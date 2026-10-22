@@ -23,6 +23,163 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     super::media::bind(builder);
     bind_operations(builder);
     bind_keyboard(builder);
+    bind_events(builder);
+}
+
+/// The readers that match `iced::Event`, `window::Event`, `mouse::Event`,
+/// `touch::Event` and `Key`'s tuple variants as facade enums.
+fn bind_events(builder: &mut host::runtime::Builder) {
+    use iced::{keyboard, mouse, touch, window, Event};
+
+    fn read<T: Clone + Send + Sync + 'static>(
+        builder: &mut host::runtime::Builder,
+        path: &'static str,
+        read: fn(&T) -> Dynamic,
+    ) {
+        builder
+            .bind(path, move |args| read_value(path, args, read))
+            .expect("the iced facade must retain every event reader");
+    }
+    fn read_value<T: Clone + Send + Sync + 'static>(
+        path: &'static str,
+        args: &mut [&mut Dynamic],
+        read: fn(&T) -> Dynamic,
+    ) -> Result<Dynamic, Box<EvalAltResult>> {
+        let [value] = args else {
+            return Err(arity(path, 1, args.len()));
+        };
+        let value = value
+            .read_lock::<T>()
+            .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+        Ok(read(&value))
+    }
+    read::<Event>(builder, "iced::Event::Keyboard", |event| match event {
+        Event::Keyboard(event) => rawr::option::some(Dynamic::from(event.clone())),
+        _ => rawr::option::none(),
+    });
+    read::<Event>(builder, "iced::Event::Mouse", |event| match event {
+        Event::Mouse(event) => rawr::option::some(Dynamic::from(*event)),
+        _ => rawr::option::none(),
+    });
+    read::<Event>(builder, "iced::Event::Window", |event| match event {
+        Event::Window(event) => rawr::option::some(Dynamic::from(event.clone())),
+        _ => rawr::option::none(),
+    });
+    read::<Event>(builder, "iced::Event::Touch", |event| match event {
+        Event::Touch(event) => rawr::option::some(Dynamic::from(*event)),
+        _ => rawr::option::none(),
+    });
+    read::<Event>(builder, "iced::Event::InputMethod", |event| {
+        Dynamic::from(matches!(event, Event::InputMethod(_)))
+    });
+    read::<Event>(builder, "iced::Event::Clipboard", |event| {
+        Dynamic::from(matches!(event, Event::Clipboard(_)))
+    });
+    read::<Event>(builder, "iced::Event::Waken", |event| {
+        Dynamic::from(matches!(event, Event::Waken))
+    });
+
+    macro_rules! test {
+        ($ty:ty, $path:literal, $pattern:pat) => {
+            read::<$ty>(builder, $path, |event| Dynamic::from(matches!(event, $pattern)));
+        };
+    }
+    test!(window::Event, "iced::window::Event::Opened", window::Event::Opened { .. });
+    test!(window::Event, "iced::window::Event::Closed", window::Event::Closed);
+    test!(window::Event, "iced::window::Event::CloseRequested", window::Event::CloseRequested);
+    test!(window::Event, "iced::window::Event::Focused", window::Event::Focused);
+    test!(window::Event, "iced::window::Event::Unfocused", window::Event::Unfocused);
+    test!(window::Event, "iced::window::Event::FileHovered", window::Event::FileHovered(_));
+    test!(window::Event, "iced::window::Event::FileDropped", window::Event::FileDropped(_));
+    test!(window::Event, "iced::window::Event::FilesHoveredLeft", window::Event::FilesHoveredLeft);
+    read::<window::Event>(builder, "iced::window::Event::Moved", |event| match event {
+        window::Event::Moved(point) => rawr::option::some(Dynamic::from(*point)),
+        _ => rawr::option::none(),
+    });
+    read::<window::Event>(builder, "iced::window::Event::Resized", |event| match event {
+        window::Event::Resized(size) => rawr::option::some(Dynamic::from(*size)),
+        _ => rawr::option::none(),
+    });
+    read::<window::Event>(builder, "iced::window::Event::Rescaled", |event| match event {
+        window::Event::Rescaled(scale) => rawr::option::some(Dynamic::from(f64::from(*scale))),
+        _ => rawr::option::none(),
+    });
+    read::<window::Event>(builder, "iced::window::Event::RedrawRequested", |event| match event {
+        window::Event::RedrawRequested(_) => rawr::option::some(Dynamic::from(marker::Instant)),
+        _ => rawr::option::none(),
+    });
+    read::<window::Event>(builder, "iced::window::Event::position", |event| match event {
+        window::Event::Opened { position, .. } => {
+            position.map_or_else(rawr::option::none, |point| rawr::option::some(Dynamic::from(point)))
+        }
+        _ => rawr::option::none(),
+    });
+    read::<window::Event>(builder, "iced::window::Event::size", |event| match event {
+        window::Event::Opened { size, .. } => Dynamic::from(*size),
+        _ => Dynamic::from(iced::Size::ZERO),
+    });
+    read::<window::Event>(builder, "iced::window::Event::scale_factor", |event| match event {
+        window::Event::Opened { scale_factor, .. } => Dynamic::from(f64::from(*scale_factor)),
+        _ => Dynamic::from(1.0_f64),
+    });
+
+    test!(mouse::Event, "iced::mouse::Event::CursorEntered", mouse::Event::CursorEntered);
+    test!(mouse::Event, "iced::mouse::Event::CursorLeft", mouse::Event::CursorLeft);
+    test!(mouse::Event, "iced::mouse::Event::CursorMoved", mouse::Event::CursorMoved { .. });
+    test!(mouse::Event, "iced::mouse::Event::WheelScrolled", mouse::Event::WheelScrolled { .. });
+    read::<mouse::Event>(builder, "iced::mouse::Event::ButtonPressed", |event| match event {
+        mouse::Event::ButtonPressed(button) => rawr::option::some(Dynamic::from(*button)),
+        _ => rawr::option::none(),
+    });
+    read::<mouse::Event>(builder, "iced::mouse::Event::ButtonReleased", |event| match event {
+        mouse::Event::ButtonReleased(button) => rawr::option::some(Dynamic::from(*button)),
+        _ => rawr::option::none(),
+    });
+    read::<mouse::Event>(builder, "iced::mouse::Event::position", |event| match event {
+        mouse::Event::CursorMoved { position } => Dynamic::from(*position),
+        _ => Dynamic::from(iced::Point::ORIGIN),
+    });
+    for (name, button) in [
+        ("Left", mouse::Button::Left),
+        ("Right", mouse::Button::Right),
+        ("Middle", mouse::Button::Middle),
+        ("Back", mouse::Button::Back),
+        ("Forward", mouse::Button::Forward),
+    ] {
+        builder
+            .bind(format!("iced::mouse::Button::{name}"), move |_| Ok(Dynamic::from(button)))
+            .expect("the iced facade must retain every mouse::Button");
+    }
+
+    test!(touch::Event, "iced::touch::Event::FingerPressed", touch::Event::FingerPressed { .. });
+    test!(touch::Event, "iced::touch::Event::FingerMoved", touch::Event::FingerMoved { .. });
+    test!(touch::Event, "iced::touch::Event::FingerLifted", touch::Event::FingerLifted { .. });
+    test!(touch::Event, "iced::touch::Event::FingerLost", touch::Event::FingerLost { .. });
+    read::<touch::Event>(builder, "iced::touch::Event::position", |event| match event {
+        touch::Event::FingerPressed { position, .. }
+        | touch::Event::FingerMoved { position, .. }
+        | touch::Event::FingerLifted { position, .. }
+        | touch::Event::FingerLost { position, .. } => Dynamic::from(*position),
+    });
+
+    builder
+        .bind_variant_reader("iced::keyboard::Key::Named", |args| {
+            read_value::<keyboard::Key>("iced::keyboard::Key::Named", args, |key| match key {
+                keyboard::Key::Named(named) => rawr::option::some(Dynamic::from(*named)),
+                _ => rawr::option::none(),
+            })
+        })
+        .expect("the iced facade must retain Key::Named's reader");
+    builder
+        .bind_variant_reader("iced::keyboard::Key::Character", |args| {
+            read_value::<keyboard::Key>("iced::keyboard::Key::Character", args, |key| match key {
+                keyboard::Key::Character(text) => {
+                    rawr::option::some(Dynamic::from(text.to_string()))
+                }
+                _ => rawr::option::none(),
+            })
+        })
+        .expect("the iced facade must retain Key::Character's reader");
 }
 
 /// `keyboard::Event`'s variants and fields, `Key`, `key::Named` and

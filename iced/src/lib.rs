@@ -118,6 +118,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("event")?;
     builder.module("keyboard")?;
     builder.module("keyboard::key")?;
+    builder.module("touch")?;
     builder.module("widget::scrollable")?;
     builder.module("widget::slider")?;
     builder.module("widget::text")?;
@@ -269,6 +270,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         OWNED_DEFAULT_VALUE_CAPABILITIES,
     )?;
     builder.value_type::<iced::Event>("Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.alias("event::Event", "Event")?;
+    builder.value_type::<iced::window::Event>("window::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::mouse::Event>("mouse::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::mouse::Button>("mouse::Button", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::touch::Event>("touch::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::keyboard::Event>("keyboard::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::keyboard::Key>("keyboard::Key", &[], DEBUG_EQ_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::keyboard::key::Named>(
@@ -838,6 +844,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_wrappers(&mut builder)?;
     declare_media(&mut builder)?;
     declare_events(&mut builder)?;
+    declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
 
     builder.finish()
@@ -2041,6 +2048,103 @@ fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
             bool_reader()?,
         )?)?;
     }
+    Ok(())
+}
+
+/// `iced::Event`, `window::Event`, `mouse::Event` and `touch::Event` as
+/// facade enums, matched as in Rust: `Event::Keyboard(keyboard::Event::KeyPressed
+/// { key, .. })`. A unit or struct variant is a shared `bool` reader named for
+/// it; a tuple variant of one field is a shared reader named for it that
+/// returns the field when the value is that variant. Struct fields are shared
+/// readers. `Key::Named(..)` and `Key::Character(..)` are tuple variants too.
+fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    fn reader(
+        builder: &mut facade::Builder,
+        path: String,
+        output: type_ref::Type,
+    ) -> Result<(), host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.output(output);
+        builder.item(item::Definition::method(path, receiver::Mode::Shared, signature.finish())?)?;
+        Ok(())
+    }
+    let bool_ = || type_ref::Type::builtin(type_ref::Builtin::Bool);
+    let some = |path: &str| -> Result<type_ref::Type, host::Error> {
+        Ok(type_ref::Type::option(type_ref::Type::registered(path)?))
+    };
+    // A tuple variant whose field the facade does not name is tested only:
+    // `Event::InputMethod(_)`.
+    for (variant, payload) in [
+        ("Keyboard", Some("keyboard::Event")),
+        ("Mouse", Some("mouse::Event")),
+        ("Window", Some("window::Event")),
+        ("Touch", Some("touch::Event")),
+        ("InputMethod", None),
+        ("Clipboard", None),
+        ("Waken", None),
+    ] {
+        let output = match payload {
+            Some(payload) => some(payload)?,
+            None => bool_(),
+        };
+        reader(builder, format!("Event::{variant}"), output)?;
+    }
+    for (variant, payload) in [
+        ("Opened", None),
+        ("Closed", None),
+        ("Moved", Some(some("Point")?)),
+        ("Resized", Some(some("Size")?)),
+        ("Rescaled", Some(type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::F64)))),
+        ("RedrawRequested", Some(some("time::Instant")?)),
+        ("CloseRequested", None),
+        ("Focused", None),
+        ("Unfocused", None),
+        ("FileHovered", None),
+        ("FileDropped", None),
+        ("FilesHoveredLeft", None),
+    ] {
+        reader(builder, format!("window::Event::{variant}"), payload.unwrap_or_else(bool_))?;
+    }
+    reader(
+        builder,
+        "window::Event::position".into(),
+        type_ref::Type::option(type_ref::Type::registered("Point")?),
+    )?;
+    reader(builder, "window::Event::size".into(), type_ref::Type::registered("Size")?)?;
+    reader(
+        builder,
+        "window::Event::scale_factor".into(),
+        type_ref::Type::builtin(type_ref::Builtin::F64),
+    )?;
+    for (variant, payload) in [
+        ("CursorEntered", None),
+        ("CursorLeft", None),
+        ("CursorMoved", None),
+        ("ButtonPressed", Some(some("mouse::Button")?)),
+        ("ButtonReleased", Some(some("mouse::Button")?)),
+        ("WheelScrolled", None),
+    ] {
+        reader(builder, format!("mouse::Event::{variant}"), payload.unwrap_or_else(bool_))?;
+    }
+    reader(builder, "mouse::Event::position".into(), type_ref::Type::registered("Point")?)?;
+    for name in ["Left", "Right", "Middle", "Back", "Forward"] {
+        builder.item(item::Definition::associated_value(
+            format!("mouse::Button::{name}"),
+            type_ref::Type::registered("mouse::Button")?,
+        )?)?;
+    }
+    for variant in ["FingerPressed", "FingerMoved", "FingerLifted", "FingerLost"] {
+        reader(builder, format!("touch::Event::{variant}"), bool_())?;
+    }
+    reader(builder, "touch::Event::position".into(), type_ref::Type::registered("Point")?)?;
+    // `Key::Named(named)` and `Key::Character(c)` in a pattern: beside
+    // their constructors, the readers of their fields.
+    reader(builder, "keyboard::Key::Named".into(), some("keyboard::key::Named")?)?;
+    reader(
+        builder,
+        "keyboard::Key::Character".into(),
+        type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::String)),
+    )?;
     Ok(())
 }
 

@@ -930,6 +930,9 @@ fn resolve_import_binding(
     qualified: ImmutableString,
     host: &host::Registry,
 ) -> Result<item::Binding, Error> {
+    // A facade re-export binds the path it names: `iced::event::Event` is
+    // `iced::Event`.
+    let qualified = host.canonical_str(&qualified);
     let target = match host.entry(&qualified) {
         Some(host::Entry::Module) => item::Import::Module,
         Some(host::Entry::ModuleItem(definitions)) => item::Import::ModuleItem {

@@ -1656,6 +1656,18 @@ fn value_or_call(
     let value = |item: &crate::host::item::Definition| {
         matches!(item.kind(), crate::host::item::Kind::Value)
     };
+    // A tuple variant's constructor, beside the reader a pattern uses.
+    let items = if items
+        .iter()
+        .any(|item| item.kind() == crate::host::item::Kind::AssociatedFunction)
+    {
+        items
+            .into_iter()
+            .filter(|item| item.kind() != crate::host::item::Kind::Method)
+            .collect()
+    } else {
+        items
+    };
     if items.iter().all(value) || !items.iter().any(value) {
         return items;
     }
@@ -6237,6 +6249,7 @@ enum Writeback {
     Place(origin::Fragment),
 }
 
+#[derive(Clone)]
 enum PatternSyntax {
     /// `name` or `mut name`.
     Binding {
@@ -6416,6 +6429,7 @@ impl PatternSyntax {
     }
 }
 
+#[derive(Clone)]
 struct EnumPatternSyntax {
     owner: Box<[(ImmutableString, Span)]>,
     owner_span: Span,
@@ -7223,6 +7237,45 @@ struct PatternBinding {
     mutable: bool,
 }
 
+/// A pattern on a facade value, lowered to the facade's variant tests and
+/// readers: the tests, in order, and the names it binds.
+#[derive(Default)]
+struct HostPattern {
+    tests: Vec<origin::Fragment>,
+    binds: Vec<PatternBinding>,
+    values: Vec<origin::Fragment>,
+}
+
+impl HostPattern {
+    fn bind(&mut self, binding: PatternBinding, value: origin::Fragment) {
+        self.binds.push(binding);
+        self.values.push(value);
+    }
+
+    /// The tests joined by `&&`, or `None` when the pattern matches every
+    /// value.
+    fn condition(&self) -> Option<origin::Fragment> {
+        let mut tests = self.tests.iter();
+        let mut joined = tests.next()?.clone().surrounded("(", ")");
+        for test in tests {
+            joined.push_text(" && ");
+            joined.push(test.clone().surrounded("(", ")"));
+        }
+        Some(joined)
+    }
+
+    /// `let name = value; ..` for each binding.
+    fn rendered_binds(&self) -> origin::Fragment {
+        let mut source = origin::Fragment::default();
+        for (binding, value) in self.binds.iter().zip(&self.values) {
+            source.push_text(format!("let {} = ", binding.name));
+            source.push(value.clone());
+            source.push_text("; ");
+        }
+        source
+    }
+}
+
 /// A resolved root match pattern: its runtime proof, its coverage, and the
 /// bindings it declares.
 struct ResolvedRootPattern {
@@ -7390,6 +7443,10 @@ struct Parser<'a> {
     /// The most elements any slice pattern names: a slice's lengths up to
     /// it are told apart for coverage (`coverage_constructors`).
     slice_arity: std::cell::Cell<usize>,
+    /// Patterns on facade values met below a script pattern: the hidden
+    /// name the value is bound to, the pattern and the value's type. The
+    /// pattern's site lowers them to tests and bindings.
+    host_checks: std::cell::RefCell<Vec<(ImmutableString, PatternSyntax, Ty)>>,
     /// Bounds a generic call requires of its inferred type arguments,
     /// checked once they are known.
     pending_bounds: Vec<(Ty, capability::Kind, Span)>,
@@ -7598,6 +7655,7 @@ impl<'a> Parser<'a> {
             explicit_trait_arguments: None,
             binding_mode: std::cell::Cell::new(None),
             slice_arity: std::cell::Cell::new(0),
+            host_checks: std::cell::RefCell::new(Vec::new()),
             pending_bounds: Vec::new(),
             generic_traits: BTreeMap::new(),
             generic_trait_arguments: BTreeMap::new(),
@@ -12965,7 +13023,22 @@ impl<'a> Parser<'a> {
             self.coerce_expr(&erased, &mut receiver)?;
             return self.parse_host_method(receiver, member, member_span);
         }
-        let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+        // A tuple variant's constructor shares its path with the reader a
+        // pattern uses: a method call names the reader.
+        let items = self.models.host_items(&path).map(|items| {
+            let methods = items
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item.kind(),
+                        crate::host::item::Kind::Method | crate::host::item::Kind::IntrinsicMethod
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if methods.is_empty() { items.to_vec() } else { methods }
+        });
+        let Some(items) = items else {
             let error = Error::UnknownMember {
                 owner: definition.path().into(),
                 member,
@@ -13686,22 +13759,30 @@ impl<'a> Parser<'a> {
         };
         let subject = self.pattern_subject(subject, &subject_ty)?;
         let resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
+        let host = self.take_host_checks()?;
         let label = self.push_root_pattern(resolved.proof, &resolved.bindings);
-        let names = resolved
-            .bindings
+        // The bindings a facade pattern makes follow the script pattern's.
+        let mut bindings = resolved.bindings;
+        let names = bindings
             .iter()
-            .map(|binding| binding.name.as_str())
+            .chain(&host.binds)
+            .map(|binding| binding.name.to_string())
             .collect::<Vec<_>>();
         let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
         let mut rendered = origin::Fragment::plain(format!("let {scrutinee} = "));
         rendered.push(subject);
-        rendered.push_text(format!(
-            ";\nlet {values} = switch {scrutinee} {{\n{label} => [{}],\n_ => ",
-            names.join(", ")
-        ));
+        rendered.push_text(format!(";\nlet {values} = switch {scrutinee} {{\n{label}"));
+        if let Some(condition) = host.condition() {
+            rendered.push_text(" if ");
+            rendered.push(condition);
+        }
+        rendered.push_text(" => { ");
+        rendered.push(host.rendered_binds());
+        rendered.push_text(format!("[{}] }},\n_ => ", names.join(", ")));
         rendered.push(otherwise.value.rendered_block());
         rendered.push_text("\n};");
-        for (index, binding) in resolved.bindings.iter().enumerate() {
+        bindings.extend(host.binds);
+        for (index, binding) in bindings.iter().enumerate() {
             let keyword = if binding.mutable { "let" } else { "const" };
             rendered.push_text(format!("\n{keyword} {} = {values}[{index}];", binding.name));
             self.bindings.insert(
@@ -14851,6 +14932,36 @@ impl<'a> Parser<'a> {
         binding_declarations: &mut Vec<PatternBinding>,
     ) -> Result<(NominalPattern, CoveragePattern), Error> {
         let expected = expected.clone();
+        // A refutable pattern on a facade value: bind the value to a hidden
+        // name, and leave its tests to the pattern's site.
+        if matches!(expected, Ty::Host { .. })
+            && !matches!(
+                syntax,
+                PatternSyntax::Binding { .. }
+                    | PatternSyntax::Ref { .. }
+                    | PatternSyntax::Discard { .. }
+                    | PatternSyntax::At { .. }
+                    | PatternSyntax::Reference { .. }
+            )
+        {
+            let mut checks = self.host_checks.borrow_mut();
+            let name: ImmutableString = format!("__rawr_host_{}", checks.len()).into();
+            checks.push((name.clone(), syntax.clone(), expected.clone()));
+            drop(checks);
+            binding_declarations.push(PatternBinding {
+                name: name.clone(),
+                span: syntax.span(),
+                ty: expected.clone(),
+                mutable: false,
+            });
+            return Ok((
+                NominalPattern::Binding {
+                    name,
+                    expected: nominal_payload_type(&expected, &self.models, syntax.span())?,
+                },
+                CoveragePattern::Wildcard,
+            ));
+        }
         match syntax {
             PatternSyntax::Ref {
                 name,
@@ -15938,7 +16049,8 @@ impl<'a> Parser<'a> {
             | Ty::String
             | Ty::Bool
             | Ty::Float(_)
-            | Ty::Ordering => subject.rendered_source(),
+            | Ty::Ordering
+            | Ty::Host { .. } => subject.rendered_source(),
             Ty::Script(definition_id, ..) => {
                 let Nominal::Enum { definition, item } =
                     self.models.definition(*definition_id).clone()
@@ -16005,6 +16117,8 @@ impl<'a> Parser<'a> {
             }
 
             let arm_start = self.position();
+            // The bindings a facade pattern in the arm makes, ahead of it.
+            let mut arm_prefix = origin::Fragment::default();
             // `_`, or a binding `name` that matches anything and binds it,
             // as in Rust.
             let catch_all = match self.peek() {
@@ -16053,6 +16167,7 @@ impl<'a> Parser<'a> {
             } else {
                 let syntax = self.parse_pattern_syntax()?;
                 let resolved = self.resolve_root_pattern(&syntax, &binding_ty)?;
+                let host = self.take_host_checks()?;
                 let alternatives = resolved.coverage.alternatives();
                 if alternatives.iter().all(|alternative| {
                     self.coverage_pattern_is_covered(
@@ -16085,6 +16200,8 @@ impl<'a> Parser<'a> {
                     );
                 }
 
+                self.bind_host_pattern(&host);
+                let host_binds = host.rendered_binds();
                 let guard = if matches!(self.peek(), Token::If) {
                     self.next();
                     let normalize_private_calls =
@@ -16097,6 +16214,27 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
+                // Facade tests guard the arm; its bindings read the value.
+                let guard = match (host.condition(), guard) {
+                    (None, None) => None,
+                    (None, Some(guard)) if host.binds.is_empty() => Some(guard),
+                    (None, Some(guard)) => {
+                        let mut test = origin::Fragment::plain("({ ");
+                        test.push(host_binds.clone());
+                        test.push(guard);
+                        test.push_text(" })");
+                        Some(test)
+                    }
+                    (Some(condition), None) => Some(condition),
+                    (Some(condition), Some(guard)) => {
+                        let mut test = condition.surrounded("(", ") && ({ ");
+                        test.push(host_binds.clone());
+                        test.push(guard);
+                        test.push_text(" })");
+                        Some(test)
+                    }
+                };
+                arm_prefix = host_binds;
                 if guard.is_none() {
                     coverage_rows.extend(
                         alternatives
@@ -16116,7 +16254,15 @@ impl<'a> Parser<'a> {
             self.expect(Token::DoubleArrow, "'=>' after a match pattern")?;
             // A block arm needs no ',' after it, as in Rust.
             let block_arm = matches!(self.peek(), Token::LeftBrace);
-            let action = self.parse_match_action()?;
+            let mut action = self.parse_match_action()?;
+            if !arm_prefix.is_empty() {
+                let mut block = origin::Fragment::plain("{ ");
+                block.push(arm_prefix);
+                block.push(action.value.rendered_source());
+                block.push_text(" }");
+                action.value.source = block;
+                action.value.prelude = origin::Fragment::default();
+            }
             arm_bindings.push(self.bindings.clone());
             self.bindings = original_bindings.clone();
             arms.push((label, guard, action, bound));
@@ -16224,7 +16370,9 @@ impl<'a> Parser<'a> {
 
     /// `let pattern = subject` heading an `if let` or `while let`: the
     /// switch subject and arm label, with the pattern's bindings in scope.
-    fn parse_let_condition(&mut self) -> Result<(origin::Fragment, String), Error> {
+    fn parse_let_condition(
+        &mut self,
+    ) -> Result<(origin::Fragment, origin::Fragment, origin::Fragment), Error> {
         self.expect(Token::Let, "`let` in a condition")?;
         let syntax = self.parse_pattern_syntax()?;
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
@@ -16237,6 +16385,7 @@ impl<'a> Parser<'a> {
         };
         let subject = self.pattern_subject(subject, &subject_ty)?;
         let resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
+        let host = self.take_host_checks()?;
         for binding in &resolved.bindings {
             self.bindings.insert(
                 binding.name.clone(),
@@ -16249,8 +16398,15 @@ impl<'a> Parser<'a> {
                 },
             );
         }
-        let label = self.push_root_pattern(resolved.proof, &resolved.bindings);
-        Ok((subject, label))
+        self.bind_host_pattern(&host);
+        let mut arm = origin::Fragment::plain(
+            self.push_root_pattern(resolved.proof, &resolved.bindings),
+        );
+        if let Some(condition) = host.condition() {
+            arm.push_text(" if ");
+            arm.push(condition);
+        }
+        Ok((subject, arm, host.rendered_binds()))
     }
 
     fn next_after_else(&mut self) -> Token {
@@ -16277,17 +16433,20 @@ impl<'a> Parser<'a> {
             // `loop { switch subject { pattern => body, _ => break } }`.
             Token::While if matches!(self.peek(), Token::Let) => {
                 let original = self.bindings.clone();
-                let (subject, arm) = self.parse_let_condition()?;
+                let (subject, arm, binds) = self.parse_let_condition()?;
                 let scrutinee = self.temporary("match");
                 let mut head = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
                 head.push(subject);
-                head.push_text(format!(";\nswitch {scrutinee} {{\n{arm} => "));
+                head.push_text(format!(";\nswitch {scrutinee} {{\n"));
+                head.push(arm);
+                head.push_text(" => { ");
+                head.push(binds);
                 let looped = self.parse_loop_body(
                     origin::Fragment::plain("loop"),
                     start,
                     label,
                     false,
-                    Some((head, origin::Fragment::plain(",\n_ => break\n}\n}"))),
+                    Some((head, origin::Fragment::plain(" },\n_ => break\n}\n}"))),
                 );
                 let inner = std::mem::replace(&mut self.bindings, original);
                 for (name, binding) in &mut self.bindings {
@@ -16942,30 +17101,42 @@ impl<'a> Parser<'a> {
         Ok(self.operator_expr(source, output, span(match_span.start(), end)))
     }
 
-    /// A facade enum's variants: the shared, parameterless `bool` methods
-    /// named for them (`Status::Active`), which test a value's variant. Its
+    /// A facade enum's variants: the shared, parameterless methods named
+    /// for them (`Status::Active`), a `bool` test or, for a tuple variant,
+    /// its field when the value is that variant (`Key::Named`); and its
+    /// `CamelCase` associated values of itself (`Key::Unidentified`). Its
     /// named fields are shared, parameterless readers (`Status::is_checked`).
     fn host_variants(&self, ty: &Ty) -> Option<Vec<ImmutableString>> {
         let Ty::Host { proof, .. } = ty else {
             return None;
         };
+        let path = proof.definition.path();
+        let own = crate::host::type_ref::Type::registered(path.as_str()).ok();
         let bool_ty = crate::host::type_ref::Type::builtin(crate::host::type_ref::Builtin::Bool);
-        let variants = self
-            .models
-            .host
-            .members(&proof.definition.path())
-            .filter(|item| {
-                item.receiver() == Some(receiver::Mode::Shared)
-                    && item.signature().parameters().is_empty()
-                    && *item.signature().output() == bool_ty
-                    && item
-                        .path_ref()
-                        .name()
-                        .starts_with(|c: char| c.is_ascii_uppercase())
-            })
-            .map(|item| ImmutableString::from(item.path_ref().name()))
-            .collect::<Vec<_>>();
-        (!variants.is_empty()).then_some(variants)
+        let camel = |name: &str| name.starts_with(|c: char| c.is_ascii_uppercase());
+        let mut readers = false;
+        let mut variants = Vec::<ImmutableString>::new();
+        for item in self.models.host.members(&path) {
+            let name = item.path_ref().name();
+            if !camel(name) {
+                continue;
+            }
+            let reader = item.receiver() == Some(receiver::Mode::Shared)
+                && item.signature().parameters().is_empty()
+                && (*item.signature().output() == bool_ty
+                    || matches!(
+                        item.signature().output().shape(),
+                        crate::host::type_ref::Shape::Option(_)
+                    ));
+            let value = item.kind() == crate::host::item::Kind::AssociatedValue
+                && own.as_ref() == Some(item.signature().output())
+                && name.chars().any(|c| c.is_ascii_lowercase());
+            readers |= reader;
+            if (reader || value) && !variants.iter().any(|known| known.as_str() == name) {
+                variants.push(name.into());
+            }
+        }
+        (readers && !variants.is_empty()).then_some(variants)
     }
 
     /// A facade enum of unit variants, as iced's `tooltip::Position`: the
@@ -17002,22 +17173,452 @@ impl<'a> Parser<'a> {
         (equal && !variants.is_empty()).then_some(variants)
     }
 
-    /// Read `member` of the facade value bound to `temporary`.
-    fn host_member(
+    /// Read `member` of the facade value `value` of type `ty`.
+    fn host_read(
         &mut self,
-        temporary: &str,
+        value: origin::Fragment,
         ty: &Ty,
         member: ImmutableString,
         at: Span,
     ) -> Result<ParsedExpr, Error> {
-        let value = self.operator_expr(origin::Fragment::plain(temporary), ty.clone(), at);
+        let value = self.operator_expr(value, ty.clone(), at);
         self.pending_arguments = Some((Vec::new(), at.end()));
         self.parse_host_method(value, member, at)
     }
 
+    /// Lower the facade patterns met below the script pattern just resolved:
+    /// each hidden name's tests and the bindings its pattern makes.
+    fn take_host_checks(&mut self) -> Result<HostPattern, Error> {
+        let checks = std::mem::take(&mut *self.host_checks.borrow_mut());
+        let mut pattern = HostPattern::default();
+        for (name, syntax, ty) in checks {
+            self.host_pattern(&syntax, origin::Fragment::plain(name.as_str()), &ty, &mut pattern)?;
+        }
+        Ok(pattern)
+    }
+
+    /// Bind each name a facade pattern makes for the code it guards.
+    fn bind_host_pattern(&mut self, pattern: &HostPattern) {
+        for binding in &pattern.binds {
+            self.bindings.insert(
+                binding.name.clone(),
+                Binding {
+                    ty: binding.ty.clone(),
+                    mutable: binding.mutable,
+                    available: true,
+                    declaration: binding.span,
+                    kind: BindingKind::Local,
+                },
+            );
+        }
+    }
+
+    /// The facade type a pattern path names: `Event`, `keyboard::Event`,
+    /// `iced::keyboard::Key`, through the file's imports.
+    fn host_pattern_owner(&self, owner: &[(ImmutableString, Span)]) -> String {
+        let written = owner
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join("::");
+        let Some((first, _)) = owner.first() else {
+            return written;
+        };
+        let qualified = match self.models.import(first) {
+            Some(binding) => format!(
+                "{}{}",
+                binding.qualified,
+                written.strip_prefix(first.as_str()).unwrap_or_default()
+            ),
+            None => written,
+        };
+        self.models.host.canonical_str(&qualified).to_string()
+    }
+
+    /// Lower `syntax`, matched against the facade-typed `value` of type `ty`,
+    /// into `out`'s tests and bindings. Below a facade enum's variant, its
+    /// fields are matched as any pattern on their types.
+    fn host_pattern(
+        &mut self,
+        syntax: &PatternSyntax,
+        value: origin::Fragment,
+        ty: &Ty,
+        out: &mut HostPattern,
+    ) -> Result<(), Error> {
+        let ty = match self.inference.resolve(ty) {
+            Ty::Reference { target, .. } => self.inference.resolve(&target),
+            ty => ty,
+        };
+        match syntax {
+            PatternSyntax::Discard { .. } | PatternSyntax::Rest { binding: None, .. } => Ok(()),
+            PatternSyntax::Binding {
+                name,
+                span,
+                mutable,
+            } => {
+                self.require_new_host_binding(out, name, *span)?;
+                out.bind(
+                    PatternBinding {
+                        name: name.clone(),
+                        span: *span,
+                        ty,
+                        mutable: *mutable,
+                    },
+                    value,
+                );
+                Ok(())
+            }
+            PatternSyntax::Ref { name, span, .. } => {
+                self.require_new_host_binding(out, name, *span)?;
+                out.bind(
+                    PatternBinding {
+                        name: name.clone(),
+                        span: *span,
+                        ty,
+                        mutable: false,
+                    },
+                    value,
+                );
+                Ok(())
+            }
+            PatternSyntax::At {
+                name,
+                name_span,
+                pattern,
+            } => {
+                self.require_new_host_binding(out, name, *name_span)?;
+                out.bind(
+                    PatternBinding {
+                        name: name.clone(),
+                        span: *name_span,
+                        ty: ty.clone(),
+                        mutable: false,
+                    },
+                    value.clone(),
+                );
+                self.host_pattern(pattern, value, &ty, out)
+            }
+            PatternSyntax::Reference { pattern, .. } => self.host_pattern(pattern, value, &ty, out),
+            PatternSyntax::Literal {
+                literal,
+                ty: actual,
+                span,
+            } => {
+                self.require_pattern_type(&ty, actual, *span)?;
+                let mut test = value.surrounded("(", ")");
+                test.push_text(format!(" == {}", scalar_text(literal)));
+                out.tests.push(test);
+                Ok(())
+            }
+            PatternSyntax::Range {
+                low,
+                high,
+                inclusive,
+                span,
+            } => {
+                for (_, actual) in low.iter().chain(high.iter()) {
+                    if !matches!(actual, Ty::Int(_) | Ty::Char | Ty::Float(_)) {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "range pattern".into(),
+                            source: *span,
+                        });
+                    }
+                    self.require_pattern_type(&ty, actual, *span)?;
+                }
+                if let Some((low, _)) = low {
+                    let mut test = value.clone().surrounded("(", ")");
+                    test.push_text(format!(" >= {}", scalar_text(low)));
+                    out.tests.push(test);
+                }
+                if let Some((high, _)) = high {
+                    let operator = if *inclusive { "<=" } else { "<" };
+                    let mut test = value.surrounded("(", ")");
+                    test.push_text(format!(" {operator} {}", scalar_text(high)));
+                    out.tests.push(test);
+                }
+                Ok(())
+            }
+            PatternSyntax::Or { alternatives, span } => {
+                // Each alternative binds the same names; the first's
+                // readers bind them, as a facade reads a field the same
+                // way in every variant.
+                let mut tests = Vec::new();
+                let mut first: Option<HostPattern> = None;
+                let mut irrefutable = false;
+                for alternative in alternatives.iter() {
+                    let mut compiled = HostPattern::default();
+                    self.host_pattern(alternative, value.clone(), &ty, &mut compiled)?;
+                    let names = |pattern: &HostPattern| {
+                        pattern
+                            .binds
+                            .iter()
+                            .map(|binding| binding.name.clone())
+                            .collect::<BTreeSet<_>>()
+                    };
+                    if let Some(first) = &first
+                        && names(first) != names(&compiled)
+                    {
+                        return Err(Error::InvalidMatch {
+                            owner: ty.name(&self.models),
+                            reason: "each `|` alternative must bind the same names".into(),
+                            pattern: *span,
+                        });
+                    }
+                    match compiled.condition() {
+                        Some(test) => tests.push(test),
+                        None => irrefutable = true,
+                    }
+                    if first.is_none() {
+                        first = Some(compiled);
+                    }
+                }
+                if !irrefutable {
+                    let mut joined = origin::Fragment::default();
+                    for (index, test) in tests.into_iter().enumerate() {
+                        if index > 0 {
+                            joined.push_text(" || ");
+                        }
+                        joined.push(test);
+                    }
+                    out.tests.push(joined);
+                }
+                let first = first.expect("an or-pattern has alternatives");
+                for (binding, bound) in first.binds.into_iter().zip(first.values) {
+                    self.require_new_host_binding(out, &binding.name, binding.span)?;
+                    out.bind(binding, bound);
+                }
+                Ok(())
+            }
+            PatternSyntax::Prelude {
+                variant,
+                payload,
+                span,
+            } => {
+                let Ty::Option(element) = &ty else {
+                    return Err(Error::TypeMismatch {
+                        expected: ty.name(&self.models),
+                        actual: variant.name().into(),
+                        expression: *span,
+                    });
+                };
+                let element = (**element).clone();
+                let test = self.prelude_op(PreludeOp::IsSome, [value.clone()]);
+                match (variant, payload) {
+                    (Prelude::None, _) => {
+                        let mut negated = origin::Fragment::plain("!");
+                        negated.push(test);
+                        out.tests.push(negated);
+                        Ok(())
+                    }
+                    (Prelude::Some, Some(payload)) => {
+                        out.tests.push(test);
+                        let inner = self.prelude_op(PreludeOp::Unwrap, [value]);
+                        self.host_pattern(payload, inner, &element, out)
+                    }
+                    _ => Err(Error::TypeMismatch {
+                        expected: ty.name(&self.models),
+                        actual: variant.name().into(),
+                        expression: *span,
+                    }),
+                }
+            }
+            PatternSyntax::Enum(pattern) if matches!(ty, Ty::Host { .. }) => {
+                self.host_variant_pattern(pattern, value, &ty, out)
+            }
+            other => Err(Error::UnsupportedNominalSyntax {
+                construct: format!(
+                    "this pattern on `{}` below a pattern on a library value",
+                    ty.name(&self.models)
+                )
+                .into(),
+                source: other.span(),
+            }),
+        }
+    }
+
+    fn require_new_host_binding(
+        &self,
+        out: &HostPattern,
+        name: &ImmutableString,
+        span: Span,
+    ) -> Result<(), Error> {
+        if out.binds.iter().any(|binding| binding.name == *name) {
+            return Err(Error::InvalidMatch {
+                owner: name.clone(),
+                reason: format!("binding `{name}` appears more than once in the pattern").into(),
+                pattern: span,
+            });
+        }
+        Ok(())
+    }
+
+    /// `Owner::Variant`, `Owner::Variant(p)` or `Owner::Variant { field: p, .. }`
+    /// on a facade enum value.
+    fn host_variant_pattern(
+        &mut self,
+        pattern: &EnumPatternSyntax,
+        value: origin::Fragment,
+        ty: &Ty,
+        out: &mut HostPattern,
+    ) -> Result<(), Error> {
+        let Ty::Host { proof, .. } = ty else {
+            unreachable!("facade variant patterns match facade values");
+        };
+        let owner_path = proof.definition.path();
+        let written = self.host_pattern_owner(&pattern.owner);
+        if written != owner_path.as_str() {
+            return Err(Error::TypeMismatch {
+                expected: owner_path.as_str().into(),
+                actual: written.into(),
+                expression: pattern.owner_span,
+            });
+        }
+        let variant = pattern.variant.clone();
+        let at = pattern.variant_span;
+        let unknown = || Error::UnknownMember {
+            owner: owner_path.as_str().into(),
+            member: variant.clone(),
+            reference: at,
+        };
+        let variant_path = format!("{owner_path}::{variant}");
+        let items = self.models.host_items(&variant_path).ok_or_else(unknown)?.to_vec();
+        let bool_ty = crate::host::type_ref::Type::builtin(crate::host::type_ref::Builtin::Bool);
+        let reader = items.iter().find(|item| {
+            item.kind() == crate::host::item::Kind::Method
+                && item.receiver() == Some(receiver::Mode::Shared)
+                && item.signature().parameters().is_empty()
+        });
+        let discards_only = pattern.payload.iter().all(|member| {
+            matches!(
+                member,
+                PatternSyntax::Discard { .. } | PatternSyntax::Rest { binding: None, .. }
+            )
+        });
+        let Some(reader) = reader.cloned() else {
+            // A unit variant that is a value: `value == Owner::Variant`.
+            let Some(item) = items
+                .iter()
+                .find(|item| item.kind() == crate::host::item::Kind::AssociatedValue)
+                .cloned()
+            else {
+                return Err(unknown());
+            };
+            if !pattern.payload.is_empty() {
+                return Err(Error::InvalidMatch {
+                    owner: owner_path.as_str().into(),
+                    reason: format!("`{variant}` is a unit variant").into(),
+                    pattern: at,
+                });
+            }
+            let owner = self.models.item_owner(&variant_path).cloned();
+            let constant = self.parse_host_value(item, owner, at)?;
+            let subject = self.operator_expr(value, ty.clone(), at);
+            let test = self.apply_binary(Token::EqualsTo, subject, constant)?;
+            out.tests.push(test.rendered_source());
+            return Ok(());
+        };
+        let read = self.host_read(value.clone(), ty, variant.clone(), at)?;
+        if *reader.signature().output() == bool_ty {
+            out.tests.push(read.rendered_source());
+            match &pattern.named {
+                Some((names, _)) => {
+                    for ((field, field_span), member) in names.iter().zip(pattern.payload.iter()) {
+                        let field_value =
+                            self.host_read(value.clone(), ty, field.clone(), *field_span)?;
+                        self.host_pattern(
+                            member,
+                            field_value.rendered_source(),
+                            &field_value.ty,
+                            out,
+                        )?;
+                    }
+                }
+                None if discards_only => {}
+                None => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: format!(
+                            "a pattern on `{variant}`'s fields, which Rawr does not read yet"
+                        )
+                        .into(),
+                        source: at,
+                    });
+                }
+            }
+            return Ok(());
+        }
+        // A tuple variant of one field: its reader returns it when the
+        // value is that variant.
+        let Ty::Option(field_ty) = self.inference.resolve(&read.ty) else {
+            return Err(unknown());
+        };
+        let field = read.rendered_source();
+        let test = self.prelude_op(PreludeOp::IsSome, [field.clone()]);
+        out.tests.push(test);
+        if pattern.named.is_some() {
+            return Err(Error::InvalidMatch {
+                owner: owner_path.as_str().into(),
+                reason: format!("`{variant}` is a tuple variant").into(),
+                pattern: at,
+            });
+        }
+        match &*pattern.payload {
+            [] if pattern.named.is_none() => Err(Error::InvalidMatch {
+                owner: owner_path.as_str().into(),
+                reason: format!("`{variant}` is a tuple variant; write `{variant}(..)`").into(),
+                pattern: at,
+            }),
+            [member] => {
+                let inner = self.prelude_op(PreludeOp::Unwrap, [field]);
+                self.host_pattern(member, inner, &field_ty, out)
+            }
+            _ => Err(Error::InvalidMatch {
+                owner: owner_path.as_str().into(),
+                reason: format!("`{variant}` has one field").into(),
+                pattern: at,
+            }),
+        }
+    }
+
+    /// The variants an arm's pattern covers whole: a variant whose fields
+    /// it matches with bindings and `_` only.
+    fn host_covers(syntax: &PatternSyntax, covered: &mut Vec<ImmutableString>) {
+        let irrefutable = |member: &PatternSyntax| {
+            let mut member = member;
+            loop {
+                match member {
+                    PatternSyntax::At { pattern, .. } => member = pattern,
+                    PatternSyntax::Reference { pattern, .. } => member = pattern,
+                    other => {
+                        return matches!(
+                            other,
+                            PatternSyntax::Binding { .. }
+                                | PatternSyntax::Ref { .. }
+                                | PatternSyntax::Discard { .. }
+                                | PatternSyntax::Rest { .. }
+                        )
+                    }
+                }
+            }
+        };
+        match syntax {
+            PatternSyntax::Or { alternatives, .. } => {
+                for alternative in alternatives.iter() {
+                    Self::host_covers(alternative, covered);
+                }
+            }
+            PatternSyntax::At { pattern, .. } | PatternSyntax::Reference { pattern, .. } => {
+                Self::host_covers(pattern, covered);
+            }
+            PatternSyntax::Enum(pattern) if pattern.payload.iter().all(irrefutable) => {
+                covered.push(pattern.variant.clone());
+            }
+            _ => {}
+        }
+    }
+
     /// `match` on a facade enum: `Status::Hovered`, `Status::Active { is_checked }`,
-    /// `Status::Focused { is_hovered: true, .. }`, `A | B`, `_` and bindings,
-    /// lowered to the facade's variant tests and field readers.
+    /// `Key::Named(key::Named::Tab)`, `A | B`, `_` and bindings, lowered to
+    /// the facade's variant tests and field readers.
     fn parse_host_match(
         &mut self,
         subject: ParsedExpr,
@@ -17032,202 +17633,25 @@ impl<'a> Parser<'a> {
         let temporary = self.temporary("match");
         self.expect(Token::LeftBrace, "'{' to start a match")?;
         let original_bindings = self.bindings.clone();
-        let mut covered = BTreeSet::<ImmutableString>::new();
+        let mut covered = Vec::<ImmutableString>::new();
         let mut exhaustive = false;
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             let pattern_start = self.position();
-            let mut tests = Vec::<origin::Fragment>::new();
-            let mut binds = origin::Fragment::default();
-            let mut names = BTreeSet::<ImmutableString>::new();
-            let mut alternatives = Vec::new();
-            let mut arm_covers = Vec::new();
-            let mut catch_all = false;
-            loop {
-                if matches!(self.peek(), Token::Underscore) {
-                    self.next();
-                    catch_all = true;
-                } else {
-                    let (first, first_span) = self.expect_name("match pattern")?;
-                    if !matches!(self.peek(), Token::DoubleColon) {
-                        self.bindings.insert(
-                            first.clone(),
-                            Binding {
-                                ty: subject_ty.clone(),
-                                mutable: false,
-                                available: true,
-                                declaration: first_span,
-                                kind: BindingKind::Local,
-                            },
-                        );
-                        binds.push_text(format!("let {first} = {temporary}; "));
-                        names.insert(first.clone());
-                        catch_all = true;
-                    } else {
-                        let mut segments = vec![first];
-                        let mut variant_span = first_span;
-                        while matches!(self.peek(), Token::DoubleColon) {
-                            self.next();
-                            let (segment, segment_span) = self.expect_qualified_name()?;
-                            segments.push(segment);
-                            variant_span = segment_span;
-                        }
-                        let variant = segments.pop().expect("qualified patterns have a variant");
-                        let owner = segments.join("::");
-                        let resolved = match self.models.import(&segments[0]) {
-                            Some(binding) => format!(
-                                "{}{}",
-                                binding.qualified,
-                                owner.strip_prefix(segments[0].as_str()).unwrap_or_default()
-                            ),
-                            None => owner.clone(),
-                        };
-                        if resolved != owner_path {
-                            return Err(Error::TypeMismatch {
-                                expected: owner_path.as_str().into(),
-                                actual: owner.into(),
-                                expression: variant_span,
-                            });
-                        }
-                        if !variants.contains(&variant) {
-                            return Err(Error::UnknownMember {
-                                owner: owner_path.as_str().into(),
-                                member: variant,
-                                reference: variant_span,
-                            });
-                        }
-                        let variant_path = format!("{owner_path}::{variant}");
-                        let value_variant = self
-                            .models
-                            .host_items(&variant_path)
-                            .is_some_and(|items| {
-                                items
-                                    .iter()
-                                    .all(|item| item.kind() == crate::host::item::Kind::AssociatedValue)
-                            });
-                        let test = if value_variant {
-                            // A unit variant that is a value: `subject == Owner::Variant`.
-                            let item = self.models.host_items(&variant_path).expect("checked")[0].clone();
-                            let owner = self.models.item_owner(&variant_path).cloned();
-                            let value = self.parse_host_value(item, owner, variant_span)?;
-                            let subject = self.operator_expr(
-                                origin::Fragment::plain(temporary.as_str()),
-                                subject_ty.clone(),
-                                variant_span,
-                            );
-                            self.apply_binary(Token::EqualsTo, subject, value)?
-                        } else {
-                            self.host_member(&temporary, &subject_ty, variant.clone(), variant_span)?
-                        };
-                        let mut condition = test.rendered_source();
-                        let mut irrefutable = true;
-                        if matches!(self.peek(), Token::LeftBrace) {
-                            self.next();
-                            while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
-                                if matches!(self.peek(), Token::ExclusiveRange) {
-                                    self.next();
-                                    break;
-                                }
-                                let (field, field_span) =
-                                    self.expect_name("variant field pattern")?;
-                                let read = self.host_member(
-                                    &temporary,
-                                    &subject_ty,
-                                    field.clone(),
-                                    field_span,
-                                )?;
-                                let mut binding = Some((field.clone(), field_span));
-                                if matches!(self.peek(), Token::Colon) {
-                                    self.next();
-                                    binding = match self.peek() {
-                                        Token::Underscore => {
-                                            self.next();
-                                            None
-                                        }
-                                        Token::Identifier(_) => {
-                                            Some(self.expect_name("field binding")?)
-                                        }
-                                        _ => {
-                                            let Some((literal, actual, at)) =
-                                                self.parse_pattern_literal()?
-                                            else {
-                                                return Err(self.unsupported("match pattern"));
-                                            };
-                                            self.require_pattern_type(&read.ty, &actual, at)?;
-                                            let literal = scalar_text(&literal);
-                                            condition.push_text(" && (");
-                                            condition.push(read.rendered_source());
-                                            condition.push_text(format!(") == {literal}"));
-                                            irrefutable = false;
-                                            None
-                                        }
-                                    };
-                                }
-                                if let Some((name, declaration)) = binding {
-                                    names.insert(name.clone());
-                                    binds.push_text(format!("let {name} = "));
-                                    binds.push(read.rendered_source());
-                                    binds.push_text("; ");
-                                    self.bindings.insert(
-                                        name,
-                                        Binding {
-                                            ty: read.ty.clone(),
-                                            mutable: false,
-                                            available: true,
-                                            declaration,
-                                            kind: BindingKind::Local,
-                                        },
-                                    );
-                                }
-                                if matches!(self.peek(), Token::Comma) {
-                                    self.next();
-                                } else if !matches!(self.peek(), Token::RightBrace) {
-                                    return Err(
-                                        self.unsupported("variant field patterns without ','")
-                                    );
-                                }
-                            }
-                            self.expect(Token::RightBrace, "'}' after variant field patterns")?;
-                        }
-                        tests.push(condition.surrounded("(", ")"));
-                        if irrefutable {
-                            arm_covers.push(variant);
-                        }
-                    }
-                }
-                alternatives.push((std::mem::take(&mut binds), std::mem::take(&mut names)));
-                if !matches!(self.peek(), Token::Pipe) {
-                    break;
-                }
-                if catch_all {
-                    return Err(self.unsupported("`|` with a catch-all pattern"));
-                }
-                self.next();
-            }
-            // Each alternative binds the same names; the facade reads a
-            // field the same way in every variant.
-            let (binds, names) = alternatives.remove(0);
-            if alternatives.iter().any(|(_, other)| *other != names) {
-                return Err(Error::InvalidMatch {
-                    owner: owner_path.as_str().into(),
-                    reason: "each `|` alternative must bind the same names".into(),
-                    pattern: span(pattern_start, self.position()),
-                });
-            }
-            let mut condition = if catch_all {
-                origin::Fragment::plain("true")
-            } else {
-                let mut joined = origin::Fragment::default();
-                for (index, test) in tests.into_iter().enumerate() {
-                    if index > 0 {
-                        joined.push_text(" || ");
-                    }
-                    joined.push(test);
-                }
-                joined
-            };
-            let guarded = matches!(self.peek(), Token::If);
-            if guarded {
+            let syntax = self.parse_pattern_syntax()?;
+            let mut compiled = HostPattern::default();
+            self.host_pattern(
+                &syntax,
+                origin::Fragment::plain(temporary.as_str()),
+                &subject_ty,
+                &mut compiled,
+            )?;
+            self.bind_host_pattern(&compiled);
+            let binds = compiled.rendered_binds();
+            let mut condition = compiled
+                .condition()
+                .unwrap_or_else(|| origin::Fragment::plain("true"));
+            if matches!(self.peek(), Token::If) {
                 self.next();
                 let guard = self.parse_expr()?;
                 self.require_type(&Ty::Bool, &guard.ty, guard.span)?;
@@ -17236,9 +17660,10 @@ impl<'a> Parser<'a> {
                 test.push(guard.rendered_source());
                 test.push_text(" })");
                 condition = test;
+            } else if compiled.tests.is_empty() {
+                exhaustive = true;
             } else {
-                exhaustive |= catch_all;
-                covered.extend(arm_covers);
+                Self::host_covers(&syntax, &mut covered);
             }
             self.expect(Token::DoubleArrow, "'=>' after a match pattern")?;
             // A block arm needs no ',' after it, as in Rust.
@@ -17466,13 +17891,16 @@ impl<'a> Parser<'a> {
         )?;
         let [consequent, alternative] = branches;
         let span = span(if_span.start(), alternative.syntax.end());
-        if let Some((subject, label)) = pattern {
+        if let Some((subject, arm, binds)) = pattern {
             let scrutinee = self.temporary("match");
             let mut source = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
             source.push(subject);
-            source.push_text(format!(";\nswitch {scrutinee} {{\n{label} => "));
+            source.push_text(format!(";\nswitch {scrutinee} {{\n"));
+            source.push(arm);
+            source.push_text(" => { ");
+            source.push(binds);
             source.push(consequent.value.rendered_block());
-            source.push_text(",\n_ => ");
+            source.push_text(" },\n_ => ");
             source.push(alternative.value.rendered_block());
             source.push_text("\n}\n}");
             return Ok(self.operator_expr(source.surrounded("(", ")"), output, span));
