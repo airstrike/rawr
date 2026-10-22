@@ -268,7 +268,7 @@ fn language_print_macros_format_like_format() {
     );
     rejected(r#"pub fn run() -> i64 { println!("{}", 1, 2); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { print!("{}"); 0 } run()"#);
-    rejected(r#"pub fn run() -> i64 { eprintln!("{:+}", "x"); 0 } run()"#);
+    rejected(r#"pub fn run() -> i64 { eprintln!("{:x}", "x"); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { print!(); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { let x: i64 = println!("a"); x } run()"#);
 }
@@ -306,7 +306,7 @@ fn language_format_specs() {
             n, -n, n, n, n, n, s, s, n, s, 'c', true
         )
     );
-    rejected(r#"pub fn run() -> i64 { let s = format!("{:+}", "x"); 0 } run()"#);
+    rejected(r#"pub fn run() -> i64 { let s = format!("{:e}", "x"); 0 } run()"#);
 }
 
 #[test]
@@ -3934,7 +3934,7 @@ fn language_format_floats_radixes_and_pretty_debug() {
          Dot(\n    Point {\n        x: 1,\n        label: \"{a}, (b)\",\n    },\n)"
     );
     rejected(r#"pub fn run() -> i64 { let s = format!("{:x}", 1.5); 0 } run()"#);
-    rejected(r#"pub fn run() -> i64 { let s = format!("{:+}", "a"); 0 } run()"#);
+    rejected(r#"pub fn run() -> i64 { let s = format!("{:z}", 1); 0 } run()"#);
 }
 
 #[test]
@@ -6500,5 +6500,185 @@ fn language_every_accepted_float_method_runs() {
                 assert_eq!(value, expected, "{ty}::{call} of {x}");
             }
         }
+    }
+}
+
+/// Every placeholder of std::fmt's grammar prints Rust's text: the table
+/// is checked against the same program built by cargo.
+#[test]
+fn language_format_specs_match_rust() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+pub fn run() -> String {
+    let digits: usize = 5;
+    let width: usize = 8;
+    let x: f64 = 3.14159;
+    let n: i32 = 255;
+    let neg: i32 = -42;
+    let big: u64 = u64::MAX;
+    let s = "hello";
+    let c = 'z';
+    let b = true;
+    let v = vec![1, 2, 3];
+    let f: f32 = 1.5;
+    let name = "Rawr";
+    let mut out = String::new();
+    out = out + &format!("{:0digits$}", 1, digits = 5) + "\n";
+    out = out + &format!("{:*^10}", "mid") + "\n";
+    out = out + &format!("{:<8}|", "ab") + "\n";
+    out = out + &format!("{:>8}|", "ab") + "\n";
+    out = out + &format!("{:^9}|", "ab") + "\n";
+    out = out + &format!("{:+}", 5) + "\n";
+    out = out + &format!("{:+}", -5) + "\n";
+    out = out + &format!("{:+.2}", x) + "\n";
+    out = out + &format!("{:#x}", n) + "\n";
+    out = out + &format!("{:#X}", n) + "\n";
+    out = out + &format!("{:#o}", n) + "\n";
+    out = out + &format!("{:#b}", 5u8) + "\n";
+    out = out + &format!("{:x}", neg) + "\n";
+    out = out + &format!("{:08.3}", x) + "\n";
+    out = out + &format!("{:#010x}", n) + "\n";
+    out = out + &format!("{:1$}|", 7, 4) + "\n";
+    out = out + &format!("{:width$}|", 7) + "\n";
+    out = out + &format!("{:>width$.prec$}", x, prec = 2) + "\n";
+    out = out + &format!("{:.*}", 3, x) + "\n";
+    out = out + &format!("{:.1$}", x, 1) + "\n";
+    out = out + &format!("{0} {1} {0}", "a", "b") + "\n";
+    out = out + &format!("{1:?} {0}", "a", "b") + "\n";
+    out = out + &format!("{name} {digits}") + "\n";
+    out = out + &format!("{x:>10.2}") + "\n";
+    out = out + &format!("{:e}", 1234.5) + "\n";
+    out = out + &format!("{:E}", 0.00012) + "\n";
+    out = out + &format!("{:.2e}", 1234.5) + "\n";
+    out = out + &format!("{:e}", 1500) + "\n";
+    out = out + &format!("{:x?}", 255) + "\n";
+    out = out + &format!("{:X?}", 255) + "\n";
+    out = out + &format!("{:#?}", v) + "\n";
+    out = out + &format!("{:?}", s) + "\n";
+    out = out + &format!("{:>8?}|", s) + "\n";
+    out = out + &format!("{:5}|", c) + "\n";
+    out = out + &format!("{:>6}|", b) + "\n";
+    out = out + &format!("{:.3}", "abcdef") + "\n";
+    out = out + &format!("{:>8.3}|", "abcdef") + "\n";
+    out = out + &format!("{:?}", x) + "\n";
+    out = out + &format!("{:?}", f) + "\n";
+    out = out + &format!("{}", big) + "\n";
+    out = out + &format!("{:x}", big) + "\n";
+    out = out + &format!("{:05}", -42) + "\n";
+    out = out + &format!("{:<05}", 7) + "\n";
+    out = out + &format!("{:^+9.1}|", x) + "\n";
+    out = out + &format!("{:#b}", 0) + "\n";
+    out = out + &format!("{{}} {}", 1) + "\n";
+    out = out + &format!("{:-^7}", "") + "\n";
+    out = out + &format!("{:.0}", 2.5) + "\n";
+    out = out + &format!("{:10.3e}|", 123456.0) + "\n";
+    out = out + &format!("{:05}|", "ab") + "\n";
+    out = out + &format!("{:#x?}", 255) + "\n";
+    out = out + &format!("{:+e}", 1234.5) + "\n";
+    out = out + &format!("{:?} {}", s, s) + "\n";
+    out
+}
+run()
+"#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let expected = r#"00001
+***mid****
+ab      |
+      ab|
+   ab    |
++5
+-5
++3.14
+0xff
+0xFF
+0o377
+0b101
+ffffffd6
+0003.142
+0x000000ff
+   7|
+       7|
+    3.14
+3.142
+3.1
+a b a
+"b" a
+Rawr 5
+      3.14
+1.2345e3
+1.2E-4
+1.23e3
+1.5e3
+ff
+FF
+[
+    1,
+    2,
+    3,
+]
+"hello"
+"hello"|
+z    |
+  true|
+abc
+     abc|
+3.14159
+1.5
+18446744073709551615
+ffffffffffffffff
+-0042
+00007
+  +3.1   |
+0b0
+{} 1
+-------
+2
+   1.235e5|
+ab   |
+0xff
++1.2345e3
+"hello" hello
+"#;
+    for (line, (actual, expected)) in value.lines().zip(expected.lines()).enumerate() {
+        assert_eq!(actual, expected, "line {}", line + 1);
+    }
+    assert_eq!(value, expected);
+}
+
+#[test]
+fn language_format_strings_are_checked_as_rustc_does() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            pub fn run() -> String {
+                println!("{:0digits$}", 1, digits = 5);
+                let width: usize = 6;
+                let y = 2.5;
+                format!("{:0digits$}|{y:>width$}|{:>1$}|{:.*}", 1, 7, 3, y, digits = 5)
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (width, y) = (6usize, 2.5);
+    assert_eq!(value, format!("{:0digits$}|{y:>width$}|{:>1$}|{:.*}", 1, 7, 3, y, digits = 5));
+    for source in [
+        r#"format!("{} {}", 1)"#,
+        r#"format!("{}", 1, 2)"#,
+        r#"format!("{a}", b = 1)"#,
+        r#"format!("{missing}")"#,
+        r#"format!("{:1$}", 7)"#,
+        r#"format!("{:.*}", 2.5)"#,
+        r#"format!("{:x}", 2.5)"#,
+        r#"format!("{:o}", "s")"#,
+        r#"format!("{:e}", true)"#,
+        r#"format!("{:width$}", 1, width = 2.5)"#,
+        r#"format!("{:q}", 1)"#,
+        r#"format!("{")"#,
+        r#"format!("}")"#,
+    ] {
+        rejected(&format!("pub fn run() -> i64 {{ let s = {source}; 0 }} run()"));
     }
 }

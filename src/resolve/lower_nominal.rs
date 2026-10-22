@@ -2652,6 +2652,13 @@ enum PreludeOp {
     /// `{:x}`, `{:X}`, `{:o}`, `{:b}` of an integer: its digits in the
     /// radix (`16`, `-16` for upper case, `8`, `2`), as Rust prints an `i64`.
     FormatRadix,
+    /// `{:x}`, `{:o}`, `{:b}` and an unsigned integer's decimal digits:
+    /// `format_bits(x, radix, bits)`, the integer's `bits` low bits as Rust
+    /// prints its type.
+    FormatBits,
+    /// `{:e}`, `{:E}` of a number: `format_exp(x, precision, mode)`, `mode`
+    /// `1` for upper case, `2` an `f32`, `4` an integer, `8` an unsigned one.
+    FormatExp,
     /// `{:#?}`: Rust's pretty `Debug` of a one-line `Debug` text.
     PrettyDebug,
     /// `collect()` into a `String`: the items' text, concatenated.
@@ -2762,6 +2769,8 @@ impl PreludeOp {
             Self::StringFromChar => "from.string-char",
             Self::FormatFloat => "format.float",
             Self::FormatRadix => "format.radix",
+            Self::FormatBits => "format.bits",
+            Self::FormatExp => "format.exp",
             Self::PrettyDebug => "format.pretty-debug",
             Self::CollectString => "iter.collect-string",
             Self::CollectVec => "iter.collect-vec",
@@ -2848,6 +2857,16 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
             ],
             Self::FormatRadix => vec![TypeId::of::<crate::INT>(), TypeId::of::<crate::INT>()],
+            Self::FormatBits => vec![
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<crate::INT>(),
+            ],
+            Self::FormatExp => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<crate::INT>(),
+            ],
             Self::PrettyDebug | Self::StrLines | Self::StrSplitWhitespace => {
                 vec![TypeId::of::<ImmutableString>()]
             }
@@ -3011,6 +3030,47 @@ impl PreludeOp {
                     8 => format!("{value:o}"),
                     -16 => format!("{value:X}"),
                     _ => format!("{value:x}"),
+                };
+                return Ok(Dynamic::from(ImmutableString::from(text)));
+            }
+            Self::FormatBits => {
+                let value = args[0].as_int().unwrap_or_default() as u64;
+                let bits = args[2].as_int().unwrap_or(64);
+                let value = if bits >= 64 { value } else { value & ((1 << bits) - 1) };
+                let text = match args[1].as_int().unwrap_or(16) {
+                    10 => value.to_string(),
+                    2 => format!("{value:b}"),
+                    8 => format!("{value:o}"),
+                    -16 => format!("{value:X}"),
+                    _ => format!("{value:x}"),
+                };
+                return Ok(Dynamic::from(ImmutableString::from(text)));
+            }
+            Self::FormatExp => {
+                let precision = usize::try_from(args[1].as_int().unwrap_or(-1)).ok();
+                let mode = args[2].as_int().unwrap_or_default();
+                let upper = mode & 1 == 1;
+                macro_rules! exp {
+                    ($value:expr) => {
+                        match (precision, upper) {
+                            (Some(precision), false) => format!("{:.precision$e}", $value),
+                            (Some(precision), true) => format!("{:.precision$E}", $value),
+                            (None, false) => format!("{:e}", $value),
+                            (None, true) => format!("{:E}", $value),
+                        }
+                    };
+                }
+                let text = if mode & 4 == 4 {
+                    let value = args[0].as_int().unwrap_or_default();
+                    if mode & 8 == 8 { exp!(value as u64) } else { exp!(value) }
+                } else {
+                    #[cfg(not(feature = "no_float"))]
+                    {
+                        let value = args[0].as_float().unwrap_or_default();
+                        if mode & 2 == 2 { exp!(value as f32) } else { exp!(value) }
+                    }
+                    #[cfg(feature = "no_float")]
+                    return Err(invariant("`f64` needs float support"));
                 };
                 return Ok(Dynamic::from(ImmutableString::from(text)));
             }
@@ -19302,9 +19362,15 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("positional `format!` arguments after named ones"));
         }
 
-        let mut pieces = Vec::<Result<String, (usize, Option<FormatSpec>)>>::new();
+        let mut pieces = Vec::<Result<String, (usize, FormatSpec)>>::new();
         let mut text = String::new();
         let mut next_positional = 0;
+        let mut counted = BTreeSet::<usize>::new();
+        let invalid = |reason: String| Error::InvalidHostOperation {
+            item: "format!".into(),
+            reason: reason.into(),
+            operation: expression,
+        };
         let mut chars = template.chars().peekable();
         while let Some(character) = chars.next() {
             match character {
@@ -19322,145 +19388,165 @@ impl<'a> Parser<'a> {
                         match chars.next() {
                             Some('}') => break,
                             Some(character) => key.push(character),
-                            None => return Err(self.unsupported("unclosed `{` in `format!`")),
+                            None => {
+                                return Err(invalid(
+                                    "invalid format string: expected `}` but string was terminated"
+                                        .into(),
+                                ))
+                            }
                         }
                     }
-                    let spec = match key.split_once(':') {
-                        Some((name, spec)) => {
-                            let Some(spec) = FormatSpec::parse(spec) else {
-                                return Err(self.unsupported("`format!` format spec"));
-                            };
-                            key = name.to_string();
-                            Some(spec)
+                    let (key, raw) = match key.split_once(':') {
+                        Some((name, spec)) => (name.trim().to_string(), spec.to_string()),
+                        None => (key.trim().to_string(), String::new()),
+                    };
+                    let spec = RawFormatSpec::parse(&raw).map_err(invalid)?;
+                    // Each `{}`/`{:.*}` takes the next positional argument;
+                    // `.*` takes one for the precision first.
+                    let take_positional = |next: &mut usize| {
+                        *next += 1;
+                        *next - 1
+                    };
+                    let resolve = |this: &mut Self,
+                                       arguments: &mut Vec<(Option<ImmutableString>, ParsedExpr)>,
+                                       reference: &FormatArgument|
+                     -> Result<usize, Error> {
+                        match reference {
+                            FormatArgument::Index(index) => {
+                                if *index >= positional {
+                                    return Err(invalid(format!(
+                                        "invalid reference to positional argument {index} (there {})",
+                                        match positional {
+                                            1 => "is 1 argument".to_string(),
+                                            count => format!("are {count} arguments"),
+                                        }
+                                    )));
+                                }
+                                Ok(*index)
+                            }
+                            FormatArgument::Name(name) => {
+                                if let Some(index) = arguments
+                                    .iter()
+                                    .position(|(named, _)| named.as_deref() == Some(name.as_str()))
+                                {
+                                    return Ok(index);
+                                }
+                                // Rust 2021's inline argument: a local of
+                                // that name.
+                                let Some(binding) = this.bindings.get(name.as_str()) else {
+                                    return Err(invalid(format!(
+                                        "cannot find value `{name}` in this scope"
+                                    )));
+                                };
+                                let captured = ParsedExpr {
+                                    prelude: origin::Fragment::default(),
+                                    source: origin::Fragment::plain(name.clone()),
+                                    ty: binding.ty.clone(),
+                                    span: expression,
+                                    lvalue: None,
+                                    outcome: crate::host::usage::Outcome::Conservative,
+                                    evaluation: crate::host::usage::Evaluation::Required,
+                                };
+                                arguments.push((Some(name.as_str().into()), captured));
+                                Ok(arguments.len() - 1)
+                            }
                         }
-                        None => None,
                     };
-                    let index = if key.is_empty() {
-                        next_positional += 1;
-                        next_positional - 1
-                    } else if let Ok(index) = key.parse::<usize>() {
-                        index
-                    } else if let Some(index) = arguments
-                        .iter()
-                        .position(|(name, _)| name.as_deref() == Some(key.as_str()))
-                    {
-                        index
-                    } else {
-                        let Some(binding) = self.bindings.get(key.as_str()) else {
-                            return Err(
-                                self.unsupported("`format!` name with no argument or local")
-                            );
-                        };
-                        let captured = ParsedExpr {
-                            prelude: origin::Fragment::default(),
-                            source: origin::Fragment::plain(key.clone()),
-                            ty: binding.ty.clone(),
-                            span: expression,
-                            lvalue: None,
-                            outcome: crate::host::usage::Outcome::Conservative,
-                            evaluation: crate::host::usage::Evaluation::Required,
-                        };
-                        arguments.push((Some(key.as_str().into()), captured));
-                        arguments.len() - 1
+                    let count = |this: &mut Self,
+                                     arguments: &mut Vec<(Option<ImmutableString>, ParsedExpr)>,
+                                     next: &mut usize,
+                                     count: &Option<FormatCountRef>|
+                     -> Result<Option<FormatCount>, Error> {
+                        Ok(match count {
+                            None => None,
+                            Some(FormatCountRef::Literal(value)) => Some(FormatCount::Literal(*value)),
+                            Some(FormatCountRef::Star) => {
+                                let index = take_positional(next);
+                                if index >= positional {
+                                    return Err(invalid(
+                                        "`.*` needs a precision argument before the value".into(),
+                                    ));
+                                }
+                                Some(FormatCount::Argument(index))
+                            }
+                            Some(FormatCountRef::Argument(reference)) => {
+                                Some(FormatCount::Argument(resolve(this, arguments, reference)?))
+                            }
+                        })
                     };
-                    if index >= arguments.len() || key.is_empty() && index >= positional {
-                        return Err(self.unsupported("`format!` placeholder without an argument"));
+                    let precision = count(self, &mut arguments, &mut next_positional, &spec.precision)?;
+                    let width = count(self, &mut arguments, &mut next_positional, &spec.width)?;
+                    let index = match &spec.argument_of(&key) {
+                        None => {
+                            let index = next_positional;
+                            next_positional += 1;
+                            if index >= positional {
+                                return Err(invalid(format!(
+                                    "{} positional argument{} in format string, but {}",
+                                    index + 1,
+                                    if index == 0 { "" } else { "s" },
+                                    match positional {
+                                        0 => "no arguments were given".to_string(),
+                                        1 => "there is 1 argument".to_string(),
+                                        count => format!("there are {count} arguments"),
+                                    }
+                                )));
+                            }
+                            index
+                        }
+                        Some(reference) => resolve(self, &mut arguments, reference)?,
+                    };
+                    for count in [&width, &precision].into_iter().flatten() {
+                        if let FormatCount::Argument(argument) = count {
+                            counted.insert(*argument);
+                        }
                     }
                     pieces.push(Ok(std::mem::take(&mut text)));
-                    pieces.push(Err((index, spec)));
+                    pieces.push(Err((index, spec.resolved(width, precision))));
                 }
-                '}' => return Err(self.unsupported("unmatched `}` in `format!`")),
+                '}' => {
+                    return Err(invalid(
+                        "invalid format string: unmatched `}` found".into(),
+                    ))
+                }
                 character => text.push(character),
             }
         }
         pieces.push(Ok(text));
 
+        // Each argument is evaluated once, in order, into a local.
         let mut source = origin::Fragment::plain("{\n");
         let mut names = Vec::new();
         let mut types = Vec::new();
-        let mut debug_texts = BTreeMap::<usize, origin::Fragment>::new();
-        for (index, (_, argument)) in arguments.iter_mut().enumerate() {
-            if !pieces
+        for (index, (name, argument)) in arguments.iter_mut().enumerate() {
+            let used = pieces
                 .iter()
-                .any(|piece| matches!(piece, Err((used, _)) if *used == index))
-            {
-                return Err(self.unsupported("`format!` argument never used"));
+                .any(|piece| matches!(piece, Err((used, _)) if *used == index));
+            if !used && !counted.contains(&index) {
+                return Err(invalid(if name.is_some() {
+                    "named argument never used".into()
+                } else {
+                    "argument never used".into()
+                }));
             }
             self.strip_string_reference(argument);
+            if counted.contains(&index) {
+                // A width or precision is a `usize`.
+                self.coerce_expr(&Ty::Int(Int::Usize), argument)?;
+            }
             let mut ty = self.inference.resolve(&argument.ty);
             // A reference or box displays as its target.
             while let Ty::Reference { target, .. } | Ty::Boxed(target) = ty {
-                ty = *target;
+                ty = self.inference.resolve(&target);
             }
-            let debug = pieces.iter().any(
-                |piece| matches!(piece, Err((used, Some(spec))) if *used == index && spec.debug),
-            );
-            let display = pieces.iter().any(|piece| {
-                matches!(piece, Err((used, spec)) if *used == index && !spec.is_some_and(|spec| spec.debug))
-            });
-            if debug && !matches!(ty, Ty::Float(_)) {
-                // Each `{:?}` of this argument renders its `Debug` text.
-                let name = self.temporary("format");
-                let rendered = self.debug_source(&ty, name.as_str().into(), argument.span)?;
-                let mut text = origin::Fragment::plain(format!("{{ let {name} = "));
-                text.push(argument.rendered_source());
-                text.push_text("; ");
-                text.push(rendered);
-                text.push_text(" }");
-                debug_texts.insert(index, text);
-            }
-            // `{}` of a type with a hand-written `Display`: its text.
-            if display
-                && !debug
-                && let Some(text) = self.display_text(&ty, argument.rendered_source())
-            {
-                let name = self.temporary("format");
-                types.push(Ty::String);
-                source.push_text(format!("let {name} = "));
-                source.push(text);
-                source.push_text(";\n");
-                names.push(name);
-                continue;
-            }
-            if display
-                && !matches!(
-                    ty,
-                    Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Char | Ty::Bool
-                )
-            {
-                return Err(Error::TypeMismatch {
-                    expected: "i64, f64, String, char or bool in `format!`".into(),
-                    actual: ty.name(&self.models),
-                    expression: argument.span,
-                });
-            }
-            for piece in &pieces {
-                if let Err((used, Some(spec))) = piece
-                    && *used == index
-                    && (spec.sign && !matches!(ty, Ty::Int(_) | Ty::Float(_))
-                        || spec.radix.is_some() && !matches!(ty, Ty::Int(_)))
-                {
-                    return Err(Error::TypeMismatch {
-                        expected: "a number for this `format!` spec".into(),
-                        actual: ty.name(&self.models),
-                        expression: argument.span,
-                    });
-                }
-            }
-            let name = self.temporary("format");
-            types.push(ty);
-            source.push_text(format!("let {name} = "));
-            match debug_texts.remove(&index) {
-                // A `Debug`-only argument is held as its text.
-                Some(text) if !display => source.push(text),
-                Some(_) => {
-                    return Err(self.unsupported("one `format!` argument as both `{}` and `{:?}`"))
-                }
-                None => source.push(argument.rendered_source()),
-            }
+            let temporary = self.temporary("format");
+            source.push_text(format!("let {temporary} = "));
+            source.push(argument.rendered_source());
             source.push_text(";\n");
-            names.push(name);
+            names.push(temporary);
+            types.push((ty, argument.span));
         }
+
         let mut text = origin::Fragment::plain("\"\"");
         for piece in pieces {
             let (index, spec) = match piece {
@@ -19471,53 +19557,116 @@ impl<'a> Parser<'a> {
                 }
                 Err(placeholder) => placeholder,
             };
-            let mut value = origin::Fragment::plain(names[index].as_str());
-            // An `f64` prints Rust's text at the spec's precision; a radix
-            // its digits; `{:#?}` the pretty `Debug`.
-            let float = matches!(types[index], Ty::Float(_));
-            let radix = spec.and_then(|spec| spec.radix);
-            if float {
-                let precision = spec.and_then(|spec| spec.precision);
-                let precision = precision.map_or(-1, |precision| precision as crate::INT);
-                // The mode: `1` for `Debug`, plus `2` for an `f32`.
-                let debug = INT::from(spec.is_some_and(|spec| spec.debug))
-                    + if matches!(self.inference.resolve(&types[index]), Ty::Float(Float::F32)) {
-                        2
-                    } else {
-                        0
+            let (ty, at) = types[index].clone();
+            let name = origin::Fragment::plain(names[index].as_str());
+            let count = |count: &Option<FormatCount>| {
+                count.as_ref().map(|count| match count {
+                    FormatCount::Literal(value) => value.to_string(),
+                    FormatCount::Argument(argument) => names[*argument].clone(),
+                })
+            };
+            let width = count(&spec.width);
+            let precision = count(&spec.precision);
+            let float = matches!(ty, Ty::Float(_));
+            let int = match ty {
+                Ty::Int(kind) => Some(kind),
+                _ => None,
+            };
+            let number = float || int.is_some();
+            let mismatch = |expected: &str| Error::TypeMismatch {
+                expected: expected.into(),
+                actual: ty.name(&self.models),
+                expression: at,
+            };
+            let f32_mode = if matches!(ty, Ty::Float(Float::F32)) { 2 } else { 0 };
+            let value = match spec.kind {
+                FormatKind::Exp { upper } => {
+                    if !number {
+                        return Err(mismatch("a number for `{:e}`"));
+                    }
+                    let unsigned = int.is_some_and(|kind| !kind.signed());
+                    let mode = i64::from(upper)
+                        + f32_mode
+                        + if int.is_some() { 4 } else { 0 }
+                        + if unsigned { 8 } else { 0 };
+                    let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                    self.prelude_op(
+                        PreludeOp::FormatExp,
+                        [name, precision.into(), mode.to_string().into()],
+                    )
+                }
+                FormatKind::Radix(radix) | FormatKind::HexDebug(radix) => {
+                    let Some(kind) = int else {
+                        return Err(mismatch(if matches!(spec.kind, FormatKind::Radix(_)) {
+                            "an integer for this `format!` spec"
+                        } else {
+                            "an integer for `{:x?}`"
+                        }));
                     };
-                let arguments = [precision.to_string(), debug.to_string()];
-                let arguments = arguments.map(origin::Fragment::plain);
-                let [precision, debug] = arguments;
-                value = self.prelude_op(PreludeOp::FormatFloat, [value, precision, debug]);
-            } else if let Some(radix) = radix {
-                let radix = origin::Fragment::plain(radix.to_string());
-                value = self.prelude_op(PreludeOp::FormatRadix, [value, radix]);
-            } else if let Ty::Int(Int::U64 | Int::Usize) = self.inference.resolve(&types[index])
-                && !spec.is_some_and(|spec| spec.debug)
-            {
-                value = self.prelude_op(PreludeOp::FormatRadix, [value, "10".into()]);
-            } else if spec.is_some_and(|spec| spec.debug && spec.alternate) {
-                value = self.prelude_op(PreludeOp::PrettyDebug, [value]);
-            }
-            match spec {
-                Some(spec)
-                    if spec.width > 0
-                        || spec.sign
-                        || spec.alternate && radix.is_some()
-                        || spec.precision.is_some() && !float && !spec.debug =>
-                {
-                    let name = self.temporary("format");
-                    source.push_text(format!("let {name} = "));
-                    source.push(value);
-                    source.push_text(";\n");
-                    let number = matches!(types[index], Ty::Int(_) | Ty::Float(_));
-                    text.push_text(format!(" + {}", spec.render(&name, number)));
+                    self.prelude_op(
+                        PreludeOp::FormatBits,
+                        [name, radix.to_string().into(), kind.bits().to_string().into()],
+                    )
                 }
-                _ => {
-                    text.push_text(" + ");
-                    text.push(value);
+                FormatKind::Debug | FormatKind::Display if float => {
+                    let debug = i64::from(spec.kind == FormatKind::Debug) + f32_mode;
+                    let precision = precision.clone().unwrap_or_else(|| "-1".into());
+                    self.prelude_op(
+                        PreludeOp::FormatFloat,
+                        [name, precision.into(), debug.to_string().into()],
+                    )
                 }
+                FormatKind::Debug => {
+                    if spec.width.is_some()
+                        && !matches!(ty, Ty::Int(_) | Ty::String | Ty::Char | Ty::Bool)
+                    {
+                        return Err(self.unsupported("a `{:?}` width on a compound value"));
+                    }
+                    let rendered = self.debug_source(&ty, name, at)?;
+                    if spec.alternate {
+                        self.prelude_op(PreludeOp::PrettyDebug, [rendered])
+                    } else {
+                        rendered
+                    }
+                }
+                FormatKind::Display => {
+                    if let Some(text) = self.display_text(&ty, name.clone()) {
+                        text
+                    } else if !matches!(
+                        ty,
+                        Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Char | Ty::Bool
+                    ) {
+                        return Err(mismatch("a type with `Display` in `format!`"));
+                    } else if let Some(kind @ (Int::U64 | Int::Usize)) = int {
+                        self.prelude_op(
+                            PreludeOp::FormatBits,
+                            [name, "10".into(), kind.bits().to_string().into()],
+                        )
+                    } else {
+                        name
+                    }
+                }
+            };
+            let prefixed = spec.alternate
+                && matches!(spec.kind, FormatKind::Radix(_) | FormatKind::HexDebug(_));
+            let truncated = precision.is_some() && !number && spec.kind == FormatKind::Display;
+            // `str`'s and `char`'s `Debug` ignore width and precision.
+            let quoted = spec.kind == FormatKind::Debug && matches!(ty, Ty::String | Ty::Char);
+            if !quoted && (width.is_some() || spec.sign && number || prefixed || truncated) {
+                let temporary = self.temporary("format");
+                source.push_text(format!("let {temporary} = "));
+                source.push(value);
+                source.push_text(";\n");
+                let rendered = spec.render(
+                    &temporary,
+                    number,
+                    width.as_deref(),
+                    precision.as_deref().filter(|_| truncated),
+                );
+                text.push_text(format!(" + {rendered}"));
+            } else {
+                text.push_text(" + ");
+                text.push(value);
             }
         }
         source.push(text);
@@ -30748,39 +30897,57 @@ struct LoopFrame {
     exits: BTreeSet<usize>,
 }
 
-/// A `format!` spec with Rust's fill, alignment, `+`, `0`, width and
-/// precision; precision truncates strings and is ignored for integers.
-#[derive(Clone, Copy)]
-struct FormatSpec {
-    /// `{:?}`: Rust's `Debug`.
-    debug: bool,
+/// An argument a format string names: `{0}`, `{name}`, `1$`, `name$`.
+#[derive(Clone, Debug, PartialEq)]
+enum FormatArgument {
+    Index(usize),
+    Name(String),
+}
+
+/// A width or precision as written: `5`, `1$`, `name$` or `.*`.
+#[derive(Clone, Debug, PartialEq)]
+enum FormatCountRef {
+    Literal(usize),
+    Argument(FormatArgument),
+    Star,
+}
+
+/// A width or precision: a literal or the argument holding it.
+#[derive(Clone, Debug, PartialEq)]
+enum FormatCount {
+    Literal(usize),
+    Argument(usize),
+}
+
+/// The trait a placeholder formats with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FormatKind {
+    Display,
+    /// `?`.
+    Debug,
+    /// `x`, `X`, `o`, `b`: `16`, `-16`, `8`, `2`.
+    Radix(i8),
+    /// `x?`, `X?`: `Debug` with hexadecimal integers.
+    HexDebug(i8),
+    /// `e`, `E`.
+    Exp { upper: bool },
+}
+
+/// std::fmt's `format_spec`, before its arguments are resolved:
+/// `[[fill]align][sign]['#']['0'][width]['.' precision]type`.
+struct RawFormatSpec {
     fill: char,
     align: Option<char>,
     sign: bool,
-    zero: bool,
-    width: usize,
-    precision: Option<usize>,
-    /// `#`: `{:#?}` pretty `Debug`, `{:#x}` a `0x` prefix.
     alternate: bool,
-    /// `{:x}` (16), `{:X}` (-16), `{:o}` (8), `{:b}` (2).
-    radix: Option<i8>,
+    zero: bool,
+    width: Option<FormatCountRef>,
+    precision: Option<FormatCountRef>,
+    kind: FormatKind,
 }
 
-impl FormatSpec {
-    fn parse(spec: &str) -> Option<Self> {
-        let (spec, debug, radix) = match spec.chars().last() {
-            Some('?') => (&spec[..spec.len() - 1], true, None),
-            Some(kind @ ('x' | 'X' | 'o' | 'b')) => {
-                let radix = match kind {
-                    'x' => 16,
-                    'X' => -16,
-                    'o' => 8,
-                    _ => 2,
-                };
-                (&spec[..spec.len() - 1], false, Some(radix))
-            }
-            _ => (spec, false, None),
-        };
+impl RawFormatSpec {
+    fn parse(spec: &str) -> Result<Self, String> {
         let chars: Vec<char> = spec.chars().collect();
         let mut at = 0;
         let mut fill = ' ';
@@ -30794,47 +30961,147 @@ impl FormatSpec {
             at = 1;
         }
         let sign = chars.get(at) == Some(&'+');
-        at += usize::from(sign);
+        if matches!(chars.get(at), Some('+' | '-')) {
+            at += 1;
+        }
         let alternate = chars.get(at) == Some(&'#');
         at += usize::from(alternate);
-        let zero = chars.get(at) == Some(&'0');
+        // `0$` is a width argument, not the `0` flag.
+        let zero = chars.get(at) == Some(&'0') && chars.get(at + 1) != Some(&'$');
         at += usize::from(zero);
-        let digits = |at: &mut usize| {
+        let integer = |at: &mut usize| -> Option<usize> {
             let start = *at;
             while chars.get(*at).is_some_and(char::is_ascii_digit) {
                 *at += 1;
             }
-            chars[start..*at]
-                .iter()
-                .collect::<String>()
-                .parse::<usize>()
-                .ok()
+            chars[start..*at].iter().collect::<String>().parse().ok()
         };
-        let width = digits(&mut at).unwrap_or(0);
+        let identifier = |at: usize| -> Option<(String, usize)> {
+            let start = at;
+            let mut end = at;
+            if !chars
+                .get(end)
+                .is_some_and(|c| c.is_alphabetic() || *c == '_')
+            {
+                return None;
+            }
+            while chars
+                .get(end)
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+            {
+                end += 1;
+            }
+            Some((chars[start..end].iter().collect(), end))
+        };
+        // `count := integer | integer '$' | identifier '$'`.
+        let count = |at: &mut usize| -> Option<FormatCountRef> {
+            let start = *at;
+            if let Some(value) = integer(at) {
+                if chars.get(*at) == Some(&'$') {
+                    *at += 1;
+                    return Some(FormatCountRef::Argument(FormatArgument::Index(value)));
+                }
+                return Some(FormatCountRef::Literal(value));
+            }
+            if let Some((name, end)) = identifier(start)
+                && chars.get(end) == Some(&'$')
+            {
+                *at = end + 1;
+                return Some(FormatCountRef::Argument(FormatArgument::Name(name)));
+            }
+            None
+        };
+        let width = count(&mut at);
         let precision = if chars.get(at) == Some(&'.') {
             at += 1;
-            Some(digits(&mut at)?)
+            if chars.get(at) == Some(&'*') {
+                at += 1;
+                Some(FormatCountRef::Star)
+            } else {
+                Some(count(&mut at).ok_or_else(|| {
+                    "invalid format string: expected a precision after `.`".to_string()
+                })?)
+            }
         } else {
             None
         };
-        (at == chars.len()).then_some(Self {
-            debug,
+        let kind = match chars[at..].iter().collect::<String>().as_str() {
+            "" => FormatKind::Display,
+            "?" => FormatKind::Debug,
+            "x" => FormatKind::Radix(16),
+            "X" => FormatKind::Radix(-16),
+            "o" => FormatKind::Radix(8),
+            "b" => FormatKind::Radix(2),
+            "x?" => FormatKind::HexDebug(16),
+            "X?" => FormatKind::HexDebug(-16),
+            "e" => FormatKind::Exp { upper: false },
+            "E" => FormatKind::Exp { upper: true },
+            other => return Err(format!("unknown format trait `{other}`")),
+        };
+        Ok(Self {
             fill,
             align,
             sign,
+            alternate,
             zero,
             width,
             precision,
-            alternate,
-            radix,
+            kind,
         })
     }
 
-    /// A Rawr block that formats the value named `name` as Rust would.
-    fn render(&self, name: &str, number: bool) -> String {
-        let width = self.width;
+    /// The argument `key` (before the `:`) names: `None` for the next
+    /// positional one.
+    fn argument_of(&self, key: &str) -> Option<FormatArgument> {
+        if key.is_empty() {
+            None
+        } else if let Ok(index) = key.parse::<usize>() {
+            Some(FormatArgument::Index(index))
+        } else {
+            Some(FormatArgument::Name(key.to_string()))
+        }
+    }
+
+    fn resolved(self, width: Option<FormatCount>, precision: Option<FormatCount>) -> FormatSpec {
+        FormatSpec {
+            fill: self.fill,
+            align: self.align,
+            sign: self.sign,
+            alternate: self.alternate,
+            zero: self.zero,
+            width,
+            precision,
+            kind: self.kind,
+        }
+    }
+}
+
+/// A placeholder's spec with its width and precision resolved.
+#[derive(Clone)]
+struct FormatSpec {
+    fill: char,
+    align: Option<char>,
+    sign: bool,
+    alternate: bool,
+    zero: bool,
+    width: Option<FormatCount>,
+    precision: Option<FormatCount>,
+    kind: FormatKind,
+}
+
+impl FormatSpec {
+    /// A Rawr block that pads the text named `name` as Rust would: `width`
+    /// and `precision` are Rawr expressions (a literal or a local).
+    fn render(
+        &self,
+        name: &str,
+        number: bool,
+        width: Option<&str>,
+        precision: Option<&str>,
+    ) -> String {
+        let width = width.unwrap_or("0");
         let mut out = format!("{{ let s = \"\" + {name};");
-        if let (Some(precision), false) = (self.precision, number) {
+        if let Some(precision) = precision {
             out += &format!(" if s.len() > {precision} {{ s = s.sub_string(0, {precision}); }}");
         }
         if number {
@@ -30843,7 +31110,11 @@ impl FormatSpec {
             if self.sign {
                 out += " else { sign = \"+\"; }";
             }
-            if let (true, Some(radix)) = (self.alternate, self.radix) {
+            let radix = match self.kind {
+                FormatKind::Radix(radix) | FormatKind::HexDebug(radix) => Some(radix),
+                _ => None,
+            };
+            if let (true, Some(radix)) = (self.alternate, radix) {
                 let prefix = match radix {
                     2 => "0b",
                     8 => "0o",
