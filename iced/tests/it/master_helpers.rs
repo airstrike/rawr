@@ -162,3 +162,62 @@ fn master_exit_checks_and_closes_through_a_window_task() {
     let confirm = simulator.into_messages().next().expect("the button emits");
     adapter.update(confirm).unwrap();
 }
+
+const WRAPPERS: &str = r#"
+use iced::widget::{button, column, container, hover, lazy, mouse_area, opaque, pin, responsive, stack, text};
+use iced::{Fill, Size, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    version: i64,
+    pressed: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Pressed,
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Pressed => {
+                self.pressed += 1;
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let list = lazy(self.version, |version: &i64| column![text("Lazy"), text(*version)]);
+        let sized = responsive(|size: Size| text(if size.width > 0.0 { "Wide" } else { "Narrow" }));
+        column![
+            list,
+            hover(text("Base"), text("Top")),
+            opaque(text("Opaque")),
+            container(sized).height(40),
+            mouse_area(text("Area")).on_press(Message::Pressed),
+            stack![container(text("Under")).width(Fill), pin(text("Pinned")).x(10).y(5)].height(40),
+            text(self.pressed),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_wrappers_lower_their_content() {
+    let mut adapter = boot(WRAPPERS);
+    let _ = iced_test::simulator(adapter.view());
+    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    for label in ["Lazy", "Base", "Opaque", "Wide", "Area", "Under", "Pinned", "0"] {
+        find(&adapter, label);
+    }
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("Area").unwrap();
+    let pressed = simulator.into_messages().next().expect("the area emits");
+    adapter.update(pressed).unwrap();
+    find(&adapter, "1");
+}

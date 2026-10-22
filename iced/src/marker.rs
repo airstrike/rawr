@@ -385,3 +385,26 @@ pub(crate) struct Native {
             + Sync,
     >,
 }
+
+/// iced's `pin(content)`: content at a fixed position.
+#[derive(Clone)]
+pub(crate) struct Pin {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) child: widget::Value,
+    pub(crate) position: iced::Point,
+    pub(crate) width: iced::Length,
+    pub(crate) height: iced::Length,
+}
+
+/// iced's `mouse_area(content)`: the messages of each mouse event.
+#[derive(Clone)]
+pub(crate) struct MouseArea {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) child: widget::Value,
+    /// One optional Message per `crate::MOUSE_AREA_MESSAGES` entry.
+    pub(crate) messages: [Option<Dynamic>; 9],
+    pub(crate) on_move: Option<item::Value>,
+    pub(crate) interaction: Option<iced::mouse::Interaction>,
+}

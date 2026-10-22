@@ -18,6 +18,8 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_stack(builder);
     bind_values(builder);
     bind_font(builder);
+    bind_fields(builder);
+    bind_wrappers(builder);
 }
 
 fn bind_alignment(builder: &mut host::runtime::Builder) {
@@ -349,6 +351,36 @@ fn bind_values(builder: &mut host::runtime::Builder) {
         .expect("the iced facade must retain the exact color macro");
 }
 
+fn bind_fields(builder: &mut host::runtime::Builder) {
+    fn reader<T: Clone + 'static>(
+        builder: &mut host::runtime::Builder,
+        path: &'static str,
+        read: fn(&T) -> f32,
+    ) {
+        builder
+            .bind(path, move |args| {
+                let [value] = args else {
+                    return Err(arity(path, 1, args.len()));
+                };
+                let value = value
+                    .read_lock::<T>()
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                Ok(Dynamic::from(f64::from(read(&value))))
+            })
+            .expect("the iced facade must retain every field reader");
+    }
+    reader::<iced::Size>(builder, "iced::Size::width", |size| size.width);
+    reader::<iced::Size>(builder, "iced::Size::height", |size| size.height);
+    reader::<iced::Point>(builder, "iced::Point::x", |point| point.x);
+    reader::<iced::Point>(builder, "iced::Point::y", |point| point.y);
+    reader::<iced::Vector>(builder, "iced::Vector::x", |vector| vector.x);
+    reader::<iced::Vector>(builder, "iced::Vector::y", |vector| vector.y);
+    reader::<iced::Rectangle>(builder, "iced::Rectangle::x", |bounds| bounds.x);
+    reader::<iced::Rectangle>(builder, "iced::Rectangle::y", |bounds| bounds.y);
+    reader::<iced::Rectangle>(builder, "iced::Rectangle::width", |bounds| bounds.width);
+    reader::<iced::Rectangle>(builder, "iced::Rectangle::height", |bounds| bounds.height);
+}
+
 fn bind_font(builder: &mut host::runtime::Builder) {
     use iced::font::{Family, Stretch, Style, Weight};
 
@@ -467,4 +499,284 @@ fn font_and<T: Clone + 'static>(
     let font = take::<iced::Font>(args[0], "iced::Font")?;
     let value = take::<T>(args[1], expected)?;
     Ok((font, value))
+}
+
+/// The Element `function` returns for `arguments`, lowered; a diagnostic
+/// when it fails.
+fn invoke_view(
+    context: &widget::Context<'_>,
+    function: &rawr::item::Value,
+    arguments: &mut [Dynamic],
+    widget: &str,
+) -> iced::Element<'static, runtime::Message> {
+    match context.invoke(function, arguments) {
+        None => iced::widget::space().boxed(),
+        Some(Ok(view)) => match into_element(view) {
+            Ok(view) => view.lower(context),
+            Err(error) => {
+                widget::diagnostic(format!("{widget} view failed: {error}")).lower(context)
+            }
+        },
+        Some(Err(error)) => {
+            widget::diagnostic(format!("{widget} view failed: {error}")).lower(context)
+        }
+    }
+}
+
+/// A view function's widget as an Element: a closure's body is the widget
+/// itself (`column![..]`), which iced converts with `Into<Element>`.
+fn into_element(view: Dynamic) -> Result<widget::Value, String> {
+    macro_rules! widgets {
+        ($($marker:ident),*) => {
+            $(if view.is::<marker::$marker>() {
+                return Ok(widget::Value::new(view.cast::<marker::$marker>()));
+            })*
+        };
+    }
+    if view.is::<widget::Value>() {
+        return Ok(view.cast::<widget::Value>());
+    }
+    widgets!(
+        Text, TextInput, Checkbox, Toggler, Slider, ProgressBar, Transition, Button, Column, Row,
+        Container, Tooltip, Scrollable, Logo, Sensor, Space, Radio, PickList, ComboBox, Stack,
+        Pin, MouseArea
+    );
+    Err(format!("expected a widget, found `{}`", view.type_name()))
+}
+
+fn take_function(
+    value: &mut Dynamic,
+    operation: &str,
+) -> Result<rawr::item::Value, Box<EvalAltResult>> {
+    let actual = value.type_name();
+    value.take().try_cast_result::<rawr::item::Value>().map_err(|_| {
+        runtime_error(format!(
+            "{operation} received `{actual}`, expected an exact symbolic function"
+        ))
+    })
+}
+
+impl widget::Descriptor for marker::Pin {
+    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+        iced::widget::pin(self.child.lower(context))
+            .position(self.position)
+            .width(self.width)
+            .height(self.height)
+            .boxed()
+    }
+
+    fn identity(&self) -> widget::Identity {
+        self.identity.clone()
+    }
+}
+
+impl Witnessed for marker::Pin {
+    fn witness(&self) -> &host::runtime::Witness {
+        &self.witness
+    }
+}
+
+impl widget::Descriptor for marker::MouseArea {
+    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+        type Set = fn(
+            iced::widget::MouseArea<'static, runtime::Message>,
+            runtime::Message,
+        ) -> iced::widget::MouseArea<'static, runtime::Message>;
+        let setters: [Set; 9] = [
+            |area, message| area.on_press(message),
+            |area, message| area.on_release(message),
+            |area, message| area.on_double_click(message),
+            |area, message| area.on_right_press(message),
+            |area, message| area.on_right_release(message),
+            |area, message| area.on_middle_press(message),
+            |area, message| area.on_middle_release(message),
+            |area, message| area.on_enter(message),
+            |area, message| area.on_exit(message),
+        ];
+        let mut area = iced::widget::mouse_area(self.child.lower(context));
+        for (message, set) in self.messages.iter().zip(setters) {
+            if let Some(payload) = message {
+                area = set(area, context.message(payload.clone()));
+            }
+        }
+        if let Some(mapper) = &self.on_move {
+            let mapper = context.message_mapper(mapper.clone());
+            area = area.on_move(move |point| mapper.map(Dynamic::from(point)));
+        }
+        if let Some(interaction) = self.interaction {
+            area = area.interaction(interaction);
+        }
+        area.boxed()
+    }
+
+    fn identity(&self) -> widget::Identity {
+        self.identity.clone()
+    }
+}
+
+impl Witnessed for marker::MouseArea {
+    fn witness(&self) -> &host::runtime::Witness {
+        &self.witness
+    }
+}
+
+fn bind_wrappers(builder: &mut host::runtime::Builder) {
+    builder
+        .bind_with_context("iced::widget::lazy", |call, args| {
+            if args.len() != 2 {
+                return Err(arity("lazy", 2, args.len()));
+            }
+            let dependency = args[0].take();
+            let view = take_function(args[1], "lazy")?;
+            native(call, move |context| {
+                invoke_view(context, &view, &mut [dependency.clone()], "lazy")
+            })
+        })
+        .expect("the iced facade must retain lazy");
+    builder
+        .bind_with_context("iced::widget::hover", |call, args| {
+            if args.len() != 2 {
+                return Err(arity("hover", 2, args.len()));
+            }
+            let base = take::<widget::Value>(args[0], "iced::Element")?;
+            let top = take::<widget::Value>(args[1], "iced::Element")?;
+            native(call, move |context| {
+                iced::widget::hover(base.lower(context), top.lower(context)).boxed()
+            })
+        })
+        .expect("the iced facade must retain hover");
+    builder
+        .bind_with_context("iced::widget::opaque", |call, args| {
+            if args.len() != 1 {
+                return Err(arity("opaque", 1, args.len()));
+            }
+            let content = take::<widget::Value>(args[0], "iced::Element")?;
+            native(call, move |context| iced::widget::opaque(content.lower(context)).boxed())
+        })
+        .expect("the iced facade must retain opaque");
+    builder
+        .bind_with_context("iced::widget::responsive", |call, args| {
+            if args.len() != 1 {
+                return Err(arity("responsive", 1, args.len()));
+            }
+            let view = take_function(args[0], "responsive")?;
+            native(call, move |context| {
+                let owned = context.owned();
+                let view = view.clone();
+                iced::widget::responsive(move |size| {
+                    invoke_view(&owned.context(), &view, &mut [Dynamic::from(size)], "responsive")
+                })
+                .boxed()
+            })
+        })
+        .expect("the iced facade must retain responsive");
+
+    bind_widget_type::<marker::Pin>(builder, "iced::widget::Pin");
+    builder
+        .bind_with_context("iced::widget::pin", |call, args| {
+            if args.len() != 1 {
+                return Err(arity("pin", 1, args.len()));
+            }
+            Ok(Dynamic::from(marker::Pin {
+                witness: call.output_witness().map_err(witness_error)?,
+                identity: widget::Identity::unique(),
+                child: take::<widget::Value>(args[0], "iced::Element")?,
+                position: iced::Point::ORIGIN,
+                width: iced::Length::Fill,
+                height: iced::Length::Fill,
+            }))
+        })
+        .expect("the iced facade must retain pin");
+    for name in ["x", "y", "position", "width", "height"] {
+        let path = format!("iced::widget::Pin::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                if args.len() != 2 {
+                    return Err(arity(&path, 2, args.len()));
+                }
+                let mut pin = take::<marker::Pin>(args[0], "iced::widget::Pin")?;
+                match name {
+                    "x" => pin.position.x = super::builtin::pixels(args[1], &path)?,
+                    "y" => pin.position.y = super::builtin::pixels(args[1], &path)?,
+                    "position" => pin.position = take::<iced::Point>(args[1], "iced::Point")?,
+                    "width" => pin.width = length(args[1])?,
+                    _ => pin.height = length(args[1])?,
+                }
+                Ok(Dynamic::from(pin))
+            })
+            .expect("the iced facade must retain every Pin builder");
+    }
+
+    bind_widget_type::<marker::MouseArea>(builder, "iced::widget::MouseArea");
+    builder
+        .bind_with_context("iced::widget::mouse_area", |call, args| {
+            if args.len() != 1 {
+                return Err(arity("mouse_area", 1, args.len()));
+            }
+            Ok(Dynamic::from(marker::MouseArea {
+                witness: call.output_witness().map_err(witness_error)?,
+                identity: widget::Identity::unique(),
+                child: take::<widget::Value>(args[0], "iced::Element")?,
+                messages: Default::default(),
+                on_move: None,
+                interaction: None,
+            }))
+        })
+        .expect("the iced facade must retain mouse_area");
+    for (index, name) in crate::MOUSE_AREA_MESSAGES.into_iter().enumerate() {
+        let path = format!("iced::widget::MouseArea::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                if args.len() != 2 {
+                    return Err(arity(&path, 2, args.len()));
+                }
+                let mut area = take::<marker::MouseArea>(args[0], "iced::widget::MouseArea")?;
+                area.messages[index] = Some(args[1].take());
+                Ok(Dynamic::from(area))
+            })
+            .expect("the iced facade must retain every MouseArea message builder");
+    }
+    builder
+        .bind("iced::widget::MouseArea::on_move", |args| {
+            if args.len() != 2 {
+                return Err(arity("MouseArea::on_move", 2, args.len()));
+            }
+            let mut area = take::<marker::MouseArea>(args[0], "iced::widget::MouseArea")?;
+            area.on_move = Some(take_function(args[1], "MouseArea::on_move")?);
+            Ok(Dynamic::from(area))
+        })
+        .expect("the iced facade must retain MouseArea::on_move");
+    builder
+        .bind("iced::widget::MouseArea::interaction", |args| {
+            if args.len() != 2 {
+                return Err(arity("MouseArea::interaction", 2, args.len()));
+            }
+            let mut area = take::<marker::MouseArea>(args[0], "iced::widget::MouseArea")?;
+            area.interaction = Some(take::<iced::mouse::Interaction>(
+                args[1],
+                "iced::mouse::Interaction",
+            )?);
+            Ok(Dynamic::from(area))
+        })
+        .expect("the iced facade must retain MouseArea::interaction");
+}
+
+/// A generic widget type's attestation and its projection into Element.
+fn bind_widget_type<T>(builder: &mut host::runtime::Builder, path: &'static str)
+where
+    T: widget::Descriptor + Witnessed + Clone,
+{
+    builder
+        .bind_type_attestation(path, |value, expected| {
+            let value = value.read_lock::<T>()?;
+            (expected.argument_count() == 1)
+                .then(|| expected.attest_witness(Some(value.witness())))
+                .flatten()
+        })
+        .expect("the iced facade must declare each generic widget type exactly once");
+    builder
+        .bind_projection_with_context(path, "iced::Element", move |call, args| {
+            project::<T>(call, args, path)
+        })
+        .expect("the iced facade must retain each widget's projection into Element");
 }

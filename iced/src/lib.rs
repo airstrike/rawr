@@ -215,6 +215,10 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.value_type::<iced::window::Id>("window::Id", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
     builder.type_::<marker::Stack>("widget::Stack", &["Message"], &[])?;
     builder.project("widget::Stack", "Element", &["Message"])?;
+    builder.type_::<marker::Pin>("widget::Pin", &["Message"], &[])?;
+    builder.project("widget::Pin", "Element", &["Message"])?;
+    builder.type_::<marker::MouseArea>("widget::MouseArea", &["Message"], &[])?;
+    builder.project("widget::MouseArea", "Element", &["Message"])?;
     builder.default_value_type::<iced::font::Weight>(
         "font::Weight",
         &[],
@@ -720,6 +724,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_canonical_values(&mut builder)?;
     declare_master_helpers(&mut builder)?;
     declare_native_tasks(&mut builder)?;
+    declare_wrappers(&mut builder)?;
     declare_font(&mut builder)?;
 
     builder.finish()
@@ -1627,12 +1632,113 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
             integer_signature("time::Duration", 1)?,
         )?)?;
     }
+    // `size.width`, `point.x` and kin, read as fields.
+    for (owner, fields) in [
+        ("Size", &["width", "height"][..]),
+        ("Point", &["x", "y"][..]),
+        ("Vector", &["x", "y"][..]),
+        ("Rectangle", &["x", "y", "width", "height"][..]),
+    ] {
+        for field in fields {
+            let mut reader = signature::Builder::new();
+            reader.output(type_ref::Type::builtin(type_ref::Builtin::F64));
+            builder.item(item::Definition::method(
+                format!("{owner}::{field}"),
+                receiver::Mode::Shared,
+                reader.finish(),
+            )?)?;
+        }
+    }
     builder.item(item::Definition::intrinsic_macro(
         "color",
         repeated_builtin_signature(type_ref::Builtin::I64, 1, "Color")?,
     )?)?;
     Ok(())
 }
+
+/// iced's `lazy`, `hover`, `opaque`, `responsive`, `pin` and `mouse_area`.
+/// `lazy` calls its view each time the view is drawn: a Rawr view is
+/// recomputed as a whole, so there is no older content to keep.
+fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let element = |message: &str| -> Result<type_ref::Type, host::Error> {
+        type_ref::Type::applied("Element", [type_ref::Type::parameter(message)?])
+    };
+    let mut lazy = signature::Builder::new();
+    lazy.type_parameter("D", &[])?;
+    lazy.type_parameter("Message", &[])?;
+    lazy.parameter(type_ref::Type::parameter("D")?);
+    lazy.parameter(type_ref::Type::callable(
+        type_ref::Type::parameter("D")?,
+        element("Message")?,
+    ));
+    lazy.output(element("Message")?);
+    builder.item(item::Definition::function("widget::lazy", lazy.finish())?)?;
+    let mut hover = signature::Builder::new();
+    hover.type_parameter("Message", &[])?;
+    hover.parameter(element("Message")?);
+    hover.parameter(element("Message")?);
+    hover.output(element("Message")?);
+    builder.item(item::Definition::function("widget::hover", hover.finish())?)?;
+    let mut opaque = signature::Builder::new();
+    opaque.type_parameter("Message", &[])?;
+    opaque.parameter(element("Message")?);
+    opaque.output(element("Message")?);
+    builder.item(item::Definition::function("widget::opaque", opaque.finish())?)?;
+    let mut responsive = signature::Builder::new();
+    responsive.type_parameter("Message", &[])?;
+    responsive.parameter(type_ref::Type::callable(
+        type_ref::Type::registered("Size")?,
+        element("Message")?,
+    ));
+    responsive.output(element("Message")?);
+    builder.item(item::Definition::function("widget::responsive", responsive.finish())?)?;
+
+    builder.item(item::Definition::function(
+        "widget::pin",
+        unary_widget_signature("widget::Pin")?,
+    )?)?;
+    pixels_builders(builder, "widget::Pin", "x")?;
+    pixels_builders(builder, "widget::Pin", "y")?;
+    builders(builder, "widget::Pin", "position", [type_ref::Type::registered("Point")?])?;
+    length_builders(builder, "widget::Pin", &["width", "height"])?;
+
+    builder.item(item::Definition::function(
+        "widget::mouse_area",
+        unary_widget_signature("widget::MouseArea")?,
+    )?)?;
+    for name in MOUSE_AREA_MESSAGES {
+        builder.item(item::Definition::method(
+            format!("widget::MouseArea::{name}"),
+            receiver::Mode::Owned,
+            message_builder_signature("widget::MouseArea", false)?,
+        )?)?;
+    }
+    builder.item(item::Definition::method(
+        "widget::MouseArea::on_move",
+        receiver::Mode::Owned,
+        message_mapper_signature("widget::MouseArea", type_ref::Type::registered("Point")?)?,
+    )?)?;
+    builders(
+        builder,
+        "widget::MouseArea",
+        "interaction",
+        [type_ref::Type::registered("mouse::Interaction")?],
+    )?;
+    Ok(())
+}
+
+/// `MouseArea`'s builders that take a Message.
+pub(crate) const MOUSE_AREA_MESSAGES: [&str; 9] = [
+    "on_press",
+    "on_release",
+    "on_double_click",
+    "on_right_press",
+    "on_right_release",
+    "on_middle_press",
+    "on_middle_release",
+    "on_enter",
+    "on_exit",
+];
 
 /// iced's own tasks: `exit()`, `window::latest()`, `window::close(id)`,
 /// `operation::focus_next()`/`focus_previous()`, and `Task::and_then`.
