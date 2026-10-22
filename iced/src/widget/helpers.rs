@@ -21,6 +21,121 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_fields(builder);
     bind_wrappers(builder);
     super::media::bind(builder);
+    bind_operations(builder);
+}
+
+/// `widget::Id`, the `id` builders, `operation::Animation` and the
+/// scrollable offsets.
+fn bind_operations(builder: &mut host::runtime::Builder) {
+    use iced::widget::scrollable::{AbsoluteOffset, RelativeOffset};
+
+    builder
+        .bind("iced::widget::Id::new", |args| {
+            let name = super::builtin::exact_string(
+                args.first().ok_or_else(|| arity("Id::new", 1, 0))?,
+                "Id::new",
+            )?;
+            Ok(Dynamic::from(iced::widget::Id::from(name)))
+        })
+        .expect("the iced facade must retain Id::new");
+    builder
+        .bind("iced::widget::Id::unique", |_| Ok(Dynamic::from(iced::widget::Id::unique())))
+        .expect("the iced facade must retain Id::unique");
+    builder
+        .bind("iced::widget::Scrollable::id", |args| {
+            if args.len() != 2 {
+                return Err(arity("Scrollable::id", 2, args.len()));
+            }
+            let mut scrollable = take::<marker::Scrollable>(args[0], "iced::widget::Scrollable")?;
+            scrollable.id = Some(take(args[1], "iced::widget::Id")?);
+            Ok(Dynamic::from(scrollable))
+        })
+        .expect("the iced facade must retain Scrollable::id");
+    builder
+        .bind("iced::widget::TextInput::id", |args| {
+            if args.len() != 2 {
+                return Err(arity("TextInput::id", 2, args.len()));
+            }
+            let mut input = take::<marker::TextInput>(args[0], "iced::widget::TextInput")?;
+            input.id = Some(take(args[1], "iced::widget::Id")?);
+            Ok(Dynamic::from(input))
+        })
+        .expect("the iced facade must retain TextInput::id");
+    for (name, animation) in crate::OPERATION_ANIMATIONS.into_iter().zip([
+        iced::widget::operation::Animation::Auto,
+        iced::widget::operation::Animation::Instant,
+        iced::widget::operation::Animation::Smooth,
+    ]) {
+        builder
+            .bind(format!("iced::widget::operation::Animation::{name}"), move |_| {
+                Ok(Dynamic::from(animation))
+            })
+            .expect("the iced facade must retain every operation::Animation");
+    }
+    for (name, offset) in [("START", RelativeOffset::START), ("END", RelativeOffset::END)] {
+        builder
+            .bind(format!("iced::widget::scrollable::RelativeOffset::{name}"), move |_| {
+                Ok(Dynamic::from(offset))
+            })
+            .expect("the iced facade must retain every RelativeOffset constant");
+    }
+    builder
+        .bind("iced::widget::scrollable::RelativeOffset::default", |_| {
+            Ok(Dynamic::from(RelativeOffset::<f32>::default()))
+        })
+        .expect("the iced facade must retain RelativeOffset::default");
+    builder
+        .bind("iced::widget::scrollable::AbsoluteOffset::default", |_| {
+            Ok(Dynamic::from(AbsoluteOffset::<f32>::default()))
+        })
+        .expect("the iced facade must retain AbsoluteOffset::default");
+    fn field<T: Clone + Send + Sync + 'static>(
+        builder: &mut host::runtime::Builder,
+        path: &'static str,
+        read: fn(&T) -> f32,
+        write: fn(&mut T, f32),
+    ) {
+        builder
+            .bind(path, move |args| match args {
+                [value] => {
+                    let value = value.read_lock::<T>().ok_or_else(|| {
+                        runtime_error(format!("`{path}` read a value of another type"))
+                    })?;
+                    Ok(Dynamic::from(f64::from(read(&value))))
+                }
+                [value, field] => {
+                    let mut value = take::<T>(value, path)?;
+                    write(&mut value, super::builtin::pixels(field, path)?);
+                    Ok(Dynamic::from(value))
+                }
+                _ => Err(arity(path, 2, args.len())),
+            })
+            .expect("the iced facade must retain every offset field");
+    }
+    field::<RelativeOffset>(
+        builder,
+        "iced::widget::scrollable::RelativeOffset::x",
+        |offset| offset.x,
+        |offset, x| offset.x = x,
+    );
+    field::<RelativeOffset>(
+        builder,
+        "iced::widget::scrollable::RelativeOffset::y",
+        |offset| offset.y,
+        |offset, y| offset.y = y,
+    );
+    field::<AbsoluteOffset>(
+        builder,
+        "iced::widget::scrollable::AbsoluteOffset::x",
+        |offset| offset.x,
+        |offset, x| offset.x = x,
+    );
+    field::<AbsoluteOffset>(
+        builder,
+        "iced::widget::scrollable::AbsoluteOffset::y",
+        |offset| offset.y,
+        |offset, y| offset.y = y,
+    );
 }
 
 fn bind_alignment(builder: &mut host::runtime::Builder) {

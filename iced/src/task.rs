@@ -48,6 +48,23 @@ pub(crate) enum Native {
     CloseWindow(iced::window::Id),
     FocusNext,
     FocusPrevious,
+    Focus(iced::widget::Id),
+    SnapTo(
+        iced::widget::Id,
+        iced::widget::scrollable::RelativeOffset,
+        iced::widget::operation::Animation,
+    ),
+    SnapToEnd(iced::widget::Id, iced::widget::operation::Animation),
+    ScrollTo(
+        iced::widget::Id,
+        iced::widget::scrollable::AbsoluteOffset,
+        iced::widget::operation::Animation,
+    ),
+    ScrollBy(
+        iced::widget::Id,
+        iced::widget::scrollable::AbsoluteOffset,
+        iced::widget::operation::Animation,
+    ),
 }
 
 impl Native {
@@ -60,6 +77,19 @@ impl Native {
             Self::CloseWindow(id) => iced::window::close(id),
             Self::FocusNext => iced::widget::operation::focus_next(),
             Self::FocusPrevious => iced::widget::operation::focus_previous(),
+            Self::Focus(id) => iced::widget::operation::focus(id),
+            Self::SnapTo(id, offset, animation) => {
+                iced::widget::operation::scrollable::snap_to(id, offset, animation)
+            }
+            Self::SnapToEnd(id, animation) => {
+                iced::widget::operation::scrollable::snap_to_end(id, animation)
+            }
+            Self::ScrollTo(id, offset, animation) => {
+                iced::widget::operation::scrollable::scroll_to(id, offset, animation)
+            }
+            Self::ScrollBy(id, offset, animation) => {
+                iced::widget::operation::scrollable::scroll_by(id, offset, animation)
+            }
         }
     }
 }
@@ -522,6 +552,49 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             .expect("the iced facade must retain every native task");
     }
     builder
+        .bind_with_context("iced::widget::operation::focus", |call, args| {
+            let [id] = args else {
+                return Err(arity("operation::focus", 1, args.len()));
+            };
+            native_task(call, Native::Focus(take_value(id, "widget::Id")?))
+        })
+        .expect("the iced facade must retain operation::focus");
+    for name in ["snap_to", "snap_to_end", "scroll_to", "scroll_by"] {
+        let path = format!("iced::widget::operation::scrollable::{name}");
+        builder
+            .bind_with_context(path.clone(), move |call, args| {
+                let expected = if name == "snap_to_end" { 2 } else { 3 };
+                if args.len() != expected {
+                    return Err(arity(&path, expected, args.len()));
+                }
+                let id = take_value::<iced::widget::Id>(args[0], "widget::Id")?;
+                let animation = take_value::<iced::widget::operation::Animation>(
+                    args[expected - 1],
+                    "operation::Animation",
+                )?;
+                let native = match name {
+                    "snap_to" => Native::SnapTo(
+                        id,
+                        take_value(args[1], "scrollable::RelativeOffset")?,
+                        animation,
+                    ),
+                    "snap_to_end" => Native::SnapToEnd(id, animation),
+                    "scroll_to" => Native::ScrollTo(
+                        id,
+                        take_value(args[1], "scrollable::AbsoluteOffset")?,
+                        animation,
+                    ),
+                    _ => Native::ScrollBy(
+                        id,
+                        take_value(args[1], "scrollable::AbsoluteOffset")?,
+                        animation,
+                    ),
+                };
+                native_task(call, native)
+            })
+            .expect("the iced facade must retain every scrollable operation");
+    }
+    builder
         .bind_with_context("iced::window::close", |call, args| {
             if args.len() != 1 {
                 return Err(arity("window::close", 1, args.len()));
@@ -706,6 +779,30 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             Ok(Dynamic::from(plan.map(mapper, witness)))
         })
         .expect("the iced facade must retain the exact Task::map item");
+}
+
+fn native_task(
+    call: &host::runtime::Call<'_>,
+    native: Native,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    Ok(Dynamic::from(Plan {
+        kind: Kind::Native(native),
+        witness: Some(call.output_witness().map_err(witness_error)?),
+    }))
+}
+
+fn take_value<T: Clone + 'static>(
+    value: &mut Dynamic,
+    expected: &str,
+) -> Result<T, Box<EvalAltResult>> {
+    let actual = value.type_name();
+    value.take().try_cast_result::<T>().map_err(|_| {
+        EvalAltResult::ErrorRuntime(
+            format!("native task binding received `{actual}`, expected `{expected}`").into(),
+            Position::NONE,
+        )
+        .into()
+    })
 }
 
 fn take(value: &mut Dynamic, operation: &str) -> Result<Plan, Box<EvalAltResult>> {

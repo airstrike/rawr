@@ -87,6 +87,9 @@ impl widget::Descriptor for marker::TextInput {
         if let Some(size) = self.size {
             input = input.size(size);
         }
+        if let Some(id) = &self.id {
+            input = input.id(id.clone());
+        }
         if let Some(width) = self.width {
             input = input.width(width);
         }
@@ -427,6 +430,9 @@ impl widget::Descriptor for marker::Tooltip {
 impl widget::Descriptor for marker::Scrollable {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut scrollable = iced::widget::scrollable(self.child.lower(context));
+        if let Some(id) = &self.id {
+            scrollable = scrollable.id(id.clone());
+        }
         if let Some(width) = self.width {
             scrollable = scrollable.width(width);
         }
@@ -1106,6 +1112,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 width: None,
                 height: None,
                 style: None,
+                id: None,
             }))
         })
         .expect("the iced facade must retain the exact scrollable item");
@@ -1139,6 +1146,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 width: None,
                 secure: false,
                 style: None,
+                id: None,
             }))
         })
         .expect("the iced facade must retain the exact text_input item");

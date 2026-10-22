@@ -166,6 +166,7 @@ pub(crate) struct Scrollable {
     pub(crate) width: Option<iced::Length>,
     pub(crate) height: Option<iced::Length>,
     pub(crate) style: Option<Source<scrollable::Status, scrollable::Style>>,
+    pub(crate) id: Option<iced::widget::Id>,
 }
 
 #[derive(Clone)]
@@ -189,6 +190,7 @@ pub(crate) struct TextInput {
     pub(crate) width: Option<iced::Length>,
     pub(crate) secure: bool,
     pub(crate) style: Option<Source<text_input::Status, text_input::Style>>,
+    pub(crate) id: Option<iced::widget::Id>,
 }
 
 #[derive(Clone)]

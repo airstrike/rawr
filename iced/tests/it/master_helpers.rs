@@ -385,3 +385,67 @@ fn master_image_and_svg_take_paths_and_handles() {
     let adapter = boot(MEDIA);
     find(&adapter, "Media");
 }
+
+const OPERATIONS: &str = r#"
+use iced::widget::{button, column, operation, scrollable, text, text_input, Id};
+use iced::widget::scrollable::RelativeOffset;
+use iced::{Task, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    input: String,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Bottom,
+    Focus,
+    Next,
+    Input(String),
+}
+
+impl State {
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Bottom => operation::scrollable::snap_to(
+                Id::new("list"),
+                RelativeOffset::END,
+                operation::Animation::Auto,
+            ),
+            Message::Focus => operation::focus(Id::new("input")),
+            Message::Next => operation::focus_next(),
+            Message::Input(input) => {
+                self.input = input;
+                Task::none()
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let offset = RelativeOffset { x: 0.0, y: 0.5 };
+        column![
+            button("Bottom").on_press(Message::Bottom),
+            button("Focus").on_press(Message::Focus),
+            button("Next").on_press(Message::Next),
+            text_input("Name", &self.input).id(Id::new("input")).on_input(Message::Input),
+            scrollable(column![text(offset.y), text("End")]).id(Id::new("list")),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_operations_take_widget_ids() {
+    let mut adapter = boot(OPERATIONS);
+    find(&adapter, "0.5");
+    for label in ["Bottom", "Focus", "Next"] {
+        let mut simulator = iced_test::simulator(adapter.view());
+        simulator.click(label).unwrap();
+        let message = simulator.into_messages().next().expect("the button emits");
+        adapter.update(message).unwrap();
+    }
+}

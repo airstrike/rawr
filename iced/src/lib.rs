@@ -97,6 +97,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::svg")?;
     builder.module("widget::qr_code")?;
     builder.module("widget::operation")?;
+    builder.module("widget::operation::scrollable")?;
     builder.module("window")?;
     builder.module("widget::scrollable")?;
     builder.module("widget::slider")?;
@@ -221,6 +222,33 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     )?;
     builder.value_type::<marker::Horizontal>("alignment::Horizontal", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.value_type::<marker::Vertical>("alignment::Vertical", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::widget::Id>(
+        "widget::Id",
+        &[],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
+    builder.default_value_type::<iced::widget::operation::Animation>(
+        "widget::operation::Animation",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::widget::scrollable::RelativeOffset>(
+        "widget::scrollable::RelativeOffset",
+        &[],
+        OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::widget::scrollable::AbsoluteOffset>(
+        "widget::scrollable::AbsoluteOffset",
+        &[],
+        OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
     builder.value_type::<iced::window::Id>("window::Id", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
     builder.type_::<marker::Stack>("widget::Stack", &["Message"], &[])?;
     builder.project("widget::Stack", "Element", &["Message"])?;
@@ -1870,6 +1898,7 @@ fn declare_native_tasks(builder: &mut facade::Builder) -> Result<(), host::Error
         [type_ref::Type::option(type_ref::Type::registered("window::Id")?)],
     )?);
     builder.item(item::Definition::function("window::latest", latest.finish())?)?;
+    declare_operations(builder)?;
     let mut close = signature::Builder::new();
     close.type_parameter("Message", &[])?;
     close.parameter(type_ref::Type::registered("window::Id")?);
@@ -1891,6 +1920,93 @@ fn declare_native_tasks(builder: &mut facade::Builder) -> Result<(), host::Error
     )?)?;
     Ok(())
 }
+
+/// `widget::Id`, the `id` builders of `scrollable` and `text_input`, and
+/// the operations that take one: `operation::focus` and
+/// `operation::scrollable::{snap_to, snap_to_end, scroll_to, scroll_by}`
+/// with their offsets and `operation::Animation`.
+fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let id = || type_ref::Type::registered("widget::Id");
+    let mut new = signature::Builder::new();
+    new.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    new.output(id()?);
+    builder.item(item::Definition::associated_function("widget::Id::new", new.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::Id::unique",
+        output_signature("widget::Id")?,
+    )?)?;
+    for owner in ["widget::Scrollable", "widget::TextInput"] {
+        builders(builder, owner, "id", [id()?])?;
+    }
+    for name in OPERATION_ANIMATIONS {
+        builder.item(item::Definition::associated_value(
+            format!("widget::operation::Animation::{name}"),
+            type_ref::Type::registered("widget::operation::Animation")?,
+        )?)?;
+    }
+    for offset in [
+        "widget::scrollable::RelativeOffset",
+        "widget::scrollable::AbsoluteOffset",
+    ] {
+        builder.item(item::Definition::associated_function(
+            format!("{offset}::default"),
+            output_signature(offset)?,
+        )?)?;
+        for field in ["x", "y"] {
+            let mut reader = signature::Builder::new();
+            reader.output(type_ref::Type::builtin(type_ref::Builtin::F64));
+            builder.item(item::Definition::method(
+                format!("{offset}::{field}"),
+                receiver::Mode::Shared,
+                reader.finish(),
+            )?)?;
+            let mut setter = signature::Builder::new();
+            setter.parameter(type_ref::Type::builtin(type_ref::Builtin::F64));
+            setter.output(type_ref::Type::registered(offset)?);
+            builder.item(item::Definition::method(
+                format!("{offset}::{field}"),
+                receiver::Mode::Owned,
+                setter.finish(),
+            )?)?;
+        }
+    }
+    for name in ["START", "END"] {
+        builder.item(item::Definition::associated_value(
+            format!("widget::scrollable::RelativeOffset::{name}"),
+            type_ref::Type::registered("widget::scrollable::RelativeOffset")?,
+        )?)?;
+    }
+    let task = || type_ref::Type::applied("Task", [type_ref::Type::parameter("Message")?]);
+    let animation = || type_ref::Type::registered("widget::operation::Animation");
+    let mut focus = signature::Builder::new();
+    focus.type_parameter("Message", &[])?;
+    focus.parameter(id()?);
+    focus.output(task()?);
+    builder.item(item::Definition::function("widget::operation::focus", focus.finish())?)?;
+    for (name, offset) in [
+        ("snap_to", Some("widget::scrollable::RelativeOffset")),
+        ("snap_to_end", None),
+        ("scroll_to", Some("widget::scrollable::AbsoluteOffset")),
+        ("scroll_by", Some("widget::scrollable::AbsoluteOffset")),
+    ] {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("Message", &[])?;
+        signature.parameter(id()?);
+        if let Some(offset) = offset {
+            signature.parameter(type_ref::Type::registered(offset)?);
+        }
+        signature.parameter(animation()?);
+        signature.output(task()?);
+        builder.item(item::Definition::function(
+            format!("widget::operation::scrollable::{name}"),
+            signature.finish(),
+        )?)?;
+    }
+    Ok(())
+}
+
+/// iced's `operation::Animation` variants.
+pub(crate) const OPERATION_ANIMATIONS: [&str; 3] = ["Auto", "Instant", "Smooth"];
 
 /// iced's `font` module: `Weight`, `Stretch`, `Style` and `Family`, and
 /// `Font::new`, `Font::with_family` and the builders a struct literal such as
