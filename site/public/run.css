@@ -18,7 +18,7 @@
 /* Before Run the static output keeps its rows but is hidden. */
 .run .pending { visibility: hidden; }
 /* A live result: stdout, stderr and the exit status inline; a frame as an image. */
-.run .live span { display: inline; }
+.run .live span, .run span span { display: inline; }
 .run span.err { color: #ff8fc4; }
 .run span.exit { color: var(--dim); }
 .run img.frame { display: block; margin: 6px 0 2px; max-width: 100%; height: auto; }
