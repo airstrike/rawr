@@ -1329,8 +1329,22 @@ fn install(
     shapes
         .try_reserve_exact(shape_count)
         .map_err(|_| Error::Allocation)?;
+    // An item whose signature names a type no facade declares (one the
+    // importer could not model) is unavailable by itself, as in the facade
+    // plan the runner builds.
+    let declared = facades
+        .iter()
+        .flat_map(|facade| &facade.entries)
+        .filter(|entry| {
+            matches!(
+                entry.outcome.representability(),
+                Representability::Struct(_) | Representability::Enum(_)
+            )
+        })
+        .map(|entry| entry.definition)
+        .collect::<std::collections::BTreeSet<_>>();
     for facade in facades {
-        let definition = build(contract, facade, &mut shapes, allocation)?;
+        let definition = build(contract, facade, &declared, &mut shapes, allocation)?;
         let (items, bytes) = definition.registry_usage();
         allocation.retain_checked(items, bytes)?;
         registry.install(definition)?;
@@ -1341,6 +1355,7 @@ fn install(
 fn build(
     _contract: &rawr_import::Contract<rawr_import::Classified>,
     mut facade: Facade<'_>,
+    declared: &std::collections::BTreeSet<rawr_import::surface::identity::Definition>,
     shapes: &mut Vec<(
         rawr_import::surface::identity::Definition,
         crate::Shared<host::type_def::Shape>,
@@ -1531,7 +1546,7 @@ fn build(
 
     for entry in &facade.entries {
         let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
-        if let Some(item) = item {
+        if let Some(item) = item.filter(|_| names_declared(entry.outcome, declared)) {
             builder.item(item)?;
         }
         for associated in entry
@@ -1552,7 +1567,9 @@ fn build(
             path.push_str(&entry.relative);
             path.push_str("::");
             path.push_str(associated.name());
-            if let Some(item) = imported_item(&types, &path, associated, allocation)? {
+            if let Some(item) = imported_item(&types, &path, associated, allocation)?
+                .filter(|_| names_declared(associated, declared))
+            {
                 builder.item(item)?;
             }
         }
@@ -1666,6 +1683,43 @@ fn imported_item(
         | Representability::Rejected(_) => None,
     };
     Ok(item)
+}
+
+/// Whether every imported type the outcome's signature names is declared.
+fn names_declared(
+    outcome: rawr_import::classify::Outcome<'_>,
+    declared: &std::collections::BTreeSet<rawr_import::surface::identity::Definition>,
+) -> bool {
+    let signature = match outcome.representability() {
+        Representability::Function(plan) => plan.signature(),
+        Representability::Method(plan) => plan.signature(),
+        Representability::FunctionItem(plan) => plan.signature(),
+        Representability::Invocation(plan) => plan.signature(),
+        Representability::Constant(plan) => return ty_ok(plan.ty(), declared),
+        _ => return true,
+    };
+    signature.inputs().iter().all(|input| ty_ok(input, declared))
+        && ty_ok(signature.output(), declared)
+}
+
+/// Whether every imported type `ty` names is declared.
+fn ty_ok(
+    ty: &representability::convert::Type,
+    declared: &std::collections::BTreeSet<rawr_import::surface::identity::Definition>,
+) -> bool {
+    use representability::convert::Type;
+    match ty {
+        Type::Nominal {
+            definition,
+            arguments,
+        } => declared.contains(definition) && arguments.iter().all(|ty| ty_ok(ty, declared)),
+        Type::FunctionItem { input, output } | Type::Result(input, output) => {
+            ty_ok(input, declared) && ty_ok(output, declared)
+        }
+        Type::Option(element) => ty_ok(element, declared),
+        Type::ProfileMessage { payload, .. } => ty_ok(payload, declared),
+        Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
+    }
 }
 
 /// A generic item Rawr calls directly: every parameter a type, none a

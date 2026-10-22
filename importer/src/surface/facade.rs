@@ -267,6 +267,29 @@ pub enum Type {
     Result(Box<Type>, Box<Type>),
 }
 
+impl Signature {
+    /// Whether every imported type the signature names is in `declared`.
+    fn declared(&self, declared: &std::collections::BTreeSet<[u8; 32]>) -> bool {
+        self.inputs.iter().all(|ty| ty.declared(declared)) && self.output.declared(declared)
+    }
+}
+
+impl Type {
+    fn declared(&self, declared: &std::collections::BTreeSet<[u8; 32]>) -> bool {
+        match self {
+            Self::Nominal {
+                identity,
+                arguments,
+            } => declared.contains(identity) && arguments.iter().all(|ty| ty.declared(declared)),
+            Self::FunctionItem { input, output } | Self::Result(input, output) => {
+                input.declared(declared) && output.declared(declared)
+            }
+            Self::Option(element) => element.declared(declared),
+            _ => true,
+        }
+    }
+}
+
 impl Plan {
     /// Reuse the exact facade selected from a current content-addressed API graph.
     pub fn encode_cached(
@@ -367,13 +390,21 @@ impl Plan {
                 }
             }
         }
+        // An item whose signature names a type no facade declares (one
+        // the importer could not model) is unavailable by itself; the rest
+        // of its facade stays.
+        let declared = facades
+            .iter()
+            .flat_map(|facade| facade.types.iter().map(|ty| ty.identity))
+            .collect::<std::collections::BTreeSet<_>>();
         for facade in &mut facades {
             facade
                 .types
                 .sort_by(|left, right| left.path.cmp(&right.path));
-            facade
-                .items
-                .sort_by(|left, right| left.path.cmp(&right.path));
+            let mut items = std::mem::take(&mut facade.items).into_vec();
+            items.retain(|item| item.signature.declared(&declared));
+            items.sort_by(|left, right| left.path.cmp(&right.path));
+            facade.items = items.into_boxed_slice();
         }
         let mut aliases = Vec::new();
         let mut sources = Vec::<ProjectionSourceSite>::new();

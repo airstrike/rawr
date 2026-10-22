@@ -2915,8 +2915,19 @@ impl<P: api::Phase> Context<'_, P> {
         admitted
             .try_reserve_exact(fields.public_fields().len())
             .map_err(|_| Error::Allocation)?;
-        let constructible = fields.public_complete() && !fields.non_exhaustive();
+        let mut constructible = fields.public_complete() && !fields.non_exhaustive();
         for field in fields.public_fields() {
+            // A public field of a type Rawr cannot hold (palette's
+            // `standard: PhantomData<S>`) is unavailable by itself. The
+            // struct stays, without a constructor, as with a private field.
+            let ty = match self.convert(field.ty()) {
+                Ok(ty) => ty,
+                Err(Failure::Reject(_)) => {
+                    constructible = false;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             self.retain_str(field.name())?;
             let selector = crate::surface::identity::Selector::StructField(
                 crate::surface::identity::Field::new(field.index(), field.name().into()),
@@ -2927,7 +2938,7 @@ impl<P: api::Phase> Context<'_, P> {
                 selector,
                 field.name().into(),
                 field.index(),
-                self.convert(field.ty())?,
+                ty,
                 field.span().clone(),
             ));
         }

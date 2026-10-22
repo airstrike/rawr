@@ -4628,14 +4628,32 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         {
             return self.unknown_constant("anonymous-constant:generic");
         }
-        if constant_ty != self.tcx.types.usize {
-            return self.unknown_constant("anonymous-constant:literal-type");
-        }
         let typing_env = ty::TypingEnv::post_analysis(self.tcx, owner);
         let unevaluated = mir::Const::Unevaluated(
             mir::UnevaluatedConst::new(definition, arguments),
             constant_ty,
         );
+        // A `bool` or unsigned constant is its value, typed.
+        if constant_ty != self.tcx.types.usize {
+            let value = match constant_ty.kind() {
+                ty::Bool => unevaluated
+                    .try_eval_bool(self.tcx, typing_env)
+                    .map(|value| value.to_string()),
+                ty::Uint(_) => unevaluated
+                    .try_eval_bits(self.tcx, typing_env)
+                    .map(|value| value.to_string()),
+                _ => return self.unknown_constant("anonymous-constant:literal-type"),
+            };
+            let Some(value) = value else {
+                return self.unknown_constant("anonymous-constant:evaluation");
+            };
+            return Ok(Constant::Literal {
+                ty: self
+                    .budget
+                    .owned(primitive_name(constant_ty).unwrap_or("const"))?,
+                value: self.budget.owned(&value)?,
+            });
+        }
         let Some(evaluated) = unevaluated.try_eval_target_usize(self.tcx, typing_env) else {
             return self.unknown_constant("anonymous-constant:evaluation");
         };

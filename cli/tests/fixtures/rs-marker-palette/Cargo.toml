@@ -1,0 +1,11 @@
+[package]
+name = "rs-marker-palette"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+palette = "0.7"
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

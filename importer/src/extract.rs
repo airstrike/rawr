@@ -259,7 +259,7 @@ fn record_fixed_selector(
         );
         SELECTOR_EDGE_KIND.store(
             match edge.kind {
-                FixedEdgeKind::Admission => 1,
+                FixedEdgeKind::Admission | FixedEdgeKind::Relevance => 1,
                 FixedEdgeKind::Support {
                     role: ledger::SupportRole::Definition,
                     ..
@@ -1149,7 +1149,12 @@ struct FixedEdge<'candidate> {
 
 #[derive(Clone, Copy)]
 enum FixedEdgeKind<'candidate> {
+    /// An associated item to the implementation that owns it.
     Admission,
+    /// A definition to an implementation that names it (its self type,
+    /// its trait or a type in either). A rejected implementation does not
+    /// reject the definitions it names: it is unavailable by itself.
+    Relevance,
     Support {
         provenance: &'candidate identity::Definition,
         role: ledger::SupportRole,
@@ -3820,37 +3825,14 @@ impl Candidate {
             for raw in fragment.implementations {
                 edge_count = edge_count.saturating_add(1);
                 allocation.exceeded("canonical export and impl edges", limits.edges, edge_count);
-                if let Some(unavailable) =
-                    catalog.unavailable_identity(&raw.id, limits, allocation)?
+                // An implementation whose crate Cargo cannot join is
+                // unavailable by itself: its types and trait stay.
+                if catalog
+                    .unavailable_identity(&raw.id, limits, allocation)?
+                    .is_some()
                 {
                     validate_unavailable_implementation(&raw, catalog, limits, allocation)?;
                     allocation.protocol_span(&raw.span)?;
-                    allocation.cloned_ownership(1);
-                    let implementation_span = span(raw.span.clone(), limits, allocation)?;
-                    for anchor in raw.relevance {
-                        if catalog
-                            .unavailable_identity(&anchor, limits, allocation)?
-                            .is_some()
-                        {
-                            continue;
-                        }
-                        let anchor = catalog.id_bounded(anchor, limits, allocation)?;
-                        if let std::collections::btree_map::Entry::Vacant(entry) =
-                            rejected.entry(anchor)
-                        {
-                            allocation.items(1)?;
-                            allocation.string(&unavailable.crate_name)?;
-                            allocation.string(&unavailable.stable_crate_id)?;
-                            allocation.cloned_ownership(2);
-                            entry.insert(Rejected {
-                                reason: ledger::Reason::ExternalAuthorityUnavailable {
-                                    crate_name: unavailable.crate_name.clone(),
-                                    stable_crate_id: unavailable.stable_crate_id.clone(),
-                                },
-                                span: allocation.clone_span(&implementation_span)?,
-                            });
-                        }
-                    }
                     continue;
                 }
                 let mut relevance = Vec::new();
@@ -3870,66 +3852,22 @@ impl Candidate {
                 allocation.protocol_span(&raw.span)?;
                 allocation.cloned_ownership(1);
                 let implementation_span = span(raw.span.clone(), limits, allocation)?;
+                // An implementation the extractor cannot model is unavailable
+                // by itself. Its self type, its trait and every other
+                // implementation of either stay available: one `impl Debug
+                // for f16` with an unknown constant must not take `Debug`
+                // and every type that implements it with it.
+                let _ = (&relevance, &implementation_span);
                 match implementation(raw, catalog, limits, allocation) {
                     Ok(implementation) => {
                         allocation.reserve(&mut implementations, 1)?;
                         implementations.push(implementation);
                     }
-                    Err(ShapeFailure::ExternalAuthorityUnavailable {
-                        crate_name,
-                        stable_crate_id,
-                    }) => {
-                        for anchor in relevance {
-                            if let std::collections::btree_map::Entry::Vacant(entry) =
-                                rejected.entry(anchor)
-                            {
-                                allocation.items(1)?;
-                                allocation.string(&crate_name)?;
-                                allocation.string(&stable_crate_id)?;
-                                allocation.cloned_ownership(2);
-                                entry.insert(Rejected {
-                                    reason: ledger::Reason::ExternalAuthorityUnavailable {
-                                        crate_name: crate_name.clone(),
-                                        stable_crate_id: stable_crate_id.clone(),
-                                    },
-                                    span: allocation.clone_span(&implementation_span)?,
-                                });
-                            }
-                        }
-                    }
-                    Err(ShapeFailure::Unknown(compiler_kind)) => {
-                        for anchor in relevance {
-                            if !rejected.contains_key(&anchor) {
-                                allocation.items(1)?;
-                                allocation.string(&compiler_kind)?;
-                                allocation.cloned_ownership(1);
-                                rejected.insert(
-                                    allocation.clone_identity(&anchor)?,
-                                    Rejected {
-                                        reason: ledger::Reason::UnknownCompilerShape {
-                                            definition: anchor,
-                                            compiler_kind: compiler_kind.clone(),
-                                        },
-                                        span: allocation.clone_span(&implementation_span)?,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    Err(ShapeFailure::UnnameablePrivate) => {
-                        for anchor in relevance {
-                            if !rejected.contains_key(&anchor) {
-                                allocation.items(1)?;
-                                rejected.insert(
-                                    allocation.clone_identity(&anchor)?,
-                                    Rejected {
-                                        reason: ledger::Reason::UnnameablePrivate(anchor),
-                                        span: allocation.clone_span(&implementation_span)?,
-                                    },
-                                );
-                            }
-                        }
-                    }
+                    Err(
+                        ShapeFailure::ExternalAuthorityUnavailable { .. }
+                        | ShapeFailure::Unknown(_)
+                        | ShapeFailure::UnnameablePrivate,
+                    ) => {}
                     Err(ShapeFailure::Fatal(error)) => return Err(error),
                 }
             }
@@ -4306,7 +4244,7 @@ impl Candidate {
                 });
                 result?;
 
-                let mut admissions = Vec::new();
+                let mut owners = Vec::new();
                 if let model::Owner::Implementation(owner) = definition.owner() {
                     let index = fixed_implementation_index(&self.implementations, owner)?;
                     let implementation = &self.implementations[index];
@@ -4320,24 +4258,29 @@ impl Candidate {
                             definition.id().def_path_hash(),
                         ));
                     }
-                    allocation.reserve(&mut admissions, 1)?;
-                    admissions.push(index);
+                    allocation.reserve(&mut owners, 1)?;
+                    owners.push(index);
                 }
+                let mut admissions = Vec::new();
                 if let Some(indices) = self.implementation_index.get(id) {
                     allocation.reserve(&mut admissions, indices.len())?;
-                    admissions.extend(indices.iter().copied());
+                    admissions.extend(indices.iter().copied().filter(|index| !owners.contains(index)));
                 }
                 allocation.sort_keys(admissions.len());
                 admissions.sort_unstable();
                 admissions.dedup();
-                for index in admissions {
+                for (index, kind) in owners
+                    .into_iter()
+                    .map(|index| (index, FixedEdgeKind::Admission))
+                    .chain(admissions.into_iter().map(|index| (index, FixedEdgeKind::Relevance)))
+                {
                     let implementation = &self.implementations[index];
                     push_fixed_edge(
                         &mut edges,
                         source,
                         implementation.id(),
                         definition.span(),
-                        FixedEdgeKind::Admission,
+                        kind,
                         &nodes,
                         limits,
                         allocation,
@@ -4428,6 +4371,9 @@ impl Candidate {
             let start = incoming.partition_point(|index| edges[*index].target < target);
             let end = incoming.partition_point(|index| edges[*index].target <= target);
             for index in &incoming[start..end] {
+                if matches!(edges[*index].kind, FixedEdgeKind::Relevance) {
+                    continue;
+                }
                 let source = edges[*index].source;
                 if states[source].rejection_distance.is_none() {
                     let next_distance = distance.saturating_add(1);
@@ -4456,8 +4402,9 @@ impl Candidate {
             let end = first.saturating_add(states[source].edge_count);
             let edge = (first..end)
                 .find(|index| {
-                    states[edges[*index].target].rejection_distance
-                        == Some(distance.saturating_sub(1))
+                    !matches!(edges[*index].kind, FixedEdgeKind::Relevance)
+                        && states[edges[*index].target].rejection_distance
+                            == Some(distance.saturating_sub(1))
                 })
                 .ok_or_else(|| {
                     extraction("fixed-rejection-witness", nodes[source].def_path_hash())

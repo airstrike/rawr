@@ -26996,8 +26996,12 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        // A generic owner (`Rgb::new`) takes its arguments from the call,
+        // which carries them; it needs no declaration of its own.
         #[cfg(feature = "rust-import")]
-        if let Some((definition, _)) = &imported_nominal_owner {
+        if let Some((definition, _)) = &imported_nominal_owner
+            && definition.parameters().is_empty()
+        {
             let selector =
                 definition
                     .imported_declaration()
@@ -27976,10 +27980,9 @@ impl<'a> Parser<'a> {
                         expression: name_span,
                     });
                 }
-                #[cfg(feature = "rust-import")]
-                if let Some(selector) = definition.imported_declaration() {
-                    self.push_imported_op(&name, &selector, None, name_span)?;
-                }
+                // A generic imported type in an annotation (`Rgb<Srgb, f32>`)
+                // needs no adapter of its own: its arguments come with the
+                // values the program builds.
                 let alias = definition.identity().imported().map(|_| definition.clone());
                 Ok(Ty::Host {
                     proof: HostTyProof::new(definition, alias, owner),

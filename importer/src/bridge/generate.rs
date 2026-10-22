@@ -2640,12 +2640,13 @@ fn render_source(
     .map_err(|_| request::Error::Encoding)?;
     // Each trait the program names is in scope for every adapter, so a
     // method it provides resolves as it does in the program.
+    let _type_paths = TypePaths::install(facade.as_ref());
     if let Some(plan) = &facade {
         for facade in plan.facades() {
             for path in facade.traits() {
                 writeln!(
                     stamps,
-                    "#[allow(unused_imports)]\npub(super) use {}::{path} as _;",
+                    "#[allow(unused_imports, deprecated)]\npub(super) use {}::{path} as _;",
                     facade.root()
                 )
                 .map_err(|_| request::Error::Encoding)?;
@@ -3516,14 +3517,13 @@ fn render_adapter(
                             }
                         )
                         .map_err(|_| request::Error::Encoding)?;
-                        render_container_path_with(
+                        render_container_path(
                             &path,
                             signature,
                             substitutions,
                             constants,
                             *container_parameters,
                             true,
-                            facade,
                             output,
                         )?;
                         write!(output, ", _>(receiver, |receiver| receiver.{}", plan.name())
@@ -5205,51 +5205,10 @@ fn render_container_path(
     type_position: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    render_container_path_with(
-        path,
-        signature,
-        substitutions,
-        constants,
-        container_parameters,
-        type_position,
-        None,
-        output,
-    )
-}
-
-/// The container path, its imported type arguments written out from the
-/// facade plan: a receiver's type must be exact (`DateTime<Local>`), as
-/// the arena finds a value by its type.
-#[allow(clippy::too_many_arguments)]
-fn render_container_path_with(
-    path: &str,
-    signature: &crate::classify::representability::signature::Signature,
-    substitutions: &[convert::Type],
-    constants: &[convert::Constant],
-    container_parameters: usize,
-    type_position: bool,
-    concrete: Option<&crate::surface::facade::Plan>,
-    output: &mut Vec<u8>,
-) -> Result<(), request::Error> {
     let partition = partition_generics(signature, substitutions, constants, container_parameters)?;
     output
         .write_all(path.as_bytes())
         .map_err(|_| request::Error::Encoding)?;
-    if let Some(facade) = concrete
-        && !partition.container_parameters.is_empty()
-        && partition.container_constants.is_empty()
-        && partition.container_types.len() == partition.container_parameters.len()
-    {
-        let rendered = partition
-            .container_types
-            .iter()
-            .map(|ty| concrete_type(ty, facade))
-            .collect::<Option<Vec<_>>>();
-        if let Some(rendered) = rendered {
-            return write!(output, "<{}>", rendered.join(", "))
-                .map_err(|_| request::Error::Encoding);
-        }
-    }
     render_generic_arguments(
         partition.container_parameters,
         partition.container_types,
@@ -5259,9 +5218,43 @@ fn render_container_path_with(
     )
 }
 
+thread_local! {
+    /// The Rust path of each imported type of the facade plan the runner
+    /// being generated declares, by identity: an imported type argument is
+    /// written out where its path is known, so a value the arena stores or
+    /// finds has its exact type (`chrono::DateTime<chrono::Local>`).
+    static TYPE_PATHS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], String>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+/// Fills `TYPE_PATHS` for one generation and empties it when dropped.
+struct TypePaths;
+
+impl TypePaths {
+    fn install(facade: Option<&crate::surface::facade::Plan>) -> Self {
+        TYPE_PATHS.with_borrow_mut(|paths| {
+            paths.clear();
+            for owner in facade.into_iter().flat_map(crate::surface::facade::Plan::facades) {
+                for ty in owner.types() {
+                    paths
+                        .entry(*ty.identity())
+                        .or_insert_with(|| format!("{}::{}", owner.root(), ty.path()));
+                }
+            }
+        });
+        Self
+    }
+}
+
+impl Drop for TypePaths {
+    fn drop(&mut self) {
+        TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
+    }
+}
+
 /// The Rust spelling of `ty`, its imported types by their facade paths, or
 /// `None` when it has no exact spelling.
-fn concrete_type(ty: &convert::Type, facade: &crate::surface::facade::Plan) -> Option<String> {
+fn concrete_type(ty: &convert::Type) -> Option<String> {
     Some(match ty {
         convert::Type::Unit => "()".to_owned(),
         convert::Type::Builtin(convert::Builtin::String) => "String".to_owned(),
@@ -5273,17 +5266,12 @@ fn concrete_type(ty: &convert::Type, facade: &crate::surface::facade::Plan) -> O
             definition,
             arguments,
         } => {
-            let (root, ty) = facade.facades().find_map(|owner| {
-                owner
-                    .types()
-                    .find(|ty| ty.identity() == definition.as_bytes())
-                    .map(|ty| (owner.root(), ty))
-            })?;
-            let mut text = format!("{root}::{}", ty.path());
+            let mut text =
+                TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())?;
             if !arguments.is_empty() {
                 let arguments = arguments
                     .iter()
-                    .map(|argument| concrete_type(argument, facade))
+                    .map(concrete_type)
                     .collect::<Option<Vec<_>>>()?;
                 text.push('<');
                 text.push_str(&arguments.join(", "));
@@ -5291,13 +5279,13 @@ fn concrete_type(ty: &convert::Type, facade: &crate::surface::facade::Plan) -> O
             }
             text
         }
-        convert::Type::Option(element) => format!("Option<{}>", concrete_type(element, facade)?),
+        convert::Type::Option(element) => format!("Option<{}>", concrete_type(element)?),
         convert::Type::Result(ok, err) => format!(
             "Result<{}, {}>",
-            concrete_type(ok, facade)?,
-            concrete_type(err, facade)?
+            concrete_type(ok)?,
+            concrete_type(err)?
         ),
-        convert::Type::ProfileMessage { payload, .. } => concrete_type(payload, facade)?,
+        convert::Type::ProfileMessage { payload, .. } => concrete_type(payload)?,
         convert::Type::FunctionItem { .. } | convert::Type::Parameter(_) => return None,
     })
 }
@@ -5351,6 +5339,12 @@ fn render_generic_arguments(
                     field: "generated type substitution cardinality",
                 })?;
                 type_index += 1;
+                let concrete = match ty {
+                    convert::Type::Nominal { .. }
+                    | convert::Type::Option(_)
+                    | convert::Type::Result(..) => concrete_type(ty),
+                    _ => None,
+                };
                 output
                     .write_all(match ty {
                         convert::Type::Unit => b"()" as &[u8],
@@ -5361,9 +5355,13 @@ fn render_generic_arguments(
                         convert::Type::Builtin(builtin) => {
                             builtin.rust_name().unwrap_or_default().as_bytes()
                         }
+                        // An imported type is written out where its path is
+                        // known; Rust infers it otherwise.
                         convert::Type::Nominal { .. }
                         | convert::Type::Option(_)
-                        | convert::Type::Result(..) => b"_",
+                        | convert::Type::Result(..) => {
+                            concrete.as_deref().unwrap_or("_").as_bytes()
+                        }
                         convert::Type::FunctionItem { .. } => {
                             return Err(request::Error::Drift {
                                 field: "static function item used as generic substitution",
