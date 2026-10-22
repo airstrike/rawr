@@ -18,10 +18,11 @@ or `text`. Every other snippet is a plain program.
 
 A plain program runs on the base language from that same parse, as `rawr
 run` runs a file: its top level, then `fn main` if it has one. A snippet of
-statements alone becomes the body of `fn main`. Its final expression is
-printed with `{:?}`, so `1 + 2` prints `3`. A `main` that returns `Err`
-prints `Error: ..` and exits with status 1. A runtime error or a limit also
-exits with status 1. Output is capped at 64 KiB. A program that writes more
+statements alone becomes a block in `fn main`, read as Rust reads a block.
+The block's value is printed with `{:?}` unless it is `()`. So `1 + 2` prints
+`3`, and `1 + 2;` prints nothing. A `main` that returns `Err`
+prints `Error: ..` and exits with status 1. A panic exits with status 101,
+as in Rust. A limit exits with status 1. Output is capped at 64 KiB. A program that writes more
 is stopped and its output ends with `… output truncated`. Messages drive an iced app. A plain program runs without them, and its
 output carries the note "messages are ignored for programs without iced".
 
@@ -54,8 +55,8 @@ object that starts with `{`, and no image does:
 ```
 
 `output` holds the program's stdout and stderr in the order it wrote them.
-Each entry is one run of text from one stream. `status` is 0, or 1 when
-`main` returned `Err`, the program failed or a limit stopped it. `limit`
+Each entry is one run of text from one stream. `status` is 0. It is 1 when
+`main` returned `Err` or a limit stopped it, and 101 when the program panicked. `limit`
 says whether a limit stopped it. `truncated` says whether the output passed
 64 KiB. `note`, when present, is a remark on the run, such as ignored messages. `--time-ms N` sets the script time budget and `--memory-mb N` caps the
 process's address space (`RLIMIT_AS`, Linux only). Errors go to stderr with
@@ -298,6 +299,16 @@ npx wrangler secret put DISCORD_TOKEN
 npx wrangler deploy        # runs build.mjs first
 curl https://rawr.airstrike.fyi/bot/health   # restarts the bot onto the new image now
 ```
+
+After the first setup, one command releases the committed HEAD:
+
+```sh
+npm run release            # image, tests, deploy, wait for the bot, smoke test, commit the bump
+npm run release:worker     # Worker and site only, no new image
+```
+
+It refuses to run while the Worker or site sources have uncommitted changes.
+It retries the deploy when Cloudflare answers 100146.
 
 `instance_type` is `lite` (1/16 vCPU, 256 MiB): a render's peak RSS was
 27 MB for a 640x400 app, 41 MB for 100k widgets stopped at the time limit

@@ -185,6 +185,22 @@ fn main_returning_err_fails_like_rust() {
 }
 
 #[test]
+fn a_panic_exits_101_like_rust() {
+    let sandbox = Sandbox::new("panic");
+    fs::write(
+        sandbox.work().join("panic.rawr"),
+        "fn main() {\n    println!(\"before\");\n    panic!(\"boom {}\", 1);\n}\n",
+    )
+    .unwrap();
+
+    let output = sandbox.rawr(&["run", "panic.rawr"]);
+
+    assert_eq!(output.status.code(), Some(101));
+    assert_eq!(stdout(&output), "before\n");
+    assert!(stderr(&output).contains("boom 1"), "{}", stderr(&output));
+}
+
+#[test]
 fn type_errors_are_the_same_diagnostic_for_check_and_run() {
     let sandbox = Sandbox::new("type-error");
     let source = sandbox.work().join("wrong.rawr");

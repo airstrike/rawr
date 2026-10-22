@@ -2717,6 +2717,13 @@ enum PreludeOp {
     /// `print!`, `println!`, `eprint!`, `eprintln!`: `print(text, stderr)`,
     /// through the engine's output callback.
     Print,
+    /// A `String` changed in place (`STR_CHANGES`), called as a method so
+    /// the string is taken by reference: `string(code, a, b)`.
+    StrChange,
+    /// A string's pieces or bytes (`STR_PIECES`): `pieces(text, code, a, b)`.
+    StrPieces,
+    /// `v.windows(n)` (`true`) or `v.chunks(n)`: the array of its slices.
+    SliceChunks,
 }
 
 impl PreludeOp {
@@ -2778,6 +2785,9 @@ impl PreludeOp {
             Self::Parse => "str.parse",
             Self::StrMethod => "str.method",
             Self::Print => "io.print",
+            Self::StrChange => "string.change",
+            Self::StrPieces => "str.pieces",
+            Self::SliceChunks => "slice.chunks",
         }
     }
 
@@ -2790,7 +2800,8 @@ impl PreludeOp {
             | Self::MapSlotInsert
             | Self::SetInsert
             | Self::SetRemove
-            | Self::VecMethod => Some(true),
+            | Self::VecMethod
+            | Self::StrChange => Some(true),
             Self::MapGet
             | Self::MapContainsKey
             | Self::MapIndex
@@ -2841,6 +2852,23 @@ impl PreludeOp {
             Self::Cast => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
             Self::Parse => vec![TypeId::of::<ImmutableString>()],
             Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
+            Self::StrChange => vec![
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+            ],
+            Self::StrPieces => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+            ],
+            Self::SliceChunks => vec![
+                TypeId::of::<crate::Array>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<bool>(),
+            ],
             Self::StrMethod => vec![
                 TypeId::of::<ImmutableString>(),
                 TypeId::of::<crate::INT>(),
@@ -2995,6 +3023,28 @@ impl PreludeOp {
             Self::Cast => return cast_value(args[0], args[1].as_int().unwrap_or(3)),
             Self::Slice | Self::SplitAt => return slice_value(self, args),
             Self::VecMethod => return vec_method(args),
+            Self::StrChange => return str_change(args),
+            Self::StrPieces => return str_pieces(args),
+            Self::SliceChunks => {
+                let size = usize::try_from(args[1].as_int().unwrap_or(0)).unwrap_or(0);
+                let windows = args[2].as_bool().unwrap_or(false);
+                if size == 0 {
+                    return panic(if windows {
+                        "window size must be non-zero".into()
+                    } else {
+                        "chunk size must be non-zero".into()
+                    });
+                }
+                let array = args[0]
+                    .as_array_ref()
+                    .map_err(|_| invariant("a slice is not an array at runtime"))?;
+                let slices: crate::Array = if windows {
+                    array.windows(size).map(|window| Dynamic::from_array(window.to_vec())).collect()
+                } else {
+                    array.chunks(size).map(|chunk| Dynamic::from_array(chunk.to_vec())).collect()
+                };
+                return Ok(Dynamic::from_array(slices));
+            }
             Self::IntMethod => return int_method([3, 3], args),
             Self::Parse => return Ok(parse_text(&args[0].clone_cast::<ImmutableString>(), 3)),
             // The engine's output callback needs the call context.
@@ -3293,16 +3343,28 @@ fn impl_self_ty(
     )
 }
 
+/// The float methods without arguments, each with the runtime's function
+/// that computes it as Rust does.
+const FLOAT_UNARY_METHODS: &[(&str, &str)] = &[
+    ("abs", "abs"),
+    ("sqrt", "sqrt"),
+    ("floor", "floor"),
+    ("ceil", "ceiling"),
+    ("round", "round"),
+    ("trunc", "int"),
+    ("is_nan", "is_nan"),
+];
+
 /// Whether a builtin type has an inherent method `member` of its own:
 /// Rust's method lookup finds it before any trait's function of
 /// that name, so `s.len()` stays `String::len` under a crate `len`.
 fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
     match ty {
         Ty::Int(_) => matches!(member, "pow" | "to_string" | "abs" | "signum"),
-        Ty::Float(_) => matches!(
-            member,
-            "powi" | "powf" | "abs" | "sqrt" | "floor" | "ceil" | "round" | "trunc" | "is_nan"
-        ),
+        Ty::Float(_) => {
+            matches!(member, "powi" | "powf")
+                || FLOAT_UNARY_METHODS.iter().any(|(name, _)| *name == member)
+        }
         Ty::Char => member == "to_string" || CHAR_METHODS.iter().any(|(name, _)| *name == member),
         Ty::Bool => member == "to_string",
         Ty::String => matches!(
@@ -3319,6 +3381,17 @@ fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
                 | "ends_with"
                 | "push_str"
                 | "push"
+                | "pop"
+                | "clear"
+                | "insert"
+                | "insert_str"
+                | "remove"
+                | "truncate"
+                | "split_off"
+                | "bytes"
+                | "as_bytes"
+                | "char_indices"
+                | "splitn"
         ),
         Ty::Array { .. } => matches!(
             member,
@@ -3439,7 +3512,8 @@ fn builtin_inherent_receiver_rank(ty: &Ty, member: &str) -> u8 {
         },
         Ty::Float(_) => 0,
         Ty::String | Ty::Array { .. } => match member {
-            "push" | "push_str" => 2,
+            "push" | "push_str" | "pop" | "clear" | "insert" | "insert_str" | "remove"
+            | "truncate" | "split_off" => 2,
             _ => 1,
         },
         Ty::Option(_) => match member {
@@ -4666,7 +4740,7 @@ impl Keyed {
 /// Rust's integer types. All are an `i64` at runtime: the kind decides the
 /// range arithmetic is checked against and what `as` truncates to.
 /// `u64` and `usize` stop at `i64::MAX`. `Var` is a literal's
-/// `{integer}`, bound by inference (`Inference::resolve`) and `i64` when
+/// `{integer}`, bound by inference (`Inference::resolve`) and `i32` when
 /// nothing binds it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Int {
@@ -7351,6 +7425,10 @@ struct Parser<'a> {
     /// Type witnesses passed for `Default`-bounded generic parameters,
     /// written over their placeholders once the types are inferred.
     pending_witnesses: Vec<(String, Ty, Span)>,
+    /// Arithmetic on a literal's `{integer}` whose kind inference had not
+    /// settled: each placeholder, written over with the kind's code once
+    /// it has (`i32` when nothing binds it, as in Rust).
+    pending_int_kinds: Vec<(String, Ty)>,
     /// `Default::default()` calls whose type inference fixes later:
     /// `(placeholder, type, span)`, written over with the type's default.
     pending_defaults: Vec<(String, Ty, Span)>,
@@ -7530,6 +7608,7 @@ impl<'a> Parser<'a> {
             pending_traits: Vec::new(),
             pending_projections: Vec::new(),
             pending_witnesses: Vec::new(),
+            pending_int_kinds: Vec::new(),
             pending_defaults: Vec::new(),
             no_struct: false,
             split_angle: None,
@@ -7859,6 +7938,7 @@ impl<'a> Parser<'a> {
                 Token::Do => {
                     return Err(self.unsupported("legacy do in checked nominal methods"));
                 }
+                Token::Fn => self.skip_nested_fn()?,
                 _ => self.parse_statement()?,
             }
         }
@@ -7955,6 +8035,7 @@ impl<'a> Parser<'a> {
                 Token::Do => {
                     return Err(self.unsupported("legacy do in checked nominal functions"));
                 }
+                Token::Fn => self.skip_nested_fn()?,
                 _ => self.parse_statement()?,
             }
         }
@@ -8271,15 +8352,27 @@ impl<'a> Parser<'a> {
     /// Write each pending witness over its placeholder (same length, so
     /// source locations stay exact).
     fn finish_witnesses(&mut self) -> Result<(), Error> {
-        // Rust's fallback: an unconstrained literal is an `i64` or `f64`.
+        self.settle_instance_literals();
+        // Rust's fallback: an unconstrained literal is an `i32` or `f64`.
         for (id, integer) in std::mem::take(&mut self.literal_kinds) {
             let (kind, default) = if integer {
-                (Ty::Int(Int::Var(id)), Ty::Int(Int::I64))
+                (Ty::Int(Int::Var(id)), Ty::Int(Int::I32))
             } else {
                 (Ty::Float(Float::Var(id)), Ty::Float(Float::F64))
             };
             if self.inference.resolve(&kind) == kind {
                 self.inference.bind(id, default);
+            }
+        }
+        for (placeholder, ty) in std::mem::take(&mut self.pending_int_kinds) {
+            let code = match self.inference.resolve(&ty) {
+                Ty::Int(Int::Var(_)) => kind_code(Ty::Int(Int::I32)),
+                ty => kind_code(ty),
+            };
+            let replacement = format!("{code:<width$}", width = placeholder.len());
+            self.output.replace_same_length(&placeholder, &replacement);
+            for closure in &mut self.lifted {
+                closure.body.replace_same_length(&placeholder, &replacement);
             }
         }
         self.finish_instances()?;
@@ -8352,6 +8445,52 @@ impl<'a> Parser<'a> {
 
     /// Write each generic trait call's instance dispatcher over its
     /// placeholder, now that inference knows the trait's arguments.
+    /// Before the literal fallback, as Rust selects impls: a trait
+    /// argument that is a literal's `{integer}` or `{float}` takes the type
+    /// of the one impl of that kind whose other arguments match.
+    fn settle_instance_literals(&mut self) {
+        for (_, trait_name, _, arguments, _, _) in self.pending_instances.clone() {
+            let arguments = arguments
+                .iter()
+                .map(|ty| self.inference.resolve(ty))
+                .collect::<Vec<_>>();
+            let literal = |ty: &Ty| match ty {
+                Ty::Int(Int::Var(id)) => Some((*id, true)),
+                Ty::Float(Float::Var(id)) => Some((*id, false)),
+                _ => None,
+            };
+            if !arguments.iter().any(|argument| literal(argument).is_some()) {
+                continue;
+            }
+            let Some(instances) = self.models.trait_instances.get(&trait_name) else {
+                continue;
+            };
+            let matching = instances
+                .iter()
+                .map(|instance| instance.iter().map(Ty::from_resolved).collect::<Vec<_>>())
+                .filter(|instance| {
+                    instance.len() == arguments.len()
+                        && instance.iter().zip(&arguments).all(|(instance, argument)| {
+                            match (literal(argument), instance) {
+                                (Some((_, true)), Ty::Int(_)) | (Some((_, false)), Ty::Float(_)) => {
+                                    true
+                                }
+                                (Some(_), _) => false,
+                                (None, instance) => instance == argument,
+                            }
+                        })
+                })
+                .collect::<Vec<_>>();
+            if let [instance] = &matching[..] {
+                for (argument, ty) in arguments.iter().zip(instance) {
+                    if let Some((id, _)) = literal(argument) {
+                        self.inference.bind(id, ty.clone());
+                    }
+                }
+            }
+        }
+    }
+
     fn finish_instances(&mut self) -> Result<(), Error> {
         for (placeholder, trait_name, method, arguments, span, by_witness) in
             std::mem::take(&mut self.pending_instances)
@@ -12729,21 +12868,27 @@ impl<'a> Parser<'a> {
             });
         }
         self.expect(Token::Bang, "'!' after an intrinsic macro name")?;
-        if !matches!(self.peek(), Token::LeftBracket) {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: format!("write `{}![..]` with square brackets", item.path_ref().name())
-                    .into(),
-                operation: span(name_span.start(), self.position()),
-            });
-        }
+        // As in Rust, a macro takes `[..]`, `(..)` or `{..}` alike.
+        let close = match self.peek() {
+            Token::LeftBracket => Token::RightBracket,
+            Token::LeftParen => Token::RightParen,
+            Token::LeftBrace => Token::RightBrace,
+            _ => {
+                return Err(Error::InvalidHostOperation {
+                    item: item.path().into(),
+                    reason: format!("write `{}![..]` with square brackets", item.path_ref().name())
+                        .into(),
+                    operation: span(name_span.start(), self.position()),
+                });
+            }
+        };
         self.next();
         let mut arguments = Vec::new();
-        while !matches!(self.peek(), Token::RightBracket | Token::EOF) {
+        while !(self.peek() == close || matches!(self.peek(), Token::EOF)) {
             arguments.push(self.parse_expr()?);
             if matches!(self.peek(), Token::Comma) {
                 self.next();
-            } else if !matches!(self.peek(), Token::RightBracket) {
+            } else if self.peek() != close {
                 return Err(Error::InvalidHostOperation {
                     item: item.path().into(),
                     reason: "separate the elements with commas".into(),
@@ -12751,7 +12896,7 @@ impl<'a> Parser<'a> {
                 });
             }
         }
-        let end = self.expect(Token::RightBracket, "']' after intrinsic macro elements")?;
+        let end = self.expect(close, "the closing delimiter after intrinsic macro elements")?;
         let call = span(name_span.start(), end);
         let (item, signature) =
             self.select_host_signature(&items, None, &mut arguments, true, call)?;
@@ -13307,6 +13452,9 @@ impl<'a> Parser<'a> {
     fn parse_binding_statement(&mut self, let_keyword: bool) -> Result<(), Error> {
         let pending = self.field_entries.len();
         let start = self.next().1;
+        if let_keyword && self.let_else_ahead() {
+            return self.parse_let_else(start);
+        }
         if let_keyword
             && matches!(
                 self.peek(),
@@ -13450,6 +13598,129 @@ impl<'a> Parser<'a> {
 
     /// `let (a, (mut b, _)) = value;`, `let &x = r;`, `let whole @ (a, b) = v;`:
     /// an irrefutable pattern binds the parts of the value.
+    /// A `fn` item inside a body: the item parser hoisted it to the file's
+    /// items, so its tokens are passed over here.
+    fn skip_nested_fn(&mut self) -> Result<(), Error> {
+        let start = self.expect(Token::Fn, "`fn` to start a nested function")?;
+        let mut depth = 0usize;
+        loop {
+            match self.next() {
+                (Token::LeftBrace, _) => depth += 1,
+                (Token::RightBrace, _) if depth == 1 => return Ok(()),
+                (Token::RightBrace, _) => depth = depth.saturating_sub(1),
+                (Token::EOF, position) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "nested `fn` without a body".into(),
+                        source: span(start, position),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Whether the `let` ahead is `let pattern = value else { .. };`: an
+    /// `else` before its `;` that no `}` precedes, since Rust forbids a
+    /// value ending in `}` there.
+    fn let_else_ahead(&mut self) -> bool {
+        // `let x = ..` and `let mut x = ..` bind whatever the value is.
+        // `let None = ..` names a unit variant, a refutable pattern.
+        if matches!(self.peek(), Token::Mut)
+            || matches!(self.peek(), Token::Identifier(ref name) if !name.starts_with(char::is_uppercase))
+                && matches!(self.peek_second(), Token::Equals | Token::Colon)
+        {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut previous = Token::EOF;
+        for (token, _) in self.input.clone() {
+            match token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                Token::SemiColon | Token::EOF if depth == 0 => return false,
+                Token::Else if depth == 0 => return previous != Token::RightBrace,
+                _ => {}
+            }
+            previous = token;
+        }
+        false
+    }
+
+    /// `let pattern = value else { diverging };`: the pattern's bindings
+    /// after the statement, or the `else` block, which must diverge.
+    fn parse_let_else(&mut self, start: Position) -> Result<(), Error> {
+        let syntax = self.parse_pattern_syntax()?;
+        self.expect(Token::Equals, "'=' after a `let` pattern")?;
+        let outer = std::mem::replace(&mut self.no_struct, true);
+        let subject = self.parse_expr();
+        self.no_struct = outer;
+        let subject = subject?;
+        self.expect(Token::Else, "`else` after a `let` value")?;
+        if !matches!(self.peek(), Token::LeftBrace) {
+            return Err(self.unsupported("`let ... else` without a block"));
+        }
+        let original = self.bindings.clone();
+        let otherwise = self.parse_match_action();
+        self.bindings = original;
+        let otherwise = otherwise?;
+        if !matches!(self.inference.resolve(&otherwise.value.ty), Ty::Never) {
+            return Err(Error::TypeMismatch {
+                expected: "`!`".into(),
+                actual: otherwise.value.ty.name(&self.models),
+                expression: otherwise.syntax,
+            });
+        }
+        let end = otherwise.syntax.end();
+        self.consume_terminator(start)?;
+        let written_ty = self.inference.resolve(&subject.ty);
+        let subject_ty = match written_ty.clone() {
+            Ty::Reference { target, .. } => *target,
+            ty => ty,
+        };
+        let subject = self.pattern_subject(subject, &subject_ty)?;
+        let resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
+        let label = self.push_root_pattern(resolved.proof, &resolved.bindings);
+        let names = resolved
+            .bindings
+            .iter()
+            .map(|binding| binding.name.as_str())
+            .collect::<Vec<_>>();
+        let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
+        let mut rendered = origin::Fragment::plain(format!("let {scrutinee} = "));
+        rendered.push(subject);
+        rendered.push_text(format!(
+            ";\nlet {values} = switch {scrutinee} {{\n{label} => [{}],\n_ => ",
+            names.join(", ")
+        ));
+        rendered.push(otherwise.value.rendered_block());
+        rendered.push_text("\n};");
+        for (index, binding) in resolved.bindings.iter().enumerate() {
+            let keyword = if binding.mutable { "let" } else { "const" };
+            rendered.push_text(format!("\n{keyword} {} = {values}[{index}];", binding.name));
+            self.bindings.insert(
+                binding.name.clone(),
+                Binding {
+                    ty: binding.ty.clone(),
+                    mutable: binding.mutable,
+                    available: true,
+                    declaration: binding.span,
+                    kind: BindingKind::Local,
+                },
+            );
+        }
+        self.write_output(rendered, span(start, end));
+        self.last_type = Ty::Unit;
+        self.last_expression = None;
+        Ok(())
+    }
+
     fn parse_pattern_binding(&mut self, start: Position) -> Result<(), Error> {
         let pending = self.field_entries.len();
         let syntax = self.parse_pattern_no_alt()?;
@@ -17236,6 +17507,7 @@ impl<'a> Parser<'a> {
                 match self.peek() {
                     Token::Let => self.parse_binding(true)?,
                     Token::Const => self.parse_binding(false)?,
+                    Token::Fn => self.skip_nested_fn()?,
                     _ => self.parse_statement()?,
                 }
             }
@@ -17902,8 +18174,14 @@ impl<'a> Parser<'a> {
     /// `f32` result rounded to `f32`.
     fn checked_arithmetic(&mut self, mut value: ParsedExpr, symbol: &str) -> ParsedExpr {
         let code = match self.inference.resolve(&value.ty) {
-            Ty::Int(kind) if kind.checked() => kind_code(Ty::Int(kind)),
-            Ty::Float(Float::F32) => kind_code(Ty::Float(Float::F32)),
+            Ty::Int(kind) if kind.checked() => kind_code(Ty::Int(kind)).to_string(),
+            Ty::Float(Float::F32) => kind_code(Ty::Float(Float::F32)).to_string(),
+            // Its kind is known once inference settles (`finish_witnesses`).
+            Ty::Int(Int::Var(_)) => {
+                let placeholder = format!("__rawr_int_kind_{:08}", self.pending_int_kinds.len());
+                self.pending_int_kinds.push((placeholder.clone(), value.ty.clone()));
+                placeholder
+            }
             _ => return value,
         };
         let verb = match symbol {
@@ -17919,7 +18197,7 @@ impl<'a> Parser<'a> {
             PreludeOp::Narrow,
             [
                 source,
-                code.to_string().into(),
+                code.into(),
                 format!("{:?}", format!("attempt to {verb} with overflow")).into(),
             ],
         );
@@ -19133,13 +19411,17 @@ impl<'a> Parser<'a> {
         // Rust's sign and rounding methods, through the runtime's math.
         let unary = match (&number, member.as_str()) {
             (Ty::Int(kind), "abs") if kind.signed() => Some(("abs", number.clone())),
-            (Ty::Float(_), "abs" | "sqrt" | "floor" | "round") => {
-                Some((member.as_str(), number.clone()))
+            (Ty::Float(_), member) if let Some((_, function)) =
+                FLOAT_UNARY_METHODS.iter().find(|(name, _)| *name == member) =>
+            {
+                let ty = if member.starts_with("is_") {
+                    Ty::Bool
+                } else {
+                    number.clone()
+                };
+                Some((*function, ty))
             }
-            (Ty::Float(_), "ceil") => Some(("ceiling", number.clone())),
-            (Ty::Float(_), "trunc") => Some(("int_part", number.clone())),
             (Ty::Int(kind), "signum") if kind.signed() => Some(("sign", number.clone())),
-            (Ty::Float(_), "is_nan") => Some(("is_nan", Ty::Bool)),
             _ => None,
         };
         if let Some((function, ty)) = unary {
@@ -19400,19 +19682,28 @@ impl<'a> Parser<'a> {
 
             ("is_empty", []) => (receiver.surrounded("(", ".len() == 0)"), Ty::Bool),
             ("to_string" | "clone" | "as_str", [])
-                if self.inference.resolve(&value.ty) == Ty::String
+                if *without_references(&self.inference.resolve(&value.ty)) == Ty::String
                     || member.as_str() != "to_string" =>
             {
                 (receiver, Ty::String)
             }
             ("to_string", [])
                 if matches!(
-                    self.inference.resolve(&value.ty),
+                    without_references(&self.inference.resolve(&value.ty)),
                     Ty::Int(Int::U64 | Int::Usize)
                 ) =>
             {
                 let digits = self.prelude_op(PreludeOp::FormatRadix, [receiver, "10".into()]);
                 (digits, Ty::String)
+            }
+            // `Display` of a float: Rust's text (`1` for `1.0`).
+            ("to_string", [])
+                if let Ty::Float(kind) = without_references(&self.inference.resolve(&value.ty)) =>
+            {
+                let mode = if *kind == Float::F32 { "2" } else { "0" };
+                let text =
+                    self.prelude_op(PreludeOp::FormatFloat, [receiver, "-1".into(), mode.into()]);
+                (text, Ty::String)
             }
             ("to_string", []) => (receiver.surrounded("", ".to_string()"), Ty::String),
             ("to_uppercase", []) => (receiver.surrounded("", ".to_upper()"), Ty::String),
@@ -19482,6 +19773,74 @@ impl<'a> Parser<'a> {
                 call.push(argument.rendered_source());
                 call.push_text(")");
                 (call, Ty::Bool)
+            }
+            // A `String` changed in place, by bytes, with Rust's panics.
+            ("pop" | "clear", [])
+            | ("insert" | "insert_str", [_, _])
+            | ("remove" | "truncate" | "split_off", [_]) => {
+                let code = STR_CHANGES
+                    .iter()
+                    .position(|name| *name == member.as_str())
+                    .expect("a listed `String` method");
+                let mut operands = vec![origin::Fragment::from(code.to_string())];
+                for (index, argument) in arguments.iter_mut().enumerate() {
+                    let expected = match (member.as_str(), index) {
+                        ("insert", 1) => Ty::Char,
+                        ("insert_str", 1) => Ty::String,
+                        _ => Ty::Int(Int::Usize),
+                    };
+                    self.coerce_expr(&expected, argument)?;
+                    operands.push(argument.rendered_source());
+                }
+                operands.resize(3, "()".into());
+                let helper = self.push_op(Op::Prelude(PreludeOp::StrChange));
+                let source = self.mutation_call(&value, &helper, operands)?;
+                let ty = match member.as_str() {
+                    "pop" => Ty::Option(Box::new(Ty::Char)),
+                    "remove" => Ty::Char,
+                    "split_off" => Ty::String,
+                    _ => Ty::Unit,
+                };
+                (source, ty)
+            }
+            // `bytes()`, `char_indices()` and `splitn(n, pattern)`: iterators
+            // over the string's pieces; `as_bytes()` a `&[u8]`.
+            ("bytes" | "char_indices" | "as_bytes", []) | ("splitn", [_, _]) => {
+                let code = STR_PIECES
+                    .iter()
+                    .position(|name| *name == member.as_str())
+                    .unwrap_or(0);
+                let mut operands = vec![value.rendered_source(), code.to_string().into()];
+                if let [count, pattern] = arguments.as_mut_slice() {
+                    self.coerce_expr(&Ty::Int(Int::Usize), count)?;
+                    let expected = match self.inference.resolve(&pattern.ty) {
+                        Ty::Char => Ty::Char,
+                        _ => Ty::String,
+                    };
+                    self.require_type(&expected, &pattern.ty, pattern.span)?;
+                    operands.push(count.rendered_source());
+                    operands.push(pattern.rendered_source());
+                }
+                operands.resize(4, "()".into());
+                let pieces = self.prelude_op(PreludeOp::StrPieces, operands);
+                let item = match member.as_str() {
+                    "bytes" | "as_bytes" => Ty::Int(Int::U8),
+                    "char_indices" => Ty::Tuple(Box::new([Ty::Int(Int::Usize), Ty::Char])),
+                    _ => Ty::String,
+                };
+                let array = Ty::Array {
+                    element: Box::new(item.clone()),
+                    length: None,
+                };
+                if member.as_str() == "as_bytes" {
+                    let slice = Ty::Reference {
+                        mutable: false,
+                        target: Box::new(array),
+                    };
+                    return Ok(self.operator_expr(pieces, slice, expression));
+                }
+                let pieces = self.operator_expr(pieces, array, expression);
+                return Ok(self.array_iterator(&pieces, item, end));
             }
             ("push_str" | "push", [argument]) => {
                 let expected = if member.as_str() == "push" {
@@ -20111,7 +20470,11 @@ impl<'a> Parser<'a> {
             }
             if builtin == Ty::String
                 || matches!(&builtin, Ty::Reference { target, .. } if **target == Ty::String)
-                || matches!(builtin, Ty::Int(_) | Ty::Char | Ty::Bool) && member == "to_string"
+                || member == "to_string"
+                    && matches!(
+                        without_references(&number),
+                        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool
+                    )
             {
                 value = self.parse_string_method(value, member, member_span)?;
                 continue;
@@ -20702,6 +21065,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary(&mut self) -> Result<ParsedExpr, Error> {
+        if matches!(self.peek(), Token::LeftBrace) {
+            return self.parse_block_expr();
+        }
         let (token, position) = self.next();
         let token_span = point_span(position);
 
@@ -20837,6 +21203,37 @@ impl<'a> Parser<'a> {
                 source: token_span,
             }),
         }
+    }
+
+    /// `{ statements; tail }`: a block whose bindings end with it and whose
+    /// value is its tail, as in Rust.
+    #[inline(never)]
+    fn parse_block_expr(&mut self) -> Result<ParsedExpr, Error> {
+        let original = self.bindings.clone();
+        let outer = std::mem::replace(&mut self.no_struct, false);
+        let block = self.parse_match_action();
+        self.no_struct = outer;
+        let inner = std::mem::replace(&mut self.bindings, original);
+        for (name, binding) in &mut self.bindings {
+            // A binding the block shadowed keeps its own state.
+            if let Some(after) = inner.get(name)
+                && after.declaration == binding.declaration
+            {
+                binding.available = after.available;
+            }
+        }
+        let block = block?;
+        let source = block.value.rendered_block();
+        Ok(ParsedExpr {
+            prelude: origin::Fragment::default(),
+            source,
+            ty: block.value.ty,
+            span: block.syntax,
+            lvalue: None,
+            outcome: crate::host::usage::Outcome::Conservative,
+            evaluation: crate::host::usage::Evaluation::Required,
+        }
+        .retain_origin())
     }
 
     /// `(value)`, or a tuple `(a, b, ..)`, which is an array at runtime.
@@ -20976,6 +21373,13 @@ impl<'a> Parser<'a> {
             ));
         }
         if matches!(self.peek(), Token::Bang)
+            && PANIC_MACROS.contains(&name.as_str())
+            && self.models.import(&name).is_none()
+        {
+            self.next();
+            return self.parse_panic_macro(&name, name_span);
+        }
+        if matches!(self.peek(), Token::Bang)
             && name.as_str() == "vec"
             && self.models.import(&name).is_none()
         {
@@ -20998,6 +21402,13 @@ impl<'a> Parser<'a> {
         {
             self.next();
             return self.parse_matches(name_span);
+        }
+        // `std::mem::swap(&mut a, &mut b)`, `mem::replace`, `take`.
+        if let Some((function, skip)) = self.mem_path(&name) {
+            for _ in 0..skip {
+                self.next();
+            }
+            return self.parse_mem_call(function, name_span);
         }
         // `Reverse(x)`, `std::cmp::Reverse(x)`.
         if self.reverse_path(&name) {
@@ -21036,7 +21447,14 @@ impl<'a> Parser<'a> {
                 };
                 return Ok(self.operator_expr(value.rendered_source(), ty, call));
             }
-            if member.as_str() != "new" || !arguments.is_empty() {
+            let mut arguments = arguments;
+            // `Vec::with_capacity(n)`: an empty `Vec`.
+            if member.as_str() == "with_capacity"
+                && let [capacity] = arguments.as_mut_slice()
+            {
+                self.coerce_expr(&Ty::Int(Int::Usize), capacity)?;
+                arguments.clear();
+            } else if member.as_str() != "new" || !arguments.is_empty() {
                 return Err(Error::UnknownMember {
                     owner: "Vec".into(),
                     member,
@@ -21107,6 +21525,289 @@ impl<'a> Parser<'a> {
             return self.parse_host_macro(items, owner, name_span);
         }
         self.parse_name_value(name, name_span)
+    }
+
+    /// `panic!`, `assert!`, `assert_eq!`, `assert_ne!`, their `debug_`
+    /// forms, `unreachable!`, `todo!` and `unimplemented!` after the `!`,
+    /// with Rust's messages. A panic throws its message.
+    #[inline(never)]
+    fn parse_panic_macro(&mut self, name: &str, name_span: Span) -> Result<ParsedExpr, Error> {
+        let (tokens, end) = self.take_argument_tokens()?;
+        let call = span(name_span.start(), end);
+        let name = name.strip_prefix("debug_").unwrap_or(name);
+        if let Some(operator) = match name {
+            "assert_eq" => Some((Token::EqualsTo, "==")),
+            "assert_ne" => Some((Token::NotEqualsTo, "!=")),
+            _ => None,
+        } {
+            return self.parse_assert_compare(operator, tokens, name_span, end);
+        }
+        if name == "assert" {
+            let mut parts = split_arguments(tokens);
+            if parts.first().is_none_or(Vec::is_empty) {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "`assert!` without a condition".into(),
+                    source: call,
+                });
+            }
+            let condition_tokens = parts.remove(0);
+            let text = format!("assertion failed: {}", token_text(&condition_tokens));
+            let mut spliced = condition_tokens;
+            spliced.push((Token::RightParen, end));
+            self.splice_tokens(spliced);
+            let condition = self.parse_expr()?;
+            self.expect(Token::RightParen, "')' after the condition of `assert!`")?;
+            self.require_type(&Ty::Bool, &condition.ty, condition.span)?;
+            let message = match self.panic_format(parts, name_span, end)? {
+                Some(message) => message,
+                None => origin::Fragment::plain(format!("{text:?}")),
+            };
+            let mut source = origin::Fragment::plain("if !(");
+            source.push(condition.rendered_source());
+            source.push_text(") { throw ");
+            source.push(message);
+            source.push_text("; }");
+            return Ok(self.operator_expr(source, Ty::Unit, call));
+        }
+        let prefix = match name {
+            "todo" => Some("not yet implemented"),
+            "unimplemented" => Some("not implemented"),
+            "unreachable" => Some("internal error: entered unreachable code"),
+            _ => None,
+        };
+        let message = match (self.panic_format(split_arguments(tokens), name_span, end)?, prefix) {
+            (Some(message), None) => message,
+            (Some(message), Some(prefix)) => {
+                let mut text = origin::Fragment::plain(format!("{:?} + (", format!("{prefix}: ")));
+                text.push(message);
+                text.push_text(")");
+                text
+            }
+            (None, prefix) => {
+                origin::Fragment::plain(format!("{:?}", prefix.unwrap_or("explicit panic")))
+            }
+        };
+        let mut source = origin::Fragment::plain("{ throw ");
+        source.push(message);
+        source.push_text("; }");
+        Ok(self.operator_expr(source, Ty::Never, call))
+    }
+
+    /// A panic macro's own message, `format!`'s text of its arguments, or
+    /// `None` without any.
+    #[inline(never)]
+    fn panic_format(
+        &mut self,
+        parts: Vec<Vec<(Token, Position)>>,
+        name_span: Span,
+        end: Position,
+    ) -> Result<Option<origin::Fragment>, Error> {
+        if parts.iter().all(Vec::is_empty) {
+            return Ok(None);
+        }
+        let mut spliced = Vec::new();
+        for (index, part) in parts.into_iter().enumerate() {
+            if index > 0 {
+                spliced.push((Token::Comma, end));
+            }
+            spliced.extend(part);
+        }
+        spliced.push((Token::RightParen, end));
+        self.splice_tokens(spliced);
+        Ok(Some(self.parse_format(name_span, true)?.rendered_source()))
+    }
+
+    /// `assert_eq!(a, b, ..)` and `assert_ne!`: as Rust expands them, both
+    /// sides borrowed once and compared, and on failure a panic showing
+    /// both with `{:?}`.
+    #[inline(never)]
+    fn parse_assert_compare(
+        &mut self,
+        (operator, symbol): (Token, &str),
+        tokens: Vec<(Token, Position)>,
+        name_span: Span,
+        end: Position,
+    ) -> Result<ParsedExpr, Error> {
+        let mut parts = split_arguments(tokens).into_iter();
+        let (Some(left), Some(right)) = (parts.next(), parts.next()) else {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "an assertion without two values".into(),
+                source: span(name_span.start(), end),
+            });
+        };
+        if left.is_empty() || right.is_empty() {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "an assertion without two values".into(),
+                source: span(name_span.start(), end),
+            });
+        }
+        let rest: Vec<_> = parts.collect();
+        let at = name_span.start();
+        let left_name = self.temporary("left");
+        let right_name = self.temporary("right");
+        let ident = |name: &str, position: Position| {
+            (Token::Identifier(Box::new(name.into())), position)
+        };
+        let mut spliced = vec![(Token::LeftBrace, at), (Token::Let, at), ident(&left_name, at)];
+        spliced.extend([(Token::Equals, at), (Token::Ampersand, at), (Token::LeftParen, at)]);
+        let left_end = left.last().map_or(at, |(_, position)| *position);
+        spliced.extend(left);
+        spliced.extend([(Token::RightParen, left_end), (Token::SemiColon, left_end)]);
+        spliced.extend([(Token::Let, at), ident(&right_name, at), (Token::Equals, at)]);
+        spliced.extend([(Token::Ampersand, at), (Token::LeftParen, at)]);
+        let right_end = right.last().map_or(at, |(_, position)| *position);
+        spliced.extend(right);
+        spliced.extend([(Token::RightParen, right_end), (Token::SemiColon, right_end)]);
+        spliced.extend([(Token::If, at), (Token::Bang, at), (Token::LeftParen, at)]);
+        spliced.extend([(Token::Multiply, at), ident(&left_name, at), (operator, at)]);
+        spliced.extend([(Token::Multiply, at), ident(&right_name, at), (Token::RightParen, at)]);
+        spliced.extend([(Token::LeftBrace, at), ident("panic", at), (Token::Bang, at)]);
+        spliced.push((Token::LeftParen, at));
+        let custom = !rest.iter().all(Vec::is_empty);
+        let colon = if custom { ": {}" } else { "" };
+        let template =
+            format!("assertion `left {symbol} right` failed{colon}\n  left: {{:?}}\n right: {{:?}}");
+        spliced.push((Token::StringConstant(Box::new(template.into())), at));
+        if custom {
+            spliced.extend([(Token::Comma, at), ident("format", at), (Token::Bang, at)]);
+            spliced.push((Token::LeftParen, at));
+            for (index, part) in rest.into_iter().enumerate() {
+                if index > 0 {
+                    spliced.push((Token::Comma, end));
+                }
+                spliced.extend(part);
+            }
+            spliced.push((Token::RightParen, end));
+        }
+        spliced.extend([(Token::Comma, at), ident(&left_name, at), (Token::Comma, at)]);
+        spliced.extend([ident(&right_name, at), (Token::RightParen, at)]);
+        spliced.extend([(Token::RightBrace, end), (Token::RightBrace, end)]);
+        self.splice_tokens(spliced);
+        let mut value = self.parse_block_expr()?;
+        value.span = span(name_span.start(), end);
+        Ok(value)
+    }
+
+    /// A call of `std::mem`'s `swap`, `replace` or `take` at `name`, by
+    /// its path (`std::mem::swap`, `mem::swap`) or imported (`swap`): the
+    /// function and the tokens before its name.
+    #[inline(never)]
+    fn mem_path(&mut self, name: &str) -> Option<(&'static str, usize)> {
+        let mut ahead = self.input.clone();
+        let tokens: Vec<Token> = (0..5)
+            .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
+            .collect();
+        let function = |token: &Token| match token {
+            Token::Identifier(name) => ["swap", "replace", "take"]
+                .into_iter()
+                .find(|function| *function == name.as_str()),
+            _ => None,
+        };
+        // Free, or imported from `std::mem` (`use std::mem::{self, swap}`).
+        let unbound = |this: &Self, name: &str| {
+            this.models.get(name).is_none()
+                && this.models.function(name).is_none()
+                && this.models.import(name).is_none_or(|binding| {
+                    let path = binding.qualified.as_str();
+                    let path = path.strip_suffix(name).unwrap_or(path);
+                    matches!(path, "std::" | "core::" | "std::mem::" | "core::mem::")
+                })
+                && !this.bindings.contains_key(name)
+        };
+        let mem = |token: &Token| matches!(token, Token::Identifier(name) if name.as_str() == "mem");
+        let (function, skip) = match name {
+            "std" | "core"
+                if tokens[0] == Token::DoubleColon
+                    && mem(&tokens[1])
+                    && tokens[2] == Token::DoubleColon =>
+            {
+                (function(&tokens[3])?, 4)
+            }
+            "mem" if tokens[0] == Token::DoubleColon && unbound(self, name) => {
+                (function(&tokens[1])?, 2)
+            }
+            name if unbound(self, name) => {
+                (function(&Token::Identifier(Box::new(name.into())))?, 0)
+            }
+            _ => return None,
+        };
+        matches!(tokens[skip], Token::LeftParen).then_some((function, skip))
+    }
+
+    /// `swap(&mut a, &mut b)`, `replace(&mut a, value)` (the old value) and
+    /// `take(&mut a)` (the old value, `a` left as its `Default`).
+    #[inline(never)]
+    fn parse_mem_call(&mut self, function: &str, name_span: Span) -> Result<ParsedExpr, Error> {
+        let (mut arguments, end) = self.parse_borrowing_arguments("`std::mem` arguments")?;
+        let call = span(name_span.start(), end);
+        let count = if function == "take" { 1 } else { 2 };
+        if arguments.len() != count {
+            return Err(Error::InvalidMethodCall {
+                owner: "std::mem".into(),
+                method: function.into(),
+                reason: format!("expects {count} argument(s), found {}", arguments.len()).into(),
+                call,
+            });
+        }
+        let borrowed = if function == "swap" { 2 } else { 1 };
+        let places = self.mutable_arguments(&arguments, 0..borrowed)?;
+        let Ty::Reference { target, .. } = self.inference.resolve(&places[0].ty) else {
+            unreachable!("a `&mut` place has a reference type");
+        };
+        let target = *target;
+        if function == "swap" {
+            let expected = Ty::Reference {
+                mutable: true,
+                target: Box::new(target.clone()),
+            };
+            self.require_type(&expected, &places[1].ty, places[1].span)?;
+        } else if function == "replace" {
+            self.coerce_expr(&target, &mut arguments[1])?;
+        }
+        let old = self.temporary("old");
+        let mut source = origin::Fragment::plain(format!("{{ let {old} = "));
+        source.push(places[0].rendered_source());
+        source.push_text("; ");
+        let ty = match function {
+            "swap" => {
+                let other = self.temporary("other");
+                source.push_text(format!("let {other} = "));
+                source.push(places[1].rendered_source());
+                source.push_text("; ");
+                source.push(self.store_into(&places[0], &other)?);
+                source.push_text(" ");
+                source.push(self.store_into(&places[1], &old)?);
+                source.push_text(" }");
+                Ty::Unit
+            }
+            "replace" => {
+                let new = self.temporary("new");
+                source.push_text(format!("let {new} = "));
+                source.push(arguments[1].rendered_source());
+                source.push_text("; ");
+                source.push(self.store_into(&places[0], &new)?);
+                source.push_text(format!(" {old} }}"));
+                target
+            }
+            _ => {
+                if !self.type_provides(&target, capability::Kind::Default) {
+                    return Err(Error::MissingCapability {
+                        owner: target.name(&self.models),
+                        capability: "Default".into(),
+                        operation: call,
+                    });
+                }
+                let new = self.temporary("new");
+                let default = self.default_source(&target, call)?;
+                source.push_text(format!("let {new} = "));
+                source.push(default);
+                source.push_text("; ");
+                source.push(self.store_into(&places[0], &new)?);
+                source.push_text(format!(" {old} }}"));
+                target
+            }
+        };
+        Ok(self.operator_expr(source, ty, call))
     }
 
     /// `print!`, `println!`, `eprint!`, `eprintln!` after the name:
@@ -23611,9 +24312,6 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> Result<origin::Fragment, Error> {
         let ty = self.inference.resolve(ty);
-        let quoted = |quote: &str, value: origin::Fragment| {
-            value.surrounded(&format!("(\"{quote}\" + "), &format!(" + \"{quote}\")"))
-        };
         Ok(match &ty {
             Ty::Reference { target, .. } | Ty::Boxed(target) => {
                 self.debug_source(target, value, span)?
@@ -23660,8 +24358,18 @@ impl<'a> Parser<'a> {
                 ));
                 source
             }
-            Ty::String => quoted("\\\"", value),
-            Ty::Char => quoted("'", value),
+            // Rust's `escape_debug`: quotes, `\n`, `\\`, `\u{..}` and kin.
+            Ty::String | Ty::Char => {
+                let code = STR_PIECES
+                    .iter()
+                    .position(|name| *name == "debug")
+                    .expect("a listed piece")
+                    .to_string();
+                self.prelude_op(
+                    PreludeOp::StrPieces,
+                    [value, code.into(), "()".into(), "()".into()],
+                )
+            }
             Ty::Option(element) => {
                 let option = self.temporary("debug");
                 let mut source = origin::Fragment::plain(format!("{{ let {option} = "));
@@ -23953,6 +24661,45 @@ impl<'a> Parser<'a> {
                     }),
                 },
             ),
+            // `windows(n)` and `chunks(n)`: an iterator over `&[T]` slices.
+            ("windows" | "chunks", [size]) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), size)?;
+                let windows = (member.as_str() == "windows").to_string();
+                let slices = self.prelude_op(
+                    PreludeOp::SliceChunks,
+                    [receiver, size.rendered_source(), windows.into()],
+                );
+                let slice = Ty::Array {
+                    element: Box::new(element),
+                    length: None,
+                };
+                let item = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(slice.clone()),
+                };
+                let slices = self.operator_expr(
+                    slices,
+                    Ty::Array {
+                        element: Box::new(item.clone()),
+                        length: None,
+                    },
+                    expression,
+                );
+                return Ok(self.array_iterator(&slices, item, end));
+            }
+            // `v.split_off(at)`: the elements from `at` on, as a new `Vec`.
+            ("split_off", [at]) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), at)?;
+                let code = vec_method_code("split_off").to_string();
+                let operands = vec![code.into(), at.rendered_source(), "()".into(), "()".into()];
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                let source = self.mutation_call(&value, &helper, operands)?;
+                let ty = Ty::Array {
+                    element: Box::new(element),
+                    length: None,
+                };
+                (source, ty)
+            }
             // `first`, `last` and `get(i)`: an `Option<&T>`.
             ("first" | "last", []) | ("get", [_]) => {
                 let index = match arguments.first_mut() {
@@ -25683,6 +26430,38 @@ impl<'a> Parser<'a> {
         }
         if builtin == Ty::String && member.as_str() == "new" && arguments.is_empty() {
             return Ok(self.literal("\"\"", Ty::String, expression));
+        }
+        if builtin == Ty::String
+            && member.as_str() == "with_capacity"
+            && let [capacity] = arguments.as_mut_slice()
+        {
+            self.coerce_expr(&Ty::Int(Int::Usize), capacity)?;
+            return Ok(self.literal("\"\"", Ty::String, expression));
+        }
+        // `String::from_utf8(bytes)`: a `Result` of the text or the error.
+        if builtin == Ty::String
+            && member.as_str() == "from_utf8"
+            && let [bytes] = arguments.as_mut_slice()
+        {
+            let expected = Ty::Array {
+                element: Box::new(Ty::Int(Int::U8)),
+                length: None,
+            };
+            self.coerce_expr(&expected, bytes)?;
+            let code = STR_PIECES
+                .iter()
+                .position(|name| *name == "from_utf8")
+                .expect("a listed piece")
+                .to_string();
+            let source = self.prelude_op(
+                PreludeOp::StrPieces,
+                [bytes.rendered_source(), code.into(), "()".into(), "()".into()],
+            );
+            let ty = Ty::Result(
+                Box::new(Ty::String),
+                Box::new(Ty::ParseError(ParseError::Utf8)),
+            );
+            return Ok(self.operator_expr(source, ty, expression));
         }
         if member.as_str() == "from"
             && let [argument] = arguments.as_mut_slice()
@@ -30400,6 +31179,8 @@ enum ParseError {
     Char,
     /// `std::convert::Infallible`, the error of `parse::<String>()`.
     Infallible,
+    /// `std::string::FromUtf8Error`, the error of `String::from_utf8`.
+    Utf8,
 }
 
 impl ParseError {
@@ -30410,6 +31191,7 @@ impl ParseError {
             "ParseBoolError" => Self::Bool,
             "ParseCharError" => Self::Char,
             "Infallible" => Self::Infallible,
+            "FromUtf8Error" => Self::Utf8,
             _ => return None,
         })
     }
@@ -30421,6 +31203,7 @@ impl ParseError {
             Self::Bool => "ParseBoolError",
             Self::Char => "ParseCharError",
             Self::Infallible => "Infallible",
+            Self::Utf8 => "FromUtf8Error",
         }
     }
 
@@ -30455,7 +31238,7 @@ impl ParseError {
                 ("cannot parse char from empty string", "ParseCharError { kind: EmptyString }"),
                 ("too many characters in string", "ParseCharError { kind: TooManyChars }"),
             ],
-            Self::Infallible => &[],
+            Self::Infallible | Self::Utf8 => &[],
         }
     }
 }
@@ -30602,6 +31385,7 @@ const VEC_METHODS: &[&str] = &[
     "store",
     "fill",
     "copy_from_slice",
+    "split_off",
 ];
 
 /// A `VEC_METHODS` code by name.
@@ -30672,6 +31456,10 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
             array.fill(value);
             Ok(Dynamic::UNIT)
         }
+        Some("split_off") if a > len => fail(format!(
+            "`at` split index (is {a}) should be <= len (is {len})"
+        )),
+        Some("split_off") => Ok(Dynamic::from_array(array.split_off(a))),
         Some("copy_from_slice") => {
             let source = value.into_array().unwrap_or_default();
             if source.len() != len {
@@ -30702,6 +31490,156 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
         }
         _ => Err(invariant("an unknown `Vec` method")),
     }
+}
+
+/// The `String` methods `StrChange` runs in place, by code.
+const STR_CHANGES: &[&str] = &[
+    "pop",
+    "clear",
+    "insert",
+    "insert_str",
+    "remove",
+    "truncate",
+    "split_off",
+];
+
+/// `STR_CHANGES`' `code` on the string taken by reference, by bytes and
+/// with Rust's panics.
+fn str_change(args: &mut FnCallArgs) -> RawrResult {
+    let fail = |message: String| -> RawrResult {
+        Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    let at = usize::try_from(args[2].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    let operand = args[3].clone();
+    let mut text = args[0]
+        .write_lock::<ImmutableString>()
+        .ok_or_else(|| invariant("a `String` is not a string at runtime"))?;
+    let name = STR_CHANGES.get(code).copied().unwrap_or_default();
+    // Rust asserts a char boundary before changing the string there.
+    let boundary = |text: &str, at: usize, what: &str| -> Result<(), Box<EvalAltResult>> {
+        if text.is_char_boundary(at) {
+            Ok(())
+        } else {
+            Err(EvalAltResult::ErrorRuntime(
+                format!("assertion failed: self.is_char_boundary({what})").into(),
+                Position::NONE,
+            )
+            .into())
+        }
+    };
+    match name {
+        "pop" => Ok(match text.make_mut().pop() {
+            Some(c) => crate::option::some(c.into()),
+            None => crate::option::none(),
+        }),
+        "clear" => {
+            *text = ImmutableString::new();
+            Ok(Dynamic::UNIT)
+        }
+        "insert" | "insert_str" => {
+            boundary(&text, at, "idx")?;
+            match operand.as_char() {
+                Ok(c) => text.make_mut().insert(at, c),
+                Err(_) => {
+                    let piece = operand.clone_cast::<ImmutableString>();
+                    text.make_mut().insert_str(at, &piece);
+                }
+            }
+            Ok(Dynamic::UNIT)
+        }
+        "remove" => {
+            let len = text.len();
+            if at > len {
+                return fail(format!(
+                    "start byte index {at} is out of bounds for string of length {len}"
+                ));
+            }
+            if !text.is_char_boundary(at) {
+                let start = (0..at).rev().find(|index| text.is_char_boundary(*index)).unwrap_or(0);
+                let inside = text[start..].chars().next().unwrap_or_default();
+                let end = start + inside.len_utf8();
+                return fail(format!(
+                    "start byte index {at} is not a char boundary; it is inside {inside:?} \
+                     (bytes {start}..{end} of string)"
+                ));
+            }
+            match text[at..].chars().next() {
+                Some(c) => {
+                    text.make_mut().remove(at);
+                    Ok(c.into())
+                }
+                None => fail("cannot remove a char from the end of a string".into()),
+            }
+        }
+        "truncate" => {
+            if at <= text.len() {
+                boundary(&text, at, "new_len")?;
+                text.make_mut().truncate(at);
+            }
+            Ok(Dynamic::UNIT)
+        }
+        "split_off" => {
+            boundary(&text, at, "at")?;
+            let rest = text.make_mut().split_off(at);
+            Ok(Dynamic::from(ImmutableString::from(rest.as_str())))
+        }
+        _ => Err(invariant("an unknown `String` method")),
+    }
+}
+
+/// The string methods `StrPieces` runs, by code: each gives an array.
+/// `from_utf8` gives a `Result` of the text or its error's message, and
+/// `debug` a string's or a char's `Debug` text.
+const STR_PIECES: &[&str] = &["bytes", "char_indices", "splitn", "from_utf8", "debug"];
+
+fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
+    let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    let name = STR_PIECES.get(code).copied().unwrap_or_default();
+    if name == "from_utf8" {
+        let bytes: Vec<u8> = args[0]
+            .as_array_ref()
+            .map_err(|_| invariant("a `Vec<u8>` is not an array at runtime"))?
+            .iter()
+            .map(|byte| u8::try_from(byte.as_int().unwrap_or_default()).unwrap_or_default())
+            .collect();
+        return Ok(match String::from_utf8(bytes) {
+            Ok(text) => crate::result::ok(Dynamic::from(ImmutableString::from(text))),
+            Err(error) => {
+                crate::result::err(Dynamic::from(ImmutableString::from(error.to_string())))
+            }
+        });
+    }
+    if name == "debug" {
+        let text = match args[0].as_char() {
+            Ok(c) => format!("{c:?}"),
+            Err(_) => format!("{:?}", args[0].clone_cast::<ImmutableString>().as_str()),
+        };
+        return Ok(Dynamic::from(ImmutableString::from(text)));
+    }
+    let text = args[0].clone_cast::<ImmutableString>();
+    let string = |piece: &str| Dynamic::from(ImmutableString::from(piece));
+    let pieces: crate::Array = match name {
+        "bytes" => text.bytes().map(|byte| Dynamic::from(crate::INT::from(byte))).collect(),
+        "char_indices" => text
+            .char_indices()
+            .map(|(index, c)| {
+                Dynamic::from_array(vec![(index as crate::INT).into(), c.into()])
+            })
+            .collect(),
+        "splitn" => {
+            let count = usize::try_from(args[2].as_int().unwrap_or_default()).unwrap_or(0);
+            match args[3].as_char() {
+                Ok(c) => text.splitn(count, c).map(string).collect(),
+                Err(_) => {
+                    let pattern = args[3].clone_cast::<ImmutableString>();
+                    text.splitn(count, pattern.as_str()).map(string).collect()
+                }
+            }
+        }
+        _ => return Err(invariant("an unknown string method")),
+    };
+    Ok(Dynamic::from_array(pieces))
 }
 
 /// `char`'s methods by name and result (`c` a `char`, `b` a `bool`, `u` a
@@ -31236,6 +32174,124 @@ fn unsigned_order(value: origin::Fragment) -> origin::Fragment {
 }
 
 /// `=` or a compound assignment.
+/// The panic macros of Rust's prelude (`parse_panic_macro`).
+const PANIC_MACROS: &[&str] = &[
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "unreachable",
+    "todo",
+    "unimplemented",
+];
+
+/// Macro arguments split at their top-level commas.
+fn split_arguments(tokens: Vec<(Token, Position)>) -> Vec<Vec<(Token, Position)>> {
+    let mut parts = vec![Vec::new()];
+    let mut depth = 0usize;
+    for (token, position) in tokens {
+        match token {
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                depth += 1;
+            }
+            Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                depth = depth.saturating_sub(1);
+            }
+            Token::Comma if depth == 0 => {
+                parts.push(Vec::new());
+                continue;
+            }
+            _ => {}
+        }
+        parts
+            .last_mut()
+            .expect("there is always a part")
+            .push((token, position));
+    }
+    if parts.len() > 1 && parts.last().is_some_and(Vec::is_empty) {
+        parts.pop();
+    }
+    parts
+}
+
+/// An expression's tokens as Rust's `stringify!` prints them: binary
+/// operators spaced, nothing around `.`, `::` and brackets.
+fn token_text(tokens: &[(Token, Position)]) -> String {
+    let mut text = String::new();
+    let mut previous: Option<&Token> = None;
+    let mut unary = false;
+    for (token, _) in tokens {
+        let word = match token {
+            Token::StringConstant(value) => format!("{:?}", value.as_str()),
+            Token::CharConstant(value) => format!("{value:?}"),
+            token => token.to_string(),
+        };
+        let operand_before = previous.is_some_and(ends_operand);
+        let tight_before = matches!(
+            token,
+            Token::Period
+                | Token::Comma
+                | Token::RightParen
+                | Token::RightBracket
+                | Token::SemiColon
+                | Token::DoubleColon
+                | Token::Unit
+        ) || matches!(token, Token::Reserved(word) if word.as_str() == "?")
+            || matches!(token, Token::LeftParen | Token::LeftBracket | Token::Bang)
+            && operand_before
+            || matches!(token, Token::LeftParen | Token::LeftBracket)
+                && matches!(previous, Some(Token::Bang));
+        let tight_after_previous = unary
+            || matches!(
+                previous,
+                Some(Token::Period | Token::LeftParen | Token::LeftBracket | Token::DoubleColon)
+            );
+        if previous.is_some() && !tight_before && !tight_after_previous {
+            text.push(' ');
+        }
+        // `-x`, `!x`, `&x`, `*x`: a prefix operator where no operand ends.
+        unary = matches!(
+            token,
+            Token::UnaryMinus | Token::Minus | Token::Bang | Token::Ampersand | Token::Multiply
+        ) && !operand_before;
+        text.push_str(&word);
+        previous = Some(token);
+    }
+    text
+}
+
+/// `ty` under all its references.
+fn without_references(mut ty: &Ty) -> &Ty {
+    while let Ty::Reference { target, .. } = ty {
+        ty = target;
+    }
+    ty
+}
+
+/// Whether an operand can end at `token`, so an operator after it is binary.
+fn ends_operand(token: &Token) -> bool {
+    match token {
+        Token::Identifier(_)
+        | Token::IntegerConstant(_)
+        | Token::StringConstant(_)
+        | Token::CharConstant(_)
+        | Token::True
+        | Token::False
+        | Token::Unit
+        | Token::RightParen
+        | Token::RightBracket
+        | Token::RightBrace
+        | Token::SelfValue => true,
+        #[cfg(not(feature = "no_float"))]
+        Token::FloatConstant(_) => true,
+        Token::Reserved(word) => word.as_str() == "?",
+        _ => false,
+    }
+}
+
 fn assignment_token(token: &Token) -> bool {
     *token == Token::Equals || compound_operator(token).is_some()
 }

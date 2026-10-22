@@ -166,6 +166,7 @@ pub(crate) struct Scrollable {
     pub(crate) width: Option<iced::Length>,
     pub(crate) height: Option<iced::Length>,
     pub(crate) style: Option<Source<scrollable::Status, scrollable::Style>>,
+    pub(crate) id: Option<iced::widget::Id>,
 }
 
 #[derive(Clone)]
@@ -189,6 +190,7 @@ pub(crate) struct TextInput {
     pub(crate) width: Option<iced::Length>,
     pub(crate) secure: bool,
     pub(crate) style: Option<Source<text_input::Status, text_input::Style>>,
+    pub(crate) id: Option<iced::widget::Id>,
 }
 
 #[derive(Clone)]
@@ -359,3 +361,92 @@ pub(crate) struct Tooltip {
 /// `alignment::Horizontal`, as the `Alignment` it converts into.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Horizontal(pub(crate) iced::Alignment);
+
+/// `alignment::Vertical`, as the `Alignment` it converts into.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Vertical(pub(crate) iced::Alignment);
+
+/// iced's `stack![..]`: children drawn on top of each other.
+#[derive(Clone)]
+pub(crate) struct Stack {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) children: Vec<widget::Value>,
+    pub(crate) width: Option<iced::Length>,
+    pub(crate) height: Option<iced::Length>,
+}
+
+/// A widget the facade lowers by one native function and no builders:
+/// `rule::horizontal(1)`, `hover(base, top)`, `lazy(dependency, view)`.
+#[derive(Clone)]
+pub(crate) struct Native {
+    pub(crate) identity: widget::Identity,
+    pub(crate) lower: std::sync::Arc<
+        dyn Fn(&widget::Context<'_>) -> iced::Element<'static, crate::runtime::Message>
+            + Send
+            + Sync,
+    >,
+}
+
+/// iced's `pin(content)`: content at a fixed position.
+#[derive(Clone)]
+pub(crate) struct Pin {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) child: widget::Value,
+    pub(crate) position: iced::Point,
+    pub(crate) width: iced::Length,
+    pub(crate) height: iced::Length,
+}
+
+/// iced's `mouse_area(content)`: the messages of each mouse event.
+#[derive(Clone)]
+pub(crate) struct MouseArea {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) child: widget::Value,
+    /// One optional Message per `crate::MOUSE_AREA_MESSAGES` entry.
+    pub(crate) messages: [Option<Dynamic>; 9],
+    pub(crate) on_move: Option<item::Value>,
+    pub(crate) interaction: Option<iced::mouse::Interaction>,
+}
+
+/// iced's `image(handle)`.
+#[derive(Clone)]
+pub(crate) struct Image {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) handle: iced::widget::image::Handle,
+    pub(crate) width: Option<iced::Length>,
+    pub(crate) height: Option<iced::Length>,
+    pub(crate) content_fit: Option<iced::ContentFit>,
+    pub(crate) opacity: Option<f32>,
+    pub(crate) scale: Option<f32>,
+}
+
+/// iced's `svg(handle)`.
+#[derive(Clone)]
+pub(crate) struct Svg {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) handle: iced::widget::svg::Handle,
+    pub(crate) width: Option<iced::Length>,
+    pub(crate) height: Option<iced::Length>,
+    pub(crate) content_fit: Option<iced::ContentFit>,
+    pub(crate) opacity: Option<f32>,
+}
+
+/// iced's `qr_code::Data`, as the text it encodes: iced's holds a drawing
+/// cache that is neither `Clone` nor `Sync`, so each view encodes it again.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct QrData(pub(crate) std::sync::Arc<str>);
+
+/// iced's `qr_code(&data)`.
+#[derive(Clone)]
+pub(crate) struct QrCode {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) data: QrData,
+    pub(crate) cell_size: Option<f32>,
+    pub(crate) total_size: Option<f32>,
+}

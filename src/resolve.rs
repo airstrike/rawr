@@ -1006,6 +1006,10 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "convert::TryInto"
                 | "num"
                 | "str::FromStr"
+                | "mem"
+                | "mem::swap"
+                | "mem::replace"
+                | "mem::take"
         )
     ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
         || rest
@@ -1061,6 +1065,7 @@ pub(crate) fn std_parse_error(path: &str) -> Option<&'static str> {
         "ParseBoolError" => ("str", "ParseBoolError"),
         "ParseCharError" => ("char", "ParseCharError"),
         "Infallible" => ("convert", "Infallible"),
+        "FromUtf8Error" => ("string", "FromUtf8Error"),
         _ => return None,
     };
     (module.is_empty() || module == expected).then_some(error)

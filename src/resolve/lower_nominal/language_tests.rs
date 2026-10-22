@@ -6116,3 +6116,389 @@ fn language_index_mut_and_mutable_trait_object_borrows() {
     );
     assert!(immutable.contains("immutable"), "{immutable}");
 }
+
+#[test]
+fn language_block_expressions() {
+    let value = run_string(
+        r#"
+        fn tail(x: i64) -> i64 {
+            {
+                let y = x * 2;
+                { y + 1 }
+            }
+        }
+        fn early(x: i64) -> i64 {
+            let v = {
+                if x > 5 {
+                    return 0;
+                }
+                x + 10
+            };
+            v
+        }
+        pub fn run() -> String {
+            let y = { let a = 2; a * 3 };
+            let x = 1;
+            {
+                let x = "shadow";
+                let _ = x;
+            }
+            let mut total = 0;
+            for i in 0..3 {
+                { total += i; }
+            }
+            let unit = {};
+            let nested = { let a = { 1 + 1 }; let b = { let c = a * 3; c }; format!("{}-{}", a, b) };
+            format!("{} {} {} {} {} {} {:?} {}", y, x, tail(4), early(2), early(9), total, unit, nested)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "6 1 9 12 0 3 () 2-6");
+    let unit_tail = rejected("pub fn run() -> i64 { let n: i64 = { let t = 1; t; }; n } run()");
+    assert!(unit_tail.contains("expected 'i64', found '()'"), "{unit_tail}");
+    rejected("pub fn run() -> i64 { { let t = 1; } t } run()");
+}
+
+#[test]
+fn language_panic_macros() {
+    let value = run_string(
+        r#"
+        fn later() -> i64 { todo!() }
+        fn never() -> i64 { unimplemented!() }
+        pub fn run() -> String {
+            let x = 5;
+            assert!(x > 1);
+            assert!(x > 1, "x was {}", x);
+            assert_eq!(x, 5);
+            assert_eq!(x, 5, "x was {}", x);
+            assert_ne!(x, 4);
+            debug_assert!(true);
+            debug_assert_eq!(x + 1, 6);
+            debug_assert_ne!(String::from("a"), "b".to_string());
+            assert_eq!(vec![1, 2], vec![1, 2]);
+            let y = match x { 5 => 10, _ => unreachable!("bad {}", x) };
+            let z = if y > 3 { y } else { panic!("small") };
+            format!("ok {} {}", y, z)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "ok 10 10");
+    for (body, message) in [
+        ("panic!()", "explicit panic"),
+        ("panic!(\"boom {}\", x)", "boom 5"),
+        ("assert!(x < 1)", "assertion failed: x < 1"),
+        ("assert!(s.len()==9 && !s.is_empty())", "assertion failed: s.len() == 9 && !s.is_empty()"),
+        ("assert!(x < 1, \"x was {x}\")", "x was 5"),
+        ("assert_eq!(x, 4)", "assertion `left == right` failed\n  left: 5\n right: 4"),
+        (
+            "assert_eq!(s, \"q\", \"with {} args\", 2)",
+            "assertion `left == right` failed: with 2 args\n  left: \"ab\"\n right: \"q\"",
+        ),
+        ("assert_ne!(x, 5)", "assertion `left != right` failed\n  left: 5\n right: 5"),
+        ("debug_assert!(-x > 0)", "assertion failed: -x > 0"),
+        ("todo!()", "not yet implemented"),
+        ("todo!(\"later\")", "not yet implemented: later"),
+        ("unimplemented!()", "not implemented"),
+        ("unimplemented!(\"not {}\", \"here\")", "not implemented: not here"),
+        ("unreachable!()", "internal error: entered unreachable code"),
+        ("unreachable!(\"x is {}\", x)", "internal error: entered unreachable code: x is 5"),
+    ] {
+        let error = rejected(&format!(
+            "pub fn run() -> i64 {{ let x = 5; let s = String::from(\"ab\"); {body}; 0 }} run()"
+        ));
+        assert!(error.contains(message), "{body}: {error}");
+    }
+    let mismatch = rejected("pub fn run() -> i64 { assert!(1); 0 } run()");
+    assert!(mismatch.contains("expected 'bool'"), "{mismatch}");
+}
+
+#[test]
+fn language_to_string_on_references_and_literals() {
+    let value = run_string(
+        r#"
+        fn show(n: &i64, f: &f64, u: &u64, c: &char, b: &bool, s: &String) -> String {
+            format!("{} {} {} {} {} {}", n.to_string(), f.to_string(), u.to_string(), c.to_string(), b.to_string(), s.to_string())
+        }
+        pub fn run() -> String {
+            let n = 3;
+            let r = &n;
+            let v = vec![1, 2, 3];
+            let big: Vec<String> = v.iter().filter(|x| **x > 1).map(|x| x.to_string()).collect();
+            let t: f32 = 0.1;
+            format!(
+                "{} {} {} {} {} {} {} {:?} {}",
+                r.to_string(), 1.5.to_string(), 'c'.to_string(), true.to_string(), 1.0.to_string(),
+                (-2.5f64).to_string(), t.to_string(), big,
+                show(&4, &2.0, &u64::MAX, &'z', &false, &String::from("s"))
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "3 1.5 c true 1 -2.5 0.1 [\"2\", \"3\"] 4 2 18446744073709551615 z false s");
+}
+
+#[test]
+fn language_string_and_vec_methods() {
+    let value = run_string(
+        r#"
+        fn shrink(s: &mut String) { s.truncate(2); }
+        pub fn run() -> String {
+            let mut s = String::from("héllo");
+            let last = s.pop();
+            s.insert(0, '>');
+            s.insert_str(1, "> ");
+            let r = s.remove(0);
+            let a = format!("{:?} {} {:?}", last, s, r);
+            shrink(&mut s);
+            let mut t = String::from("abcdef");
+            let tail = t.split_off(4);
+            t.clear();
+            let b: Vec<u8> = "hé".bytes().collect();
+            let n = "hé".as_bytes().len();
+            let i: Vec<(usize, char)> = "hé!".char_indices().collect();
+            let parts: Vec<&str> = "a,b,,c".splitn(3, ',').collect();
+            let utf8 = format!("{:?} {}", String::from_utf8(vec![104, 105]), String::from_utf8(vec![0x41, 0xff]).unwrap_err());
+            let mut v: Vec<i32> = Vec::with_capacity(10);
+            v.push(1); v.push(2); v.push(3); v.push(4); v.push(5);
+            let w: Vec<i32> = v.windows(2).map(|p| p[0] + p[1]).collect();
+            let c: Vec<Vec<i32>> = v.chunks(2).map(|p| p.to_vec()).collect();
+            let rest = v.split_off(3);
+            let name = String::with_capacity(4);
+            format!("{a}|{s}|{t}{tail}|{b:?} {n}|{i:?}|{parts:?}|{utf8}|{w:?} {c:?} {v:?} {rest:?} [{name}]")
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "Some('o') > héll '>'|> |ef|[104, 195, 169] 3|[(0, 'h'), (1, 'é'), (3, '!')]|[\"a\", \"b\", \",c\"]|\
+         Ok(\"hi\") invalid utf-8 sequence of 1 bytes from index 1|[3, 5, 7, 9] [[1, 2], [3, 4], [5]] [1, 2, 3] [4, 5] []"
+    );
+    for (body, message) in [
+        ("let mut s = String::from(\"é\"); s.insert(1, 'x')", "assertion failed: self.is_char_boundary(idx)"),
+        ("let mut s = String::from(\"ab\"); s.remove(2)", "cannot remove a char from the end of a string"),
+        ("let mut s = String::from(\"ab\"); s.remove(5)", "start byte index 5 is out of bounds for string of length 2"),
+        (
+            "let mut s = String::from(\"éa\"); s.remove(1)",
+            "start byte index 1 is not a char boundary; it is inside 'é' (bytes 0..2 of string)",
+        ),
+        ("let mut s = String::from(\"é\"); s.truncate(1)", "assertion failed: self.is_char_boundary(new_len)"),
+        ("let v = vec![1]; let n = v.windows(0).count()", "window size must be non-zero"),
+        ("let v = vec![1]; let n = v.chunks(0).count()", "chunk size must be non-zero"),
+        ("let mut v = vec![1]; let w = v.split_off(3)", "`at` split index (is 3) should be <= len (is 1)"),
+    ] {
+        let error = rejected(&format!("pub fn run() -> i64 {{ {body}; 0 }} run()"));
+        assert!(error.contains(message), "{body}: {error}");
+    }
+}
+
+#[test]
+fn language_std_mem_swap_replace_take() {
+    let value = run_string(
+        r#"
+        use std::mem::{replace, take};
+        use std::mem;
+        #[derive(Debug, Default)]
+        struct P { a: Vec<i64>, b: Vec<i64>, name: String }
+        fn rotate(x: &mut i64, y: &mut i64) { mem::swap(x, y); }
+        pub fn run() -> String {
+            let mut a = 1;
+            let mut b = 2;
+            std::mem::swap(&mut a, &mut b);
+            let old = std::mem::replace(&mut a, 0);
+            let mut v = vec![1];
+            let t = std::mem::take(&mut v);
+            let mut p = P { a: vec![1], b: vec![2, 3], name: String::from("n") };
+            mem::swap(&mut p.a, &mut p.b);
+            let n = take(&mut p.name);
+            let first = replace(&mut p.a[0], 9);
+            let (mut x, mut y) = (5, 6);
+            rotate(&mut x, &mut y);
+            format!("{} {} {} {:?} {:?} {:?} {} {} {} {}", a, b, old, t, v, p, n, first, x, y)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "0 1 2 [1] [] P { a: [9, 3], b: [1], name: \"\" } n 2 6 5");
+    // A crate's own `swap` is called as written.
+    let own = run("fn swap(a: i64, b: i64) -> i64 { a - b } pub fn run() -> i64 { swap(5, 2) } run()");
+    assert_eq!(own, 3);
+    rejected("pub fn run() -> i64 { let mut a = 1; std::mem::swap(&mut a, &mut a); a } run()");
+}
+
+#[test]
+fn language_let_else() {
+    let value = run_string(
+        r#"
+        enum Shape { Circle(f64), Square(f64) }
+        fn area(s: &Shape) -> f64 {
+            let Shape::Circle(r) = s else { return 0.0; };
+            3.0 * r * r
+        }
+        fn parse(t: &str) -> i64 {
+            let Ok(n) = t.parse::<i64>() else { panic!("bad {}", t) };
+            n
+        }
+        pub fn run() -> String {
+            let Some(q) = Some(3) else { return String::new(); };
+            let mut letters = String::new();
+            for name in vec!["ab", "", "cd"] {
+                let Some(mut c) = name.chars().next() else { continue; };
+                c = c.to_ascii_uppercase();
+                letters.push(c);
+            }
+            let x = if q > 2 { 1 } else { 2 };
+            let None = Some(1) else { return format!("{} {} {} {} {}", q, letters, area(&Shape::Circle(1.0)), area(&Shape::Square(2.0)), parse("42") + x); };
+            String::new()
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "3 AC 3 0 43");
+    let error = rejected("pub fn run() -> i64 { let Some(x) = Some(1) else { 0 }; x } run()");
+    assert!(error.contains("`!`"), "{error}");
+    let error = rejected("pub fn run() -> i64 { let Some(x) = Some(1) else { return 0; }; } run()");
+    assert!(!error.is_empty());
+    rejected("pub fn run() -> i64 { let Some(x) = Some(1) else { let y = x; return 0; }; x } run()");
+}
+
+#[test]
+fn language_nested_fn_items() {
+    let value = run_string(
+        r#"
+        struct C { n: i64 }
+        impl C {
+            fn get(&self) -> i64 { fn add(a: i64, b: i64) -> i64 { a + b } add(self.n, 1) }
+        }
+        pub fn run() -> String {
+            let first = twice(sq(3));
+            fn sq(x: i64) -> i64 { x * x }
+            fn twice(x: i64) -> i64 { fact(2) * x / 2 }
+            fn fact(n: i64) -> i64 { if n <= 1 { 1 } else { n * fact(n - 1) } }
+            let f: fn(i64) -> i64 = sq;
+            let label = if true {
+                fn inner() -> String { String::from("inner") }
+                inner()
+            } else {
+                String::new()
+            };
+            format!("{} {} {} {}", first, f(5), label, C { n: 1 }.get())
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "9 25 inner 2");
+}
+
+#[test]
+fn language_untyped_integers_are_i32() {
+    let error = rejected("pub fn run() -> i64 { let f = (1..=20).fold(1, |a, b| a * b); println!(\"{}\", f); 0 } run()");
+    assert!(error.contains("attempt to multiply with overflow"), "{error}");
+    let error = rejected("pub fn run() -> i64 { let mut x = 2147483600; for _ in 0..100 { x += 1; } println!(\"{}\", x); 0 } run()");
+    assert!(error.contains("attempt to add with overflow"), "{error}");
+    // A literal an `i64` binds is an `i64`, before or after the arithmetic.
+    let value = run(r#"
+        fn widen(x: i64) -> i64 { x }
+        pub fn run() -> i64 {
+            let mut x = 2147483600;
+            x += 100;
+            let y: i64 = 3_000_000_000 * 2;
+            widen(x) + y
+        }
+        run()
+    "#);
+    assert_eq!(value, 2_147_483_700 + 6_000_000_000);
+    let value = run_string(
+        "pub fn run() -> String { let n = 7; let m = n * 6; format!(\"{} {}\", m, (1..=10).fold(1, |a, b| a * b)) } run()",
+    );
+    assert_eq!(value, "42 3628800");
+}
+
+#[test]
+fn language_debug_escapes_strings_and_chars() {
+    let value = run_string(
+        r#"
+        #[derive(Debug)]
+        struct S { name: String, c: char }
+        pub fn run() -> String {
+            let s = "a\"b\n\t\\ é \u{7f} \u{301}x '";
+            let v = vec![String::from("x\"y"), String::from("__rawr_z")];
+            format!(
+                "{:?}|{:?} {:?} {:?} {:?}|{:?} {:?}|{:?}|{:?}",
+                s, '\'', '"', '\n', '\u{301}', v, Some("q\""),
+                S { name: String::from("n\"m"), c: '\'' }, ("t\"", 'x')
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        r#""a\"b\n\t\\ é \u{7f} \u{301}x '"|'\'' '"' '\n' '\u{301}'|["x\"y", "__rawr_z"] Some("q\"")|S { name: "n\"m", c: '\'' }|("t\"", 'x')"#
+    );
+}
+
+/// Every float method the checker accepts runs, and gives Rust's value.
+#[test]
+fn language_every_accepted_float_method_runs() {
+    let unary = |name: &str, x: f64| -> String {
+        match name {
+            "abs" => format!("{:?}", x.abs()),
+            "sqrt" => format!("{:?}", x.sqrt()),
+            "floor" => format!("{:?}", x.floor()),
+            "ceil" => format!("{:?}", x.ceil()),
+            "round" => format!("{:?}", x.round()),
+            "trunc" => format!("{:?}", x.trunc()),
+            "is_nan" => format!("{:?}", x.is_nan()),
+            other => panic!("`{other}` is accepted on floats but this test does not know it"),
+        }
+    };
+    let mut calls: Vec<(String, Box<dyn Fn(f64) -> String>)> = super::FLOAT_UNARY_METHODS
+        .iter()
+        .map(|(name, _)| {
+            let name = name.to_string();
+            let expected: Box<dyn Fn(f64) -> String> = Box::new({
+                let name = name.clone();
+                move |x| unary(&name, x)
+            });
+            (format!("{name}()"), expected)
+        })
+        .collect();
+    calls.push(("powi(3)".into(), Box::new(|x: f64| format!("{:?}", x.powi(3)))));
+    calls.push(("powf(0.5)".into(), Box::new(|x: f64| format!("{:?}", x.powf(0.5)))));
+    calls.push(("min(1.0)".into(), Box::new(|x: f64| format!("{:?}", x.min(1.0)))));
+    calls.push(("max(1.0)".into(), Box::new(|x: f64| format!("{:?}", x.max(1.0)))));
+    calls.push(("clamp(-1.0, 1.0)".into(), Box::new(|x: f64| format!("{:?}", x.clamp(-1.0, 1.0)))));
+    calls.push(("partial_cmp(&1.0)".into(), Box::new(|x: f64| format!("{:?}", x.partial_cmp(&1.0)))));
+    calls.push(("to_string()".into(), Box::new(|x: f64| format!("{:?}", x.to_string()))));
+    calls.push(("clone()".into(), Box::new(|x: f64| format!("{:?}", x))));
+    for (call, expected) in &calls {
+        for x in [2.25, -2.5, 0.5, -0.5, 3.0] {
+            for ty in ["f64", "f32"] {
+                let source = format!(
+                    "pub fn run() -> String {{ let x: {ty} = {x:?}; format!(\"{{:?}}\", x.{call}) }} run()"
+                );
+                let value = Engine::new()
+                    .eval::<String>(&source)
+                    .unwrap_or_else(|error| panic!("{ty}::{call} of {x}: {error}"));
+                // An `f32` result prints as an `f32`.
+                let mut expected = expected(x);
+                if ty == "f32" {
+                    if let Ok(number) = expected.parse::<f64>() {
+                        expected = format!("{:?}", number as f32);
+                    } else if let Some(number) = expected
+                        .strip_prefix('"')
+                        .and_then(|text| text.strip_suffix('"'))
+                        .and_then(|text| text.parse::<f64>().ok())
+                    {
+                        expected = format!("{:?}", (number as f32).to_string());
+                    }
+                }
+                assert_eq!(value, expected, "{ty}::{call} of {x}");
+            }
+        }
+    }
+}

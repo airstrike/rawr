@@ -32,10 +32,10 @@ const COMPATIBILITY_SEMANTIC_POLICY: &[u8] = b"rawr.iced.compatibility-applicati
 const COMPATIBILITY_RUNTIME_BINDING: &[u8] = b"rawr.iced.compatibility-runtime-binding/v2";
 const TEXT_ENDPOINT_DISPOSITION: &[u8] =
     b"rawr.iced.compatibility-text-endpoint/suppressed-by-D271/v1";
-const COMPATIBILITY_PROJECTIONS: usize = 22;
+const COMPATIBILITY_PROJECTIONS: usize = 28;
 const COMPATIBILITY_ABI: u32 = 16;
 const COMPATIBILITY_DIGEST: [u8; 16] = [
-    93, 3, 248, 91, 151, 239, 104, 9, 141, 129, 119, 140, 52, 233, 205, 100,
+    63, 227, 61, 40, 201, 23, 55, 76, 36, 1, 125, 18, 247, 17, 158, 85,
 ];
 
 /// One exact target-argument substitution sealed into a generated projection table.
@@ -2837,7 +2837,7 @@ impl<'proof> Decoration<'proof> {
             "iced::widget::Text::style",
             "iced::widget::Text::width",
         ];
-        const OVERLOADS: usize = 13;
+        const OVERLOADS: usize = 14;
         let builder_count = semantic
             .items()
             .filter(|item| item.path().strip_prefix("iced::widget::Text::").is_some())

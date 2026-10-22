@@ -8,9 +8,11 @@ mod component;
 pub(crate) mod diagnostic;
 pub mod draw;
 pub mod event;
+mod helpers;
 pub(crate) mod key;
 pub mod layout;
 mod mapped;
+mod media;
 pub mod mouse;
 pub mod operation;
 pub mod overlay;
@@ -376,6 +378,19 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// This context with its theme owned, for a widget that lowers its
+    /// content later, as `responsive` does at layout.
+    pub(crate) fn owned(&self) -> OwnedContext {
+        OwnedContext {
+            instance: self.instance,
+            generation: self.generation,
+            authority: self.authority.clone(),
+            diagnostics: self.diagnostics.clone(),
+            theme: self.theme.clone(),
+            timing: self.timing.clone(),
+        }
+    }
+
     pub(crate) fn diagnostics(&self) -> Arc<diagnostic::Sink> {
         self.diagnostics.clone()
     }
@@ -404,6 +419,30 @@ impl<'a> Context<'a> {
                 Some(session) => binding.observed(session),
                 None => binding,
             })
+    }
+}
+
+/// A [`Context`] that owns its theme; [`OwnedContext::context`] lends one.
+#[derive(Clone)]
+pub(crate) struct OwnedContext {
+    instance: application::Instance,
+    generation: program::GenerationId,
+    authority: MappingAuthority,
+    diagnostics: Arc<diagnostic::Sink>,
+    theme: theme::Value,
+    timing: Option<timing::Session>,
+}
+
+impl OwnedContext {
+    pub(crate) fn context(&self) -> Context<'_> {
+        Context {
+            instance: self.instance,
+            generation: self.generation,
+            authority: self.authority.clone(),
+            diagnostics: self.diagnostics.clone(),
+            theme: &self.theme,
+            timing: self.timing.clone(),
+        }
     }
 }
 

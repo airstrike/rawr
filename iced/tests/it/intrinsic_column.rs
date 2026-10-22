@@ -443,7 +443,7 @@ fn intrinsic_macro_errors_are_positioned_and_name_the_registered_item() {
             "`button` is a function here; write `button(..)`",
         ),
         (
-            "column!(text(1))",
+            "column! text(1)",
             "iced::widget::column",
             "write `column![..]` with square brackets",
         ),
@@ -480,6 +480,8 @@ fn column_is_a_macro_and_a_function_as_in_iced() {
         "column((0..3).map(|i| text(i)))",
         "iced::widget::column(vec![text(1)])",
         "iced::widget::column![text(1)]",
+        "column!(text(1), text(2))",
+        "column! { text(1) }",
         "Column::new().push(text(1)).push(button(\"ok\"))",
         "Column::with_children(vec![text(1)])",
         "iced::widget::Column::from_vec(vec![text(1)])",

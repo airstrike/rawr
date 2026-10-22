@@ -53,6 +53,31 @@ const OWNED_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Send,
     capability::Kind::Static,
 ];
+/// A `Clone` value that is not `Copy`, as iced's `Event`.
+const DEBUG_VALUE_CAPABILITIES: &[capability::Kind] = &[
+    capability::Kind::Debug,
+    capability::Kind::Clone,
+    capability::Kind::PartialEq,
+    capability::Kind::Send,
+    capability::Kind::Static,
+];
+const DEBUG_EQ_VALUE_CAPABILITIES: &[capability::Kind] = &[
+    capability::Kind::Debug,
+    capability::Kind::Clone,
+    capability::Kind::PartialEq,
+    capability::Kind::Eq,
+    capability::Kind::Send,
+    capability::Kind::Static,
+];
+const OWNED_EQ_VALUE_CAPABILITIES: &[capability::Kind] = &[
+    capability::Kind::Debug,
+    capability::Kind::Clone,
+    capability::Kind::Copy,
+    capability::Kind::PartialEq,
+    capability::Kind::Eq,
+    capability::Kind::Send,
+    capability::Kind::Static,
+];
 const OWNED_EQ_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Default,
     capability::Kind::Debug,
@@ -70,6 +95,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("alignment")?;
     builder.module("animation")?;
     builder.module("border")?;
+    builder.module("font")?;
     builder.module("mouse")?;
     builder.module("padding")?;
     builder.module("theme")?;
@@ -82,6 +108,16 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::component")?;
     builder.module("widget::container")?;
     builder.module("widget::radio")?;
+    builder.module("widget::rule")?;
+    builder.module("widget::image")?;
+    builder.module("widget::svg")?;
+    builder.module("widget::qr_code")?;
+    builder.module("widget::operation")?;
+    builder.module("widget::operation::scrollable")?;
+    builder.module("window")?;
+    builder.module("event")?;
+    builder.module("keyboard")?;
+    builder.module("keyboard::key")?;
     builder.module("widget::scrollable")?;
     builder.module("widget::slider")?;
     builder.module("widget::text")?;
@@ -95,7 +131,13 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.value_type::<theme::Value>(
         "Theme",
         &[],
-        &[capability::Kind::Clone, capability::Kind::PartialEq],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
     )?;
     builder.value_type::<iced::theme::Palette>("theme::Palette", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::theme::palette::Background>(
@@ -198,6 +240,107 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
     builder.value_type::<marker::Horizontal>("alignment::Horizontal", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<marker::Vertical>("alignment::Vertical", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::widget::Id>(
+        "widget::Id",
+        &[],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
+    builder.default_value_type::<iced::widget::operation::Animation>(
+        "widget::operation::Animation",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::widget::scrollable::RelativeOffset>(
+        "widget::scrollable::RelativeOffset",
+        &[],
+        OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::widget::scrollable::AbsoluteOffset>(
+        "widget::scrollable::AbsoluteOffset",
+        &[],
+        OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.value_type::<iced::Event>("Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::keyboard::Event>("keyboard::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::keyboard::Key>("keyboard::Key", &[], DEBUG_EQ_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::keyboard::key::Named>(
+        "keyboard::key::Named",
+        &[],
+        OWNED_EQ_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::keyboard::Modifiers>(
+        "keyboard::Modifiers",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.value_type::<iced::window::Id>("window::Id", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
+    builder.type_::<marker::Stack>("widget::Stack", &["Message"], &[])?;
+    builder.project("widget::Stack", "Element", &["Message"])?;
+    builder.value_type::<iced::widget::image::Handle>(
+        "widget::image::Handle",
+        &[],
+        &[capability::Kind::Clone, capability::Kind::PartialEq, capability::Kind::Send, capability::Kind::Static],
+    )?;
+    builder.value_type::<iced::widget::svg::Handle>(
+        "widget::svg::Handle",
+        &[],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
+    builder.default_value_type::<iced::ContentFit>("ContentFit", &[], OWNED_EQ_DEFAULT_VALUE_CAPABILITIES)?;
+    builder.value_type::<marker::QrData>(
+        "widget::qr_code::Data",
+        &[],
+        &[capability::Kind::Debug, capability::Kind::Clone, capability::Kind::PartialEq, capability::Kind::Send, capability::Kind::Static],
+    )?;
+    builder.value_type::<iced::widget::qr_code::Error>(
+        "widget::qr_code::Error",
+        &[],
+        OWNED_EQ_VALUE_CAPABILITIES,
+    )?;
+    builder.type_::<marker::Image>("widget::Image", &[], &[])?;
+    builder.project_with("widget::Image", "Element", &[host::type_def::Argument::fresh()])?;
+    builder.type_::<marker::Svg>("widget::Svg", &[], &[])?;
+    builder.project_with("widget::Svg", "Element", &[host::type_def::Argument::fresh()])?;
+    builder.type_::<marker::QrCode>("widget::QRCode", &[], &[])?;
+    builder.project_with("widget::QRCode", "Element", &[host::type_def::Argument::fresh()])?;
+    builder.type_::<marker::Pin>("widget::Pin", &["Message"], &[])?;
+    builder.project("widget::Pin", "Element", &["Message"])?;
+    builder.type_::<marker::MouseArea>("widget::MouseArea", &["Message"], &[])?;
+    builder.project("widget::MouseArea", "Element", &["Message"])?;
+    builder.default_value_type::<iced::font::Weight>(
+        "font::Weight",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::font::Stretch>(
+        "font::Stretch",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::font::Style>(
+        "font::Style",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::font::Family>(
+        "font::Family",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
     builder.default_value_type::<std::time::Duration>(
         "time::Duration",
         &[],
@@ -268,6 +411,15 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             type_ref::Type::registered("Theme")?,
         )?)?;
     }
+    // `theme.to_string()`: its name, as iced's `Display`.
+    let mut name = signature::Builder::new();
+    name.output(type_ref::Type::builtin(type_ref::Builtin::String));
+    builder.item(item::Definition::method("Theme::to_string", receiver::Mode::Shared, name.finish())?)?;
+    // iced's `Theme::ALL`, every built-in theme.
+    builder.item(item::Definition::associated_value(
+        "Theme::ALL",
+        type_ref::Type::slice(type_ref::Type::registered("Theme")?),
+    )?)?;
     builder.item(item::Definition::intrinsic_function(
         "run",
         run_signature()?,
@@ -681,6 +833,12 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         element_boxed_signature()?,
     )?)?;
     declare_canonical_values(&mut builder)?;
+    declare_master_helpers(&mut builder)?;
+    declare_native_tasks(&mut builder)?;
+    declare_wrappers(&mut builder)?;
+    declare_media(&mut builder)?;
+    declare_events(&mut builder)?;
+    declare_font(&mut builder)?;
 
     builder.finish()
 }
@@ -1500,6 +1658,619 @@ fn declare_tooltip(builder: &mut facade::Builder) -> Result<(), host::Error> {
     Ok(())
 }
 
+/// iced master's shorthands and small helpers: `Left`, `Right`, `Top` and
+/// `Bottom` beside `Center`; `left`, `right`, `top` and `bottom` beside
+/// `center`; `rule::horizontal`/`vertical`; `stack`; and `time::hours`/
+/// `minutes`.
+fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    for name in ["Top", "Center", "Bottom"] {
+        builder.item(item::Definition::associated_value(
+            format!("alignment::Vertical::{name}"),
+            type_ref::Type::registered("alignment::Vertical")?,
+        )?)?;
+    }
+    for (name, owner) in [
+        ("Left", "alignment::Horizontal"),
+        ("Right", "alignment::Horizontal"),
+        ("Top", "alignment::Vertical"),
+        ("Bottom", "alignment::Vertical"),
+    ] {
+        builder.item(item::Definition::value(name, type_ref::Type::registered(owner)?)?)?;
+    }
+    // iced's `impl Into<alignment::Horizontal>` and `Into<Vertical>`.
+    builder.item(item::Definition::method(
+        "widget::Text::align_x",
+        receiver::Mode::Owned,
+        fixed_builder_signature("widget::Text", type_ref::Type::registered("alignment::Horizontal")?)?,
+    )?)?;
+    for owner in ["widget::Row", "widget::Container"] {
+        builder.item(item::Definition::method(
+            format!("{owner}::align_y"),
+            receiver::Mode::Owned,
+            registered_builder_signature(owner, "alignment::Vertical")?,
+        )?)?;
+    }
+    length_builders(
+        builder,
+        "widget::Container",
+        &["center", "align_left", "align_right", "align_top", "align_bottom"],
+    )?;
+    for name in ["widget::left", "widget::right", "widget::top", "widget::bottom"] {
+        builder.item(item::Definition::function(name, container_signature()?)?)?;
+    }
+    for name in ["widget::rule::horizontal", "widget::rule::vertical"] {
+        for pixels in PIXELS {
+            let mut signature = signature::Builder::new();
+            signature.type_parameter("Message", &[])?;
+            signature.parameter(type_ref::Type::builtin(pixels));
+            signature.output(type_ref::Type::applied(
+                "Element",
+                [type_ref::Type::parameter("Message")?],
+            )?);
+            builder.item(item::Definition::function(name, signature.finish())?)?;
+        }
+    }
+    builder.item(item::Definition::intrinsic_macro(
+        "widget::stack",
+        collection_signature("widget::Stack")?,
+    )?)?;
+    builder.item(item::Definition::function(
+        "widget::stack",
+        children_signature("widget::Stack")?,
+    )?)?;
+    for name in ["with_children", "from_vec"] {
+        builder.item(item::Definition::associated_function(
+            format!("widget::Stack::{name}"),
+            children_signature("widget::Stack")?,
+        )?)?;
+    }
+    builder.item(item::Definition::associated_function(
+        "widget::Stack::new",
+        generic_empty_signature("widget::Stack")?,
+    )?)?;
+    length_builders(builder, "widget::Stack", &["width", "height"])?;
+    builders(
+        builder,
+        "widget::Stack",
+        "push",
+        [type_ref::Type::applied(
+            "Element",
+            [type_ref::Type::parameter("Message")?],
+        )?],
+    )?;
+    builders(builder, "widget::Stack", "extend", [children()?])?;
+    for name in ["hours", "minutes"] {
+        builder.item(item::Definition::function(
+            format!("time::{name}"),
+            integer_signature("time::Duration", 1)?,
+        )?)?;
+    }
+    // `Duration::from_millis(10)` and kin, and its readers.
+    for name in ["from_secs", "from_millis", "from_micros", "from_nanos"] {
+        builder.item(item::Definition::associated_function(
+            format!("time::Duration::{name}"),
+            integer_signature("time::Duration", 1)?,
+        )?)?;
+    }
+    for name in ["from_secs_f64", "from_secs_f32"] {
+        builder.item(item::Definition::associated_function(
+            format!("time::Duration::{name}"),
+            repeated_builtin_signature(type_ref::Builtin::F64, 1, "time::Duration")?,
+        )?)?;
+    }
+    for (name, output) in [
+        ("as_secs", type_ref::Builtin::I64),
+        ("as_millis", type_ref::Builtin::I64),
+        ("as_micros", type_ref::Builtin::I64),
+        ("as_nanos", type_ref::Builtin::I64),
+        ("as_secs_f64", type_ref::Builtin::F64),
+        ("as_secs_f32", type_ref::Builtin::F64),
+    ] {
+        let mut reader = signature::Builder::new();
+        reader.output(type_ref::Type::builtin(output));
+        builder.item(item::Definition::method(
+            format!("time::Duration::{name}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+    }
+    // `size.width`, `point.x` and kin, read as fields.
+    for (owner, fields) in [
+        ("Size", &["width", "height"][..]),
+        ("Point", &["x", "y"][..]),
+        ("Vector", &["x", "y"][..]),
+        ("Rectangle", &["x", "y", "width", "height"][..]),
+    ] {
+        for field in fields {
+            let mut reader = signature::Builder::new();
+            reader.output(type_ref::Type::builtin(type_ref::Builtin::F64));
+            builder.item(item::Definition::method(
+                format!("{owner}::{field}"),
+                receiver::Mode::Shared,
+                reader.finish(),
+            )?)?;
+        }
+    }
+    builder.item(item::Definition::intrinsic_macro(
+        "color",
+        repeated_builtin_signature(type_ref::Builtin::I64, 1, "Color")?,
+    )?)?;
+    Ok(())
+}
+
+/// iced's `lazy`, `hover`, `opaque`, `responsive`, `pin` and `mouse_area`.
+/// `lazy` calls its view each time the view is drawn: a Rawr view is
+/// recomputed as a whole, so there is no older content to keep.
+fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let element = |message: &str| -> Result<type_ref::Type, host::Error> {
+        type_ref::Type::applied("Element", [type_ref::Type::parameter(message)?])
+    };
+    let mut lazy = signature::Builder::new();
+    lazy.type_parameter("D", &[])?;
+    lazy.type_parameter("Message", &[])?;
+    lazy.parameter(type_ref::Type::parameter("D")?);
+    lazy.parameter(type_ref::Type::callable(
+        type_ref::Type::parameter("D")?,
+        element("Message")?,
+    ));
+    lazy.output(element("Message")?);
+    builder.item(item::Definition::function("widget::lazy", lazy.finish())?)?;
+    let mut hover = signature::Builder::new();
+    hover.type_parameter("Message", &[])?;
+    hover.parameter(element("Message")?);
+    hover.parameter(element("Message")?);
+    hover.output(element("Message")?);
+    builder.item(item::Definition::function("widget::hover", hover.finish())?)?;
+    let mut opaque = signature::Builder::new();
+    opaque.type_parameter("Message", &[])?;
+    opaque.parameter(element("Message")?);
+    opaque.output(element("Message")?);
+    builder.item(item::Definition::function("widget::opaque", opaque.finish())?)?;
+    let mut responsive = signature::Builder::new();
+    responsive.type_parameter("Message", &[])?;
+    responsive.parameter(type_ref::Type::callable(
+        type_ref::Type::registered("Size")?,
+        element("Message")?,
+    ));
+    responsive.output(element("Message")?);
+    builder.item(item::Definition::function("widget::responsive", responsive.finish())?)?;
+
+    builder.item(item::Definition::function(
+        "widget::pin",
+        unary_widget_signature("widget::Pin")?,
+    )?)?;
+    pixels_builders(builder, "widget::Pin", "x")?;
+    pixels_builders(builder, "widget::Pin", "y")?;
+    builders(builder, "widget::Pin", "position", [type_ref::Type::registered("Point")?])?;
+    length_builders(builder, "widget::Pin", &["width", "height"])?;
+
+    builder.item(item::Definition::function(
+        "widget::mouse_area",
+        unary_widget_signature("widget::MouseArea")?,
+    )?)?;
+    for name in MOUSE_AREA_MESSAGES {
+        builder.item(item::Definition::method(
+            format!("widget::MouseArea::{name}"),
+            receiver::Mode::Owned,
+            message_builder_signature("widget::MouseArea", false)?,
+        )?)?;
+    }
+    builder.item(item::Definition::method(
+        "widget::MouseArea::on_move",
+        receiver::Mode::Owned,
+        message_mapper_signature("widget::MouseArea", type_ref::Type::registered("Point")?)?,
+    )?)?;
+    builders(
+        builder,
+        "widget::MouseArea",
+        "interaction",
+        [type_ref::Type::registered("mouse::Interaction")?],
+    )?;
+    Ok(())
+}
+
+/// iced's `image`, `svg` and `qr_code` widgets, their handles and data,
+/// and `ContentFit`.
+fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let string = || type_ref::Type::builtin(type_ref::Builtin::String);
+    for (module, handle, function, widget) in [
+        ("widget::image", "widget::image::Handle", "widget::image", "widget::Image"),
+        ("widget::svg", "widget::svg::Handle", "widget::svg", "widget::Svg"),
+    ] {
+        let mut from_path = signature::Builder::new();
+        from_path.parameter(string());
+        from_path.output(type_ref::Type::registered(handle)?);
+        builder.item(item::Definition::associated_function(
+            format!("{handle}::from_path"),
+            from_path.finish(),
+        )?)?;
+        // `impl Into<Handle>`: a handle, or a path.
+        for input in [type_ref::Type::registered(handle)?, string()] {
+            let mut signature = signature::Builder::new();
+            signature.parameter(input);
+            signature.output(type_ref::Type::registered(widget)?);
+            builder.item(item::Definition::function(function, signature.finish())?)?;
+        }
+        let _ = module;
+        length_builders(builder, widget, &["width", "height"])?;
+        builders(builder, widget, "content_fit", [type_ref::Type::registered("ContentFit")?])?;
+        builders(builder, widget, "opacity", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
+    }
+    builders(builder, "widget::Image", "scale", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
+    for name in CONTENT_FITS {
+        builder.item(item::Definition::associated_value(
+            format!("ContentFit::{name}"),
+            type_ref::Type::registered("ContentFit")?,
+        )?)?;
+    }
+
+    let mut data = signature::Builder::new();
+    data.parameter(string());
+    data.output(type_ref::Type::result(
+        type_ref::Type::registered("widget::qr_code::Data")?,
+        type_ref::Type::registered("widget::qr_code::Error")?,
+    ));
+    builder.item(item::Definition::associated_function("widget::qr_code::Data::new", data.finish())?)?;
+    let mut qr_code = signature::Builder::new();
+    qr_code.parameter(type_ref::Type::registered("widget::qr_code::Data")?);
+    qr_code.output(type_ref::Type::registered("widget::QRCode")?);
+    builder.item(item::Definition::function("widget::qr_code", qr_code.finish())?)?;
+    pixels_builders(builder, "widget::QRCode", "cell_size")?;
+    pixels_builders(builder, "widget::QRCode", "total_size")?;
+    Ok(())
+}
+
+/// iced's runtime events as subscriptions: `event::listen()`,
+/// `keyboard::listen()`, `window::frames()` and `time::every(duration)`,
+/// with `Subscription::filter_map`. `keyboard::Event` matches as in Rust
+/// (`keyboard::Event::KeyPressed { key, modifiers, .. }`); a `Key` is
+/// compared with `Key::Named(key::Named::Space)` or `Key::Character("r")`.
+fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let stream = |path: &str,
+                  inputs: &[type_ref::Type],
+                  output: type_ref::Type|
+     -> Result<item::Definition, host::Error> {
+        let mut signature = signature::Builder::new();
+        for input in inputs {
+            signature.parameter(input.clone());
+        }
+        signature.output(output);
+        item::Definition::stream_operation(path, signature.finish(), host::stream::Version::new(1))
+    };
+    builder.item(stream("event::listen", &[], type_ref::Type::registered("Event")?)?)?;
+    builder.item(stream(
+        "keyboard::listen",
+        &[],
+        type_ref::Type::registered("keyboard::Event")?,
+    )?)?;
+    builder.item(stream("window::frames", &[], type_ref::Type::registered("time::Instant")?)?)?;
+    builder.item(stream(
+        "time::every",
+        &[type_ref::Type::registered("time::Duration")?],
+        type_ref::Type::registered("time::Instant")?,
+    )?)?;
+
+    // iced's `Subscription::batch(..)` and `Task::batch(..)`: any `Vec` or
+    // array of them.
+    for owner in ["Subscription", "Task"] {
+        let mut batch = signature::Builder::new();
+        batch.type_parameter("Message", &[])?;
+        let plan = type_ref::Type::applied(owner, [type_ref::Type::parameter("Message")?])?;
+        batch.parameter(type_ref::Type::slice(plan.clone()));
+        batch.output(plan);
+        builder.item(item::Definition::associated_function(
+            format!("{owner}::batch"),
+            batch.finish(),
+        )?)?;
+    }
+    let mut filter_map = signature::Builder::new();
+    filter_map.type_parameter("Message", &[])?;
+    filter_map.type_parameter("Parent", &[])?;
+    filter_map.parameter(type_ref::Type::callable(
+        type_ref::Type::parameter("Message")?,
+        type_ref::Type::option(type_ref::Type::parameter("Parent")?),
+    ));
+    filter_map.output(type_ref::Type::applied(
+        "Subscription",
+        [type_ref::Type::parameter("Parent")?],
+    )?);
+    builder.item(item::Definition::method(
+        "Subscription::filter_map",
+        receiver::Mode::Owned,
+        filter_map.finish(),
+    )?)?;
+
+    // `keyboard::Event`'s variants, as a facade enum, and their fields.
+    let bool_reader = || -> Result<signature::Definition, host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.output(type_ref::Type::builtin(type_ref::Builtin::Bool));
+        Ok(signature.finish())
+    };
+    for variant in ["KeyPressed", "KeyReleased", "ModifiersChanged"] {
+        builder.item(item::Definition::method(
+            format!("keyboard::Event::{variant}"),
+            receiver::Mode::Shared,
+            bool_reader()?,
+        )?)?;
+    }
+    for (field, output) in [
+        ("key", type_ref::Type::registered("keyboard::Key")?),
+        ("modified_key", type_ref::Type::registered("keyboard::Key")?),
+        ("modifiers", type_ref::Type::registered("keyboard::Modifiers")?),
+        ("repeat", type_ref::Type::builtin(type_ref::Builtin::Bool)),
+    ] {
+        let mut reader = signature::Builder::new();
+        reader.output(output);
+        builder.item(item::Definition::method(
+            format!("keyboard::Event::{field}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+    }
+    let mut named = signature::Builder::new();
+    named.parameter(type_ref::Type::registered("keyboard::key::Named")?);
+    named.output(type_ref::Type::registered("keyboard::Key")?);
+    builder.item(item::Definition::associated_function("keyboard::Key::Named", named.finish())?)?;
+    let mut character = signature::Builder::new();
+    character.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    character.output(type_ref::Type::registered("keyboard::Key")?);
+    builder.item(item::Definition::associated_function(
+        "keyboard::Key::Character",
+        character.finish(),
+    )?)?;
+    builder.item(item::Definition::associated_value(
+        "keyboard::Key::Unidentified",
+        type_ref::Type::registered("keyboard::Key")?,
+    )?)?;
+    // `key.as_ref()`: iced's `Key<&str>`, the same key here.
+    builder.item(item::Definition::method(
+        "keyboard::Key::as_ref",
+        receiver::Mode::Shared,
+        output_signature("keyboard::Key")?,
+    )?)?;
+    for name in KEY_NAMES {
+        builder.item(item::Definition::associated_value(
+            format!("keyboard::key::Named::{name}"),
+            type_ref::Type::registered("keyboard::key::Named")?,
+        )?)?;
+    }
+    for name in ["shift", "control", "alt", "logo", "command", "macos_command", "jump"] {
+        builder.item(item::Definition::method(
+            format!("keyboard::Modifiers::{name}"),
+            receiver::Mode::Shared,
+            bool_reader()?,
+        )?)?;
+    }
+    Ok(())
+}
+
+/// The `keyboard::key::Named` keys the facade names.
+pub(crate) const KEY_NAMES: [&str; 40] = [
+    "Alt", "Control", "Shift", "Super", "Meta", "Enter", "Tab", "Space", "ArrowDown", "ArrowLeft",
+    "ArrowRight", "ArrowUp", "End", "Home", "PageDown", "PageUp", "Backspace", "Delete", "Insert",
+    "Escape", "CapsLock", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+    "Copy", "Cut", "Paste", "Undo", "Redo", "ContextMenu", "PrintScreen",
+];
+
+/// iced's `ContentFit` variants.
+pub(crate) const CONTENT_FITS: [&str; 5] = ["Contain", "Cover", "Fill", "None", "ScaleDown"];
+
+/// `MouseArea`'s builders that take a Message.
+pub(crate) const MOUSE_AREA_MESSAGES: [&str; 9] = [
+    "on_press",
+    "on_release",
+    "on_double_click",
+    "on_right_press",
+    "on_right_release",
+    "on_middle_press",
+    "on_middle_release",
+    "on_enter",
+    "on_exit",
+];
+
+/// iced's own tasks: `exit()`, `window::latest()`, `window::close(id)`,
+/// `operation::focus_next()`/`focus_previous()`, and `Task::and_then`.
+/// `and_then` takes `impl Fn(T) -> Task<U>` on a `Task<Option<T>>`; the
+/// facade checks the function, and the task's `Option` when it runs.
+fn declare_native_tasks(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let task = |message: &str| -> Result<type_ref::Type, host::Error> {
+        type_ref::Type::applied("Task", [type_ref::Type::parameter(message)?])
+    };
+    for name in [
+        "exit",
+        "widget::operation::focus_next",
+        "widget::operation::focus_previous",
+    ] {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("Message", &[])?;
+        signature.output(task("Message")?);
+        builder.item(item::Definition::function(name, signature.finish())?)?;
+    }
+    let mut latest = signature::Builder::new();
+    latest.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::option(type_ref::Type::registered("window::Id")?)],
+    )?);
+    builder.item(item::Definition::function("window::latest", latest.finish())?)?;
+    declare_operations(builder)?;
+    let mut close = signature::Builder::new();
+    close.type_parameter("Message", &[])?;
+    close.parameter(type_ref::Type::registered("window::Id")?);
+    close.output(task("Message")?);
+    builder.item(item::Definition::function("window::close", close.finish())?)?;
+    let mut and_then = signature::Builder::new();
+    and_then.type_parameter("Message", &[])?;
+    and_then.type_parameter("T", &[])?;
+    and_then.type_parameter("Parent", &[])?;
+    and_then.parameter(type_ref::Type::callable(
+        type_ref::Type::parameter("T")?,
+        task("Parent")?,
+    ));
+    and_then.output(task("Parent")?);
+    builder.item(item::Definition::method(
+        "Task::and_then",
+        receiver::Mode::Owned,
+        and_then.finish(),
+    )?)?;
+    Ok(())
+}
+
+/// `widget::Id`, the `id` builders of `scrollable` and `text_input`, and
+/// the operations that take one: `operation::focus` and
+/// `operation::scrollable::{snap_to, snap_to_end, scroll_to, scroll_by}`
+/// with their offsets and `operation::Animation`.
+fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let id = || type_ref::Type::registered("widget::Id");
+    let mut new = signature::Builder::new();
+    new.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    new.output(id()?);
+    builder.item(item::Definition::associated_function("widget::Id::new", new.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::Id::unique",
+        output_signature("widget::Id")?,
+    )?)?;
+    for owner in ["widget::Scrollable", "widget::TextInput"] {
+        builders(builder, owner, "id", [id()?])?;
+    }
+    for name in OPERATION_ANIMATIONS {
+        builder.item(item::Definition::associated_value(
+            format!("widget::operation::Animation::{name}"),
+            type_ref::Type::registered("widget::operation::Animation")?,
+        )?)?;
+    }
+    for offset in [
+        "widget::scrollable::RelativeOffset",
+        "widget::scrollable::AbsoluteOffset",
+    ] {
+        builder.item(item::Definition::associated_function(
+            format!("{offset}::default"),
+            output_signature(offset)?,
+        )?)?;
+        for field in ["x", "y"] {
+            let mut reader = signature::Builder::new();
+            reader.output(type_ref::Type::builtin(type_ref::Builtin::F64));
+            builder.item(item::Definition::method(
+                format!("{offset}::{field}"),
+                receiver::Mode::Shared,
+                reader.finish(),
+            )?)?;
+            let mut setter = signature::Builder::new();
+            setter.parameter(type_ref::Type::builtin(type_ref::Builtin::F64));
+            setter.output(type_ref::Type::registered(offset)?);
+            builder.item(item::Definition::method(
+                format!("{offset}::{field}"),
+                receiver::Mode::Owned,
+                setter.finish(),
+            )?)?;
+        }
+    }
+    for name in ["START", "END"] {
+        builder.item(item::Definition::associated_value(
+            format!("widget::scrollable::RelativeOffset::{name}"),
+            type_ref::Type::registered("widget::scrollable::RelativeOffset")?,
+        )?)?;
+    }
+    let task = || type_ref::Type::applied("Task", [type_ref::Type::parameter("Message")?]);
+    let animation = || type_ref::Type::registered("widget::operation::Animation");
+    let mut focus = signature::Builder::new();
+    focus.type_parameter("Message", &[])?;
+    focus.parameter(id()?);
+    focus.output(task()?);
+    builder.item(item::Definition::function("widget::operation::focus", focus.finish())?)?;
+    for (name, offset) in [
+        ("snap_to", Some("widget::scrollable::RelativeOffset")),
+        ("snap_to_end", None),
+        ("scroll_to", Some("widget::scrollable::AbsoluteOffset")),
+        ("scroll_by", Some("widget::scrollable::AbsoluteOffset")),
+    ] {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("Message", &[])?;
+        signature.parameter(id()?);
+        if let Some(offset) = offset {
+            signature.parameter(type_ref::Type::registered(offset)?);
+        }
+        signature.parameter(animation()?);
+        signature.output(task()?);
+        builder.item(item::Definition::function(
+            format!("widget::operation::scrollable::{name}"),
+            signature.finish(),
+        )?)?;
+    }
+    Ok(())
+}
+
+/// iced's `operation::Animation` variants.
+pub(crate) const OPERATION_ANIMATIONS: [&str; 3] = ["Auto", "Instant", "Smooth"];
+
+/// iced's `font` module: `Weight`, `Stretch`, `Style` and `Family`, and
+/// `Font::new`, `Font::with_family` and the builders a struct literal such as
+/// `Font { weight: font::Weight::Bold, ..Font::DEFAULT }` lowers to.
+fn declare_font(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    for (owner, variants) in [
+        ("font::Weight", &FONT_WEIGHTS[..]),
+        ("font::Stretch", &FONT_STRETCHES[..]),
+        ("font::Style", &FONT_STYLES[..]),
+        ("font::Family", &FONT_FAMILIES[..]),
+    ] {
+        for name in variants {
+            builder.item(item::Definition::associated_value(
+                format!("{owner}::{name}"),
+                type_ref::Type::registered(owner)?,
+            )?)?;
+        }
+    }
+    // `Family::VARIANTS`, the standalone families.
+    builder.item(item::Definition::associated_value(
+        "font::Family::VARIANTS",
+        type_ref::Type::slice(type_ref::Type::registered("font::Family")?),
+    )?)?;
+    let mut name = signature::Builder::new();
+    name.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    name.output(type_ref::Type::registered("font::Family")?);
+    builder.item(item::Definition::associated_function("font::Family::name", name.finish())?)?;
+    let mut new = signature::Builder::new();
+    new.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    new.output(type_ref::Type::registered("Font")?);
+    builder.item(item::Definition::associated_function("Font::new", new.finish())?)?;
+    let mut family = signature::Builder::new();
+    family.parameter(type_ref::Type::registered("font::Family")?);
+    family.output(type_ref::Type::registered("Font")?);
+    builder.item(item::Definition::associated_function("Font::with_family", family.finish())?)?;
+    for (name, input) in [
+        ("weight", "font::Weight"),
+        ("stretch", "font::Stretch"),
+        ("style", "font::Style"),
+        ("family", "font::Family"),
+    ] {
+        let mut method = signature::Builder::new();
+        method.parameter(type_ref::Type::registered(input)?);
+        method.output(type_ref::Type::registered("Font")?);
+        builder.item(item::Definition::method(
+            format!("Font::{name}"),
+            receiver::Mode::Owned,
+            method.finish(),
+        )?)?;
+    }
+    Ok(())
+}
+
+pub(crate) const FONT_WEIGHTS: [&str; 9] = [
+    "Thin", "ExtraLight", "Light", "Normal", "Medium", "Semibold", "Bold", "ExtraBold", "Black",
+];
+pub(crate) const FONT_STRETCHES: [&str; 9] = [
+    "UltraCondensed",
+    "ExtraCondensed",
+    "Condensed",
+    "SemiCondensed",
+    "Normal",
+    "SemiExpanded",
+    "Expanded",
+    "ExtraExpanded",
+    "UltraExpanded",
+];
+pub(crate) const FONT_STYLES: [&str; 3] = ["Normal", "Italic", "Oblique"];
+pub(crate) const FONT_FAMILIES: [&str; 5] = ["Serif", "SansSerif", "Cursive", "Fantasy", "Monospace"];
+
 /// iced's `tooltip::Position` variants.
 pub(crate) const TOOLTIP_POSITIONS: [&str; 5] = ["Top", "Bottom", "Left", "Right", "FollowCursor"];
 
@@ -1709,7 +2480,15 @@ fn builder_signature(
     owner: &str,
     input: type_ref::Type,
 ) -> Result<signature::Definition, host::Error> {
-    if matches!(owner, "widget::Text" | "widget::Space" | "widget::ProgressBar") {
+    if matches!(
+        owner,
+        "widget::Text"
+            | "widget::Space"
+            | "widget::ProgressBar"
+            | "widget::Image"
+            | "widget::Svg"
+            | "widget::QRCode"
+    ) {
         return fixed_builder_signature(owner, input);
     }
     let mut signature = signature::Builder::new();

@@ -142,8 +142,11 @@ fn execute_command(
                 Ok(loaded) => loaded,
                 Err(base) => {
                     let cargo = rawr_cli::cargo::begin(&base.graph);
-                    let failed = base::run(base)
-                        .map_err(|report| Error::Run(run::Error::Application { report }));
+                    let failed = base::run(base).map_err(
+                        |(base::Failed::Compile(report) | base::Failed::Panic(report))| {
+                            Error::Run(run::Error::Application { report })
+                        },
+                    );
                     rawr_cli::cargo::after_run(cargo);
                     return Ok(failed?.map(|error| Report {
                         message: String::new(),

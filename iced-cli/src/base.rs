@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-pub(crate) use rawr_cli::base::{check, run, Loaded, Session};
+pub(crate) use rawr_cli::base::{check, run, Failed, Loaded, Session};
 
 /// Load the program at `path` once, through its parse cells.
 pub(crate) fn load(path: Option<&PathBuf>) -> Result<Loaded, rawr::diagnostic::Report> {

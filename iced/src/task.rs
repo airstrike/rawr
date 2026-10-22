@@ -32,6 +32,66 @@ enum PreparedKind {
         plan: Box<Prepared>,
         mapper: item::Value,
     },
+    Native(Native),
+    AndThen {
+        plan: Box<Prepared>,
+        mapper: item::Value,
+    },
+}
+
+/// iced's own tasks: `exit`, `window::latest`/`close` and the focus
+/// operations. They run in iced's runtime and touch no Rawr authority.
+#[derive(Clone, Debug)]
+pub(crate) enum Native {
+    Exit,
+    LatestWindow,
+    CloseWindow(iced::window::Id),
+    FocusNext,
+    FocusPrevious,
+    Focus(iced::widget::Id),
+    SnapTo(
+        iced::widget::Id,
+        iced::widget::scrollable::RelativeOffset,
+        iced::widget::operation::Animation,
+    ),
+    SnapToEnd(iced::widget::Id, iced::widget::operation::Animation),
+    ScrollTo(
+        iced::widget::Id,
+        iced::widget::scrollable::AbsoluteOffset,
+        iced::widget::operation::Animation,
+    ),
+    ScrollBy(
+        iced::widget::Id,
+        iced::widget::scrollable::AbsoluteOffset,
+        iced::widget::operation::Animation,
+    ),
+}
+
+impl Native {
+    fn lower(self) -> iced::Task<Result<Dynamic, Error>> {
+        match self {
+            Self::Exit => iced::exit(),
+            Self::LatestWindow => {
+                iced::window::latest().map(|id| Ok(rawr::option::from(id)))
+            }
+            Self::CloseWindow(id) => iced::window::close(id),
+            Self::FocusNext => iced::widget::operation::focus_next(),
+            Self::FocusPrevious => iced::widget::operation::focus_previous(),
+            Self::Focus(id) => iced::widget::operation::focus(id),
+            Self::SnapTo(id, offset, animation) => {
+                iced::widget::operation::scrollable::snap_to(id, offset, animation)
+            }
+            Self::SnapToEnd(id, animation) => {
+                iced::widget::operation::scrollable::snap_to_end(id, animation)
+            }
+            Self::ScrollTo(id, offset, animation) => {
+                iced::widget::operation::scrollable::scroll_to(id, offset, animation)
+            }
+            Self::ScrollBy(id, offset, animation) => {
+                iced::widget::operation::scrollable::scroll_by(id, offset, animation)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -48,6 +108,12 @@ enum Kind {
         second: Box<Plan>,
     },
     Map {
+        plan: Box<Plan>,
+        mapper: item::Value,
+    },
+    Native(Native),
+    /// iced's `Task<Option<T>>::and_then`: `mapper` of each `Some`, a plan.
+    AndThen {
         plan: Box<Plan>,
         mapper: item::Value,
     },
@@ -159,7 +225,9 @@ impl Plan {
             | Kind::Perform { .. }
             | Kind::Batch(_)
             | Kind::Chain { .. }
-            | Kind::Map { .. } => None,
+            | Kind::Map { .. }
+            | Kind::Native(_)
+            | Kind::AndThen { .. } => None,
             Kind::Done(payload) => Some(payload),
         }
     }
@@ -215,6 +283,11 @@ impl Plan {
                 plan: Box::new(plan.prepare_application(authority)?),
                 mapper,
             },
+            Kind::Native(native) => PreparedKind::Native(native),
+            Kind::AndThen { plan, mapper } => PreparedKind::AndThen {
+                plan: Box::new(plan.prepare_application(authority)?),
+                mapper,
+            },
         };
         Ok(Prepared { kind, witness })
     }
@@ -246,6 +319,10 @@ impl Plan {
                 let authority = authority.clone();
                 plan.lower_payload(&authority)?
                     .map(move |result| result.and_then(|payload| authority.map(payload, &mapper)))
+            }
+            Kind::Native(native) => native.lower(),
+            Kind::AndThen { plan, mapper } => {
+                and_then(plan.lower_payload(authority)?, authority.clone(), mapper)
             }
         };
         let Some(witness) = witness else {
@@ -306,6 +383,10 @@ impl Prepared {
                 plan.lower_payload(context, &authority)
                     .map(move |result| result.and_then(|payload| authority.map(payload, &mapper)))
             }
+            PreparedKind::Native(native) => native.lower(),
+            PreparedKind::AndThen { plan, mapper } => {
+                and_then(plan.lower_payload(context, authority), authority.clone(), mapper)
+            }
         };
         let Some(witness) = witness else {
             return task;
@@ -315,6 +396,34 @@ impl Prepared {
             result.and_then(|payload| authority.validate_output(&witness, payload))
         })
     }
+}
+
+/// Each `Some` the task yields, given to `mapper`, whose plan then runs.
+fn and_then(
+    task: iced::Task<Result<Dynamic, Error>>,
+    authority: Authority,
+    mapper: item::Value,
+) -> iced::Task<Result<Dynamic, Error>> {
+    task.then(move |result| {
+        let mut payload = match result {
+            Ok(payload) => payload,
+            Err(error) => return iced::Task::done(Err(error)),
+        };
+        let actual = payload.type_name().to_string();
+        let inner = match rawr::option::take(&mut payload) {
+            Some(Some(inner)) => inner,
+            Some(None) => return iced::Task::none(),
+            None => return iced::Task::done(Err(Error::Representation { actual })),
+        };
+        let next = authority
+            .map(inner, &mapper)
+            .and_then(Plan::from_dynamic)
+            .and_then(|plan| plan.lower_payload(&authority));
+        match next {
+            Ok(task) => task,
+            Err(error) => iced::Task::done(Err(error)),
+        }
+    })
 }
 
 impl Authority {
@@ -424,6 +533,142 @@ impl std::error::Error for Error {
 
 pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Builder) {
     let builder = iced;
+    for (path, native) in [
+        ("iced::exit", Native::Exit),
+        ("iced::window::latest", Native::LatestWindow),
+        ("iced::widget::operation::focus_next", Native::FocusNext),
+        ("iced::widget::operation::focus_previous", Native::FocusPrevious),
+    ] {
+        builder
+            .bind_with_context(path, move |call, args| {
+                if !args.is_empty() {
+                    return Err(arity(path, 0, args.len()));
+                }
+                Ok(Dynamic::from(Plan {
+                    kind: Kind::Native(native.clone()),
+                    witness: Some(call.output_witness().map_err(witness_error)?),
+                }))
+            })
+            .expect("the iced facade must retain every native task");
+    }
+    builder
+        .bind_with_context("iced::Task::batch", |call, args| {
+            let [plans] = args else {
+                return Err(arity("Task::batch", 1, args.len()));
+            };
+            let plans = plans.take().into_array().map_err(|actual| {
+                EvalAltResult::ErrorRuntime(
+                    format!("Task::batch expected a list, found `{actual}`").into(),
+                    Position::NONE,
+                )
+            })?;
+            let plans = plans
+                .into_iter()
+                .map(|mut plan| take(&mut plan, "Task::batch"))
+                .collect::<Result<Vec<_>, _>>()?;
+            let witness = call.output_witness().map_err(witness_error)?;
+            Ok(Dynamic::from(Plan::batch(plans, witness)))
+        })
+        .expect("the iced facade must retain Task::batch");
+    builder
+        .bind_with_context("iced::widget::operation::focus", |call, args| {
+            let [id] = args else {
+                return Err(arity("operation::focus", 1, args.len()));
+            };
+            native_task(call, Native::Focus(take_value(id, "widget::Id")?))
+        })
+        .expect("the iced facade must retain operation::focus");
+    for name in ["snap_to", "snap_to_end", "scroll_to", "scroll_by"] {
+        let path = format!("iced::widget::operation::scrollable::{name}");
+        builder
+            .bind_with_context(path.clone(), move |call, args| {
+                let expected = if name == "snap_to_end" { 2 } else { 3 };
+                if args.len() != expected {
+                    return Err(arity(&path, expected, args.len()));
+                }
+                let id = take_value::<iced::widget::Id>(args[0], "widget::Id")?;
+                let animation = take_value::<iced::widget::operation::Animation>(
+                    args[expected - 1],
+                    "operation::Animation",
+                )?;
+                let native = match name {
+                    "snap_to" => Native::SnapTo(
+                        id,
+                        take_value(args[1], "scrollable::RelativeOffset")?,
+                        animation,
+                    ),
+                    "snap_to_end" => Native::SnapToEnd(id, animation),
+                    "scroll_to" => Native::ScrollTo(
+                        id,
+                        take_value(args[1], "scrollable::AbsoluteOffset")?,
+                        animation,
+                    ),
+                    _ => Native::ScrollBy(
+                        id,
+                        take_value(args[1], "scrollable::AbsoluteOffset")?,
+                        animation,
+                    ),
+                };
+                native_task(call, native)
+            })
+            .expect("the iced facade must retain every scrollable operation");
+    }
+    builder
+        .bind_with_context("iced::window::close", |call, args| {
+            if args.len() != 1 {
+                return Err(arity("window::close", 1, args.len()));
+            }
+            let id = args[0]
+                .take()
+                .try_cast_result::<iced::window::Id>()
+                .map_err(|value| {
+                    EvalAltResult::ErrorRuntime(
+                        format!("window::close received `{}`, expected a `window::Id`", value.type_name())
+                            .into(),
+                        Position::NONE,
+                    )
+                })?;
+            Ok(Dynamic::from(Plan {
+                kind: Kind::Native(Native::CloseWindow(id)),
+                witness: Some(call.output_witness().map_err(witness_error)?),
+            }))
+        })
+        .expect("the iced facade must retain window::close");
+    builder
+        .bind_with_context("iced::Task::and_then", |call, args| {
+            if args.len() != 2 {
+                return Err(arity("Task::and_then", 2, args.len()));
+            }
+            let plan = take(args[0], "Task::and_then")?;
+            let witness = plan.witness.as_ref().ok_or_else(|| {
+                EvalAltResult::ErrorRuntime(
+                    "Task::and_then received an unattested plan".into(),
+                    Position::NONE,
+                )
+            })?;
+            let witness = call.transform_witness(witness).map_err(witness_error)?;
+            let mapper = args[1]
+                .take()
+                .try_cast_result::<item::Value>()
+                .map_err(|value| {
+                    EvalAltResult::ErrorRuntime(
+                        format!(
+                            "Task::and_then received `{}`, expected an exact symbolic function",
+                            value.type_name()
+                        )
+                        .into(),
+                        Position::NONE,
+                    )
+                })?;
+            Ok(Dynamic::from(Plan {
+                kind: Kind::AndThen {
+                    plan: Box::new(plan),
+                    mapper,
+                },
+                witness: Some(witness),
+            }))
+        })
+        .expect("the iced facade must retain Task::and_then");
     builder
         .bind_type_attestation("iced::Task", |value, expected| {
             let plan = value.read_lock::<Plan>()?;
@@ -553,6 +798,30 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             Ok(Dynamic::from(plan.map(mapper, witness)))
         })
         .expect("the iced facade must retain the exact Task::map item");
+}
+
+fn native_task(
+    call: &host::runtime::Call<'_>,
+    native: Native,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    Ok(Dynamic::from(Plan {
+        kind: Kind::Native(native),
+        witness: Some(call.output_witness().map_err(witness_error)?),
+    }))
+}
+
+fn take_value<T: Clone + 'static>(
+    value: &mut Dynamic,
+    expected: &str,
+) -> Result<T, Box<EvalAltResult>> {
+    let actual = value.type_name();
+    value.take().try_cast_result::<T>().map_err(|_| {
+        EvalAltResult::ErrorRuntime(
+            format!("native task binding received `{actual}`, expected `{expected}`").into(),
+            Position::NONE,
+        )
+        .into()
+    })
 }
 
 fn take(value: &mut Dynamic, operation: &str) -> Result<Plan, Box<EvalAltResult>> {

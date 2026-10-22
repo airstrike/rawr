@@ -433,14 +433,14 @@ mod tests {
         two.i64(2);
         let two = two.finish().unwrap();
         let contributions = [one.clone(), two.clone()];
-        let identity = ordered.identity(&contributions, &[]).unwrap();
+        let identity = ordered.identity(&contributions, &[], &[]).unwrap();
 
-        assert_eq!(identity, ordered.identity(&contributions, &[]).unwrap());
+        assert_eq!(identity, ordered.identity(&contributions, &[], &[]).unwrap());
         assert_ne!(
             identity,
-            ordered.identity(&[two.clone(), one.clone()], &[]).unwrap()
+            ordered.identity(&[two.clone(), one.clone()], &[], &[]).unwrap()
         );
-        assert_ne!(identity, typed.identity(&contributions, &[]).unwrap());
+        assert_ne!(identity, typed.identity(&contributions, &[], &[]).unwrap());
 
         let second_facade = generic_facade(2);
         let second_definition = item(&second_facade);
@@ -455,7 +455,7 @@ mod tests {
             string_type,
         )
         .unwrap();
-        assert_ne!(identity, versioned.identity(&contributions, &[]).unwrap());
+        assert_ne!(identity, versioned.identity(&contributions, &[], &[]).unwrap());
     }
 
     fn facade(version: u32) -> host::facade::Definition {

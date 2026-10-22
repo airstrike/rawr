@@ -1049,6 +1049,35 @@ impl State {
         assert_eq!(text("vec![1, 2, 3].iter().sum::<i64>()").text(), "6\n");
         assert_eq!(text("let a = 20;\na + 7").text(), "27\n");
         assert_eq!(text("println!(\"hi\")").text(), "hi\n");
+        // As in a Rust block: a final `;` leaves no value to print.
+        assert_eq!(text("1 + 2;").text(), "");
+        assert_eq!(text("let a = 2;\n{ let b = a * 3; b }").text(), "6\n");
+        assert_eq!(text("\"a\".to_string() + \"b\"").text(), "\"ab\"\n");
+    }
+
+    #[test]
+    fn run_plain_panic_exits_101_like_rust() {
+        let output = text("println!(\"before\");\nassert_eq!(1 + 1, 3);");
+        assert_eq!(output.status, 101);
+        assert!(!output.limit);
+        let text = output.text();
+        assert!(text.starts_with("before\n"), "{text}");
+        assert!(text.contains("assertion `left == right` failed\n  left: 2\n right: 3"), "{text}");
+    }
+
+    #[test]
+    fn run_plain_statement_errors_keep_their_positions() {
+        let error = super::run("let x: i64 = \"s\";", &Options::default()).unwrap_err();
+        let PlayError::Compile(text) = error else {
+            panic!("expected a compile error, got {error:?}");
+        };
+        assert!(text.contains("play.rawr:1:14"), "{text}");
+        assert!(text.contains(" 1 | let x: i64 = \"s\";"), "{text}");
+        let error = super::run("let a = 1;\na + true", &Options::default()).unwrap_err();
+        let PlayError::Compile(text) = error else {
+            panic!("expected a compile error, got {error:?}");
+        };
+        assert!(text.contains("play.rawr:2:"), "{text}");
     }
 
     #[test]
@@ -1114,7 +1143,7 @@ impl State {
             let source = format!("fn leak(x) {{ {body} }}\nfn main() {{ leak(1); }}\n");
             let refused = match super::run(&source, &Options::default()) {
                 Err(_) => true,
-                Ok(super::Outcome::Text(output)) => output.status == 1,
+                Ok(super::Outcome::Text(output)) => output.status != 0,
                 Ok(super::Outcome::Image(_)) => false,
             };
             assert!(refused, "{body}");

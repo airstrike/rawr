@@ -197,7 +197,12 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
             eprintln!("{error}");
             ExitCode::FAILURE
         }
-        Err(report) => failure(&report),
+        Err(base::Failed::Compile(report)) => failure(&report),
+        Err(base::Failed::Panic(report)) => {
+            eprint!("{}", diagnostic::render(&report));
+            // Rust's exit status for a panic.
+            ExitCode::from(101)
+        }
     };
     cargo::after_run(cargo);
     code

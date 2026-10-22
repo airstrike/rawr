@@ -123,20 +123,30 @@ pub fn check(loaded: Loaded) -> Result<PathBuf, diagnostic::Report> {
     Ok(loaded.target.source().path().to_path_buf())
 }
 
+/// Why a base program did not finish.
+pub enum Failed {
+    /// It did not compile.
+    Compile(diagnostic::Report),
+    /// It panicked or failed at run time. Rust exits with 101 for a panic.
+    Panic(diagnostic::Report),
+}
+
 /// Run a base program once. `Ok(Some(text))` is a `main` that returned
 /// `Err`: Rust's `Error: {err:?}`, for stderr and a failing exit.
-pub fn run(loaded: Loaded) -> Result<Option<String>, diagnostic::Report> {
+pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     let Loaded { target, graph, .. } = loaded;
     let target = &target;
     let engine = Engine::new();
     let (ast, main) = engine
         .compile_package(graph)
-        .map_err(|error| compile_report(&error, target))?;
+        .map_err(|error| Failed::Compile(compile_report(&error, target)))?;
     let runtime = |error: Box<rawr::EvalAltResult>| {
         let source = source(target);
-        diagnostic::Report::from_evaluation(source.clone(), &error).unwrap_or_else(|_| {
-            report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, source)
-        })
+        Failed::Panic(
+            diagnostic::Report::from_evaluation(source.clone(), &error).unwrap_or_else(|_| {
+                report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, source)
+            }),
+        )
     };
     let mut scope = Scope::new();
     let value = engine
