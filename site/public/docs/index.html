@@ -20,6 +20,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
 <link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
 </head>
 <body>
 <header class="bar">
@@ -56,7 +57,7 @@
 <p>A Rawr program is meant to stay valid Rust. The cart example below compiles with rustc unchanged and prints the same line.</p>
 <div class="block">
   <div class="file"><b>cart.rawr</b><span>Rawr</span></div>
-  <pre><code data-lang="rust">enum Item {
+  <pre><code data-lang="rust" data-run="cart.rawr" id="src-cart">enum Item {
     Book { price: f64 },
     Coffee { cups: i64 },
 }
@@ -86,7 +87,7 @@ fn main() {
     let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
     println!("total: {}", total(&amp;cart));
 }</code></pre>
-  <div class="run"><b>rawr run cart.rawr</b><span>total: 27</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rawr" hidden></button><b>rawr run cart.rawr</b><span id="out-cart" aria-live="polite">total: 27</span></div>
 </div>
 
 <h2 id="parts">The parts</h2>
@@ -125,5 +126,6 @@ fn main() {
   </div>
 </footer>
 <script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
 </body>
 </html>

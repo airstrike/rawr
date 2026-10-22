@@ -36,12 +36,12 @@
     "TURNSTILE_SITEKEY": "0x4AAAAAAFfQTZDPbRvs2kSG",
     "PLAY_VERSION": "a689bab57145"
   },
-  // /play's examples (play/tests/fixtures/*.rs) and the landing page
-  // (site/public/index.html, whose snippets /play/run accepts), as text.
-  "rules": [{ "type": "Text", "globs": ["**/*.rs", "**/*.html"], "fallthrough": false }],
+  // /play's examples (play/tests/fixtures/*.rs), as text.
+  "rules": [{ "type": "Text", "globs": ["**/*.rs"], "fallthrough": false }],
   // dist/ is site/public (the landing page at /, /og/card.png) and public/
   // (/bot/invite, the redirect with its link preview; /og/invite.png, which
-  // rawr-play renders from og/card.rs), merged by build.mjs.
+  // rawr-play renders from og/card.rs), merged by build.mjs. It also writes
+  // src/runnable.gen.ts, the hashes of the sources /play/run accepts.
   "build": { "command": "node build.mjs" },
   // The Worker runs first so it can redirect the old host; for the new host
   // it hands every path but /play and /bot to the assets.

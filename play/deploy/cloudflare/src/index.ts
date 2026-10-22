@@ -24,10 +24,10 @@
 // which only this Durable Object can reach. A render is an iced snippet's
 // PNG or a plain program's output (JSON).
 //
-// POST /play/run runs the landing page's own snippets without Turnstile:
-// only sources whose SHA-256 is one of the page's `<code data-run>` texts
-// (the page is embedded in this Worker when it is built, so the list is the
-// deployed page's). Results are cached per image version.
+// POST /play/run runs the site's own snippets without Turnstile: only
+// sources whose SHA-256 is one of the `<code data-run>` texts in the site's
+// pages. build.mjs collects those hashes into src/runnable.gen.ts, so the
+// list is the deployed pages'. Results are cached per image version.
 
 import { Container, ContainerProxy, getContainer, type OutboundHandlerContext } from "@cloudflare/containers";
 import { render, type Dashboard } from "./dashboard.ts";
@@ -51,7 +51,6 @@ import {
   RENDER_LIMITS,
   SHARE_LIMITS,
   canonical,
-  runnable,
   sha256,
   hmac,
   parseSnippet,
@@ -61,7 +60,7 @@ import {
   type Snippet,
 } from "./play.ts";
 import { render as renderPlay } from "./playpage.ts";
-import landing from "../../../../site/public/index.html";
+import { RUNNABLE } from "./runnable.gen.ts";
 import {
   addWebRateLimited,
   emptyStats,
@@ -616,15 +615,11 @@ async function previewImage(request: Request, env: Env, ctx: ExecutionContext, i
   }
 }
 
-/** The SHA-256 of each source the landing page runs, computed once per isolate. */
-let landingHashes: Promise<Set<string>> | undefined;
-function landingSources(): Promise<Set<string>> {
-  landingHashes ??= Promise.all(runnable(landing).map(sha256)).then((hashes) => new Set(hashes));
-  return landingHashes;
-}
+/** The SHA-256 of each source the site's Run buttons send. */
+const SITE_SOURCES: ReadonlySet<string> = new Set(RUNNABLE);
 
 /**
- * POST /play/run: one of the landing page's own snippets, by its exact
+ * POST /play/run: one of the site's own snippets, by its exact
  * source, without Turnstile. Any other source is refused. Each result is
  * cached for the deployed image; uncached runs are limited per IP.
  */
@@ -633,8 +628,8 @@ async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Pr
   const code = body?.code;
   if (typeof code !== "string") return plain("bad request", 400);
   const hash = await sha256(code);
-  if (!(await landingSources()).has(hash)) {
-    return plain("only the landing page's snippets run here; use /play for your own code", 403);
+  if (!SITE_SOURCES.has(hash)) {
+    return plain("only the site's own snippets run here; use /play for your own code", 403);
   }
   const cache = caches.default;
   const key = new Request(`${SITE}/play/run/${hash}/${env.PLAY_VERSION}`);

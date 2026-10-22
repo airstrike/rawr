@@ -241,17 +241,30 @@ export function decodeHtml(html: string): string {
   });
 }
 
+/** One `<code data-run>` element: its `data-run` name (may be empty) and its text. */
+export interface RunBlock {
+  name: string;
+  code: string;
+  /** The element's inner HTML, to catch markup inside it. */
+  html: string;
+}
+
 /**
- * The sources the landing page runs: the text of each `<code data-run>`
- * element in its HTML. The page sends exactly that text, so these are the
- * only sources /play/run accepts without Turnstile.
+ * The `<code data-run>` elements in a page's HTML. Their text is what the
+ * page's Run buttons send (`textContent`), so these are the only sources
+ * /play/run accepts without Turnstile.
  */
-export function runnable(html: string): string[] {
-  const sources: string[] = [];
-  for (const match of html.matchAll(/<code\b[^>]*\bdata-run\b[^>]*>([\s\S]*?)<\/code>/g)) {
-    sources.push(decodeHtml(match[1]));
+export function runBlocks(html: string): RunBlock[] {
+  const blocks: RunBlock[] = [];
+  for (const match of html.matchAll(/<code\b([^>]*)\bdata-run\b(?:="([^"]*)")?([^>]*)>([\s\S]*?)<\/code>/g)) {
+    blocks.push({ name: match[2] ?? "", code: decodeHtml(match[4]), html: match[4] });
   }
-  return sources;
+  return blocks;
+}
+
+/** The sources a page runs: the text of each `<code data-run>` element. */
+export function runnable(html: string): string[] {
+  return runBlocks(html).map((block) => block.code);
 }
 
 /** One stream's run of a plain program's output. */

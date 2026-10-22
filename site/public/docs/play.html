@@ -20,6 +20,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
 <link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
 </head>
 <body>
 <header class="bar">
@@ -128,9 +129,9 @@ impl Counter {
 <p>A plain program runs the way <code>rawr run</code> runs a file. Its top-level statements run first. Then <code>fn main</code> runs if there is one. The reply is its stdout and stderr in the order it wrote them.</p>
 <p>A snippet of statements alone runs as the body of <code>main</code>. If its last expression has no semicolon, its value is printed with <code>{:?}</code>. So <code>1 + 2</code> prints <code>3</code>, and <code>1 + 2;</code> prints nothing.</p>
 <div class="block">
-  <pre><code data-lang="rust">let xs = vec![3, 1, 2];
+  <pre><code data-lang="rust" data-run id="src-sum">let xs = vec![3, 1, 2];
 xs.iter().sum::&lt;i64&gt;()</code></pre>
-  <div class="run"><span>6</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-sum" data-out="out-sum" aria-label="Run this snippet" hidden></button><span id="out-sum" aria-live="polite">6</span></div>
 </div>
 <p>The reply shows the exit status when it isn&rsquo;t 0. A <code>main</code> that returns <code>Err</code> prints <code>Error: ..</code> and exits with status 1. A panic exits with status 101. A program stopped by a limit exits with status 1. Messages don&rsquo;t apply to a plain program. The reply notes that they were ignored.</p>
 
@@ -192,5 +193,6 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
   </div>
 </footer>
 <script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
 </body>
 </html>
