@@ -1609,6 +1609,11 @@ fn evaluate_theme(
     launch
         .invoke_theme(&mut args)
         .map_err(Error::Invocation)?
+        // `theme() -> Option<Theme>`: `None` is the default theme.
+        .and_then(|mut value| match rawr::option::take(&mut value) {
+            Some(option) => option,
+            None => Some(value),
+        })
         .map(theme::Value::from_dynamic)
         .transpose()
         .map_err(Error::ThemeOutput)
