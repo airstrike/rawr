@@ -221,3 +221,167 @@ fn master_wrappers_lower_their_content() {
     adapter.update(pressed).unwrap();
     find(&adapter, "1");
 }
+
+/// `examples/qr_code/src/main.rs`, with its `RangeInclusive<f32>` constant
+/// inlined and no `data.truncate(100)`: Rawr does not import
+/// `std::ops::RangeInclusive` or have `String::truncate` yet, and takes
+/// `Theme::to_string` as the closure `|theme| theme.to_string()`; its
+/// `theme` returns a `Theme`, as a Rawr theme function does, not an
+/// `Option<Theme>`.
+const QR_CODE: &str = r#"
+use iced::widget::{center, column, pick_list, qr_code, row, slider, text, text_input, toggler};
+use iced::{Center, Theme, Widget};
+
+
+pub fn main() -> iced::Result {
+    iced::application(QRGenerator::default, QRGenerator::update, QRGenerator::view)
+        .theme(QRGenerator::theme)
+        .run()
+}
+
+#[derive(Default)]
+struct QRGenerator {
+    data: String,
+    qr_code: Option<qr_code::Data>,
+    total_size: Option<f32>,
+    theme: Option<Theme>,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    DataChanged(String),
+    ToggleTotalSize(bool),
+    TotalSizeChanged(f32),
+    ThemeChanged(Theme),
+}
+
+impl QRGenerator {
+
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::DataChanged(data) => {
+
+                self.qr_code = if data.is_empty() {
+                    None
+                } else {
+                    qr_code::Data::new(&data).ok()
+                };
+
+                self.data = data;
+            }
+            Message::ToggleTotalSize(enabled) => {
+                self.total_size = enabled.then_some(300.0);
+            }
+            Message::TotalSizeChanged(total_size) => {
+                self.total_size = Some(total_size);
+            }
+            Message::ThemeChanged(theme) => {
+                self.theme = Some(theme);
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let title = text("QR Code Generator").size(70);
+
+        let input = text_input("Type the data of your QR code here...", &self.data)
+            .on_input(Message::DataChanged)
+            .size(30)
+            .padding(15);
+
+        let toggle_total_size = toggler(self.total_size.is_some())
+            .on_toggle(Message::ToggleTotalSize)
+            .label("Limit Total Size");
+
+        let choose_theme = row![
+            text("Theme:"),
+            pick_list(self.theme.as_ref(), Theme::ALL, |theme: &Theme| theme.to_string())
+                .on_select(Message::ThemeChanged)
+                .placeholder("Theme")
+        ]
+        .spacing(10)
+        .align_y(Center);
+
+        let content = column![
+            title,
+            input,
+            row![toggle_total_size, choose_theme]
+                .spacing(20)
+                .align_y(Center),
+            self.total_size.map(|total_size| {
+                slider(200.0..=400.0, total_size, Message::TotalSizeChanged)
+            }),
+            self.qr_code.as_ref().map(|data| {
+                if let Some(total_size) = self.total_size {
+                    qr_code(data).total_size(total_size)
+                } else {
+                    qr_code(data).cell_size(10.0)
+                }
+            })
+        ]
+        .width(700)
+        .spacing(20)
+        .align_x(Center);
+
+        center(content).padding(20)
+    }
+
+    fn theme(&self) -> Theme {
+        self.theme.clone().unwrap_or(Theme::Light)
+    }
+}
+"#;
+
+#[test]
+fn master_qr_code_draws_its_data() {
+    let mut adapter = boot(QR_CODE);
+    find(&adapter, "QR Code Generator");
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("Type the data of your QR code here...").unwrap();
+    simulator.typewrite("rawr");
+    for message in simulator.into_messages() {
+        adapter.update(message).unwrap();
+    }
+    let _ = iced_test::simulator(adapter.view());
+    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+}
+
+const MEDIA: &str = r#"
+use iced::widget::{column, image, svg, text};
+use iced::{ContentFit, Fill, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Nothing,
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Nothing => {}
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            text("Media"),
+            image("ferris.png").width(100).content_fit(ContentFit::Contain),
+            image(image::Handle::from_path("ferris.png")).opacity(0.5),
+            svg(svg::Handle::from_path("tiger.svg")).width(Fill).height(Fill),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_image_and_svg_take_paths_and_handles() {
+    let adapter = boot(MEDIA);
+    find(&adapter, "Media");
+}

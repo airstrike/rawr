@@ -93,6 +93,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::container")?;
     builder.module("widget::radio")?;
     builder.module("widget::rule")?;
+    builder.module("widget::image")?;
+    builder.module("widget::svg")?;
+    builder.module("widget::qr_code")?;
     builder.module("widget::operation")?;
     builder.module("window")?;
     builder.module("widget::scrollable")?;
@@ -108,7 +111,13 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.value_type::<theme::Value>(
         "Theme",
         &[],
-        &[capability::Kind::Clone, capability::Kind::PartialEq],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
     )?;
     builder.value_type::<iced::theme::Palette>("theme::Palette", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::theme::palette::Background>(
@@ -215,6 +224,39 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.value_type::<iced::window::Id>("window::Id", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
     builder.type_::<marker::Stack>("widget::Stack", &["Message"], &[])?;
     builder.project("widget::Stack", "Element", &["Message"])?;
+    builder.value_type::<iced::widget::image::Handle>(
+        "widget::image::Handle",
+        &[],
+        &[capability::Kind::Clone, capability::Kind::PartialEq, capability::Kind::Send, capability::Kind::Static],
+    )?;
+    builder.value_type::<iced::widget::svg::Handle>(
+        "widget::svg::Handle",
+        &[],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
+    builder.default_value_type::<iced::ContentFit>("ContentFit", &[], OWNED_EQ_DEFAULT_VALUE_CAPABILITIES)?;
+    builder.value_type::<marker::QrData>(
+        "widget::qr_code::Data",
+        &[],
+        &[capability::Kind::Debug, capability::Kind::Clone, capability::Kind::PartialEq, capability::Kind::Send, capability::Kind::Static],
+    )?;
+    builder.value_type::<iced::widget::qr_code::Error>(
+        "widget::qr_code::Error",
+        &[],
+        OWNED_EQ_VALUE_CAPABILITIES,
+    )?;
+    builder.type_::<marker::Image>("widget::Image", &[], &[])?;
+    builder.project_with("widget::Image", "Element", &[host::type_def::Argument::fresh()])?;
+    builder.type_::<marker::Svg>("widget::Svg", &[], &[])?;
+    builder.project_with("widget::Svg", "Element", &[host::type_def::Argument::fresh()])?;
+    builder.type_::<marker::QrCode>("widget::QRCode", &[], &[])?;
+    builder.project_with("widget::QRCode", "Element", &[host::type_def::Argument::fresh()])?;
     builder.type_::<marker::Pin>("widget::Pin", &["Message"], &[])?;
     builder.project("widget::Pin", "Element", &["Message"])?;
     builder.type_::<marker::MouseArea>("widget::MouseArea", &["Message"], &[])?;
@@ -309,6 +351,15 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             type_ref::Type::registered("Theme")?,
         )?)?;
     }
+    // `theme.to_string()`: its name, as iced's `Display`.
+    let mut name = signature::Builder::new();
+    name.output(type_ref::Type::builtin(type_ref::Builtin::String));
+    builder.item(item::Definition::method("Theme::to_string", receiver::Mode::Shared, name.finish())?)?;
+    // iced's `Theme::ALL`, every built-in theme.
+    builder.item(item::Definition::associated_value(
+        "Theme::ALL",
+        type_ref::Type::slice(type_ref::Type::registered("Theme")?),
+    )?)?;
     builder.item(item::Definition::intrinsic_function(
         "run",
         run_signature()?,
@@ -725,6 +776,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_master_helpers(&mut builder)?;
     declare_native_tasks(&mut builder)?;
     declare_wrappers(&mut builder)?;
+    declare_media(&mut builder)?;
     declare_font(&mut builder)?;
 
     builder.finish()
@@ -1727,6 +1779,60 @@ fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
     Ok(())
 }
 
+/// iced's `image`, `svg` and `qr_code` widgets, their handles and data,
+/// and `ContentFit`.
+fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let string = || type_ref::Type::builtin(type_ref::Builtin::String);
+    for (module, handle, function, widget) in [
+        ("widget::image", "widget::image::Handle", "widget::image", "widget::Image"),
+        ("widget::svg", "widget::svg::Handle", "widget::svg", "widget::Svg"),
+    ] {
+        let mut from_path = signature::Builder::new();
+        from_path.parameter(string());
+        from_path.output(type_ref::Type::registered(handle)?);
+        builder.item(item::Definition::associated_function(
+            format!("{handle}::from_path"),
+            from_path.finish(),
+        )?)?;
+        // `impl Into<Handle>`: a handle, or a path.
+        for input in [type_ref::Type::registered(handle)?, string()] {
+            let mut signature = signature::Builder::new();
+            signature.parameter(input);
+            signature.output(type_ref::Type::registered(widget)?);
+            builder.item(item::Definition::function(function, signature.finish())?)?;
+        }
+        let _ = module;
+        length_builders(builder, widget, &["width", "height"])?;
+        builders(builder, widget, "content_fit", [type_ref::Type::registered("ContentFit")?])?;
+        builders(builder, widget, "opacity", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
+    }
+    builders(builder, "widget::Image", "scale", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
+    for name in CONTENT_FITS {
+        builder.item(item::Definition::associated_value(
+            format!("ContentFit::{name}"),
+            type_ref::Type::registered("ContentFit")?,
+        )?)?;
+    }
+
+    let mut data = signature::Builder::new();
+    data.parameter(string());
+    data.output(type_ref::Type::result(
+        type_ref::Type::registered("widget::qr_code::Data")?,
+        type_ref::Type::registered("widget::qr_code::Error")?,
+    ));
+    builder.item(item::Definition::associated_function("widget::qr_code::Data::new", data.finish())?)?;
+    let mut qr_code = signature::Builder::new();
+    qr_code.parameter(type_ref::Type::registered("widget::qr_code::Data")?);
+    qr_code.output(type_ref::Type::registered("widget::QRCode")?);
+    builder.item(item::Definition::function("widget::qr_code", qr_code.finish())?)?;
+    pixels_builders(builder, "widget::QRCode", "cell_size")?;
+    pixels_builders(builder, "widget::QRCode", "total_size")?;
+    Ok(())
+}
+
+/// iced's `ContentFit` variants.
+pub(crate) const CONTENT_FITS: [&str; 5] = ["Contain", "Cover", "Fill", "None", "ScaleDown"];
+
 /// `MouseArea`'s builders that take a Message.
 pub(crate) const MOUSE_AREA_MESSAGES: [&str; 9] = [
     "on_press",
@@ -2059,7 +2165,15 @@ fn builder_signature(
     owner: &str,
     input: type_ref::Type,
 ) -> Result<signature::Definition, host::Error> {
-    if matches!(owner, "widget::Text" | "widget::Space" | "widget::ProgressBar") {
+    if matches!(
+        owner,
+        "widget::Text"
+            | "widget::Space"
+            | "widget::ProgressBar"
+            | "widget::Image"
+            | "widget::Svg"
+            | "widget::QRCode"
+    ) {
         return fixed_builder_signature(owner, input);
     }
     let mut signature = signature::Builder::new();

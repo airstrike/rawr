@@ -408,3 +408,43 @@ pub(crate) struct MouseArea {
     pub(crate) on_move: Option<item::Value>,
     pub(crate) interaction: Option<iced::mouse::Interaction>,
 }
+
+/// iced's `image(handle)`.
+#[derive(Clone)]
+pub(crate) struct Image {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) handle: iced::widget::image::Handle,
+    pub(crate) width: Option<iced::Length>,
+    pub(crate) height: Option<iced::Length>,
+    pub(crate) content_fit: Option<iced::ContentFit>,
+    pub(crate) opacity: Option<f32>,
+    pub(crate) scale: Option<f32>,
+}
+
+/// iced's `svg(handle)`.
+#[derive(Clone)]
+pub(crate) struct Svg {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) handle: iced::widget::svg::Handle,
+    pub(crate) width: Option<iced::Length>,
+    pub(crate) height: Option<iced::Length>,
+    pub(crate) content_fit: Option<iced::ContentFit>,
+    pub(crate) opacity: Option<f32>,
+}
+
+/// iced's `qr_code::Data`, as the text it encodes: iced's holds a drawing
+/// cache that is neither `Clone` nor `Sync`, so each view encodes it again.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct QrData(pub(crate) std::sync::Arc<str>);
+
+/// iced's `qr_code(&data)`.
+#[derive(Clone)]
+pub(crate) struct QrCode {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) data: QrData,
+    pub(crate) cell_size: Option<f32>,
+    pub(crate) total_size: Option<f32>,
+}

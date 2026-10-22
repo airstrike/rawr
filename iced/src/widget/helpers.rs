@@ -20,6 +20,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_font(builder);
     bind_fields(builder);
     bind_wrappers(builder);
+    super::media::bind(builder);
 }
 
 fn bind_alignment(builder: &mut host::runtime::Builder) {
@@ -539,7 +540,7 @@ fn into_element(view: Dynamic) -> Result<widget::Value, String> {
     widgets!(
         Text, TextInput, Checkbox, Toggler, Slider, ProgressBar, Transition, Button, Column, Row,
         Container, Tooltip, Scrollable, Logo, Sensor, Space, Radio, PickList, ComboBox, Stack,
-        Pin, MouseArea
+        Pin, MouseArea, Image, Svg, QrCode
     );
     Err(format!("expected a widget, found `{}`", view.type_name()))
 }
