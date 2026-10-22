@@ -298,7 +298,7 @@ fn main() {
     let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
     println!("total: {}", total(&amp;cart));
 }</code></pre>
-          <div class="run"><b>rawr run cart.rawr</b><span id="out-cart">total: 27</span></div>
+          <div class="run"><b>rawr run cart.rawr</b><span id="out-cart" aria-live="polite">total: 27</span></div>
         </div>
         <div class="divider">
           <span class="hit" aria-hidden="true"></span>
@@ -492,7 +492,7 @@ impl Counter {
         .align_x(Center)
     }
 }</code></pre>
-            <div class="run"><b>rawr run</b><span class="quiet" id="out-counter">(opens a window)</span></div>
+            <div class="run"><b>rawr run</b><span class="quiet" id="out-counter" aria-live="polite">(opens a window)</span></div>
           </div>
           <div class="divider">
             <span class="hit" aria-hidden="true"></span>
@@ -739,7 +739,7 @@ use iced::widget::{Widget, button, column, text};
           if (last) last.textContent = last.textContent.replace(/\n$/, "");
           if (result.status !== 0) add((last ? "\n" : "") + "exit status " + result.status, "exit");
           out.replaceChildren(live);
-          say("Output: " + live.textContent);
+          say("");
         } else if (response.ok && type.startsWith("image/")) {
           const img = new Image();
           img.className = "frame";
@@ -750,7 +750,7 @@ use iced::widget::{Widget, button, column, text};
           if (img.naturalWidth) img.width = img.naturalWidth / 2;
           live.append(img);
           out.replaceChildren(live);
-          say("Ran. The first frame is shown under the command.");
+          say("");
         } else {
           say("Could not run it: " + (await response.text()).slice(0, 200));
         }
