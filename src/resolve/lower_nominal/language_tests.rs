@@ -6213,3 +6213,29 @@ fn language_panic_macros() {
     let mismatch = rejected("pub fn run() -> i64 { assert!(1); 0 } run()");
     assert!(mismatch.contains("expected 'bool'"), "{mismatch}");
 }
+
+#[test]
+fn language_to_string_on_references_and_literals() {
+    let value = run_string(
+        r#"
+        fn show(n: &i64, f: &f64, u: &u64, c: &char, b: &bool, s: &String) -> String {
+            format!("{} {} {} {} {} {}", n.to_string(), f.to_string(), u.to_string(), c.to_string(), b.to_string(), s.to_string())
+        }
+        pub fn run() -> String {
+            let n = 3;
+            let r = &n;
+            let v = vec![1, 2, 3];
+            let big: Vec<String> = v.iter().filter(|x| **x > 1).map(|x| x.to_string()).collect();
+            let t: f32 = 0.1;
+            format!(
+                "{} {} {} {} {} {} {} {:?} {}",
+                r.to_string(), 1.5.to_string(), 'c'.to_string(), true.to_string(), 1.0.to_string(),
+                (-2.5f64).to_string(), t.to_string(), big,
+                show(&4, &2.0, &u64::MAX, &'z', &false, &String::from("s"))
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "3 1.5 c true 1 -2.5 0.1 [\"2\", \"3\"] 4 2 18446744073709551615 z false s");
+}

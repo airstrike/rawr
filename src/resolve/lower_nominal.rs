@@ -19400,19 +19400,28 @@ impl<'a> Parser<'a> {
 
             ("is_empty", []) => (receiver.surrounded("(", ".len() == 0)"), Ty::Bool),
             ("to_string" | "clone" | "as_str", [])
-                if self.inference.resolve(&value.ty) == Ty::String
+                if *without_references(&self.inference.resolve(&value.ty)) == Ty::String
                     || member.as_str() != "to_string" =>
             {
                 (receiver, Ty::String)
             }
             ("to_string", [])
                 if matches!(
-                    self.inference.resolve(&value.ty),
+                    without_references(&self.inference.resolve(&value.ty)),
                     Ty::Int(Int::U64 | Int::Usize)
                 ) =>
             {
                 let digits = self.prelude_op(PreludeOp::FormatRadix, [receiver, "10".into()]);
                 (digits, Ty::String)
+            }
+            // `Display` of a float: Rust's text (`1` for `1.0`).
+            ("to_string", [])
+                if let Ty::Float(kind) = without_references(&self.inference.resolve(&value.ty)) =>
+            {
+                let mode = if *kind == Float::F32 { "2" } else { "0" };
+                let text =
+                    self.prelude_op(PreludeOp::FormatFloat, [receiver, "-1".into(), mode.into()]);
+                (text, Ty::String)
             }
             ("to_string", []) => (receiver.surrounded("", ".to_string()"), Ty::String),
             ("to_uppercase", []) => (receiver.surrounded("", ".to_upper()"), Ty::String),
@@ -20111,7 +20120,11 @@ impl<'a> Parser<'a> {
             }
             if builtin == Ty::String
                 || matches!(&builtin, Ty::Reference { target, .. } if **target == Ty::String)
-                || matches!(builtin, Ty::Int(_) | Ty::Char | Ty::Bool) && member == "to_string"
+                || member == "to_string"
+                    && matches!(
+                        without_references(&number),
+                        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool
+                    )
             {
                 value = self.parse_string_method(value, member, member_span)?;
                 continue;
@@ -31522,6 +31535,14 @@ fn token_text(tokens: &[(Token, Position)]) -> String {
         previous = Some(token);
     }
     text
+}
+
+/// `ty` under all its references.
+fn without_references(mut ty: &Ty) -> &Ty {
+    while let Ty::Reference { target, .. } = ty {
+        ty = target;
+    }
+    ty
 }
 
 /// Whether an operand can end at `token`, so an operator after it is binary.
