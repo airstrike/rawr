@@ -718,6 +718,8 @@ use iced::widget::{Widget, button, column, text};
     const bar = button.closest(".runbar");
     (bar || button).hidden = false;
     const out = document.getElementById(button.dataset.out);
+    // With JS the strip stays empty until Run prints into it.
+    out.replaceChildren();
     const note = button.dataset.note ? document.getElementById(button.dataset.note) : null;
     const label = button.textContent;
     const say = (text) => { if (note) note.textContent = text; };
