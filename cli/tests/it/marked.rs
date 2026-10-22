@@ -128,27 +128,109 @@ fn discovery_follows_mod_declarations_and_ignores_other_files() {
     assert!(graph.sources()[1].path().ends_with("src/item/mod.rs"));
 }
 
+/// An unmarked module of a marked crate is native Rust: Rawr records it for
+/// the native build and parses only the marked files. A crate with a native
+/// module imports its Cargo dependencies.
 #[test]
-fn a_reachable_unmarked_module_is_a_clear_error() {
+fn an_unmarked_module_is_native_rust() {
     let sandbox = Sandbox::new("marked-native");
-    let root = copy("rs-marker-cart", &sandbox.work());
-    let item = root.join("src/item.rs");
-    let text = fs::read_to_string(&item).unwrap();
-    fs::write(&item, text.trim_start_matches("// rawr\n")).unwrap();
+    let root = copy("rs-marker-native", &sandbox.work());
 
-    let checked = sandbox.rawr(&["check", "rs-marker-cart"]);
+    let graph = graph(&root, None).unwrap();
 
-    assert_eq!(checked.status.code(), Some(1));
-    let text = stderr(&checked);
-    assert!(
-        text.contains(&format!(
-            "module `item` is native Rust. `{}` does not start with `// rawr`. \
-             Rawr does not run native modules yet. Add `// rawr` as its first line to run it with Rawr.",
-            item.display()
-        )),
-        "{text}"
+    let sources: Vec<_> = graph
+        .sources()
+        .iter()
+        .map(|source| source.path().strip_prefix(&root).unwrap().to_path_buf())
+        .collect();
+    assert_eq!(
+        sources,
+        [PathBuf::from("src/main.rs"), PathBuf::from("src/receipt.rs")]
     );
-    assert!(text.contains("mod item;"), "{text}");
+    let native = graph.entry_package().rust_modules();
+    assert_eq!(native.len(), 1);
+    assert_eq!(native[0].modules(), ["tax"]);
+    assert_eq!(native[0].path(), root.join("src/tax.rs"));
+    assert!(graph.declares_rust_import());
+}
+
+/// The iced counter's view calls a native module, so it imports its
+/// Cargo dependencies. Without the native module it would not: a built-in
+/// facade serves iced.
+#[test]
+fn a_native_module_makes_a_marked_iced_crate_import_its_dependencies() {
+    let sandbox = Sandbox::new("marked-counter");
+    let root = copy("rs-marker-counter", &sandbox.work());
+
+    let graph = self::graph(&root, None).unwrap();
+    let native = graph.entry_package().rust_modules();
+    assert_eq!(native.len(), 1);
+    assert_eq!(native[0].modules(), ["theme"]);
+    assert!(graph.declares_rust_import());
+
+    fs::remove_file(root.join("src/theme.rs")).unwrap();
+    let main = root.join("src/main.rs");
+    let text = fs::read_to_string(&main).unwrap();
+    fs::write(&main, text.replace("mod theme;\n", "")).unwrap();
+    let ui = root.join("src/ui.rs");
+    let text = fs::read_to_string(&ui).unwrap();
+    fs::write(
+        &ui,
+        text.replace("use crate::theme::format_count;\n", "")
+            .replace("format_count(counter.value)", "counter.value"),
+    )
+    .unwrap();
+    let graph = self::graph(&root, None).unwrap();
+    assert!(graph.entry_package().rust_modules().is_empty());
+    assert!(!graph.declares_rust_import());
+}
+
+/// Native code must not use marked code: Rawr builds the native modules
+/// without the marked ones. Cargo builds the same crate.
+#[test]
+fn native_code_cannot_use_marked_code() {
+    let sandbox = Sandbox::new("marked-direction");
+    let root = copy("rs-marker-direction", &sandbox.work());
+    let pricing = root.join("src/pricing.rs");
+
+    let error = graph(&root, None).unwrap_err();
+
+    assert!(
+        error.contains(&format!(
+            "native module `crate::pricing` uses `crate::Item`. \
+             `crate::Item` is in the marked module `crate` (`{}`). \
+             Rawr builds the native modules without the marked ones. \
+             Native code cannot use marked code. \
+             Move the item into a native module, or mark `{}` with `// rawr`.",
+            root.join("src/main.rs").display(),
+            pricing.display()
+        )),
+        "{error}"
+    );
+
+    // A native module may use another native module, through `crate` or
+    // `super`, and a test module's `super` is its own module.
+    fs::write(root.join("src/money.rs"), "pub fn twice(cents: i64) -> i64 { cents * 2 }\n").unwrap();
+    fs::write(
+        &pricing,
+        "use crate::money::twice;\n\
+         pub fn doubled(cents: i64) -> i64 { super::money::twice(cents) + twice(0) }\n\
+         #[cfg(test)]\nmod tests { use super::doubled; }\n",
+    )
+    .unwrap();
+    let main = root.join("src/main.rs");
+    let text = fs::read_to_string(&main).unwrap();
+    fs::write(&main, text.replace("mod pricing;", "mod money;\nmod pricing;")).unwrap();
+    graph(&root, None).unwrap();
+
+    // A marked module is marked code too, reached through `super`.
+    fs::write(root.join("src/money.rs"), "// rawr\npub fn twice(cents: i64) -> i64 { cents * 2 }\n").unwrap();
+    let error = graph(&root, None).unwrap_err();
+    assert!(
+        error.contains("native module `crate::pricing` uses `crate::money::twice`.")
+            && error.contains("is in the marked module `crate::money`"),
+        "{error}"
+    );
 }
 
 #[test]

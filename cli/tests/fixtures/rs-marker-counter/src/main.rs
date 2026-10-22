@@ -1,4 +1,5 @@
 // rawr
+mod theme;
 mod ui;
 
 use crate::ui::view;

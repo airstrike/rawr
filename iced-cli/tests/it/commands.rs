@@ -616,9 +616,9 @@ fn an_iced_program_handed_from_rawr_to_rawr_iced_is_parsed_once() {
     );
 }
 
-/// The iced counter as a Cargo crate of two `.rs` files marked `// rawr`:
-/// rawr-iced serves it as it serves the `.rawr` counter, from one parse
-/// of each file.
+/// The iced counter as a Cargo crate of two `.rs` files marked `// rawr`,
+/// without its native module: rawr-iced serves it as it serves the `.rawr`
+/// counter, from one parse of each file.
 #[test]
 fn a_marked_iced_crate_is_served_by_rawr_iced() {
     let sandbox = Sandbox::new("marked-counter");
@@ -626,7 +626,12 @@ fn a_marked_iced_crate_is_served_by_rawr_iced() {
     let root = sandbox.path().join("counter");
     fs::create_dir_all(root.join("src")).unwrap();
     for file in ["Cargo.toml", "src/main.rs", "src/ui.rs"] {
-        fs::copy(fixture.join(file), root.join(file)).unwrap();
+        let text = fs::read_to_string(fixture.join(file)).unwrap();
+        let text = text
+            .replace("mod theme;\n", "")
+            .replace("use crate::theme::format_count;\n", "")
+            .replace("format_count(counter.value)", "counter.value");
+        fs::write(root.join(file), text).unwrap();
     }
 
     let loaded = rawr_cli::base::load(Some(&root)).unwrap();

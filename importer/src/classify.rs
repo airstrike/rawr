@@ -2303,10 +2303,12 @@ fn definition_nameable(
     if !model.display_path().all(facade_segment_nameable) {
         return settle(names, root, definition, false);
     }
+    // A type is nameable through any import that exports it. A function of
+    // one crate may take or return a type another declared crate exports.
     let exported = names
         .exported
-        .get(root)
-        .is_some_and(|exported| exported.contains(&definition));
+        .values()
+        .any(|exported| exported.contains(&definition));
     let Some(plan) = shared_plan(names.plans, definition) else {
         return settle(names, root, definition, false);
     };

@@ -123,6 +123,153 @@ pub(crate) fn declarations(text: &str) -> Vec<Declaration> {
     declarations
 }
 
+/// One path in Rust source that starts at `crate` or `super`: a place a
+/// native module may reach outside itself.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Reference {
+    /// Inline modules enclosing the path.
+    pub(crate) inline: Vec<String>,
+    /// The path's segments, `crate` or the leading `super`s included.
+    pub(crate) segments: Vec<String>,
+    /// Byte range of the whole path.
+    pub(crate) range: Range<usize>,
+    /// The path sits in an item or inline module whose `#[cfg]` is false
+    /// on every target (see [`Declaration::disabled`]).
+    pub(crate) disabled: bool,
+}
+
+/// Every `crate::…` and `super::…` path in Rust source. A `use` group
+/// (`use crate::{a, b::c}`) gives one path per item. Visibility paths
+/// (`pub(in crate::a)`) are not references and are left out.
+pub(crate) fn references(text: &str) -> Vec<Reference> {
+    let tokens = tokens(text);
+    let colons = |at: usize| {
+        tokens.get(at) == Some(&Token::Punct(b':'))
+            && tokens.get(at + 1) == Some(&Token::Punct(b':'))
+    };
+    let end_of = |at: usize| match tokens[at] {
+        Token::Ident(name, start) => start + name.len(),
+        Token::Punct(_) => 0,
+    };
+    // One `a::b::c` run of identifiers from `at`: the segments and the
+    // index of the last identifier.
+    let run = |mut at: usize| {
+        let mut segments = Vec::new();
+        let mut last = at;
+        while let Some(Token::Ident(name, _)) = tokens.get(at) {
+            segments.push((*name).to_owned());
+            last = at;
+            if colons(at + 1) && matches!(tokens.get(at + 3), Some(Token::Ident(..))) {
+                at += 3;
+            } else {
+                break;
+            }
+        }
+        (segments, last)
+    };
+    let mut references = Vec::new();
+    let mut inline: Vec<(String, usize, bool)> = Vec::new();
+    let mut depth = 0_usize;
+    let mut disabled = false;
+    let mut index = 0;
+    while index < tokens.len() {
+        match tokens[index] {
+            Token::Punct(b'#') => {
+                let mut next = index + 1;
+                if tokens.get(next) == Some(&Token::Punct(b'!')) {
+                    next += 1;
+                }
+                if tokens.get(next) == Some(&Token::Punct(b'['))
+                    && tokens
+                        .get(next + 1)
+                        .is_some_and(|token| matches!(token, Token::Ident("cfg", _)))
+                    && tokens.get(next + 2) == Some(&Token::Punct(b'('))
+                {
+                    let mut cursor = next + 3;
+                    if cfg(&tokens, &mut cursor) == Some(false) {
+                        disabled = true;
+                    }
+                }
+            }
+            Token::Punct(b'{') => {
+                depth += 1;
+                if let (Some(Token::Ident(name, _)), Some(Token::Ident("mod", _))) = (
+                    index.checked_sub(1).map(|at| tokens[at]),
+                    index.checked_sub(2).map(|at| tokens[at]),
+                ) {
+                    let enclosed = inline.iter().any(|(_, _, disabled)| *disabled);
+                    inline.push((name.to_owned(), depth, disabled || enclosed));
+                }
+                disabled = false;
+            }
+            Token::Punct(b'}') => {
+                if inline.last().is_some_and(|(_, inner, _)| *inner == depth) {
+                    inline.pop();
+                }
+                depth = depth.saturating_sub(1);
+                disabled = false;
+            }
+            Token::Punct(b';') => disabled = false,
+            Token::Ident(first @ ("crate" | "super"), start)
+                if colons(index + 1)
+                    && !(index >= 2 && colons(index - 2))
+                    && !(index >= 1 && matches!(tokens[index - 1], Token::Ident("in", _))) =>
+            {
+                let inside = inline
+                    .iter()
+                    .map(|(name, _, _)| name.clone())
+                    .collect::<Vec<_>>();
+                let off = disabled || inline.iter().any(|(_, _, disabled)| *disabled);
+                let (prefix, last) = run(index);
+                debug_assert_eq!(prefix.first().map(String::as_str), Some(first));
+                let group = colons(last + 1) && tokens.get(last + 3) == Some(&Token::Punct(b'{'));
+                if !group {
+                    references.push(Reference {
+                        inline: inside,
+                        segments: prefix,
+                        range: start..end_of(last),
+                        disabled: off,
+                    });
+                    index = last + 1;
+                    continue;
+                }
+                // `prefix::{item, item::path, self, nested::{…}}`: each
+                // item's leading path.
+                let mut cursor = last + 4;
+                let mut nesting = 1_usize;
+                let mut item_start = true;
+                while cursor < tokens.len() && nesting > 0 {
+                    match tokens[cursor] {
+                        Token::Punct(b'{') => nesting += 1,
+                        Token::Punct(b'}') => nesting -= 1,
+                        Token::Punct(b',') if nesting == 1 => item_start = true,
+                        Token::Ident(..) if nesting == 1 && item_start => {
+                            item_start = false;
+                            let (rest, item_last) = run(cursor);
+                            let mut segments = prefix.clone();
+                            segments.extend(rest.into_iter().filter(|segment| segment != "self"));
+                            references.push(Reference {
+                                inline: inside.clone(),
+                                segments,
+                                range: start..end_of(item_last),
+                                disabled: off,
+                            });
+                            cursor = item_last;
+                        }
+                        _ => {}
+                    }
+                    cursor += 1;
+                }
+                index = cursor;
+                continue;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    references
+}
+
 /// A `.rs` module as the generated app crate compiles it. The `.rawr`
 /// modules are part of the same crate, so what Rust lets them see Rawr must
 /// see through the generated crate's public API: `pub(crate)`/`pub(in crate)`
@@ -538,6 +685,56 @@ mod plain;
                 ("mac".to_owned(), false),
                 ("plain".to_owned(), false),
             ]
+        );
+    }
+    #[test]
+    fn references_are_crate_and_super_paths_with_their_inline_modules() {
+        let text = r#"
+use crate::{Item, view::{self, Panel}, money::twice as double};
+pub(in crate::model) fn scoped<'a>(x: &'a str) -> super::Up { crate::deep::f(); x.len() }
+// crate::commented::Out
+const S: &str = "crate::quoted::Out";
+fn g() { other::crate_like(); a::super_b(); }
+mod inner { fn h() { super::super::far(); } }
+#[cfg(test)]
+mod tests { use super::*; }
+#[cfg(test)]
+use crate::only_tests;
+"#;
+        let found = super::references(text)
+            .into_iter()
+            .map(|reference| {
+                (
+                    reference.inline.join("::"),
+                    reference.segments.join("::"),
+                    text[reference.range].to_owned(),
+                    reference.disabled,
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = [
+            ("", "crate::Item", "crate::{Item", false),
+            ("", "crate::view", "crate::{Item, view", false),
+            (
+                "",
+                "crate::money::twice",
+                "crate::{Item, view::{self, Panel}, money::twice",
+                false,
+            ),
+            ("", "super::Up", "super::Up", false),
+            ("", "crate::deep::f", "crate::deep::f", false),
+            ("inner", "super::super::far", "super::super::far", false),
+            ("tests", "super", "super", true),
+            ("", "crate::only_tests", "crate::only_tests", true),
+        ];
+        assert_eq!(
+            found,
+            expected.map(|(inline, segments, text, disabled)| (
+                inline.to_owned(),
+                segments.to_owned(),
+                text.to_owned(),
+                disabled
+            ))
         );
     }
 }

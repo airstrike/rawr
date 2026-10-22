@@ -13,6 +13,10 @@ use crate::{diagnostic, parse, project, Engine, ImmutableString, Position, Span}
 
 const CONFIG_NAME: &str = "rawr.toml";
 const LIB_SOURCE: &str = "src/lib.rawr";
+/// Crates a built-in facade serves. A marked crate whose only Cargo
+/// dependencies are these, and which has no native module, needs no
+/// native build.
+const FACADE_CRATES: [&str; 1] = ["iced"];
 
 type Parts = (
     Box<[Package]>,
@@ -573,10 +577,11 @@ impl<'a> Builder<'a> {
             None,
         )?;
         self.packages[package.0].source = root_source;
-        // A marked crate's Cargo dependencies are Cargo's to build; Rawr
-        // does not import them.
-        if !request.dependency && !marked {
+        if !request.dependency {
             self.load_cargo(package, &root)?;
+        }
+        if marked {
+            self.check_native_direction(package)?;
         }
 
         let name_label = match manifest
@@ -806,21 +811,6 @@ impl<'a> Builder<'a> {
                         Some(text),
                     )?;
                 }
-                ModuleFile::Rust(child_path) if marked => {
-                    return Err(Error::module(
-                        self.evidence.clone(),
-                        format!(
-                            "module `{}` is native Rust. `{}` does not start with `// rawr`. \
-                             Rawr does not run native modules yet. \
-                             Add `// rawr` as its first line to run it with Rawr.",
-                            child_modules.join("::"),
-                            child_path.display()
-                        )
-                        .into(),
-                        label,
-                        None,
-                    ));
-                }
                 ModuleFile::Rust(child_path) => self.load_rust_module(
                     package,
                     package_root,
@@ -834,6 +824,114 @@ impl<'a> Builder<'a> {
 
         self.active_modules.pop();
         Ok(id)
+    }
+
+    /// In a marked crate, native code must not depend on marked code: a
+    /// native module's `crate::…` and `super::…` paths must not land in a
+    /// marked module (the crate root included). The native part is built
+    /// without the marked modules, so such a path would not compile there.
+    fn check_native_direction(&mut self, package: Id) -> Result<(), Error> {
+        let name = self.packages[package.0].name.clone();
+        let marked = self
+            .sources
+            .iter()
+            .filter(|source| source.package() == name.as_str())
+            .map(|source| (source.modules().to_vec(), source.path().to_path_buf()))
+            .collect::<Vec<_>>();
+        let native = self.packages[package.0]
+            .rust_modules
+            .iter()
+            .map(|module| module.modules.to_vec())
+            .collect::<Vec<_>>();
+        let mut violation = None;
+        'modules: for module in &self.packages[package.0].rust_modules {
+            for reference in super::polyglot::references(&module.text) {
+                if reference.disabled {
+                    continue;
+                }
+                let mut base = module
+                    .modules
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                base.extend(reference.inline.iter().cloned());
+                let supers = reference
+                    .segments
+                    .iter()
+                    .take_while(|segment| *segment == "super")
+                    .count();
+                let absolute = if reference.segments[0] == "crate" {
+                    reference.segments[1..].to_vec()
+                } else {
+                    let Some(kept) = base.len().checked_sub(supers) else {
+                        continue;
+                    };
+                    let mut absolute = base[..kept].to_vec();
+                    absolute.extend(reference.segments[supers..].iter().cloned());
+                    absolute
+                };
+                // The innermost module the path lands in.
+                let is = |modules: &[ImmutableString], length: usize| {
+                    modules.len() == length
+                        && modules
+                            .iter()
+                            .zip(&absolute)
+                            .all(|(left, right)| left.as_str() == right)
+                };
+                for length in (0..=absolute.len()).rev() {
+                    if native.iter().any(|modules| is(modules, length)) {
+                        break;
+                    }
+                    if let Some((modules, path)) =
+                        marked.iter().find(|(modules, _)| is(modules, length))
+                    {
+                        violation = Some((
+                            module.modules.clone(),
+                            module.path.clone(),
+                            module.text.clone(),
+                            reference,
+                            modules.clone(),
+                            path.clone(),
+                        ));
+                        break 'modules;
+                    }
+                }
+            }
+        }
+        let Some((modules, path, text, reference, owner, owner_path)) = violation else {
+            return Ok(());
+        };
+        let spelled = |modules: &[ImmutableString]| {
+            std::iter::once("crate")
+                .chain(modules.iter().map(ImmutableString::as_str))
+                .collect::<Vec<_>>()
+                .join("::")
+        };
+        let source = diagnostic::Source::new(path.to_string_lossy().into_owned(), text.clone())
+            .map_err(Error::diagnostic)?;
+        let index = self.push_evidence(source);
+        let label = error::Label {
+            source: index,
+            span: manifest::byte_span(&text, reference.range.clone()),
+        };
+        Err(Error::module(
+            self.evidence.clone(),
+            format!(
+                "native module `{}` uses `{used}`. \
+                 `{used}` is in the marked module `{}` (`{}`). \
+                 Rawr builds the native modules without the marked ones. \
+                 Native code cannot use marked code. \
+                 Move the item into a native module, or mark `{}` with `// rawr`.",
+                spelled(&modules),
+                spelled(&owner),
+                owner_path.display(),
+                path.display(),
+                used = &text[reference.range.clone()],
+            )
+            .into(),
+            label,
+            None,
+        ))
     }
 
     /// Rust's file rules for `mod name;` across both extensions: `name.rawr`,
@@ -948,7 +1046,8 @@ impl<'a> Builder<'a> {
                 source: index,
                 span: manifest::byte_span(&text, child.range.clone()),
             };
-            match self.module_file(module_root, &child_modules, label, false)? {
+            let marked = self.packages[package.0].marked;
+            match self.module_file(module_root, &child_modules, label, marked)? {
                 ModuleFile::Rust(child_path) => self.load_rust_module(
                     package,
                     package_root,
@@ -961,8 +1060,9 @@ impl<'a> Builder<'a> {
                     return Err(Error::module(
                         self.evidence.clone(),
                         format!(
-                            "Rust module `crate::{}` declares `mod {};`, which is the Rawr file `{}`. \
-                             Native Rust cannot depend on a Rawr module.",
+                            "native module `crate::{}` declares `mod {};`, which is the marked file `{}`. \
+                             Native Rust cannot depend on a marked module. \
+                             Declare it from a marked module, or remove `// rawr` from its first line.",
                             modules.join("::"),
                             child.path.last().map_or("", String::as_str),
                             child_path.display()
@@ -1029,9 +1129,18 @@ impl<'a> Builder<'a> {
         };
         {
             let package = &mut self.packages[package.0];
-            if package.rust.is_none()
-                && (!cargo.dependencies.is_empty() || !package.rust_modules.is_empty())
-            {
+            // A marked crate that uses only crates a built-in facade
+            // serves runs without a native build.
+            let imports = if package.marked {
+                !package.rust_modules.is_empty()
+                    || cargo
+                        .dependencies
+                        .iter()
+                        .any(|dependency| !FACADE_CRATES.contains(&dependency.alias.as_str()))
+            } else {
+                !cargo.dependencies.is_empty() || !package.rust_modules.is_empty()
+            };
+            if package.rust.is_none() && imports {
                 package.rust = Some(manifest::rust::Config::from_cargo(
                     &cargo.path,
                     cargo.dependencies.clone(),
