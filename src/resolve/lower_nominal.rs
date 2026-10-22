@@ -13369,6 +13369,9 @@ impl<'a> Parser<'a> {
     fn parse_binding_statement(&mut self, let_keyword: bool) -> Result<(), Error> {
         let pending = self.field_entries.len();
         let start = self.next().1;
+        if let_keyword && self.let_else_ahead() {
+            return self.parse_let_else(start);
+        }
         if let_keyword
             && matches!(
                 self.peek(),
@@ -13512,6 +13515,108 @@ impl<'a> Parser<'a> {
 
     /// `let (a, (mut b, _)) = value;`, `let &x = r;`, `let whole @ (a, b) = v;`:
     /// an irrefutable pattern binds the parts of the value.
+    /// Whether the `let` ahead is `let pattern = value else { .. };`: an
+    /// `else` before its `;` that no `}` precedes, since Rust forbids a
+    /// value ending in `}` there.
+    fn let_else_ahead(&mut self) -> bool {
+        // `let x = ..` and `let mut x = ..` bind whatever the value is.
+        // `let None = ..` names a unit variant, a refutable pattern.
+        if matches!(self.peek(), Token::Mut)
+            || matches!(self.peek(), Token::Identifier(ref name) if !name.starts_with(char::is_uppercase))
+                && matches!(self.peek_second(), Token::Equals | Token::Colon)
+        {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut previous = Token::EOF;
+        for (token, _) in self.input.clone() {
+            match token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                Token::SemiColon | Token::EOF if depth == 0 => return false,
+                Token::Else if depth == 0 => return previous != Token::RightBrace,
+                _ => {}
+            }
+            previous = token;
+        }
+        false
+    }
+
+    /// `let pattern = value else { diverging };`: the pattern's bindings
+    /// after the statement, or the `else` block, which must diverge.
+    fn parse_let_else(&mut self, start: Position) -> Result<(), Error> {
+        let syntax = self.parse_pattern_syntax()?;
+        self.expect(Token::Equals, "'=' after a `let` pattern")?;
+        let outer = std::mem::replace(&mut self.no_struct, true);
+        let subject = self.parse_expr();
+        self.no_struct = outer;
+        let subject = subject?;
+        self.expect(Token::Else, "`else` after a `let` value")?;
+        if !matches!(self.peek(), Token::LeftBrace) {
+            return Err(self.unsupported("`let ... else` without a block"));
+        }
+        let original = self.bindings.clone();
+        let otherwise = self.parse_match_action();
+        self.bindings = original;
+        let otherwise = otherwise?;
+        if !matches!(self.inference.resolve(&otherwise.value.ty), Ty::Never) {
+            return Err(Error::TypeMismatch {
+                expected: "`!`".into(),
+                actual: otherwise.value.ty.name(&self.models),
+                expression: otherwise.syntax,
+            });
+        }
+        let end = otherwise.syntax.end();
+        self.consume_terminator(start)?;
+        let written_ty = self.inference.resolve(&subject.ty);
+        let subject_ty = match written_ty.clone() {
+            Ty::Reference { target, .. } => *target,
+            ty => ty,
+        };
+        let subject = self.pattern_subject(subject, &subject_ty)?;
+        let resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
+        let label = self.push_root_pattern(resolved.proof, &resolved.bindings);
+        let names = resolved
+            .bindings
+            .iter()
+            .map(|binding| binding.name.as_str())
+            .collect::<Vec<_>>();
+        let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
+        let mut rendered = origin::Fragment::plain(format!("let {scrutinee} = "));
+        rendered.push(subject);
+        rendered.push_text(format!(
+            ";\nlet {values} = switch {scrutinee} {{\n{label} => [{}],\n_ => ",
+            names.join(", ")
+        ));
+        rendered.push(otherwise.value.rendered_block());
+        rendered.push_text("\n};");
+        for (index, binding) in resolved.bindings.iter().enumerate() {
+            let keyword = if binding.mutable { "let" } else { "const" };
+            rendered.push_text(format!("\n{keyword} {} = {values}[{index}];", binding.name));
+            self.bindings.insert(
+                binding.name.clone(),
+                Binding {
+                    ty: binding.ty.clone(),
+                    mutable: binding.mutable,
+                    available: true,
+                    declaration: binding.span,
+                    kind: BindingKind::Local,
+                },
+            );
+        }
+        self.write_output(rendered, span(start, end));
+        self.last_type = Ty::Unit;
+        self.last_expression = None;
+        Ok(())
+    }
+
     fn parse_pattern_binding(&mut self, start: Position) -> Result<(), Error> {
         let pending = self.field_entries.len();
         let syntax = self.parse_pattern_no_alt()?;

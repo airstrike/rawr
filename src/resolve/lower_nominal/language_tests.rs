@@ -6328,3 +6328,39 @@ fn language_std_mem_swap_replace_take() {
     assert_eq!(own, 3);
     rejected("pub fn run() -> i64 { let mut a = 1; std::mem::swap(&mut a, &mut a); a } run()");
 }
+
+#[test]
+fn language_let_else() {
+    let value = run_string(
+        r#"
+        enum Shape { Circle(f64), Square(f64) }
+        fn area(s: &Shape) -> f64 {
+            let Shape::Circle(r) = s else { return 0.0; };
+            3.0 * r * r
+        }
+        fn parse(t: &str) -> i64 {
+            let Ok(n) = t.parse::<i64>() else { panic!("bad {}", t) };
+            n
+        }
+        pub fn run() -> String {
+            let Some(q) = Some(3) else { return String::new(); };
+            let mut letters = String::new();
+            for name in vec!["ab", "", "cd"] {
+                let Some(mut c) = name.chars().next() else { continue; };
+                c = c.to_ascii_uppercase();
+                letters.push(c);
+            }
+            let x = if q > 2 { 1 } else { 2 };
+            let None = Some(1) else { return format!("{} {} {} {} {}", q, letters, area(&Shape::Circle(1.0)), area(&Shape::Square(2.0)), parse("42") + x); };
+            String::new()
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "3 AC 3 0 43");
+    let error = rejected("pub fn run() -> i64 { let Some(x) = Some(1) else { 0 }; x } run()");
+    assert!(error.contains("`!`"), "{error}");
+    let error = rejected("pub fn run() -> i64 { let Some(x) = Some(1) else { return 0; }; } run()");
+    assert!(!error.is_empty());
+    rejected("pub fn run() -> i64 { let Some(x) = Some(1) else { let y = x; return 0; }; x } run()");
+}
