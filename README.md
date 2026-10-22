@@ -5,13 +5,14 @@ Site: <https://rawr.airstrike.fyi>
 
 ## What is Rawr?
 
-A scripting language that reads like Rust: the same structs, enums, traits and
-`match`, checked up front with rustc-style errors. Your program stays Rust; the
-parts you want to change while it runs are written in Rawr.
+A scripting language that reads like Rust. It has Rust's structs, enums,
+traits and `match`. It checks your code before running it and reports errors
+the way rustc does. Your program stays Rust. You write the parts you want to
+change while it runs in Rawr.
 
-The `rawr` crate is the language, and any Rust program can embed it. Layers
-add a domain on top. The first is `rawr-iced`, for
-[iced](https://github.com/iced-rs/iced) apps; it is brought in when your code
+The `rawr` crate is the language. Any Rust program can embed it. Layers add a
+domain on top. `rawr-iced` is the first layer, for
+[iced](https://github.com/iced-rs/iced) apps. Rawr loads it when your code
 uses iced.
 
 ## What does it look like?
@@ -152,9 +153,10 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 ```
 
 `rawr-cli` installs `rawr`. `rawr-import` installs `rawr-import-driver` next
-to it, which reads your Rust crates for imports. The first `rawr run` of an
-iced app compiles iced, so it takes a few minutes. Later launches reuse that
-build. A script without iced runs once and exits, with no build and no hot
+to it. The driver reads your Rust crates for imports. `cargo install` builds
+iced into `rawr`, so it takes a few minutes. After that, an iced app opens in
+seconds. A project with its own Rust crates compiles them on its first run. A
+script without iced runs once and exits. It doesn't build anything or hot
 reload.
 
 ## How do I start an iced project?
@@ -163,15 +165,15 @@ reload.
 rawr new hello && cd hello && rawr run
 ```
 
-`rawr new` writes one file, `src/main.rawr`, a counter. There is no manifest
-until you want one. Edit it while the window is open.
+`rawr new` writes a counter app to `src/main.rawr`. You don't need a manifest
+until you add Rust crates. Edit it while the window is open.
 
 The other commands you will use:
 
 - `rawr check`: type-check without opening a window.
 - `rawr preview [name]`: open one `#[preview]` view on its own.
-- `rawr snapshot --check` / `--update`: render every preview headlessly and
-  compare with, or replace, the committed PNGs.
+- `rawr snapshot --check` / `--update`: render every preview to a PNG, then
+  compare them with the committed images or replace them.
 - `rawr doctor`: report on the environment and the project.
 
 Every command takes a project directory or a single file. `rawr --help` lists
@@ -215,19 +217,19 @@ To add the bot to a server, use the
 
 ## How far along is it?
 
-Pre-alpha. The `rawr` command runs on Apple Silicon Macs, rawr-iced follows
-iced master, and both pin one nightly. APIs, commands, file formats and error
+Pre-alpha. The `rawr` command runs only on Apple Silicon Macs. rawr-iced
+follows iced master. Both pin one nightly. APIs, commands, file formats and error
 codes will change without notice.
 
-It covers a lot of Rust, not all of it. Known gaps include:
+Rawr doesn't cover all of Rust yet. Known gaps include:
 
 - nested `fn` items and `let .. else`;
 - `impl Fn(..) -> T + 'a` and a few other closure and `fn`-value shapes;
 - generic functions over iced types, such as a `fn padded<Message>(..)` helper;
 - parts of iced not yet exposed, such as `rule`, `rich_text!` and canvas.
 
-When Rawr rejects valid Rust that it claims to cover, that is a bug. A small
-reproduction is the most useful report.
+If Rawr rejects valid Rust that it claims to support, that's a bug. Please
+report it with a small reproduction.
 
 ## What's the license?
 
