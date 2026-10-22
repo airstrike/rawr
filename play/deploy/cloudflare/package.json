@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "push-image": "./push-image.sh",
+    "build": "node build.mjs",
     "deploy": "wrangler deploy",
     "test": "node --test test/stats.test.ts test/play.test.ts",
     "check": "tsc --noEmit"

@@ -147,6 +147,6 @@ test("the dashboard states and escapes", () => {
   assert.ok(html.includes("&#60;script&#62;"));
   assert.ok(!html.includes("<script>"));
   assert.ok(html.includes("≠ deployed def"), "an image other than the deployed one is flagged");
-  assert.ok(html.includes('href="/invite"'));
+  assert.ok(html.includes('href="/bot/invite"'));
   assert.ok(html.includes(TOKEN), "servers are listed by token");
 });

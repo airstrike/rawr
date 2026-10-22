@@ -151,7 +151,7 @@ footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wr
 </style>
 </head>
 <body>
-<header class="bar"><span class="brand"><span class="mark"></span><b>RAWR</b><span>Play bot</span></span><span class="links"><a href="/play">Playground</a><a href="/invite">Add to a server</a></span></header>
+<header class="bar"><span class="brand"><span class="mark"></span><b>RAWR</b><span>Play bot</span></span><span class="links"><a href="/play">Playground</a><a href="/bot/invite">Add to a server</a></span></header>
 <main>
 <p class="cap kicker"><span class="pink">//</span>Status</p>
 <h1 class="${st}">${title}</h1>

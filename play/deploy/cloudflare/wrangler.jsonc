@@ -1,5 +1,6 @@
-// rawr-play on Cloudflare Containers. Build and push the image with
-// ./push-image.sh (it rewrites "image" below), then `npx wrangler deploy`.
+// rawr-play on Cloudflare Containers, serving all of rawr.airstrike.fyi.
+// Build and push the image with ./push-image.sh (it rewrites "image" below),
+// then `npx wrangler deploy` (it runs build.mjs first).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "rawr-play",
@@ -35,11 +36,19 @@
     "TURNSTILE_SITEKEY": "0x4AAAAAAFfQTZDPbRvs2kSG",
     "PLAY_VERSION": "02d0d62d6b92"
   },
-  // /invite (the redirect with its link preview) and /og/ are static files;
-  // public/og/invite.png is rendered by rawr-play from og/card.rs.
   // /play's examples: play/tests/fixtures/*.rs, imported as text.
   "rules": [{ "type": "Text", "globs": ["**/*.rs"], "fallthrough": false }],
-  "assets": { "directory": "public", "binding": "ASSETS", "html_handling": "drop-trailing-slash" },
-  "routes": [{ "pattern": "rawr-bot.airstrike.fyi", "custom_domain": true }]
+  // dist/ is site/public (the landing page at /, /og/card.png) and public/
+  // (/bot/invite, the redirect with its link preview; /og/invite.png, which
+  // rawr-play renders from og/card.rs), merged by build.mjs.
+  "build": { "command": "node build.mjs" },
+  // The Worker runs first so it can redirect the old host; for the new host
+  // it hands every path but /play and /bot to the assets.
+  "assets": { "directory": "dist", "binding": "ASSETS", "html_handling": "drop-trailing-slash", "run_worker_first": true },
+  "routes": [
+    { "pattern": "rawr.airstrike.fyi", "custom_domain": true },
+    // The old host: every request gets a redirect to rawr.airstrike.fyi.
+    { "pattern": "rawr-bot.airstrike.fyi", "custom_domain": true }
+  ]
   // DISCORD_TOKEN is a secret: `npx wrangler secret put DISCORD_TOKEN`.
 }

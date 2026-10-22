@@ -159,15 +159,24 @@ It needs no GPU, no system fonts and no CA bundle (rustls ships its roots),
 and the bot only makes outbound connections (Discord's gateway), so one
 always-on container runs it. `play/deploy/cloudflare` is a Worker whose
 `PlayBot` Durable Object owns that container: it never sleeps, and a
-five-minute cron (and `GET /health`) starts it again if it stopped. The
+five-minute cron (and `GET /bot/health`) starts it again if it stopped. The
 container has no disk: the bot keeps `/play-channel` choices in the Durable
 Object's storage through `http://play-config.internal/channels`, a host the
 Worker intercepts for the container only (no public endpoint, no secret).
 The bot also reports its boot phases and aggregate stats there each minute
 (renders, code errors, limits, median and p95 time, rate-limited counts,
 servers and channels; no message content, user IDs or server names), and
-`https://rawr-bot.airstrike.fyi/` shows them, with the last 50 boot events,
+`https://rawr.airstrike.fyi/bot` shows them, with the last 50 boot events,
 as a page in RawrGallery's Ink sheet.
+
+The same Worker serves all of `rawr.airstrike.fyi`. The landing page at `/`
+comes from `site/public`. The invite redirect at `/bot/invite` and the link
+preview cards in `/og/` come from `public/`. `build.mjs` merges the two into
+`dist/`, and the build fails if a path is in both. Wrangler runs it before
+every deploy. The Worker runs before the assets so it can answer the old
+host. Every request to `rawr-bot.airstrike.fyi` gets a 301 to the same path
+on `rawr.airstrike.fyi`. `/` there goes to `/bot` and `/invite` goes to
+`/bot/invite`.
 
 Servers appear on the dashboard only as tokens: the guild ID as one
 AES-256 block under `PLAY_LOG_KEY` (32 hex digits; the same server always
@@ -183,7 +192,7 @@ cargo run -p rawr-play -- encrypt-server <guild id>... # the token of a known se
 
 ### Playground
 
-`https://rawr-bot.airstrike.fyi/play` is a web playground: an editor
+`https://rawr.airstrike.fyi/play` is a web playground: an editor
 (Tab indents, Ctrl/Cmd+Enter runs), dark/light, an optional size, messages
 (one `Message` expression per line, like `msg=`), iced's examples from
 `play/tests/fixtures` (embedded when the Worker is built) and the output: the
@@ -221,7 +230,7 @@ playground runs apart from Discord's.
 A deploy does not replace a Durable Object's running container, which keeps
 the image it started from. `push-image.sh` writes the image's commit into
 both the image and `vars.PLAY_VERSION`; the Durable Object records the
-version it started, and the cron or `GET /health` restarts a container
+version it started, and the cron or `GET /bot/health` restarts a container
 started from any other.
 
 The image is `play/Dockerfile`: a `rust:1-slim-bookworm` stage that
@@ -238,8 +247,8 @@ npm install
 npx wrangler login
 ./push-image.sh            # builds the committed HEAD (CLOUDFLARE_ACCOUNT_ID overrides the account)
 npx wrangler secret put DISCORD_TOKEN
-npx wrangler deploy
-curl https://rawr-bot.airstrike.fyi/health   # restarts the bot onto the new image now
+npx wrangler deploy        # runs build.mjs first
+curl https://rawr.airstrike.fyi/bot/health   # restarts the bot onto the new image now
 ```
 
 `instance_type` is `lite` (1/16 vCPU, 256 MiB): a render's peak RSS was

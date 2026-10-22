@@ -230,9 +230,9 @@ column![text("hi"), button("go")]
 
 Options are `WxH` (up to 2048 per side), `dark` or `light`, and repeated
 `msg=EXPR` messages applied before rendering. The
-[playground](https://rawr-bot.airstrike.fyi/play) does the same in a browser.
+[playground](https://rawr.airstrike.fyi/play) does the same in a browser.
 To add the bot to a server, use the
-[invite link](https://rawr-bot.airstrike.fyi/invite).
+[invite link](https://rawr.airstrike.fyi/bot/invite).
 
 ## How far along is it?
 

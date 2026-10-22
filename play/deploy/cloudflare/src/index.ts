@@ -1,18 +1,22 @@
 // rawr-play on Cloudflare Containers: one always-on container runs
 // rawr-play-bot, which holds Discord's gateway websocket (outbound only).
-// A cron trigger and GET /health start it if it is not running.
+// A cron trigger and GET /bot/health start it if it is not running.
+//
+// It serves all of rawr.airstrike.fyi: the landing page (site/public) and
+// the bot's files (public/), merged into dist/ by build.mjs, plus /play and
+// /bot. The old host, rawr-bot.airstrike.fyi, redirects every request here.
 //
 // The channels each server's mods chose with /play-channel live in this
 // Durable Object's storage. The bot loads and saves them at
 // http://play-config.internal/channels, a host only the container can reach:
 // outbound interception hands its requests to `config` below, so there is no
 // public endpoint and no secret. The bot also posts its boot events
-// (/events) and minute stats (/stats) there, which / shows as a dashboard.
+// (/events) and minute stats (/stats) there, which /bot shows as a dashboard.
 //
 // A Durable Object's container keeps the image it was started from: a deploy
 // does not replace it. The Durable Object records the PLAY_VERSION (and the
 // settings passed to the container) it started
-// and `ensure` (cron, /health) restarts a container started from another.
+// and `ensure` (cron, /bot/health) restarts a container started from another.
 //
 // /play is a web playground: the Worker serves the page, keeps shares in this
 // Durable Object (content-addressed), limits each IP (by HMAC, never in
@@ -72,7 +76,11 @@ const SHARE_PREFIX = "share:";
 const SEEN_PREFIX = "seen:";
 const PURGE_KEY = "play-purge";
 const COUNT_KEY = "play-share-count";
-const SITE = "https://rawr-bot.airstrike.fyi";
+const HOST = "rawr.airstrike.fyi";
+const SITE = `https://${HOST}`;
+const OLD_HOST = "rawr-bot.airstrike.fyi";
+/** Old paths that moved under /bot; every other path is the same on the new host. */
+const MOVED: Record<string, string> = { "/": "/bot", "/invite": "/bot/invite", "/health": "/bot/health" };
 
 /** A share's preview: its PNG, or a failure (kept forever for a code error or a limit). */
 export type Preview =
@@ -362,7 +370,7 @@ export class PlayBot extends Container<Env> {
 
   /** Start the bot unless it is running from the deployed image; true once it runs. */
   async ensure(): Promise<boolean> {
-    // Cron and /health may overlap: one at a time.
+    // Cron and /bot/health may overlap: one at a time.
     this.ensuring ??= this.ensureOnce().finally(() => (this.ensuring = undefined));
     return this.ensuring;
   }
@@ -630,17 +638,23 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
+    if (url.hostname === OLD_HOST) {
+      // 308 keeps a POST a POST (a playground page still open on the old host).
+      const status = request.method === "GET" || request.method === "HEAD" ? 301 : 308;
+      return Response.redirect(`${SITE}${MOVED[path] ?? path}${url.search}`, status);
+    }
     if (path === "/play" || path.startsWith("/play/")) {
       return play(request, env, ctx, path);
     }
-    if (path === "/" && (request.method === "GET" || request.method === "HEAD")) {
+    if (path === "/bot" && (request.method === "GET" || request.method === "HEAD")) {
       const html = render(await getContainer(env.PLAY_BOT).dashboard());
       return new Response(request.method === "HEAD" ? null : html, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
       });
     }
-    if (path !== "/health") {
+    if (path !== "/bot/health") {
       return env.ASSETS.fetch(request);
     }
     const running = await getContainer(env.PLAY_BOT).ensure();

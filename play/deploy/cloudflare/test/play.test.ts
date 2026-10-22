@@ -26,8 +26,8 @@ import { render } from "../src/playpage.ts";
 const OG = {
   title: "Rawr Playground",
   description: "use iced::widget::{button, column};",
-  url: "https://rawr-bot.airstrike.fyi/play/abcDEF1234",
-  image: "https://rawr-bot.airstrike.fyi/play/abcDEF1234.png",
+  url: "https://rawr.airstrike.fyi/play/abcDEF1234",
+  image: "https://rawr.airstrike.fyi/play/abcDEF1234.png",
   alt: "The first frame",
   width: 328,
   height: 382,
@@ -119,7 +119,7 @@ test("the page escapes the code and embeds the examples safely", () => {
   assert.ok(html.includes("Message::A"));
   assert.ok(html.includes("turnstile/v0/api.js"));
   assert.ok(html.includes("shared · abcDEF1234"));
-  assert.ok(html.includes('href="/invite"') && html.includes('href="/"'));
+  assert.ok(html.includes('href="/bot/invite"') && html.includes('href="/bot"'));
   const bare = render({ snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG });
   assert.ok(!bare.includes("challenges.cloudflare.com") && !bare.includes(`id="ts"`));
 });
@@ -141,7 +141,7 @@ test("the page's inline script parses", () => {
 
 test("link preview tags", () => {
   const tags = ogTags({ ...OG, description: 'say "hi" <b>' }, escape);
-  assert.ok(tags.includes('<meta property="og:image" content="https://rawr-bot.airstrike.fyi/play/abcDEF1234.png">'));
+  assert.ok(tags.includes('<meta property="og:image" content="https://rawr.airstrike.fyi/play/abcDEF1234.png">'));
   assert.ok(tags.includes('<meta property="og:image:width" content="328">'));
   assert.ok(tags.includes('<meta property="og:image:height" content="382">'));
   assert.ok(tags.includes('<meta name="twitter:card" content="summary_large_image">'));

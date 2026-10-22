@@ -1,4 +1,4 @@
-// The link preview for rawr-bot.airstrike.fyi/invite, drawn by Rawr itself
+// The link preview for rawr.airstrike.fyi/bot/invite, drawn by Rawr itself
 // in RawrGallery's Ink sheet. Render it with:
 //   rawr-play play/deploy/cloudflare/og/card.rs --size 600x315 -o play/deploy/cloudflare/public/og/invite.png
 use iced::theme::palette::Seed;

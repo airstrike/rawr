@@ -102,7 +102,7 @@ footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wr
 </style>
 </head>
 <body>
-<header class="bar"><span class="brand"><span class="mark"></span><b>RAWR</b><span>Playground</span></span><span class="links"><a class="status" href="/">Status</a><a href="/invite">Add to Discord</a></span></header>
+<header class="bar"><span class="brand"><span class="mark"></span><b>RAWR</b><span>Playground</span></span><span class="links"><a class="status" href="/bot">Status</a><a href="/bot/invite">Add to Discord</a></span></header>
 <div class="tools">
 <select id="examples" aria-label="Examples"><option value="">Examples</option>${options}<option value="reset">Reset</option></select>
 <span class="seg">${theme("dark")}${theme("light")}</span>
