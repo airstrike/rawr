@@ -11,7 +11,7 @@
     {
       "class_name": "PlayBot",
       // A registry address, not a Dockerfile, so deploy never calls docker.
-      "image": "registry.cloudflare.com/fce80b8101fbb2f85548560babc6c7bc/rawr-play:02d0d62d6b92",
+      "image": "registry.cloudflare.com/fce80b8101fbb2f85548560babc6c7bc/rawr-play:c427352b71c1",
       // lite: 1/16 vCPU, 256 MiB. A render peaks well under that (see
       // play/README.md); "basic" (1/4 vCPU, 1 GiB) renders faster.
       "instance_type": "lite",
@@ -34,7 +34,7 @@
     // from another image is restarted by the next cron or /health.
     // Turnstile's public site key for /play (the secret is TURNSTILE_SECRET).
     "TURNSTILE_SITEKEY": "0x4AAAAAAFfQTZDPbRvs2kSG",
-    "PLAY_VERSION": "02d0d62d6b92"
+    "PLAY_VERSION": "c427352b71c1"
   },
   // /play's examples (play/tests/fixtures/*.rs) and the landing page
   // (site/public/index.html, whose snippets /play/run accepts), as text.
