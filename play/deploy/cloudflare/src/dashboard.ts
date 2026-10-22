@@ -119,7 +119,9 @@ a { color: var(--pink); text-decoration: none; }
 .cap, th, .bar, footer { font: 11px/1.4 "Fira Mono", ui-monospace, monospace; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
 .pink { color: var(--pink); }
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 24px; border-bottom: 1px solid var(--line); }
-.brand { display: flex; align-items: center; gap: 12px; }
+.brand { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
+.brand:hover b { color: var(--pink); }
+.brand:focus-visible { outline: 2px solid var(--text); outline-offset: 4px; }
 .mark { width: 10px; height: 10px; background: var(--pink); }
 .brand b { font-weight: 400; color: var(--text); font-size: 13px; letter-spacing: 0.02em; }
 .bar a { border: 1px solid var(--pink); padding: 6px 12px; }
@@ -151,7 +153,7 @@ footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wr
 </style>
 </head>
 <body>
-<header class="bar"><span class="brand"><span class="mark"></span><b>RAWR</b><span>Play bot</span></span><span class="links"><a href="/play">Playground</a><a href="/bot/invite">Add to a server</a></span></header>
+<header class="bar"><a class="brand" href="/" aria-label="Rawr home, play bot"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span>Play bot</span></a><span class="links"><a href="/play">Playground</a><a href="/bot/invite">Add to a server</a></span></header>
 <main>
 <p class="cap kicker"><span class="pink">//</span>Status</p>
 <h1 class="${st}">${title}</h1>

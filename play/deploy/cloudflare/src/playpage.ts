@@ -56,7 +56,9 @@ a { color: var(--pink); text-decoration: none; }
 .cap { color: var(--dim); }
 .pink { color: var(--pink); }
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; border-bottom: 1px solid var(--line); color: var(--dim); }
-.brand { display: flex; align-items: center; gap: 12px; }
+.brand { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
+.brand:hover b { color: var(--pink); }
+.brand:focus-visible { outline: 2px solid var(--text); outline-offset: 4px; }
 /* The play triangle of /play.svg (M11 8 L25 16 L11 24 Z in 32x32), in the square's 10px box. */
 .mark { width: 10px; height: 10px; background: var(--pink); clip-path: polygon(6.25% 0, 93.75% 50%, 6.25% 100%); }
 .brand b { font-weight: 400; color: var(--text); font-size: 13px; letter-spacing: 0.02em; }
@@ -108,7 +110,7 @@ footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wr
 </style>
 </head>
 <body>
-<header class="bar"><span class="brand"><span class="mark"></span><b>RAWR</b><span>Playground</span></span><span class="links"><a class="status" href="/bot">Status</a><a href="/bot/invite">Add to Discord</a></span></header>
+<header class="bar"><a class="brand" href="/" aria-label="Rawr home, playground"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span>Playground</span></a><span class="links"><a class="status" href="/bot">Status</a><a href="/bot/invite">Add to Discord</a></span></header>
 <div class="tools">
 <select id="examples" aria-label="Examples"><option value="">Examples</option>${options}<option value="reset">Reset</option></select>
 <span class="seg">${theme("dark")}${theme("light")}</span>
