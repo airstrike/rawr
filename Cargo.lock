@@ -2906,6 +2906,7 @@ dependencies = [
  "percent-encoding",
  "rawr-canonical",
  "rawr-directory",
+ "rawr-location",
  "rawr-toml",
  "rustix",
  "semver",
@@ -2918,6 +2919,13 @@ dependencies = [
  "unicode-ident",
  "url",
  "utf8_iter",
+]
+
+[[package]]
+name = "rawr-location"
+version = "0.1.0"
+dependencies = [
+ "toml_edit",
 ]
 
 [[package]]
