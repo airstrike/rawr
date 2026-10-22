@@ -24243,9 +24243,6 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> Result<origin::Fragment, Error> {
         let ty = self.inference.resolve(ty);
-        let quoted = |quote: &str, value: origin::Fragment| {
-            value.surrounded(&format!("(\"{quote}\" + "), &format!(" + \"{quote}\")"))
-        };
         Ok(match &ty {
             Ty::Reference { target, .. } | Ty::Boxed(target) => {
                 self.debug_source(target, value, span)?
@@ -24292,8 +24289,18 @@ impl<'a> Parser<'a> {
                 ));
                 source
             }
-            Ty::String => quoted("\\\"", value),
-            Ty::Char => quoted("'", value),
+            // Rust's `escape_debug`: quotes, `\n`, `\\`, `\u{..}` and kin.
+            Ty::String | Ty::Char => {
+                let code = STR_PIECES
+                    .iter()
+                    .position(|name| *name == "debug")
+                    .expect("a listed piece")
+                    .to_string();
+                self.prelude_op(
+                    PreludeOp::StrPieces,
+                    [value, code.into(), "()".into(), "()".into()],
+                )
+            }
             Ty::Option(element) => {
                 let option = self.temporary("debug");
                 let mut source = origin::Fragment::plain(format!("{{ let {option} = "));
@@ -31513,8 +31520,9 @@ fn str_change(args: &mut FnCallArgs) -> RawrResult {
 }
 
 /// The string methods `StrPieces` runs, by code: each gives an array.
-/// `from_utf8` gives a `Result` of the text or its error's message.
-const STR_PIECES: &[&str] = &["bytes", "char_indices", "splitn", "from_utf8"];
+/// `from_utf8` gives a `Result` of the text or its error's message, and
+/// `debug` a string's or a char's `Debug` text.
+const STR_PIECES: &[&str] = &["bytes", "char_indices", "splitn", "from_utf8", "debug"];
 
 fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
     let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
@@ -31532,6 +31540,13 @@ fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
                 crate::result::err(Dynamic::from(ImmutableString::from(error.to_string())))
             }
         });
+    }
+    if name == "debug" {
+        let text = match args[0].as_char() {
+            Ok(c) => format!("{c:?}"),
+            Err(_) => format!("{:?}", args[0].clone_cast::<ImmutableString>().as_str()),
+        };
+        return Ok(Dynamic::from(ImmutableString::from(text)));
     }
     let text = args[0].clone_cast::<ImmutableString>();
     let string = |piece: &str| Dynamic::from(ImmutableString::from(piece));

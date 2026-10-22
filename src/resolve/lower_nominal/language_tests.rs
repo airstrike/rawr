@@ -6416,3 +6416,27 @@ fn language_untyped_integers_are_i32() {
     );
     assert_eq!(value, "42 3628800");
 }
+
+#[test]
+fn language_debug_escapes_strings_and_chars() {
+    let value = run_string(
+        r#"
+        #[derive(Debug)]
+        struct S { name: String, c: char }
+        pub fn run() -> String {
+            let s = "a\"b\n\t\\ é \u{7f} \u{301}x '";
+            let v = vec![String::from("x\"y"), String::from("__rawr_z")];
+            format!(
+                "{:?}|{:?} {:?} {:?} {:?}|{:?} {:?}|{:?}|{:?}",
+                s, '\'', '"', '\n', '\u{301}', v, Some("q\""),
+                S { name: String::from("n\"m"), c: '\'' }, ("t\"", 'x')
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        r#""a\"b\n\t\\ é \u{7f} \u{301}x '"|'\'' '"' '\n' '\u{301}'|["x\"y", "__rawr_z"] Some("q\"")|S { name: "n\"m", c: '\'' }|("t\"", 'x')"#
+    );
+}
