@@ -132,6 +132,7 @@ ${sitekey ? '<div id="ts"></div>' : ""}
 <div class="out" id="out" aria-live="polite"><p class="note">Run (Ctrl/Cmd + Enter). iced code shows its first frame. Other programs show their output.</p></div>
 </section>
 </main>
+<footer><span>MIT or Apache-2.0</span><a href="https://airstrike.fyi">airstrike.fyi</a></footer>
 <script type="application/json" id="example-data">${scriptJson(examples)}</script>
 <script>
 (() => {
