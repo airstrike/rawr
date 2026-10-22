@@ -974,6 +974,27 @@ impl<'a> Cursor<'a> {
                 tail.centered = true;
                 continue;
             }
+            // iced's window and renderer settings (`.window_size(..)`,
+            // `.font(..)`, `.style(..)`, ...) and a `.title("literal")`:
+            // the preview window does not apply them, so they are accepted
+            // and skipped.
+            if WINDOW_SETTINGS.contains(&name.as_str())
+                || (name == "title"
+                    && !matches!(
+                        self.tokens.get(self.index + 3).map(crate::item::BodyToken::kind),
+                        Some(crate::item::BodyTokenKind::Identifier(_))
+                    ))
+            {
+                let operation =
+                    Span::new(self.tokens[self.index].span().start(), method.span().end());
+                self.consume();
+                self.consume();
+                self.skip_argument_list().ok_or_else(|| application::Error::MalformedEntry {
+                    reason: format!("`.{name}(..)` expects its arguments in parentheses").into(),
+                    entry: operation,
+                })?;
+                continue;
+            }
             let (role, contract, slot) = match name.as_str() {
                 "title" => ("title", title, &mut tail.title),
                 "theme" => ("theme", theme, &mut tail.theme),
@@ -1028,6 +1049,34 @@ impl<'a> Cursor<'a> {
         Ok(tail)
     }
 
+    /// Skip one balanced `(..)` argument list.
+    fn skip_argument_list(&mut self) -> Option<()> {
+        if self.consume_kind(&crate::item::BodyTokenKind::Unit) {
+            return Some(());
+        }
+        if !self.consume_kind(&crate::item::BodyTokenKind::LeftParen) {
+            return None;
+        }
+        let mut depth = 0_usize;
+        loop {
+            let token = self.peek()?;
+            match token.kind() {
+                crate::item::BodyTokenKind::LeftParen
+                | crate::item::BodyTokenKind::LeftBrace
+                | crate::item::BodyTokenKind::LeftBracket => depth += 1,
+                crate::item::BodyTokenKind::RightParen if depth == 0 => {
+                    self.consume();
+                    return Some(());
+                }
+                crate::item::BodyTokenKind::RightParen
+                | crate::item::BodyTokenKind::RightBrace
+                | crate::item::BodyTokenKind::RightBracket => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            self.consume();
+        }
+    }
+
     fn consume_identifier(&mut self, expected: &str) -> bool {
         if is_identifier(self.peek(), expected) {
             self.consume();
@@ -1072,6 +1121,26 @@ impl<'a> Cursor<'a> {
         }
     }
 }
+
+/// iced's application builders that set window or renderer settings.
+const WINDOW_SETTINGS: &[&str] = &[
+    "antialiasing",
+    "decorations",
+    "default_font",
+    "executor",
+    "exit_on_close_request",
+    "font",
+    "fonts",
+    "level",
+    "position",
+    "resizable",
+    "scale_factor",
+    "settings",
+    "style",
+    "transparent",
+    "window",
+    "window_size",
+];
 
 fn is_identifier(token: Option<&crate::item::BodyToken>, expected: &str) -> bool {
     matches!(

@@ -359,3 +359,29 @@ pub(crate) struct Tooltip {
 /// `alignment::Horizontal`, as the `Alignment` it converts into.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Horizontal(pub(crate) iced::Alignment);
+
+/// `alignment::Vertical`, as the `Alignment` it converts into.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Vertical(pub(crate) iced::Alignment);
+
+/// iced's `stack![..]`: children drawn on top of each other.
+#[derive(Clone)]
+pub(crate) struct Stack {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) children: Vec<widget::Value>,
+    pub(crate) width: iced::Length,
+    pub(crate) height: iced::Length,
+}
+
+/// A widget the facade lowers by one native function and no builders:
+/// `rule::horizontal(1)`, `hover(base, top)`, `lazy(dependency, view)`.
+#[derive(Clone)]
+pub(crate) struct Native {
+    pub(crate) identity: widget::Identity,
+    pub(crate) lower: std::sync::Arc<
+        dyn Fn(&widget::Context<'_>) -> iced::Element<'static, crate::runtime::Message>
+            + Send
+            + Sync,
+    >,
+}

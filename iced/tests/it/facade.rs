@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [93, 3, 248, 91, 151, 239, 104, 9, 141, 129, 119, 140, 52, 233, 205, 100]
+        [68, 115, 240, 211, 150, 108, 42, 180, 104, 156, 156, 13, 57, 33, 219, 108]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
@@ -488,13 +488,17 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert!(align_x
         .iter()
         .all(|item| item.receiver() == Some(receiver::Mode::Owned)));
-    for path in [
-        "iced::widget::scrollable",
-        "iced::widget::space",
-        "iced::widget::Text::align_x",
-    ] {
+    for path in ["iced::widget::scrollable", "iced::widget::space"] {
         assert!(registry.item(path).is_some(), "missing shell item `{path}`");
     }
+    // `Text::align_x` takes `Alignment` or `alignment::Horizontal` too.
+    assert_eq!(
+        second
+            .items()
+            .filter(|item| item.path() == "iced::widget::Text::align_x")
+            .count(),
+        2
+    );
     // `impl Into<Length>` and `impl Into<Padding>`: the value, or pixels.
     for path in [
         "iced::widget::Text::width",

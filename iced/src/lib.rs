@@ -53,6 +53,15 @@ const OWNED_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Send,
     capability::Kind::Static,
 ];
+const OWNED_EQ_VALUE_CAPABILITIES: &[capability::Kind] = &[
+    capability::Kind::Debug,
+    capability::Kind::Clone,
+    capability::Kind::Copy,
+    capability::Kind::PartialEq,
+    capability::Kind::Eq,
+    capability::Kind::Send,
+    capability::Kind::Static,
+];
 const OWNED_EQ_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Default,
     capability::Kind::Debug,
@@ -70,6 +79,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("alignment")?;
     builder.module("animation")?;
     builder.module("border")?;
+    builder.module("font")?;
     builder.module("mouse")?;
     builder.module("padding")?;
     builder.module("theme")?;
@@ -82,6 +92,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::component")?;
     builder.module("widget::container")?;
     builder.module("widget::radio")?;
+    builder.module("widget::rule")?;
+    builder.module("widget::operation")?;
+    builder.module("window")?;
     builder.module("widget::scrollable")?;
     builder.module("widget::slider")?;
     builder.module("widget::text")?;
@@ -198,6 +211,30 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
     builder.value_type::<marker::Horizontal>("alignment::Horizontal", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<marker::Vertical>("alignment::Vertical", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::window::Id>("window::Id", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
+    builder.type_::<marker::Stack>("widget::Stack", &["Message"], &[])?;
+    builder.project("widget::Stack", "Element", &["Message"])?;
+    builder.default_value_type::<iced::font::Weight>(
+        "font::Weight",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::font::Stretch>(
+        "font::Stretch",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::font::Style>(
+        "font::Style",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::font::Family>(
+        "font::Family",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
     builder.default_value_type::<std::time::Duration>(
         "time::Duration",
         &[],
@@ -681,6 +718,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         element_boxed_signature()?,
     )?)?;
     declare_canonical_values(&mut builder)?;
+    declare_master_helpers(&mut builder)?;
+    declare_native_tasks(&mut builder)?;
+    declare_font(&mut builder)?;
 
     builder.finish()
 }
@@ -1499,6 +1539,210 @@ fn declare_tooltip(builder: &mut facade::Builder) -> Result<(), host::Error> {
     )?;
     Ok(())
 }
+
+/// iced master's shorthands and small helpers: `Left`, `Right`, `Top` and
+/// `Bottom` beside `Center`; `left`, `right`, `top` and `bottom` beside
+/// `center`; `rule::horizontal`/`vertical`; `stack`; and `time::hours`/
+/// `minutes`.
+fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    for name in ["Top", "Center", "Bottom"] {
+        builder.item(item::Definition::associated_value(
+            format!("alignment::Vertical::{name}"),
+            type_ref::Type::registered("alignment::Vertical")?,
+        )?)?;
+    }
+    for (name, owner) in [
+        ("Left", "alignment::Horizontal"),
+        ("Right", "alignment::Horizontal"),
+        ("Top", "alignment::Vertical"),
+        ("Bottom", "alignment::Vertical"),
+    ] {
+        builder.item(item::Definition::value(name, type_ref::Type::registered(owner)?)?)?;
+    }
+    // iced's `impl Into<alignment::Horizontal>` and `Into<Vertical>`.
+    builder.item(item::Definition::method(
+        "widget::Text::align_x",
+        receiver::Mode::Owned,
+        fixed_builder_signature("widget::Text", type_ref::Type::registered("alignment::Horizontal")?)?,
+    )?)?;
+    for owner in ["widget::Row", "widget::Container"] {
+        builder.item(item::Definition::method(
+            format!("{owner}::align_y"),
+            receiver::Mode::Owned,
+            registered_builder_signature(owner, "alignment::Vertical")?,
+        )?)?;
+    }
+    length_builders(
+        builder,
+        "widget::Container",
+        &["center", "align_left", "align_right", "align_top", "align_bottom"],
+    )?;
+    for name in ["widget::left", "widget::right", "widget::top", "widget::bottom"] {
+        builder.item(item::Definition::function(name, container_signature()?)?)?;
+    }
+    for name in ["widget::rule::horizontal", "widget::rule::vertical"] {
+        for pixels in PIXELS {
+            let mut signature = signature::Builder::new();
+            signature.type_parameter("Message", &[])?;
+            signature.parameter(type_ref::Type::builtin(pixels));
+            signature.output(type_ref::Type::applied(
+                "Element",
+                [type_ref::Type::parameter("Message")?],
+            )?);
+            builder.item(item::Definition::function(name, signature.finish())?)?;
+        }
+    }
+    builder.item(item::Definition::intrinsic_macro(
+        "widget::stack",
+        collection_signature("widget::Stack")?,
+    )?)?;
+    builder.item(item::Definition::function(
+        "widget::stack",
+        children_signature("widget::Stack")?,
+    )?)?;
+    for name in ["with_children", "from_vec"] {
+        builder.item(item::Definition::associated_function(
+            format!("widget::Stack::{name}"),
+            children_signature("widget::Stack")?,
+        )?)?;
+    }
+    builder.item(item::Definition::associated_function(
+        "widget::Stack::new",
+        generic_empty_signature("widget::Stack")?,
+    )?)?;
+    length_builders(builder, "widget::Stack", &["width", "height"])?;
+    builders(
+        builder,
+        "widget::Stack",
+        "push",
+        [type_ref::Type::applied(
+            "Element",
+            [type_ref::Type::parameter("Message")?],
+        )?],
+    )?;
+    builders(builder, "widget::Stack", "extend", [children()?])?;
+    for name in ["hours", "minutes"] {
+        builder.item(item::Definition::function(
+            format!("time::{name}"),
+            integer_signature("time::Duration", 1)?,
+        )?)?;
+    }
+    builder.item(item::Definition::intrinsic_macro(
+        "color",
+        repeated_builtin_signature(type_ref::Builtin::I64, 1, "Color")?,
+    )?)?;
+    Ok(())
+}
+
+/// iced's own tasks: `exit()`, `window::latest()`, `window::close(id)`,
+/// `operation::focus_next()`/`focus_previous()`, and `Task::and_then`.
+/// `and_then` takes `impl Fn(T) -> Task<U>` on a `Task<Option<T>>`; the
+/// facade checks the function, and the task's `Option` when it runs.
+fn declare_native_tasks(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let task = |message: &str| -> Result<type_ref::Type, host::Error> {
+        type_ref::Type::applied("Task", [type_ref::Type::parameter(message)?])
+    };
+    for name in [
+        "exit",
+        "widget::operation::focus_next",
+        "widget::operation::focus_previous",
+    ] {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("Message", &[])?;
+        signature.output(task("Message")?);
+        builder.item(item::Definition::function(name, signature.finish())?)?;
+    }
+    let mut latest = signature::Builder::new();
+    latest.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::option(type_ref::Type::registered("window::Id")?)],
+    )?);
+    builder.item(item::Definition::function("window::latest", latest.finish())?)?;
+    let mut close = signature::Builder::new();
+    close.type_parameter("Message", &[])?;
+    close.parameter(type_ref::Type::registered("window::Id")?);
+    close.output(task("Message")?);
+    builder.item(item::Definition::function("window::close", close.finish())?)?;
+    let mut and_then = signature::Builder::new();
+    and_then.type_parameter("Message", &[])?;
+    and_then.type_parameter("T", &[])?;
+    and_then.type_parameter("Parent", &[])?;
+    and_then.parameter(type_ref::Type::callable(
+        type_ref::Type::parameter("T")?,
+        task("Parent")?,
+    ));
+    and_then.output(task("Parent")?);
+    builder.item(item::Definition::method(
+        "Task::and_then",
+        receiver::Mode::Owned,
+        and_then.finish(),
+    )?)?;
+    Ok(())
+}
+
+/// iced's `font` module: `Weight`, `Stretch`, `Style` and `Family`, and
+/// `Font::new`, `Font::with_family` and the builders a struct literal such as
+/// `Font { weight: font::Weight::Bold, ..Font::DEFAULT }` lowers to.
+fn declare_font(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    for (owner, variants) in [
+        ("font::Weight", &FONT_WEIGHTS[..]),
+        ("font::Stretch", &FONT_STRETCHES[..]),
+        ("font::Style", &FONT_STYLES[..]),
+        ("font::Family", &FONT_FAMILIES[..]),
+    ] {
+        for name in variants {
+            builder.item(item::Definition::associated_value(
+                format!("{owner}::{name}"),
+                type_ref::Type::registered(owner)?,
+            )?)?;
+        }
+    }
+    let mut name = signature::Builder::new();
+    name.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    name.output(type_ref::Type::registered("font::Family")?);
+    builder.item(item::Definition::associated_function("font::Family::name", name.finish())?)?;
+    let mut new = signature::Builder::new();
+    new.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    new.output(type_ref::Type::registered("Font")?);
+    builder.item(item::Definition::associated_function("Font::new", new.finish())?)?;
+    let mut family = signature::Builder::new();
+    family.parameter(type_ref::Type::registered("font::Family")?);
+    family.output(type_ref::Type::registered("Font")?);
+    builder.item(item::Definition::associated_function("Font::with_family", family.finish())?)?;
+    for (name, input) in [
+        ("weight", "font::Weight"),
+        ("stretch", "font::Stretch"),
+        ("style", "font::Style"),
+        ("family", "font::Family"),
+    ] {
+        let mut method = signature::Builder::new();
+        method.parameter(type_ref::Type::registered(input)?);
+        method.output(type_ref::Type::registered("Font")?);
+        builder.item(item::Definition::method(
+            format!("Font::{name}"),
+            receiver::Mode::Owned,
+            method.finish(),
+        )?)?;
+    }
+    Ok(())
+}
+
+pub(crate) const FONT_WEIGHTS: [&str; 9] = [
+    "Thin", "ExtraLight", "Light", "Normal", "Medium", "Semibold", "Bold", "ExtraBold", "Black",
+];
+pub(crate) const FONT_STRETCHES: [&str; 9] = [
+    "UltraCondensed",
+    "ExtraCondensed",
+    "Condensed",
+    "SemiCondensed",
+    "Normal",
+    "SemiExpanded",
+    "Expanded",
+    "ExtraExpanded",
+    "UltraExpanded",
+];
+pub(crate) const FONT_STYLES: [&str; 3] = ["Normal", "Italic", "Oblique"];
+pub(crate) const FONT_FAMILIES: [&str; 5] = ["Serif", "SansSerif", "Cursive", "Fantasy", "Monospace"];
 
 /// iced's `tooltip::Position` variants.
 pub(crate) const TOOLTIP_POSITIONS: [&str; 5] = ["Top", "Bottom", "Left", "Right", "FollowCursor"];

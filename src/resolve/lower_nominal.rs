@@ -12729,21 +12729,27 @@ impl<'a> Parser<'a> {
             });
         }
         self.expect(Token::Bang, "'!' after an intrinsic macro name")?;
-        if !matches!(self.peek(), Token::LeftBracket) {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: format!("write `{}![..]` with square brackets", item.path_ref().name())
-                    .into(),
-                operation: span(name_span.start(), self.position()),
-            });
-        }
+        // As in Rust, a macro takes `[..]`, `(..)` or `{..}` alike.
+        let close = match self.peek() {
+            Token::LeftBracket => Token::RightBracket,
+            Token::LeftParen => Token::RightParen,
+            Token::LeftBrace => Token::RightBrace,
+            _ => {
+                return Err(Error::InvalidHostOperation {
+                    item: item.path().into(),
+                    reason: format!("write `{}![..]` with square brackets", item.path_ref().name())
+                        .into(),
+                    operation: span(name_span.start(), self.position()),
+                });
+            }
+        };
         self.next();
         let mut arguments = Vec::new();
-        while !matches!(self.peek(), Token::RightBracket | Token::EOF) {
+        while !(self.peek() == close || matches!(self.peek(), Token::EOF)) {
             arguments.push(self.parse_expr()?);
             if matches!(self.peek(), Token::Comma) {
                 self.next();
-            } else if !matches!(self.peek(), Token::RightBracket) {
+            } else if self.peek() != close {
                 return Err(Error::InvalidHostOperation {
                     item: item.path().into(),
                     reason: "separate the elements with commas".into(),
@@ -12751,7 +12757,7 @@ impl<'a> Parser<'a> {
                 });
             }
         }
-        let end = self.expect(Token::RightBracket, "']' after intrinsic macro elements")?;
+        let end = self.expect(close, "the closing delimiter after intrinsic macro elements")?;
         let call = span(name_span.start(), end);
         let (item, signature) =
             self.select_host_signature(&items, None, &mut arguments, true, call)?;
