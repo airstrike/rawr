@@ -31,10 +31,10 @@ npm test >"$logs/release-test.log" 2>&1 || { echo "npm test failed; see $logs/re
 
 attempt=1
 until npx wrangler deploy >"$logs/release-deploy.log" 2>&1; do
-  if grep -q 100146 "$logs/release-deploy.log" && [ "$attempt" -lt 5 ]; then
-    echo "Cloudflare answered 100146; retrying in 15 s (attempt $attempt)."
+  if grep -q -e 100146 -e "Internal Server Error" "$logs/release-deploy.log" && [ "$attempt" -lt 5 ]; then
+    echo "Cloudflare answered 100146 or a 500; retrying in 30 s (attempt $attempt)."
     attempt=$((attempt + 1))
-    sleep 15
+    sleep 30
   else
     echo "wrangler deploy failed; see $logs/release-deploy.log" >&2
     exit 1
