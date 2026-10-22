@@ -7031,3 +7031,20 @@ fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(error.contains("nknown function") && error.contains("centre"), "{error}");
 }
+
+#[test]
+fn language_precise_capture_bounds_and_async_functions() {
+    let value = run(r#"
+        fn nums(limit: i64) -> impl Iterator<Item = i64> + use<> { (1..limit).map(|n| n * 2) }
+        pub fn run() -> i64 { nums(4).sum::<i64>() }
+        run()
+    "#);
+    assert_eq!(value, 12);
+    for source in [
+        "async fn go() -> i64 { 1 } pub fn run() -> i64 { 0 } run()",
+        "struct S; impl S { async fn go(&self) -> i64 { 1 } } pub fn run() -> i64 { 0 } run()",
+    ] {
+        let error = rejected(source);
+        assert!(error.contains("not supported in Rawr yet"), "{error}");
+    }
+}

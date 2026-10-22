@@ -147,6 +147,11 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                 ))
                 .into_err(*position));
             }
+            (Token::Reserved(text), position)
+                if scan.delimiter_depth == 0 && text.as_str() == "async" =>
+            {
+                return Err(async_unsupported(*position));
+            }
             (Token::Reserved(text), _) if scan.delimiter_depth == 0 && text.as_str() == "static" => {
                 let start = input.peek().expect("peeked static").1;
                 items.push(parse_static(input, &tokenizer_control, Box::default(), None, start)?);
@@ -1553,7 +1558,11 @@ fn parse_impl(
             }
         }
 
-        let position = input.peek().expect("token streams always end with EOF").1;
+        let (token, position) = input.peek().expect("token streams always end with EOF");
+        if matches!(token, Token::Reserved(text) if text.as_str() == "async") {
+            return Err(async_unsupported(*position));
+        }
+        let position = *position;
         return Err(PERR::MissingToken(
             "fn".into(),
             "for an associated function inside an impl block".into(),
@@ -2084,6 +2093,36 @@ fn parse_generic_params(input: &mut TokenStream) -> ParseResult<Vec<crate::item:
 
 /// `Bound + Bound`: trait paths; lifetime bounds are erased. Associated
 /// type equalities (`Shape<Output = i64>`) go to `projections`.
+/// `async fn`, which Rawr does not run yet.
+fn async_unsupported(position: Position) -> crate::ParseError {
+    PERR::BadInput(crate::LexError::ImproperSymbol(
+        "async".into(),
+        "`async` functions are not supported in Rawr yet".into(),
+    ))
+    .into_err(position)
+}
+
+/// `use<'a, T>` among `impl Trait` bounds: Rust's precise capturing, which
+/// Rawr's types need no record of. Where it ends, when it was there.
+fn skip_precise_capture(input: &mut TokenStream) -> ParseResult<Option<Position>> {
+    if !matches!(input.peek(), Some((Token::Use, _))) {
+        return Ok(None);
+    }
+    input.next();
+    expect(input, Token::LessThan, "after `use` in a bound")?;
+    loop {
+        match input.next() {
+            Some((Token::GreaterThan, position)) => return Ok(Some(after(position, 1))),
+            Some((Token::EOF, position)) => {
+                return Err(PERR::MissingToken(">".into(), "to close `use<..>`".into())
+                    .into_err(position));
+            }
+            None => unreachable!("token streams always end with EOF"),
+            Some(_) => {}
+        }
+    }
+}
+
 fn parse_bounds(
     input: &mut TokenStream,
     projections: &mut Vec<(crate::item::Name, crate::item::Name, type_ref::Type)>,
@@ -2093,6 +2132,7 @@ fn parse_bounds(
     loop {
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             parse_lifetime(input)?;
+        } else if skip_precise_capture(input)?.is_some() {
         } else if let Some((Token::Identifier(name) | Token::Reserved(name), position)) =
             input.peek()
             && is_fn_trait(name)
@@ -2717,6 +2757,10 @@ fn parse_type_split(
                 path.span = Span::new(start, lifetime.span.end());
                 continue;
             }
+            if let Some(end) = skip_precise_capture(input)? {
+                path.span = Span::new(start, end);
+                continue;
+            }
             let extra = parse_path_split(input, split)?;
             if !is_auto_trait(&extra) {
                 return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
@@ -2808,6 +2852,10 @@ fn skip_fn_bounds(
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             let lifetime = parse_lifetime(input)?;
             path.span = Span::new(start, lifetime.span.end());
+            continue;
+        }
+        if let Some(end) = skip_precise_capture(input)? {
+            path.span = Span::new(start, end);
             continue;
         }
         let extra = parse_path_split(input, split)?;
@@ -3090,6 +3138,10 @@ fn parse_iterator_type(
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             let lifetime = parse_lifetime(input)?;
             span = Span::new(start, lifetime.span.end());
+            continue;
+        }
+        if let Some(end) = skip_precise_capture(input)? {
+            span = Span::new(start, end);
             continue;
         }
         let extra = parse_path_split(input, split)?;
