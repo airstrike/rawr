@@ -20357,10 +20357,12 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // A range's element kind is not kept: `start()` of a
+        // `RangeInclusive<f32>` is an `f32` where one is expected.
         let element = if range == Ty::FloatRange {
-            Ty::Float(Float::F64)
+            Ty::Float(Float::Var(self.inference.fresh_id()))
         } else {
-            Ty::Int(Int::I64)
+            Ty::Int(Int::Var(self.inference.fresh_id()))
         };
         let code = match member.as_str() {
             "start" => 0,

@@ -6894,3 +6894,21 @@ fn language_statics_and_unsafe_blocks() {
     let error = rejected("unsafe fn f() {} pub fn run() -> i64 { 0 } run()");
     assert!(error.contains("not supported in Rawr yet"), "{error}");
 }
+
+#[test]
+fn language_range_bounds_take_the_element_kind() {
+    let value = Engine::new()
+        .eval::<f64>(
+            r#"
+            use std::ops::RangeInclusive;
+            const SIZE: RangeInclusive<f32> = 200.0..=400.0;
+            pub fn run() -> f32 {
+                let middle: Option<f32> = true.then_some(SIZE.start() + (SIZE.end() - SIZE.start()) / 2.0);
+                middle.unwrap()
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(value, 300.0);
+}
