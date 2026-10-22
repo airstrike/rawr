@@ -86,6 +86,8 @@ p code, li code, td code, figcaption code { font-size: 0.88em; color: var(--text
 .run b::before { content: "$ "; color: var(--dim); }
 .run span { color: var(--rose); }
 .run span.quiet { color: var(--dim); }
+/* Before Run, JS empties the output line; keep its row so the strip doesn't jump. */
+.run span:empty::before { content: "\00a0"; }
 .rawr .run { background: #0e0c10; }
 /* Live results from a Run button: stdout, stderr and the exit status inline; a frame as an image. */
 .run .live span { display: inline; }
@@ -204,7 +206,8 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
 <header class="bar">
   <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
-    <a href="#install">Install</a>
+    <a href="/docs">Docs</a>
+    <a class="wide" href="#install">Install</a>
     <a href="/play">Playground</a>
     <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
   </nav>
@@ -615,7 +618,7 @@ use iced::widget::{Widget, button, column, text};
     </div>
     <div>
       <p class="status">The language crate and the <code>rawr</code> command build on stable Rust. rawr-iced runs only on Apple Silicon Macs. It follows iced master and pins one nightly. APIs, commands, file formats and error codes will change without notice.</p>
-      <p class="status">Rawr doesn&rsquo;t cover all of Rust yet. If it rejects valid Rust that it claims to support, that&rsquo;s a bug. Please report it with a small reproduction.</p>
+      <p class="status">Rawr doesn&rsquo;t cover all of Rust yet. <a href="/docs/language#not-supported">The language docs</a> list what is missing. If it rejects valid Rust that it claims to support, that&rsquo;s a bug. Please report it with a small reproduction.</p>
     </div>
   </div>
 </section>
@@ -624,6 +627,7 @@ use iced::widget::{Widget, button, column, text};
 <footer>
   <div class="wrap cap">
     <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
     <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
   </div>
 </footer>

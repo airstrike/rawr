@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>?play and the playground | Rawr docs</title>
+<meta name="description" content="Run Rawr snippets from Discord with ?play or in the browser playground. Snippet shapes, options, messages, the settle rule, limits and share links.">
+<meta property="og:title" content="?play and the playground | Rawr docs">
+<meta property="og:description" content="Run Rawr snippets from Discord with ?play or in the browser playground. Snippet shapes, options, messages, the settle rule, limits and share links.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/play">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/play">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="cap"><span class="slash">//</span>Docs</p>
+  <ol>
+    <li><a href="/docs">Overview</a></li>
+    <li><a href="/docs/start">Getting started</a></li>
+    <li><a href="/docs/language">The language</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">rawr-iced</a></li>
+    <li><a href="/docs/play" aria-current="page">?play and the playground</a><ol><li><a href="#discord">In Discord</a></li><li><a href="#shapes">Snippet shapes</a></li><li><a href="#settle">When the frame is taken</a></li><li><a href="#limits">Limits</a></li><li><a href="#playground">The playground</a></li><li><a href="#add-bot">Adding the bot to a server</a></li></ol></li>
+    <li><a href="/docs/cli">Commands</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<p class="cap"><span class="slash">//</span>?play and the playground</p>
+<h1>?play and the playground</h1>
+<p class="lede">The <code>?play</code> bot runs a Rawr snippet posted in Discord and replies with the result. <a href="/play">The playground</a> does the same in a browser. Neither needs anything installed.</p>
+
+<h2 id="discord">In Discord</h2>
+<p>Write <code>?play</code> on the first line of a message and put the snippet in a code block below it. The fence can be <code>```rust</code>, <code>```rawr</code> or a bare <code>```</code>. The bot also answers when <code>?play</code> is in the fence&rsquo;s info string, as in <code>```rust ?play</code>.</p>
+<div class="block">
+  <div class="file"><b>Discord</b></div>
+  <pre><code><span class="k">?play</span> 320x200 light msg=Message::Increment
+<span class="c">```rust</span>
+column![text("hi"), button("go")]
+<span class="c">```</span></code></pre>
+</div>
+<p>The bot runs the first code block in the message. A snippet that uses iced gets an image of its rendered frame. A plain program gets its output in a text block. An error gets the report that <code>rawr check</code> would print. The bot cuts it to 2000 characters.</p>
+<p>If you edit a message the bot already answered, it runs the snippet again and edits its reply. The bot ignores messages from other bots.</p>
+
+<h3 id="options">Options</h3>
+<p>Options go on the <code>?play</code> line after the command.</p>
+<table>
+  <tr><th>Option</th><th>Meaning</th></tr>
+  <tr><td><code>WxH</code> or <code>size=WxH</code></td><td>The canvas size in logical pixels. Each side can be at most 2048. Without a size the canvas fits the content. It adds a 12&nbsp;px margin.</td></tr>
+  <tr><td><code>dark</code>, <code>light</code> or <code>theme=..</code></td><td>The theme to render with. The default is dark. An app with its own <code>.theme(..)</code> uses its own theme.</td></tr>
+  <tr><td><code>msg=EXPR</code></td><td>A message to apply before rendering. Repeat it to apply several in order.</td></tr>
+</table>
+<p>Images are drawn at twice the logical size, so they stay sharp on high-density screens.</p>
+
+<h2 id="shapes">Snippet shapes</h2>
+<p>A snippet uses iced when it names the <code>iced</code> crate. It also uses iced when it uses one of iced&rsquo;s widget functions, widget macros or common types without declaring or importing it. <code>column!</code>, <code>text</code>, <code>button</code>, <code>Color</code> and <code>Fill</code> are examples. Every other snippet is a plain program.</p>
+
+<h3 id="expression">An expression</h3>
+<p>A bare iced expression renders as a view.</p>
+<div class="block"><pre><code data-lang="rust">column![text("hi"), button("go")]</code></pre></div>
+
+<h3 id="view">A view</h3>
+<p>A function named <code>view</code> with no arguments renders what it returns.</p>
+<div class="block"><pre><code data-lang="rust">fn view() -&gt; impl Widget&lt;()&gt; {
+    row![text("left"), text("right")].spacing(20)
+}</code></pre></div>
+<p>Expressions and views without <code>use</code> lines get those iced names imported for them. Messages are refused for expressions and views. Only an app takes them.</p>
+
+<h3 id="app">An app</h3>
+<p>A type with <code>fn view(&amp;self)</code> and <code>fn update(&amp;mut self, message)</code> is an app. The snippet can have its own <code>main</code> with <code>iced::run</code> or <code>iced::application</code>. Without one, the bot boots <code>State::default()</code>. It applies each <code>msg=</code> in order and then renders the view. An app doesn&rsquo;t get imports for free. Write its <code>use</code> lines as you would in a file.</p>
+<div class="block">
+  <div class="file"><b>?play light msg=Message::Increment msg=Message::Increment</b></div>
+  <pre><code data-lang="rust">use iced::widget::{Widget, button, column, text};
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+}
+
+impl Counter {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Increment =&gt; self.value += 1,
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        column![
+            text(self.value).size(40),
+            button("Increment").on_press(Message::Increment),
+        ]
+        .padding(20)
+    }
+}</code></pre>
+</div>
+<figure class="shot">
+  <img src="/img/docs-play-counter.png" width="159" height="151" alt="The counter rendered in the light theme after two Increment messages: the number 2 above an Increment button">
+  <figcaption>The reply after two <code>Increment</code> messages.</figcaption>
+</figure>
+<p>A snippet with its own <code>#[preview]</code> is refused. Use the size option instead.</p>
+
+<h3 id="plain">A plain program</h3>
+<p>A plain program runs the way <code>rawr run</code> runs a file. Its top-level statements run first. Then <code>fn main</code> runs if there is one. The reply is its stdout and stderr in the order it wrote them.</p>
+<p>A snippet of statements alone runs as the body of <code>main</code>. If its last expression has no semicolon, its value is printed with <code>{:?}</code>. So <code>1 + 2</code> prints <code>3</code>, and <code>1 + 2;</code> prints nothing.</p>
+<div class="block">
+  <pre><code data-lang="rust">let xs = vec![3, 1, 2];
+xs.iter().sum::&lt;i64&gt;()</code></pre>
+  <div class="run"><span>6</span></div>
+</div>
+<p>The reply shows the exit status when it isn&rsquo;t 0. A <code>main</code> that returns <code>Err</code> prints <code>Error: ..</code> and exits with status 1. A panic exits with status 101. A program stopped by a limit exits with status 1. Messages don&rsquo;t apply to a plain program. The reply notes that they were ignored.</p>
+
+<h2 id="settle">When the frame is taken</h2>
+<p>An app is rendered as iced would first show it. Its boot task runs and the messages are applied. Then the view is drawn over a sequence of frames until it settles.</p>
+<ul>
+  <li>A frame where a widget publishes a message applies that message and draws again.</li>
+  <li>A frame that changes the interface draws again. A component handling its own event is one example. A sensor firing is another.</li>
+  <li>A frame that changes nothing settles. If a widget asked to be redrawn at a later time, the clock jumps to that time and drawing continues.</li>
+  <li>An animation that asks for the very next frame settles right away.</li>
+  <li>At most 8 frames are drawn.</li>
+</ul>
+<p>Subscriptions don&rsquo;t run, so a timer never ticks. Use <code>msg=</code> to put the app in the state you want to show.</p>
+
+<h2 id="limits">Limits</h2>
+<p>Snippets are untrusted. Each one runs in its own process with these limits on the hosted bot and playground:</p>
+<table>
+  <tr><th>Limit</th><th>Value</th></tr>
+  <tr><td>Script time</td><td>5 seconds. The whole run is stopped after 10 seconds.</td></tr>
+  <tr><td>Memory</td><td>256 MB per run.</td></tr>
+  <tr><td>Operations</td><td>1,000,000 per evaluation.</td></tr>
+  <tr><td>Call depth</td><td>32.</td></tr>
+  <tr><td>Values</td><td>Strings up to 64 KiB. Arrays and maps up to 10,000 elements.</td></tr>
+  <tr><td>Output</td><td>64 KiB. Longer output ends with <code>&hellip; output truncated</code>. Discord replies are also cut to fit a message.</td></tr>
+  <tr><td>Canvas</td><td>2048 logical pixels per side.</td></tr>
+</table>
+<p>A limit gets a plain reply such as <code>time limit exceeded</code>. Snippets have no filesystem, network or environment access.</p>
+<p>The bot also limits how often it runs. Each user gets 4 runs a minute. Each channel gets 12. A run over the limit gets an hourglass reaction instead of a reply.</p>
+
+<h2 id="playground">The playground</h2>
+<p><a href="/play">rawr.airstrike.fyi/play</a> has an editor and an output pane. Ctrl+Enter or Cmd+Enter runs the code. Tab indents. You can pick the theme and a size. The messages box takes one <code>Message</code> expression per line.</p>
+<p>The Examples menu loads some of iced&rsquo;s own examples. Examples &rarr; Reset brings back the counter. The editor keeps your latest snippet in the browser, so <code>/play</code> opens where you left off.</p>
+<p>Each visitor gets 6 runs a minute and 60 an hour. Code can be up to 16 KiB. A run takes up to 32 messages.</p>
+
+<h3 id="share">Share links</h3>
+<p><strong>Share</strong> saves the code and options and gives a link of the form <code>/play/&lt;id&gt;</code>. The id comes from the content, so the same snippet always gets the same link. A shared snippet can be up to 64 KiB.</p>
+<p>A shared link shows a preview card when posted in Discord and other apps. For an iced snippet the card is its first frame. For a plain program it is the site card with the first line of output. A share that nobody opens for 30 days is deleted.</p>
+
+<h2 id="add-bot">Adding the bot to a server</h2>
+<p>Use the <a href="/bot/invite">invite link</a> to add the bot to a Discord server you manage. The bot answers only in channels a moderator turns on. It doesn&rsquo;t answer in direct messages.</p>
+<p>Moderators choose the channels with the <code>/play-channel</code> command. It needs the Manage Channels permission in the channel it changes. Its replies are visible only to the moderator who ran it.</p>
+<table>
+  <tr><th>Command</th><th>What it does</th></tr>
+  <tr><td><code>/play-channel add [channel]</code></td><td>Turns the bot on in a channel. The default is the current channel.</td></tr>
+  <tr><td><code>/play-channel remove [channel]</code></td><td>Turns the bot off in a channel.</td></tr>
+  <tr><td><code>/play-channel list</code></td><td>Lists the channels where the bot answers.</td></tr>
+</table>
+<p>A thread follows its parent channel. Running <code>/play-channel add</code> in a thread turns the bot on for the parent channel.</p>
+<p>The <a href="/bot">status page</a> shows whether the bot is up. It also counts recent runs.</p>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/iced">Previous<b>rawr-iced</b></a><a class="next" href="/docs/cli">Next<b>Commands</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+</body>
+</html>

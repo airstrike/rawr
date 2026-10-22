@@ -2,6 +2,7 @@
 
 Rust Augmented With Rust.
 Site: <https://rawr.airstrike.fyi>
+Docs: <https://rawr.airstrike.fyi/docs>
 
 ## What is Rawr?
 

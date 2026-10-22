@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Commands | Rawr docs</title>
+<meta name="description" content="Every command of rawr and rawr-iced, with its arguments and flags.">
+<meta property="og:title" content="Commands | Rawr docs">
+<meta property="og:description" content="Every command of rawr and rawr-iced, with its arguments and flags.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/cli">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/cli">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="cap"><span class="slash">//</span>Docs</p>
+  <ol>
+    <li><a href="/docs">Overview</a></li>
+    <li><a href="/docs/start">Getting started</a></li>
+    <li><a href="/docs/language">The language</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">rawr-iced</a></li>
+    <li><a href="/docs/play">?play and the playground</a></li>
+    <li><a href="/docs/cli" aria-current="page">Commands</a><ol><li><a href="#paths">Paths</a></li><li><a href="#rawr">Commands of rawr</a></li><li><a href="#rawr-iced">Commands from rawr-iced</a></li><li><a href="#exit">Exit status</a></li><li><a href="#files">Files Rawr writes</a></li></ol></li>
+  </ol>
+</nav>
+<main>
+<article>
+<p class="cap"><span class="slash">//</span>Commands</p>
+<h1>Commands</h1>
+<p class="lede">You type every command as <code>rawr ..</code>. The <code>rawr</code> binary runs some of them itself. It hands the rest to <code>rawr-iced</code> when rawr-iced is installed.</p>
+
+<h2 id="paths">Paths</h2>
+<p>Most commands take an optional path. The path can be a project directory, a single <code>.rawr</code> file or a <code>rawr.toml</code>. Without a path, the command uses the current directory. In a project directory the entry file is <code>src/main.rawr</code>.</p>
+<p><code>rawr --help</code> lists the commands. When rawr-iced is installed, the help also shows where it was found and which commands it adds. <code>rawr</code> looks for <code>rawr-iced</code> next to its own binary first and then on <code>PATH</code>.</p>
+
+<h2 id="rawr">Commands of <code>rawr</code></h2>
+<p>These come with <code>rawr-cli</code> and build on stable Rust.</p>
+<table class="wide">
+  <tr><th>Command</th><th>What it does</th></tr>
+  <tr><td><code>rawr [run] [path]</code></td><td>Checks a program and runs it. <code>run</code> is the default command, so <code>rawr</code> alone runs the project in the current directory. A plain program runs once and exits. A program that uses iced goes to rawr-iced. rawr-iced opens the app and reloads it on save.</td></tr>
+  <tr><td><code>rawr check [path]</code></td><td>Checks a program without running it. It prints <code>Checked</code> and the entry path when the program is valid. It prints the first error and exits with status 1 when it isn&rsquo;t.</td></tr>
+  <tr><td><code>rawr doctor [path]</code></td><td>Reports on the environment and the project. It shows where <code>rawr</code> and <code>rawr-iced</code> are, their versions, the iced revision, the renderer, the project root, the entry file and the manifest.</td></tr>
+  <tr><td><code>rawr -h</code>, <code>--help</code></td><td>Prints the help.</td></tr>
+  <tr><td><code>rawr -V</code>, <code>--version</code></td><td>Prints the version.</td></tr>
+</table>
+<p>Set <code>RAWR_VERBOSE=1</code> to see how a program was loaded and which binary ran it.</p>
+
+<h2 id="rawr-iced">Commands from rawr-iced</h2>
+<p>These need <a href="/docs/start#install-iced">rawr-iced</a>. With rawr-iced installed, it also runs <code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> for programs that use iced.</p>
+<table class="wide">
+  <tr><th>Command</th><th>What it does</th></tr>
+  <tr><td><code>rawr new &lt;name-or-path&gt;</code></td><td>Creates a project directory with a counter app in <code>src/main.rawr</code>.</td></tr>
+  <tr id="check-as-rust"><td><code>rawr check --as-rust [path]</code></td><td>Copies the project under <code>target/</code> with every <code>.rawr</code> file renamed to <code>.rs</code>. Then it runs <code>cargo check</code> on the copy. It reports <code>ok</code> or the first error for each module. It needs a <code>Cargo.toml</code> with a <code>[package]</code>. A <code>rawr.toml</code> with <code>[rust.dependencies]</code> also works.</td></tr>
+  <tr><td><code>rawr preview [path] [name]</code></td><td>Opens one <code>#[preview]</code> view in a window. <code>name</code> is the preview&rsquo;s name or <code>group/name</code>. Without a name it opens the last preview you picked. The arrow keys step through a group.</td></tr>
+  <tr><td><code>rawr snapshot --update [path]</code></td><td>Renders every preview to a PNG under <code>snapshots/</code> and replaces the stored images.</td></tr>
+  <tr><td><code>rawr snapshot --check [path]</code></td><td>Renders every preview and compares it with the stored image. It exits with status 1 if any pixel differs. The new images go under <code>target/rawr/snapshots/</code>.</td></tr>
+  <tr><td><code>--verbose</code></td><td>With <code>rawr snapshot</code>, prints absolute paths and storage details.</td></tr>
+  <tr><td><code>rawr mcp</code></td><td>Runs an MCP server on stdio for coding tools such as Claude Code and Codex. Its tools list and render previews, check the project and drive a running window. The window tools take screenshots, click, type, press keys, reset the app and wait for a reload.</td></tr>
+  <tr><td><code>rawr init [--claude] [--codex] [path]</code></td><td>Registers <code>rawr mcp</code> in the project. <code>--claude</code> writes <code>.mcp.json</code> for Claude Code. <code>--codex</code> writes <code>.codex/config.toml</code> for Codex.</td></tr>
+  <tr><td><code>rawr cache clean</code></td><td>Removes the shared builds that no running process uses.</td></tr>
+  <tr><td><code>rawr cache clean --all</code></td><td>Also removes the current project&rsquo;s <code>.rawr/cache</code> and <code>target/rawr</code>.</td></tr>
+</table>
+
+<h2 id="exit">Exit status</h2>
+<ul>
+  <li>0 when the command succeeds.</li>
+  <li>1 when a check fails, when <code>main</code> returns <code>Err</code> or when a snapshot differs.</li>
+  <li>101 when a program panics.</li>
+</ul>
+
+<h2 id="files">Files Rawr writes</h2>
+<ul>
+  <li><code>snapshots/</code> holds the stored preview images. Commit it.</li>
+  <li><code>target/rawr/</code> holds Rawr&rsquo;s build files. The images from the last <code>rawr snapshot --check</code> go in <code>target/rawr/snapshots/</code>.</li>
+  <li><code>target/rawr-as-rust/</code> holds the copy that <code>rawr check --as-rust</code> checks.</li>
+  <li><code>.rawr/cache</code> holds cached data for the project.</li>
+</ul>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/play">Previous<b>?play and the playground</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+</body>
+</html>
