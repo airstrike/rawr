@@ -22274,6 +22274,16 @@ impl<'a> Parser<'a> {
             return self.parse_array(open, close, None);
         }
         if matches!(self.peek(), Token::Bang)
+            && matches!(
+                name.as_str(),
+                "concat" | "env" | "include_str" | "include_bytes" | "stringify"
+            )
+            && self.models.import(&name).is_none()
+        {
+            self.next();
+            return self.parse_compile_time_macro(&name, name_span);
+        }
+        if matches!(self.peek(), Token::Bang)
             && name.as_str() == "matches"
             && self.models.import(&name).is_none()
         {
@@ -23115,6 +23125,13 @@ impl<'a> Parser<'a> {
             return Ok(self.function_value(&function, name_span));
         }
 
+        // `PI` after `use std::f64::consts::PI;`.
+        if !self.bindings.contains_key(name.as_str())
+            && let Some(binding) = self.models.import(&name)
+            && let Some((value, single)) = crate::resolve::float_constant(&binding.qualified)
+        {
+            return Ok(self.float_constant(value, single, name_span));
+        }
         self.record_capture(&name);
         let Some(binding) = self.bindings.get(name.as_str()) else {
             return Err(self.unsupported("unknown variable in nominal expression"));
@@ -27235,7 +27252,247 @@ impl<'a> Parser<'a> {
     /// `Type::member(..)` for a builtin type: `String::new()`, the
     /// prelude's and the crate's `From` conversions (`String::from(x)`,
     /// `i64::from(true)`), and crate trait functions without `self`.
-    fn parse_builtin_path(
+/// `concat!`, `env!`, `include_str!`, `include_bytes!` and `stringify!`,
+    /// which rustc expands while it compiles: their text (or bytes) as a
+    /// literal. `env!("CARGO_MANIFEST_DIR")` is the project's directory and
+    /// `include_str!`'s path is relative to the file that names it.
+    fn parse_compile_time_macro(&mut self, name: &str, name_span: Span) -> Result<ParsedExpr, Error> {
+        let (text, end) = self.compile_time_text(name, name_span)?;
+        let at = span(name_span.start(), end);
+        if name == "include_bytes" {
+            let bytes = self.include(name, &text, at)?;
+            let length = bytes.len();
+            let source = format!(
+                "[{}]",
+                bytes.iter().map(u8::to_string).collect::<Vec<_>>().join(", ")
+            );
+            let ty = Ty::Reference {
+                mutable: false,
+                target: Box::new(Ty::Array {
+                    element: Box::new(Ty::Int(Int::U8)),
+                    length: Some(length),
+                }),
+            };
+            return Ok(self.literal(source, ty, at));
+        }
+        Ok(self.literal(format!("{text:?}"), Ty::String, at))
+    }
+
+    /// The text of the compile-time macro `name`, after its `!`, and where
+    /// it ends.
+    fn compile_time_text(&mut self, name: &str, name_span: Span) -> Result<(String, Position), Error> {
+        let open = match self.next() {
+            (Token::LeftParen | Token::LeftBracket | Token::LeftBrace, position) => position,
+            (_, position) => {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!("`{name}!` without `(`").into(),
+                    source: point_span(position),
+                })
+            }
+        };
+        if name == "stringify" {
+            // The tokens as written, between the delimiters.
+            let mut depth = 0usize;
+            let mut pieces = Vec::new();
+            let end = loop {
+                match self.next() {
+                    (token @ (Token::LeftParen | Token::LeftBracket | Token::LeftBrace), _) => {
+                        depth += 1;
+                        pieces.push(token.to_string());
+                    }
+                    (Token::RightParen | Token::RightBracket | Token::RightBrace, position)
+                        if depth == 0 =>
+                    {
+                        break position;
+                    }
+                    (token @ (Token::RightParen | Token::RightBracket | Token::RightBrace), _) => {
+                        depth -= 1;
+                        pieces.push(token.to_string());
+                    }
+                    (Token::EOF, position) => {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "`stringify!` without its closing delimiter".into(),
+                            source: span(open, position),
+                        })
+                    }
+                    (token, _) => pieces.push(token.to_string()),
+                }
+            };
+            return Ok((pieces.join(" "), end));
+        }
+        let mut arguments = Vec::new();
+        let end = loop {
+            if let (Token::RightParen | Token::RightBracket | Token::RightBrace, position) =
+                (self.peek(), self.position())
+            {
+                self.next();
+                break position;
+            }
+            arguments.push(self.compile_time_argument()?);
+            if matches!(self.peek(), Token::Comma) {
+                self.next();
+            } else if !matches!(
+                self.peek(),
+                Token::RightParen | Token::RightBracket | Token::RightBrace
+            ) {
+                return Err(self.unsupported("compile-time macro arguments without ','"));
+            }
+        };
+        let at = span(name_span.start(), end);
+        let one = |arguments: &[String]| -> Result<String, Error> {
+            match arguments {
+                [text] => Ok(text.clone()),
+                _ => Err(Error::InvalidHostOperation {
+                    item: format!("{name}!").into(),
+                    reason: "takes one string literal".into(),
+                    operation: at,
+                }),
+            }
+        };
+        let text = match name {
+            "concat" => arguments.concat(),
+            "env" => {
+                let Some(variable) = arguments.first() else {
+                    return Err(Error::InvalidHostOperation {
+                        item: "env!".into(),
+                        reason: "takes the name of an environment variable".into(),
+                        operation: at,
+                    });
+                };
+                match self.environment_variable(variable) {
+                    Some(value) => value,
+                    None => {
+                        return Err(Error::InvalidHostOperation {
+                            item: "env!".into(),
+                            reason: arguments.get(1).cloned().unwrap_or_else(|| {
+                                format!("environment variable `{variable}` not defined at compile time")
+                            })
+                            .into(),
+                            operation: at,
+                        })
+                    }
+                }
+            }
+            "include_str" => {
+                let path = one(&arguments)?;
+                let bytes = self.include(name, &path, at)?;
+                String::from_utf8(bytes).map_err(|_| Error::InvalidHostOperation {
+                    item: "include_str!".into(),
+                    reason: format!("`{path}` is not UTF-8").into(),
+                    operation: at,
+                })?
+            }
+            // `include_bytes!`'s path; its caller reads the file.
+            _ => one(&arguments)?,
+        };
+        Ok((text, end))
+    }
+
+    /// One argument of `concat!` or another compile-time macro: a literal
+    /// or a nested `concat!`, `env!` or `include_str!`.
+    fn compile_time_argument(&mut self) -> Result<String, Error> {
+        let negative = matches!(self.peek(), Token::Minus | Token::UnaryMinus);
+        if negative {
+            self.next();
+        }
+        let sign = if negative { "-" } else { "" };
+        Ok(match self.next() {
+            (Token::StringConstant(text), _) if !negative => text.to_string(),
+            (Token::IntegerConstant(value), _) => format!("{sign}{value}"),
+            #[cfg(not(feature = "no_float"))]
+            (Token::FloatConstant(value), _) => format!("{sign}{}", value.1),
+            (Token::CharConstant(value), _) if !negative => value.to_string(),
+            (Token::True, _) if !negative => "true".into(),
+            (Token::False, _) if !negative => "false".into(),
+            (Token::Identifier(name), name_position)
+                if !negative
+                    && matches!(name.as_str(), "concat" | "env" | "include_str" | "stringify")
+                    && matches!(self.peek(), Token::Bang) =>
+            {
+                self.next();
+                let name_span = point_span(name_position);
+                self.compile_time_text(name.as_str(), name_span)?.0
+            }
+            (_, position) => {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "a compile-time macro argument other than a literal".into(),
+                    source: point_span(position),
+                })
+            }
+        })
+    }
+
+    /// The file this code is in, when it is a file on disk.
+    #[cfg(not(feature = "no_std"))]
+    fn source_file(&self) -> Option<std::path::PathBuf> {
+        let key = self.models.sources.key(self.models.context.index());
+        let source = self.models.sources.resolve(key).ok()?;
+        let path = std::path::PathBuf::from(source.identity());
+        path.is_file().then_some(path)
+    }
+
+    /// A compile-time environment variable: `CARGO_MANIFEST_DIR` is the
+    /// directory of the project the file is in; any other is the
+    /// environment's.
+    fn environment_variable(&self, name: &str) -> Option<String> {
+        #[cfg(not(feature = "no_std"))]
+        {
+            if name == "CARGO_MANIFEST_DIR" {
+                let file = self.source_file()?;
+                let manifest = file
+                    .ancestors()
+                    .skip(1)
+                    .find(|directory| {
+                        directory.join("Cargo.toml").is_file() || directory.join("rawr.toml").is_file()
+                    })
+                    .or_else(|| {
+                        file.ancestors()
+                            .skip(1)
+                            .find(|directory| directory.file_name().is_some_and(|name| name == "src"))
+                            .and_then(std::path::Path::parent)
+                    })
+                    .or_else(|| file.parent())?;
+                return Some(manifest.to_string_lossy().into_owned());
+            }
+            std::env::var(name).ok()
+        }
+        #[cfg(feature = "no_std")]
+        {
+            let _ = name;
+            None
+        }
+    }
+
+    /// The bytes of the file `path` names, relative to this code's file.
+    fn include(&self, macro_name: &str, path: &str, at: Span) -> Result<Vec<u8>, Error> {
+        let error = |reason: String| Error::InvalidHostOperation {
+            item: format!("{macro_name}!").into(),
+            reason: reason.into(),
+            operation: at,
+        };
+        #[cfg(not(feature = "no_std"))]
+        {
+            let Some(file) = self.source_file() else {
+                return Err(error(format!(
+                    "`{path}` is read relative to a file on disk; this code is not in one"
+                )));
+            };
+            let target = file
+                .parent()
+                .map_or_else(|| std::path::PathBuf::from(path), |directory| directory.join(path));
+            std::fs::read(&target)
+                .map_err(|failure| error(format!("cannot read `{}`: {failure}", target.display())))
+        }
+        #[cfg(feature = "no_std")]
+        Err(error(format!("`{path}` cannot be read without a file system")))
+    }
+
+    fn float_constant(&mut self, value: f64, single: bool, at: Span) -> ParsedExpr {
+        let ty = Ty::Float(if single { Float::F32 } else { Float::F64 });
+        self.literal(format!("{value:?}"), ty, at)
+    }
+
+        fn parse_builtin_path(
         &mut self,
         builtin: Ty,
         name: ImmutableString,
@@ -27243,6 +27500,21 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         self.next();
         let (member, member_span) = self.expect_member_name()?;
+        // `f64::consts::PI`.
+        if member.as_str() == "consts" && matches!(self.peek(), Token::DoubleColon) {
+            self.next();
+            let (constant, constant_span) = self.expect_member_name()?;
+            let path = format!("{name}::consts::{constant}");
+            let Some((value, single)) = crate::resolve::float_constant(&path) else {
+                return Err(Error::UnknownMember {
+                    owner: format!("{name}::consts").into(),
+                    member: constant,
+                    reference: constant_span,
+                });
+            };
+            let at = span(name_span.start(), text_end(constant_span.start(), &constant));
+            return Ok(self.float_constant(value, single, at));
+        }
         // `u8::MAX`, `i64::MIN`, `f64::MAX`: the kind's bounds (`u64::MAX`
         // and `usize::MAX` are all 64 bits set).
         if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
@@ -27462,6 +27734,29 @@ impl<'a> Parser<'a> {
         let path_end = segments.last().map_or(first_span.end(), |(name, span)| {
             text_end(span.start(), name)
         });
+        // `std::f64::consts::PI`, `f32::consts::TAU`, `consts::E`.
+        {
+            let written = segments
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>()
+                .join("::");
+            let full = match self.models.import(&segments[0].0) {
+                Some(binding) if segments.len() > 1 => format!(
+                    "{}{}",
+                    binding.qualified,
+                    &written[segments[0].0.len()..]
+                ),
+                _ => written,
+            };
+            if let Some((value, single)) = crate::resolve::float_constant(&full) {
+                return Ok(self.float_constant(
+                    value,
+                    single,
+                    Span::new(first_span.start(), path_end),
+                ));
+            }
+        }
         if let Some(spelled) = self
             .models
             .qualified_rust(Span::new(first_span.start(), path_end))

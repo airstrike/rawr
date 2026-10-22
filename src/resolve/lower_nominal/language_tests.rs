@@ -6812,3 +6812,36 @@ run()
     // The same program built by rustc prints this.
     assert_eq!(value, "7 4 true 10 2 true 1 2 1");
 }
+
+#[test]
+fn language_float_constants_and_compile_time_text() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            use std::f32::consts::TAU;
+            use std::f64::consts;
+            pub fn run() -> String {
+                let text = concat!("ra", "wr", '-', 1, 2.5, true, stringify!(a + b));
+                format!("{:.5} {:.5} {:.5} {}", std::f64::consts::PI, consts::E, TAU, text)
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        value,
+        format!(
+            "{:.5} {:.5} {:.5} {}",
+            std::f64::consts::PI,
+            std::f64::consts::E,
+            std::f32::consts::TAU,
+            concat!("ra", "wr", '-', 1, 2.5, true, stringify!(a + b))
+        )
+    );
+    // Without a file on disk there is no project for `env!` or a path for
+    // `include_str!` to name.
+    let error = rejected(r#"pub fn run() -> i64 { let p = env!("CARGO_MANIFEST_DIR"); 0 } run()"#);
+    assert!(error.contains("env!"), "{error}");
+    let error = rejected(r#"pub fn run() -> i64 { let p = include_str!("x.txt"); 0 } run()"#);
+    assert!(error.contains("not in one"), "{error}");
+}

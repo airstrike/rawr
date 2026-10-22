@@ -1015,6 +1015,9 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "mem::take"
         )
     ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
+        || rest.is_some_and(|rest| {
+            matches!(rest, "f32::consts" | "f64::consts") || float_constant(path).is_some()
+        })
         || rest
         .and_then(|rest| rest.strip_prefix("ops"))
         .is_some_and(|rest| {
@@ -1041,6 +1044,31 @@ pub(crate) fn std_range(path: &str) -> Option<&'static str> {
         "Range" => Some(crate::item::type_ref::ITER_TYPE),
         _ => None,
     }
+}
+
+/// `std::f64::consts::PI` and kin as a path is written (`f32::consts::TAU`,
+/// `core::f64::consts::E`): its value, as an `f64`, and whether it is an
+/// `f32`'s.
+pub(crate) fn float_constant(path: &str) -> Option<(f64, bool)> {
+    let rest = path
+        .strip_prefix("std::")
+        .or_else(|| path.strip_prefix("core::"))
+        .unwrap_or(path);
+    let (kind, name) = rest.split_once("::consts::")?;
+    macro_rules! constants {
+        ($($name:ident),*) => {
+            match (kind, name) {
+                $(("f64", stringify!($name)) => Some((std::f64::consts::$name, false)),)*
+                $(("f32", stringify!($name)) => Some((f64::from(std::f32::consts::$name), true)),)*
+                _ => None,
+            }
+        };
+    }
+    constants!(
+        PI, TAU, E, SQRT_2, FRAC_1_SQRT_2, LN_2, LN_10, LOG2_E, LOG10_E, LOG2_10, LOG10_2,
+        FRAC_PI_2, FRAC_PI_3, FRAC_PI_4, FRAC_PI_6, FRAC_PI_8, FRAC_1_PI, FRAC_2_PI,
+        FRAC_2_SQRT_PI
+    )
 }
 
 /// `std::cmp::Reverse` as a type path is written: `Reverse` (imported, or

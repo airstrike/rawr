@@ -418,3 +418,40 @@ mod tests {
     assert_success(&output);
     assert_eq!(stdout(&output), "88 built\n");
 }
+
+#[test]
+fn compile_time_macros_read_the_project_as_rustc_does() {
+    let sandbox = Sandbox::new("compile-time");
+    let project = sandbox.work().join("macros");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(project.join("src/greeting.txt"), "hello\n").unwrap();
+    fs::write(
+        project.join("src/main.rawr"),
+        r#"use std::f32::consts::TAU;
+use std::f64::consts;
+
+const NAME: &str = concat!("ra", "wr", '-', 1, 2.5, true);
+
+fn main() {
+    let greeting = include_str!("greeting.txt");
+    let bytes = include_bytes!("greeting.txt");
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/greeting.txt");
+    println!("{} {} {} {}", NAME, greeting.trim(), bytes.len(), bytes[0]);
+    println!("{} {}", path.ends_with("/src/greeting.txt"), path.starts_with(manifest));
+    println!("{:.5} {:.5} {:.5} {:.3}", std::f64::consts::PI, consts::E, TAU, core::f64::consts::SQRT_2);
+    println!("{}", stringify!(a + b));
+}
+"#,
+    )
+    .unwrap();
+
+    let output = sandbox.rawr(&["run", "macros"]);
+
+    assert_success(&output);
+    // The same program built by cargo prints this.
+    assert_eq!(
+        stdout(&output),
+        "rawr-12.5true hello 6 104\ntrue true\n3.14159 2.71828 6.28319 1.414\na + b\n"
+    );
+}
