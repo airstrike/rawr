@@ -248,9 +248,13 @@ impl Graph {
         self.entry_package().rust.is_some()
     }
 
-    /// Every source's parsed items, as loading parsed them.
-    pub(crate) fn parsed_items(&self) -> impl Iterator<Item = &crate::item::Parsed> {
-        self.units.iter().flat_map(|unit| unit.parsed.items())
+    /// Every source with its items, as loading parsed them.
+    pub(crate) fn parsed_sources(
+        &self,
+    ) -> impl Iterator<Item = (&source::Source, &[crate::item::Parsed])> {
+        self.units
+            .iter()
+            .map(|unit| (&self.sources[unit.source.index()], unit.parsed.items()))
     }
 
     #[allow(dead_code)]

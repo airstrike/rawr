@@ -110,10 +110,12 @@ fn execute_transform(
     path: Option<PathBuf>,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<(), Error> {
+    let loaded = crate::base::load(path.as_ref()).map_err(Error::Diagnostic)?;
     #[cfg(feature = "native-runner")]
-    if let Some(target) = crate::import::declared(path.as_ref()).map_err(Error::Diagnostic)? {
+    if loaded.graph.declares_rust_import() {
         return crate::import::owner::run(
-            &target,
+            &loaded.target,
+            Some(loaded.graph),
             rawr_import::process::Lifecycle::Preview,
             #[cfg(feature = "import-baseline")]
             profile,
@@ -131,7 +133,7 @@ fn execute_transform(
         ));
     }
     let root = root(path.as_ref())?;
-    let launch = crate::watch::Launch::open(path).map_err(Error::Diagnostic)?;
+    let launch = crate::watch::Launch::open(loaded).map_err(Error::Diagnostic)?;
     let (bootstrap, source, service, timing, session) = launch.into_parts();
     let control = rawr_iced::control::Host::bootstrap_observed(bootstrap, source.clone(), timing)
         .map_err(Error::Diagnostic)?

@@ -30,29 +30,25 @@ pub fn prepare(path: Option<PathBuf>) -> Result<rawr_iced::application::Prepared
 
 /// Prepare and run one application in the native iced event loop.
 pub fn execute(path: Option<PathBuf>) -> Result<(), Error> {
-    execute_transform(
-        path,
+    let loaded = crate::base::load(path.as_ref())
+        .map_err(|report| Error::Compile(compile::Error::from_report(report)))?;
+    execute_loaded(
+        loaded,
         #[cfg(feature = "import-baseline")]
         None,
     )
 }
 
-#[cfg(feature = "import-baseline")]
-pub(crate) fn execute_with_profile(
-    path: Option<PathBuf>,
-    profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<(), Error> {
-    execute_transform(path, profile)
-}
-
-fn execute_transform(
-    path: Option<PathBuf>,
+/// Run an application from the command's one load.
+pub(crate) fn execute_loaded(
+    loaded: crate::base::Loaded,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<(), Error> {
     #[cfg(feature = "native-runner")]
-    if let Some(target) = crate::import::declared(path.as_ref()).map_err(Error::Live)? {
+    if loaded.graph.declares_rust_import() {
         return crate::import::owner::run(
-            &target,
+            &loaded.target,
+            Some(loaded.graph),
             rawr_import::process::Lifecycle::Run,
             #[cfg(feature = "import-baseline")]
             profile,
@@ -63,7 +59,7 @@ fn execute_transform(
     if profile.is_some() {
         return Err(Error::Live(profile_report()));
     }
-    let launch = crate::watch::Launch::open(path).map_err(Error::Live)?;
+    let launch = crate::watch::Launch::open(loaded).map_err(Error::Live)?;
     let (bootstrap, source, service, timing, session) = launch.into_parts();
     let previews = {
         let preparation = bootstrap.preparation();

@@ -4,8 +4,9 @@
 //! says itself what brings it in, from the [`Facts`] of the program.
 
 use crate::item::{self, type_ref};
-use crate::{package, ImmutableString};
-use std::collections::BTreeSet;
+use crate::{diagnostic, package, ImmutableString};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 /// What a host knows about a program from loading its package graph, before
 /// any layer's work: derived from the parse that loading already did, never
@@ -25,21 +26,38 @@ pub struct Layer {
     pub claims: fn(&Facts) -> bool,
 }
 
+/// A program's [`Facts`] kept across reloads, spreadsheet style: one cell per
+/// source file, keyed by its path and computed again only when its text
+/// changed; the facts are recomputed from the cells only when a cell did.
+#[derive(Clone, Debug, Default)]
+pub struct Sheet {
+    cells: BTreeMap<PathBuf, Cell>,
+    facts: Facts,
+}
+
+#[derive(Clone, Debug)]
+struct Cell {
+    /// The text this cell was computed from.
+    source: diagnostic::Source,
+    roots: BTreeSet<ImmutableString>,
+}
+
+/// What one [`Sheet::update`] did.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Update {
+    /// How many sources had their facts computed: new or edited files.
+    pub recomputed: usize,
+    /// Whether the program's facts changed, so layers must judge it again.
+    pub changed: bool,
+}
+
 impl Facts {
     /// The facts of a loaded package graph.
     #[must_use]
     pub fn of(graph: &package::Graph) -> Self {
-        let mut roots = BTreeSet::new();
-        for parsed in graph.parsed_items() {
-            parsed_roots(parsed, &mut roots);
-        }
-        Self {
-            roots,
-            #[cfg(feature = "rust-import")]
-            rust_import: graph.declares_rust_import(),
-            #[cfg(not(feature = "rust-import"))]
-            rust_import: false,
-        }
+        let mut sheet = Sheet::default();
+        sheet.update(graph);
+        sheet.facts
     }
 
     /// Whether the package declares `[rust]` imports.
@@ -53,6 +71,60 @@ impl Facts {
     #[must_use]
     pub fn names_crate(&self, name: &str) -> bool {
         self.roots.contains(name)
+    }
+}
+
+impl Sheet {
+    /// The facts as of the last update.
+    #[must_use]
+    pub const fn facts(&self) -> &Facts {
+        &self.facts
+    }
+
+    /// Bring the sheet to a newly loaded graph of the same program: a file
+    /// whose text is unchanged keeps its cell; a new or edited one is
+    /// computed from the items loading parsed; a file gone drops its cell.
+    pub fn update(&mut self, graph: &package::Graph) -> Update {
+        let mut recomputed = 0;
+        let mut cells = BTreeMap::new();
+        for (source, items) in graph.parsed_sources() {
+            let cell = match self.cells.remove(source.path()) {
+                Some(cell) if cell.source.text() == source.text() => cell,
+                _ => {
+                    recomputed += 1;
+                    let mut roots = BTreeSet::new();
+                    for parsed in items {
+                        parsed_roots(parsed, &mut roots);
+                    }
+                    Cell {
+                        source: source.diagnostic().clone(),
+                        roots,
+                    }
+                }
+            };
+            cells.insert(source.path().to_path_buf(), cell);
+        }
+        let dropped = !self.cells.is_empty();
+        self.cells = cells;
+        #[cfg(feature = "rust-import")]
+        let rust_import = graph.declares_rust_import();
+        #[cfg(not(feature = "rust-import"))]
+        let rust_import = false;
+        let mut changed = rust_import != self.facts.rust_import;
+        self.facts.rust_import = rust_import;
+        if recomputed > 0 || dropped {
+            let roots = self
+                .cells
+                .values()
+                .flat_map(|cell| cell.roots.iter().cloned())
+                .collect();
+            changed |= roots != self.facts.roots;
+            self.facts.roots = roots;
+        }
+        Update {
+            recomputed,
+            changed,
+        }
     }
 }
 
@@ -179,5 +251,40 @@ mod tests {
         ] {
             assert!(!facts(source).names_crate("iced"), "{source}");
         }
+    }
+
+    #[test]
+    fn a_reload_recomputes_only_the_edited_files_facts() {
+        let root = std::env::temp_dir().join(format!("rawr-layer-sheet-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let main = "mod view;\nfn main() { let n = view::count(); }\n";
+        std::fs::write(root.join("src/main.rawr"), main).unwrap();
+        let view = |text: &str| std::fs::write(root.join("src/view.rawr"), text).unwrap();
+        let mut sheet = super::Sheet::default();
+        let load = |sheet: &mut super::Sheet| {
+            let target = crate::project::Target::discover(&root).unwrap();
+            sheet.update(&crate::package::Graph::load(&crate::Engine::new(), &target).unwrap())
+        };
+        let update = |recomputed, changed| super::Update {
+            recomputed,
+            changed,
+        };
+
+        view("pub fn count() -> i64 { 1 }\n");
+        assert_eq!(load(&mut sheet), update(2, true));
+        assert!(sheet.facts().names_crate("view"));
+        // Nothing saved: no cell is computed.
+        assert_eq!(load(&mut sheet), update(0, false));
+        // An edit naming no new crate: that one file, same facts.
+        view("pub fn count() -> i64 { 2 }\n");
+        assert_eq!(load(&mut sheet), update(1, false));
+        // Bringing iced in, then taking it out again.
+        view("use iced::widget::text;\npub fn count() -> i64 { 2 }\n");
+        assert_eq!(load(&mut sheet), update(1, true));
+        assert!(sheet.facts().names_crate("iced"));
+        view("pub fn count() -> i64 { 2 }\n");
+        assert_eq!(load(&mut sheet), update(1, true));
+        assert!(!sheet.facts().names_crate("iced"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

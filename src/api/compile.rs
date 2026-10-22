@@ -110,6 +110,30 @@ impl Engine {
         crate::package::compile::generation(self, target, Some(session))
     }
 
+    /// [`Engine::compile_package_generation`] of a graph already loaded:
+    /// a host that judged the program from its load compiles that same parse.
+    #[cfg(feature = "std")]
+    #[doc(hidden)]
+    pub fn compile_loaded_package_generation(
+        &self,
+        graph: crate::package::Graph,
+        session: Option<&crate::timing::Session>,
+    ) -> Result<crate::reload::Candidate, crate::package::Error> {
+        crate::package::compile::generation_from_graph(self, graph, session)
+    }
+
+    /// [`Engine::compile_package_application_descriptor`] of a graph already
+    /// loaded.
+    #[cfg(feature = "std")]
+    #[doc(hidden)]
+    pub fn compile_loaded_package_application_descriptor(
+        &self,
+        graph: crate::package::Graph,
+        session: Option<&crate::timing::Session>,
+    ) -> Result<crate::application::Descriptor, crate::package::Error> {
+        crate::package::compile::descriptor_from_graph(self, graph, session)
+    }
+
     /// Compile and fully validate one application from a static package graph.
     #[cfg(feature = "std")]
     pub fn compile_package_application_descriptor(

@@ -27,7 +27,16 @@ pub(crate) fn descriptor(
     target: &project::Target,
     session: Option<&timing::Session>,
 ) -> Result<crate::application::Descriptor, Error> {
-    let (executable, sources, entry, _) = executable_with_evidence(engine, target, session, false)?;
+    descriptor_from_graph(engine, load(engine, target, session)?, session)
+}
+
+/// [`descriptor`] of a graph already loaded.
+pub(crate) fn descriptor_from_graph(
+    engine: &Engine,
+    graph: Graph,
+    session: Option<&timing::Session>,
+) -> Result<crate::application::Descriptor, Error> {
+    let (executable, sources, entry, _) = executable_from_graph(engine, graph, session, false)?;
     timing::observe_optional(session, timing::Phase::ApplicationContract, || {
         executable
             .require_application()
@@ -72,7 +81,16 @@ pub(crate) fn generation(
     target: &project::Target,
     session: Option<&timing::Session>,
 ) -> Result<crate::reload::Candidate, Error> {
-    let (executable, sources, _, source) = executable_with_evidence(engine, target, session, true)?;
+    generation_from_graph(engine, load(engine, target, session)?, session)
+}
+
+/// [`generation`] of a graph already loaded.
+pub(crate) fn generation_from_graph(
+    engine: &Engine,
+    graph: Graph,
+    session: Option<&timing::Session>,
+) -> Result<crate::reload::Candidate, Error> {
+    let (executable, sources, _, source) = executable_from_graph(engine, graph, session, true)?;
     let source = source.expect("reload compilation retains its canonical source graph");
     crate::reload::Candidate::from_package(executable, source).map_err(|(source, error)| {
         Error::resolution(
@@ -199,10 +217,23 @@ fn executable_with_evidence(
     session: Option<&timing::Session>,
     retain_source: bool,
 ) -> Result<ExecutableEvidence, Error> {
-    let graph = timing::observe_optional(session, timing::Phase::ParseItems, || {
+    executable_from_graph(
+        engine,
+        load(engine, target, session)?,
+        session,
+        retain_source,
+    )
+}
+
+/// Load (parse) a target's graph, observed as [`timing::Phase::ParseItems`].
+pub(crate) fn load(
+    engine: &Engine,
+    target: &project::Target,
+    session: Option<&timing::Session>,
+) -> Result<Graph, Error> {
+    timing::observe_optional(session, timing::Phase::ParseItems, || {
         Graph::load(engine, target)
-    })?;
-    executable_from_graph(engine, graph, session, retain_source)
+    })
 }
 
 /// [`executable_with_evidence`] of a graph already loaded.

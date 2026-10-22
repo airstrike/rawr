@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -52,6 +52,7 @@ trait Work: Clone + Send + 'static {
 struct Compiler {
     target: PathBuf,
     engine: rawr::Shared<rawr::Engine>,
+    layer: Arc<Mutex<crate::base::Session>>,
     timing: rawr::timing::Session,
     control: Arc<super::Control>,
     publication: Arc<rawr::reload::scheduler::publication::Slot>,
@@ -77,6 +78,7 @@ impl Session {
     pub(crate) fn start(
         target: PathBuf,
         engine: rawr::Shared<rawr::Engine>,
+        layer: crate::base::Session,
         adapter: Adapter,
         transport: rawr_iced::reload::Transport,
         timing: rawr::timing::Session,
@@ -90,6 +92,7 @@ impl Session {
         let work = Compiler {
             target,
             engine,
+            layer: Arc::new(Mutex::new(layer)),
             timing,
             control: Arc::clone(&control),
             publication: Arc::clone(&publication),
@@ -344,6 +347,7 @@ impl Work for Compiler {
         compile(
             self.target.clone(),
             self.engine.clone(),
+            &self.layer,
             Arc::clone(&self.control),
             Arc::clone(&self.publication),
             Some(&self.timing),
@@ -389,6 +393,7 @@ impl Pool {
 fn compile(
     target: PathBuf,
     engine: rawr::Shared<rawr::Engine>,
+    layer: &Mutex<crate::base::Session>,
     control: Arc<super::Control>,
     publication: Arc<rawr::reload::scheduler::publication::Slot>,
     timing: Option<&rawr::timing::Session>,
@@ -403,11 +408,20 @@ fn compile(
             target.source().text(),
         )
         .map_err(environment_report)?;
-        let compiled = match timing {
-            Some(timing) => engine.compile_package_generation_observed(&target, timing),
-            None => engine.compile_package_generation(&target),
-        };
-        compiled.map_err(|error| super::launch::package_report(&error, fallback))
+        // One parse per reload: the layer's facts and the compile share it.
+        let load = || rawr::package::Graph::load(&engine, &target);
+        let graph = match timing {
+            Some(timing) => timing.observe_result(rawr::timing::Phase::ParseItems, load),
+            None => load(),
+        }
+        .map_err(|error| super::launch::package_report(&error, fallback.clone()))?;
+        layer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .judge(&graph)?;
+        engine
+            .compile_loaded_package_generation(graph, timing)
+            .map_err(|error| super::launch::package_report(&error, fallback))
     }));
     let candidate = match compiled {
         Ok(Ok(candidate)) => candidate,
@@ -559,6 +573,7 @@ mod tests {
             let compiler = Compiler {
                 target: root.clone(),
                 engine,
+                layer: Arc::new(Mutex::new(iced_session())),
                 timing: timing.clone(),
                 control: Arc::clone(&control),
                 publication,
@@ -698,9 +713,11 @@ mod tests {
         assert!(delivery.checking(&gate, observed));
         let request = gate.start(now).unwrap();
         assert!(delivery.reloading(&gate, &request));
+        let layer = Mutex::new(iced_session());
         let invalid = compile(
             root.clone(),
             engine.clone(),
+            &layer,
             Arc::clone(&control),
             Arc::clone(&publication),
             None,
@@ -716,7 +733,15 @@ mod tests {
         assert!(delivery.checking(&gate, observed));
         let request = gate.start(now).unwrap();
         assert!(delivery.reloading(&gate, &request));
-        let newest = compile(root.clone(), engine, control, publication, None, request);
+        let newest = compile(
+            root.clone(),
+            engine,
+            &layer,
+            control,
+            publication,
+            None,
+            request,
+        );
         assert!(newest.report().is_none());
 
         assert!(!delivery.send(&gate, invalid).unwrap());
@@ -835,6 +860,70 @@ mod tests {
         assert_eq!(harness.supervisor.adapter.publication().read().staged(), 0);
         assert!(harness.supervisor.feedback.try_recv().is_err());
         harness.cleanup();
+    }
+
+    fn iced_session() -> crate::base::Session {
+        crate::base::Session::new(rawr_iced::LAYER, rawr::layer::Sheet::default())
+    }
+
+    #[test]
+    fn a_reload_that_drops_iced_asks_for_a_restart_and_keeps_the_layer_otherwise() {
+        let root = std::env::temp_dir().join(format!(
+            "rawr-reload-layer-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rawr"), source("Initial")).unwrap();
+
+        let loaded = crate::base::load(Some(&root)).unwrap();
+        let mut compiler = rawr::Engine::new();
+        rawr_iced::install(&mut compiler).unwrap();
+        let engine = rawr::Shared::new(compiler);
+        let first = engine
+            .compile_loaded_package_generation(loaded.graph, None)
+            .unwrap();
+        let layer = Mutex::new(crate::base::Session::new(rawr_iced::LAYER, loaded.sheet));
+        let adapter = super::super::Adapter::manual(first.source(), Duration::ZERO).unwrap();
+        let gate = adapter.gate();
+        let publication = adapter.publication();
+        let control = adapter.control();
+        let (transport, service) =
+            rawr_iced::reload::channel(Arc::clone(&gate), Arc::clone(&publication), engine.clone());
+        let (delivery, _feedback, _retry) = transport.into_parts();
+        let reload = |text: &str| {
+            fs::write(root.join("src/main.rawr"), text).unwrap();
+            let now = Instant::now();
+            let observed = gate.observe(now).unwrap();
+            assert!(delivery.checking(&gate, observed));
+            let request = gate.start(now).unwrap();
+            assert!(delivery.reloading(&gate, &request));
+            let completion = compile(
+                root.clone(),
+                engine.clone(),
+                &layer,
+                Arc::clone(&control),
+                Arc::clone(&publication),
+                None,
+                request,
+            );
+            let report = completion.report().cloned();
+            assert!(delivery.send(&gate, completion).is_ok());
+            report
+        };
+
+        // An edit that keeps iced reloads as before.
+        assert_eq!(reload(&source("Edited")), None);
+        // Taking iced out: the session cannot become a base program.
+        let dropped = reload(r#"fn main() { println!("plain"); }"#).unwrap();
+        assert!(
+            dropped.message().contains("no longer brings in rawr-iced"),
+            "{dropped:?}"
+        );
+        // Bringing it back reloads again.
+        assert_eq!(reload(&source("Back")), None);
+        drop(service);
+        fs::remove_dir_all(root).ok();
     }
 
     fn source(label: &str) -> String {

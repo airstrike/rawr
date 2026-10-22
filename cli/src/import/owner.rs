@@ -26,12 +26,14 @@ struct Initial {
 /// Check one imported application without opening a native window.
 pub(crate) fn check(
     target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<PathBuf, diagnostic::Report> {
     let source = target.source().path().to_path_buf();
     let fallback = fallback(target)?;
     let (mut lane, _) = initial(
         target,
+        graph,
         rawr_import::process::Lifecycle::Check,
         false,
         #[cfg(feature = "import-baseline")]
@@ -43,8 +45,10 @@ pub(crate) fn check(
 }
 
 /// Run one imported application or preview under the generated child owner.
+/// `graph` is the target's load when the caller already has it.
 pub(crate) fn run(
     target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
     lifecycle: rawr_import::process::Lifecycle,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<(), diagnostic::Report> {
@@ -55,6 +59,7 @@ pub(crate) fn run(
     rawr_import::progress::begin(&target_path);
     let initial = initial_watched(
         target,
+        graph,
         &target_path,
         lifecycle,
         #[cfg(feature = "import-baseline")]
@@ -136,6 +141,7 @@ pub(crate) fn run(
             };
             let prepared = match super::prepare_in(
                 &next_target,
+                None,
                 revision,
                 #[cfg(feature = "import-baseline")]
                 profile,
@@ -303,6 +309,7 @@ pub(crate) fn snapshot(
     let source = fallback(target)?;
     let (mut lane, _) = initial(
         target,
+        None,
         lifecycle,
         false,
         #[cfg(feature = "import-baseline")]
@@ -347,12 +354,12 @@ pub(crate) fn cell(
         let target_path = project(target)
             .ok_or_else(|| framework("a `[rust]` owner requires a Rawr project", source.clone()))?;
         let (lane, adapter, manifests, native_baseline) =
-            initial_watched(target, target_path, lifecycle, profile)?;
+            initial_watched(target, None, target_path, lifecycle, profile)?;
         // Keep the same registered observer and native baseline as the ordinary
         // owner until the installed generation has actually retired.
         (lane, Some((adapter, manifests, native_baseline)))
     } else {
-        let (lane, _) = initial(target, lifecycle, false, profile)?;
+        let (lane, _) = initial(target, None, lifecycle, false, profile)?;
         (lane, None)
     };
     let observed = match command {
@@ -384,6 +391,7 @@ pub(crate) fn cell(
 
 pub(super) fn initial(
     target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
     lifecycle: rawr_import::process::Lifecycle,
     started: bool,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
@@ -398,6 +406,7 @@ pub(super) fn initial(
     } = prepare_on_lane(
         &mut lane,
         target,
+        graph,
         #[cfg(feature = "import-baseline")]
         profile,
         &source,
@@ -416,6 +425,7 @@ pub(super) fn initial(
 
 fn initial_watched(
     target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
     target_path: &Path,
     lifecycle: rawr_import::process::Lifecycle,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
@@ -433,6 +443,7 @@ fn initial_watched(
     let mut initial = prepare_on_lane(
         &mut lane,
         target,
+        graph,
         #[cfg(feature = "import-baseline")]
         profile,
         &source,
@@ -536,14 +547,16 @@ fn open_lane(
 fn prepare_on_lane(
     lane: &mut Lane,
     target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
     source: &diagnostic::Source,
 ) -> Result<Initial, diagnostic::Report> {
     let revision = lane
         .revision()
         .map_err(|error| framework(error, source.clone()))?;
-    let prepared = super::prepare(
+    let prepared = super::prepare_loaded(
         target,
+        graph,
         revision,
         #[cfg(feature = "import-baseline")]
         profile,
@@ -582,6 +595,7 @@ fn refresh_initial(
     prepare_on_lane(
         lane,
         &target,
+        None,
         #[cfg(feature = "import-baseline")]
         profile,
         source,
@@ -684,6 +698,7 @@ mod tests {
         let target = rawr::project::Target::discover(&root).expect("run target discovers");
         let (mut lane, _) = super::initial(
             &target,
+            None,
             rawr_import::process::Lifecycle::Run,
             true,
             #[cfg(feature = "import-baseline")]
@@ -735,6 +750,7 @@ mod tests {
         let target = rawr::project::Target::discover(&root).expect("preview target discovers");
         let (mut preview, _) = super::initial(
             &target,
+            None,
             rawr_import::process::Lifecycle::Preview,
             true,
             #[cfg(feature = "import-baseline")]
@@ -769,9 +785,14 @@ mod tests {
                 .expect("the real iced lifecycle evidence scope opens");
             let target = rawr::project::Target::discover(&project)
                 .expect("the real iced lifecycle target discovers");
-            let (mut lane, _) =
-                super::initial(&target, rawr_import::process::Lifecycle::Run, true, None)
-                    .unwrap_or_else(|error| panic!("the real iced lifecycle rejects: {error}"));
+            let (mut lane, _) = super::initial(
+                &target,
+                None,
+                rawr_import::process::Lifecycle::Run,
+                true,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("the real iced lifecycle rejects: {error}"));
             assert!(lane.current_key().is_some());
             lane.shutdown()
                 .expect("the real iced lifecycle owner exits and reaps");

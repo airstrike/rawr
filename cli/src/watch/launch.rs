@@ -19,13 +19,15 @@ pub(crate) struct Launch {
 }
 
 impl Launch {
-    /// Compile, bind, watch, and start one exact project target.
-    pub(crate) fn open(path: Option<PathBuf>) -> Result<Self, diagnostic::Report> {
-        let target = match path {
-            Some(path) => project::Target::discover(path),
-            None => project::Target::current(),
-        }
-        .map_err(|error| diagnostic::Report::from_project(&error))?;
+    /// Compile, bind, watch, and start one exact project target from the
+    /// command's one load.
+    pub(crate) fn open(loaded: crate::base::Loaded) -> Result<Self, diagnostic::Report> {
+        let crate::base::Loaded {
+            target,
+            graph,
+            sheet,
+            timing,
+        } = loaded;
         let target_path = target_path(&target);
         let fallback = diagnostic::Source::new(
             target.source().path().to_string_lossy().into_owned(),
@@ -42,9 +44,8 @@ impl Launch {
             )
         })?;
         let engine = rawr::Shared::new(engine);
-        let timing = rawr::timing::Session::start();
         let candidate = engine
-            .compile_package_generation_observed(&target, &timing)
+            .compile_loaded_package_generation(graph, Some(&timing))
             .map_err(|error| package_report(&error, fallback.clone()))?;
         let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());
         let source = candidate.source().entry_source().diagnostic().clone();
@@ -93,14 +94,22 @@ impl Launch {
             engine.clone(),
             timing.clone(),
         );
-        let session = Session::start(target_path, engine, adapter, transport, timing.clone())
-            .map_err(|error| {
-                report(
-                    diagnostic::code::ENVIRONMENT_DIAGNOSTIC,
-                    error,
-                    Some(source.clone()),
-                )
-            })?;
+        let layer = crate::base::Session::new(rawr_iced::LAYER, sheet);
+        let session = Session::start(
+            target_path,
+            engine,
+            layer,
+            adapter,
+            transport,
+            timing.clone(),
+        )
+        .map_err(|error| {
+            report(
+                diagnostic::code::ENVIRONMENT_DIAGNOSTIC,
+                error,
+                Some(source.clone()),
+            )
+        })?;
 
         Ok(Self {
             bootstrap,
@@ -200,7 +209,7 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
         )
         .unwrap();
 
-        let launch = Launch::open(Some(root.clone())).unwrap();
+        let launch = Launch::open(crate::base::load(Some(&root)).unwrap()).unwrap();
         let (bootstrap, source, service, timing, session) = launch.into_parts();
         let host =
             rawr_iced::program::Host::bootstrap_observed(bootstrap, Some(source), timing).unwrap();

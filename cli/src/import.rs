@@ -79,13 +79,31 @@ impl Prepared {
 }
 
 /// Resolve, classify, compile, and seal the exact generated iced owner.
+#[cfg(test)]
 pub(crate) fn prepare(
     target: &rawr::project::Target,
     revision: rawr_import::supervisor::Revision,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<Prepared, Error> {
+    prepare_loaded(
+        target,
+        None,
+        revision,
+        #[cfg(feature = "import-baseline")]
+        profile,
+    )
+}
+
+/// [`prepare`] with the target's load when the caller already has it.
+pub(crate) fn prepare_loaded(
+    target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
+    revision: rawr_import::supervisor::Revision,
+    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
+) -> Result<Prepared, Error> {
     prepare_in(
         target,
+        graph,
         revision,
         #[cfg(feature = "import-baseline")]
         profile,
@@ -95,12 +113,14 @@ pub(crate) fn prepare(
 
 fn prepare_in(
     target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
     revision: rawr_import::supervisor::Revision,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
     scope: &rawr_import::supervisor::snapshot::attempt::Scope,
 ) -> Result<Prepared, Error> {
     prepare_transform(
         target,
+        graph,
         revision,
         #[cfg(feature = "import-baseline")]
         profile,
@@ -111,6 +131,7 @@ fn prepare_in(
 
 fn prepare_transform(
     target: &rawr::project::Target,
+    graph: Option<rawr::package::Graph>,
     revision: rawr_import::supervisor::Revision,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
     verify_surface: impl FnOnce(&[u8], &rawr_import::cargo::Limits) -> Result<(), Error>,
@@ -126,7 +147,10 @@ fn prepare_transform(
             rawr_import::metrics::profile::Selection::Variant
         }
     };
-    let graph = rawr::package::Graph::load(&rawr::Engine::new(), target).map_err(Error::Rawr)?;
+    let graph = match graph {
+        Some(graph) => graph,
+        None => rawr::package::Graph::load(&rawr::Engine::new(), target).map_err(Error::Rawr)?,
+    };
     // The project's `[rust.limits]` accounting targets (standard when
     // unconfigured) are one captured profile for every route of this import.
     let limits = graph.rust_limits();
@@ -619,6 +643,7 @@ mod tests {
         let revision = owner.revision().expect("RawrGallery evidence revision");
         let prepared = super::prepare_transform(
             &target,
+            None,
             revision,
             #[cfg(feature = "import-baseline")]
             None,

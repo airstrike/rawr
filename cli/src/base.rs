@@ -7,36 +7,69 @@
 
 use std::path::PathBuf;
 
+use rawr::layer::{Facts, Layer, Sheet};
 use rawr::{diagnostic, project, CallFnOptions, Dynamic, Engine, Scope};
 
 /// The layers this binary carries. The one place a feature flag, or finding
 /// a layer's separate binary, would change.
-const INSTALLED: &[rawr::layer::Layer] = &[rawr_iced::LAYER];
+const INSTALLED: &[Layer] = &[rawr_iced::LAYER];
+
+/// A program as the command loaded it: the one parse every later step of
+/// the command uses, its facts, and the command's timing session holding
+/// that parse.
+pub(crate) struct Loaded {
+    pub(crate) target: project::Target,
+    pub(crate) graph: rawr::package::Graph,
+    pub(crate) sheet: Sheet,
+    pub(crate) timing: rawr::timing::Session,
+}
 
 /// What runs a program: the base alone, or the base with one layer on top.
 pub(crate) enum Program {
-    /// The base alone, with the package graph its decision loaded.
-    Base(project::Target, rawr::package::Graph),
-    Layered(rawr::layer::Layer),
+    Base(Loaded),
+    Layered(Loaded),
 }
 
-/// Decide, before any layer's work, what runs the program at `path`: each
-/// installed layer judges the facts of the one package-graph load (the
-/// parse the base compiles from). A target that cannot be discovered or
-/// parsed, or brings in two layers, is a diagnostic.
-pub(crate) fn layer(path: Option<&PathBuf>) -> Result<Program, diagnostic::Report> {
+/// Discover and load the program at `path` once, with its facts.
+pub(crate) fn load(path: Option<&PathBuf>) -> Result<Loaded, diagnostic::Report> {
     let target = match path {
         Some(path) => project::Target::discover(path),
         None => project::Target::current(),
     }
     .map_err(|error| diagnostic::Report::from_project(&error))?;
-    let graph = rawr::package::Graph::load(&Engine::new(), &target)
+    let timing = rawr::timing::Session::start();
+    let graph = timing
+        .observe_result(rawr::timing::Phase::ParseItems, || {
+            rawr::package::Graph::load(&Engine::new(), &target)
+        })
         .map_err(|error| compile_report(&error, &target))?;
-    let facts = rawr::layer::Facts::of(&graph);
-    let mut claimed = INSTALLED.iter().filter(|layer| (layer.claims)(&facts));
+    let mut sheet = Sheet::default();
+    sheet.update(&graph);
+    Ok(Loaded {
+        target,
+        graph,
+        sheet,
+        timing,
+    })
+}
+
+/// Decide, before any layer's work, what runs the program at `path`: each
+/// installed layer judges the facts of the one load. A target that cannot
+/// be discovered or parsed, or brings in two layers, is a diagnostic.
+pub(crate) fn layer(path: Option<&PathBuf>) -> Result<Program, diagnostic::Report> {
+    let loaded = load(path)?;
+    Ok(match claimed(loaded.sheet.facts())? {
+        None => Program::Base(loaded),
+        Some(_) => Program::Layered(loaded),
+    })
+}
+
+/// The installed layer a program with these facts brings in, if any.
+fn claimed(facts: &Facts) -> Result<Option<Layer>, diagnostic::Report> {
+    let mut claimed = INSTALLED.iter().filter(|layer| (layer.claims)(facts));
     match (claimed.next(), claimed.next()) {
-        (None, _) => Ok(Program::Base(target, graph)),
-        (Some(layer), None) => Ok(Program::Layered(*layer)),
+        (None, _) => Ok(None),
+        (Some(layer), None) => Ok(Some(*layer)),
         (Some(first), Some(second)) => Err(diagnostic::Report::error(
             diagnostic::code::FRAMEWORK_FACADE,
             format!(
@@ -49,23 +82,68 @@ pub(crate) fn layer(path: Option<&PathBuf>) -> Result<Program, diagnostic::Repor
     }
 }
 
+/// A live session's layer, judged again across reloads: each reload brings
+/// the sheet to its new load, and the layers judge the facts again only
+/// when they changed. A session cannot change layer in place: a program
+/// that no longer brings its layer in (or brings in another) gets a
+/// diagnostic asking for a restart, and the running program stays as it
+/// was, as for any failed reload.
+pub(crate) struct Session {
+    layer: Layer,
+    sheet: Sheet,
+    verdict: Result<(), diagnostic::Report>,
+}
+
+impl Session {
+    /// A session of `layer` over the program it claimed.
+    pub(crate) const fn new(layer: Layer, sheet: Sheet) -> Self {
+        Self {
+            layer,
+            sheet,
+            verdict: Ok(()),
+        }
+    }
+
+    /// Whether the session's layer still runs this reload's load.
+    pub(crate) fn judge(&mut self, graph: &rawr::package::Graph) -> Result<(), diagnostic::Report> {
+        if self.sheet.update(graph).changed {
+            self.verdict = match claimed(self.sheet.facts()) {
+                Ok(Some(layer)) if layer.name == self.layer.name => Ok(()),
+                Ok(now) => Err(diagnostic::Report::error(
+                    diagnostic::code::FRAMEWORK_FACADE,
+                    match now {
+                        Some(other) => format!(
+                            "this program now brings in {} instead of {}",
+                            other.name, self.layer.name
+                        ),
+                        None => format!(
+                            "this program no longer brings in {}; it now runs on the base language",
+                            self.layer.name
+                        ),
+                    },
+                )
+                .help("stop it and run it again with `rawr run`")
+                .finish()),
+                Err(report) => Err(report),
+            };
+        }
+        self.verdict.clone()
+    }
+}
+
 /// Compile a base program; the source path checked.
-pub(crate) fn check(
-    target: &project::Target,
-    graph: rawr::package::Graph,
-) -> Result<PathBuf, diagnostic::Report> {
+pub(crate) fn check(loaded: Loaded) -> Result<PathBuf, diagnostic::Report> {
     Engine::new()
-        .compile_package(graph)
-        .map_err(|error| compile_report(&error, target))?;
-    Ok(target.source().path().to_path_buf())
+        .compile_package(loaded.graph)
+        .map_err(|error| compile_report(&error, &loaded.target))?;
+    Ok(loaded.target.source().path().to_path_buf())
 }
 
 /// Run a base program once. `Ok(Some(text))` is a `main` that returned
 /// `Err`: Rust's `Error: {err:?}`, for stderr and a failing exit.
-pub(crate) fn run(
-    target: &project::Target,
-    graph: rawr::package::Graph,
-) -> Result<Option<String>, diagnostic::Report> {
+pub(crate) fn run(loaded: Loaded) -> Result<Option<String>, diagnostic::Report> {
+    let Loaded { target, graph, .. } = loaded;
+    let target = &target;
     let engine = Engine::new();
     let (ast, main) = engine
         .compile_package(graph)

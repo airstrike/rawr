@@ -120,6 +120,37 @@ impl Compiler {
         }
     }
 
+    /// [`Self::check_observed`] of a graph already loaded under `timing`:
+    /// the host's layer decision and this check share that one parse.
+    #[must_use = "the observed outcome must be handled"]
+    pub fn check_loaded_observed(
+        &self,
+        target: &project::Target,
+        graph: rawr::package::Graph,
+        timing: timing::Session,
+    ) -> Observed<Checked> {
+        let outcome = diagnostic::Source::new(
+            target.source().path().to_string_lossy().into_owned(),
+            target.source().text(),
+        )
+        .map_err(Error::Diagnostic)
+        .and_then(|source| {
+            self.engine
+                .compile_loaded_package_application_descriptor(graph, Some(&timing))
+                .map_err(Error::Package)
+                .map(|descriptor| Checked {
+                    engine: self.engine.clone(),
+                    descriptor,
+                    source,
+                    timing: Some(timing.clone()),
+                })
+        });
+        Observed {
+            outcome,
+            timing: timing.snapshot(),
+        }
+    }
+
     /// Check in-memory source through the same complete application contract.
     pub fn check_source(&self, source: impl AsRef<str>) -> Result<Checked, Error> {
         self.check_named_source("<memory>", source)
