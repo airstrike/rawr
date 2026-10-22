@@ -6958,3 +6958,70 @@ fn language_mut_methods_through_field_and_element_places() {
     );
     assert!(error.contains("self"), "{error}");
 }
+
+#[test]
+fn language_patterns_on_mut_places_write_their_bindings_back() {
+    let value = run(r#"
+        enum Mode { Preview, Stream { content: String, offset: usize } }
+        enum State { Idle, Ticking { last: i64, ticks: i64 } }
+        struct App { mode: Mode, out: String, state: State, total: i64 }
+        impl App {
+            fn next(&mut self) {
+                match &mut self.mode {
+                    Mode::Preview => {}
+                    Mode::Stream { content, offset } => {
+                        if *offset >= content.len() {
+                            self.mode = Mode::Preview;
+                        } else if let Some(token) = content[*offset..].chars().next() {
+                            self.out.push(token);
+                            *offset += token.len_utf8();
+                        }
+                    }
+                }
+            }
+            fn tick(&mut self, now: i64) -> i64 {
+                if let State::Ticking { last, ticks } = &mut self.state {
+                    self.total += now - *last;
+                    *last = now;
+                    *ticks += 1;
+                    if *ticks == 2 { return 1; }
+                }
+                0
+            }
+        }
+        fn grow(slots: &mut Vec<Option<i64>>) -> i64 {
+            let mut total = 0;
+            for slot in slots.iter_mut() {
+                if let Some(n) = slot { *n *= 2; total += *n; }
+            }
+            match &mut slots[0] { Some(n) if *n > 100 => *n = 0, Some(n) => *n += 1, None => {} }
+            total
+        }
+        pub fn run() -> i64 {
+            let mut app = App {
+                mode: Mode::Stream { content: String::from("héy"), offset: 0 },
+                out: String::new(),
+                state: State::Ticking { last: 1, ticks: 0 },
+                total: 0,
+            };
+            for _ in 0..5 { app.next(); }
+            let early = app.tick(5) * 10 + app.tick(9);
+            let ticks = match &app.state { State::Ticking { ticks, .. } => *ticks, State::Idle => -1 };
+            let mut slots = vec![Some(1), None, Some(5)];
+            let doubled = grow(&mut slots);
+            let mut opt = Some(0);
+            while let Some(n) = &mut opt {
+                *n += 1;
+                if *n > 3 { break; }
+            }
+            let mut x = Some(1);
+            match &mut x { Some(v) => *v += 1, None => {} }
+            let preview = matches!(app.mode, Mode::Preview) && app.out == "héy";
+            if !preview { return -1; }
+            app.total * 1000000 + early * 10000 + ticks * 1000 + doubled * 10
+                + slots[0].unwrap() + opt.unwrap() * 100 + x.unwrap() * 100000
+        }
+        run()
+    "#);
+    assert_eq!(value, 8 * 1000000 + 1 * 10000 + 2 * 1000 + 12 * 10 + 3 + 4 * 100 + 2 * 100000);
+}

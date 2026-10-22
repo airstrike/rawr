@@ -334,6 +334,123 @@ fn collect_nominal_root(
     collect_nominal(value, pattern, true, bindings, &shape)
 }
 
+/// Write the values a root pattern bound by `&mut` back into `value`, the
+/// place it matched: the binding `names[i]` takes `values[i]`. `false`, and
+/// `value` unchanged, when the value no longer matches the pattern.
+pub(crate) fn restore_nominal_root(
+    value: &mut Dynamic,
+    pattern: &NominalPattern,
+    names: &[ImmutableString],
+    values: &[Dynamic],
+) -> bool {
+    if !matches!(collect_nominal_root(value, pattern, &mut Vec::new()), Ok(true)) {
+        return false;
+    }
+    restore_nominal(value, pattern, names, values);
+    true
+}
+
+/// `restore_nominal_root` below the root, on a value proven to match.
+fn restore_nominal(
+    value: &mut Dynamic,
+    pattern: &NominalPattern,
+    names: &[ImmutableString],
+    values: &[Dynamic],
+) {
+    let bound = |name: &ImmutableString| {
+        names
+            .iter()
+            .position(|bound| bound == name)
+            .and_then(|index| values.get(index))
+    };
+    match pattern {
+        NominalPattern::Binding { name, .. } => {
+            if let Some(new) = bound(name) {
+                *value = new.clone();
+            }
+        }
+        NominalPattern::Discard { .. }
+        | NominalPattern::Literal(_)
+        | NominalPattern::Range { .. } => {}
+        NominalPattern::Enum(child) => {
+            if let Union::Enum(ref mut nominal, ..) = value.0 {
+                for (value, child) in nominal.payload_mut().iter_mut().zip(child.payload.iter()) {
+                    restore_nominal(value, child, names, values);
+                }
+            }
+        }
+        NominalPattern::Option(Some(child)) => {
+            if let Some(Some(mut inner)) = crate::option::read(value) {
+                restore_nominal(&mut inner, child, names, values);
+                *value = crate::option::some(inner);
+            }
+        }
+        NominalPattern::Option(None) => {}
+        NominalPattern::Result(variant) => match (crate::result::read(value), variant) {
+            (Some(Ok(mut inner)), Ok(child)) => {
+                restore_nominal(&mut inner, child, names, values);
+                *value = crate::result::ok(inner);
+            }
+            (Some(Err(mut inner)), Err(child)) => {
+                restore_nominal(&mut inner, child, names, values);
+                *value = crate::result::err(inner);
+            }
+            _ => {}
+        },
+        NominalPattern::Tuple(members) => {
+            if let Ok(mut array) = value.as_array_mut() {
+                for (value, member) in array.iter_mut().zip(members.iter()) {
+                    restore_nominal(value, member, names, values);
+                }
+            }
+        }
+        NominalPattern::Struct(members) => {
+            if let Some(mut value) = value.write_lock::<crate::types::nominal::Struct>() {
+                for (value, member) in value.fields_mut().iter_mut().zip(members.iter()) {
+                    restore_nominal(value, member, names, values);
+                }
+            }
+        }
+        NominalPattern::Slice {
+            before,
+            rest,
+            after,
+        } => {
+            if let Ok(mut array) = value.as_array_mut() {
+                let end = array.len() - after.len();
+                for (value, member) in array.iter_mut().zip(before.iter()) {
+                    restore_nominal(value, member, names, values);
+                }
+                for (value, member) in array[end..].iter_mut().zip(after.iter()) {
+                    restore_nominal(value, member, names, values);
+                }
+                if let Some(rest) = rest {
+                    let mut middle = Dynamic::from_array(array[before.len()..end].to_vec());
+                    restore_nominal(&mut middle, rest, names, values);
+                    if let Ok(middle) = middle.as_array_ref() {
+                        if middle.len() == end - before.len() {
+                            array[before.len()..end].clone_from_slice(&middle);
+                        }
+                    }
+                }
+            }
+        }
+        NominalPattern::Or(alternatives) => {
+            let matched = alternatives.iter().find(|alternative| {
+                matches!(collect_nominal_root(value, alternative, &mut Vec::new()), Ok(true))
+            });
+            if let Some(alternative) = matched {
+                restore_nominal(value, alternative, names, values);
+            }
+        }
+        // `name @ pattern` binds the whole value, which wins over the parts.
+        NominalPattern::At { name, pattern } => match bound(name) {
+            Some(new) => *value = new.clone(),
+            None => restore_nominal(value, pattern, names, values),
+        },
+    }
+}
+
 impl Engine {
     /// If the value is a string, intern it.
     #[inline(always)]

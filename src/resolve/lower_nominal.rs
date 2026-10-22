@@ -2510,6 +2510,13 @@ pub(crate) struct ClosureCallable {
     pub(crate) source: crate::program::source::Id,
 }
 
+/// A root pattern bound by `&mut` and the names it binds that way.
+#[derive(Clone, Hash)]
+struct Restore {
+    pattern: crate::ast::NominalPattern,
+    names: Box<[ImmutableString]>,
+}
+
 #[derive(Clone)]
 enum Op {
     #[cfg(feature = "rust-import")]
@@ -2598,6 +2605,8 @@ enum Op {
         definition: type_def::Definition,
         item: item::Enum,
     },
+    /// Write what a pattern bound by `&mut` back into the place it matched.
+    Restore(Box<Restore>),
     Prelude(PreludeOp),
     /// `collect()` whose target inference decides: `CollectString` or
     /// `CollectVec` once the function is checked.
@@ -3799,6 +3808,7 @@ enum ExecutableOp {
         definition: type_def::Definition,
         item: item::Enum,
     },
+    Restore(Box<Restore>),
     Prelude(PreludeOp),
     /// A prelude operation for the kinds (`kind_code`) it was checked at.
     Kinded {
@@ -3983,6 +3993,7 @@ impl ExecutableOp {
             | Self::Default { .. }
             | Self::Validate { .. }
             | Self::MatchSubject { .. }
+            | Self::Restore(_)
             | Self::Prelude(_)
             | Self::Kinded { .. } => BTreeSet::new(),
         }
@@ -4011,6 +4022,7 @@ impl ExecutableOp {
             | Self::Default { .. }
             | Self::Validate { .. }
             | Self::MatchSubject { .. }
+            | Self::Restore(_)
             | Self::Prelude(_)
             | Self::Kinded { .. } => None,
         }
@@ -4041,6 +4053,7 @@ impl ExecutableOp {
             | Self::Default { .. }
             | Self::Validate { .. }
             | Self::MatchSubject { .. }
+            | Self::Restore(_)
             | Self::Prelude(_)
             | Self::Kinded { .. } => None,
         }
@@ -4186,6 +4199,12 @@ impl ExecutableOp {
             Self::Default { definition, .. } => (definition, "default".to_string()),
             Self::Validate { definition } => (definition, "validate".to_string()),
             Self::MatchSubject { definition, .. } => (definition, "match-subject".to_string()),
+            Self::Restore(restore) => {
+                return format!(
+                    "\0rawr.restore.{:016x}",
+                    crate::program::schema::symbol_id(&**restore)
+                );
+            }
         };
 
         format!(
@@ -4273,6 +4292,11 @@ impl ExecutableOp {
                 vec![models.definition(definition.id()).ty().type_id(models)]
             }
             Self::MatchSubject { .. } => vec![TypeId::of::<Dynamic>()],
+            Self::Restore(_) => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::Array>(),
+            ],
             Self::Prelude(op) | Self::Kinded { op, .. } => op.argument_types(),
         }
     }
@@ -4577,6 +4601,27 @@ impl ExecutableOp {
             Self::Validate { definition } => {
                 validate_dynamic(args[0], definition, models)?;
                 Ok(Dynamic::UNIT)
+            }
+            Self::Restore(restore) => {
+                // `[restored, place]`: the place with the bindings written
+                // back, unless it changed since it was matched (it was
+                // assigned another value, which the bindings no longer name).
+                let unchanged = equal_value(args[0], args[1]);
+                let mut place = args[0].clone();
+                let values = args[2].as_array_ref().map(|values| values.to_vec());
+                let restored = unchanged
+                    && values.is_ok_and(|values| {
+                        crate::eval::restore_nominal_root(
+                            &mut place,
+                            &restore.pattern,
+                            &restore.names,
+                            &values,
+                        )
+                    });
+                if !restored {
+                    place = args[0].clone();
+                }
+                Ok(Dynamic::from_array(vec![restored.into(), place]))
             }
             Self::MatchSubject {
                 definition, item, ..
@@ -7502,6 +7547,8 @@ struct Parser<'a> {
     /// that copies it into a local before the statement and the code that
     /// stores it back after (`self.counts.entry(k)`).
     field_entries: Vec<(origin::Fragment, origin::Fragment)>,
+    /// Patterns matched on `&mut` places whose bindings are in scope.
+    write_backs: Vec<WriteBack>,
     /// The expression depth at which `&mut place` is read: a direct
     /// argument for a function's `&mut` parameter (`this_parameter`).
     mutable_borrow: Option<usize>,
@@ -7743,6 +7790,7 @@ impl<'a> Parser<'a> {
             pipelines: BTreeMap::new(),
             last_range: None,
             field_entries: Vec::new(),
+            write_backs: Vec::new(),
             mutable_borrow: None,
             bound_iterators: BTreeMap::new(),
             pending_member: None,
@@ -11108,6 +11156,7 @@ impl<'a> Parser<'a> {
             Op::MatchSubject { definition, item } => {
                 ExecutableOp::MatchSubject { definition, item }
             }
+            Op::Restore(restore) => ExecutableOp::Restore(restore),
         })
     }
 
@@ -13738,9 +13787,11 @@ impl<'a> Parser<'a> {
 
     fn parse_binding(&mut self, let_keyword: bool) -> Result<(), Error> {
         let pending = self.field_entries.len();
+        let touched = self.begin_write_backs();
         let bound = self.parse_binding_statement(let_keyword);
         self.field_entries.truncate(pending);
         bound?;
+        self.end_write_backs(touched);
         self.settle_parses()
     }
 
@@ -14454,10 +14505,163 @@ impl<'a> Parser<'a> {
 
     fn parse_statement(&mut self) -> Result<(), Error> {
         let pending = self.field_entries.len();
+        let touched = self.begin_write_backs();
         let parsed = self.parse_expression_statement(pending);
         self.field_entries.truncate(pending);
         parsed?;
+        self.end_write_backs(touched);
         self.settle_parses()
+    }
+
+    /// Start a statement: no `&mut` pattern binding is used in it yet. The
+    /// enclosing statement's marks, to restore.
+    fn begin_write_backs(&mut self) -> Vec<bool> {
+        self.write_backs
+            .iter_mut()
+            .map(|write_back| std::mem::replace(&mut write_back.touched, false))
+            .collect()
+    }
+
+    /// End a statement: when it used a `&mut` pattern binding, write the
+    /// bindings back into their place after it (after a block's tail, around
+    /// it), unless a new binding shadows one.
+    fn end_write_backs(&mut self, outer: Vec<bool>) {
+        let mut hooks = origin::Fragment::default();
+        for (write_back, outer) in self.write_backs.iter_mut().zip(outer) {
+            let visible = write_back.bindings.iter().all(|(name, at)| {
+                self.bindings
+                    .get(name)
+                    .is_some_and(|binding| binding.declaration == *at)
+            });
+            if write_back.touched && visible {
+                hooks.push(write_back.hook.clone());
+            }
+            write_back.touched |= outer;
+        }
+        if hooks.is_empty() {
+            return;
+        }
+        match self.last_expression {
+            Some((start, endpoint)) => {
+                let mut tail = self.output.split_off(start);
+                tail.trim_end();
+                let value = self.temporary("tail");
+                let mut source = origin::Fragment::plain(format!("{{ let {value} = "));
+                source.push(tail);
+                source.push_text("; ");
+                source.push(hooks);
+                source.push_text(format!(" {value} }}"));
+                let start = self.write_output(source, endpoint);
+                self.last_expression = Some((start, endpoint));
+            }
+            None => {
+                self.output.push(hooks);
+                self.output.push_text("\n");
+            }
+        }
+    }
+
+    /// For a pattern matched on a `&mut` place: its `&mut` bindings and the
+    /// statement writing them back into the place through `scrutinee`, the
+    /// value matched. `None` for another subject, or no such binding.
+    fn pattern_write_back(
+        &mut self,
+        subject: &ParsedExpr,
+        proof: &crate::ast::NominalPattern,
+        bindings: &[PatternBinding],
+        scrutinee: &str,
+    ) -> Result<Option<WriteBack>, Error> {
+        if !matches!(
+            self.inference.resolve(&subject.ty),
+            Ty::Reference { mutable: true, .. }
+        ) {
+            return Ok(None);
+        }
+        let bound = bindings
+            .iter()
+            .filter(|binding| {
+                matches!(
+                    self.inference.resolve(&binding.ty),
+                    Ty::Reference { mutable: true, .. }
+                )
+            })
+            .map(|binding| (binding.name.clone(), binding.span))
+            .collect::<Vec<_>>();
+        if bound.is_empty() {
+            return Ok(None);
+        }
+        let (read, place, store) = match &subject.lvalue {
+            Some(Lvalue::Binding { binding, .. }) => (
+                origin::Fragment::default(),
+                origin::Fragment::plain(binding.to_string()),
+                origin::Fragment::default(),
+            ),
+            Some(Lvalue::Place { place, .. }) => (
+                origin::Fragment::default(),
+                place.clone(),
+                origin::Fragment::default(),
+            ),
+            Some(Lvalue::Field(field)) => {
+                let nested = NestedLvalue {
+                    binding: field.binding.clone(),
+                    base: origin::Fragment::plain(field.binding.to_string()),
+                    steps: vec![PlaceStep::Field {
+                        definition: field.definition.clone(),
+                        slot: field.slot,
+                    }],
+                    ty: field.ty.clone(),
+                };
+                self.nested_parts(&nested)
+            }
+            Some(Lvalue::Nested(nested)) => {
+                let nested = (**nested).clone();
+                self.nested_parts(&nested)
+            }
+            Some(Lvalue::Slice(_)) | None => {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "binding parts of a `&mut` value that is not a local, a field \
+                                or an element"
+                        .into(),
+                    source: subject.span,
+                })
+            }
+        };
+        if let Some(root) = subject.lvalue.as_ref().map(Lvalue::binding) {
+            let root = root.clone();
+            self.require_mutable_binding(&root, subject.span)?;
+        }
+        let names = bound
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Box<[_]>>();
+        let values = names
+            .iter()
+            .map(ImmutableString::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let helper = self.push_op(Op::Restore(Box::new(Restore {
+            pattern: proof.clone(),
+            names,
+        })));
+        let written = self.temporary("written");
+        let mut hook = origin::Fragment::plain("{ ");
+        hook.push(read);
+        hook.push_text(format!("let {written} = {helper}("));
+        hook.push(place.clone());
+        hook.push_text(format!(
+            ", {scrutinee}, [{values}]); if {written}[0] {{ "
+        ));
+        hook.push(place);
+        hook.push_text(format!(
+            " = {written}[1]; {scrutinee} = {written}[1]; }} else {{ {scrutinee} = (); }} "
+        ));
+        hook.push(store);
+        hook.push_text("}");
+        Ok(Some(WriteBack {
+            bindings: bound,
+            hook,
+            touched: false,
+        }))
     }
 
     /// Each pending `parse` whose target a statement made known gets its
@@ -16337,7 +16541,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_match(&mut self, match_span: Span) -> Result<ParsedExpr, Error> {
-        let subject = self.parse_head(Self::parse_expr)?;
+        let subject = self.parse_subject()?;
         // Matching through `&T` matches the referenced value.
         let subject_ty = match self.inference.resolve(&subject.ty) {
             Ty::Reference { target, .. } => *target,
@@ -16361,6 +16565,9 @@ impl<'a> Parser<'a> {
         };
         // A catch-all binding arm binds the scrutinee as written, `&T` included.
         let binding_ty = self.inference.resolve(&subject.ty);
+        let scrutinee = self.temporary("match");
+        // Kept for the arms whose `&mut` bindings are written back.
+        let place = subject.clone();
         let subject = self.pattern_subject(subject, &subject_ty)?;
         self.expect(Token::LeftBrace, "'{' to start a match")?;
         let mut arms = Vec::new();
@@ -16382,6 +16589,7 @@ impl<'a> Parser<'a> {
             let arm_start = self.position();
             // The bindings a facade pattern in the arm makes, ahead of it.
             let mut arm_prefix = origin::Fragment::default();
+            let mut write_back = None;
             // `_`, or a binding `name` that matches anything and binds it,
             // as in Rust.
             let catch_all = match self.peek() {
@@ -16450,12 +16658,24 @@ impl<'a> Parser<'a> {
                     });
                 }
 
+                write_back = self.pattern_write_back(
+                    &place,
+                    &resolved.proof,
+                    &resolved.bindings,
+                    &scrutinee,
+                )?;
                 for binding in &resolved.bindings {
+                    let written = write_back.as_ref().is_some_and(|write_back| {
+                        write_back
+                            .bindings
+                            .iter()
+                            .any(|(name, at)| *name == binding.name && *at == binding.span)
+                    });
                     self.bindings.insert(
                         binding.name.clone(),
                         Binding {
                             ty: binding.ty.clone(),
-                            mutable: binding.mutable,
+                            mutable: binding.mutable || written,
                             available: true,
                             declaration: binding.span,
                             kind: BindingKind::Local,
@@ -16517,7 +16737,34 @@ impl<'a> Parser<'a> {
             self.expect(Token::DoubleArrow, "'=>' after a match pattern")?;
             // A block arm needs no ',' after it, as in Rust.
             let block_arm = matches!(self.peek(), Token::LeftBrace);
-            let mut action = self.parse_match_action()?;
+            let written = write_back.is_some();
+            self.write_backs.extend(write_back);
+            let touched = self.begin_write_backs();
+            let action = self.parse_match_action();
+            // An arm that is an expression writes back after it.
+            let hook = match self.write_backs.last() {
+                Some(write_back) if written && write_back.touched && !block_arm => {
+                    Some(write_back.hook.clone())
+                }
+                _ => None,
+            };
+            for (write_back, outer) in self.write_backs.iter_mut().zip(touched) {
+                write_back.touched |= outer;
+            }
+            if written {
+                self.write_backs.pop();
+            }
+            let mut action = action?;
+            if let Some(hook) = hook {
+                let value = self.temporary("arm");
+                let mut block = origin::Fragment::plain(format!("{{ let {value} = "));
+                block.push(action.value.rendered_source());
+                block.push_text("; ");
+                block.push(hook);
+                block.push_text(format!(" {value} }}"));
+                action.value.source = block;
+                action.value.prelude = origin::Fragment::default();
+            }
             if !arm_prefix.is_empty() {
                 let mut block = origin::Fragment::plain("{ ");
                 block.push(arm_prefix);
@@ -16578,7 +16825,6 @@ impl<'a> Parser<'a> {
         // `_ if guard => a, rest..` is `_ => if guard { a } else { match rest }`
         // on the same subject, which is evaluated once. A catch-all binding
         // `name` is `_` with `let name = subject;` ahead of its guard and arm.
-        let scrutinee = self.temporary("match");
         let mut source = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
         source.push(subject);
         source.push_text(format!(";\nswitch {scrutinee} {{\n"));
@@ -16633,28 +16879,47 @@ impl<'a> Parser<'a> {
 
     /// `let pattern = subject` heading an `if let` or `while let`: the
     /// switch subject and arm label, with the pattern's bindings in scope.
+    /// A pattern matched on a `&mut` place writes its `&mut` bindings back
+    /// through `scrutinee`, the value matched (`WriteBack`).
     fn parse_let_condition(
         &mut self,
-    ) -> Result<(origin::Fragment, origin::Fragment, origin::Fragment), Error> {
+        scrutinee: &str,
+    ) -> Result<
+        (
+            origin::Fragment,
+            origin::Fragment,
+            origin::Fragment,
+            Option<WriteBack>,
+        ),
+        Error,
+    > {
         self.expect(Token::Let, "`let` in a condition")?;
         let syntax = self.parse_pattern_syntax()?;
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
-        let subject = self.parse_head(Self::parse_expr)?;
+        let subject = self.parse_subject()?;
         // Matching through `&T` binds references, Rust's default binding mode.
         let written_ty = self.inference.resolve(&subject.ty);
         let subject_ty = match written_ty.clone() {
             Ty::Reference { target, .. } => *target,
             ty => ty,
         };
-        let subject = self.pattern_subject(subject, &subject_ty)?;
         let resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
+        let write_back =
+            self.pattern_write_back(&subject, &resolved.proof, &resolved.bindings, scrutinee)?;
+        let subject = self.pattern_subject(subject, &subject_ty)?;
         let host = self.take_host_checks()?;
         for binding in &resolved.bindings {
+            let written = write_back.as_ref().is_some_and(|write_back| {
+                write_back
+                    .bindings
+                    .iter()
+                    .any(|(name, at)| *name == binding.name && *at == binding.span)
+            });
             self.bindings.insert(
                 binding.name.clone(),
                 Binding {
                     ty: binding.ty.clone(),
-                    mutable: binding.mutable,
+                    mutable: binding.mutable || written,
                     available: true,
                     declaration: binding.span,
                     kind: BindingKind::Local,
@@ -16669,7 +16934,21 @@ impl<'a> Parser<'a> {
             arm.push_text(" if ");
             arm.push(condition);
         }
-        Ok((subject, arm, host.rendered_binds()))
+        Ok((subject, arm, host.rendered_binds(), write_back))
+    }
+
+    /// The subject of a `match`, `if let` or `while let`, which may be a
+    /// `&mut` borrow of a place.
+    fn parse_subject(&mut self) -> Result<ParsedExpr, Error> {
+        let borrowing =
+            matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut);
+        let outer = self.mutable_borrow;
+        if borrowing {
+            self.mutable_borrow = Some(self.expression_stack.len() + 1);
+        }
+        let subject = self.parse_head(Self::parse_expr);
+        self.mutable_borrow = outer;
+        subject
     }
 
     fn next_after_else(&mut self) -> Token {
@@ -16696,14 +16975,16 @@ impl<'a> Parser<'a> {
             // `loop { switch subject { pattern => body, _ => break } }`.
             Token::While if matches!(self.peek(), Token::Let) => {
                 let original = self.bindings.clone();
-                let (subject, arm, binds) = self.parse_let_condition()?;
                 let scrutinee = self.temporary("match");
+                let (subject, arm, binds, write_back) = self.parse_let_condition(&scrutinee)?;
                 let mut head = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
                 head.push(subject);
                 head.push_text(format!(";\nswitch {scrutinee} {{\n"));
                 head.push(arm);
                 head.push_text(" => { ");
                 head.push(binds);
+                let written = write_back.is_some();
+                self.write_backs.extend(write_back);
                 let looped = self.parse_loop_body(
                     origin::Fragment::plain("loop"),
                     start,
@@ -16711,6 +16992,9 @@ impl<'a> Parser<'a> {
                     false,
                     Some((head, origin::Fragment::plain(" },\n_ => break\n}\n}"))),
                 );
+                if written {
+                    self.write_backs.pop();
+                }
                 let inner = std::mem::replace(&mut self.bindings, original);
                 for (name, binding) in &mut self.bindings {
                     binding.available &= inner.get(name).is_some_and(|binding| binding.available);
@@ -18097,11 +18381,19 @@ impl<'a> Parser<'a> {
         }
         // `if let pattern = subject`: a switch on the subject, whose
         // bindings are in scope only in the consequent.
+        let scrutinee = if matches!(self.peek(), Token::Let) {
+            self.temporary("match")
+        } else {
+            String::new()
+        };
+        let mut written = false;
         let (pattern, condition, original_bindings) = if matches!(self.peek(), Token::Let) {
             let original_bindings = self.bindings.clone();
-            let pattern = self.parse_let_condition()?;
+            let (subject, arm, binds, write_back) = self.parse_let_condition(&scrutinee)?;
+            written = write_back.is_some();
+            self.write_backs.extend(write_back);
             let condition = self.literal("true", Ty::Bool, if_span);
-            (Some(pattern), condition, original_bindings)
+            (Some((subject, arm, binds)), condition, original_bindings)
         } else {
             let condition = self.parse_head(Self::parse_expr)?;
             self.require_type(&Ty::Bool, &condition.ty, condition.span)?;
@@ -18111,7 +18403,12 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek(), Token::LeftBrace) {
             return Err(self.unsupported("`if` consequent without a block"));
         }
-        let consequent = self.parse_match_action()?;
+        let consequent = self.parse_match_action();
+        // The pattern's bindings go out of scope with the consequent.
+        if written {
+            self.write_backs.pop();
+        }
+        let consequent = consequent?;
         let consequent_bindings = self.bindings.clone();
         self.bindings = original_bindings.clone();
         let alternative = if !matches!(self.peek(), Token::Else) {
@@ -18155,7 +18452,6 @@ impl<'a> Parser<'a> {
         let [consequent, alternative] = branches;
         let span = span(if_span.start(), alternative.syntax.end());
         if let Some((subject, arm, binds)) = pattern {
-            let scrutinee = self.temporary("match");
             let mut source = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
             source.push(subject);
             source.push_text(format!(";\nswitch {scrutinee} {{\n"));
@@ -23527,6 +23823,15 @@ impl<'a> Parser<'a> {
         else {
             return;
         };
+        for write_back in &mut self.write_backs {
+            if write_back
+                .bindings
+                .iter()
+                .any(|(bound, at)| bound == name && *at == declaration)
+            {
+                write_back.touched = true;
+            }
+        }
         for scope in &mut self.closures {
             if scope.outer.get(name) == Some(&declaration) {
                 scope.captures.insert(name.clone());
@@ -31601,6 +31906,17 @@ fn contains_inference(ty: &Ty) -> bool {
         }
         _ => false,
     }
+}
+
+/// The `&mut` bindings of a pattern matched on a place (`if let Some(v) =
+/// &mut x`, `match &mut self.state`). Each statement that uses one is
+/// followed by `hook`, which writes the bindings back into the place.
+struct WriteBack {
+    /// Each binding's name and declaration.
+    bindings: Vec<(ImmutableString, Span)>,
+    hook: origin::Fragment,
+    /// The statement being read uses a binding.
+    touched: bool,
 }
 
 /// A loop being parsed. A `break` or `continue` to an enclosing loop sets
