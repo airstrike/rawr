@@ -24,6 +24,9 @@ const HOST_PACKAGES: [&str; 10] = [
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Naming any path stops Cargo rerunning this script when it changes
+    // itself, so it names itself too.
+    println!("cargo:rerun-if-changed=build.rs");
     if env::var_os("CARGO_FEATURE_EMBEDDED_HOST").is_some() {
         embed_host()?;
     }

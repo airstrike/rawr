@@ -6,6 +6,9 @@ use std::{
 
 fn main() {
     // Tell Cargo that if the given environment variable changes, to rerun this build script.
+    // Naming any path stops Cargo rerunning this script when it changes
+    // itself, so it names itself too.
+    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build.template");
     println!("cargo:rerun-if-env-changed=RAWR_AHASH_SEED");
     println!("cargo:rerun-if-env-changed=RAWR_HASHING_SEED");
