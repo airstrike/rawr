@@ -9640,7 +9640,13 @@ impl<'a> Parser<'a> {
                 _ => return None,
             }
         }
-        if !matches!(ahead.peek(), Some((Token::LeftParen | Token::Unit, _))) {
+        let called = matches!(ahead.peek(), Some((Token::LeftParen | Token::Unit, _)));
+        // `From::from` as a value is a closure (`parse_std_trait_call`).
+        if !called
+            && !segments.iter().rev().nth(1).is_some_and(|name| {
+                matches!(name.as_str(), "From" | "Into" | "Clone" | "ToString")
+            })
+        {
             return None;
         }
         let [modules @ .., trait_name, member] = &segments[..] else {
@@ -9902,6 +9908,33 @@ impl<'a> Parser<'a> {
         member: &str,
         start: Position,
     ) -> Result<ParsedExpr, Error> {
+        // `.map(From::from)`, `ToString::to_string` as a value: the closure
+        // `|value| value.into()` (or the method named).
+        if !matches!(self.peek(), Token::LeftParen | Token::Unit)
+            && matches!(trait_name, "From" | "Into" | "Clone" | "ToString")
+        {
+            let at = start;
+            let argument = || {
+                (
+                    Token::Identifier(Box::new("__rawr_trait_value".into())),
+                    at,
+                )
+            };
+            let method = if matches!(trait_name, "From" | "Into") {
+                "into"
+            } else {
+                member
+            };
+            self.splice_tokens(vec![
+                argument(),
+                (Token::Pipe, at),
+                argument(),
+                (Token::Period, at),
+                (Token::Identifier(Box::new(method.into())), at),
+                (Token::Unit, at),
+            ]);
+            return self.parse_closure(Token::Pipe, point_span(at), false);
+        }
         let (arguments, close) = self.take_argument_tokens()?;
         let call = span(start, close);
         let expects = |count: usize, found: usize| Error::InvalidMethodCall {
@@ -19042,6 +19075,25 @@ impl<'a> Parser<'a> {
         let target = self.inference.resolve(&target);
         // `&mut c as &mut dyn Bump`, `Box::new(c) as Box<dyn Bump>`: an
         // unsized coercion, the value (and its place) unchanged.
+        // `double as fn(i64) -> i64`: a function item or closure coerced
+        // to its pointer type. A host style function (`button::primary as
+        // fn(&Theme, _) -> _`) stays the host value, which Rawr passes on
+        // as it is.
+        if let Ty::Fn { .. } = &target {
+            if matches!(
+                source,
+                Ty::Host { .. } | Ty::Callable { .. } | Ty::Support(_)
+            ) {
+                value.span = span(value.span.start(), written.end());
+                value.lvalue = None;
+                return Ok(value);
+            }
+            self.coerce_expr(&target, &mut value)?;
+            value.ty = target;
+            value.span = span(value.span.start(), written.end());
+            value.lvalue = None;
+            return Ok(value);
+        }
         if matches!(
             (&source, &target),
             (Ty::Reference { .. }, Ty::Reference { .. }) | (Ty::Boxed(_), Ty::Boxed(_))

@@ -7077,3 +7077,22 @@ fn language_fieldless_enum_casts() {
     assert_eq!(value, 0 + 10 * 100 + 11 * 10000 + -3 * 1000000 + 254 * 100000000);
     rejected("enum E { A(i64) } pub fn run() -> i64 { E::A(1) as i64 } run()");
 }
+
+#[test]
+fn language_fn_pointer_casts_and_trait_function_values() {
+    let value = run(r#"
+        struct Item(String);
+        impl From<&str> for Item { fn from(s: &str) -> Self { Item(s.to_string()) } }
+        fn double(x: i64) -> i64 { x * 2 }
+        pub fn run() -> i64 {
+            let f = double as fn(i64) -> i64;
+            let g: fn(i64) -> i64 = From::from;
+            let items: Vec<Item> = ["a", "bb"].into_iter().map(From::from).collect();
+            let s: Vec<String> = vec![1, 2].iter().map(ToString::to_string).collect();
+            let t: Vec<String> = ["a", "b"].into_iter().map(Into::into).collect();
+            f(4) + g(3) + items[1].0.len() as i64 + s.len() as i64 + t.len() as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 17);
+}
