@@ -406,7 +406,7 @@ fn background_cargo_check_restarts_on_saves_and_reports_only_the_newest() {
 #[test]
 fn a_marked_crate_imports_its_cargo_dependencies() {
     let sandbox = Sandbox::new("marked-deps");
-    for name in ["rs-marker-rand", "rs-marker-chrono"] {
+    for name in ["rs-marker-rand", "rs-marker-chrono", "rs-marker-palette"] {
         let root = copy(name, &sandbox.work());
         assert!(!root.join("rawr.toml").exists());
         let graph = graph(&root, None).unwrap();
