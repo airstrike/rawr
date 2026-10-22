@@ -7921,6 +7921,7 @@ impl<'a> Parser<'a> {
                 Token::Do => {
                     return Err(self.unsupported("legacy do in checked nominal methods"));
                 }
+                Token::Fn => self.skip_nested_fn()?,
                 _ => self.parse_statement()?,
             }
         }
@@ -8017,6 +8018,7 @@ impl<'a> Parser<'a> {
                 Token::Do => {
                     return Err(self.unsupported("legacy do in checked nominal functions"));
                 }
+                Token::Fn => self.skip_nested_fn()?,
                 _ => self.parse_statement()?,
             }
         }
@@ -13515,6 +13517,27 @@ impl<'a> Parser<'a> {
 
     /// `let (a, (mut b, _)) = value;`, `let &x = r;`, `let whole @ (a, b) = v;`:
     /// an irrefutable pattern binds the parts of the value.
+    /// A `fn` item inside a body: the item parser hoisted it to the file's
+    /// items, so its tokens are passed over here.
+    fn skip_nested_fn(&mut self) -> Result<(), Error> {
+        let start = self.expect(Token::Fn, "`fn` to start a nested function")?;
+        let mut depth = 0usize;
+        loop {
+            match self.next() {
+                (Token::LeftBrace, _) => depth += 1,
+                (Token::RightBrace, _) if depth == 1 => return Ok(()),
+                (Token::RightBrace, _) => depth = depth.saturating_sub(1),
+                (Token::EOF, position) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "nested `fn` without a body".into(),
+                        source: span(start, position),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Whether the `let` ahead is `let pattern = value else { .. };`: an
     /// `else` before its `;` that no `}` precedes, since Rust forbids a
     /// value ending in `}` there.
@@ -17403,6 +17426,7 @@ impl<'a> Parser<'a> {
                 match self.peek() {
                     Token::Let => self.parse_binding(true)?,
                     Token::Const => self.parse_binding(false)?,
+                    Token::Fn => self.skip_nested_fn()?,
                     _ => self.parse_statement()?,
                 }
             }

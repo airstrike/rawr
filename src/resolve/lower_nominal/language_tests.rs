@@ -6364,3 +6364,31 @@ fn language_let_else() {
     assert!(!error.is_empty());
     rejected("pub fn run() -> i64 { let Some(x) = Some(1) else { let y = x; return 0; }; x } run()");
 }
+
+#[test]
+fn language_nested_fn_items() {
+    let value = run_string(
+        r#"
+        struct C { n: i64 }
+        impl C {
+            fn get(&self) -> i64 { fn add(a: i64, b: i64) -> i64 { a + b } add(self.n, 1) }
+        }
+        pub fn run() -> String {
+            let first = twice(sq(3));
+            fn sq(x: i64) -> i64 { x * x }
+            fn twice(x: i64) -> i64 { fact(2) * x / 2 }
+            fn fact(n: i64) -> i64 { if n <= 1 { 1 } else { n * fact(n - 1) } }
+            let f: fn(i64) -> i64 = sq;
+            let label = if true {
+                fn inner() -> String { String::from("inner") }
+                inner()
+            } else {
+                String::new()
+            };
+            format!("{} {} {} {}", first, f(5), label, C { n: 1 }.get())
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "9 25 inner 2");
+}

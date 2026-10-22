@@ -11,7 +11,31 @@ use std::prelude::v1::*;
 /// which the legacy script does not see.
 pub(super) type ParsedFile = (Box<[crate::item::Parsed]>, Vec<Span>);
 
+#[cfg(not(feature = "no_std"))]
+std::thread_local! {
+    /// The `fn` items declared inside function bodies of the file being
+    /// parsed. They join the file's items, as Rawr hoists them.
+    static NESTED: core::cell::RefCell<Vec<crate::item::Function>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+}
+
 pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
+    #[cfg(not(feature = "no_std"))]
+    let outer = NESTED.take();
+    let parsed = parse_items(engine, source);
+    #[cfg(not(feature = "no_std"))]
+    let nested = NESTED.replace(outer);
+    let (mut items, inner) = parsed?;
+    #[cfg(not(feature = "no_std"))]
+    if !nested.is_empty() {
+        let mut all = items.into_vec();
+        all.extend(nested.into_iter().map(crate::item::Parsed::Function));
+        items = all.into_boxed_slice();
+    }
+    Ok((items, inner))
+}
+
+fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     let inputs = [source];
     let (stream, tokenizer_control) = engine.lex(&inputs);
     let input = &mut stream.peekable();
@@ -3075,8 +3099,21 @@ fn parse_body_syntax(
 ) -> ParseResult<(Span, crate::item::BodySyntax)> {
     let mut scan = ScanState::inside_body();
     let mut tokens = Vec::new();
+    // Whether a statement may start here: a nested `fn` item.
+    let mut boundary = true;
 
     loop {
+        #[cfg(not(feature = "no_std"))]
+        if boundary && let Some((Token::Fn, position)) = input.peek() {
+            let position = *position;
+            let function =
+                parse_function(input, tokenizer_control, Box::default(), None, position, false)?;
+            NESTED.with_borrow_mut(|nested| nested.push(function));
+            continue;
+        }
+        if let Some((token, _)) = input.peek() {
+            boundary = matches!(token, Token::LeftBrace | Token::RightBrace | Token::SemiColon);
+        }
         match scan
             .next(input, tokenizer_control)
             .expect("token streams always end with EOF")
