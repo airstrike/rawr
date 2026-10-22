@@ -100,7 +100,7 @@ fn main() {
 <p>The <code>rawr</code> command parses a program once. If the program uses iced, rawr-iced reads that parse and does not parse the file again.</p>
 
 <h2 id="status">Status</h2>
-<p>Rawr is pre-alpha. The crate and the <code>rawr</code> command build on stable Rust. rawr-iced runs only on Apple Silicon Macs for now. It follows iced master and pins one Rust nightly. APIs, commands, file formats and error codes will change without notice.</p>
+<p>Rawr is pre-alpha. The crate and the <code>rawr</code> command build on stable Rust. They have no platform-specific code. Importing your own Rust crates currently works only on Apple Silicon Macs. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far. rawr-iced follows iced master and pins one Rust nightly. APIs, commands, file formats and error codes will change without notice.</p>
 <p>Rawr doesn&rsquo;t cover all of Rust yet. <a href="/docs/language#not-supported">The language page</a> lists what is missing today. If Rawr rejects valid Rust that it claims to support, that&rsquo;s a bug. Please report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
 
 <h2 id="pages">Pages</h2>

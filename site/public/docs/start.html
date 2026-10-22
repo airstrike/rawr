@@ -65,7 +65,7 @@
 
 <h3 id="install-iced">rawr-iced</h3>
 <p>rawr-iced adds iced support. Install it and <code>rawr</code> hands every program that uses iced to it.</p>
-<div class="note"><p>rawr-iced runs on Apple Silicon Macs for now. It needs the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr builds iced and your own crates with that toolchain too.</p></div>
+<div class="note"><p>Importing your own Rust crates currently works only on Apple Silicon Macs. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far. rawr-iced needs the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr builds iced and your own crates with that toolchain too.</p></div>
 <div class="block"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre></div>
