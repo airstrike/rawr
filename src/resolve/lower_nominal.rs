@@ -8340,6 +8340,7 @@ impl<'a> Parser<'a> {
     /// Write each pending witness over its placeholder (same length, so
     /// source locations stay exact).
     fn finish_witnesses(&mut self) -> Result<(), Error> {
+        self.settle_instance_literals();
         // Rust's fallback: an unconstrained literal is an `i32` or `f64`.
         for (id, integer) in std::mem::take(&mut self.literal_kinds) {
             let (kind, default) = if integer {
@@ -8432,6 +8433,52 @@ impl<'a> Parser<'a> {
 
     /// Write each generic trait call's instance dispatcher over its
     /// placeholder, now that inference knows the trait's arguments.
+    /// Before the literal fallback, as Rust selects impls: a trait
+    /// argument that is a literal's `{integer}` or `{float}` takes the type
+    /// of the one impl of that kind whose other arguments match.
+    fn settle_instance_literals(&mut self) {
+        for (_, trait_name, _, arguments, _, _) in self.pending_instances.clone() {
+            let arguments = arguments
+                .iter()
+                .map(|ty| self.inference.resolve(ty))
+                .collect::<Vec<_>>();
+            let literal = |ty: &Ty| match ty {
+                Ty::Int(Int::Var(id)) => Some((*id, true)),
+                Ty::Float(Float::Var(id)) => Some((*id, false)),
+                _ => None,
+            };
+            if !arguments.iter().any(|argument| literal(argument).is_some()) {
+                continue;
+            }
+            let Some(instances) = self.models.trait_instances.get(&trait_name) else {
+                continue;
+            };
+            let matching = instances
+                .iter()
+                .map(|instance| instance.iter().map(Ty::from_resolved).collect::<Vec<_>>())
+                .filter(|instance| {
+                    instance.len() == arguments.len()
+                        && instance.iter().zip(&arguments).all(|(instance, argument)| {
+                            match (literal(argument), instance) {
+                                (Some((_, true)), Ty::Int(_)) | (Some((_, false)), Ty::Float(_)) => {
+                                    true
+                                }
+                                (Some(_), _) => false,
+                                (None, instance) => instance == argument,
+                            }
+                        })
+                })
+                .collect::<Vec<_>>();
+            if let [instance] = &matching[..] {
+                for (argument, ty) in arguments.iter().zip(instance) {
+                    if let Some((id, _)) = literal(argument) {
+                        self.inference.bind(id, ty.clone());
+                    }
+                }
+            }
+        }
+    }
+
     fn finish_instances(&mut self) -> Result<(), Error> {
         for (placeholder, trait_name, method, arguments, span, by_witness) in
             std::mem::take(&mut self.pending_instances)
