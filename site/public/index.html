@@ -4,18 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rawr: Rust Augmented With Rust</title>
-<meta name="description" content="Rawr is Rust Augmented With Rust: a scripting language that reads like Rust. The rawr crate embeds it in any Rust program on stable Rust; its first shell, rawr-iced, runs native iced apps that reload in about 0.2 s.">
+<meta name="description" content="Rawr is Rust Augmented With Rust: a scripting language that reads like Rust. The rawr crate embeds it in any Rust program on stable Rust; its first layer, rawr-iced, is brought in when your code uses iced and reloads native iced apps in about 0.2 s.">
 <meta property="og:title" content="Rawr: Rust Augmented With Rust">
-<meta property="og:description" content="A scripting language that reads like Rust. Embed it in any Rust program; the rawr-iced shell runs native iced apps. Pre-alpha.">
+<meta property="og:description" content="A scripting language that reads like Rust. Embed it in any Rust program; with iced, the rawr-iced layer reloads native apps. Pre-alpha.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Rawr: Rust Augmented With Rust. The same cart code as Rust and as a Rawr script.">
+<meta property="og:image:alt" content="Rawr: Rust Augmented With Rust. The same cart program run by cargo and by rawr.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Rawr: Rust Augmented With Rust">
-<meta name="twitter:description" content="A scripting language that reads like Rust. Embed it in any Rust program; the rawr-iced shell runs native iced apps. Pre-alpha.">
+<meta name="twitter:description" content="A scripting language that reads like Rust. Embed it in any Rust program; with iced, the rawr-iced layer reloads native apps. Pre-alpha.">
 <meta name="twitter:image" content="https://rawr.airstrike.fyi/og/card.png">
 <meta name="theme-color" content="#141416">
 <link rel="canonical" href="https://rawr.airstrike.fyi/">
@@ -79,13 +79,17 @@ p code, li code, td code, figcaption code { font-size: 0.88em; color: var(--text
 .file b { font-weight: 400; color: var(--text); }
 .rawr .file b { color: var(--pink); }
 .layer pre { flex: 1; padding: 14px 16px 16px; font-size: 13px; line-height: 1.6; color: var(--code); tab-size: 4; overflow: hidden; white-space: pre; }
-.run { padding: 10px 16px; border-top: 1px solid var(--line); font: 12px/1.5 var(--mono); color: var(--dim); }
-.run b { font-weight: 400; color: var(--text); }
-.run { display: flex; justify-content: space-between; gap: 12px; }
-.run span { color: var(--rose); white-space: nowrap; }
-.run span::before { content: "\2192  "; color: var(--dim); }
+/* A terminal strip under each file: the command, then its output on the next line. */
+.run { padding: 10px 16px 11px; border-top: 1px solid var(--line); background: #0c0c0e; font: 12px/1.6 var(--mono); color: var(--dim); white-space: pre; }
+.run b, .run span { display: block; font-weight: 400; }
+.run b { color: var(--text); }
 .run b::before { content: "$ "; color: var(--dim); }
-.run b.call::before { content: none; }
+.run span { color: var(--rose); }
+.run span.quiet { color: var(--dim); }
+.rawr .run { background: #0e0c10; }
+/* The right-hand file mirrors its name and command to the right edge, so both show at any split. */
+.layer.rawr .file { flex-direction: row-reverse; }
+.layer.rawr .run { text-align: right; }
 .divider { position: absolute; top: 0; bottom: 0; left: var(--pos); width: 0; z-index: 2; }
 .divider::before { content: ""; position: absolute; top: 0; bottom: 0; left: -0.5px; width: 1px; background: var(--pink); }
 .grip { position: absolute; top: 50%; left: 0; width: 36px; height: 36px; transform: translate(-50%, -50%); background: var(--pink); color: var(--bg); border: 0; display: grid; place-items: center; cursor: ew-resize; touch-action: none; font: 15px/1 var(--mono); letter-spacing: -1px; }
@@ -197,18 +201,18 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
       <p class="cap"><span class="slash">//</span>A scripting language that reads like Rust</p>
       <h1><span class="ini">R</span>ust <span class="ini">A</span>ugmented <span class="ini">W</span>ith <span class="ini">R</span>ust</h1>
       <p class="lede">Rawr has Rust&rsquo;s structs, enums, traits and <code>match</code>, checked up front with rustc-style errors. Your program stays Rust; the parts you want to change while it runs are written in Rawr.</p>
-      <p class="lede">The <code>rawr</code> crate is the language, and any Rust program can embed it. A shell gives it a domain. The first one, <a href="#iced"><code>rawr-iced</code></a>, runs native <a href="https://github.com/iced-rs/iced">iced</a> apps that reload in about 0.2&nbsp;s.</p>
+      <p class="lede">The <code>rawr</code> crate is the language, and any Rust program can embed it. Layers add a domain on top. The first, <a href="#iced"><code>rawr-iced</code></a>, is brought in when your code uses <a href="https://github.com/iced-rs/iced">iced</a>, and reloads native iced apps in about 0.2&nbsp;s.</p>
       <div class="actions">
         <a class="btn go" href="#install">Install Rawr</a>
-        <a class="btn" href="#iced">See the iced shell</a>
+        <a class="btn" href="#iced">See rawr-iced</a>
       </div>
     </div>
 
-    <figure class="compare intro" style="--pos: 50%" data-left="Rust" data-right="Rawr">
+    <figure class="compare intro" style="--pos: 50%" data-left="main.rs" data-right="cart.rawr">
       <div class="tabs">
         <button type="button" data-to="100" aria-pressed="false" aria-controls="stage-cart">main.rs</button>
         <span class="hint">drag the divider</span>
-        <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-cart">SCRIPT</button>
+        <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-cart">cart.rawr</button>
       </div>
       <div class="scroller">
       <div class="stage" id="stage-cart">
@@ -247,7 +251,7 @@ fn main() {
           <div class="run"><b>cargo run</b><span>total: 27</span></div>
         </div>
         <div class="layer rawr" aria-hidden="true">
-          <div class="file"><b>SCRIPT</b><span>Rawr</span></div>
+          <div class="file"><b>cart.rawr</b><span>Rawr</span></div>
           <pre><code data-lang="rust">enum Item {
     Book { price: f64 },
     Coffee { cups: i64 },
@@ -274,49 +278,48 @@ fn total(items: &amp;[Item]) -&gt; f64 {
     sum
 }
 
-let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
-total(&amp;cart)</code></pre>
-          <div class="run"><b class="call">Engine::new().eval::&lt;f64&gt;(SCRIPT)</b><span>27.0</span></div>
+fn main() {
+    let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
+    println!("total: {}", total(&amp;cart));
+}</code></pre>
+          <div class="run"><b>rawr run cart.rawr</b><span>total: 27</span></div>
         </div>
         <div class="divider">
           <span class="hit" aria-hidden="true"></span>
-          <button type="button" class="grip" role="slider" aria-label="Compare the Rust program and the Rawr script" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="Half Rust, half Rawr" aria-controls="stage-cart"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
+          <button type="button" class="grip" role="slider" aria-label="Compare main.rs and cart.rawr" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="50% main.rs, 50% cart.rawr" aria-controls="stage-cart"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
         </div>
       </div>
       </div>
       <figcaption>
-        <strong>Spot the difference.</strong> The enum, the trait, the <code>impl</code> and <code>fn total</code> are the same bytes. Only the ending differs: Rust needs a <code>fn main</code> that prints, while a Rawr script runs its statements from the top and hands its last expression back to the Rust program that evaluated it.
-        <small>Left: a complete Rust 2024 program; stable <code>rustc</code> compiles it without warnings and it prints <code>total: 27</code>. Right: the <code>SCRIPT</code> string in <code>examples/cart.rs</code>, which <code>cargo run --example cart</code> evaluates to <code>27</code>.</small>
+        <strong>Spot the difference.</strong> There isn&rsquo;t one. The two files are the same bytes; only the command differs. <code>cargo run</code> builds it as Rust, <code>rawr run</code> runs it as Rawr, and both print <code>total: 27</code>.
+        <small>Right: <code>examples/cart.rawr</code>. Left: the same file copied to <code>src/main.rs</code>; stable <code>rustc</code> (edition 2024) compiles it without warnings.</small>
       </figcaption>
     </figure>
   </div>
 </div>
 
-<section id="shells">
+<section id="layers">
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>Shells</p>
-      <h2>A language, then a shell for a domain</h2>
-      <p>The language core knows nothing about windows or widgets. It parses, checks and runs Rawr inside whatever Rust program embeds it.</p>
-      <p>A shell gives it a domain: the types, the commands and the reload loop. <strong>iced is the first shell</strong>; <code>rawr-iced</code> is Rawr for iced apps.</p>
+      <p class="cap"><span class="slash">//</span>Layers</p>
+      <h2>A base language, with layers on top</h2>
+      <p>The base language knows nothing about windows or widgets. It parses, checks and runs Rawr inside whatever Rust program embeds it. <code>rawr run cart.rawr</code> runs on the base alone.</p>
+      <p>A layer adds a domain on top: its types, its commands and a reload loop. <strong>rawr-iced is the first layer</strong>, and <code>rawr</code> brings it in when your code uses iced. More layers can follow.</p>
     </div>
     <div class="stack">
       <table>
-        <tr><td><code>rawr</code></td><td>The language. Embed it in any Rust program with <code>Engine::new().eval</code>. Builds on stable Rust 1.91 or newer.</td></tr>
-        <tr><td><code>rawr-iced</code></td><td>The first shell, for <a href="https://github.com/iced-rs/iced">iced</a> apps: reload on save in about 0.2&nbsp;s, rustc-style errors, your Rust crates imported with no bindings, <code>#[preview]</code> views and PNG snapshots, and the <code>?play</code> bot and playground.</td></tr>
+        <tr><td><code>rawr</code></td><td>The base language. Embed it in any Rust program: compile a file with <code>Engine::compile</code> and call into it with <code>call_fn</code>. Builds on stable Rust 1.91 or newer.</td></tr>
+        <tr><td><code>rawr-iced</code></td><td>The first layer, brought in when your code uses <a href="https://github.com/iced-rs/iced">iced</a>: reload on save in about 0.2&nbsp;s, rustc-style errors, your Rust crates imported with no bindings, <code>#[preview]</code> views and PNG snapshots, and the <code>?play</code> bot and playground.</td></tr>
       </table>
       <div class="block">
         <div class="file"><b>examples/cart.rs</b><span>the host</span></div>
-        <pre><code data-lang="rust">use rawr::Engine;
-
-const SCRIPT: &amp;str = r#"
-… the Rawr script above …
-"#;
+        <pre><code data-lang="rust">//! Rawr embedded: Rust code running a Rust-shaped script.
+use rawr::{Engine, Scope};
 
 fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
-    let total = Engine::new().eval::&lt;f64&gt;(SCRIPT)?;
-    println!("total: {total}");
-    Ok(())
+    let engine = Engine::new();
+    let ast = engine.compile(include_str!("cart.rawr"))?;
+    engine.call_fn::&lt;()&gt;(&amp;mut Scope::new(), &amp;ast, "main", ())
 }</code></pre>
         <div class="run"><b>cargo run --example cart</b><span>total: 27</span></div>
       </div>
@@ -330,7 +333,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
       <p class="cap"><span class="slash">//</span>Install</p>
       <h2>Install from git</h2>
       <p><strong>The language</strong> is an ordinary crate. It builds on stable Rust 1.91 or newer.</p>
-      <p><strong>The iced shell</strong> is more demanding. It runs on Apple Silicon Macs for now and needs one pinned Rust nightly, <code>nightly-2026-07-11</code>, with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr builds iced and your own crates with that toolchain too.</p>
+      <p><strong>The <code>rawr</code> command</strong> is more demanding, even for scripts without iced: it carries rawr-iced, runs on Apple Silicon Macs for now, and needs one pinned Rust nightly, <code>nightly-2026-07-11</code>, with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr builds iced and your own crates with that toolchain too.</p>
     </div>
     <div>
       <div class="group">
@@ -338,16 +341,16 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
         <div class="cmds">
           <div class="cmd"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre><button type="button" class="copy">Copy</button></div>
         </div>
-        <p class="note">Then <code>Engine::new().eval::&lt;T&gt;(script)</code>, as in <code>examples/cart.rs</code> above.</p>
+        <p class="note">Then compile a file and call its <code>main</code>, as <code>examples/cart.rs</code> does above.</p>
       </div>
       <div class="group">
-        <p class="cap">The iced shell: toolchain, CLI and import driver</p>
+        <p class="cap">The rawr command: toolchain, CLI and import driver</p>
         <div class="cmds">
           <div class="cmd"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src</code></pre><button type="button" class="copy">Copy</button></div>
           <div class="cmd"><pre><code>cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre><button type="button" class="copy">Copy</button></div>
           <div class="cmd"><pre><code>cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre><button type="button" class="copy">Copy</button></div>
         </div>
-        <p class="note"><code>rawr-cli</code> installs <code>rawr</code>. <code>rawr-import</code> installs <code>rawr-import-driver</code> next to it, which reads your Rust crates for imports. The first <code>rawr run</code> compiles iced, so it takes a few minutes; later launches reuse that build.</p>
+        <p class="note"><code>rawr-cli</code> installs <code>rawr</code>. <code>rawr-import</code> installs <code>rawr-import-driver</code> next to it, which reads your Rust crates for imports. The first <code>rawr run</code> of an iced app compiles iced, so it takes a few minutes; later launches reuse that build. A script without iced runs once and exits, with no build and no hot reload.</p>
       </div>
       <div class="group">
         <p class="cap">Start an iced project</p>
@@ -363,9 +366,9 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
 <section id="iced">
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>The iced shell</p>
+      <p class="cap"><span class="slash">//</span>rawr-iced</p>
       <h2>Write iced. Reload it like a script.</h2>
-      <p><code>rawr-iced</code> runs native iced apps written in Rawr, with the same <code>impl Widget&lt;Message&gt;</code>, the same <code>column![]</code>, the same <code>match</code>, against iced master.</p>
+      <p>When your code uses iced, <code>rawr</code> brings in <code>rawr-iced</code> on top of the base language. It runs native iced apps written in Rawr, with the same <code>impl Widget&lt;Message&gt;</code>, the same <code>column![]</code>, the same <code>match</code>, against iced master.</p>
       <p>Save a <code>.rawr</code> file and <code>rawr run</code> reloads it in about 0.2&nbsp;s. The window stays open and keeps its state.</p>
     </div>
       <figure class="compare" style="--pos: 50%" data-left="main.rs" data-right="main.rawr">
@@ -418,7 +421,7 @@ impl Counter {
         .align_x(Center)
     }
 }</code></pre>
-            <div class="run"><b>cargo run</b></div>
+            <div class="run"><b>cargo run</b><span class="quiet">(opens a window)</span></div>
           </div>
           <div class="layer rawr" aria-hidden="true">
             <div class="file"><b>src/main.rawr</b><span>Rawr</span></div>
@@ -462,7 +465,7 @@ impl Counter {
         .align_x(Center)
     }
 }</code></pre>
-            <div class="run"><b>rawr run</b></div>
+            <div class="run"><b>rawr run</b><span class="quiet">(opens a window)</span></div>
           </div>
           <div class="divider">
             <span class="hit" aria-hidden="true"></span>
@@ -481,12 +484,12 @@ impl Counter {
 <section>
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>iced shell &middot; Commands</p>
+      <p class="cap"><span class="slash">//</span>rawr-iced &middot; Commands</p>
       <h2>One command for each part of the loop</h2>
       <p>Everything works on a project directory or a single file. Run <code>rawr --help</code> for the full grammar.</p>
     </div>
     <table>
-      <tr><td><code>rawr run</code></td><td>Opens the app. Saving a <code>.rawr</code> file reloads it in place; changing your Rust crates rebuilds them natively.</td></tr>
+      <tr><td><code>rawr run</code></td><td>Runs a script once on the base language; with iced, opens the app. Saving a <code>.rawr</code> file reloads it in place; changing your Rust crates rebuilds them natively.</td></tr>
       <tr><td><code>rawr check</code></td><td>Type-checks without a window and reports errors the way rustc does.</td></tr>
       <tr><td><code>rawr check --as-rust</code></td><td>Copies the project under <code>target/</code> with <code>.rawr</code> renamed to <code>.rs</code> and runs <code>cargo check</code> on it.</td></tr>
       <tr><td><code>rawr preview</code></td><td>Opens a view marked <code>#[preview]</code> on its own. &larr; and &rarr; step through a group.</td></tr>
@@ -500,7 +503,7 @@ impl Counter {
 <section>
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>iced shell &middot; Diagnostics</p>
+      <p class="cap"><span class="slash">//</span>rawr-iced &middot; Diagnostics</p>
       <h2>Errors you already know how to read</h2>
       <p>Delete the <code>Decrement</code> arm from the counter and <code>rawr check</code> answers the way rustc would: the code, the span, and what is missing.</p>
     </div>
@@ -520,7 +523,7 @@ impl Counter {
 <section>
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>iced shell &middot; Rust imports</p>
+      <p class="cap"><span class="slash">//</span>rawr-iced &middot; Rust imports</p>
       <h2>Your own Rust crates, with no bindings</h2>
       <p>List a crate in <code>rawr.toml</code> and <code>use</code> it. Rawr reads only the items your code touches, so a custom native widget in a Cargo crate is just another widget.</p>
       <p>This is <code>gallery_ui::Dial</code> from RawrGallery, an ordinary iced <code>Widget</code> written in Rust and driven from <code>dial.rawr</code>.</p>
@@ -550,7 +553,7 @@ let face = container(Dial::new(self.value, Message::Turn).range(0..=100))
 <section>
   <div class="wrap sec">
     <div class="side">
-      <p class="cap"><span class="slash">//</span>iced shell &middot; ?play</p>
+      <p class="cap"><span class="slash">//</span>rawr-iced &middot; ?play</p>
       <h2>Render a snippet in Discord</h2>
       <p>In a Discord channel where the bot is turned on, write <code>?play</code> over a code block with a view or a whole app, and it replies with the frame. The playground does the same in a browser, nothing to install.</p>
       <div class="actions" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:24px">
@@ -583,7 +586,7 @@ use iced::widget::{Widget, button, column, text};
       <h2>Pre-alpha, plainly</h2>
     </div>
     <div>
-      <p class="status">Rawr is early. The language crate builds on stable Rust. The iced shell runs on Apple Silicon Macs, follows iced master, and pins one nightly. APIs, commands, file formats and error codes will change without notice.</p>
+      <p class="status">Rawr is early. The language crate builds on stable Rust. The <code>rawr</code> command runs on Apple Silicon Macs, rawr-iced follows iced master, and both pin one nightly. APIs, commands, file formats and error codes will change without notice.</p>
       <p class="status">It covers a lot of Rust but not all of it. When Rawr rejects valid Rust that it claims to cover, that is a bug, and a small reproduction is the most useful report.</p>
     </div>
   </div>

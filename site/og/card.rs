@@ -1,6 +1,6 @@
 // The link preview for rawr.airstrike.fyi, drawn by Rawr itself in
 // RawrGallery's Ink sheet. Render it with:
-//   rawr-play site/og/card.rs --size 600x315 -o site/public/og/card.png
+//   rawr-play site/og/card.rs --size 600x315 --fonts target/play/fonts -o site/public/og/card.png
 use iced::theme::palette::Seed;
 use iced::widget::{column, container, row, space, text};
 use iced::{Border, Center, Color, Fill, Font, Theme, Widget, border};
@@ -50,7 +50,7 @@ impl Card {
             .spacing(8),
             row![word("R", "ust"), word("A", "ugmented"), word("W", "ith"), word("R", "ust")]
                 .spacing(9),
-            text("Embed it in any Rust program. Its iced shell reloads apps in about 0.2 s.")
+            text("Embed it in any Rust program. With iced, apps reload in about 0.2 s.")
                 .size(14)
                 .style(text::secondary),
         ]
@@ -60,16 +60,16 @@ impl Card {
             column![
                 brand,
                 lede,
-                row![file("main.rs"), file("SCRIPT · Rawr")].spacing(16),
+                row![file("main.rs", "cargo run"), file("cart.rawr", "rawr run cart.rawr")].spacing(16),
                 row![
                     caption("RAWR.AIRSTRIKE.FYI"),
                     space().width(Fill),
                     caption("WRITTEN IN RAWR · RENDERED BY ICED"),
                 ],
             ]
-            .spacing(14),
+            .spacing(10),
         )
-        .padding([18, 28])
+        .padding([14, 28])
         .width(Fill)
         .height(Fill)
     }
@@ -83,25 +83,31 @@ fn word(initial: &str, rest: &str) -> impl Widget<Message> {
     ]
 }
 
-/// The same cart code as Rust and as Rawr: the joke is that both read alike.
-fn file(name: &str) -> impl Widget<Message> {
-    column![
-        caption(name),
-        container(
-            column![
-                code("fn total(items: &[Item]) -> f64 {"),
-                code("    let mut sum = 0.0;"),
-                code("    for item in items {"),
-                code("        sum += item.price();"),
-            ]
-            .spacing(1),
-        )
-        .padding(12)
-        .width(Fill)
-        .style(panel),
-    ]
-    .spacing(6)
+/// The same cart file as Rust and as Rawr: only the command differs.
+fn file(name: &str, command: &str) -> impl Widget<Message> {
+    let source = container(
+        column![
+            code("fn total(items: &[Item]) -> f64 {"),
+            code("    let mut sum = 0.0;"),
+            code("    for item in items {"),
+            code("        sum += item.price();"),
+        ]
+        .spacing(1),
+    )
+    .padding([8, 12])
     .width(Fill)
+    .style(panel);
+    let shell = container(
+        row![text("$").size(11).font(Font::MONOSPACE).style(text::secondary), code(command)]
+            .spacing(7),
+    )
+    .padding([5, 12])
+    .width(Fill)
+    .style(terminal);
+
+    column![caption(name), column![source, shell]]
+        .spacing(6)
+        .width(Fill)
 }
 
 fn code(line: &str) -> iced::widget::Text<'static> {
@@ -120,5 +126,13 @@ fn panel(theme: &Theme) -> container::Style {
     let palette = theme.palette();
     container::Style::default()
         .background(palette.background.weakest.color)
+        .border(frame(palette.background.strong.color))
+}
+
+/// The terminal strip under each file: the command that runs it.
+fn terminal(theme: &Theme) -> container::Style {
+    let palette = theme.palette();
+    container::Style::default()
+        .background(palette.background.base.color)
         .border(frame(palette.background.strong.color))
 }
