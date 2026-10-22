@@ -57,7 +57,8 @@ a { color: var(--pink); text-decoration: none; }
 .pink { color: var(--pink); }
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; border-bottom: 1px solid var(--line); color: var(--dim); }
 .brand { display: flex; align-items: center; gap: 12px; }
-.mark { width: 10px; height: 10px; background: var(--pink); }
+/* The play triangle of /play.svg (M11 8 L25 16 L11 24 Z in 32x32), in the square's 10px box. */
+.mark { width: 10px; height: 10px; background: var(--pink); clip-path: polygon(6.25% 0, 93.75% 50%, 6.25% 100%); }
 .brand b { font-weight: 400; color: var(--text); font-size: 13px; letter-spacing: 0.02em; }
 .links { display: flex; gap: 16px; }
 .tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 24px; border-bottom: 1px solid var(--line); }
