@@ -7548,6 +7548,10 @@ struct Parser<'a> {
     /// name the value is bound to, the pattern and the value's type. The
     /// pattern's site lowers them to tests and bindings.
     host_checks: std::cell::RefCell<Vec<(ImmutableString, PatternSyntax, Ty)>>,
+    /// A host call's one signature, whose closure arguments take their
+    /// parameter types from the arguments before them, as Rust infers
+    /// `pick_list(selected, options, |x| x.to_string())`'s `x`.
+    deferred_hints: Option<(crate::host::item::Definition, Option<Ty>)>,
     /// Bounds a generic call requires of its inferred type arguments,
     /// checked once they are known.
     pending_bounds: Vec<(Ty, capability::Kind, Span)>,
@@ -7757,6 +7761,7 @@ impl<'a> Parser<'a> {
             binding_mode: std::cell::Cell::new(None),
             slice_arity: std::cell::Cell::new(0),
             host_checks: std::cell::RefCell::new(Vec::new()),
+            deferred_hints: None,
             pending_bounds: Vec::new(),
             generic_traits: BTreeMap::new(),
             generic_trait_arguments: BTreeMap::new(),
@@ -23392,6 +23397,10 @@ impl<'a> Parser<'a> {
     /// whose parameter there is a host callable, as iced's `.style(..)`
     /// takes a pinned style or `impl Fn(&Theme, Status) -> Style`.
     fn hint_closures(&mut self, items: &[crate::host::item::Definition], receiver: Option<&Ty>) {
+        self.deferred_hints = match items {
+            [item] => Some((item.clone(), receiver.cloned())),
+            _ => None,
+        };
         let mut overloads = Vec::<Vec<Option<(Box<[Ty]>, Option<(Rc<HostTyProof>, usize)>)>>>::new();
         for item in items {
             let checkpoint = self.inference.checkpoint();
@@ -23439,6 +23448,43 @@ impl<'a> Parser<'a> {
             .into_iter()
             .map(|hint| hint.map(|(inputs, _)| inputs))
             .collect();
+    }
+
+    /// The input types of the host callable parameter after `arguments`,
+    /// with the generics the arguments before it settle: `None` when it is
+    /// no callable or they leave an input open.
+    fn inferred_closure_hint(
+        &mut self,
+        item: &crate::host::item::Definition,
+        receiver: Option<&Ty>,
+        arguments: &[ParsedExpr],
+    ) -> Option<Box<[Ty]>> {
+        let checkpoint = self.inference.checkpoint();
+        let hint = self
+            .instantiate_host_signature(item, receiver, None)
+            .ok()
+            .and_then(|signature| {
+                let Ty::Callable { .. } = self.inference.resolve(signature.inputs.get(arguments.len())?)
+                else {
+                    return None;
+                };
+                for (parameter, argument) in signature.inputs.iter().zip(arguments) {
+                    let actual = self.inference.resolve(&argument.ty);
+                    let _ = self.unify_type(parameter, &actual);
+                }
+                let Ty::Callable { inputs, .. } =
+                    self.inference.resolve(&signature.inputs[arguments.len()])
+                else {
+                    return None;
+                };
+                let inputs = inputs
+                    .iter()
+                    .map(|input| self.inference.resolve(input))
+                    .collect::<Box<[Ty]>>();
+                (!inputs.iter().any(contains_inference)).then_some(inputs)
+            });
+        self.inference.rollback(checkpoint);
+        hint
     }
 
     /// The closures this body passed to the host.
@@ -27027,6 +27073,7 @@ impl<'a> Parser<'a> {
         context: &str,
     ) -> Result<(Vec<ParsedExpr>, Position), Error> {
         let mut expected = std::mem::take(&mut self.argument_hints).into_iter();
+        let deferred = self.deferred_hints.take();
         if let Some(pending) = self.pending_arguments.take() {
             return Ok(pending);
         }
@@ -27041,6 +27088,11 @@ impl<'a> Parser<'a> {
         while !matches!(self.peek(), Token::RightParen) {
             let outer = std::mem::replace(&mut self.no_struct, false);
             self.closure_hint = hints.next().flatten();
+            if self.closure_hint.is_none()
+                && let Some((item, receiver)) = &deferred
+            {
+                self.closure_hint = self.inferred_closure_hint(item, receiver.as_ref(), &arguments);
+            }
             self.closure_output = outputs.next().flatten();
             let expected = expected.next().flatten();
             let argument = self.parse_expr_expecting(expected.as_ref());

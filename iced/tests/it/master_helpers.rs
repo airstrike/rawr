@@ -501,3 +501,48 @@ fn master_duration_and_instant_operators_compute_as_rust() {
     find(&adapter, "3400 400 1");
     find(&adapter, "true true");
 }
+
+/// Closure parameters take their types from the library function's other
+/// arguments, as Rust infers them.
+const INFERRED: &str = r#"
+use iced::widget::{column, lazy, pick_list, text};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    version: u64,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Selected(String),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Selected(_) => self.version += 1,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let options = vec![String::from("alpha"), String::from("beta")];
+        column![
+            pick_list(Some(String::from("beta")), options, |name| name.to_uppercase())
+                .on_select(|name| Message::Selected(name)),
+            lazy(self.version, |version| text(format!("version {}", version + 1))),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_closure_parameters_take_the_types_of_the_other_arguments() {
+    let adapter = boot(INFERRED);
+    find(&adapter, "BETA");
+    find(&adapter, "version 1");
+}
