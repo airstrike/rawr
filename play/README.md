@@ -300,6 +300,16 @@ npx wrangler deploy        # runs build.mjs first
 curl https://rawr.airstrike.fyi/bot/health   # restarts the bot onto the new image now
 ```
 
+After the first setup, one command releases the committed HEAD:
+
+```sh
+npm run release            # image, tests, deploy, wait for the bot, smoke test, commit the bump
+npm run release:worker     # Worker and site only, no new image
+```
+
+It refuses to run while the Worker or site sources have uncommitted changes.
+It retries the deploy when Cloudflare answers 100146.
+
 `instance_type` is `lite` (1/16 vCPU, 256 MiB): a render's peak RSS was
 27 MB for a 640x400 app, 41 MB for 100k widgets stopped at the time limit
 and 63 MB at the 2048x2048 maximum (macOS `/usr/bin/time -l`, release),
