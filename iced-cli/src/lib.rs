@@ -152,13 +152,18 @@ fn execute_command(
                     }));
                 }
             };
-            run::execute_loaded(
+            let successful = run::execute_loaded(
                 loaded,
                 #[cfg(feature = "import-baseline")]
                 profile,
             )
             .map_err(Error::Run)?;
-            Ok(None)
+            // A program that failed printed its own error as it ran.
+            Ok((!successful).then(|| Report {
+                message: String::new(),
+                warning: None,
+                successful: false,
+            }))
         }
         command::Command::Preview { path, name } => {
             let path = preview::select(path, name).map_err(Error::Preview)?;

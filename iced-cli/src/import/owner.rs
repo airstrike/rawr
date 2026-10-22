@@ -45,13 +45,15 @@ pub(crate) fn check(
 }
 
 /// Run one imported application or preview under the generated child owner.
-/// `graph` is the target's load when the caller already has it.
+/// `graph` is the target's load when the caller already has it. `Ok(false)`
+/// is a program that ended with a failing exit: it printed its own error as
+/// it ran.
 pub(crate) fn run(
     target: &rawr::project::Target,
     graph: Option<rawr::package::Graph>,
     lifecycle: rawr_import::process::Lifecycle,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<(), diagnostic::Report> {
+) -> Result<bool, diagnostic::Report> {
     let source = fallback(target)?;
     let target_path = project(target)
         .ok_or_else(|| framework("a `[rust]` owner requires a Rawr project", source.clone()))?
@@ -72,11 +74,13 @@ pub(crate) fn run(
     let mut refresh_required = false;
     let mut native_inputs = None;
     loop {
-        if lane
-            .reap_if_exited()
-            .map_err(|error| framework(error, source.clone()))?
-        {
-            return Ok(());
+        match lane.reap_if_exited() {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(crate::watch::native::Error::Process(rawr_import::process::RunnerError::Exit(
+                Some(_),
+            ))) if lifecycle == rawr_import::process::Lifecycle::Run => return Ok(false),
+            Err(error) => return Err(framework(error, source.clone())),
         }
 
         let now = Instant::now();
@@ -269,7 +273,7 @@ pub(crate) fn run(
                         source.clone(),
                     ),
                 )?;
-                return wait_for_window(lane, source);
+                return wait_for_window(lane, source).map(|()| true);
             }
             Ok(crate::watch::Notice::Schedule(error)) => {
                 retain_report(
@@ -279,7 +283,7 @@ pub(crate) fn run(
                         source.clone(),
                     ),
                 )?;
-                return wait_for_window(lane, source);
+                return wait_for_window(lane, source).map(|()| true);
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 retain_report(
@@ -289,7 +293,7 @@ pub(crate) fn run(
                         source.clone(),
                     ),
                 )?;
-                return wait_for_window(lane, source);
+                return wait_for_window(lane, source).map(|()| true);
             }
         }
     }

@@ -67,10 +67,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// Embed the host sources a generated harness compiles (every package's
-/// library: its manifest, build script and `src`, less `#[cfg(test)]` module
-/// files and binary sources) and their digest, which is also this Rawr's source
-/// identity. Tests, benches, examples and binaries are never built for a
-/// dependency, so editing them keeps the host.
+/// library: its manifest, build script, import manifest and `src`, less
+/// `#[cfg(test)]` module files and binary sources) and their digest, which is
+/// also this Rawr's source identity. Tests, benches, examples and binaries
+/// are never built for a dependency, so editing them keeps the host.
 fn embed_host() -> Result<(), Box<dyn Error>> {
     let repository = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("no manifest dir")?)
         .join("..")
@@ -80,7 +80,9 @@ fn embed_host() -> Result<(), Box<dyn Error>> {
     for package in HOST_PACKAGES {
         let root = repository.join(package);
         let mut files = Vec::new();
-        for name in ["build.rs", "build.template"] {
+        // `manifest.toml` is rawr-iced's import manifest, which its library
+        // includes from outside `src`.
+        for name in ["build.rs", "build.template", "manifest.toml"] {
             let path = root.join(name);
             if path.is_file() {
                 println!("cargo:rerun-if-changed={}", path.display());

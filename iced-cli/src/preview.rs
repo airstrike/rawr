@@ -120,6 +120,7 @@ fn execute_transform(
             #[cfg(feature = "import-baseline")]
             profile,
         )
+        .map(|_| ())
         .map_err(Error::Diagnostic);
     }
     #[cfg(feature = "import-baseline")]

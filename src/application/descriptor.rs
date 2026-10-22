@@ -995,8 +995,13 @@ impl CheckedContract {
         evidence: &program::ContractEvidence,
         cycle: &host::facade::ProfileCycle,
     ) -> Result<Self, application::Error> {
-        let entry = program::ApplicationEvidence::application(evidence)
-            .ok_or(application::Error::MissingEntry)?;
+        // A program whose `main` is not an application runs `main` once,
+        // as a plain program does.
+        let Some(entry) = program::ApplicationEvidence::application(evidence) else {
+            return Ok(Self {
+                fingerprint: SemanticFingerprint::plain(),
+            });
+        };
         let contract = Contract::validate(entry, evidence)?;
         Ok(Self {
             fingerprint: contract.semantic_fingerprint(cycle)?,
@@ -1012,6 +1017,14 @@ impl CheckedContract {
 }
 
 impl SemanticFingerprint {
+    /// The semantics of a plain program: no application, a `main` run once.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn plain() -> Self {
+        use sha2::Digest as _;
+        Self(sha2::Sha256::digest(b"rawr.application.plain-program/v1").into())
+    }
+
     /// Borrow the canonical domain-separated semantic contract bytes.
     #[doc(hidden)]
     #[must_use]

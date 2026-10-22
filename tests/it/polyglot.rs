@@ -151,7 +151,7 @@ fn a_qualified_expression_path_into_a_rust_module_names_the_app_crate() {
     #[cfg(feature = "rust-import")]
     {
         let graph = Graph::load(&engine, &target).unwrap();
-        let seed = graph.rust_demand_seed(&[]);
+        let seed = graph.rust_demand_seed(&[], None);
         assert!(seed.contains(&Box::<str>::from("poly_app::model::answer")), "{seed:?}");
     }
 }
@@ -199,7 +199,7 @@ fn the_app_crate_is_imported_and_a_rawr_module_uses_its_rust_module() {
     let target = rawr::project::Target::discover(project.path()).unwrap();
     let graph = Graph::load(&engine, &target).unwrap();
     assert!(graph.declares_rust_import(), "a Cargo package with .rs modules declares a Rust import");
-    assert_eq!(graph.rust_demand_seed(&[]), [Box::<str>::from("polyglot::model::Thing::new")]);
+    assert_eq!(graph.rust_demand_seed(&[], None), [Box::<str>::from("polyglot::model::Thing::new")]);
 
     let limits = graph.rust_limits();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");

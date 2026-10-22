@@ -35,12 +35,15 @@ impl Graph {
 
     /// Transform `[rust]` with one host-selected exact framework-profile package.
     /// `demand` holds Rust paths Rawr names below wholesale crate re-exports
-    /// (see [`super::Error::rust_demand`]).
+    /// (see [`super::Error::rust_demand`]). `framework` is the crate the
+    /// profile reads, with its alias: it joins the request when `[rust]`
+    /// declares no dependency of that alias.
     #[doc(hidden)]
     pub fn rust_import_with_profile(
         &self,
         environment: Environment,
         profile: Dependency,
+        framework: Option<(&str, Dependency)>,
         universe: rawr_import::cargo::universe::Catalog,
         demand: &[Box<str>],
         limits: &Limits,
@@ -55,6 +58,7 @@ impl Graph {
             config,
             environment,
             Some((profile, universe)),
+            framework,
             app,
             demand,
             limits,
@@ -67,13 +71,14 @@ impl Graph {
     /// The Rust paths the Rawr source names, found by a cheap
     /// syntactic pass (`use` items and qualified paths, with `use` bindings
     /// expanded), plus `required` paths a host profile needs. Only paths below
-    /// an entry `[rust]` dependency alias are kept, and a path that only
+    /// an entry `[rust]` dependency alias, or below `framework` (the alias of
+    /// the crate the host adds for its profile), are kept, and a path that only
     /// qualifies a longer one is dropped: demanding the longer path extracts
     /// every item on the way. Sorted and deduplicated, so the same source
     /// gives the same demand. An empty result when there is no `[rust]`.
     #[doc(hidden)]
     #[must_use]
-    pub fn rust_demand_seed(&self, required: &[&str]) -> Vec<Box<str>> {
+    pub fn rust_demand_seed(&self, required: &[&str], framework: Option<&str>) -> Vec<Box<str>> {
         let Some(config) = self.entry_package().rust.as_ref() else {
             return Vec::new();
         };
@@ -85,7 +90,8 @@ impl Graph {
                     .dependencies
                     .iter()
                     .any(|dependency| dependency.alias.as_str() == path[0])
-                    || app == Some(path[0]))
+                    || app == Some(path[0])
+                    || framework == Some(path[0]))
         };
         let mut paths = Vec::new();
         for source in self.sources() {
@@ -590,7 +596,7 @@ fn request(
     app: Option<Dependency>,
     limits: &Limits,
 ) -> rawr_import::Result<Request> {
-    request_with_profile(entry, config, environment, None, app, &[], limits)
+    request_with_profile(entry, config, environment, None, None, app, &[], limits)
 }
 
 fn request_with_profile(
@@ -598,6 +604,7 @@ fn request_with_profile(
     config: &Config,
     environment: Environment,
     profile: Option<(Dependency, rawr_import::cargo::universe::Catalog)>,
+    framework: Option<(&str, Dependency)>,
     app: Option<Dependency>,
     demand: &[Box<str>],
     limits: &Limits,
@@ -627,6 +634,14 @@ fn request_with_profile(
     }
     if let Some(app) = app {
         builder = builder.dependency(app)?;
+    }
+    if let Some((alias, framework)) = framework
+        && !config
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.alias.as_str() == alias)
+    {
+        builder = builder.dependency(framework)?;
     }
     if let Some((profile, universe)) = profile {
         builder = builder.dependency(profile)?;

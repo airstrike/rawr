@@ -325,8 +325,10 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             let _ = fs::remove_file(&socket);
             return Err(Error::MissingLog("stderr"));
         };
-        let stdout = thread::spawn(move || tail(stdout));
-        let stderr = thread::spawn(move || tail(stderr));
+        // `rawr run` shows what the program prints as it prints it.
+        let forward = process.lifecycle == Lifecycle::Run;
+        let stdout = thread::spawn(move || tail(stdout, forward.then_some(Forward::Stdout)));
+        let stderr = thread::spawn(move || tail(stderr, forward.then_some(Forward::Stderr)));
         let stream = match accept(&listener, &mut child) {
             Ok(stream) => stream,
             Err(error) => {
@@ -1592,13 +1594,32 @@ fn hex(bytes: &[u8; 32]) -> String {
     output
 }
 
-fn tail(mut reader: impl std::io::Read) -> std::io::Result<Box<[u8]>> {
+/// Where a running program's output also goes as it arrives.
+#[derive(Clone, Copy)]
+enum Forward {
+    Stdout,
+    Stderr,
+}
+
+fn tail(mut reader: impl std::io::Read, forward: Option<Forward>) -> std::io::Result<Box<[u8]>> {
+    use std::io::Write as _;
     let mut retained = Vec::new();
     let mut buffer = [0_u8; 16 * 1024];
     loop {
         let count = reader.read(&mut buffer)?;
         if count == 0 {
             return Ok(retained.into_boxed_slice());
+        }
+        // Best effort: a closed terminal never fails the runner.
+        match forward {
+            Some(Forward::Stdout) => {
+                let mut out = std::io::stdout().lock();
+                let _ = out.write_all(&buffer[..count]).and_then(|()| out.flush());
+            }
+            Some(Forward::Stderr) => {
+                let _ = std::io::stderr().lock().write_all(&buffer[..count]);
+            }
+            None => {}
         }
         retained.extend_from_slice(&buffer[..count]);
         if retained.len() > crate::protocol::STREAM_TAIL_BYTES {
@@ -1993,7 +2014,7 @@ mod tests {
     fn stdout_and_stderr_bytes_remain_bounded_non_protocol_logs() {
         let mut bytes = vec![0x55; crate::protocol::STREAM_TAIL_BYTES + 37];
         bytes[..9].copy_from_slice(&[0, 0, 0, 5, 0, 0, 0, 1, 12]);
-        let retained = tail(Cursor::new(bytes)).expect("the log stream drains");
+        let retained = tail(Cursor::new(bytes), None).expect("the log stream drains");
         assert_eq!(retained.len(), crate::protocol::STREAM_TAIL_BYTES);
         assert!(retained.iter().all(|byte| *byte == 0x55));
     }

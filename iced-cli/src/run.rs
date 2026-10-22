@@ -29,7 +29,9 @@ pub fn prepare(path: Option<PathBuf>) -> Result<rawr_iced::application::Prepared
 }
 
 /// Prepare and run one application in the native iced event loop.
-pub fn execute(path: Option<PathBuf>) -> Result<(), Error> {
+/// `Ok(false)` is a program that ended with a failing exit: it printed its
+/// own error as it ran.
+pub fn execute(path: Option<PathBuf>) -> Result<bool, Error> {
     let loaded = crate::base::load(path.as_ref())
         .map_err(|report| Error::Compile(compile::Error::from_report(report)))?;
     execute_loaded(
@@ -39,11 +41,12 @@ pub fn execute(path: Option<PathBuf>) -> Result<(), Error> {
     )
 }
 
-/// Run an application from the command's one load.
+/// Run an application from the command's one load. `Ok(false)` is a
+/// program that ended with a failing exit.
 pub(crate) fn execute_loaded(
     loaded: crate::base::Loaded,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     #[cfg(feature = "native-runner")]
     if loaded.graph.declares_rust_import() {
         return crate::import::owner::run(
@@ -83,7 +86,7 @@ pub(crate) fn execute_loaded(
     let shutdown = session
         .finish()
         .map_err(|error| Error::Live(crate::watch::native_report(error, source)));
-    native.and(shutdown)
+    native.and(shutdown).map(|()| true)
 }
 
 #[cfg(feature = "import-baseline")]

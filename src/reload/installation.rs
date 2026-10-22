@@ -125,6 +125,14 @@ impl Bootstrap {
         }
     }
 
+    /// Call the root package's `fn main` once, for a program that is not an
+    /// application. `None` when the package has no `main`.
+    #[cfg(not(feature = "no_function"))]
+    #[doc(hidden)]
+    pub fn invoke_main(&self) -> Option<Result<Dynamic, program::Error>> {
+        self.binding.0.invoke_main()
+    }
+
     /// Consume this bootstrap and install one complete authority-free state.
     #[must_use]
     pub fn install<T>(self, state: T) -> current::Slot<T> {

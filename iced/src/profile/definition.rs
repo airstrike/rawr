@@ -175,6 +175,25 @@ impl Definition {
         self.universe.clone()
     }
 
+    /// The alias the profile's evidence paths start with.
+    pub const FRAMEWORK: &'static str = "iced";
+
+    /// The `iced` crate the profile reads its evidence from, at the exact
+    /// revision rawr-iced links. A program that declares no `iced`
+    /// dependency is imported with this one, so a program using only other
+    /// crates still gives the profile its evidence.
+    pub fn framework_dependency(
+        limits: &rawr_import::cargo::Limits,
+    ) -> rawr_import::Result<rawr_import::cargo::config::Dependency> {
+        rawr_import::cargo::config::Dependency::git(
+            Self::FRAMEWORK,
+            "https://github.com/iced-rs/iced",
+            crate::native::ICED_REVISION,
+            limits,
+        )?
+        .features(["advanced"], false)
+    }
+
     /// Select this exact crate as the generated runner's semantic profile host.
     pub fn cargo_dependency(
         limits: &rawr_import::cargo::Limits,

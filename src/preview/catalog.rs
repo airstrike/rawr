@@ -55,7 +55,7 @@ impl Catalog {
     pub(crate) fn from_package_generation_executable(
         executable: program::Executable,
     ) -> Result<Self, (program::source::Id, preview::Error)> {
-        Self::from_package_executable_with_presence(executable, false)
+        Self::from_package_executable_with_presence(executable, false, false)
     }
 
     #[cfg(feature = "rust-import")]
@@ -64,7 +64,10 @@ impl Catalog {
         cycle: &host::facade::ProfileCycle,
         expected: &[u8; 32],
     ) -> Result<Self, (program::source::Id, preview::Error)> {
-        let catalog = Self::from_package_executable_with_presence(executable, false)?;
+        // A plain program (no application, a `main` run once) has neither an
+        // application nor previews.
+        let plain = *expected == *application::descriptor::SemanticFingerprint::plain().as_bytes();
+        let catalog = Self::from_package_executable_with_presence(executable, false, plain)?;
         if let Some(actual) = catalog.application_semantic(cycle)?
             && actual.as_bytes() != expected
         {
@@ -108,19 +111,20 @@ impl Catalog {
     pub(crate) fn from_package_executable(
         executable: program::Executable,
     ) -> Result<Self, (program::source::Id, preview::Error)> {
-        Self::from_package_executable_with_presence(executable, true)
+        Self::from_package_executable_with_presence(executable, true, false)
     }
 
     #[cfg(not(feature = "no_std"))]
     fn from_package_executable_with_presence(
         executable: program::Executable,
         require_preview: bool,
+        plain: bool,
     ) -> Result<Self, (program::source::Id, preview::Error)> {
         let fallback = executable.model_source();
         if require_preview && executable.previews().is_empty() {
             return Err((fallback, preview::Error::Missing));
         }
-        if executable.application().is_none() && executable.previews().is_empty() {
+        if !plain && executable.application().is_none() && executable.previews().is_empty() {
             return Err((fallback, preview::Error::Missing));
         }
         let application = match executable.application() {

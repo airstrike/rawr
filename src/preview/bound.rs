@@ -44,6 +44,25 @@ impl BoundCatalog {
         self.application.as_ref()
     }
 
+    /// Call the root package's `fn main` once, for a program that is not an
+    /// application. `None` when the package has no `main`.
+    #[cfg(not(feature = "no_function"))]
+    #[doc(hidden)]
+    pub fn invoke_main(&self) -> Option<Result<Dynamic, program::Error>> {
+        let package = self.authority.package();
+        let main = self.authority.items().find(|item| {
+            let key = item.key();
+            item.kind() == crate::item::Kind::Function
+                && key.package() == package
+                && key.modules().is_empty()
+                && key.name() == "main"
+        })?;
+        Some(
+            self.authority
+                .invoke_bound(main, &mut [], self.runtime.clone()),
+        )
+    }
+
     /// Return compiler-validated previews in stable key order.
     #[must_use]
     pub fn previews(&self) -> &[preview::Definition] {

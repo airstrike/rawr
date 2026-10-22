@@ -231,6 +231,8 @@ pub struct BoundGeneration {
 
 enum Generation {
     Application(crate::program::Host),
+    /// A plain program: no application, a `main` run once.
+    Main(rawr::reload::installation::Bootstrap),
     Preview(crate::control::Host),
     Snapshot {
         suite: crate::snapshot::Suite,
@@ -473,6 +475,9 @@ pub enum Error {
     /// The requested command does not match the pre-admission lifecycle.
     #[error("generated iced lifecycle command does not match its bound mode")]
     Lifecycle,
+    /// Previews and snapshots need an application, and a plain program has none.
+    #[error("this program has no application, so it has no previews or snapshots. Its `main` does not end in `iced::run` or `iced::application`.")]
+    PlainProgram,
     /// The generated and linked import-baseline fixture identities disagree.
     #[cfg(feature = "import-baseline")]
     #[error("generated iced profile fixture disagrees with the linked host")]
@@ -944,7 +949,7 @@ impl BoundGeneration {
     pub const fn host(&self) -> Option<&crate::program::Host> {
         match &self.host {
             Generation::Application(host) => Some(host),
-            Generation::Preview(_) | Generation::Snapshot { .. } => None,
+            Generation::Main(_) | Generation::Preview(_) | Generation::Snapshot { .. } => None,
         }
     }
 
@@ -954,7 +959,7 @@ impl BoundGeneration {
         match &mut self.host {
             Generation::Application(host) => host.seed_state(state),
             Generation::Preview(host) => host.seed_state(state),
-            Generation::Snapshot { .. } => false,
+            Generation::Main(_) | Generation::Snapshot { .. } => false,
         }
     }
 
@@ -963,7 +968,7 @@ impl BoundGeneration {
         if self.observation.is_some()
             || !matches!(
                 &self.host,
-                Generation::Application(_) | Generation::Preview(_)
+                Generation::Application(_) | Generation::Preview(_) | Generation::Main(_)
             )
         {
             return Err(Error::Lifecycle);
@@ -982,7 +987,7 @@ impl BoundGeneration {
     ) -> Result<(Running, Transport), Error> {
         if !matches!(
             &self.host,
-            Generation::Application(_) | Generation::Preview(_)
+            Generation::Application(_) | Generation::Preview(_) | Generation::Main(_)
         ) {
             return Err(Error::Lifecycle);
         }
@@ -1049,7 +1054,9 @@ impl BoundGeneration {
             Generation::Snapshot { suite, mode } => suite
                 .execute(mode)
                 .map_err(|error| Error::Reload(error.to_string().into_boxed_str())),
-            Generation::Application(_) | Generation::Preview(_) => Err(Error::Lifecycle),
+            Generation::Application(_) | Generation::Preview(_) | Generation::Main(_) => {
+                Err(Error::Lifecycle)
+            }
         }
     }
 }
@@ -1057,12 +1064,14 @@ impl BoundGeneration {
 enum LiveGeneration {
     Application(crate::program::Host, crate::reload::Service),
     Preview(crate::control::Host, crate::reload::Service),
+    Main(rawr::reload::installation::Bootstrap),
 }
 
 fn running_with_service(generation: Generation, service: crate::reload::Service) -> LiveGeneration {
     match generation {
         Generation::Application(host) => LiveGeneration::Application(host, service),
         Generation::Preview(host) => LiveGeneration::Preview(host, service),
+        Generation::Main(bootstrap) => LiveGeneration::Main(bootstrap),
         Generation::Snapshot { .. } => unreachable!("snapshot generations never become live"),
     }
 }
@@ -1074,8 +1083,33 @@ impl Running {
         match self.live {
             LiveGeneration::Application(host, service) => host.run(service),
             LiveGeneration::Preview(host, service) => host.run_live(service),
+            LiveGeneration::Main(bootstrap) => run_main(&bootstrap),
         }
     }
+}
+
+/// Run a plain program's `main` once and end the process with its outcome:
+/// `Error: {err:?}` on stderr and a failing exit when `main` returns `Err`,
+/// as for a Rust program.
+fn run_main(bootstrap: &rawr::reload::installation::Bootstrap) -> ! {
+    use std::io::Write as _;
+    let code = match bootstrap.invoke_main() {
+        None => 0,
+        Some(Ok(value)) => match value.try_cast::<Result<rawr::Dynamic, rawr::Dynamic>>() {
+            Some(Err(error)) => {
+                eprintln!("Error: {error:?}");
+                1
+            }
+            _ => 0,
+        },
+        Some(Err(error)) => {
+            eprintln!("error: {error}");
+            1
+        }
+    };
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(code)
 }
 
 impl Transport {
@@ -2042,12 +2076,18 @@ pub fn bind_generation(
     let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());
     let source = candidate.source().entry_source().diagnostic().clone();
     let bootstrap = candidate.bind(engine, runtime)?;
-    let previews = {
+    let (plain, previews) = {
         let preparation = bootstrap.preparation();
         let catalog = preparation.catalog();
-        catalog.application().is_some() && !catalog.previews().is_empty()
+        let application = catalog.application().is_some();
+        (!application, application && !catalog.previews().is_empty())
     };
     let host = match mode {
+        // A plain program checks by binding, and runs its `main` once.
+        Mode::Check | Mode::Run if plain => Generation::Main(bootstrap),
+        Mode::Preview | Mode::SnapshotCheck | Mode::SnapshotUpdate if plain => {
+            return Err(Error::PlainProgram);
+        }
         // `rawr run` of an app that declares previews opens the app under the
         // preview footer so any preview is one pick away.
         Mode::Run if previews => Generation::Preview(

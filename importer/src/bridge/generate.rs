@@ -956,8 +956,6 @@ fn run_protocol() -> std::io::Result<()> {
     let mut pending: Option<PendingProgram> = None;
     let mut prepared = false;
     let mut admitted = false;
-    println!("rawr runner stdout log");
-    eprintln!("rawr runner stderr log");
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     let mut authentication = Vec::with_capacity(32 + GENERATED_MANIFEST.len());
     authentication.extend_from_slice(&capability);
@@ -1189,8 +1187,6 @@ fn run_protocol() -> std::io::Result<()> {
     let mut admitted = false;
     let mut sequence = 0_u64;
     let mut pending: Option<PendingProfileProgram> = None;
-    println!("rawr runner stdout log");
-    eprintln!("rawr runner stderr log");
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     let mut authentication = Vec::with_capacity(32 + GENERATED_MANIFEST.len());
     authentication.extend_from_slice(&capability);
@@ -1935,8 +1931,6 @@ fn run_protocol() -> std::io::Result<()> {
     let mut admitted = false;
     let mut observed = false;
     let mut sequence = 0_u64;
-    println!("rawr runner stdout log");
-    eprintln!("rawr runner stderr log");
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     let mut authentication = Vec::with_capacity(32 + GENERATED_MANIFEST.len());
     authentication.extend_from_slice(&capability);

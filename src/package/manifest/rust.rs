@@ -211,7 +211,10 @@ impl<'a> Specification<'a> {
             span: item_span(text, item),
         })?;
         let table = value.as_inline_table().ok_or_else(|| Error {
-            message: format!("Rust dependency `{alias}` must use `{{ ... }}`").into(),
+            message: format!(
+                "Rust dependency `{alias}` must be a version string or use `{{ ... }}`"
+            )
+            .into(),
             span: item_span(text, item),
         })?;
         for (key, value) in table.iter() {
@@ -270,7 +273,19 @@ fn parse_dependencies(
                 span: item_span(text, item),
             });
         }
-        dependencies.push(parse_dependency(text, root, alias, item)?);
+        // A version string is `{ version = "..." }`, as in Cargo.
+        let dependency = match item {
+            Item::Value(Value::String(version)) => {
+                let mut inline = InlineTable::new();
+                inline.insert("version", version.value().as_str().into());
+                let normalized = Item::Value(Value::InlineTable(inline));
+                let mut dependency = parse_dependency(text, root, alias, &normalized)?;
+                dependency.span = item_span(text, item);
+                dependency
+            }
+            _ => parse_dependency(text, root, alias, item)?,
+        };
+        dependencies.push(dependency);
     }
     dependencies.sort_unstable_by(|left, right| left.alias.cmp(&right.alias));
     Ok(dependencies.into_boxed_slice())
@@ -718,6 +733,34 @@ mod manifest_rust {
         assert_eq!(config.dependencies[2].features.as_ref(), ["alloc", "serde"]);
         assert!(!config.dependencies[2].default_features);
         assert_ne!(config.dependencies[0].span, start_span());
+    }
+
+    #[test]
+    fn a_version_string_is_a_registry_dependency_as_in_cargo() {
+        let manifest = parse(
+            r#"
+                [rust.dependencies]
+                rand = "0.9"
+            "#,
+        );
+        let config = manifest.rust.expect("Rust configuration is present");
+
+        assert_eq!(config.dependencies[0].alias, "rand");
+        assert_eq!(
+            config.dependencies[0].source,
+            Source::Registry {
+                version: "0.9".to_owned()
+            }
+        );
+        assert!(config.dependencies[0].default_features);
+        assert_ne!(config.dependencies[0].span, start_span());
+
+        let error = Manifest::parse("[rust.dependencies]\nrand = 9\n", root())
+            .expect_err("a number is not a dependency");
+        assert_eq!(
+            error.message.as_str(),
+            "Rust dependency `rand` must be a version string or use `{ ... }`"
+        );
     }
 
     #[test]

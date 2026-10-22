@@ -186,7 +186,8 @@ fn prepare_transform(
     // it names (a syntactic pass over `use` and qualified paths, plus the
     // paths the iced profile selects), so the first launch needs one probe.
     // A path the pass misses below such a dependency is demanded as above.
-    let seed = graph.rust_demand_seed(rawr_iced::profile::Definition::DEMAND);
+    let framework = rawr_iced::profile::Definition::FRAMEWORK;
+    let seed = graph.rust_demand_seed(rawr_iced::profile::Definition::DEMAND, Some(framework));
     #[cfg(feature = "import-baseline")]
     let (mut observed_toolchain, mut observed_resolution);
     #[cfg(feature = "import-baseline")]
@@ -199,9 +200,12 @@ fn prepare_transform(
         let environment = Environment::capture().map_err(Error::Import)?;
         let dependency =
             rawr_iced::profile::Definition::cargo_dependency(&limits).map_err(Error::Import)?;
+        let framework_dependency =
+            rawr_iced::profile::Definition::framework_dependency(&limits).map_err(Error::Import)?;
         let request = match graph.rust_import_with_profile(
             environment,
             dependency,
+            Some((framework, framework_dependency)),
             definition.resolution_universe(),
             &request_demand,
             &limits,
@@ -592,7 +596,7 @@ mod tests {
             .expect("fixture profile definition")
             .resolution_universe();
         let request = graph
-            .rust_import_with_profile(environment, dependency, universe, &[], &limits)
+            .rust_import_with_profile(environment, dependency, None, universe, &[], &limits)
             .expect("fixture import request")
             .expect("fixture declares rust dependencies");
         let native = rawr_import::process::Native::pinned().expect("pinned native toolchain");
@@ -623,7 +627,7 @@ mod tests {
             .expect("fixture profile definition")
             .resolution_universe();
         let request = graph
-            .rust_import_with_profile(environment, dependency, universe, &[], &limits)
+            .rust_import_with_profile(environment, dependency, None, universe, &[], &limits)
             .expect("fixture import request")
             .expect("fixture declares rust dependencies");
         let native = rawr_import::process::Native::pinned().expect("pinned native toolchain");
