@@ -425,12 +425,7 @@ fn parse_item_after_attribute_marker(
         attributes.push(parse_attribute(input)?);
     }
 
-    let visibility = if matches!(input.peek(), Some((Token::Pub, _))) {
-        let (_, position) = input.next().expect("peeked visibility must exist");
-        Some(token_span(position, "pub"))
-    } else {
-        None
-    };
+    let visibility = parse_item_visibility(input);
 
     parse_item_with_leading(
         input,
@@ -631,14 +626,27 @@ fn parse_leading(
         attributes.push(parse_attribute(input)?);
     }
 
-    let visibility = if matches!(input.peek(), Some((Token::Pub, _))) {
-        let (_, position) = input.next().expect("peeked visibility must exist");
-        Some(token_span(position, "pub"))
-    } else {
-        None
-    };
+    let visibility = parse_item_visibility(input);
 
     Ok((attributes.into_boxed_slice(), visibility, start))
+}
+
+/// An item's `pub`, `pub(crate)`, `pub(super)`, `pub(self)` or `pub(in path)`.
+/// Rawr reads a restricted visibility as `pub`. Rust's own check of the
+/// restriction is left to rustc.
+fn parse_item_visibility(input: &mut TokenStream) -> Option<Span> {
+    if !matches!(input.peek(), Some((Token::Pub, _))) {
+        return None;
+    }
+    let (_, position) = input.next().expect("peeked visibility must exist");
+    if matches!(input.peek(), Some((Token::LeftParen, _))) {
+        input.next();
+        while !matches!(
+            input.next(),
+            Some((Token::RightParen | Token::EOF, _)) | None
+        ) {}
+    }
+    Some(token_span(position, "pub"))
 }
 
 /// The attribute path a `#[cfg(..)]` that does not hold is read as.
@@ -1361,7 +1369,8 @@ fn skip_field_visibility(input: &mut TokenStream) -> ParseResult<Option<Position
         let (_, position) = input.next().expect("peeked `(` must exist");
         match input.peek() {
             Some((Token::SelfValue | Token::In, _)) => {}
-            Some((Token::Identifier(name), _)) if matches!(name.as_str(), "crate" | "super") => {}
+            Some((Token::Identifier(name) | Token::Reserved(name), _))
+                if matches!(name.as_str(), "crate" | "super") => {}
             _ => return Ok(Some(position)),
         }
         while !matches!(

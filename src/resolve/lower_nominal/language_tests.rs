@@ -7048,3 +7048,16 @@ fn language_precise_capture_bounds_and_async_functions() {
         assert!(error.contains("not supported in Rawr yet"), "{error}");
     }
 }
+
+#[test]
+fn language_restricted_item_visibility() {
+    let value = run(r#"
+        pub(crate) struct Point { pub(crate) x: i64, pub(super) y: i64 }
+        pub(crate) fn sum(p: &Point) -> i64 { p.x + p.y }
+        pub(in crate) fn twice(n: i64) -> i64 { n * 2 }
+        pub(self) fn one() -> i64 { 1 }
+        pub fn run() -> i64 { twice(sum(&Point { x: 2, y: 3 })) + one() }
+        run()
+    "#);
+    assert_eq!(value, 11);
+}
