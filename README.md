@@ -10,6 +10,8 @@ traits and `match`. It checks your code before running it and reports errors
 the way rustc does. Your program stays Rust. You write the parts you want to
 change while it runs in Rawr.
 
+Rawr code runs on an interpreter. Everything it calls into is native Rust.
+
 The `rawr` crate is the language. Any Rust program can embed it. The `rawr`
 command runs Rawr programs. rawr-iced adds support for
 [iced](https://github.com/iced-rs/iced) apps. Install it and `rawr` hands
@@ -125,13 +127,18 @@ impl Counter {
 - Code you change while the program runs doesn't need a rebuild. With iced,
   saving a `.rawr` file reloads the running app in about 0.2 s, and the
   window stays open and keeps its state.
-- It's still Rust to read and to review. Errors look like rustc's: a code, a
-  span, and what is missing.
-- With iced, your own Rust crates are imported with no bindings to
-  write, and `#[preview]` plus `rawr snapshot` render views to PNG for review.
+- It's still Rust to read and to review. Errors look like rustc's. They show
+  the error code, the span and what is missing.
+- With iced, you import your own Rust crates without writing bindings.
+  `#[preview]` and `rawr snapshot` render views to PNG for review.
 
-If you later want plain Rust back, `rawr check --as-rust` copies the project
-under `target/` with `.rawr` renamed to `.rs` and runs `cargo check` on it.
+The cost is speed. Rawr code is interpreted, so its own logic runs slower than
+compiled Rust. Keep hot loops and heavy work in Rust crates.
+
+Rawr has no release mode that compiles to machine code. Because the code is
+Rust-shaped, `rawr check --as-rust` copies the project under `target/` with
+`.rawr` renamed to `.rs` and runs `cargo check` on it. If that passes, cargo
+can build the same files as a normal Rust program.
 
 ## How do I install it?
 
