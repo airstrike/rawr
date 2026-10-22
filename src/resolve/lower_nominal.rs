@@ -21950,6 +21950,14 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Token::LeftBrace) {
             return self.parse_block_expr();
         }
+        // `unsafe { .. }` is its block: Rawr has none of the operations
+        // that need it, so what it holds is checked as anywhere else.
+        if matches!(self.peek(), Token::Identifier(ref name) if name.as_str() == "unsafe")
+            && matches!(self.peek_second(), Token::LeftBrace)
+        {
+            self.next();
+            return self.parse_block_expr();
+        }
         let (token, position) = self.next();
         let token_span = point_span(position);
 

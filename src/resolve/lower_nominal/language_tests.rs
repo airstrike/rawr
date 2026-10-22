@@ -6871,3 +6871,26 @@ fn language_impl_trait_with_associated_type_equalities() {
     "#);
     assert_eq!(value, 15);
 }
+
+#[test]
+fn language_statics_and_unsafe_blocks() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            static LIMIT: i64 = 40;
+            pub static NAMES: [&str; 2] = ["a", "b"];
+            pub fn run() -> String {
+                let doubled = unsafe { LIMIT * 2 };
+                format!("{} {} {}", LIMIT + 2, NAMES[1], doubled)
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    // The same program built by rustc prints `42 b 80`.
+    assert_eq!(value, "42 b 80");
+    let error = rejected("static mut COUNT: i64 = 0; pub fn run() -> i64 { 0 } run()");
+    assert!(error.contains("static mut"), "{error}");
+    let error = rejected("unsafe fn f() {} pub fn run() -> i64 { 0 } run()");
+    assert!(error.contains("not supported in Rawr yet"), "{error}");
+}

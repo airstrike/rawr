@@ -138,6 +138,19 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                     }
                 }
             }
+            (Token::Identifier(text), position)
+                if scan.delimiter_depth == 0 && text.as_str() == "unsafe" =>
+            {
+                return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+                    "unsafe".into(),
+                    "`unsafe` items are not supported in Rawr yet".into(),
+                ))
+                .into_err(*position));
+            }
+            (Token::Reserved(text), _) if scan.delimiter_depth == 0 && text.as_str() == "static" => {
+                let start = input.peek().expect("peeked static").1;
+                items.push(parse_static(input, &tokenizer_control, Box::default(), None, start)?);
+            }
             (token, _) if scan.delimiter_depth == 0 && begins_item(token) => {
                 items.extend(parse_item(input, &tokenizer_control)?);
             }
@@ -492,11 +505,61 @@ fn parse_enabled_item(
             )
             .map(crate::item::Parsed::Function)
         }
+        (Token::Reserved(text), _) if text.as_str() == "static" => {
+            parse_static(input, tokenizer_control, attributes, visibility, start)
+        }
+        (Token::Identifier(text), position) if text.as_str() == "unsafe" => {
+            Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+                "unsafe".into(),
+                "`unsafe` items are not supported in Rawr yet".into(),
+            ))
+            .into_err(*position))
+        }
         (_, position) => Err(PERR::MissingToken(
             "item".into(),
             "after item attributes or visibility".into(),
         )
         .into_err(*position)),
+    }
+}
+
+/// `static NAME: T = value;`: an immutable static is read as a `const`,
+/// whose value it always has. A `static mut` is not supported yet.
+fn parse_static(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<crate::item::Parsed> {
+    input.next();
+    if let Some((Token::Mut, position)) = input.peek() {
+        return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+            "static mut".into(),
+            "a `static mut` is not supported in Rawr yet; keep the value in your state".into(),
+        ))
+        .into_err(*position));
+    }
+    #[cfg(not(feature = "no_function"))]
+    {
+        let name = parse_name(input, "after 'static'")?;
+        parse_const_rest(
+            input,
+            tokenizer_control,
+            crate::item::Header {
+                attributes,
+                visibility,
+                span: Span::NONE,
+            },
+            start,
+            name,
+        )
+        .map(crate::item::Parsed::Function)
+    }
+    #[cfg(feature = "no_function")]
+    {
+        let _ = (tokenizer_control, attributes, visibility);
+        Err(PERR::MissingToken("item".into(), "after 'static'".into()).into_err(start))
     }
 }
 
