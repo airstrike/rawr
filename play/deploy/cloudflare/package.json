@@ -6,6 +6,8 @@
     "push-image": "./push-image.sh",
     "build": "node build.mjs",
     "deploy": "wrangler deploy",
+    "release": "./release.sh",
+    "release:worker": "./release.sh --worker",
     "test": "node --test test/stats.test.ts test/play.test.ts",
     "check": "tsc --noEmit"
   },
