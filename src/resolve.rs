@@ -990,6 +990,7 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "fmt::Debug"
                 | "fmt::Display"
                 | "fmt::Formatter"
+                | "fmt::Write"
                 | "cmp"
                 | "cmp::Ordering"
                 | "cmp::PartialOrd"

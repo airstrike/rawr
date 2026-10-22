@@ -1043,6 +1043,7 @@ fn parse_use(
     }];
     let mut grouped = false;
     let mut glob = None;
+    let mut extra_uses = Vec::new();
 
     while matches!(input.peek(), Some((Token::DoubleColon, _))) {
         input.next();
@@ -1088,61 +1089,55 @@ fn parse_use(
             prefix: path,
         }
     } else if grouped {
+        // `use a::{b, c::{d, e}, f::*}`: the paths that go on inside the
+        // group are imports of their own, hoisted beside this one.
         let open = expect(input, Token::LeftBrace, "to start an import group")?;
-        let mut members = Vec::new();
-
-        while !matches!(input.peek(), Some((Token::RightBrace, _))) {
-            let name = match input.peek() {
-                Some((Token::SelfValue, position)) => {
-                    let span = token_span(*position, "self");
-                    input.next();
-                    crate::item::Name {
-                        span,
-                        text: "self".into(),
-                    }
-                }
-                _ => parse_name(input, "inside an import group")?,
-            };
-            let alias = parse_use_alias(input)?;
-            members.push(crate::item::UseMember { name, alias });
-
-            match input.peek().expect("token streams always end with EOF") {
-                (Token::Comma, _) => {
-                    input.next();
-                    if matches!(input.peek(), Some((Token::RightBrace, _))) {
-                        break;
-                    }
-                }
-                (Token::RightBrace, _) => break,
-                (_, position) => {
-                    return Err(PERR::MissingToken(
-                        Token::Comma.into(),
-                        "between grouped imports".into(),
-                    )
-                    .into_err(*position));
-                }
-            }
-        }
-
-        let close = expect(input, Token::RightBrace, "to close an import group")?;
-        crate::item::UseTree::Group {
+        let mut nested = Vec::new();
+        let (members, close) = parse_use_members(input, &path.segments, &mut nested)?;
+        let group = crate::item::UseTree::Group {
             prefix: path,
             members: members.into_boxed_slice(),
             span: Span::new(open, after(close, 1)),
-        }
+        };
+        let mut trees = nested.into_iter();
+        let tree = if matches!(&group, crate::item::UseTree::Group { members, .. } if members.is_empty()) {
+            trees.next().unwrap_or(group)
+        } else {
+            group
+        };
+        extra_uses.extend(trees);
+        tree
     } else {
         crate::item::UseTree::Path(path, parse_use_alias(input)?)
     };
 
     let semicolon = expect(input, Token::SemiColon, "to terminate an import")?;
     let end = after(semicolon, 1);
+    let header = crate::item::Header {
+        attributes,
+        visibility,
+        span: Span::new(start, end),
+    };
+    #[cfg(not(feature = "no_std"))]
+    for tree in extra_uses {
+        let used = crate::item::Use {
+            header: header.clone(),
+            tree,
+            span: Span::new(start, end),
+        };
+        NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Use(used)));
+    }
+    #[cfg(feature = "no_std")]
+    if !extra_uses.is_empty() {
+        return Err(PERR::MissingToken(
+            Token::Comma.into(),
+            "between grouped imports".into(),
+        )
+        .into_err(start));
+    }
 
     Ok(crate::item::Use {
-        header: crate::item::Header {
-            attributes,
-            visibility,
-            span: Span::new(start, end),
-        },
+        header,
         tree,
         span: Span::new(start, end),
     })
@@ -2839,15 +2834,26 @@ fn parse_impl_bounds(
     split: &mut Option<Position>,
     start: Position,
 ) -> ParseResult<type_ref::Type> {
+    // `impl Shape<Output = i64>`: each equality is the argument
+    // `=Shape=Output<i64>` after the bounds, which a parameter's lifted
+    // generic takes as its projection.
     let mut projections = Vec::new();
     let bounds = parse_bounds(input, &mut projections, Some(split))?;
-    if let Some((_, name, _)) = projections.first() {
-        return Err(PERR::MissingToken(
-            "a trait without associated type equalities".into(),
-            "in `impl Trait` (write a generic `T: Trait<Name = U>`)".into(),
-        )
-        .into_err(name.span.start()));
-    }
+    let bindings = projections.into_iter().map(|(owner, name, ty)| {
+        let span = Span::new(name.span.start(), ty.span().end());
+        type_ref::Path {
+            segments: Box::new([type_ref::Segment {
+                name: crate::item::Name {
+                    text: format!("{}{}={}", type_ref::BINDING_PREFIX, owner.text, name.text).into(),
+                    span: owner.span,
+                },
+                arguments: Box::new([type_ref::Argument::Type(ty)]),
+                span,
+            }]),
+            span,
+        }
+    });
+    let bounds = bounds.into_iter().chain(bindings).collect::<Vec<_>>();
     let end = bounds.last().map_or(start, |bound| bound.span.end());
     let span = Span::new(start, end);
     Ok(type_ref::Type::Path(type_ref::Path {
@@ -2879,11 +2885,26 @@ fn lift_impl_parameters(
                 if matches!(&path.segments[..], [segment] if segment.name.text == type_ref::IMPL_TYPE) =>
             {
                 let segment = &path.segments[0];
+                let mut projections = Vec::new();
                 let bounds = segment
                     .arguments
                     .iter()
                     .filter_map(|argument| match argument {
                         type_ref::Argument::Type(type_ref::Type::Path(bound)) => {
+                            // `=Shape=Output<i64>`: a projection.
+                            if let [binding] = &bound.segments[..]
+                                && let Some(rest) =
+                                    binding.name.text.strip_prefix(type_ref::BINDING_PREFIX)
+                                && let Some((owner, name)) = rest.split_once('=')
+                                && let [type_ref::Argument::Type(ty)] = &binding.arguments[..]
+                            {
+                                let named = |text: &str| crate::item::Name {
+                                    text: text.into(),
+                                    span: binding.name.span,
+                                };
+                                projections.push((named(owner), named(name), ty.clone()));
+                                return None;
+                            }
                             Some(bound.clone())
                         }
                         _ => None,
@@ -2907,7 +2928,7 @@ fn lift_impl_parameters(
                 generics.push(crate::item::GenericParam {
                     name: name.clone(),
                     bounds,
-                    projections: Box::default(),
+                    projections: projections.into_boxed_slice(),
                     default: None,
                 });
                 *ty = type_ref::Type::Path(type_ref::Path {
@@ -3663,7 +3684,121 @@ fn parse_use_alias(input: &mut TokenStream) -> ParseResult<Option<crate::item::N
         return Ok(None);
     }
     input.next();
+    // `use Trait as _;` brings the trait's methods in scope and binds no
+    // name: a name no code can write.
+    if let Some((Token::Underscore, position)) = input.peek() {
+        let position = *position;
+        input.next();
+        return Ok(Some(crate::item::Name {
+            span: token_span(position, "_"),
+            text: format!("_ {position:?}").into(),
+        }));
+    }
     parse_name(input, "after `as` in an import").map(Some)
+}
+
+/// The rest of an import tree inside a group after its member path
+/// `prefix`: `::name`, `::{..}` or `::*` again, then an optional `as`.
+/// Each complete path, group or glob joins `trees`.
+fn parse_use_subtree(
+    input: &mut TokenStream,
+    mut segments: Vec<type_ref::Segment>,
+    trees: &mut Vec<crate::item::UseTree>,
+) -> ParseResult<()> {
+    let path_of = |segments: &[type_ref::Segment]| {
+        let span = Span::new(
+            segments.first().expect("a path segment").span.start(),
+            segments.last().expect("a path segment").span.end(),
+        );
+        type_ref::Path {
+            segments: segments.to_vec().into_boxed_slice(),
+            span,
+        }
+    };
+    while matches!(input.peek(), Some((Token::DoubleColon, _))) {
+        input.next();
+        if let Some((Token::Multiply, position)) = input.peek() {
+            let star = token_span(*position, "*");
+            input.next();
+            let prefix = path_of(&segments);
+            trees.push(crate::item::UseTree::Glob {
+                span: Span::new(prefix.span.start(), star.end()),
+                prefix,
+            });
+            return Ok(());
+        }
+        if matches!(input.peek(), Some((Token::LeftBrace, _))) {
+            let open = expect(input, Token::LeftBrace, "to start an import group")?;
+            let (members, close) = parse_use_members(input, &segments, trees)?;
+            if !members.is_empty() {
+                trees.push(crate::item::UseTree::Group {
+                    prefix: path_of(&segments),
+                    members: members.into_boxed_slice(),
+                    span: Span::new(open, after(close, 1)),
+                });
+            }
+            return Ok(());
+        }
+        let name = parse_use_segment(input, "after '::' in an import path")?;
+        segments.push(type_ref::Segment {
+            span: name.span,
+            name,
+            arguments: Box::default(),
+        });
+    }
+    trees.push(crate::item::UseTree::Path(path_of(&segments), parse_use_alias(input)?));
+    Ok(())
+}
+
+/// The members of an import group after its `{`, through its `}`: each
+/// `name` or `self` (renamed or not) of `prefix`; a member path that goes on
+/// (`b::{c, d}`, `b::*`) joins `trees` whole.
+fn parse_use_members(
+    input: &mut TokenStream,
+    prefix: &[type_ref::Segment],
+    trees: &mut Vec<crate::item::UseTree>,
+) -> ParseResult<(Vec<crate::item::UseMember>, Position)> {
+    let mut members = Vec::new();
+    while !matches!(input.peek(), Some((Token::RightBrace, _))) {
+        let name = match input.peek() {
+            Some((Token::SelfValue, position)) => {
+                let span = token_span(*position, "self");
+                input.next();
+                crate::item::Name {
+                    span,
+                    text: "self".into(),
+                }
+            }
+            _ => parse_use_segment(input, "inside an import group")?,
+        };
+        if matches!(input.peek(), Some((Token::DoubleColon, _))) {
+            let mut segments = prefix.to_vec();
+            segments.push(type_ref::Segment {
+                span: name.span,
+                name,
+                arguments: Box::default(),
+            });
+            parse_use_subtree(input, segments, trees)?;
+        } else {
+            let alias = parse_use_alias(input)?;
+            members.push(crate::item::UseMember { name, alias });
+        }
+        match input.peek().expect("token streams always end with EOF") {
+            (Token::Comma, _) => {
+                input.next();
+            }
+            (Token::RightBrace, _) => break,
+            (_, position) => {
+                return Err(PERR::MissingToken(
+                    Token::Comma.into(),
+                    "between grouped imports".into(),
+                )
+                .into_err(*position));
+            }
+        }
+    }
+    let close = expect(input, Token::RightBrace, "to close an import group")?;
+    Ok((members, close))
 }
 
 /// An import path segment: a name, or `super` for the parent module.

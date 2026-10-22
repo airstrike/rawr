@@ -6845,3 +6845,29 @@ fn language_float_constants_and_compile_time_text() {
     let error = rejected(r#"pub fn run() -> i64 { let p = include_str!("x.txt"); 0 } run()"#);
     assert!(error.contains("not in one"), "{error}");
 }
+
+#[test]
+fn language_impl_trait_with_associated_type_equalities() {
+    let value = run(r#"
+        trait Shape {
+            type Output;
+            fn area(&self) -> Self::Output;
+        }
+        struct Square(i64);
+        impl Shape for Square {
+            type Output = i64;
+            fn area(&self) -> i64 { self.0 * self.0 }
+        }
+        fn total(shape: impl Shape<Output = i64>, extra: i64) -> i64 {
+            shape.area() + extra
+        }
+        fn evens() -> impl Iterator<Item = i64> {
+            vec![2, 4].into_iter()
+        }
+        pub fn run() -> i64 {
+            total(Square(3), evens().sum::<i64>())
+        }
+        run()
+    "#);
+    assert_eq!(value, 15);
+}
