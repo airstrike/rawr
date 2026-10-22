@@ -145,7 +145,10 @@ fn an_unmarked_module_is_native_rust() {
         .collect();
     assert_eq!(
         sources,
-        [PathBuf::from("src/main.rs"), PathBuf::from("src/receipt.rs")]
+        [
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/receipt.rs")
+        ]
     );
     let native = graph.entry_package().rust_modules();
     assert_eq!(native.len(), 1);
@@ -210,7 +213,11 @@ fn native_code_cannot_use_marked_code() {
 
     // A native module may use another native module, through `crate` or
     // `super`, and a test module's `super` is its own module.
-    fs::write(root.join("src/money.rs"), "pub fn twice(cents: i64) -> i64 { cents * 2 }\n").unwrap();
+    fs::write(
+        root.join("src/money.rs"),
+        "pub fn twice(cents: i64) -> i64 { cents * 2 }\n",
+    )
+    .unwrap();
     fs::write(
         &pricing,
         "use crate::money::twice;\n\
@@ -220,11 +227,19 @@ fn native_code_cannot_use_marked_code() {
     .unwrap();
     let main = root.join("src/main.rs");
     let text = fs::read_to_string(&main).unwrap();
-    fs::write(&main, text.replace("mod pricing;", "mod money;\nmod pricing;")).unwrap();
+    fs::write(
+        &main,
+        text.replace("mod pricing;", "mod money;\nmod pricing;"),
+    )
+    .unwrap();
     graph(&root, None).unwrap();
 
     // A marked module is marked code too, reached through `super`.
-    fs::write(root.join("src/money.rs"), "// rawr\npub fn twice(cents: i64) -> i64 { cents * 2 }\n").unwrap();
+    fs::write(
+        root.join("src/money.rs"),
+        "// rawr\npub fn twice(cents: i64) -> i64 { cents * 2 }\n",
+    )
+    .unwrap();
     let error = graph(&root, None).unwrap_err();
     assert!(
         error.contains("native module `crate::pricing` uses `crate::money::twice`.")
@@ -398,4 +413,17 @@ fn a_marked_crate_imports_its_cargo_dependencies() {
         assert!(graph.declares_rust_import(), "{name}");
         assert!(graph.entry_package().rust_modules().is_empty(), "{name}");
     }
+}
+
+/// A marked crate in a Cargo workspace inherits its dependencies and
+/// edition from the workspace root, as Cargo resolves them.
+#[test]
+fn a_marked_workspace_member_inherits_its_dependencies() {
+    let sandbox = Sandbox::new("marked-workspace");
+    let root = copy("rs-marker-workspace", &sandbox.work());
+
+    let graph = graph(&root.join("app"), None).unwrap();
+
+    assert!(graph.declares_rust_import());
+    assert!(graph.entry_package().is_marked());
 }

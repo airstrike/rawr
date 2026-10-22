@@ -229,7 +229,9 @@ impl Graph {
     #[must_use]
     pub fn root_of(target: &project::Target) -> PathBuf {
         match target {
-            project::Target::File(source) => file_root(source.path(), |manifest| manifest.is_file()),
+            project::Target::File(source) => {
+                file_root(source.path(), |manifest| manifest.is_file())
+            }
             project::Target::Project(project) => project.root().as_path().to_path_buf(),
         }
     }
@@ -1121,9 +1123,14 @@ impl<'a> Builder<'a> {
             diagnostic::Source::new(path.to_string_lossy().into_owned(), text.clone())
                 .map_err(Error::diagnostic)?,
         );
-        let cargo = manifest::cargo::Cargo::parse(path, text, root).map_err(|error| {
-            Error::manifest(self.evidence.clone(), evidence, error.message, error.span)
-        })?;
+        #[cfg(feature = "rust-import")]
+        let ask_cargo = self.snapshot.is_none();
+        #[cfg(not(feature = "rust-import"))]
+        let ask_cargo = true;
+        let cargo =
+            manifest::cargo::Cargo::parse(path, text, root, ask_cargo).map_err(|error| {
+                Error::manifest(self.evidence.clone(), evidence, error.message, error.span)
+            })?;
         let Some(cargo) = cargo else {
             return Ok(());
         };

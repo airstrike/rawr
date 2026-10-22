@@ -9,6 +9,7 @@ use crate::{ImmutableString, Position, Span};
 
 pub(crate) mod cargo;
 pub(crate) mod rust;
+pub(crate) mod workspace;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Manifest {

@@ -58,8 +58,16 @@ pub(crate) struct Dependency {
 )]
 pub(crate) enum Source {
     Path(PathBuf),
-    Registry { version: String },
-    Git { url: String, rev: String },
+    Registry {
+        version: String,
+    },
+    Git {
+        url: String,
+        rev: String,
+    },
+    /// `{ workspace = true }` in a runner's snapshot, which does not ask
+    /// Cargo. The runner reads only the alias.
+    Workspace,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -299,6 +307,7 @@ pub(super) fn cargo_dependencies(
     text: &str,
     root: &Path,
     item: Option<&Item>,
+    inherited: Option<&super::workspace::Inherited>,
 ) -> Result<Box<[Dependency]>, Error> {
     let Some(item) = item else {
         return Ok(Box::default());
@@ -339,13 +348,29 @@ pub(super) fn cargo_dependencies(
         }
         inline.remove("optional");
         if inline.contains_key("workspace") {
-            return Err(Error {
+            // Cargo resolved the inherited entry, member features included.
+            let Some(inherited) = inherited else {
+                dependencies.push(Dependency {
+                    alias: alias.as_str().into(),
+                    package: None,
+                    source: Source::Workspace,
+                    features: Box::default(),
+                    default_features: true,
+                    span: item_span(text, item),
+                });
+                continue;
+            };
+            let dependency = inherited.dependencies.get(key).ok_or_else(|| Error {
                 message: format!(
-                    "Cargo dependency `{key}` inherits from a workspace; Rawr reads only the package's own `[dependencies]`, so write it out there"
+                    "Cargo dependency `{key}` inherits from a workspace that Cargo could not read"
                 )
                 .into(),
                 span: item_span(text, item),
-            });
+            })?;
+            let mut dependency = dependency.clone();
+            dependency.span = item_span(text, item);
+            dependencies.push(dependency);
+            continue;
         }
         if inline.contains_key("path") {
             inline.remove("version");

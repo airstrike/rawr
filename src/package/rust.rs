@@ -262,6 +262,8 @@ fn app_manifest(cargo: &super::manifest::cargo::Cargo) -> String {
                 fields.push(format!("git = {url:?}"));
                 fields.push(format!("rev = {rev:?}"));
             }
+            // Only a runner's snapshot keeps an unresolved inheritance.
+            Source::Workspace => fields.push("workspace = true".to_owned()),
         }
         if !dependency.features.is_empty() {
             fields.push(format!("features = {:?}", dependency.features));
@@ -625,6 +627,16 @@ fn request_with_profile(
                 Dependency::registry(&configured.alias, version, limits)?
             }
             Source::Git { url, rev } => Dependency::git(&configured.alias, url, rev, limits)?,
+            Source::Workspace => {
+                return Err(rawr_import::Error::Request {
+                    field: "dependency",
+                    reason: format!(
+                        "Rust dependency `{}` inherits from a workspace that Cargo did not resolve",
+                        configured.alias
+                    )
+                    .into_boxed_str(),
+                });
+            }
         };
         if let Some(package) = &configured.package {
             dependency = dependency.package(package)?;

@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use toml_edit::Document;
+use toml_edit::{Document, Item};
 
 use super::{byte_span, item_span, rust, Error};
 use crate::{Position, Span};
@@ -29,7 +29,16 @@ pub(crate) struct Cargo {
 
 impl Cargo {
     /// Parse `Cargo.toml`: `None` when it is only a workspace (no `[package]`).
-    pub(crate) fn parse(path: PathBuf, text: String, root: &Path) -> Result<Option<Self>, Error> {
+    ///
+    /// With `ask_cargo`, Cargo resolves what the package inherits from its
+    /// workspace. Without it (a runner's snapshot) an inherited dependency
+    /// keeps only its alias.
+    pub(crate) fn parse(
+        path: PathBuf,
+        text: String,
+        root: &Path,
+        ask_cargo: bool,
+    ) -> Result<Option<Self>, Error> {
         let document = Document::parse(text.as_str()).map_err(|error| Error {
             message: error.to_string().into(),
             span: error
@@ -52,11 +61,39 @@ impl Cargo {
                 ),
             })?
             .to_owned();
-        let string = |key: &str| {
-            package
-                .get(key)
-                .and_then(|item| item.as_str())
-                .map(str::to_owned)
+        // `foo.workspace = true` inherits `foo` from the workspace root.
+        let inherits = |item: &Item| {
+            item.as_table_like()
+                .and_then(|table| table.get("workspace"))
+                .and_then(Item::as_bool)
+                == Some(true)
+        };
+        let inheriting = ["version", "edition"]
+            .iter()
+            .any(|key| package.get(key).is_some_and(inherits))
+            || table
+                .get("dependencies")
+                .and_then(Item::as_table_like)
+                .is_some_and(|dependencies| dependencies.iter().any(|(_, item)| inherits(item)));
+        let inherited = if inheriting && ask_cargo {
+            Some(
+                super::workspace::inherited(&path, &text).map_err(|message| Error {
+                    message: message.into(),
+                    span: table.get("package").map_or_else(
+                        || Span::new(Position::START, Position::START),
+                        |item| item_span(&text, item),
+                    ),
+                })?,
+            )
+        } else {
+            None
+        };
+        let string = |key: &str| match package.get(key) {
+            Some(item) if inherits(item) => inherited.as_ref().and_then(|inherited| match key {
+                "version" => inherited.version.clone(),
+                _ => inherited.edition.clone(),
+            }),
+            item => item.and_then(|item| item.as_str()).map(str::to_owned),
         };
         let version = string("version");
         let edition = string("edition");
@@ -65,7 +102,8 @@ impl Cargo {
             .and_then(|item| item.get("name"))
             .and_then(|item| item.as_str())
             .map_or_else(|| name.replace('-', "_"), str::to_owned);
-        let dependencies = rust::cargo_dependencies(&text, root, table.get("dependencies"))?;
+        let dependencies =
+            rust::cargo_dependencies(&text, root, table.get("dependencies"), inherited.as_ref())?;
         Ok(Some(Self {
             path,
             package: name,

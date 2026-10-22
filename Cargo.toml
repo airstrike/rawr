@@ -70,7 +70,7 @@ rawr_import = { package = "rawr-import", path = "importer", features = ["test-fi
 ## Default features: `std`, uses runtime random numbers for hashing.
 default = ["std", "ahash/runtime-rng"] # ahash/runtime-rng trumps ahash/compile-time-rng
 ## Standard features: uses compile-time random number for hashing.
-std = ["once_cell/std", "ahash/std", "num-traits/std", "smartstring/std", "dep:toml_edit"]
+std = ["once_cell/std", "ahash/std", "num-traits/std", "smartstring/std", "dep:toml_edit", "serde_json"]
 ## Enable Rawr manifest transformation into a zero-touch Cargo importer request.
 rust-import = ["std", "dep:rawr_import", "dep:thiserror"]
 ## Build exact real-extraction integration tests with the pinned importer driver.
