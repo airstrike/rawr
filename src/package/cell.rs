@@ -26,7 +26,7 @@ use crate::{parse, preview, source, ImmutableString, Position, Span, AST};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`) and the
@@ -673,6 +673,7 @@ impl Codec for item::BodyToken {
             Kind::If => Some(15),
             Kind::OrOr => Some(16),
             Kind::Other => Some(17),
+            Kind::Bang => Some(18),
         };
         if let Some(tag) = tag {
             writer.byte(tag);
@@ -703,6 +704,7 @@ impl Codec for item::BodyToken {
             15 => Kind::If,
             16 => Kind::OrOr,
             17 => Kind::Other,
+            18 => Kind::Bang,
             _ => return None,
         };
         Some(Self::new(kind, Span::get(reader)?))

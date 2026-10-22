@@ -4,7 +4,7 @@
 //! says itself what brings it in, from the [`Facts`] of the program.
 
 use crate::item::{self, type_ref};
-use crate::{diagnostic, package, ImmutableString};
+use crate::{diagnostic, package, parse, ImmutableString};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -14,6 +14,7 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Facts {
     roots: BTreeSet<ImmutableString>,
+    free: BTreeSet<ImmutableString>,
     rust_import: bool,
 }
 
@@ -25,6 +26,10 @@ pub struct Claims {
     pub crates: Vec<String>,
     /// `rawr.toml` tables that bring the layer in: `rust` for rawr-iced.
     pub sections: Vec<String>,
+    /// Paths a host may import for a snippet that writes no `use` of its
+    /// own, such as `iced::widget::column`. Only such a host (`?play`)
+    /// reads them, through [`Claims::claim_snippet`]; `rawr` does not.
+    pub prelude: Vec<String>,
 }
 
 impl Claims {
@@ -33,6 +38,27 @@ impl Claims {
     pub fn claim(&self, facts: &Facts) -> bool {
         self.crates.iter().any(|name| facts.names_crate(name))
             || self.sections.iter().any(|section| facts.declares(section))
+    }
+
+    /// Whether a snippet with these facts brings the layer in, for a host
+    /// that imports [`Claims::prelude`] into a snippet: [`Claims::claim`], or
+    /// a prelude name the snippet uses and neither declares nor imports.
+    #[must_use]
+    pub fn claim_snippet(&self, facts: &Facts) -> bool {
+        self.claim(facts)
+            || self.prelude.iter().any(|path| {
+                let name = path.rsplit("::").next().unwrap_or(path);
+                facts.uses_free(name)
+            })
+    }
+
+    /// The `use` items that import [`Claims::prelude`], on one line.
+    #[must_use]
+    pub fn prelude_imports(&self) -> String {
+        self.prelude
+            .iter()
+            .map(|path| format!("use {path}; "))
+            .collect()
     }
 
     /// What in `facts` brings the layer in, as a user reads it: `` `iced` ``
@@ -65,7 +91,29 @@ pub struct Sheet {
 struct Cell {
     /// The text this cell was computed from.
     source: diagnostic::Source,
+    names: Names,
+}
+
+/// The names one source writes.
+#[derive(Clone, Debug, Default)]
+struct Names {
+    /// The first segment of every path: the crates and modules it names.
     roots: BTreeSet<ImmutableString>,
+    /// Every name it calls, invokes as a macro, starts a path with or
+    /// writes as a type.
+    used: BTreeSet<ImmutableString>,
+    /// Every name its items declare or its `use` items bind.
+    declared: BTreeSet<ImmutableString>,
+}
+
+impl Names {
+    fn of(items: &[item::Parsed]) -> Self {
+        let mut names = Self::default();
+        for parsed in items {
+            names.parsed(parsed);
+        }
+        names
+    }
 }
 
 /// What one [`Sheet::update`] did.
@@ -84,6 +132,18 @@ impl Facts {
         let mut sheet = Sheet::default();
         sheet.update(graph);
         sheet.facts
+    }
+
+    /// The facts of one parsed in-memory source, such as a snippet: the
+    /// parse a host judges is the parse it compiles.
+    #[must_use]
+    pub fn of_unit(unit: &parse::Unit) -> Self {
+        let names = Names::of(unit.items());
+        Self {
+            free: names.used.difference(&names.declared).cloned().collect(),
+            roots: names.roots,
+            rust_import: false,
+        }
     }
 
     /// Whether the package declares `[rust]` imports.
@@ -105,6 +165,13 @@ impl Facts {
     pub fn names_crate(&self, name: &str) -> bool {
         self.roots.contains(name)
     }
+
+    /// Whether an item uses `name` (calls it, invokes it as a macro, starts
+    /// a path or writes a type with it) and no item declares or imports it.
+    #[must_use]
+    pub fn uses_free(&self, name: &str) -> bool {
+        self.free.contains(name)
+    }
 }
 
 impl Sheet {
@@ -125,13 +192,9 @@ impl Sheet {
                 Some(cell) if cell.source.text() == source.text() => cell,
                 _ => {
                     recomputed += 1;
-                    let mut roots = BTreeSet::new();
-                    for parsed in items {
-                        parsed_roots(parsed, &mut roots);
-                    }
                     Cell {
                         source: source.diagnostic().clone(),
-                        roots,
+                        names: Names::of(items),
                     }
                 }
             };
@@ -143,13 +206,21 @@ impl Sheet {
         let mut changed = rust_import != self.facts.rust_import;
         self.facts.rust_import = rust_import;
         if recomputed > 0 || dropped {
-            let roots = self
-                .cells
-                .values()
-                .flat_map(|cell| cell.roots.iter().cloned())
+            let union = |set: fn(&Names) -> &BTreeSet<ImmutableString>| -> BTreeSet<_> {
+                self.cells
+                    .values()
+                    .flat_map(|cell| set(&cell.names).iter().cloned())
+                    .collect()
+            };
+            let roots = union(|names| &names.roots);
+            let declared = union(|names| &names.declared);
+            let free = union(|names| &names.used)
+                .difference(&declared)
+                .cloned()
                 .collect();
-            changed |= roots != self.facts.roots;
+            changed |= roots != self.facts.roots || free != self.facts.free;
             self.facts.roots = roots;
+            self.facts.free = free;
         }
         Update {
             recomputed,
@@ -158,91 +229,122 @@ impl Sheet {
     }
 }
 
-/// The first segment of every path `parsed` writes.
-fn parsed_roots(parsed: &item::Parsed, roots: &mut BTreeSet<ImmutableString>) {
-    match parsed {
-        item::Parsed::Use(item) => {
-            let (item::UseTree::Path(path, _)
-            | item::UseTree::Group { prefix: path, .. }
-            | item::UseTree::Glob { prefix: path, .. }) = &item.tree;
-            // `use iced;` names the crate with its only segment.
-            if let Some(first) = path.segments.first() {
-                roots.insert(first.name.text.clone());
+impl Names {
+    /// The names `parsed` writes and declares.
+    fn parsed(&mut self, parsed: &item::Parsed) {
+        match parsed {
+            item::Parsed::Use(item) => {
+                let (item::UseTree::Path(path, _)
+                | item::UseTree::Group { prefix: path, .. }
+                | item::UseTree::Glob { prefix: path, .. }) = &item.tree;
+                // `use iced;` names the crate with its only segment.
+                if let Some(first) = path.segments.first() {
+                    self.roots.insert(first.name.text.clone());
+                }
+                for (name, _) in item.bindings() {
+                    self.declared.insert(name.text);
+                }
+            }
+            item::Parsed::Function(function) => {
+                self.declared.insert(function.name.text.clone());
+                self.function(function);
+            }
+            item::Parsed::LegacyFunction(function) => {
+                self.declared.insert(function.name.text.clone());
+                self.body(&function.body_syntax);
+            }
+            item::Parsed::Struct(item) => {
+                self.declared.insert(item.name.text.clone());
+                for field in &item.fields {
+                    self.ty(&field.ty);
+                }
+            }
+            item::Parsed::Enum(item) => {
+                self.declared.insert(item.name.text.clone());
+                for ty in item.variants.iter().flat_map(|variant| &variant.payload) {
+                    self.ty(ty);
+                }
+            }
+            item::Parsed::Impl(item) => {
+                if let Some(path) = &item.trait_ {
+                    self.path(path);
+                }
+                self.ty(&item.owner);
+                for function in &item.functions {
+                    self.function(function);
+                }
+            }
+            item::Parsed::Trait(item) => {
+                self.declared.insert(item.name.text.clone());
+                for function in &item.functions {
+                    self.function(function);
+                }
+            }
+            item::Parsed::Module(item) => {
+                self.declared.insert(item.name.text.clone());
             }
         }
-        item::Parsed::Function(function) => function_roots(function, roots),
-        item::Parsed::LegacyFunction(function) => body_roots(&function.body_syntax, roots),
-        item::Parsed::Struct(item) => {
-            for field in &item.fields {
-                type_roots(&field.ty, roots);
-            }
-        }
-        item::Parsed::Enum(item) => {
-            for ty in item.variants.iter().flat_map(|variant| &variant.payload) {
-                type_roots(ty, roots);
-            }
-        }
-        item::Parsed::Impl(item) => {
-            if let Some(path) = &item.trait_ {
-                path_roots(path, roots);
-            }
-            type_roots(&item.owner, roots);
-            for function in &item.functions {
-                function_roots(function, roots);
-            }
-        }
-        item::Parsed::Trait(item) => {
-            for function in &item.functions {
-                function_roots(function, roots);
-            }
-        }
-        item::Parsed::Module(_) => {}
     }
-}
 
-fn function_roots(function: &item::Function, roots: &mut BTreeSet<ImmutableString>) {
-    for parameter in &function.parameters {
-        type_roots(&parameter.ty, roots);
-    }
-    if let Some(output) = &function.output {
-        type_roots(output, roots);
-    }
-    body_roots(&function.body_syntax, roots);
-}
-
-/// `name::` not after another `::`.
-fn body_roots(body: &item::BodySyntax, roots: &mut BTreeSet<ImmutableString>) {
-    let tokens = body.tokens();
-    for (index, pair) in tokens.windows(2).enumerate() {
-        if let (item::BodyTokenKind::Identifier(name), item::BodyTokenKind::DoubleColon) =
-            (pair[0].kind(), pair[1].kind())
-            && !(index > 0 && matches!(tokens[index - 1].kind(), item::BodyTokenKind::DoubleColon))
-        {
-            roots.insert(name.clone());
+    fn function(&mut self, function: &item::Function) {
+        for parameter in &function.parameters {
+            self.ty(&parameter.ty);
         }
+        if let Some(output) = &function.output {
+            self.ty(output);
+        }
+        self.body(&function.body_syntax);
     }
-}
 
-fn type_roots(ty: &type_ref::Type, roots: &mut BTreeSet<ImmutableString>) {
-    match ty {
-        type_ref::Type::Unit(_) => {}
-        type_ref::Type::Tuple { members, .. } => {
-            for member in members {
-                type_roots(member, roots);
+    /// `name::` starts a path, `name(` calls and `name!` invokes a macro,
+    /// each not after `::` or `.`.
+    fn body(&mut self, body: &item::BodySyntax) {
+        use item::BodyTokenKind as Kind;
+        let tokens = body.tokens();
+        for (index, pair) in tokens.windows(2).enumerate() {
+            let Kind::Identifier(name) = pair[0].kind() else {
+                continue;
+            };
+            if index > 0 && matches!(tokens[index - 1].kind(), Kind::DoubleColon | Kind::Dot) {
+                continue;
+            }
+            match pair[1].kind() {
+                Kind::DoubleColon => {
+                    self.roots.insert(name.clone());
+                    self.used.insert(name.clone());
+                }
+                Kind::LeftParen | Kind::Unit | Kind::Bang => {
+                    self.used.insert(name.clone());
+                }
+                _ => {}
             }
         }
-        type_ref::Type::Path(path) => path_roots(path, roots),
-        type_ref::Type::Reference { target, .. } => type_roots(target, roots),
     }
-}
 
-fn path_roots(path: &type_ref::Path, roots: &mut BTreeSet<ImmutableString>) {
-    if let [first, _, ..] = &path.segments[..] {
-        roots.insert(first.name.text.clone());
+    fn ty(&mut self, ty: &type_ref::Type) {
+        match ty {
+            type_ref::Type::Unit(_) => {}
+            type_ref::Type::Tuple { members, .. } => {
+                for member in members {
+                    self.ty(member);
+                }
+            }
+            type_ref::Type::Path(path) => self.path(path),
+            type_ref::Type::Reference { target, .. } => self.ty(target),
+        }
     }
-    for argument in path.segments.iter().flat_map(|segment| &segment.arguments) {
-        if let type_ref::Argument::Type(ty) = argument {
-            type_roots(ty, roots);
+
+    fn path(&mut self, path: &type_ref::Path) {
+        if let Some(first) = path.segments.first() {
+            if path.segments.len() > 1 {
+                self.roots.insert(first.name.text.clone());
+            }
+            self.used.insert(first.name.text.clone());
+        }
+        for argument in path.segments.iter().flat_map(|segment| &segment.arguments) {
+            if let type_ref::Argument::Type(ty) = argument {
+                self.ty(ty);
+            }
         }
     }
 }
@@ -281,6 +383,47 @@ mod tests {
         ] {
             assert!(!facts(source).names_crate("iced"), "{source}");
         }
+    }
+
+    #[test]
+    fn a_snippet_uses_the_names_it_neither_declares_nor_imports() {
+        let unit = |source: &str| Facts::of_unit(&crate::Engine::new().parse_unit(source).unwrap());
+        let facts = unit(
+            "fn main() { println!(\"{:?}\", column![text(\"hi\"), helper()].padding(Pad::new())); }\n\
+             fn helper() -> i64 { let n = 1; n.text() }\nstruct Pad;",
+        );
+        for name in ["column", "text", "println"] {
+            assert!(facts.uses_free(name), "{name}");
+        }
+        // Declared, a local, a method.
+        for name in ["helper", "Pad", "n", "padding"] {
+            assert!(!facts.uses_free(name), "{name}");
+        }
+        let imported = unit("use iced::widget::text;\nfn main() { let t = text(\"x\"); }");
+        assert!(!imported.uses_free("text"));
+        assert!(imported.names_crate("iced"));
+        let typed = unit("fn view() -> Element<()> { 1 }");
+        assert!(typed.uses_free("Element"));
+    }
+
+    #[test]
+    fn a_snippet_host_claims_by_crate_or_by_prelude_name() {
+        let claims = super::Claims {
+            crates: vec!["gui".into()],
+            sections: Vec::new(),
+            prelude: vec!["gui::widget::label".into()],
+        };
+        let unit = |source: &str| Facts::of_unit(&crate::Engine::new().parse_unit(source).unwrap());
+        let named = unit("fn main() { let x = gui::widget::label(\"a\"); }");
+        assert!(claims.claim(&named) && claims.claim_snippet(&named));
+        let prelude = unit("fn main() { let x = label(\"a\"); }");
+        assert!(!claims.claim(&prelude), "rawr has no prelude");
+        assert!(claims.claim_snippet(&prelude));
+        let own = unit("fn label(s: &str) -> i64 { 1 }\nfn main() { let x = label(\"a\"); }");
+        assert!(!claims.claim_snippet(&own));
+        let plain = unit("fn main() { println!(\"{}\", 1 + 2); }");
+        assert!(!claims.claim_snippet(&plain));
+        assert_eq!(claims.prelude_imports(), "use gui::widget::label; ");
     }
 
     #[test]

@@ -223,6 +223,27 @@ impl Engine {
         )
     }
 
+    /// Compile one in-memory source this Engine already parsed (with
+    /// [`Engine::parse_unit`]), naming its diagnostics by `source`: a host
+    /// that judged the program from that parse (its
+    /// [`crate::layer::Facts::of_unit`]) compiles the same parse.
+    #[doc(hidden)]
+    pub fn compile_unit(
+        &self,
+        unit: crate::parse::Unit,
+        source: crate::diagnostic::Source,
+    ) -> ParseResult<AST> {
+        let program = crate::resolve::resolve_with_evidence(unit, &self.host_registry, source)?;
+        crate::resolve::lower_with_engine(
+            self,
+            program,
+            Some(&Scope::new()),
+            #[cfg(not(feature = "no_optimize"))]
+            self.optimization_level,
+        )
+        .map(program::Executable::into_ast)
+    }
+
     /// Compile one exact retained source snapshot into a preview catalog.
     #[doc(hidden)]
     pub fn compile_preview_catalog_source(

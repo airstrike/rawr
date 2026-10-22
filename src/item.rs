@@ -663,6 +663,8 @@ pub(crate) enum BodyTokenKind {
     OrOr,
     /// An integer literal, so a `const N: usize = 3;` has its value.
     Integer(crate::INT),
+    /// `!`, as after a macro's name.
+    Bang,
     Other,
 }
 

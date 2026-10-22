@@ -1,0 +1,19 @@
+# What `rawr-iced --rawr-manifest` prints: the programs `rawr` hands to
+# rawr-iced (those naming the `iced` crate, or declaring `[rust]` imports
+# served by the generated iced runner) and the commands it adds to `rawr`.
+# `prelude` is what a snippet host such as `?play` imports into a snippet
+# that has no `use` of its own; such a snippet using one of these names is
+# rawr-iced's too. `rawr` itself imports nothing.
+format = 1
+name = "rawr-iced"
+crates = ["iced"]
+sections = ["rust"]
+prelude = [
+    "iced::Alignment", "iced::Center", "iced::Color", "iced::Element", "iced::Fill",
+    "iced::Length", "iced::Theme", "iced::Widget",
+    "iced::widget::button", "iced::widget::checkbox", "iced::widget::column",
+    "iced::widget::container", "iced::widget::row", "iced::widget::scrollable",
+    "iced::widget::slider", "iced::widget::space", "iced::widget::text",
+    "iced::widget::text_input", "iced::widget::toggler",
+]
+commands = ["preview", "snapshot", "new", "mcp", "init", "doctor", "cache", "check --as-rust"]

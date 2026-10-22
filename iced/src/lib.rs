@@ -28,6 +28,11 @@ pub mod task;
 pub mod theme;
 pub mod widget;
 
+/// What brings a program to rawr-iced, as data: the manifest the
+/// `rawr-iced` binary prints for `rawr`, and the prelude a snippet host
+/// imports (see `manifest.toml`).
+pub const MANIFEST: &str = include_str!("../manifest.toml");
+
 use rawr::host::{self, facade, item, signature, type_ref};
 use rawr::{capability, receiver, Engine};
 

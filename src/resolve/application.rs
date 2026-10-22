@@ -758,6 +758,7 @@ fn delimiter_depth(tokens: &[crate::item::BodyToken], end: usize) -> usize {
             | crate::item::BodyTokenKind::If
             | crate::item::BodyTokenKind::OrOr
             | crate::item::BodyTokenKind::Integer(_)
+            | crate::item::BodyTokenKind::Bang
             | crate::item::BodyTokenKind::Other => {}
         }
     }

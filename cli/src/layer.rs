@@ -106,6 +106,7 @@ impl Manifest {
             claims: Claims {
                 crates: strings("crates")?,
                 sections: strings("sections")?,
+                prelude: strings("prelude")?,
             },
             commands: strings("commands")?
                 .iter()

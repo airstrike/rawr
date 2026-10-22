@@ -3346,6 +3346,7 @@ fn body_token(token: Token, position: Position) -> crate::item::BodyToken {
         Token::SemiColon => (Kind::Semicolon, 1),
         Token::If => (Kind::If, 2),
         Token::Or => (Kind::OrOr, 2),
+        Token::Bang => (Kind::Bang, 1),
         ref word if let Some(name) = crate::tokenizer::rust_name(word) => {
             let width = name.len() - "__rawr_".len();
             (Kind::Identifier(name.into()), width)
