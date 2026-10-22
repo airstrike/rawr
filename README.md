@@ -247,10 +247,12 @@ commands, file formats and error codes will change without notice.
 
 Rawr doesn't cover all of Rust yet. Known gaps include:
 
-- nested `fn` items and `let .. else`;
-- `impl Fn(..) -> T + 'a` and a few other closure and `fn`-value shapes;
+- type aliases, glob imports and `pub(crate)` or `pub(super)` visibility;
 - generic functions over iced types, such as a `fn padded<Message>(..)` helper;
-- parts of iced not yet exposed, such as `rule`, `rich_text!` and canvas.
+- `std::time` outside iced apps;
+- parts of iced not yet exposed, such as canvas.
+
+The [docs](https://rawr.airstrike.fyi/docs/language) keep the full list.
 
 If Rawr rejects valid Rust that it claims to support, that's a bug. Please
 report it with a small reproduction.
