@@ -2219,6 +2219,11 @@ fn declare_font(builder: &mut facade::Builder) -> Result<(), host::Error> {
             )?)?;
         }
     }
+    // `Family::VARIANTS`, the standalone families.
+    builder.item(item::Definition::associated_value(
+        "font::Family::VARIANTS",
+        type_ref::Type::slice(type_ref::Type::registered("font::Family")?),
+    )?)?;
     let mut name = signature::Builder::new();
     name.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
     name.output(type_ref::Type::registered("font::Family")?);

@@ -437,10 +437,16 @@ fn bind_rule(builder: &mut host::runtime::Builder) {
 
 impl widget::Descriptor for marker::Stack {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
-        iced::widget::Stack::with_children(self.children.iter().map(|child| child.lower(context)))
-            .width(self.width)
-            .height(self.height)
-            .boxed()
+        // Unset, iced's stack takes the size of its first child.
+        let mut stack =
+            iced::widget::Stack::with_children(self.children.iter().map(|child| child.lower(context)));
+        if let Some(width) = self.width {
+            stack = stack.width(width);
+        }
+        if let Some(height) = self.height {
+            stack = stack.height(height);
+        }
+        stack.boxed()
     }
 
     fn identity(&self) -> widget::Identity {
@@ -465,8 +471,8 @@ fn new_stack(
         witness: call.output_witness().map_err(witness_error)?,
         identity: widget::Identity::unique(),
         children,
-        width: iced::Length::Shrink,
-        height: iced::Length::Shrink,
+        width: None,
+        height: None,
     }))
 }
 
@@ -520,9 +526,9 @@ fn bind_stack(builder: &mut host::runtime::Builder) {
                 let mut stack = take::<marker::Stack>(args[0], "iced::widget::Stack")?;
                 let value = length(args[1])?;
                 if height {
-                    stack.height = value;
+                    stack.height = Some(value);
                 } else {
-                    stack.width = value;
+                    stack.width = Some(value);
                 }
                 Ok(Dynamic::from(stack))
             })
@@ -748,6 +754,13 @@ fn bind_font(builder: &mut host::runtime::Builder) {
             .bind(format!("iced::font::Family::{name}"), move |_| Ok(Dynamic::from(value)))
             .expect("the iced facade must retain every font::Family");
     }
+    builder
+        .bind("iced::font::Family::VARIANTS", |_| {
+            Ok(Dynamic::from_array(
+                Family::VARIANTS.iter().copied().map(Dynamic::from).collect(),
+            ))
+        })
+        .expect("the iced facade must retain font::Family::VARIANTS");
     builder
         .bind("iced::font::Family::name", |args| {
             let name = super::builtin::exact_string(

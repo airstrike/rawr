@@ -372,8 +372,8 @@ pub(crate) struct Stack {
     pub(crate) witness: rawr::host::runtime::Witness,
     pub(crate) identity: widget::Identity,
     pub(crate) children: Vec<widget::Value>,
-    pub(crate) width: iced::Length,
-    pub(crate) height: iced::Length,
+    pub(crate) width: Option<iced::Length>,
+    pub(crate) height: Option<iced::Length>,
 }
 
 /// A widget the facade lowers by one native function and no builders:
