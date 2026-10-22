@@ -385,3 +385,17 @@ fn background_cargo_check_restarts_on_saves_and_reports_only_the_newest() {
     assert_eq!(lines("started").len(), 2);
     assert_eq!(lines("finished"), ["2"]);
 }
+
+/// A marked crate's Cargo.toml dependencies are its Rust imports. No
+/// rawr.toml is needed.
+#[test]
+fn a_marked_crate_imports_its_cargo_dependencies() {
+    let sandbox = Sandbox::new("marked-deps");
+    for name in ["rs-marker-rand", "rs-marker-chrono"] {
+        let root = copy(name, &sandbox.work());
+        assert!(!root.join("rawr.toml").exists());
+        let graph = graph(&root, None).unwrap();
+        assert!(graph.declares_rust_import(), "{name}");
+        assert!(graph.entry_package().rust_modules().is_empty(), "{name}");
+    }
+}

@@ -1,0 +1,11 @@
+[package]
+name = "rs-marker-chrono"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+chrono = "0.4"
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

@@ -1088,9 +1088,9 @@ impl Running {
     }
 }
 
-/// Run a plain program's `main` once and end the process with its outcome:
-/// `Error: {err:?}` on stderr and a failing exit when `main` returns `Err`,
-/// as for a Rust program.
+/// Run a plain program's `main` once and end the process with its outcome,
+/// as for a Rust program. A `main` that returns `Err` prints
+/// `Error: {err:?}` on stderr and exits with 1. A panic exits with 101.
 fn run_main(bootstrap: &rawr::reload::installation::Bootstrap) -> ! {
     use std::io::Write as _;
     let code = match bootstrap.invoke_main() {
@@ -1102,9 +1102,10 @@ fn run_main(bootstrap: &rawr::reload::installation::Bootstrap) -> ! {
             }
             _ => 0,
         },
+        // A run-time failure is a panic: Rust exits with 101.
         Some(Err(error)) => {
             eprintln!("error: {error}");
-            1
+            101
         }
     };
     let _ = std::io::stdout().flush();

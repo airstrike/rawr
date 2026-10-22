@@ -167,7 +167,8 @@ fn settle_lock(program: &OsString, manifest: &Path) {
     let modified = |path: &Path| fs::metadata(path).and_then(|metadata| metadata.modified()).ok();
     let current = match (modified(manifest), modified(&lock)) {
         (Some(manifest), Some(lock)) => lock >= manifest,
-        _ => false,
+        (Some(_), None) => false,
+        (None, _) => true,
     };
     if !current {
         let _ = Command::new(program)
