@@ -8057,6 +8057,7 @@ impl<'a> Parser<'a> {
                     return Err(self.unsupported("legacy do in checked nominal methods"));
                 }
                 Token::Fn => self.skip_nested_fn()?,
+                Token::Use => self.skip_nested_use()?,
                 _ => self.parse_statement()?,
             }
         }
@@ -8154,6 +8155,7 @@ impl<'a> Parser<'a> {
                     return Err(self.unsupported("legacy do in checked nominal functions"));
                 }
                 Token::Fn => self.skip_nested_fn()?,
+                Token::Use => self.skip_nested_use()?,
                 _ => self.parse_statement()?,
             }
         }
@@ -13852,6 +13854,24 @@ impl<'a> Parser<'a> {
 
     /// `let (a, (mut b, _)) = value;`, `let &x = r;`, `let whole @ (a, b) = v;`:
     /// an irrefutable pattern binds the parts of the value.
+    /// A `use` inside a body: the item parser hoisted it to the file's
+    /// items, so its tokens are passed over here.
+    fn skip_nested_use(&mut self) -> Result<(), Error> {
+        let start = self.expect(Token::Use, "`use` to start an import")?;
+        loop {
+            match self.next() {
+                (Token::SemiColon, _) => return Ok(()),
+                (Token::EOF, position) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "`use` without a `;`".into(),
+                        source: span(start, position),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// A `fn` item inside a body: the item parser hoisted it to the file's
     /// items, so its tokens are passed over here.
     fn skip_nested_fn(&mut self) -> Result<(), Error> {
@@ -18117,6 +18137,7 @@ impl<'a> Parser<'a> {
                     Token::Let => self.parse_binding(true)?,
                     Token::Const => self.parse_binding(false)?,
                     Token::Fn => self.skip_nested_fn()?,
+                Token::Use => self.skip_nested_use()?,
                     _ => self.parse_statement()?,
                 }
             }

@@ -740,6 +740,34 @@ impl<'a> Resolver<'a> {
         };
         let segments = path_segments(prefix);
         let module: ImmutableString = segments.join("::").into();
+        // `use super::*;`, `use crate::shapes::*;`: every item that module
+        // of this crate declares.
+        if let Some(modules) = self.local_glob_module(context, &segments) {
+            let mut names = self
+                .declarations
+                .keys()
+                .filter(|address| {
+                    address.package == context.namespace.package && *address.modules == *modules
+                })
+                .map(|address| address.name.clone())
+                .filter(|name| !occupied.contains_key(name))
+                .collect::<Vec<_>>();
+            names.dedup();
+            return Ok(names
+                .into_iter()
+                .map(|name| {
+                    let mut path = segments.to_vec();
+                    path.push(name.clone());
+                    (
+                        crate::item::Name {
+                            span: *span,
+                            text: name,
+                        },
+                        path.into_boxed_slice(),
+                    )
+                })
+                .collect());
+        }
         if parsed.header.visibility.is_some() {
             return Err(Failure {
                 primary: context.source,
@@ -782,6 +810,37 @@ impl<'a> Resolver<'a> {
                 )
             })
             .collect())
+    }
+
+    /// The modules of this crate a glob import's prefix names: `super`,
+    /// `super::super`, `crate`, `crate::a`, `self::a` or a child module.
+    fn local_glob_module(
+        &self,
+        context: &Context,
+        segments: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let first = segments.first()?;
+        let modules = context.namespace.modules.as_ref();
+        let supers = segments
+            .iter()
+            .take_while(|segment| *segment == "super")
+            .count();
+        let mut absolute = Vec::new();
+        if supers > 0 {
+            absolute.extend_from_slice(&modules[..modules.len().checked_sub(supers)?]);
+            absolute.extend_from_slice(&segments[supers..]);
+        } else if first == "crate" {
+            absolute.extend_from_slice(&segments[1..]);
+        } else if first == "self" {
+            absolute.extend_from_slice(modules);
+            absolute.extend_from_slice(&segments[1..]);
+        } else if self.is_child_module(context, first) {
+            absolute.extend_from_slice(modules);
+            absolute.extend_from_slice(segments);
+        } else {
+            return None;
+        }
+        Some(absolute)
     }
 
     fn resolve_unit_bindings(

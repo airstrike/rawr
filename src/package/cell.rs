@@ -429,7 +429,7 @@ record! {
     item::Name { text, span }
     item::Header { attributes, visibility, span }
     item::Attribute { path, arguments, span, preview }
-    item::Module { header, name, span }
+    item::Module { header, name, span, inline }
     item::Use { header, tree, span }
     item::UseMember { name, alias }
     item::GenericParam { name, bounds, projections, default }

@@ -13,23 +13,48 @@ pub(super) type ParsedFile = (Box<[crate::item::Parsed]>, Vec<Span>);
 
 #[cfg(not(feature = "no_std"))]
 std::thread_local! {
-    /// The `fn` items declared inside function bodies of the file being
-    /// parsed. They join the file's items, as Rawr hoists them.
-    static NESTED: core::cell::RefCell<Vec<crate::item::Function>> =
+    /// The `fn` items and `use` imports declared inside function bodies of
+    /// the file being parsed. They join the file's items, as Rawr hoists them.
+    static NESTED: core::cell::RefCell<Vec<crate::item::Parsed>> =
         const { core::cell::RefCell::new(Vec::new()) };
+    /// The spans of the items a `#[cfg(..)]` left out of the file being
+    /// parsed, which the legacy script does not see either.
+    static SKIPPED: core::cell::RefCell<Vec<Span>> = const { core::cell::RefCell::new(Vec::new()) };
 }
 
 pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     #[cfg(not(feature = "no_std"))]
     let outer = NESTED.take();
+    #[cfg(not(feature = "no_std"))]
+    let outer_skipped = SKIPPED.take();
     let parsed = parse_items(engine, source);
     #[cfg(not(feature = "no_std"))]
     let nested = NESTED.replace(outer);
-    let (mut items, inner) = parsed?;
+    #[cfg(not(feature = "no_std"))]
+    let skipped = SKIPPED.replace(outer_skipped);
+    let (mut items, mut inner) = parsed?;
+    #[cfg(not(feature = "no_std"))]
+    inner.extend(skipped);
     #[cfg(not(feature = "no_std"))]
     if !nested.is_empty() {
         let mut all = items.into_vec();
-        all.extend(nested.into_iter().map(crate::item::Parsed::Function));
+        for item in nested {
+            // One import written in several bodies is hoisted once.
+            let key = |used: &crate::item::Use| {
+                used.bindings()
+                    .into_iter()
+                    .map(|(name, path)| (name.text, path))
+                    .collect::<Vec<_>>()
+            };
+            if let crate::item::Parsed::Use(used) = &item
+                && all.iter().any(|existing| {
+                    matches!(existing, crate::item::Parsed::Use(other) if key(other) == key(used))
+                })
+            {
+                continue;
+            }
+            all.push(item);
+        }
         items = all.into_boxed_slice();
     }
     Ok((items, inner))
@@ -77,9 +102,11 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                     .expect("peeked attribute marker must exist");
 
                 if matches!(input.peek(), Some((Token::LeftBracket, _))) {
-                    let item =
-                        parse_item_after_attribute_marker(input, &tokenizer_control, position)?;
-                    bind_previews(item, &mut items)?;
+                    if let Some(item) =
+                        parse_item_after_attribute_marker(input, &tokenizer_control, position)?
+                    {
+                        bind_previews(item, &mut items)?;
+                    }
                 }
             }
             #[cfg(not(feature = "no_function"))]
@@ -112,12 +139,12 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                 }
             }
             (token, _) if scan.delimiter_depth == 0 && begins_item(token) => {
-                items.push(parse_item(input, &tokenizer_control)?);
+                items.extend(parse_item(input, &tokenizer_control)?);
             }
             (Token::Identifier(name), _)
                 if scan.delimiter_depth == 0 && name.as_str() == "trait" =>
             {
-                items.push(parse_item(input, &tokenizer_control)?);
+                items.extend(parse_item(input, &tokenizer_control)?);
             }
             _ => {
                 scan.next(input, &tokenizer_control);
@@ -361,7 +388,7 @@ fn is_attribute_marker(token: &Token) -> bool {
 fn parse_item(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
-) -> ParseResult<crate::item::Parsed> {
+) -> ParseResult<Option<crate::item::Parsed>> {
     let (attributes, visibility, start) = parse_leading(input)?;
     parse_item_with_leading(input, tokenizer_control, attributes, visibility, start)
 }
@@ -370,7 +397,7 @@ fn parse_item_after_attribute_marker(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     hash: Position,
-) -> ParseResult<crate::item::Parsed> {
+) -> ParseResult<Option<crate::item::Parsed>> {
     let mut attributes = vec![parse_attribute_after_marker(input, hash)?];
 
     while input
@@ -397,6 +424,22 @@ fn parse_item_after_attribute_marker(
 }
 
 fn parse_item_with_leading(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<Option<crate::item::Parsed>> {
+    if cfg_disabled(&attributes) {
+        let end = skip_item(input)?;
+        #[cfg(not(feature = "no_std"))]
+        SKIPPED.with_borrow_mut(|skipped| skipped.push(Span::new(start, end)));
+        return Ok(None);
+    }
+    parse_enabled_item(input, tokenizer_control, attributes, visibility, start).map(Some)
+}
+
+fn parse_enabled_item(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
@@ -465,8 +508,35 @@ fn parse_module(
 ) -> ParseResult<crate::item::Module> {
     expect(input, Token::Mod, "to start a file module")?;
     let name = parse_name(input, "after 'mod'")?;
-    let semicolon = expect(input, Token::SemiColon, "after a file module name")?;
-    let end = after(semicolon, 1);
+    // `mod name { .. }`: its items are read as a module of their own, so
+    // its tokens are passed over here.
+    let (end, inline) = if matches!(input.peek(), Some((Token::LeftBrace, _))) {
+        let (_, open) = input.next().expect("peeked brace must exist");
+        let mut depth = 1usize;
+        let close = loop {
+            match input.next().expect("token streams always end with EOF") {
+                (Token::LeftBrace | Token::MapStart, _) => depth += 1,
+                (Token::RightBrace, position) => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break position;
+                    }
+                }
+                (Token::EOF, position) => {
+                    return Err(PERR::MissingToken(
+                        Token::RightBrace.into(),
+                        "to close an inline module".into(),
+                    )
+                    .into_err(position));
+                }
+                _ => {}
+            }
+        };
+        (after(close, 1), Some(Span::new(after(open, 1), close)))
+    } else {
+        let semicolon = expect(input, Token::SemiColon, "after a file module name")?;
+        (after(semicolon, 1), None)
+    };
 
     Ok(crate::item::Module {
         header: crate::item::Header {
@@ -476,6 +546,7 @@ fn parse_module(
         },
         name,
         span: Span::new(start, end),
+        inline,
     })
 }
 
@@ -500,6 +571,84 @@ fn parse_leading(
     };
 
     Ok((attributes.into_boxed_slice(), visibility, start))
+}
+
+/// The attribute path a `#[cfg(..)]` that does not hold is read as.
+const CFG_DISABLED: &str = "cfg(false)";
+
+/// Whether an item's attributes leave it out of the build: a `#[cfg(..)]`
+/// that does not hold.
+fn cfg_disabled(attributes: &[crate::item::Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path.segments.len() == 1 && attribute.path.segments[0].name.text == CFG_DISABLED
+    })
+}
+
+/// One `cfg` predicate: `test` (false: Rawr builds as rustc does without
+/// `--test`), `debug_assertions` (true), `not(..)`, `all(..)`, `any(..)`;
+/// any other option, as `feature = "x"`, does not hold.
+fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
+    let name = parse_name(input, "in a `cfg` predicate")?;
+    match name.text.as_str() {
+        operator @ ("not" | "all" | "any") => {
+            expect(input, Token::LeftParen, "after a `cfg` operator")?;
+            let mut values = Vec::new();
+            while !matches!(input.peek(), Some((Token::RightParen, _))) {
+                values.push(parse_cfg_predicate(input)?);
+                if matches!(input.peek(), Some((Token::Comma, _))) {
+                    input.next();
+                }
+            }
+            expect(input, Token::RightParen, "to close a `cfg` operator")?;
+            Ok(match operator {
+                "not" => !values.first().copied().unwrap_or(false),
+                "all" => values.iter().all(|value| *value),
+                _ => values.iter().any(|value| *value),
+            })
+        }
+        name => {
+            if matches!(input.peek(), Some((Token::Equals, _))) {
+                input.next();
+                input.next();
+                return Ok(false);
+            }
+            Ok(name == "debug_assertions")
+        }
+    }
+}
+
+/// Pass over one item's tokens: up to a `;` or the `}` closing its body.
+/// Returns where the item ends.
+fn skip_item(input: &mut TokenStream) -> ParseResult<Position> {
+    let mut depth = 0usize;
+    loop {
+        match input.next().expect("token streams always end with EOF") {
+            (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
+                depth += 1;
+            }
+            (Token::RightParen | Token::RightBracket, _) => depth = depth.saturating_sub(1),
+            (Token::RightBrace, position) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some((Token::SemiColon, position)) = input.peek() {
+                        let end = after(*position, 1);
+                        input.next();
+                        return Ok(end);
+                    }
+                    return Ok(after(position, 1));
+                }
+            }
+            (Token::SemiColon, position) if depth == 0 => return Ok(after(position, 1)),
+            (Token::EOF, position) => {
+                return Err(PERR::MissingToken(
+                    Token::SemiColon.into(),
+                    "to end an item".into(),
+                )
+                .into_err(position));
+            }
+            _ => {}
+        }
+    }
 }
 
 fn parse_attribute(input: &mut TokenStream) -> ParseResult<crate::item::Attribute> {
@@ -541,6 +690,25 @@ fn parse_attribute_after_marker(
     }
 
     let mut arguments = Vec::new();
+
+    // `#[cfg(predicate)]`: Rawr builds as rustc does without `--test`.
+    if path.segments.len() == 1 && path.segments[0].name.text == "cfg" {
+        expect(input, Token::LeftParen, "after `cfg`")?;
+        let enabled = parse_cfg_predicate(input)?;
+        expect(input, Token::RightParen, "to close `cfg`")?;
+        let close = expect(input, Token::RightBracket, "to close an attribute")?;
+        let mut path = path;
+        if !enabled {
+            // A disabled item is passed over; its attribute says so.
+            path.segments[0].name.text = CFG_DISABLED.into();
+        }
+        return Ok(crate::item::Attribute {
+            path,
+            arguments: Box::default(),
+            span: Span::new(hash, after(close, 1)),
+            preview: None,
+        });
+    }
 
     if matches!(input.peek(), Some((Token::LeftParen, _))) {
         input.next();
@@ -1288,6 +1456,10 @@ fn parse_impl(
         #[cfg(not(feature = "no_function"))]
         {
             let (attributes, visibility, function_start) = parse_leading(input)?;
+            if cfg_disabled(&attributes) {
+                skip_item(input)?;
+                continue;
+            }
 
             // `type Output = i64;`
             if is_associated_type(input) {
@@ -1466,6 +1638,10 @@ fn parse_trait(
         #[cfg(not(feature = "no_function"))]
         {
             let (attributes, visibility, function_start) = parse_leading(input)?;
+            if cfg_disabled(&attributes) {
+                skip_item(input)?;
+                continue;
+            }
             // `type Output;`
             if is_associated_type(input) {
                 input.next();
@@ -3108,7 +3284,14 @@ fn parse_body_syntax(
             let position = *position;
             let function =
                 parse_function(input, tokenizer_control, Box::default(), None, position, false)?;
-            NESTED.with_borrow_mut(|nested| nested.push(function));
+            NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(function)));
+            continue;
+        }
+        #[cfg(not(feature = "no_std"))]
+        if boundary && let Some((Token::Use, position)) = input.peek() {
+            let position = *position;
+            let used = parse_use(input, Box::default(), None, position)?;
+            NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Use(used)));
             continue;
         }
         if let Some((token, _)) = input.peek() {

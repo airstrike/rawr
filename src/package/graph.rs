@@ -698,6 +698,35 @@ impl<'a> Builder<'a> {
                 declaration,
             )
         })?;
+        self.load_module_text(
+            package,
+            package_name,
+            package_root,
+            module_root,
+            modules,
+            canonical.clone(),
+            canonical,
+            text,
+            declaration,
+        )
+    }
+
+    /// One module's source `text`, read from `canonical` (`key` tells the
+    /// module apart: an inline module shares its file's path), and the
+    /// modules it declares.
+    #[allow(clippy::too_many_arguments)]
+    fn load_module_text(
+        &mut self,
+        package: Id,
+        package_name: &str,
+        package_root: &Path,
+        module_root: &Path,
+        modules: Box<[ImmutableString]>,
+        canonical: PathBuf,
+        key: PathBuf,
+        text: String,
+        declaration: Option<error::Label>,
+    ) -> Result<source::Id, Error> {
         let id = source::Id::from_index(self.sources.len());
         let source = source::Source::new(
             id,
@@ -737,11 +766,12 @@ impl<'a> Builder<'a> {
                 | item::Parsed::LegacyFunction(_) => None,
             })
             .collect::<Vec<_>>();
+        let file_text = source.text().to_string();
         self.sources.push(source);
         self.units.push(Unit { source: id, parsed });
-        self.active_modules.push(canonical.clone());
+        self.active_modules.push(key.clone());
         self.module_targets.insert(
-            canonical,
+            key.clone(),
             declaration.unwrap_or(error::Label {
                 source: evidence,
                 span: Span::new(Position::START, Position::START),
@@ -755,6 +785,23 @@ impl<'a> Builder<'a> {
                 source: evidence,
                 span: module.span,
             };
+            // `mod name { .. }`: the text inside its braces, where it is in
+            // the file, so its positions stay the file's.
+            if let Some(inline) = module.inline {
+                let child_key = key.join(format!("#{}", module.name.text));
+                self.load_module_text(
+                    package,
+                    package_name,
+                    package_root,
+                    module_root,
+                    child_modules.into_boxed_slice(),
+                    canonical.clone(),
+                    child_key,
+                    keep_span(&file_text, inline),
+                    Some(label),
+                )?;
+                continue;
+            }
             match self.module_file(module_root, &child_modules, label)? {
                 ModuleFile::Rawr(child_path) => {
                     self.load_module(
@@ -1141,4 +1188,34 @@ impl<'a> Builder<'a> {
             span: Span::new(Position::START, Position::START),
         }
     }
+}
+
+/// `text` with everything outside `span` blanked, line breaks kept, so the
+/// text inside keeps its lines and columns.
+fn keep_span(text: &str, span: Span) -> String {
+    let point = |position: Position| {
+        (
+            position.line().unwrap_or(0),
+            position.position().unwrap_or(0),
+        )
+    };
+    let (start, end) = (point(span.start()), point(span.end()));
+    let (mut line, mut column) = (1usize, 1usize);
+    let mut kept = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character == '\n' {
+            kept.push('\n');
+            line += 1;
+            column = 1;
+            continue;
+        }
+        let inside = start <= (line, column) && (line, column) < end;
+        if inside || character == '\r' {
+            kept.push(character);
+        } else {
+            kept.push(' ');
+        }
+        column += 1;
+    }
+    kept
 }

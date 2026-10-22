@@ -369,8 +369,11 @@ pub struct Module {
     pub header: Header,
     /// Declared module name.
     pub name: Name,
-    /// Complete item span, including the semicolon.
+    /// Complete item span, including the semicolon or the closing brace.
     pub span: Span,
+    /// `mod name { .. }`: the span inside its braces, whose items are the
+    /// module's, read as a file module of their own.
+    pub inline: Option<Span>,
 }
 
 /// A compile-time import.
