@@ -2602,7 +2602,8 @@ fn parse_type_split(
             && is_fn_trait(name)
         {
             input.next();
-            return parse_fn_signature(input, start).map(type_ref::Type::Path);
+            let path = parse_fn_signature(input, start)?;
+            return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
         // `dyn Shape<Output = i64>`: each binding is the argument
         // `=Output<i64>` of the trait's segment.
@@ -2712,7 +2713,8 @@ fn parse_type_split(
     // function type; `impl Iterator<Item = T>`.
     match fn_type_start(input)? {
         Some(ImplStart::Fn(start)) => {
-            return parse_fn_signature(input, start).map(type_ref::Type::Path)
+            let path = parse_fn_signature(input, start)?;
+            return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
         Some(ImplStart::Iterator(name, start)) => {
             return parse_iterator_type(input, split, name, start)
@@ -2722,6 +2724,36 @@ fn parse_type_split(
     }
 
     parse_path_split(input, split).map(type_ref::Type::Path)
+}
+
+/// `impl Fn(A) -> B + 'a + Send`: the lifetimes and auto traits after a
+/// function type, which Rawr's one function type needs no record of.
+fn skip_fn_bounds(
+    input: &mut TokenStream,
+    split: &mut Option<Position>,
+    mut path: type_ref::Path,
+) -> ParseResult<type_ref::Path> {
+    let start = path.span.start();
+    while split.is_none() && matches!(input.peek(), Some((Token::Plus | Token::UnaryPlus, _))) {
+        input.next();
+        if matches!(input.peek(), Some((Token::Apostrophe, _))) {
+            let lifetime = parse_lifetime(input)?;
+            path.span = Span::new(start, lifetime.span.end());
+            continue;
+        }
+        let extra = parse_path_split(input, split)?;
+        if !is_auto_trait(&extra) {
+            return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+                "+".into(),
+                "only lifetimes and auto traits (`Send`, `Sync`, `Unpin`) can be added to a \
+                 function trait"
+                    .into(),
+            ))
+            .into_err(extra.span.start()));
+        }
+        path.span = Span::new(start, extra.span.end());
+    }
+    Ok(path)
 }
 
 /// What a type starting with `fn` or `impl` is.

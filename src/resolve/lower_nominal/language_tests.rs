@@ -6704,3 +6704,42 @@ fn language_builtin_functions_as_values() {
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(value, r#"["a", "b"] [2.0, 3.0] [1, 0] [Named("a"), Named("b")] ['A', 'B']"#);
 }
+
+#[test]
+fn language_fn_traits_with_lifetimes_and_auto_traits() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            fn apply<'a>(f: impl Fn(i64) -> i64 + 'a, x: i64) -> i64 {
+                f(x)
+            }
+            fn twice(f: &dyn Fn(i64) -> i64, x: i64) -> i64 {
+                f(f(x))
+            }
+            fn count(mut f: impl FnMut() -> i64 + Send) -> i64 {
+                f() + f()
+            }
+            fn adder<'a>(n: &'a i64) -> impl Fn(i64) -> i64 + 'a {
+                move |x| x + *n
+            }
+            fn boxed(n: i64) -> Box<dyn Fn(i64) -> i64 + Send + 'static> {
+                Box::new(move |x| x * n)
+            }
+            pub fn run() -> String {
+                let n = 5;
+                let mut calls = 0;
+                let a = apply(|x| x + 1, 1);
+                let b = twice(&|x| x * 3, 2);
+                let c = count(|| { calls += 1; calls });
+                let d = adder(&n)(10);
+                let e = boxed(3)(4);
+                format!("{a} {b} {c} {d} {e}")
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    // The same program built by rustc prints `2 18 3 15 12`.
+    assert_eq!(value, "2 18 3 15 12");
+    rejected("fn f(g: impl Fn(i64) -> i64 + Clone) -> i64 { g(1) } pub fn run() -> i64 { f(|x| x) } run()");
+}
