@@ -41,6 +41,7 @@ export function render(page: Page): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Rawr Playground</title>
+<link rel="icon" href="/play.svg" type="image/svg+xml">
 ${ogTags(page.og, escape)}
 <meta name="theme-color" content="#ff2e93">
 ${sitekey ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>' : ""}
