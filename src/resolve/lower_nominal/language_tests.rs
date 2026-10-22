@@ -6239,3 +6239,58 @@ fn language_to_string_on_references_and_literals() {
     );
     assert_eq!(value, "3 1.5 c true 1 -2.5 0.1 [\"2\", \"3\"] 4 2 18446744073709551615 z false s");
 }
+
+#[test]
+fn language_string_and_vec_methods() {
+    let value = run_string(
+        r#"
+        fn shrink(s: &mut String) { s.truncate(2); }
+        pub fn run() -> String {
+            let mut s = String::from("héllo");
+            let last = s.pop();
+            s.insert(0, '>');
+            s.insert_str(1, "> ");
+            let r = s.remove(0);
+            let a = format!("{:?} {} {:?}", last, s, r);
+            shrink(&mut s);
+            let mut t = String::from("abcdef");
+            let tail = t.split_off(4);
+            t.clear();
+            let b: Vec<u8> = "hé".bytes().collect();
+            let n = "hé".as_bytes().len();
+            let i: Vec<(usize, char)> = "hé!".char_indices().collect();
+            let parts: Vec<&str> = "a,b,,c".splitn(3, ',').collect();
+            let utf8 = format!("{:?} {}", String::from_utf8(vec![104, 105]), String::from_utf8(vec![0x41, 0xff]).unwrap_err());
+            let mut v: Vec<i32> = Vec::with_capacity(10);
+            v.push(1); v.push(2); v.push(3); v.push(4); v.push(5);
+            let w: Vec<i32> = v.windows(2).map(|p| p[0] + p[1]).collect();
+            let c: Vec<Vec<i32>> = v.chunks(2).map(|p| p.to_vec()).collect();
+            let rest = v.split_off(3);
+            let name = String::with_capacity(4);
+            format!("{a}|{s}|{t}{tail}|{b:?} {n}|{i:?}|{parts:?}|{utf8}|{w:?} {c:?} {v:?} {rest:?} [{name}]")
+        }
+        run()
+    "#,
+    );
+    assert_eq!(
+        value,
+        "Some('o') > héll '>'|> |ef|[104, 195, 169] 3|[(0, 'h'), (1, 'é'), (3, '!')]|[\"a\", \"b\", \",c\"]|\
+         Ok(\"hi\") invalid utf-8 sequence of 1 bytes from index 1|[3, 5, 7, 9] [[1, 2], [3, 4], [5]] [1, 2, 3] [4, 5] []"
+    );
+    for (body, message) in [
+        ("let mut s = String::from(\"é\"); s.insert(1, 'x')", "assertion failed: self.is_char_boundary(idx)"),
+        ("let mut s = String::from(\"ab\"); s.remove(2)", "cannot remove a char from the end of a string"),
+        ("let mut s = String::from(\"ab\"); s.remove(5)", "start byte index 5 is out of bounds for string of length 2"),
+        (
+            "let mut s = String::from(\"éa\"); s.remove(1)",
+            "start byte index 1 is not a char boundary; it is inside 'é' (bytes 0..2 of string)",
+        ),
+        ("let mut s = String::from(\"é\"); s.truncate(1)", "assertion failed: self.is_char_boundary(new_len)"),
+        ("let v = vec![1]; let n = v.windows(0).count()", "window size must be non-zero"),
+        ("let v = vec![1]; let n = v.chunks(0).count()", "chunk size must be non-zero"),
+        ("let mut v = vec![1]; let w = v.split_off(3)", "`at` split index (is 3) should be <= len (is 1)"),
+    ] {
+        let error = rejected(&format!("pub fn run() -> i64 {{ {body}; 0 }} run()"));
+        assert!(error.contains(message), "{body}: {error}");
+    }
+}

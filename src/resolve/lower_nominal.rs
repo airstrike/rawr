@@ -2717,6 +2717,13 @@ enum PreludeOp {
     /// `print!`, `println!`, `eprint!`, `eprintln!`: `print(text, stderr)`,
     /// through the engine's output callback.
     Print,
+    /// A `String` changed in place (`STR_CHANGES`), called as a method so
+    /// the string is taken by reference: `string(code, a, b)`.
+    StrChange,
+    /// A string's pieces or bytes (`STR_PIECES`): `pieces(text, code, a, b)`.
+    StrPieces,
+    /// `v.windows(n)` (`true`) or `v.chunks(n)`: the array of its slices.
+    SliceChunks,
 }
 
 impl PreludeOp {
@@ -2778,6 +2785,9 @@ impl PreludeOp {
             Self::Parse => "str.parse",
             Self::StrMethod => "str.method",
             Self::Print => "io.print",
+            Self::StrChange => "string.change",
+            Self::StrPieces => "str.pieces",
+            Self::SliceChunks => "slice.chunks",
         }
     }
 
@@ -2790,7 +2800,8 @@ impl PreludeOp {
             | Self::MapSlotInsert
             | Self::SetInsert
             | Self::SetRemove
-            | Self::VecMethod => Some(true),
+            | Self::VecMethod
+            | Self::StrChange => Some(true),
             Self::MapGet
             | Self::MapContainsKey
             | Self::MapIndex
@@ -2841,6 +2852,23 @@ impl PreludeOp {
             Self::Cast => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
             Self::Parse => vec![TypeId::of::<ImmutableString>()],
             Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
+            Self::StrChange => vec![
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+            ],
+            Self::StrPieces => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+            ],
+            Self::SliceChunks => vec![
+                TypeId::of::<crate::Array>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<bool>(),
+            ],
             Self::StrMethod => vec![
                 TypeId::of::<ImmutableString>(),
                 TypeId::of::<crate::INT>(),
@@ -2995,6 +3023,28 @@ impl PreludeOp {
             Self::Cast => return cast_value(args[0], args[1].as_int().unwrap_or(3)),
             Self::Slice | Self::SplitAt => return slice_value(self, args),
             Self::VecMethod => return vec_method(args),
+            Self::StrChange => return str_change(args),
+            Self::StrPieces => return str_pieces(args),
+            Self::SliceChunks => {
+                let size = usize::try_from(args[1].as_int().unwrap_or(0)).unwrap_or(0);
+                let windows = args[2].as_bool().unwrap_or(false);
+                if size == 0 {
+                    return panic(if windows {
+                        "window size must be non-zero".into()
+                    } else {
+                        "chunk size must be non-zero".into()
+                    });
+                }
+                let array = args[0]
+                    .as_array_ref()
+                    .map_err(|_| invariant("a slice is not an array at runtime"))?;
+                let slices: crate::Array = if windows {
+                    array.windows(size).map(|window| Dynamic::from_array(window.to_vec())).collect()
+                } else {
+                    array.chunks(size).map(|chunk| Dynamic::from_array(chunk.to_vec())).collect()
+                };
+                return Ok(Dynamic::from_array(slices));
+            }
             Self::IntMethod => return int_method([3, 3], args),
             Self::Parse => return Ok(parse_text(&args[0].clone_cast::<ImmutableString>(), 3)),
             // The engine's output callback needs the call context.
@@ -3319,6 +3369,17 @@ fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
                 | "ends_with"
                 | "push_str"
                 | "push"
+                | "pop"
+                | "clear"
+                | "insert"
+                | "insert_str"
+                | "remove"
+                | "truncate"
+                | "split_off"
+                | "bytes"
+                | "as_bytes"
+                | "char_indices"
+                | "splitn"
         ),
         Ty::Array { .. } => matches!(
             member,
@@ -3439,7 +3500,8 @@ fn builtin_inherent_receiver_rank(ty: &Ty, member: &str) -> u8 {
         },
         Ty::Float(_) => 0,
         Ty::String | Ty::Array { .. } => match member {
-            "push" | "push_str" => 2,
+            "push" | "push_str" | "pop" | "clear" | "insert" | "insert_str" | "remove"
+            | "truncate" | "split_off" => 2,
             _ => 1,
         },
         Ty::Option(_) => match member {
@@ -19492,6 +19554,74 @@ impl<'a> Parser<'a> {
                 call.push_text(")");
                 (call, Ty::Bool)
             }
+            // A `String` changed in place, by bytes, with Rust's panics.
+            ("pop" | "clear", [])
+            | ("insert" | "insert_str", [_, _])
+            | ("remove" | "truncate" | "split_off", [_]) => {
+                let code = STR_CHANGES
+                    .iter()
+                    .position(|name| *name == member.as_str())
+                    .expect("a listed `String` method");
+                let mut operands = vec![origin::Fragment::from(code.to_string())];
+                for (index, argument) in arguments.iter_mut().enumerate() {
+                    let expected = match (member.as_str(), index) {
+                        ("insert", 1) => Ty::Char,
+                        ("insert_str", 1) => Ty::String,
+                        _ => Ty::Int(Int::Usize),
+                    };
+                    self.coerce_expr(&expected, argument)?;
+                    operands.push(argument.rendered_source());
+                }
+                operands.resize(3, "()".into());
+                let helper = self.push_op(Op::Prelude(PreludeOp::StrChange));
+                let source = self.mutation_call(&value, &helper, operands)?;
+                let ty = match member.as_str() {
+                    "pop" => Ty::Option(Box::new(Ty::Char)),
+                    "remove" => Ty::Char,
+                    "split_off" => Ty::String,
+                    _ => Ty::Unit,
+                };
+                (source, ty)
+            }
+            // `bytes()`, `char_indices()` and `splitn(n, pattern)`: iterators
+            // over the string's pieces; `as_bytes()` a `&[u8]`.
+            ("bytes" | "char_indices" | "as_bytes", []) | ("splitn", [_, _]) => {
+                let code = STR_PIECES
+                    .iter()
+                    .position(|name| *name == member.as_str())
+                    .unwrap_or(0);
+                let mut operands = vec![value.rendered_source(), code.to_string().into()];
+                if let [count, pattern] = arguments.as_mut_slice() {
+                    self.coerce_expr(&Ty::Int(Int::Usize), count)?;
+                    let expected = match self.inference.resolve(&pattern.ty) {
+                        Ty::Char => Ty::Char,
+                        _ => Ty::String,
+                    };
+                    self.require_type(&expected, &pattern.ty, pattern.span)?;
+                    operands.push(count.rendered_source());
+                    operands.push(pattern.rendered_source());
+                }
+                operands.resize(4, "()".into());
+                let pieces = self.prelude_op(PreludeOp::StrPieces, operands);
+                let item = match member.as_str() {
+                    "bytes" | "as_bytes" => Ty::Int(Int::U8),
+                    "char_indices" => Ty::Tuple(Box::new([Ty::Int(Int::Usize), Ty::Char])),
+                    _ => Ty::String,
+                };
+                let array = Ty::Array {
+                    element: Box::new(item.clone()),
+                    length: None,
+                };
+                if member.as_str() == "as_bytes" {
+                    let slice = Ty::Reference {
+                        mutable: false,
+                        target: Box::new(array),
+                    };
+                    return Ok(self.operator_expr(pieces, slice, expression));
+                }
+                let pieces = self.operator_expr(pieces, array, expression);
+                return Ok(self.array_iterator(&pieces, item, end));
+            }
             ("push_str" | "push", [argument]) => {
                 let expected = if member.as_str() == "push" {
                     Ty::Char
@@ -21089,7 +21219,14 @@ impl<'a> Parser<'a> {
                 };
                 return Ok(self.operator_expr(value.rendered_source(), ty, call));
             }
-            if member.as_str() != "new" || !arguments.is_empty() {
+            let mut arguments = arguments;
+            // `Vec::with_capacity(n)`: an empty `Vec`.
+            if member.as_str() == "with_capacity"
+                && let [capacity] = arguments.as_mut_slice()
+            {
+                self.coerce_expr(&Ty::Int(Int::Usize), capacity)?;
+                arguments.clear();
+            } else if member.as_str() != "new" || !arguments.is_empty() {
                 return Err(Error::UnknownMember {
                     owner: "Vec".into(),
                     member,
@@ -24165,6 +24302,45 @@ impl<'a> Parser<'a> {
                     }),
                 },
             ),
+            // `windows(n)` and `chunks(n)`: an iterator over `&[T]` slices.
+            ("windows" | "chunks", [size]) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), size)?;
+                let windows = (member.as_str() == "windows").to_string();
+                let slices = self.prelude_op(
+                    PreludeOp::SliceChunks,
+                    [receiver, size.rendered_source(), windows.into()],
+                );
+                let slice = Ty::Array {
+                    element: Box::new(element),
+                    length: None,
+                };
+                let item = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(slice.clone()),
+                };
+                let slices = self.operator_expr(
+                    slices,
+                    Ty::Array {
+                        element: Box::new(item.clone()),
+                        length: None,
+                    },
+                    expression,
+                );
+                return Ok(self.array_iterator(&slices, item, end));
+            }
+            // `v.split_off(at)`: the elements from `at` on, as a new `Vec`.
+            ("split_off", [at]) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), at)?;
+                let code = vec_method_code("split_off").to_string();
+                let operands = vec![code.into(), at.rendered_source(), "()".into(), "()".into()];
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                let source = self.mutation_call(&value, &helper, operands)?;
+                let ty = Ty::Array {
+                    element: Box::new(element),
+                    length: None,
+                };
+                (source, ty)
+            }
             // `first`, `last` and `get(i)`: an `Option<&T>`.
             ("first" | "last", []) | ("get", [_]) => {
                 let index = match arguments.first_mut() {
@@ -25895,6 +26071,38 @@ impl<'a> Parser<'a> {
         }
         if builtin == Ty::String && member.as_str() == "new" && arguments.is_empty() {
             return Ok(self.literal("\"\"", Ty::String, expression));
+        }
+        if builtin == Ty::String
+            && member.as_str() == "with_capacity"
+            && let [capacity] = arguments.as_mut_slice()
+        {
+            self.coerce_expr(&Ty::Int(Int::Usize), capacity)?;
+            return Ok(self.literal("\"\"", Ty::String, expression));
+        }
+        // `String::from_utf8(bytes)`: a `Result` of the text or the error.
+        if builtin == Ty::String
+            && member.as_str() == "from_utf8"
+            && let [bytes] = arguments.as_mut_slice()
+        {
+            let expected = Ty::Array {
+                element: Box::new(Ty::Int(Int::U8)),
+                length: None,
+            };
+            self.coerce_expr(&expected, bytes)?;
+            let code = STR_PIECES
+                .iter()
+                .position(|name| *name == "from_utf8")
+                .expect("a listed piece")
+                .to_string();
+            let source = self.prelude_op(
+                PreludeOp::StrPieces,
+                [bytes.rendered_source(), code.into(), "()".into(), "()".into()],
+            );
+            let ty = Ty::Result(
+                Box::new(Ty::String),
+                Box::new(Ty::ParseError(ParseError::Utf8)),
+            );
+            return Ok(self.operator_expr(source, ty, expression));
         }
         if member.as_str() == "from"
             && let [argument] = arguments.as_mut_slice()
@@ -30612,6 +30820,8 @@ enum ParseError {
     Char,
     /// `std::convert::Infallible`, the error of `parse::<String>()`.
     Infallible,
+    /// `std::string::FromUtf8Error`, the error of `String::from_utf8`.
+    Utf8,
 }
 
 impl ParseError {
@@ -30622,6 +30832,7 @@ impl ParseError {
             "ParseBoolError" => Self::Bool,
             "ParseCharError" => Self::Char,
             "Infallible" => Self::Infallible,
+            "FromUtf8Error" => Self::Utf8,
             _ => return None,
         })
     }
@@ -30633,6 +30844,7 @@ impl ParseError {
             Self::Bool => "ParseBoolError",
             Self::Char => "ParseCharError",
             Self::Infallible => "Infallible",
+            Self::Utf8 => "FromUtf8Error",
         }
     }
 
@@ -30667,7 +30879,7 @@ impl ParseError {
                 ("cannot parse char from empty string", "ParseCharError { kind: EmptyString }"),
                 ("too many characters in string", "ParseCharError { kind: TooManyChars }"),
             ],
-            Self::Infallible => &[],
+            Self::Infallible | Self::Utf8 => &[],
         }
     }
 }
@@ -30814,6 +31026,7 @@ const VEC_METHODS: &[&str] = &[
     "store",
     "fill",
     "copy_from_slice",
+    "split_off",
 ];
 
 /// A `VEC_METHODS` code by name.
@@ -30884,6 +31097,10 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
             array.fill(value);
             Ok(Dynamic::UNIT)
         }
+        Some("split_off") if a > len => fail(format!(
+            "`at` split index (is {a}) should be <= len (is {len})"
+        )),
+        Some("split_off") => Ok(Dynamic::from_array(array.split_off(a))),
         Some("copy_from_slice") => {
             let source = value.into_array().unwrap_or_default();
             if source.len() != len {
@@ -30914,6 +31131,148 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
         }
         _ => Err(invariant("an unknown `Vec` method")),
     }
+}
+
+/// The `String` methods `StrChange` runs in place, by code.
+const STR_CHANGES: &[&str] = &[
+    "pop",
+    "clear",
+    "insert",
+    "insert_str",
+    "remove",
+    "truncate",
+    "split_off",
+];
+
+/// `STR_CHANGES`' `code` on the string taken by reference, by bytes and
+/// with Rust's panics.
+fn str_change(args: &mut FnCallArgs) -> RawrResult {
+    let fail = |message: String| -> RawrResult {
+        Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    let at = usize::try_from(args[2].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    let operand = args[3].clone();
+    let mut text = args[0]
+        .write_lock::<ImmutableString>()
+        .ok_or_else(|| invariant("a `String` is not a string at runtime"))?;
+    let name = STR_CHANGES.get(code).copied().unwrap_or_default();
+    // Rust asserts a char boundary before changing the string there.
+    let boundary = |text: &str, at: usize, what: &str| -> Result<(), Box<EvalAltResult>> {
+        if text.is_char_boundary(at) {
+            Ok(())
+        } else {
+            Err(EvalAltResult::ErrorRuntime(
+                format!("assertion failed: self.is_char_boundary({what})").into(),
+                Position::NONE,
+            )
+            .into())
+        }
+    };
+    match name {
+        "pop" => Ok(match text.make_mut().pop() {
+            Some(c) => crate::option::some(c.into()),
+            None => crate::option::none(),
+        }),
+        "clear" => {
+            *text = ImmutableString::new();
+            Ok(Dynamic::UNIT)
+        }
+        "insert" | "insert_str" => {
+            boundary(&text, at, "idx")?;
+            match operand.as_char() {
+                Ok(c) => text.make_mut().insert(at, c),
+                Err(_) => {
+                    let piece = operand.clone_cast::<ImmutableString>();
+                    text.make_mut().insert_str(at, &piece);
+                }
+            }
+            Ok(Dynamic::UNIT)
+        }
+        "remove" => {
+            let len = text.len();
+            if at > len {
+                return fail(format!(
+                    "start byte index {at} is out of bounds for string of length {len}"
+                ));
+            }
+            if !text.is_char_boundary(at) {
+                let start = (0..at).rev().find(|index| text.is_char_boundary(*index)).unwrap_or(0);
+                let inside = text[start..].chars().next().unwrap_or_default();
+                let end = start + inside.len_utf8();
+                return fail(format!(
+                    "start byte index {at} is not a char boundary; it is inside {inside:?} \
+                     (bytes {start}..{end} of string)"
+                ));
+            }
+            match text[at..].chars().next() {
+                Some(c) => {
+                    text.make_mut().remove(at);
+                    Ok(c.into())
+                }
+                None => fail("cannot remove a char from the end of a string".into()),
+            }
+        }
+        "truncate" => {
+            if at <= text.len() {
+                boundary(&text, at, "new_len")?;
+                text.make_mut().truncate(at);
+            }
+            Ok(Dynamic::UNIT)
+        }
+        "split_off" => {
+            boundary(&text, at, "at")?;
+            let rest = text.make_mut().split_off(at);
+            Ok(Dynamic::from(ImmutableString::from(rest.as_str())))
+        }
+        _ => Err(invariant("an unknown `String` method")),
+    }
+}
+
+/// The string methods `StrPieces` runs, by code: each gives an array.
+/// `from_utf8` gives a `Result` of the text or its error's message.
+const STR_PIECES: &[&str] = &["bytes", "char_indices", "splitn", "from_utf8"];
+
+fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
+    let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    let name = STR_PIECES.get(code).copied().unwrap_or_default();
+    if name == "from_utf8" {
+        let bytes: Vec<u8> = args[0]
+            .as_array_ref()
+            .map_err(|_| invariant("a `Vec<u8>` is not an array at runtime"))?
+            .iter()
+            .map(|byte| u8::try_from(byte.as_int().unwrap_or_default()).unwrap_or_default())
+            .collect();
+        return Ok(match String::from_utf8(bytes) {
+            Ok(text) => crate::result::ok(Dynamic::from(ImmutableString::from(text))),
+            Err(error) => {
+                crate::result::err(Dynamic::from(ImmutableString::from(error.to_string())))
+            }
+        });
+    }
+    let text = args[0].clone_cast::<ImmutableString>();
+    let string = |piece: &str| Dynamic::from(ImmutableString::from(piece));
+    let pieces: crate::Array = match name {
+        "bytes" => text.bytes().map(|byte| Dynamic::from(crate::INT::from(byte))).collect(),
+        "char_indices" => text
+            .char_indices()
+            .map(|(index, c)| {
+                Dynamic::from_array(vec![(index as crate::INT).into(), c.into()])
+            })
+            .collect(),
+        "splitn" => {
+            let count = usize::try_from(args[2].as_int().unwrap_or_default()).unwrap_or(0);
+            match args[3].as_char() {
+                Ok(c) => text.splitn(count, c).map(string).collect(),
+                Err(_) => {
+                    let pattern = args[3].clone_cast::<ImmutableString>();
+                    text.splitn(count, pattern.as_str()).map(string).collect()
+                }
+            }
+        }
+        _ => return Err(invariant("an unknown string method")),
+    };
+    Ok(Dynamic::from_array(pieces))
 }
 
 /// `char`'s methods by name and result (`c` a `char`, `b` a `bool`, `u` a
