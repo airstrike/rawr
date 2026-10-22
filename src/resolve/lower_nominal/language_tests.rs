@@ -6912,3 +6912,49 @@ fn language_range_bounds_take_the_element_kind() {
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(value, 300.0);
 }
+
+#[test]
+fn language_mut_methods_through_field_and_element_places() {
+    let value = run(r#"
+        struct Counter { n: i64 }
+        impl Counter { fn bump(&mut self) { self.n += 1; } }
+        struct Inner { log: Vec<i64>, name: String, items: Vec<Counter> }
+        struct State { text: String, inner: Inner, rows: Vec<String> }
+        impl State {
+            fn change(&mut self, x: &str) {
+                self.text.push_str(&x);
+                self.text.push('!');
+                self.inner.name.push_str(x);
+                self.inner.log.push(3);
+                self.inner.log.sort();
+                self.inner.log.sort_by_key(|n| -*n);
+                self.rows[0].push_str("z");
+                self.inner.items[0].bump();
+                self.inner.items.iter_mut().for_each(|c| c.n *= 10);
+            }
+        }
+        pub fn run() -> i64 {
+            let mut s = State {
+                text: String::new(),
+                inner: Inner { log: vec![5, 1], name: String::from("n"), items: vec![Counter { n: 1 }] },
+                rows: vec![String::from("a")],
+            };
+            s.change("ab");
+            let mut v = vec![String::from("q")];
+            v[0].push_str("rs");
+            let ok = s.text == "ab!" && s.inner.name == "nab" && s.rows[0] == "az" && v[0] == "qrs";
+            if ok { s.inner.log[0] * 100 + s.inner.log[2] * 10 + s.inner.items[0].n } else { -1 }
+        }
+        run()
+    "#);
+    assert_eq!(value, 5 * 100 + 1 * 10 + 20);
+    let error = rejected(
+        r#"
+        struct S { text: String }
+        impl S { fn f(&self) { self.text.push_str("x"); } }
+        pub fn run() -> i64 { 0 }
+        run()
+    "#,
+    );
+    assert!(error.contains("self"), "{error}");
+}

@@ -20730,7 +20730,20 @@ impl<'a> Parser<'a> {
                 };
                 self.require_type(&expected, &argument.ty, argument.span)?;
                 let Some(Lvalue::Binding { binding, .. }) = &value.lvalue else {
-                    return Err(self.unsupported("`push_str` on a value that is not a local"));
+                    // A field, an element or a nested place: changed in
+                    // place and stored back like the other `String` changes.
+                    let code = STR_CHANGES
+                        .iter()
+                        .position(|name| *name == member.as_str())
+                        .expect("a listed `String` method");
+                    let operands = vec![
+                        origin::Fragment::from(code.to_string()),
+                        "()".into(),
+                        argument.rendered_source(),
+                    ];
+                    let helper = self.push_op(Op::Prelude(PreludeOp::StrChange));
+                    let source = self.mutation_call(&value, &helper, operands)?;
+                    return Ok(self.operator_expr(source, Ty::Unit, expression));
                 };
                 let Some(local) = self.bindings.get(binding) else {
                     return Err(self.unsupported("assignment through an unknown binding"));
@@ -25852,20 +25865,21 @@ impl<'a> Parser<'a> {
             ("sort_by" | "sort_by_key", [f]) => Some(f),
             _ => return Ok(None),
         };
-        let Some(Lvalue::Binding { binding, .. }) = &value.lvalue else {
-            return Err(self.unsupported("sorting a value that is not a local"));
+        // A local is sorted in place; a field, an element or a nested place
+        // through a copy stored back.
+        let (binding, store) = match &value.lvalue {
+            Some(Lvalue::Binding { binding, .. }) => {
+                let binding = binding.clone();
+                self.require_mutable_binding(&binding, value.span)?;
+                (binding.to_string(), None)
+            }
+            Some(_) => {
+                let copy = self.temporary("sorted");
+                let store = self.store_into(value, &copy)?;
+                (copy, Some(store))
+            }
+            None => return Err(self.unsupported("sorting a value that is not a place")),
         };
-        let Some(local) = self.bindings.get(binding) else {
-            return Err(self.unsupported("assignment through an unknown binding"));
-        };
-        if !local.mutable {
-            return Err(Error::ImmutableBinding {
-                binding: binding.clone(),
-                mutation: value.span,
-                declaration: local.declaration,
-            });
-        }
-        let binding = binding.clone();
         let reference = Ty::Reference {
             mutable: false,
             target: Box::new(element.clone()),
@@ -25928,6 +25942,15 @@ impl<'a> Parser<'a> {
                 source.push(compare);
                 source.push_text(");");
             }
+        }
+        if let Some(store) = store {
+            let mut copied = origin::Fragment::plain(format!("{{ let {binding} = "));
+            copied.push(value.rendered_source());
+            copied.push_text("; ");
+            copied.push(source);
+            copied.push_text(" } ");
+            copied.push(store);
+            source = copied;
         }
         source.push_text(" }");
         Ok(Some(source))
@@ -32897,6 +32920,8 @@ const STR_CHANGES: &[&str] = &[
     "remove",
     "truncate",
     "split_off",
+    "push",
+    "push_str",
 ];
 
 /// `STR_CHANGES`' `code` on the string taken by reference, by bytes and
@@ -32979,6 +33004,16 @@ fn str_change(args: &mut FnCallArgs) -> RawrResult {
             boundary(&text, at, "at")?;
             let rest = text.make_mut().split_off(at);
             Ok(Dynamic::from(ImmutableString::from(rest.as_str())))
+        }
+        "push" | "push_str" => {
+            match operand.as_char() {
+                Ok(c) => text.make_mut().push(c),
+                Err(_) => {
+                    let piece = operand.clone_cast::<ImmutableString>();
+                    text.make_mut().push_str(&piece);
+                }
+            }
+            Ok(Dynamic::UNIT)
         }
         _ => Err(invariant("an unknown `String` method")),
     }
