@@ -546,6 +546,8 @@ pub struct Variant {
     pub fields: Option<Box<[Name]>>,
     /// `#[default]`: the variant a derived `Default` builds.
     pub default: Option<Span>,
+    /// `V = 5`: the explicit discriminant an `as` cast reads.
+    pub discriminant: Option<crate::INT>,
     /// Complete variant span.
     pub span: Span,
 }

@@ -1254,6 +1254,7 @@ fn resolve_item(
                     payload: payload.into_boxed_slice(),
                     fields: variant.fields,
                     default: variant.default,
+                    discriminant: variant.discriminant,
                     span: variant.span,
                 });
             }

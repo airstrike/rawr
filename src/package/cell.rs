@@ -26,7 +26,7 @@ use crate::{parse, preview, source, ImmutableString, Position, Span, AST};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`) and the
@@ -287,6 +287,15 @@ impl Codec for u32 {
     }
 }
 
+impl Codec for crate::INT {
+    fn put(&self, writer: &mut Writer) {
+        writer.number(*self as u64);
+    }
+    fn get(reader: &mut Reader) -> Option<Self> {
+        Some(reader.number()? as Self)
+    }
+}
+
 impl Codec for usize {
     fn put(&self, writer: &mut Writer) {
         writer.number(*self as u64);
@@ -436,7 +445,7 @@ record! {
     item::Struct { header, name, generics, fields, form, span }
     item::Field { name, ty, span }
     item::Enum { header, name, generics, variants, span }
-    item::Variant { name, payload, fields, default, span }
+    item::Variant { name, payload, fields, default, discriminant, span }
     item::Impl { header, generics, trait_, owner, functions, associated, span }
     item::Trait {
         header, name, functions, provided, associated, associated_bounds,

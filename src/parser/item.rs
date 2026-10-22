@@ -1451,12 +1451,37 @@ fn parse_enum(
             fields = Some(names.into_boxed_slice());
         }
 
+        // `Green = 5`, `Low = -1`: an explicit discriminant.
+        let mut discriminant = None;
+        if matches!(input.peek(), Some((Token::Equals, _))) {
+            input.next();
+            let negative = matches!(input.peek(), Some((Token::Minus | Token::UnaryMinus, _)));
+            if negative {
+                input.next();
+            }
+            match input.next() {
+                Some((Token::IntegerConstant(value), position)) => {
+                    discriminant = Some(if negative { -value } else { value });
+                    end = after(position, value.to_string().len());
+                }
+                other => {
+                    let position = other.map_or(Position::NONE, |(_, position)| position);
+                    return Err(PERR::MissingToken(
+                        "an integer".into(),
+                        "as an enum discriminant".into(),
+                    )
+                    .into_err(position));
+                }
+            }
+        }
+
         variants.push(crate::item::Variant {
             span: Span::new(variant_name.span.start(), end),
             name: variant_name,
             payload: payload.into_boxed_slice(),
             fields,
             default,
+            discriminant,
         });
 
         consume_comma_or_end(input, Token::RightBrace, "between enum variants")?;

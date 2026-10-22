@@ -7061,3 +7061,19 @@ fn language_restricted_item_visibility() {
     "#);
     assert_eq!(value, 11);
 }
+
+#[test]
+fn language_fieldless_enum_casts() {
+    let value = run(r#"
+        #[derive(Clone, Copy)]
+        enum Level { Low, Mid = 10, High, Negative = -3, After }
+        pub fn run() -> i64 {
+            let high = Level::High;
+            (Level::Low as i64) + (Level::Mid as i32) as i64 * 100 + high as i64 * 10000
+                + (Level::Negative as i64) * 1000000 + (Level::After as u8) as i64 * 100000000
+        }
+        run()
+    "#);
+    assert_eq!(value, 0 + 10 * 100 + 11 * 10000 + -3 * 1000000 + 254 * 100000000);
+    rejected("enum E { A(i64) } pub fn run() -> i64 { E::A(1) as i64 } run()");
+}

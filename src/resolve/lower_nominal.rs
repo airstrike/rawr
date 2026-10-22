@@ -2661,6 +2661,9 @@ enum PreludeOp {
     /// index, a builtin's witness code (`builtin_type_key`), else `-1`.
     /// What a trait dispatcher selects the impl by.
     TypeIndex,
+    /// `value as i32` of a fieldless script enum: its variant's
+    /// discriminant, explicit or one past the previous variant's.
+    Discriminant,
     /// `i64::from(bool)`, `f64::from(bool)`, `String::from(char)`: the
     /// prelude's conversions among builtin types.
     IntFromBool,
@@ -2787,6 +2790,7 @@ impl PreludeOp {
             Self::GenericDebug => "generic.debug",
             Self::Compare => "generic.partial-cmp",
             Self::TypeIndex => "generic.type-index",
+            Self::Discriminant => "enum.discriminant",
             Self::IntFromBool => "from.i64-bool",
             Self::FloatFromBool => "from.f64-bool",
             Self::StringFromChar => "from.string-char",
@@ -2871,6 +2875,7 @@ impl PreludeOp {
             | Self::UnwrapErr
             | Self::GenericDebug
             | Self::TypeIndex
+            | Self::Discriminant
             | Self::ReverseWrap => vec![TypeId::of::<Dynamic>()],
             Self::ReverseInner => vec![TypeId::of::<std::cmp::Reverse<Dynamic>>()],
             Self::IntFromBool | Self::FloatFromBool => vec![TypeId::of::<bool>()],
@@ -3303,6 +3308,24 @@ impl PreludeOp {
                     }
                 }
                 return Ok(Dynamic::from(ImmutableString::from(text)));
+            }
+            Self::Discriminant => {
+                let Union::Enum(value, ..) = &args[0].0 else {
+                    return Err(invariant("an enum cast operand is not an enum at runtime"));
+                };
+                let Some(Nominal::Enum { item, .. }) = models.by_identity.get(value.identity())
+                else {
+                    return Err(invariant("an enum cast operand has no enum model"));
+                };
+                let mut next: crate::INT = 0;
+                for variant in &item.variants {
+                    let discriminant = variant.discriminant.unwrap_or(next);
+                    if variant.name.text == value.variant().name() {
+                        return Ok(discriminant.into());
+                    }
+                    next = discriminant.wrapping_add(1);
+                }
+                return Err(invariant("an enum cast operand has an unknown variant"));
             }
             Self::TypeIndex => {
                 let identity = match &args[0].0 {
@@ -19029,6 +19052,22 @@ impl<'a> Parser<'a> {
             value.span = span(value.span.start(), written.end());
             value.lvalue = lvalue;
             return Ok(value);
+        }
+        // `Color::Red as i32`: a fieldless enum's discriminant, cast on as
+        // an `isize` is.
+        if let (Ty::Script(id, _), Ty::Int(_)) = (&source, &target)
+            && let Nominal::Enum { item, .. } = self.models.definition(*id)
+            && item
+                .variants
+                .iter()
+                .all(|variant| variant.payload.is_empty())
+        {
+            let operand = value.rendered_source();
+            value.prelude = origin::Fragment::default();
+            value.source = self.prelude_op(PreludeOp::Discriminant, [operand]);
+            value.lvalue = None;
+            source = Ty::Int(Int::I64);
+            value.ty = source.clone();
         }
         let literal = value.source.as_str().parse::<crate::FLOAT>().is_ok();
         match (&source, &target) {
