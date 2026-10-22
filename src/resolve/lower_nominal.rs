@@ -12505,6 +12505,20 @@ impl<'a> Parser<'a> {
         {
             return self.parse_imported_function_item(items, owner, expression);
         }
+        // `window::close`, `Theme::to_string`: a library function or method
+        // named without a call is a function value, as in Rust.
+        if !matches!(self.peek(), Token::LeftParen | Token::Unit)
+            && let [item] = items.as_ref()
+            && item.imported_identity().is_none()
+            && matches!(
+                item.kind(),
+                crate::host::item::Kind::Function
+                    | crate::host::item::Kind::AssociatedFunction
+                    | crate::host::item::Kind::Method
+            )
+        {
+            return self.host_function_value(item.clone(), expression);
+        }
         let default = items.iter().all(|item| {
             item.kind() == crate::host::item::Kind::AssociatedFunction
                 && item.path_ref().name() == "default"
@@ -12526,6 +12540,113 @@ impl<'a> Parser<'a> {
             });
         }
         Ok(value)
+    }
+
+    /// A library function or method as a value: the closure that calls it,
+    /// `|a, b| path(a, b)` or `|a: &Owner, b| a.method(b)`, read in its place
+    /// so it takes the parameter types its use expects.
+    fn host_function_value(
+        &mut self,
+        item: crate::host::item::Definition,
+        expression: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let path = item.path().to_string();
+        let arity = item.signature().parameters().len();
+        if item.kind() != crate::host::item::Kind::Method {
+            return self.function_value_closure(&path, arity, None, expression);
+        }
+        let (owner, member) = path.rsplit_once("::").expect("a method has an owner");
+        // A receiver of a type without parameters is annotated, so the
+        // value has a type where nothing expects one.
+        let annotation = self
+            .models
+            .host
+            .type_(owner)
+            .filter(|definition| definition.parameters().is_empty())
+            .map(|_| {
+                let reference = match item.receiver() {
+                    Some(receiver::Mode::Owned) => "",
+                    Some(receiver::Mode::Mutable) => "&mut ",
+                    _ => "&",
+                };
+                format!("{reference}{owner}")
+            });
+        self.function_value_closure(member, arity + 1, Some(annotation), expression)
+    }
+
+    /// Read `|a0, ..| path(a0, ..)` (or, for a method, `|a0, ..| a0.path(..)`)
+    /// in place of a function named as a value.
+    fn function_value_closure(
+        &mut self,
+        path: &str,
+        arity: usize,
+        method: Option<Option<String>>,
+        at: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let position = at.start();
+        let mut tokens = Vec::<Token>::new();
+        let path_tokens = |path: &str, tokens: &mut Vec<Token>| {
+            for (index, segment) in path.split("::").enumerate() {
+                if index > 0 {
+                    tokens.push(Token::DoubleColon);
+                }
+                tokens.push(Token::Identifier(Box::new(segment.into())));
+            }
+        };
+        let name = |index: usize| Token::Identifier(Box::new(format!("__rawr_argument_{index}").into()));
+        if arity == 0 {
+            tokens.push(Token::Or);
+        } else {
+            tokens.push(Token::Pipe);
+            for index in 0..arity {
+                if index > 0 {
+                    tokens.push(Token::Comma);
+                }
+                tokens.push(name(index));
+                if index == 0
+                    && let Some(Some(annotation)) = &method
+                {
+                    tokens.push(Token::Colon);
+                    let mut annotation = annotation.as_str();
+                    if let Some(rest) = annotation.strip_prefix("&mut ") {
+                        tokens.push(Token::Ampersand);
+                        tokens.push(Token::Mut);
+                        annotation = rest;
+                    } else if let Some(rest) = annotation.strip_prefix('&') {
+                        tokens.push(Token::Ampersand);
+                        annotation = rest;
+                    }
+                    path_tokens(annotation, &mut tokens);
+                }
+            }
+            tokens.push(Token::Pipe);
+        }
+        let first = if method.is_some() {
+            tokens.push(name(0));
+            tokens.push(Token::Period);
+            tokens.push(Token::Identifier(Box::new(path.into())));
+            1
+        } else {
+            path_tokens(path, &mut tokens);
+            0
+        };
+        tokens.push(Token::LeftParen);
+        for index in first..arity {
+            if index > first {
+                tokens.push(Token::Comma);
+            }
+            tokens.push(name(index));
+        }
+        tokens.push(Token::RightParen);
+        let rest = self.input.by_ref().collect::<Vec<_>>();
+        self.input = tokens
+            .into_iter()
+            .map(|token| (token, position))
+            .chain(rest)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .peekable();
+        self.parse_primary()
     }
 
     fn parse_stream_operation(
@@ -26953,6 +27074,19 @@ impl<'a> Parser<'a> {
                 (Ty::Float(Float::F32), "MIN") => format!("{:?}", f64::from(f32::MIN)),
                 (Ty::Float(_), "MAX") => format!("{:?}", f64::MAX),
                 (Ty::Float(_), "MIN") => format!("{:?}", f64::MIN),
+                // `String::from`, `f64::sqrt`, `char::is_alphanumeric`: a
+                // function as a value.
+                (_, "from" | "try_from") => {
+                    let path = format!("{name}::{member}");
+                    return self.function_value_closure(&path, 1, None, name_span);
+                }
+                (_, member) if member.starts_with(|c: char| c.is_ascii_lowercase()) => {
+                    let annotation = match builtin {
+                        Ty::String => "&str".to_string(),
+                        _ => name.to_string(),
+                    };
+                    return self.function_value_closure(member, 1, Some(Some(annotation)), name_span);
+                }
                 _ => {
                     return Err(Error::UnknownMember {
                         owner: name,

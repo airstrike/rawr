@@ -6682,3 +6682,25 @@ fn language_format_strings_are_checked_as_rustc_does() {
         rejected(&format!("pub fn run() -> i64 {{ let s = {source}; 0 }} run()"));
     }
 }
+
+#[test]
+fn language_builtin_functions_as_values() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            #[derive(Debug)]
+            enum Word { Named(String) }
+            pub fn run() -> String {
+                let words: Vec<String> = vec!["a", "b"].into_iter().map(String::from).collect();
+                let roots: Vec<f64> = vec![4.0, 9.0].into_iter().map(f64::sqrt).collect();
+                let ones: Vec<i64> = vec![true, false].into_iter().map(i64::from).collect();
+                let named: Vec<Word> = words.clone().into_iter().map(Word::Named).collect();
+                let upper: Vec<char> = "ab".chars().map(char::to_ascii_uppercase).collect();
+                format!("{:?} {:?} {:?} {:?} {:?}", words, roots, ones, named, upper)
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(value, r#"["a", "b"] [2.0, 3.0] [1, 0] [Named("a"), Named("b")] ['A', 'B']"#);
+}

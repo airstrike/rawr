@@ -93,12 +93,12 @@ fn master_helpers_check_and_render() {
     find(&adapter, "0");
 }
 
-/// `examples/exit/src/main.rs`, with `and_then(window::close)` written as a
-/// closure: Rawr does not yet take a library function as a value.
+/// `examples/exit/src/main.rs` as written: `window::close` is a function
+/// value.
 const EXIT: &str = r#"
-use iced::widget::{button, center, column};
+use iced::widget::{button, center, column, text};
 use iced::window;
-use iced::{Center, Task, Widget};
+use iced::{Center, Task, Theme, Widget};
 
 pub fn main() -> iced::Result {
     iced::run(Exit::update, Exit::view)
@@ -118,7 +118,7 @@ enum Message {
 impl Exit {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Confirm => window::latest().and_then(|id| window::close(id)),
+            Message::Confirm => window::latest().and_then(window::close),
             Message::Exit => {
                 self.show_confirm = true;
 
@@ -136,7 +136,9 @@ impl Exit {
                     .on_press(Message::Confirm),
             ]
         } else {
+            let themes: Vec<String> = Theme::ALL.iter().map(Theme::to_string).collect();
             column![
+                text(themes[0].clone()),
                 "Click the button to exit",
                 button("Exit").padding([10, 20]).on_press(Message::Exit),
             ]
@@ -152,6 +154,7 @@ impl Exit {
 #[test]
 fn master_exit_checks_and_closes_through_a_window_task() {
     let mut adapter = boot(EXIT);
+    find(&adapter, "Light");
     let mut simulator = iced_test::simulator(adapter.view());
     simulator.click("Exit").unwrap();
     let exit = simulator.into_messages().next().expect("the button emits");
