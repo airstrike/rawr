@@ -89,8 +89,36 @@ const OWNED_EQ_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Static,
 ];
 
+/// `{:?}` of the facade's value types prints Rust's `Debug` text.
+fn register_debug() {
+    use rawr::host::debug::register;
+    register::<iced::Border>();
+    register::<iced::Color>();
+    register::<iced::ContentFit>();
+    register::<iced::Event>();
+    register::<iced::Font>();
+    register::<iced::keyboard::Event>();
+    register::<iced::keyboard::Key>();
+    register::<iced::keyboard::key::Named>();
+    register::<iced::keyboard::Modifiers>();
+    register::<iced::Length>();
+    register::<iced::mouse::Button>();
+    register::<iced::mouse::Event>();
+    register::<iced::mouse::Interaction>();
+    register::<iced::Padding>();
+    register::<iced::Point>();
+    register::<iced::Rectangle>();
+    register::<iced::Size>();
+    register::<iced::touch::Event>();
+    register::<iced::Vector>();
+    register::<iced::window::Event>();
+    register::<iced::window::Id>();
+    register::<std::time::Duration>();
+}
+
 /// Build the validated compile-time `iced` facade contract.
 pub fn facade() -> Result<facade::Definition, host::Error> {
+    register_debug();
     let mut builder = facade::Builder::new("iced", facade::Abi::new(16)?)?;
     builder.module("alignment")?;
     builder.module("animation")?;

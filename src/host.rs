@@ -1,5 +1,7 @@
 //! Host metadata consulted while resolving Rawr source.
 
+#[cfg(not(feature = "no_std"))]
+pub mod debug;
 pub(crate) mod endpoint;
 pub mod value;
 mod error;

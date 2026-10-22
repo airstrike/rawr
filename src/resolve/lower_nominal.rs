@@ -25985,6 +25985,16 @@ impl<'a> Parser<'a> {
                 source.push_text(format!("; }} {text} + \"}}\" }}"));
                 source
             }
+            // A facade type providing `Debug`: Rust's text, as its facade
+            // registered it (`host::debug`).
+            Ty::Host { proof, .. }
+                if proof
+                    .definition
+                    .capabilities()
+                    .contains(capability::Kind::Debug) =>
+            {
+                self.prelude_op(PreludeOp::GenericDebug, [value])
+            }
             Ty::Script(id, ..) => {
                 let model = self.models.definition(*id).clone();
                 self.require_capability(&model, capability::Kind::Debug, span)?;

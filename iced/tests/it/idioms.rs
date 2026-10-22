@@ -1125,3 +1125,17 @@ fn text_formats_like_format_and_colors_read_their_channels() {
     find(&adapter, "alpha 0.50 red 0");
     find(&adapter, "same true 0");
 }
+
+#[test]
+fn facade_values_print_with_debug() {
+    let adapter = boot_with(
+        r#"column![text(format!("{:?}", iced::Color::BLACK)), text(shown(&Vec::new()))]"#,
+        r#"
+fn shown(events: &Vec<iced::Event>) -> String {
+    let lines: Vec<String> = events.iter().map(|event| format!("{event:?}")).collect();
+    lines.join(", ")
+}
+"#,
+    );
+    find(&adapter, "Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }");
+}

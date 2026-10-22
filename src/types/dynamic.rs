@@ -752,6 +752,12 @@ impl fmt::Debug for Dynamic {
                     };
                 }
 
+                // A host type its facade prints with Rust's `Debug`.
+                #[cfg(not(feature = "no_std"))]
+                if let Some(text) = crate::host::debug::text(_value_any) {
+                    return f.write_str(&text);
+                }
+
                 f.write_str((***v).type_name())
             }
 
