@@ -1,13 +1,12 @@
 use std::fs;
 
 #[test]
-fn empty_native_lane_shutdown_preserves_an_empty_route() {
-    let root = project("restart");
-    let mut lane =
-        rawr_cli::watch::native::Lane::<()>::new(&root).expect("the optional native lane binds");
-    lane.shutdown().expect("the first empty shutdown succeeds");
-    lane.shutdown().expect("the second empty shutdown succeeds");
+fn optional_native_lane_starts_without_claiming_a_process() {
+    let root = project("bootstrap");
+    let mut lane = rawr_iced_cli::watch::native::Lane::<()>::new(&root)
+        .expect("the optional native lane binds exact local authorities");
     assert_eq!(lane.current_key(), None);
+    lane.shutdown().expect("empty shutdown is idempotent");
     let _ = fs::remove_dir_all(root);
 }
 

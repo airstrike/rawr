@@ -27,6 +27,7 @@ impl Launch {
             graph,
             sheet,
             timing,
+            ..
         } = loaded;
         let target_path = target_path(&target);
         let fallback = diagnostic::Source::new(
@@ -94,7 +95,7 @@ impl Launch {
             engine.clone(),
             timing.clone(),
         );
-        let layer = crate::base::Session::new(rawr_iced::LAYER, sheet);
+        let layer = crate::base::session(sheet);
         let session = Session::start(
             target_path,
             engine,

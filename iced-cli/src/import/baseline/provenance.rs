@@ -150,7 +150,7 @@ impl Kind {
         if self == Self::Observer {
             "rawr-qualification-observer"
         } else {
-            "rawr"
+            "rawr-iced"
         }
     }
 
@@ -224,7 +224,7 @@ impl Verified {
         // current-checkout facts corroborate the receipt; they do not create it.
         let current = crate::evidence::cell_build(executable)
             .map_err(|_| Error::Invalid("current child build corroboration failed"))?;
-        if current.executable != selected(&self.0, "rawr")?.file
+        if current.executable != selected(&self.0, "rawr-iced")?.file
             || current.source_tree != self.0.source.label()
             || current.lockfile_digest != self.0.source.lockfile
         {
@@ -362,7 +362,7 @@ fn validate(receipt: &Receipt, current: &Source, kind: Kind) -> Result<(), Error
             .as_str()
             .ok_or(Error::Invalid("Cargo target name is missing"))?;
         let manifest = match name {
-            "rawr" | "rawr-qualification-observer" => "cli/Cargo.toml",
+            "rawr-iced" | "rawr-qualification-observer" => "iced-cli/Cargo.toml",
             "rawr-import-driver" => "importer/Cargo.toml",
             _ => return Err(Error::Invalid("unexpected selected binary")),
         };
@@ -565,12 +565,12 @@ fn invocation(
         arguments.extend(
             [
                 "-p",
-                "rawr-cli",
+                "rawr-iced-cli",
                 "--bin",
                 "rawr-qualification-observer",
                 "--no-default-features",
                 "--features",
-                "rawr-cli/qualification-observer",
+                "rawr-iced-cli/qualification-observer",
             ]
             .map(OsString::from),
         );
@@ -588,10 +588,10 @@ fn invocation(
             arguments.push(setting.into());
         }
     } else {
-        arguments.extend(["-p", "rawr-cli", "-p", "rawr-import", "--bins"].map(OsString::from));
+        arguments.extend(["-p", "rawr-iced-cli", "-p", "rawr-import", "--bins"].map(OsString::from));
     }
     if kind == Kind::Evidence {
-        arguments.extend(["--features", "rawr-cli/import-baseline"].map(OsString::from));
+        arguments.extend(["--features", "rawr-iced-cli/import-baseline"].map(OsString::from));
     }
     let compiler = serde_json::to_string(
         compiler
@@ -801,7 +801,7 @@ fn messages(stdout: &[u8]) -> Result<(Vec<serde_json::Value>, serde_json::Value)
             Some("compiler-artifact")
                 if matches!(
                     record["target"]["name"].as_str(),
-                    Some("rawr" | "rawr-import-driver" | "rawr-qualification-observer")
+                    Some("rawr-iced" | "rawr-import-driver" | "rawr-qualification-observer")
                 ) =>
             {
                 artifacts.push(record)
@@ -996,7 +996,7 @@ mod tests {
         let kind = Kind::Evidence;
         let target = "aarch64-apple-darwin";
         let artifacts = [
-            ("rawr", "cli/Cargo.toml", kind.features()),
+            ("rawr-iced", "iced-cli/Cargo.toml", kind.features()),
             (
                 "rawr-import-driver",
                 "importer/Cargo.toml",
@@ -1080,7 +1080,7 @@ mod tests {
         assert!(text.iter().any(|arg| arg == "--no-default-features"));
         assert!(!text
             .iter()
-            .any(|arg| arg == "--bins" || arg == "rawr-cli/import-baseline"));
+            .any(|arg| arg == "--bins" || arg == "rawr-iced-cli/import-baseline"));
         assert!(text
             .iter()
             .any(|arg| arg.starts_with("env.SDKROOT=") && arg.contains(super::OBSERVER_SDK)));

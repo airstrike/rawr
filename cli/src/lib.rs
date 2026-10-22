@@ -1,461 +1,332 @@
-//! Command parsing and execution for the Rawr developer CLI.
+//! The `rawr` command. It runs Rawr programs on the base language. A
+//! program another installed binary serves (rawr-iced, for programs using
+//! iced) is loaded here once and handed to that binary, which reads the
+//! parse from the program's parse cells instead of parsing it again.
+//! Commands `rawr` does not run itself go to the binary that provides them.
 
 #![deny(unsafe_code)]
-// The public command error preserves its structured subcommand diagnostics.
-// Boxing variants would change the CLI library's exhaustively matched API.
-#![allow(clippy::result_large_err)]
 
-mod base;
-mod check;
-pub mod command;
-pub mod compile;
+pub mod base;
+pub mod cells;
 pub mod diagnostic;
-pub mod doctor;
-#[cfg(feature = "native-runner")]
-mod import;
-pub mod init;
-mod mcp;
-pub mod new;
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub mod evidence;
-pub mod preview;
-#[cfg(feature = "native-runner")]
-mod release;
-pub mod run;
-pub mod snapshot;
-pub mod watch;
+pub mod layer;
 
-use std::fmt;
-use std::path::Path;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
 
-/// Failure while executing a parsed CLI command.
-#[derive(Debug)]
-pub enum Error {
-    /// Project discovery or application checking failed.
-    Compile(compile::Error),
-    /// Native application preparation or execution failed.
-    Run(run::Error),
-    /// Preview Catalog preparation or native execution failed.
-    Preview(preview::Error),
-    /// Deterministic snapshot preparation or storage failed.
-    Snapshot(snapshot::Error),
-    /// Conservative project creation failed.
-    New(new::Error),
-    /// `rawr cache clean` could not read or evict the store.
-    Clean(String),
-    /// `rawr mcp` lost its stdio.
-    Mcp(std::io::Error),
-    /// `rawr init` could not read or write an agent config.
-    Init(init::Error),
-    /// Private baseline selection was not valid for the parsed command.
-    #[cfg(feature = "import-baseline")]
-    Evidence(evidence::Error),
-}
-
-/// Successful output from a non-interactive command.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Report {
-    message: String,
-    warning: Option<String>,
-    successful: bool,
-}
-
-impl Report {
-    /// Return the concise human-readable command result.
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-
-    /// Return a prominent warning that must be written to stderr.
-    #[must_use]
-    pub fn warning(&self) -> Option<&str> {
-        self.warning.as_deref()
-    }
-
-    /// Return whether this completed command should exit successfully.
-    #[must_use]
-    pub const fn is_successful(&self) -> bool {
-        self.successful
+/// Run `rawr` with `arguments`, the executable name excluded.
+#[must_use]
+pub fn main(arguments: Vec<OsString>) -> ExitCode {
+    match parse(&arguments) {
+        Ok(Request::Help) => {
+            println!("{}", help(&layer::installed()));
+            ExitCode::SUCCESS
+        }
+        Ok(Request::Version) => {
+            println!("rawr {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Ok(Request::Program { check, path }) => program(check, path.as_ref(), &arguments),
+        Ok(Request::Doctor { path }) => doctor(path.as_ref(), &arguments),
+        Ok(Request::Other) => forward(&arguments),
+        Err(message) => {
+            eprintln!("error: {message}; run `rawr --help` for usage");
+            ExitCode::from(2)
+        }
     }
 }
 
-/// Execute one already-parsed command.
-pub fn execute(command: command::Command) -> Result<Option<Report>, Error> {
-    execute_transform(
-        command,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
+/// What the arguments ask of `rawr` itself.
+#[derive(Debug, Eq, PartialEq)]
+enum Request {
+    Help,
+    Version,
+    /// `rawr [run] [path]`, or `rawr check [path]`.
+    Program { check: bool, path: Option<PathBuf> },
+    Doctor { path: Option<PathBuf> },
+    /// A command another binary may provide.
+    Other,
 }
 
-/// Execute one command with the import-baseline private typed profile fixture.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub fn execute_with_profile(
-    command: command::Command,
-    profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<Option<Report>, Error> {
-    let profile = evidence::authorize_profile(profile, &command).map_err(Error::Evidence)?;
-    execute_transform(command, profile)
-}
-
-fn execute_transform(
-    command: command::Command,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<Option<Report>, Error> {
-    // Exceedances belong to the command that produced them. They stay in the
-    // import registry; the CLI does not print them.
-    #[cfg(feature = "native-runner")]
-    drop(rawr_import::exceedance::drain());
-    execute_command(
-        command,
-        #[cfg(feature = "import-baseline")]
-        profile,
-    )
-}
-
-fn execute_command(
-    command: command::Command,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<Option<Report>, Error> {
-    // Whether a layer goes on the base is decided from the source, before
-    // any layer's work, from the one load the rest of the command uses. A
-    // private profile only ever selects an import.
-    #[cfg(feature = "import-baseline")]
-    let profiled = profile.is_some();
-    #[cfg(not(feature = "import-baseline"))]
-    let profiled = false;
-    let layer = |path: Option<&std::path::PathBuf>| {
-        Ok(match base::layer(path)? {
-            base::Program::Base(loaded) if !profiled => Err(loaded),
-            // rawr-iced, the only layer, is the rest of each command.
-            base::Program::Base(loaded) | base::Program::Layered(loaded) => Ok(loaded),
-        })
+fn parse(arguments: &[OsString]) -> Result<Request, String> {
+    let words: Vec<_> = arguments.iter().map(|argument| argument.to_string_lossy()).collect();
+    let path = |rest: &[OsString]| match rest {
+        [] => Ok(None),
+        [path] if !path.to_string_lossy().starts_with('-') => Ok(Some(PathBuf::from(path))),
+        [option] => Err(format!("unknown argument `{}`", option.to_string_lossy())),
+        [_, extra, ..] => Err(format!("unexpected argument `{}`", extra.to_string_lossy())),
     };
-    match command {
-        command::Command::Run { path } => {
-            let loaded = match layer(path.as_ref()).map_err(|report| {
-                Error::Run(run::Error::Compile(compile::Error::from_report(report)))
-            })? {
-                Ok(loaded) => loaded,
-                Err(base) => {
-                    let failed = base::run(base)
-                        .map_err(|report| Error::Run(run::Error::Application { report }))?;
-                    return Ok(failed.map(|error| Report {
-                        message: String::new(),
-                        warning: Some(error),
-                        successful: false,
-                    }));
-                }
-            };
-            run::execute_loaded(
-                loaded,
-                #[cfg(feature = "import-baseline")]
-                profile,
-            )
-            .map_err(Error::Run)?;
-            Ok(None)
+    let asks_help = arguments[1.min(arguments.len())..]
+        .iter()
+        .any(|argument| argument == "-h" || argument == "--help");
+    match words.first().map(AsRef::as_ref) {
+        None => Ok(Request::Program {
+            check: false,
+            path: None,
+        }),
+        Some("-h" | "--help" | "help") => Ok(Request::Help),
+        Some("-V" | "--version") => Ok(Request::Version),
+        Some("run" | "check" | "doctor") if asks_help => Ok(Request::Help),
+        Some("run") => path(&arguments[1..]).map(|path| Request::Program { check: false, path }),
+        // `check` with an option `rawr` does not know is another binary's.
+        Some("check") if arguments[1..].iter().any(|argument| argument.to_string_lossy().starts_with('-')) => {
+            Ok(Request::Other)
         }
-        command::Command::Preview { path, name } => {
-            let path = preview::select(path, name).map_err(Error::Preview)?;
-            #[cfg(feature = "import-baseline")]
-            preview::execute_with_profile(path, profile).map_err(Error::Preview)?;
-            #[cfg(not(feature = "import-baseline"))]
-            preview::execute(path).map_err(Error::Preview)?;
-            Ok(None)
-        }
-        command::Command::Snapshot {
-            mode,
-            verbose,
-            path,
-        } => {
-            #[cfg(feature = "import-baseline")]
-            let outcome =
-                snapshot::execute_with_profile(mode, path, profile).map_err(Error::Snapshot)?;
-            #[cfg(not(feature = "import-baseline"))]
-            let outcome = snapshot::execute(mode, path).map_err(Error::Snapshot)?;
-            let successful = outcome.is_successful();
-            let message = if outcome.updated() {
-                details(
-                    format!("Updated {} snapshots.", outcome.artifacts()),
-                    &outcome,
-                    verbose,
-                )
-            } else if successful {
-                details(
-                    format!("{} snapshots match.", outcome.artifacts()),
-                    &outcome,
-                    verbose,
-                )
-            } else {
-                let mut message = format!(
-                    "Snapshot check found {} mismatch(es) across {} artifact(s):\n",
-                    outcome.differences().len(),
-                    outcome.artifacts(),
-                );
-                for difference in outcome.differences() {
-                    message.push_str(&format!(
-                        "\n[{}] {} ({})\n  expected: {}\n  actual:   {}\n  {}\n",
-                        difference.class(),
-                        difference.identity(),
-                        difference.theme(),
-                        visible(&outcome, difference.expected(), verbose).display(),
-                        visible(&outcome, difference.actual(), verbose).display(),
-                        difference.detail(),
-                    ));
-                }
-                if verbose {
-                    storage(&mut message, &outcome);
-                }
-                message
-            };
-            let warning = (!outcome.notices().is_empty()).then(|| {
-                let mut warning = format!(
-                    "WARNING: snapshot update committed with {} cleanup warning(s)",
-                    outcome.notices().len(),
-                );
-                if verbose {
-                    warning.push(':');
-                    for notice in outcome.notices() {
-                        warning.push_str(&format!("\n  {notice}"));
-                    }
-                } else {
-                    warning.push_str("; rerun with `--verbose` for recoverable storage details.");
-                }
-                warning
-            });
-            Ok(Some(Report {
-                message,
-                warning,
-                successful,
-            }))
-        }
-        command::Command::Check { path } => {
-            let source = match layer(path.as_ref())
-                .map_err(|report| Error::Compile(compile::Error::from_report(report)))?
-            {
-                Ok(loaded) => check::execute_loaded(
-                    loaded,
-                    #[cfg(feature = "import-baseline")]
-                    profile,
-                )
-                .map_err(Error::Compile)?,
-                Err(base) => base::check(base)
-                    .map_err(|report| Error::Compile(compile::Error::from_report(report)))?,
-            };
-            Ok(Some(Report {
-                message: format!("Checked {}", source.display()),
-                warning: None,
-                successful: true,
-            }))
-        }
-        command::Command::CheckAsRust { path } => {
-            let (message, successful) = check::as_rust(path).map_err(Error::Compile)?;
-            Ok(Some(Report {
-                message,
-                warning: None,
-                successful,
-            }))
-        }
-        command::Command::New { path } => {
-            let created = new::create(path).map_err(Error::New)?;
-            Ok(Some(Report {
-                message: format!(
-                    "Created Rawr project at {}\n\nNext:\n  cd {}\n  rawr check\n  rawr run",
-                    created.root().display(),
-                    created.root().display()
-                ),
-                warning: None,
-                successful: true,
-            }))
-        }
-        command::Command::CacheClean { all } => {
-            let freed = clean(all).map_err(Error::Clean)?;
-            Ok(Some(Report {
-                message: format!("Freed {:.1} GB.", freed as f64 / 1e9),
-                warning: None,
-                successful: true,
-            }))
-        }
-        command::Command::Mcp => {
-            mcp::serve().map_err(Error::Mcp)?;
-            Ok(None)
-        }
-        command::Command::Init {
-            claude,
-            codex,
-            path,
-        } => {
-            let root = preview::root(path.as_ref()).map_err(Error::Preview)?;
-            let mut lines = Vec::new();
-            if claude {
-                lines.push(init::claude(&root).map_err(Error::Init)?.to_string());
-            }
-            if codex {
-                lines.push(init::codex(&root).map_err(Error::Init)?.to_string());
-            }
-            Ok(Some(Report {
-                message: lines.join("\n"),
-                warning: None,
-                successful: true,
-            }))
-        }
-        command::Command::Doctor { path } => {
-            let report = doctor::Report::examine(path);
-            let successful = !report.has_failures();
-            Ok(Some(Report {
-                message: report.to_string(),
-                warning: None,
-                successful,
-            }))
-        }
+        Some("check") => path(&arguments[1..]).map(|path| Request::Program { check: true, path }),
+        Some("doctor") => path(&arguments[1..]).map(|path| Request::Doctor { path }),
+        Some(word) if word.starts_with('-') => Err(format!("unknown argument `{word}`")),
+        Some(_) if is_path(&arguments[0]) => path(arguments).map(|path| Request::Program { check: false, path }),
+        Some(_) => Ok(Request::Other),
     }
 }
 
-/// Retire other installs' idle Rawr hosts, the only Rawr-wide cache;
-/// `all` also removes the current project's `.rawr/cache` and its
-/// `<target>/rawr` (which `cargo clean` removes too). Returns the bytes freed.
-fn clean(all: bool) -> Result<u64, String> {
-    let mut freed = 0;
-    #[cfg(feature = "native-runner")]
-    {
-        let home = std::env::var_os("CARGO_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".cargo")))
-            .ok_or("rawr cache clean requires CARGO_HOME or HOME")?;
-        let hosts = rawr_import::store::home(&home).join("hosts");
-        let before = directory_bytes(&hosts);
-        rawr_import::host::clean(&home);
-        freed += before.saturating_sub(directory_bytes(&hosts));
+/// A first argument that names a program rather than a command.
+fn is_path(argument: &OsStr) -> bool {
+    if argument == "." || argument == ".." || argument == "rawr.toml" {
+        return true;
     }
-    if all {
-        let project = std::env::current_dir().map_err(|error| error.to_string())?;
-        let mut owned = vec![project.join(".rawr/cache")];
-        #[cfg(feature = "native-runner")]
-        owned.push(rawr_import::location::rawr_directory(
-            &project,
-            &rawr_import::cargo::config::Environment::capture()
-                .map_err(|error| error.to_string())?,
+    Path::new(argument).extension() == Some(OsStr::new("rawr"))
+        || argument
+            .to_string_lossy()
+            .contains(std::path::MAIN_SEPARATOR)
+}
+
+fn help(installed: &[layer::Installed]) -> String {
+    let mut help = String::from(
+        "Rawr: Rust-shaped scripts and apps\n\n`rawr` runs Rawr programs.",
+    );
+    for known in layer::catalog() {
+        help.push_str(&format!(
+            " {name} adds support for programs that use {uses}. Install it and `rawr` hands those programs to it.",
+            name = known.manifest.name,
+            uses = base::uses(&known.manifest.claims),
         ));
-        for cache in owned {
-            freed += directory_bytes(&cache);
-            match std::fs::remove_dir_all(&cache) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(format!("remove {}: {error}", cache.display()));
-                }
-                _ => {}
+    }
+    help.push_str(
+        "\n\nUsage:\n  rawr [run] [path]    Run a program\n  rawr check [path]    Check a program without running it\n  rawr doctor [path]   Report on the environment and the project\n",
+    );
+    for binary in installed {
+        let words: Vec<_> = binary
+            .manifest
+            .commands
+            .iter()
+            .filter(|command| command.word != "doctor")
+            .map(ToString::to_string)
+            .collect();
+        help.push_str(&format!(
+            "\nFrom {} ({}):\n  {}\n  Run `rawr <command> --help` for each one.\n",
+            binary.manifest.name,
+            binary.path.display(),
+            words.join("\n  "),
+        ));
+    }
+    for known in layer::catalog() {
+        if !installed.iter().any(|binary| binary.manifest.name == known.manifest.name) {
+            help.push_str(&format!(
+                "\n{} is not installed. Install it with:\n{}\n",
+                known.manifest.name,
+                layer::install_lines(&known),
+            ));
+        }
+    }
+    help.push_str("\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the version\n\nRAWR_VERBOSE=1 says how the program was loaded and where it went.");
+    help
+}
+
+/// Load the program once, then run it here or hand it to the binary that
+/// serves it.
+fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
+    let loaded = match base::load(path) {
+        Ok(loaded) => loaded,
+        Err(report) => return failure(&report),
+    };
+    let installed = layer::installed();
+    let facts = loaded.sheet.facts();
+    match layer::claimed(&installed, facts) {
+        Err(report) => return failure(&report),
+        Ok(Some(binary)) => {
+            cells::keep("rawr", &loaded.cells, &loaded.graph);
+            if cells::verbose() {
+                eprintln!(
+                    "rawr: {} serves this program; handing it over",
+                    binary.path.display()
+                );
+            }
+            return hand_off(&binary.path, arguments);
+        }
+        Ok(None) => {}
+    }
+    cells::tell("rawr", &loaded.cells);
+    if let Some(known) = layer::catalog()
+        .into_iter()
+        .find(|known| known.manifest.claims.claim(facts))
+    {
+        let report = rawr::diagnostic::Report::error(
+            rawr::diagnostic::code::FRAMEWORK_FACADE,
+            format!(
+                "this program uses {}, which {} serves, and it is not installed",
+                known.manifest.claims.reason(facts).unwrap_or_default(),
+                known.manifest.name
+            ),
+        )
+        .help(format!(
+            "install {}:\n{}",
+            known.manifest.name,
+            layer::install_lines(&known)
+        ))
+        .finish();
+        return failure(&report);
+    }
+    if check {
+        return match base::check(loaded) {
+            Ok(source) => {
+                println!("Checked {}", source.display());
+                ExitCode::SUCCESS
+            }
+            Err(report) => failure(&report),
+        };
+    }
+    match base::run(loaded) {
+        Ok(None) => ExitCode::SUCCESS,
+        Ok(Some(error)) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+        Err(report) => failure(&report),
+    }
+}
+
+/// `rawr doctor`: what `rawr` knows, then each installed binary's own report.
+fn doctor(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
+    let installed = layer::installed();
+    println!("rawr {}", env!("CARGO_PKG_VERSION"));
+    if let Ok(executable) = std::env::current_exe() {
+        println!("  at {}", executable.display());
+    }
+    for known in layer::catalog() {
+        match installed
+            .iter()
+            .find(|binary| binary.manifest.name == known.manifest.name)
+        {
+            Some(binary) => println!("{}: {}", known.manifest.name, binary.path.display()),
+            None => println!(
+                "{}: not installed; programs using {} need it. Install it with:\n{}",
+                known.manifest.name,
+                base::uses(&known.manifest.claims),
+                layer::install_lines(&known)
+            ),
+        }
+    }
+    match base::discover(path) {
+        Ok(target) => println!("program: {}", target.source().path().display()),
+        Err(report) => {
+            println!("program: none found");
+            if path.is_some() {
+                return failure(&report);
             }
         }
     }
-    Ok(freed)
+    let mut code = ExitCode::SUCCESS;
+    for binary in installed
+        .iter()
+        .filter(|binary| binary.manifest.provides_word("doctor"))
+    {
+        println!();
+        match Command::new(&binary.path).args(arguments).status() {
+            Ok(status) if status.success() => {}
+            Ok(_) => code = ExitCode::FAILURE,
+            Err(error) => {
+                eprintln!("error: cannot run {}: {error}", binary.path.display());
+                code = ExitCode::FAILURE;
+            }
+        }
+    }
+    code
 }
 
-fn directory_bytes(path: &Path) -> u64 {
-    std::fs::symlink_metadata(path).map_or(0, |metadata| {
-        if metadata.is_dir() {
-            std::fs::read_dir(path).map_or(0, |entries| {
-                entries
-                    .flatten()
-                    .map(|entry| directory_bytes(&entry.path()))
-                    .sum()
+/// A command `rawr` does not run itself: the installed binary providing it
+/// runs it.
+fn forward(arguments: &[OsString]) -> ExitCode {
+    if let Some(binary) = layer::installed()
+        .into_iter()
+        .find(|binary| binary.manifest.provides(arguments))
+    {
+        return hand_off(&binary.path, arguments);
+    }
+    for known in layer::catalog() {
+        if let Some(command) = known.manifest.provided(arguments) {
+            eprintln!(
+                "error: `{command}` comes with {}, which is not installed. Install it with:\n{}",
+                known.manifest.name,
+                layer::install_lines(&known)
+            );
+            return ExitCode::FAILURE;
+        }
+    }
+    let command = arguments
+        .first()
+        .map(|word| word.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    eprintln!("error: unknown command `{command}`; run `rawr --help` for usage");
+    ExitCode::from(2)
+}
+
+/// Run `binary` with the same arguments in place of this process.
+fn hand_off(binary: &Path, arguments: &[OsString]) -> ExitCode {
+    let mut command = Command::new(binary);
+    command.args(arguments);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        let error = command.exec();
+        eprintln!("error: cannot run {}: {error}", binary.display());
+        ExitCode::FAILURE
+    }
+    #[cfg(not(unix))]
+    match command.status() {
+        Ok(status) => ExitCode::from(status.code().map_or(1, |code| code as u8)),
+        Err(error) => {
+            eprintln!("error: cannot run {}: {error}", binary.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn failure(report: &rawr::diagnostic::Report) -> ExitCode {
+    eprint!("{}", diagnostic::render(report));
+    ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse, Request};
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    fn request(words: &[&str]) -> Result<Request, String> {
+        parse(&words.iter().map(OsString::from).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn rawr_runs_and_checks_programs_and_leaves_other_commands_to_others() {
+        let program = |check, path: Option<&str>| {
+            Ok(Request::Program {
+                check,
+                path: path.map(PathBuf::from),
             })
-        } else {
-            metadata.len()
-        }
-    })
-}
-
-fn details(mut message: String, outcome: &rawr_iced::snapshot::Outcome, verbose: bool) -> String {
-    if verbose {
-        storage(&mut message, outcome);
-    }
-    message
-}
-
-fn storage(message: &mut String, outcome: &rawr_iced::snapshot::Outcome) {
-    message.push_str(&format!(
-        "\nBaseline: {}\nRendered: {}",
-        outcome.baseline().display(),
-        outcome.actual().display(),
-    ));
-}
-
-fn visible<'a>(
-    outcome: &'a rawr_iced::snapshot::Outcome,
-    path: &'a Path,
-    verbose: bool,
-) -> &'a Path {
-    if verbose {
-        return path;
-    }
-    outcome
-        .baseline()
-        .parent()
-        .and_then(|root| path.strip_prefix(root).ok())
-        .unwrap_or(path)
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.report().fmt(formatter)
-    }
-}
-
-impl Error {
-    /// Transform every command failure into the canonical shared report.
-    #[must_use]
-    pub fn report(&self) -> rawr::diagnostic::Report {
-        match self {
-            Self::Compile(error) => error.report().clone(),
-            Self::Run(error) => error.report().clone(),
-            Self::Preview(error) => error.report().clone(),
-            Self::Snapshot(error) => error.report().clone(),
-            Self::New(error) => rawr::diagnostic::Report::error(
-                rawr::diagnostic::code::ENVIRONMENT_CREATE,
-                error.to_string(),
-            )
-            .help("choose an absent or verified empty target directory")
-            .finish(),
-            Self::Clean(error) => rawr::diagnostic::Report::error(
-                rawr::diagnostic::code::ENVIRONMENT_UNREADABLE,
-                error.clone(),
-            )
-            .finish(),
-            Self::Mcp(error) => rawr::diagnostic::Report::error(
-                rawr::diagnostic::code::ENVIRONMENT_UNREADABLE,
-                format!("rawr mcp: {error}"),
-            )
-            .finish(),
-            Self::Init(error) => rawr::diagnostic::Report::error(
-                rawr::diagnostic::code::ENVIRONMENT_UNREADABLE,
-                format!("rawr init: {error}"),
-            )
-            .finish(),
-            #[cfg(feature = "import-baseline")]
-            Self::Evidence(error) => rawr::diagnostic::Report::error(
-                rawr::diagnostic::code::ENVIRONMENT_DIAGNOSTIC,
-                error.to_string(),
-            )
-            .finish(),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Compile(error) => Some(error),
-            Self::Run(error) => Some(error),
-            Self::Preview(error) => Some(error),
-            Self::Snapshot(error) => Some(error),
-            Self::New(error) => Some(error),
-            Self::Clean(_) => None,
-            Self::Mcp(error) => Some(error),
-            Self::Init(error) => Some(error),
-            #[cfg(feature = "import-baseline")]
-            Self::Evidence(error) => Some(error),
-        }
+        };
+        assert_eq!(request(&[]), program(false, None));
+        assert_eq!(request(&["run"]), program(false, None));
+        assert_eq!(request(&["run", "app"]), program(false, Some("app")));
+        assert_eq!(request(&["cart.rawr"]), program(false, Some("cart.rawr")));
+        assert_eq!(request(&["check", "."]), program(true, Some(".")));
+        assert_eq!(request(&["check", "--as-rust"]), Ok(Request::Other));
+        assert_eq!(request(&["preview", "x"]), Ok(Request::Other));
+        assert_eq!(request(&["new", "hello"]), Ok(Request::Other));
+        assert_eq!(request(&["run", "--help"]), Ok(Request::Help));
+        assert_eq!(request(&["--version"]), Ok(Request::Version));
+        assert!(request(&["run", "a", "b"]).is_err());
+        assert!(request(&["--bogus"]).is_err());
     }
 }

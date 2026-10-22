@@ -12,7 +12,7 @@ fn profile_launch_hot_retention_and_cold_reset_are_exact() {
     let (generated, snapshot) =
         p5::generated(&project, p5::Mode::Success, None, b"first body", first);
     let mut lane =
-        rawr_cli::watch::native::Lane::new(project.path()).expect("the profile native lane binds");
+        rawr_iced_cli::watch::native::Lane::new(project.path()).expect("the profile native lane binds");
     let initial = lane
         .replace(generated, snapshot)
         .expect("the synthetic profile admits");

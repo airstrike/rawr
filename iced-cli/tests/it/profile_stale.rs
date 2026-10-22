@@ -12,7 +12,7 @@ fn foreign_activation_capability_is_rejected_while_old_route_stays_live() {
     let (generated, snapshot) =
         p5::generated(&project, p5::Mode::Success, None, b"old route", first);
     let mut lane =
-        rawr_cli::watch::native::Lane::new(project.path()).expect("the old native lane binds");
+        rawr_iced_cli::watch::native::Lane::new(project.path()).expect("the old native lane binds");
     let old = lane
         .replace(generated, snapshot)
         .expect("the old profile route admits");
@@ -68,7 +68,7 @@ fn foreign_activation_capability_is_rejected_while_old_route_stays_live() {
     ));
     assert!(matches!(
         lane.validate_message(&queued),
-        Err(rawr_cli::watch::native::Error::Process(
+        Err(rawr_iced_cli::watch::native::Error::Process(
             rawr_import::process::RunnerError::Stale
         ))
     ));

@@ -1,46 +1,49 @@
 //! The base every program gets: the language and its core intrinsics
-//! (`format!`, `println!`, ..). Installed layers (rawr-iced today) add a
-//! domain on top when a program brings them in; [`layer`] is the one place
-//! that asks them, from the source alone, before any layer's work. A program
-//! with nothing layered on runs once here: its top level, then `fn main` if
-//! there is one, as in Rust.
+//! (`format!`, `println!`, ..). A program another installed binary serves
+//! (rawr-iced today) is handed to it after this one load; see `crate::main`.
+//! A program nothing else serves runs once here: its top level, then
+//! `fn main` if there is one, as in Rust.
 
 use std::path::PathBuf;
 
-use rawr::layer::{Facts, Layer, Sheet};
+use rawr::layer::{Claims, Sheet};
+use rawr::package::Cells;
 use rawr::{diagnostic, project, CallFnOptions, Dynamic, Engine, Scope};
 
-/// The layers this binary carries. The one place a feature flag, or finding
-/// a layer's separate binary, would change.
-const INSTALLED: &[Layer] = &[rawr_iced::LAYER];
-
 /// A program as the command loaded it: the one parse every later step of
-/// the command uses, its facts, and the command's timing session holding
-/// that parse.
-pub(crate) struct Loaded {
-    pub(crate) target: project::Target,
-    pub(crate) graph: rawr::package::Graph,
-    pub(crate) sheet: Sheet,
-    pub(crate) timing: rawr::timing::Session,
+/// the command uses, its facts, the parse cells it was loaded through and
+/// the command's timing session holding that parse.
+pub struct Loaded {
+    /// The discovered target.
+    pub target: project::Target,
+    /// The program's package graph.
+    pub graph: rawr::package::Graph,
+    /// Its facts, one cell per source.
+    pub sheet: Sheet,
+    /// The parse cells it was loaded through.
+    pub cells: Cells,
+    /// The command's timing session.
+    pub timing: rawr::timing::Session,
 }
 
-/// What runs a program: the base alone, or the base with one layer on top.
-pub(crate) enum Program {
-    Base(Loaded),
-    Layered(Loaded),
-}
-
-/// Discover and load the program at `path` once, with its facts.
-pub(crate) fn load(path: Option<&PathBuf>) -> Result<Loaded, diagnostic::Report> {
-    let target = match path {
+/// Discover the program at `path` (the current directory when `None`).
+pub fn discover(path: Option<&PathBuf>) -> Result<project::Target, diagnostic::Report> {
+    match path {
         Some(path) => project::Target::discover(path),
         None => project::Target::current(),
     }
-    .map_err(|error| diagnostic::Report::from_project(&error))?;
+    .map_err(|error| diagnostic::Report::from_project(&error))
+}
+
+/// Discover and load the program at `path` once, with its facts. A source
+/// whose parse cell holds its text is read from the cell, not parsed.
+pub fn load(path: Option<&PathBuf>) -> Result<Loaded, diagnostic::Report> {
+    let target = discover(path)?;
+    let cells = Cells::new(crate::cells::directory(&target));
     let timing = rawr::timing::Session::start();
     let graph = timing
         .observe_result(rawr::timing::Phase::ParseItems, || {
-            rawr::package::Graph::load(&Engine::new(), &target)
+            rawr::package::Graph::load_with_cells(&Engine::new(), &target, &cells)
         })
         .map_err(|error| compile_report(&error, &target))?;
     let mut sheet = Sheet::default();
@@ -49,90 +52,71 @@ pub(crate) fn load(path: Option<&PathBuf>) -> Result<Loaded, diagnostic::Report>
         target,
         graph,
         sheet,
+        cells,
         timing,
     })
 }
 
-/// Decide, before any layer's work, what runs the program at `path`: each
-/// installed layer judges the facts of the one load. A target that cannot
-/// be discovered or parsed, or brings in two layers, is a diagnostic.
-pub(crate) fn layer(path: Option<&PathBuf>) -> Result<Program, diagnostic::Report> {
-    let loaded = load(path)?;
-    Ok(match claimed(loaded.sheet.facts())? {
-        None => Program::Base(loaded),
-        Some(_) => Program::Layered(loaded),
-    })
-}
-
-/// The installed layer a program with these facts brings in, if any.
-fn claimed(facts: &Facts) -> Result<Option<Layer>, diagnostic::Report> {
-    let mut claimed = INSTALLED.iter().filter(|layer| (layer.claims)(facts));
-    match (claimed.next(), claimed.next()) {
-        (None, _) => Ok(None),
-        (Some(layer), None) => Ok(Some(*layer)),
-        (Some(first), Some(second)) => Err(diagnostic::Report::error(
-            diagnostic::code::FRAMEWORK_FACADE,
-            format!(
-                "this program brings in both {} and {}; a program takes one layer",
-                first.name, second.name
-            ),
-        )
-        .help("use the crates of only one of them")
-        .finish()),
-    }
-}
-
-/// A live session's layer, judged again across reloads: each reload brings
-/// the sheet to its new load, and the layers judge the facts again only
-/// when they changed. A session cannot change layer in place: a program
-/// that no longer brings its layer in (or brings in another) gets a
+/// A live session's program, judged again across reloads: each reload
+/// brings the sheet to its new load, and the claims are judged again only
+/// when the facts changed. A session cannot hand its program elsewhere in
+/// place: a program that no longer uses what the session serves gets a
 /// diagnostic asking for a restart, and the running program stays as it
 /// was, as for any failed reload.
-pub(crate) struct Session {
-    layer: Layer,
+pub struct Session {
+    claims: Claims,
     sheet: Sheet,
     verdict: Result<(), diagnostic::Report>,
 }
 
 impl Session {
-    /// A session of `layer` over the program it claimed.
-    pub(crate) const fn new(layer: Layer, sheet: Sheet) -> Self {
+    /// A session serving the program `claims` claimed.
+    #[must_use]
+    pub const fn new(claims: Claims, sheet: Sheet) -> Self {
         Self {
-            layer,
+            claims,
             sheet,
             verdict: Ok(()),
         }
     }
 
-    /// Whether the session's layer still runs this reload's load.
-    pub(crate) fn judge(&mut self, graph: &rawr::package::Graph) -> Result<(), diagnostic::Report> {
+    /// Whether this session still serves this reload's load.
+    pub fn judge(&mut self, graph: &rawr::package::Graph) -> Result<(), diagnostic::Report> {
         if self.sheet.update(graph).changed {
-            self.verdict = match claimed(self.sheet.facts()) {
-                Ok(Some(layer)) if layer.name == self.layer.name => Ok(()),
-                Ok(now) => Err(diagnostic::Report::error(
+            self.verdict = if self.claims.claim(self.sheet.facts()) {
+                Ok(())
+            } else {
+                Err(diagnostic::Report::error(
                     diagnostic::code::FRAMEWORK_FACADE,
-                    match now {
-                        Some(other) => format!(
-                            "this program now brings in {} instead of {}",
-                            other.name, self.layer.name
-                        ),
-                        None => format!(
-                            "this program no longer brings in {}; it now runs on the base language",
-                            self.layer.name
-                        ),
-                    },
+                    format!("this program no longer uses {}", uses(&self.claims)),
                 )
                 .help("stop it and run it again with `rawr run`")
-                .finish()),
-                Err(report) => Err(report),
+                .finish())
             };
         }
         self.verdict.clone()
     }
 }
 
+/// What `claims` names, as a user reads it: `` `iced` or `[rust]` in rawr.toml ``.
+#[must_use]
+pub fn uses(claims: &Claims) -> String {
+    claims
+        .crates
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .chain(
+            claims
+                .sections
+                .iter()
+                .map(|section| format!("`[{section}]` in rawr.toml")),
+        )
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
 /// Compile a base program; the source path checked.
-pub(crate) fn check(loaded: Loaded) -> Result<PathBuf, diagnostic::Report> {
+pub fn check(loaded: Loaded) -> Result<PathBuf, diagnostic::Report> {
     Engine::new()
         .compile_package(loaded.graph)
         .map_err(|error| compile_report(&error, &loaded.target))?;
@@ -141,7 +125,7 @@ pub(crate) fn check(loaded: Loaded) -> Result<PathBuf, diagnostic::Report> {
 
 /// Run a base program once. `Ok(Some(text))` is a `main` that returned
 /// `Err`: Rust's `Error: {err:?}`, for stderr and a failing exit.
-pub(crate) fn run(loaded: Loaded) -> Result<Option<String>, diagnostic::Report> {
+pub fn run(loaded: Loaded) -> Result<Option<String>, diagnostic::Report> {
     let Loaded { target, graph, .. } = loaded;
     let target = &target;
     let engine = Engine::new();
@@ -151,7 +135,7 @@ pub(crate) fn run(loaded: Loaded) -> Result<Option<String>, diagnostic::Report> 
     let runtime = |error: Box<rawr::EvalAltResult>| {
         let source = source(target);
         diagnostic::Report::from_evaluation(source.clone(), &error).unwrap_or_else(|_| {
-            crate::watch::report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, source)
+            report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, source)
         })
     };
     let mut scope = Scope::new();
@@ -190,10 +174,22 @@ fn source(target: &project::Target) -> Option<diagnostic::Source> {
 
 fn compile_report(error: &rawr::package::Error, target: &project::Target) -> diagnostic::Report {
     error.report().unwrap_or_else(|report_error| {
-        crate::watch::report(
+        report(
             diagnostic::code::ENVIRONMENT_DIAGNOSTIC,
             format!("cannot retain exact package diagnostic evidence: {report_error}"),
             source(target),
         )
     })
+}
+
+fn report(
+    code: diagnostic::code::Code,
+    message: impl std::fmt::Display,
+    source: Option<diagnostic::Source>,
+) -> diagnostic::Report {
+    let builder = diagnostic::Report::error(code, message.to_string());
+    match source {
+        Some(source) => builder.source(source).finish(),
+        None => builder.finish(),
+    }
 }

@@ -11,14 +11,6 @@
 pub mod application;
 pub mod control;
 
-/// rawr-iced as a layer over the base language: brought in by a program
-/// that names the `iced` crate, or whose package declares `[rust]` imports
-/// (served by the generated iced runner).
-pub const LAYER: rawr::layer::Layer = rawr::layer::Layer {
-    name: "rawr-iced",
-    claims: |facts| facts.names_crate("iced") || facts.declares_rust_import(),
-};
-
 pub mod diagnostic;
 mod effect;
 mod marker;

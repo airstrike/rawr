@@ -1,0 +1,8 @@
+# What `rawr-iced --rawr-manifest` prints: the programs `rawr` hands to
+# rawr-iced (those naming the `iced` crate, or declaring `[rust]` imports
+# served by the generated iced runner) and the commands it adds to `rawr`.
+format = 1
+name = "rawr-iced"
+crates = ["iced"]
+sections = ["rust"]
+commands = ["preview", "snapshot", "new", "mcp", "init", "doctor", "cache", "check --as-rust"]

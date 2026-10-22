@@ -1,68 +1,18 @@
 [package]
 name = "rawr-cli"
 version = "0.1.0"
-rust-version = "1.92.0"
+rust-version = "1.91.0"
 edition = "2024"
 publish = false
-description = "Command-line tools for Rawr"
+description = "The rawr command: runs Rawr programs and hands those using iced to rawr-iced"
 repository = "https://github.com/airstrike/rawr"
 license = "MIT OR Apache-2.0"
 
-[features]
-default = ["native-runner"]
-native-runner = ["dep:rawr-import", "rawr-import/rustc-driver", "rawr-import/embedded-host"]
-# Private nonproduction evidence in the existing normal `rawr` target.
-import-baseline = [
-    "native-runner",
-    "rawr-import/import-baseline",
-    "rawr-iced/import-baseline",
-    "dep:nix",
-    "dep:thiserror",
-    "dep:sha2",
-    "dep:axuielement",
-]
-# One private observer, explicitly built apart from both product artifacts.
-qualification-observer = [
-    "dep:rawr-import", "rawr-import/import-baseline",
-    "dep:nix", "dep:thiserror", "dep:sha2", "dep:serde",
-    "dep:axuielement",
-]
-
 [dependencies]
-rawr-watch = { path = "../watch" }
 rawr = { path = "..", features = ["sync"] }
-rawr-import = { path = "../importer", optional = true }
-rawr-iced = { path = "../iced" }
-nix = { version = "0.27.1", features = ["process", "signal"], optional = true }
-sha2 = { version = "0.10", optional = true }
-thiserror = { version = "2", optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = "1"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-axuielement = { version = "0.9.1", default-features = false, optional = true }
-libc = "0.2"
-core-foundation = "0.10"
-core-graphics = "0.24"
-
-[dev-dependencies]
-rawr-watch = { path = "../watch", features = ["test-support"] }
-rawr-import = { path = "../importer", features = ["rustc-driver", "test-fixtures"] }
-rawr-iced = { path = "../iced", features = ["profile-selection-diagnostic"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-thiserror = "2"
-
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-core-foundation = "0.10"
-core-graphics = "0.24"
+rawr-location = { path = "../location" }
+toml_edit = { version = "0.25.13", default-features = false, features = ["parse", "display"] }
 
 [[bin]]
 name = "rawr"
 path = "src/main.rs"
-
-[[bin]]
-name = "rawr-qualification-observer"
-path = "src/qualification_observer.rs"
-required-features = ["qualification-observer"]

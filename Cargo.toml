@@ -3,6 +3,7 @@ members = [
     ".",
     "canonical",
     "cli",
+    "iced-cli",
     "codegen",
     "codegen/tests/custom_root",
     "directory",

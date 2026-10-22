@@ -572,7 +572,7 @@ fn screenshot(title: Option<&str>) -> Result<Vec<Value>, String> {
         };
         let owner = text("kCGWindowOwnerName");
         if number("kCGWindowLayer") == Some(0)
-            && matches!(owner.as_str(), "rawr" | "rawr-generated-runner")
+            && matches!(owner.as_str(), "rawr" | "rawr-iced" | "rawr-generated-runner")
         {
             if let Some(number) = number("kCGWindowNumber") {
                 found.push((number, text("kCGWindowName")));

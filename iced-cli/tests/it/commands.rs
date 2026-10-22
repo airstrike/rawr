@@ -14,7 +14,7 @@ fn check_accepts_a_one_file_zero_config_counter() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rawr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_rawr-iced"))
         .args(["check", source.to_str().unwrap()])
         .output()
         .unwrap();
@@ -33,7 +33,7 @@ fn check_reports_compile_failure_with_a_nonzero_exit() {
     let source = temporary_source("broken");
     fs::write(&source, "this is not a Rawr application").unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rawr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_rawr-iced"))
         .args(["check", source.to_str().unwrap()])
         .output()
         .unwrap();
@@ -46,14 +46,14 @@ fn check_reports_compile_failure_with_a_nonzero_exit() {
 #[test]
 fn help_version_and_unknown_command_have_concise_exits() {
     for argument in ["-h", "--help", "help", "-V", "--version"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_rawr"))
+        let output = Command::new(env!("CARGO_BIN_EXE_rawr-iced"))
             .arg(argument)
             .output()
             .unwrap();
         assert!(output.status.success(), "{argument}");
     }
 
-    let output = Command::new(env!("CARGO_BIN_EXE_rawr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_rawr-iced"))
         .arg("rn")
         .output()
         .unwrap();
@@ -74,7 +74,7 @@ fn new_creates_the_exact_zero_config_counter_in_a_missing_target() {
     assert_success(&output);
     assert_eq!(
         fs::read_to_string(target.join("src/main.rawr")).unwrap(),
-        rawr_cli::new::COUNTER_SOURCE
+        rawr_iced_cli::new::COUNTER_SOURCE
     );
     assert!(!target.join("Cargo.toml").exists());
     assert!(!target.join("rawr.toml").exists());
@@ -90,12 +90,12 @@ fn new_accepts_a_verified_empty_existing_directory() {
     let target = sandbox.path().join("counter");
     fs::create_dir(&target).unwrap();
 
-    let created = rawr_cli::new::create(target.clone()).unwrap();
+    let created = rawr_iced_cli::new::create(target.clone()).unwrap();
 
     assert_eq!(created.root(), target);
     assert_eq!(
         fs::read_to_string(target.join("src/main.rawr")).unwrap(),
-        rawr_cli::new::COUNTER_SOURCE
+        rawr_iced_cli::new::COUNTER_SOURCE
     );
 }
 
@@ -108,7 +108,7 @@ fn new_refuses_non_empty_targets_without_changing_a_byte() {
     let original = b"\0user-owned\xffbytes";
     fs::write(&existing, original).unwrap();
 
-    let error = rawr_cli::new::create(target.clone()).unwrap_err();
+    let error = rawr_iced_cli::new::create(target.clone()).unwrap_err();
 
     assert!(error.to_string().contains("non-empty"));
     assert_eq!(fs::read(&existing).unwrap(), original);
@@ -122,14 +122,14 @@ fn new_refuses_existing_files_and_repeated_initialization() {
     let original = b"not a project";
     fs::write(&file_target, original).unwrap();
 
-    let file_error = rawr_cli::new::create(file_target.clone()).unwrap_err();
+    let file_error = rawr_iced_cli::new::create(file_target.clone()).unwrap_err();
     assert!(file_error.to_string().contains("existing file"));
     assert_eq!(fs::read(&file_target).unwrap(), original);
 
     let project_target = sandbox.path().join("counter-project");
-    rawr_cli::new::create(project_target.clone()).unwrap();
+    rawr_iced_cli::new::create(project_target.clone()).unwrap();
     let starter = fs::read(project_target.join("src/main.rawr")).unwrap();
-    let repeated = rawr_cli::new::create(project_target.clone()).unwrap_err();
+    let repeated = rawr_iced_cli::new::create(project_target.clone()).unwrap_err();
     assert!(repeated.to_string().contains("non-empty"));
     assert_eq!(
         fs::read(project_target.join("src/main.rawr")).unwrap(),
@@ -148,7 +148,7 @@ fn new_refuses_a_target_symlink_without_following_it() {
     fs::create_dir(&destination).unwrap();
     symlink(&destination, &target).unwrap();
 
-    let error = rawr_cli::new::create(target.clone()).unwrap_err();
+    let error = rawr_iced_cli::new::create(target.clone()).unwrap_err();
 
     assert!(error.to_string().contains("target symlink"));
     assert!(fs::read_dir(&destination).unwrap().next().is_none());
@@ -169,7 +169,7 @@ fn new_refuses_a_symlink_in_the_existing_ancestor_chain() {
     fs::create_dir(&destination).unwrap();
     symlink(&destination, &linked_parent).unwrap();
 
-    let error = rawr_cli::new::create(linked_parent.join("counter")).unwrap_err();
+    let error = rawr_iced_cli::new::create(linked_parent.join("counter")).unwrap_err();
 
     assert!(error.to_string().contains("ancestor"));
     assert!(error.to_string().contains("symlink"));
@@ -199,7 +199,7 @@ fn new_resolves_nested_relative_paths_and_the_result_checks() {
 #[test]
 fn packaged_starter_cannot_drift_from_the_runnable_golden_counter() {
     assert_eq!(
-        rawr_cli::new::COUNTER_SOURCE,
+        rawr_iced_cli::new::COUNTER_SOURCE,
         include_str!("../../../iced/examples/application_counter.rawr")
     );
 }
@@ -477,120 +477,6 @@ fn doctor_extension_locations_are_future_ready_warnings() {
     assert!(stdout.contains(&missing.display().to_string()));
 }
 
-/// A program with no layer runs on the base alone: no cargo, rustc, store
-/// or window. With those unreachable and the sandbox read-only in effect, it
-/// still runs, and leaves the sandbox exactly as it was.
-fn base_command(sandbox: &Sandbox) -> Command {
-    let mut command = rawr_command();
-    let missing = sandbox.path().join("missing");
-    command
-        .current_dir(sandbox.path())
-        .env("PATH", "")
-        .env("HOME", &missing)
-        .env("CARGO_HOME", &missing)
-        .env("RUSTUP_HOME", &missing);
-    command
-}
-
-#[test]
-fn base_runs_the_cart_with_no_layer_and_no_build() {
-    let sandbox = Sandbox::new("base-cart");
-    let source = sandbox.path().join("cart.rawr");
-    fs::write(&source, include_str!("../../../examples/cart.rawr")).unwrap();
-    let before = tree(sandbox.path());
-
-    let run = base_command(&sandbox)
-        .args(["run", "cart.rawr"])
-        .output()
-        .unwrap();
-    let checked = base_command(&sandbox)
-        .args(["check", "cart.rawr"])
-        .output()
-        .unwrap();
-
-    assert_success(&run);
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "total: 27\n");
-    assert!(run.stderr.is_empty());
-    assert_success(&checked);
-    assert!(String::from_utf8_lossy(&checked.stdout).starts_with("Checked "));
-    assert_eq!(tree(sandbox.path()), before);
-}
-
-#[test]
-fn base_prints_a_final_value_and_main_output() {
-    let sandbox = Sandbox::new("base-output");
-    fs::write(
-        sandbox.path().join("value.rawr"),
-        "let x = 20.0 + 7.0;\nx\n",
-    )
-    .unwrap();
-    fs::write(
-        sandbox.path().join("main.rawr"),
-        "fn main() {\n    print!(\"a\");\n    println!(\"{}\", 1 + 1);\n    eprintln!(\"to stderr\");\n}\n",
-    )
-    .unwrap();
-
-    let value = base_command(&sandbox)
-        .args(["run", "value.rawr"])
-        .output()
-        .unwrap();
-    let main = base_command(&sandbox)
-        .args(["run", "main.rawr"])
-        .output()
-        .unwrap();
-
-    assert_success(&value);
-    assert_eq!(String::from_utf8_lossy(&value.stdout), "27.0\n");
-    assert_success(&main);
-    assert_eq!(String::from_utf8_lossy(&main.stdout), "a2\n");
-    assert_eq!(String::from_utf8_lossy(&main.stderr), "to stderr\n");
-}
-
-#[test]
-fn base_main_returning_err_fails_like_rust() {
-    let sandbox = Sandbox::new("base-err");
-    fs::write(
-        sandbox.path().join("err.rawr"),
-        "fn main() -> Result<(), String> {\n    Err(String::from(\"boom\"))\n}\n",
-    )
-    .unwrap();
-
-    let output = base_command(&sandbox)
-        .args(["run", "err.rawr"])
-        .output()
-        .unwrap();
-
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    assert_eq!(String::from_utf8_lossy(&output.stderr), "Error: \"boom\"\n");
-}
-
-#[test]
-fn base_type_errors_are_the_same_diagnostic_for_check_and_run() {
-    let sandbox = Sandbox::new("base-type-error");
-    let source = sandbox.path().join("wrong.rawr");
-    fs::write(&source, "fn main() {\n    let x: i64 = \"text\";\n}\n").unwrap();
-
-    let checked = base_command(&sandbox)
-        .args(["check", "wrong.rawr"])
-        .output()
-        .unwrap();
-    let run = base_command(&sandbox)
-        .args(["run", "wrong.rawr"])
-        .output()
-        .unwrap();
-
-    assert!(!checked.status.success());
-    assert!(!run.status.success());
-    assert_eq!(checked.stderr, run.stderr);
-    let stderr = String::from_utf8_lossy(&checked.stderr);
-    assert!(stderr.starts_with("error[RAWR-RESOLVE-"), "{stderr}");
-    assert!(
-        stderr.contains(&format!("{}:2:", source.display())),
-        "{stderr}"
-    );
-}
-
 fn fixture_path(stem: &str, extension: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/diagnostics")
@@ -631,7 +517,7 @@ fn tree(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
 }
 
 fn rawr_command() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_rawr"))
+    Command::new(env!("CARGO_BIN_EXE_rawr-iced"))
 }
 
 fn assert_success(output: &std::process::Output) {
@@ -682,4 +568,50 @@ fn temporary_source(label: &str) -> std::path::PathBuf {
 fn temporary_path(label: &str) -> PathBuf {
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("rawr-cli-{label}-{}-{id}", std::process::id()))
+}
+
+/// `rawr` hands an iced program to rawr-iced after parsing it once: what
+/// `rawr` does in its own process (load, then keep the parse cells) and
+/// then rawr-iced, started as `rawr` starts it, reading every source from
+/// those cells. Each source is parsed once across both processes.
+#[test]
+fn an_iced_program_handed_from_rawr_to_rawr_iced_is_parsed_once() {
+    let sandbox = Sandbox::new("parse-once");
+    let root = sandbox.path().to_path_buf();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/main.rawr"),
+        format!(
+            "mod parts;\n{}",
+            include_str!("../../../iced/examples/application_counter.rawr")
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/parts.rawr"),
+        "pub fn label() -> String {\n    String::from(\"count\")\n}\n",
+    )
+    .unwrap();
+
+    // `rawr`: one load, and the program goes to rawr-iced.
+    let loaded = rawr_cli::base::load(Some(&root)).unwrap();
+    assert!(rawr_iced_cli::layer::claims().claim(loaded.sheet.facts()));
+    assert_eq!(loaded.cells.counts().parsed, 2);
+    rawr_cli::cells::keep("rawr", &loaded.cells, &loaded.graph);
+    drop(loaded);
+
+    // rawr-iced, with the arguments `rawr` hands it.
+    let output = rawr_command()
+        .args(["check"])
+        .arg(&root)
+        .env("RAWR_VERBOSE", "1")
+        .output()
+        .unwrap();
+
+    assert_success(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("rawr-iced: parsed 0 sources, read 2 from parse cells"),
+        "{stderr}"
+    );
 }

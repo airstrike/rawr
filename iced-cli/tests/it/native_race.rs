@@ -10,7 +10,7 @@ fn latest_miss_is_the_only_cold_candidate_allowed_to_admit() {
     let _turn = rawr_import::store::test_turn();
     let root = project("native-race");
     let generated = p3::generated_at(&root);
-    let mut lane = rawr_cli::watch::native::Lane::new(&root).expect("the native lane binds");
+    let mut lane = rawr_iced_cli::watch::native::Lane::new(&root).expect("the native lane binds");
     let initial = lane
         .replace(generated, p3::snapshot_transport())
         .expect("the initial runner admits");
@@ -56,7 +56,7 @@ fn latest_miss_is_the_only_cold_candidate_allowed_to_admit() {
         .expect("the already-running obsolete request can finish generation");
     assert!(matches!(
         lane.replace(obsolete, obsolete_snapshot),
-        Err(rawr_cli::watch::native::Error::Obsolete)
+        Err(rawr_iced_cli::watch::native::Error::Obsolete)
     ));
     assert_eq!(lane.current_key(), Some(initial));
 

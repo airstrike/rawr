@@ -10,7 +10,7 @@ fn changed_surface_returns_one_complete_cold_continuation() {
     let _turn = rawr_import::store::test_turn();
     let root = project("surface-miss");
     let generated = p3::generated_at(&root);
-    let mut lane = rawr_cli::watch::native::Lane::new(&root).expect("the native lane binds");
+    let mut lane = rawr_iced_cli::watch::native::Lane::new(&root).expect("the native lane binds");
     let initial = lane
         .replace(generated, p3::snapshot_transport())
         .expect("the initial runner admits");

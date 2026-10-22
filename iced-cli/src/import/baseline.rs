@@ -2442,7 +2442,7 @@ fn environment() -> Result<Environment, Error> {
         rustc,
         rustdoc: output("rustup", &["run", "nightly-2026-07-11", "rustdoc", "-Vv"])?,
         cargo: output("rustup", &["run", "nightly-2026-07-11", "cargo", "-Vv"])?,
-        driver: concat!("rawr-cli ", env!("CARGO_PKG_VERSION")).into(),
+        driver: concat!("rawr-iced-cli ", env!("CARGO_PKG_VERSION")).into(),
         target,
         profile: "test owner / generated runner release profile".into(),
     })

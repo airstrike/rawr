@@ -17,15 +17,6 @@ pub struct Facts {
     rust_import: bool,
 }
 
-/// A layer a host has installed: its name and what brings it in.
-#[derive(Clone, Copy, Debug)]
-pub struct Layer {
-    /// The crate providing the layer.
-    pub name: &'static str,
-    /// Whether the program brings this layer in: a pure function of its facts.
-    pub claims: fn(&Facts) -> bool,
-}
-
 /// What brings a layer in, as the layer declares it: a program naming one
 /// of `crates`, or whose package manifest declares one of `sections`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

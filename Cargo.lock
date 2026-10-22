@@ -2850,19 +2850,9 @@ dependencies = [
 name = "rawr-cli"
 version = "0.1.0"
 dependencies = [
- "axuielement",
- "core-foundation",
- "core-graphics",
- "libc",
- "nix 0.27.1",
  "rawr",
- "rawr-iced",
- "rawr-import",
- "rawr-watch",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.19",
+ "rawr-location",
+ "toml_edit",
 ]
 
 [[package]]
@@ -2888,6 +2878,26 @@ dependencies = [
  "sha2",
  "thiserror 2.0.19",
  "unicode-script",
+]
+
+[[package]]
+name = "rawr-iced-cli"
+version = "0.1.0"
+dependencies = [
+ "axuielement",
+ "core-foundation",
+ "core-graphics",
+ "libc",
+ "nix 0.27.1",
+ "rawr",
+ "rawr-cli",
+ "rawr-iced",
+ "rawr-import",
+ "rawr-watch",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

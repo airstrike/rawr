@@ -17,7 +17,7 @@ fn failed_exclusive_activation_keeps_the_old_sole_owner_and_allows_retry() {
         b"old exclusive owner",
         first,
     );
-    let mut lane = rawr_cli::watch::native::Lane::new(project.path())
+    let mut lane = rawr_iced_cli::watch::native::Lane::new(project.path())
         .expect("the exclusive native lane binds");
     let old = lane
         .replace(generated, snapshot)
@@ -34,7 +34,7 @@ fn failed_exclusive_activation_keeps_the_old_sole_owner_and_allows_retry() {
     );
     assert!(matches!(
         lane.replace(generated, snapshot),
-        Err(rawr_cli::watch::native::Error::Bootstrap(_))
+        Err(rawr_iced_cli::watch::native::Error::Bootstrap(_))
     ));
     assert_eq!(lane.current_key(), Some(old));
     assert!(lease.exists());

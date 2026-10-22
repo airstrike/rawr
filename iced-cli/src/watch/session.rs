@@ -863,7 +863,7 @@ mod tests {
     }
 
     fn iced_session() -> crate::base::Session {
-        crate::base::Session::new(rawr_iced::LAYER, rawr::layer::Sheet::default())
+        crate::base::session(rawr::layer::Sheet::default())
     }
 
     #[test]
@@ -883,7 +883,7 @@ mod tests {
         let first = engine
             .compile_loaded_package_generation(loaded.graph, None)
             .unwrap();
-        let layer = Mutex::new(crate::base::Session::new(rawr_iced::LAYER, loaded.sheet));
+        let layer = Mutex::new(crate::base::session(loaded.sheet));
         let adapter = super::super::Adapter::manual(first.source(), Duration::ZERO).unwrap();
         let gate = adapter.gate();
         let publication = adapter.publication();
@@ -917,7 +917,7 @@ mod tests {
         // Taking iced out: the session cannot become a base program.
         let dropped = reload(r#"fn main() { println!("plain"); }"#).unwrap();
         assert!(
-            dropped.message().contains("no longer brings in rawr-iced"),
+            dropped.message().contains("this program no longer uses `iced`"),
             "{dropped:?}"
         );
         // Bringing it back reloads again.

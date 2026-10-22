@@ -11,7 +11,7 @@ fn unchanged_surface_hot_admits_with_zero_cargo_path() {
     let generated = initial
         .generate(&rawr_import::cargo::Limits::standard())
         .expect("the initial runner generates");
-    let mut lane = rawr_cli::watch::native::Lane::new(root).expect("the native lane binds");
+    let mut lane = rawr_iced_cli::watch::native::Lane::new(root).expect("the native lane binds");
     let initial = lane
         .replace(generated, snapshot)
         .expect("the initial runner admits");
