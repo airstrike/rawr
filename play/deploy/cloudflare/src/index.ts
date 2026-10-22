@@ -83,6 +83,9 @@ const CONFIG_MAX = 64 * 1024;
 const STATS_KEY = "play-stats";
 const EVENTS_KEY = "play-events";
 const STARTED_KEY = "play-started-version";
+/** Unix seconds of the last start, and the deployed value a stale image was last restarted for. */
+const STARTED_AT_KEY = "play-started-at";
+const STALE_KEY = "play-stale-restart";
 const REPORT_MAX = 256 * 1024;
 const SHARE_PREFIX = "share:";
 const SEEN_PREFIX = "seen:";
@@ -422,8 +425,21 @@ export class PlayBot extends Container<Env> {
     const deployed = this.wanted();
     const started = await this.ctx.storage.get<string>(STARTED_KEY);
     const container = this.ctx.container;
-    if (container?.running && started !== deployed) {
-      await this.event("worker", "restart", `running ${started ?? "an unrecorded image"}; deployed ${deployed}`);
+    // A start can land before Cloudflare has the deploy's image: the bot it
+    // started then reports the old image. Restart it once for this deploy.
+    const status = (await this.ctx.storage.get<Stats>(STATS_KEY))?.status;
+    const startedAt = (await this.ctx.storage.get<number>(STARTED_AT_KEY)) ?? 0;
+    const stale =
+      started === deployed &&
+      status !== null &&
+      status !== undefined &&
+      status.boot >= startedAt &&
+      status.version !== this.env.PLAY_VERSION &&
+      (await this.ctx.storage.get<string>(STALE_KEY)) !== deployed;
+    if (container?.running && (started !== deployed || stale)) {
+      if (stale) await this.ctx.storage.put(STALE_KEY, deployed);
+      const running = stale ? `the bot reports ${status?.version}` : `running ${started ?? "an unrecorded image"}`;
+      await this.event("worker", "restart", `${running}; deployed ${deployed}`);
       await container.destroy();
       for (let i = 0; i < 40 && container.running; i++) {
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -438,6 +454,7 @@ export class PlayBot extends Container<Env> {
         return false;
       }
       await this.ctx.storage.put(STARTED_KEY, deployed);
+      await this.ctx.storage.put(STARTED_AT_KEY, Math.floor(Date.now() / 1000));
     }
     return this.ctx.container?.running ?? false;
   }
