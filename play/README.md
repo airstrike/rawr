@@ -18,8 +18,9 @@ or `text`. Every other snippet is a plain program.
 
 A plain program runs on the base language from that same parse, as `rawr
 run` runs a file: its top level, then `fn main` if it has one. A snippet of
-statements alone becomes the body of `fn main`. Its final expression is
-printed with `{:?}`, so `1 + 2` prints `3`. A `main` that returns `Err`
+statements alone becomes a block in `fn main`, read as Rust reads a block.
+The block's value is printed with `{:?}` unless it is `()`. So `1 + 2` prints
+`3`, and `1 + 2;` prints nothing. A `main` that returns `Err`
 prints `Error: ..` and exits with status 1. A runtime error or a limit also
 exits with status 1. Output is capped at 64 KiB. A program that writes more
 is stopped and its output ends with `… output truncated`. Messages drive an iced app. A plain program runs without them, and its

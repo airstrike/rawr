@@ -20702,6 +20702,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary(&mut self) -> Result<ParsedExpr, Error> {
+        if matches!(self.peek(), Token::LeftBrace) {
+            return self.parse_block_expr();
+        }
         let (token, position) = self.next();
         let token_span = point_span(position);
 
@@ -20837,6 +20840,36 @@ impl<'a> Parser<'a> {
                 source: token_span,
             }),
         }
+    }
+
+    /// `{ statements; tail }`: a block whose bindings end with it and whose
+    /// value is its tail, as in Rust.
+    fn parse_block_expr(&mut self) -> Result<ParsedExpr, Error> {
+        let original = self.bindings.clone();
+        let outer = std::mem::replace(&mut self.no_struct, false);
+        let block = self.parse_match_action();
+        self.no_struct = outer;
+        let inner = std::mem::replace(&mut self.bindings, original);
+        for (name, binding) in &mut self.bindings {
+            // A binding the block shadowed keeps its own state.
+            if let Some(after) = inner.get(name)
+                && after.declaration == binding.declaration
+            {
+                binding.available = after.available;
+            }
+        }
+        let block = block?;
+        let source = block.value.rendered_block();
+        Ok(ParsedExpr {
+            prelude: origin::Fragment::default(),
+            source,
+            ty: block.value.ty,
+            span: block.syntax,
+            lvalue: None,
+            outcome: crate::host::usage::Outcome::Conservative,
+            evaluation: crate::host::usage::Evaluation::Required,
+        }
+        .retain_origin())
     }
 
     /// `(value)`, or a tuple `(a, b, ..)`, which is an array at runtime.

@@ -9,8 +9,8 @@
 //!
 //! A snippet with items (`fn main`, a struct, ..) runs as written: its top
 //! level, then `fn main` if there is one. A snippet of statements alone is
-//! the body of a `fn main`, and a final expression is printed with `{:?}`,
-//! as `rawr run` prints a script's final value.
+//! a block in a `fn main`, and the block's value is printed with `{:?}`
+//! unless it is `()`.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -329,57 +329,32 @@ fn engine(limits: &Limits, deadline: Instant, sink: &Arc<Mutex<Output>>) -> Engi
 }
 
 /// The program a snippet runs as. One with items runs as written. One of
-/// statements alone becomes `fn main`'s body; its final expression, unless
-/// it is a loop or an output macro, is printed with `{:?}`. What is added
-/// shares the first line and the final expression's line, or follows the
-/// snippet, so its lines keep their numbers.
+/// statements alone becomes a block in `fn main`, as Rust reads a block: a
+/// final expression without `;` is its value, which is printed with `{:?}`
+/// unless it is `()`. The block opens on the first line and closes after
+/// the snippet, so its lines and columns keep their numbers.
 #[must_use]
 pub fn program(source: &str) -> String {
     let source = crate::without_tests(source);
-    let scan = scan(&source);
-    if scan.item {
+    if has_item(&source) {
         return source;
     }
-    let tail = source[scan.tail..].trim();
-    let statement = tail.is_empty()
-        || ["for ", "while ", "loop ", "loop{", "let "]
-            .iter()
-            .any(|start| tail.starts_with(start))
-        || [
-            "print!", "println!", "eprint!", "eprintln!", "assert!", "assert_eq!", "assert_ne!",
-            "panic!",
-        ]
-        .iter()
-        .any(|start| tail.starts_with(start));
-    if statement {
-        return format!("fn main() {{ {source}\n}}\n");
-    }
-    let at = scan.tail + source[scan.tail..].find(tail).unwrap_or(0);
     format!(
-        "fn main() {{ {}println!(\"{{:?}}\", {}\n); }}\n",
-        &source[..at],
-        &source[at..]
+        "fn main() {{ let __v = {{ {source}\n}};\n\
+         let __d = format!(\"{{:?}}\", __v); if __d != \"()\" {{ println!(\"{{}}\", __d); }} }}\n"
     )
 }
 
-struct Scan {
-    /// Whether a top-level item starts a statement.
-    item: bool,
-    /// Where the final statement starts.
-    tail: usize,
-}
-
-/// Find top-level items and the final statement, outside strings, chars and
+/// Whether a top-level item starts a statement, outside strings, chars and
 /// comments: statements end at `;`, and at a `}` closing a block that the
 /// next word does not continue (`else`).
-fn scan(source: &str) -> Scan {
+fn has_item(source: &str) -> bool {
     const ITEMS: &[&str] = &[
         "fn", "pub", "struct", "enum", "impl", "trait", "use", "mod", "const", "static", "type",
         "#[",
     ];
     let bytes = source.as_bytes();
     let mut depth = 0usize;
-    let mut tail = 0;
     let mut item = false;
     let mut start = true;
     let mut index = 0;
@@ -426,20 +401,18 @@ fn scan(source: &str) -> Scan {
                         .take_while(|c| c.is_alphanumeric() || *c == '_')
                         .collect();
                     if !word.is_empty() && word != "else" && word != "as" {
-                        tail = index + 1;
                         start = true;
                     }
                 }
             }
             b';' if depth == 0 => {
-                tail = index + 1;
                 start = true;
             }
             _ => {}
         }
         index += 1;
     }
-    Scan { item, tail }
+    item
 }
 
 #[cfg(test)]
@@ -448,18 +421,20 @@ mod tests {
 
     #[test]
     fn plain_snippets_become_programs() {
-        assert_eq!(program("1 + 2"), "fn main() { println!(\"{:?}\", 1 + 2\n); }\n");
+        let print = "let __d = format!(\"{:?}\", __v); if __d != \"()\" { println!(\"{}\", __d); } }\n";
+        assert_eq!(program("1 + 2"), format!("fn main() {{ let __v = {{ 1 + 2\n}};\n{print}"));
         assert_eq!(
             program("let a = 1;\na + 1"),
-            "fn main() { let a = 1;\nprintln!(\"{:?}\", a + 1\n); }\n"
+            format!("fn main() {{ let __v = {{ let a = 1;\na + 1\n}};\n{print}")
         );
-        assert_eq!(program("println!(\"hi\")"), "fn main() { println!(\"hi\")\n}\n");
-        assert_eq!(program("let s = \"a;b\";"), "fn main() { let s = \"a;b\";\n}\n");
         let looped = "for i in 0..2 {\n    println!(\"{i}\");\n}";
-        assert_eq!(program(looped), format!("fn main() {{ {looped}\n}}\n"));
+        assert_eq!(
+            program(looped),
+            format!("fn main() {{ let __v = {{ {looped}\n}};\n{print}")
+        );
         let items = "fn main() {\n    println!(\"x\");\n}\n";
         assert_eq!(program(items), items);
-        let value = "if true { 1 } else { 2 }";
-        assert!(program(value).contains("println!(\"{:?}\", if true"));
+        let item_later = "let s = \"a;b\";\nfn f() {}";
+        assert_eq!(program(item_later), item_later);
     }
 }

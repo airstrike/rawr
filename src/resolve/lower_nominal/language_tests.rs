@@ -6116,3 +6116,46 @@ fn language_index_mut_and_mutable_trait_object_borrows() {
     );
     assert!(immutable.contains("immutable"), "{immutable}");
 }
+
+#[test]
+fn language_block_expressions() {
+    let value = run_string(
+        r#"
+        fn tail(x: i64) -> i64 {
+            {
+                let y = x * 2;
+                { y + 1 }
+            }
+        }
+        fn early(x: i64) -> i64 {
+            let v = {
+                if x > 5 {
+                    return 0;
+                }
+                x + 10
+            };
+            v
+        }
+        pub fn run() -> String {
+            let y = { let a = 2; a * 3 };
+            let x = 1;
+            {
+                let x = "shadow";
+                let _ = x;
+            }
+            let mut total = 0;
+            for i in 0..3 {
+                { total += i; }
+            }
+            let unit = {};
+            let nested = { let a = { 1 + 1 }; let b = { let c = a * 3; c }; format!("{}-{}", a, b) };
+            format!("{} {} {} {} {} {} {:?} {}", y, x, tail(4), early(2), early(9), total, unit, nested)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "6 1 9 12 0 3 () 2-6");
+    let unit_tail = rejected("pub fn run() -> i64 { let n: i64 = { let t = 1; t; }; n } run()");
+    assert!(unit_tail.contains("expected 'i64', found '()'"), "{unit_tail}");
+    rejected("pub fn run() -> i64 { { let t = 1; } t } run()");
+}
