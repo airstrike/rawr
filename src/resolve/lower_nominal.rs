@@ -3649,6 +3649,7 @@ fn owner_id(ty: &Ty) -> Option<type_def::Id> {
     match ty {
         Ty::Script(id, _) => Some(*id),
         Ty::Boxed(_) => None,
+        Ty::Host { proof, .. } => Some(type_def::Id::foreign(&proof.definition.path())),
         ty => builtin_code(ty).map(type_def::Id::builtin),
     }
 }
@@ -21460,7 +21461,7 @@ impl<'a> Parser<'a> {
                             })
                 };
                 if let Some(owner) = owner_id(&receiver)
-                    && owner.builtin_code().is_some()
+                    && (owner.builtin_code().is_some() || matches!(receiver, Ty::Host { .. }))
                     && (!builtin_inherent_method(&receiver, &member) || by_value_first(self, owner))
                     && self
                         .models
@@ -28238,6 +28239,59 @@ impl<'a> Parser<'a> {
                     .filter(|_| owner.as_str() == "Self")
             });
 
+        // `iced::Color::from(value)` through the crate's `impl From<T> for
+        // iced::Color`, when the facade has no `from` of its own.
+        if qualified_model.is_none()
+            && member.as_str() == "from"
+            && matches!(self.peek(), Token::LeftParen)
+        {
+            let full = match self.models.import(&segments[0].0) {
+                Some(binding) => format!(
+                    "{}{}",
+                    binding.qualified,
+                    &owner[segments[0].0.len()..]
+                ),
+                None => owner.to_string(),
+            };
+            if let Some(definition) = self.models.host.type_(&full).cloned()
+                && self.models.host_items(&format!("{full}::from")).is_none()
+            {
+                let target = type_def::Id::foreign(&definition.path());
+                if self.models.conversions.contains_key(&target) {
+                    let (mut arguments, end) = self.parse_call_arguments("`from` arguments")?;
+                    let call = span(owner_span.start(), end);
+                    let [argument] = arguments.as_mut_slice() else {
+                        return Err(Error::InvalidMethodCall {
+                            owner: full.into(),
+                            method: member,
+                            reason: format!("expects 1 argument(s), found {}", arguments.len())
+                                .into(),
+                            call,
+                        });
+                    };
+                    let source = self.inference.resolve(&argument.ty);
+                    let Some((conversion, from, owner)) =
+                        self.select_conversion(target, None, &source, call)
+                    else {
+                        return Err(Error::MissingCapability {
+                            owner: full.into(),
+                            capability: format!("From<{}>", source.name(&self.models)).into(),
+                            operation: call,
+                        });
+                    };
+                    self.coerce_expr(&from, argument)?;
+                    return Ok(self.operator_expr(
+                        origin::Fragment::call(
+                            method_name(conversion.id()),
+                            [argument.rendered_source()],
+                        ),
+                        owner,
+                        call,
+                    ));
+                }
+            }
+        }
+
         let imported_owner = (qualified_model.is_none() && segments.len() == 1)
             .then(|| self.models.import(&owner).cloned())
             .flatten()
@@ -29736,6 +29790,24 @@ impl<'a> Parser<'a> {
         {
             self.option_host_callable(value)?;
             source = self.inference.resolve(&value.ty);
+        }
+        // A crate type where a facade type is expected, through the crate's
+        // `impl From<T> for` it: a facade's `impl Into<Color>` parameter.
+        if let (Ty::Host { .. }, Ty::Script(..)) = (&target, &source)
+            && let Some(id) = owner_id(&target)
+            && self.models.conversions.contains_key(&id)
+            && let Some((conversion, ..)) =
+                self.select_conversion(id, Some(&target), &source, value.span)
+        {
+            value.source = origin::Fragment::call(
+                method_name(conversion.id()),
+                [value.rendered_source()],
+            );
+            value.prelude = origin::Fragment::default();
+            value.ty = target.clone();
+            value.lvalue = None;
+            value.source.cover(value.span);
+            source = target.clone();
         }
         // A function item taking its place in a `fn` pointer choice.
         if let (Ty::FnChoice { keys, .. }, Ty::FnItem { key, .. }) = (&target, &source)

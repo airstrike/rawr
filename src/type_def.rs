@@ -81,6 +81,17 @@ impl Id {
         Self(usize::MAX - code.unsigned_abs() as usize)
     }
 
+    /// A facade type as a trait impl owner (`impl From<Shade> for
+    /// iced::Color`), by its path: an id no script or builtin type has.
+    pub(crate) fn foreign(path: &str) -> Self {
+        // FNV-1a, folded below the builtin codes' 64 ids.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in path.bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+        Self(usize::MAX - 64 - (hash % (1 << 40)) as usize)
+    }
+
     /// The witness code of a builtin impl owner's id.
     pub(crate) const fn builtin_code(self) -> Option<i64> {
         let distance = usize::MAX - self.0;
@@ -165,17 +176,20 @@ impl Definition {
     /// The owner of trait impls for the builtin type `name`, which
     /// has no declaration: keyed `std::name`, with the witness `code`.
     pub(crate) fn builtin(code: i64, name: &str, item: item::Id, name_span: Span) -> Self {
+        Self::outside(Id::builtin(code), name, item, name_span)
+    }
+
+    /// The owner of trait impls for the facade type at `path`, which has
+    /// no declaration in the crate: keyed `std::path`.
+    pub(crate) fn foreign(path: &str, item: item::Id, name_span: Span) -> Self {
+        Self::outside(Id::foreign(path), path, item, name_span)
+    }
+
+    fn outside(id: Id, name: &str, item: item::Id, name_span: Span) -> Self {
         let key = Key::new("std".into(), Box::default(), name.into());
         let schema = program::schema::for_builtin(&key);
-        Declaration::new(
-            Id::builtin(code),
-            item,
-            key,
-            name.into(),
-            name_span,
-            Kind::Struct,
-        )
-        .resolve(schema, capability::Set::new())
+        Declaration::new(id, item, key, name.into(), name_span, Kind::Struct)
+            .resolve(schema, capability::Set::new())
     }
 }
 

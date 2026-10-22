@@ -1695,7 +1695,12 @@ fn resolve_methods(
                         if matches!(path.target, type_ref::Target::Script { .. })
                 )
             });
-            let builtin = builtin_owner(&item.owner)
+            // A facade type (`impl From<Shade> for iced::Color`) owns impls
+            // under the same rule.
+            let outside = builtin_owner(&item.owner)
+                .map(|(code, name)| (Some(code), name))
+                .or_else(|| foreign_owner(&item.owner).map(|path| (None, path)));
+            let builtin = outside
                 .map(|(code, owner_name)| {
                     if declared.name.span == Span::NONE && !local_argument {
                         return Err(Error::InvalidImplOwner {
@@ -1707,12 +1712,19 @@ fn resolve_methods(
                             reference: type_span(&item.owner),
                         });
                     }
-                    Ok(type_def::Definition::builtin(
-                        code,
-                        &owner_name,
-                        shell.id,
-                        type_span(&item.owner),
-                    ))
+                    Ok(match code {
+                        Some(code) => type_def::Definition::builtin(
+                            code,
+                            &owner_name,
+                            shell.id,
+                            type_span(&item.owner),
+                        ),
+                        None => type_def::Definition::foreign(
+                            &owner_name,
+                            shell.id,
+                            type_span(&item.owner),
+                        ),
+                    })
                 })
                 .transpose()
                 .map_err(|error| LocatedError::primary(shell.source, error))?;
@@ -1914,6 +1926,17 @@ fn resolve_methods(
 
 /// The first id of the methods of impls for builtin types.
 const BUILTIN_METHOD_IDS: usize = 1 << 30;
+
+/// A facade type as a trait impl owner: its path.
+fn foreign_owner(ty: &type_ref::Type) -> Option<ImmutableString> {
+    match ty {
+        type_ref::Type::Path(path) => match &path.target {
+            type_ref::Target::Host { definition, .. } => Some(definition.path().into()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 
 /// A builtin type as a trait impl owner: its witness code
 /// and name. `Box<T>` is not one: it is `T` at runtime.

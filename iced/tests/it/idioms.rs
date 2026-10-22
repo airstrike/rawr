@@ -1050,3 +1050,59 @@ fn sliders_checkboxes_and_togglers_take_iced_sizing_builders() {
     );
     find(&adapter, "sized");
 }
+
+#[test]
+fn crate_conversions_into_facade_types_apply_where_rust_applies_them() {
+    let adapter = boot_with(
+        r#"column![
+            text("shade").color(Shade::Light),
+            text("from").color(Color::from(Shade::Dark)),
+            text("into").color({ let color: Color = Shade::Light.into(); color }),
+            text(format!("brightness {}", Color::BLACK.brightness())),
+        ]"#,
+        r#"
+trait Brightness { fn brightness(&self) -> f32; }
+impl Brightness for iced::Color {
+    fn brightness(&self) -> f32 { 0.5 }
+}
+#[derive(Debug, Clone, Copy)]
+enum Shade { Dark, Light }
+impl From<Shade> for iced::Color {
+    fn from(shade: Shade) -> Self {
+        match shade {
+            Shade::Dark => Color::from_rgb8(0, 0, 0),
+            Shade::Light => Color::WHITE,
+        }
+    }
+}
+"#,
+    );
+    find(&adapter, "shade");
+    find(&adapter, "into");
+    find(&adapter, "brightness 0.5");
+}
+
+#[test]
+fn a_std_trait_for_a_facade_type_is_rejected_as_rustc_does() {
+    let source = r#"
+use iced::Widget;
+use iced::widget::text;
+impl Default for iced::Color {
+    fn default() -> Self { iced::Color::BLACK }
+}
+struct State {}
+#[derive(Debug, Clone)] enum Message {}
+impl State {
+    fn new() -> State { State {} }
+    fn update(&mut self, message: Message) {}
+    fn view(&self) -> impl Widget<Message> { text("a") }
+}
+pub fn main() -> iced::Result {
+    iced::application(State::new, State::update, State::view).run()
+}
+"#;
+    let Err(error) = rawr_iced::application::Compiler::new().unwrap().check_source(source) else {
+        panic!("Rust rejects `impl Default for iced::Color` (E0117)");
+    };
+    assert!(error.to_string().contains("E0117"), "{error}");
+}
