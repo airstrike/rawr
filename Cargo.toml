@@ -19,7 +19,7 @@ resolver = "3"
 [package]
 name = "rawr"
 version = "1.25.1"
-rust-version = "1.91.0"
+rust-version = "1.95.0"
 edition = "2024"
 autobenches = false
 authors = ["Andy Terra"]

@@ -135,7 +135,7 @@ under `target/` with `.rawr` renamed to `.rs` and runs `cargo check` on it.
 
 ## How do I install it?
 
-To embed the language, add the crate. It builds on stable Rust 1.91 or newer:
+To embed the language, add the crate. It builds on stable Rust 1.95 or newer:
 
 ```sh
 cargo add --git https://github.com/airstrike/rawr rawr

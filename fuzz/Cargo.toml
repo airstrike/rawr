@@ -2,7 +2,7 @@
 name = "rawr-fuzz"
 version = "0.0.0"
 publish = false
-rust-version = "1.91.0"
+rust-version = "1.95.0"
 edition = "2024"
 
 [package.metadata]

@@ -311,7 +311,7 @@ fn main() {
     </div>
     <div class="stack">
       <table>
-        <tr><td><code>rawr</code> crate</td><td>The language. Embed it in any Rust program. Pass source text to <code>Engine::compile</code>, then call a script function with <code>call_fn</code>. Builds on stable Rust 1.91 or newer.</td></tr>
+        <tr><td><code>rawr</code> crate</td><td>The language. Embed it in any Rust program. Pass source text to <code>Engine::compile</code>, then call a script function with <code>call_fn</code>. Builds on stable Rust 1.95 or newer.</td></tr>
         <tr><td><code>rawr</code> command</td><td>Runs and checks Rawr programs. Builds on stable Rust.</td></tr>
         <tr><td><code>rawr-iced</code></td><td>Runs programs that use <a href="https://github.com/iced-rs/iced">iced</a>. It adds:<ul><li>reload on save in about 0.2&nbsp;s</li><li>imports of your own Rust crates without bindings</li><li><code>#[preview]</code> views and PNG snapshots</li><li>the <code>?play</code> bot and playground</li></ul></td></tr>
       </table>
@@ -336,7 +336,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
     <div class="side">
       <p class="cap"><span class="slash">//</span>Install</p>
       <h2>Install from git</h2>
-      <p><strong>The language</strong> is an ordinary crate. It builds on stable Rust 1.91 or newer.</p>
+      <p><strong>The language</strong> is an ordinary crate. It builds on stable Rust 1.95 or newer.</p>
       <p><strong>The <code>rawr</code> command</strong> builds on stable Rust too. It runs programs that don&rsquo;t use iced.</p>
       <p><strong>rawr-iced</strong> needs more. It runs only on Apple Silicon Macs for now and needs <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr also builds your own crates with that toolchain.</p>
     </div>
