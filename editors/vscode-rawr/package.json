@@ -1,0 +1,36 @@
+{
+  "name": "rawr-language",
+  "displayName": "Rawr Language",
+  "description": "Local syntax highlighting for Rawr source files.",
+  "version": "0.0.1",
+  "publisher": "rawr-local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "rawr",
+        "aliases": [
+          "Rawr",
+          "rawr"
+        ],
+        "extensions": [
+          ".rawr"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rawr",
+        "scopeName": "source.rawr",
+        "path": "./syntaxes/rawr.tmLanguage.json"
+      }
+    ]
+  }
+}

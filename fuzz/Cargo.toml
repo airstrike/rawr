@@ -1,0 +1,65 @@
+[package]
+name = "rawr-fuzz"
+version = "0.0.0"
+publish = false
+rust-version = "1.91.0"
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+anyhow = "1.0.78"
+arbitrary = { version = "1.3.2", features = ["derive"] }
+libfuzzer-sys = "0.4"
+rawr = { path = "..", features = ["fuzz", "decimal", "metadata", "debugging", "grain"] }
+serde = { version = "1.0.194", features = ["derive"] }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+resolver = "3"
+
+[profile.release]
+debug = true
+debug-assertions = true
+overflow-checks = true
+
+[[bin]]
+name = "scripting"
+path = "fuzz_targets/scripting.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "ast"
+path = "fuzz_targets/ast.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_serde"
+path = "fuzz_targets/fuzz_serde.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "load"
+path = "fuzz_targets/load.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "roundtrip"
+path = "fuzz_targets/roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "generated"
+path = "fuzz_targets/generated.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,18 @@
+{
+  "schema": "rawr.phase9.baseline.scenarios/v1",
+  "current": [
+    { "scenario": "clean-cold", "mutation": "base fixture after an empty project cache" },
+    { "scenario": "identical-warm", "mutation": "base fixture after the matching cold owner" },
+    { "scenario": "rawr-occurrence", "mutation": "mutations/rawr-occurrence.rawr" },
+    { "scenario": "rust-body-equal-api", "mutation": "mutations/rust-body.rs" },
+    { "scenario": "rust-public-api", "mutation": "mutations/rust-public-api.rs" },
+    { "scenario": "profile-rule", "mutation": "private phase9-baseline Definition::new-equivalent baseline followed by the semantic variant" },
+    { "scenario": "classifier-facade", "mutation": "mutations/classifier-facade.toml after rust-public-api.rs" },
+    { "scenario": "demand-only", "mutation": "mutations/demand-only.rawr" }
+  ],
+  "after_cutover": [
+    { "scenario": "corrupt-runner", "node_evidence": { "status": "not-applicable", "reason": "the P9-07 runner DAG node does not exist before cutover" } },
+    { "scenario": "corrupt-resolution", "node_evidence": { "status": "not-applicable", "reason": "the P9-03 path-bound extraction bundle does not exist before cutover" } },
+    { "scenario": "concurrent-cold", "node_evidence": { "status": "not-applicable", "reason": "the P9-02/P9-07 single-flight protocols do not exist before cutover" } }
+  ]
+}

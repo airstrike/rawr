@@ -1,0 +1,33 @@
+{
+  "scope": "Pinned complete original-manifest reference only; not product parity or release qualification",
+  "date": "2026-09-05",
+  "toolchain": "nightly-2026-07-11",
+  "cargo_commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+  "isolated_registry_and_local_packages_verified": 72,
+  "cases": 130,
+  "accepted": 80,
+  "rejected": 50,
+  "locked_repeat_byte_identical": true,
+  "files": {
+    "Cargo.toml": "3ae6ee4ce4e4771106e0e714533e56bb5f92dd543f4fca215f73dc5fc091010d",
+    "Cargo.lock": "722441d634e7c65b44ccded2d1399ab04a41212280b209d1b65a0f0de60f878b",
+    "prepare.py": "bb5cbdb65085cb57d1be66eb39e2819fba48ac87e585b019d7abbb9fb372bc67",
+    "run.py": "483a986931cf5602b2fe7b18bfa950144a5c6ec26c96dfc84f71178b284cf65a",
+    "src/fixtures.rs": "545329497b0eab2aed7b1ac4af03e6616fb4295aeea6e33e84aad5ec174211f0",
+    "src/main.rs": "cc03ad141eaf295b87daa3f8d33b45dd63d8875fba276870304ac3f824fd8f13",
+    "src/project.rs": "1082dcc5762a5b2b6aed8b22963b06782a12728c6d9843ae0c3b1b4d5a6adfff",
+    "fixtures/full.toml": "80feedd59710092604ea45784d6d16ba08f9383df0eb67a211ac5e0c58108d63",
+    "fixtures/workspace.toml": "1e1715c05e9a87b2a90fcd0e38459eb726237435432e7c70b0a1aece7dd24246"
+  },
+  "observations": {
+    "file": "observations.jsonl",
+    "bytes": 271503,
+    "sha256": "4bdb6ccb690b4d8eb75a45895d04a659994198666e7c09cfdf24e123cc171b7b"
+  },
+  "features_sha256": "744a297f0a45a50063c11d527c6194618417cd616c8bb5dceb4535d6d6f0cc75",
+  "findings": [
+    "Raw first-key datetime marker maps can return early. Content-staged dependency/lint extras reject unconsumed map entries; preserve adapter provenance.",
+    "Empty profile positional sequences and extra profile/hints positions behave as emitted; no universal sequence exhaustion rule."
+  ],
+  "limit": "The product interpreter has only selected visitors connected; observations do not certify full typed interpretation or membership."
+}

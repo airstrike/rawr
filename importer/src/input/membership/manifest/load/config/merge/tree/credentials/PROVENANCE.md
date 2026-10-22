@@ -1,0 +1,13 @@
+# Credentials tree transformations
+
+Cargo 59800466c5c41c444d264b1010b4d57e85a7117f, util/context/mod.rs:1772-1814, controls these two transitions. The owner loads/converts/includes credentials before normalize_credentials, initializes ordinary values between the transitions, and publishes only a successful merge_credentials result.
+
+Normalization removes token of any type. Existing registry discards it, regardless of registry type. Vacant registry Entry reservation precedes constructing its one-token wrapper; its source definition is the credential root definition, while token preserves its original node and origin. Reserving the placeholder node index before constructing the wrapper preserves that reservation order; a refusal consumes the unpublished tree. Root physical map history is retained until credential iteration.
+
+Overlay iteration consumes the normalized credential root in physical map order. For each key, only the matching ordinary subtree is copied. Missing ordinary keys transfer their credential node directly. Each matching entry calls the existing pair merge with a fresh EMPTY Key; the selected top-level key is intentionally absent. The result root starts empty and uses ordinary insert for each entry exactly as Cargo's credential_values map does. No ordinary-only keys enter the result.
+
+ConfigValue derives Clone (config_value.rs:42). The implementation copies reachable nodes using explicit depth-first table/list continuations, borrowed string/definition provenance, copied spans and list order. Exact table physical state is supplied by Table::try_copy, then remapped by occupied-only replace. Iterating/reinserting a new table would not preserve the contract and is not used. No whole ordinary root/arena copy occurs, and dead arena nodes are never traversed.
+
+All nodes, lists and continuation frames use admitted storage::Buffer. Copy, iteration, remap, merge and overlay insertion share the original Session and first-refusal latch. Compact map copying owns its closed bulk-copy admission and finite physical scan bound; actual Tree node/continuation events are charged separately. Nodes contain only borrowed scalars and inert indexed containers, so success/refusal teardown has no nesting-dependent recursive destruction.
+
+Tests exercise arbitrary occupied registry types, origin retention, partial-overlay scope, empty merge-key list behavior, unvisited unmatched ordinary values, exhaustive transition admission refusals and 12,000-deep copy/drop. Pinned hash map physical clone/refusal evidence belongs to table tests. Owner tests separately establish includes, lazy ordinary initialization and lookup fallback timing.

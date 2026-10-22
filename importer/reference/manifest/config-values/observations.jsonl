@@ -1,0 +1,14 @@
+{"source":"","value":["table",[]]}
+{"source":"a=1\nb=true\nc=\"x\"","value":["table",[["a",["integer",1]],["b",["boolean",true]],["c",["string","x"]]]]}
+{"source":"a=[1,true,\"x\",{nested=[false,7]}]","value":["table",[["a",["list",[["integer",1],["boolean",true],["string","x"],["table",[["nested",["list",[["boolean",false],["integer",7]]]]]]]]]]]}
+{"source":"[path-bases]\nworkspace=\"../root\"","value":["table",[["path-bases",["table",[["workspace",["string","../root"]]]]]]]}
+{"config_error":"unsupported TOML configuration type `float`","path":"[Key(\"a\")]","source":"a=1.5"}
+{"config_error":"unsupported TOML configuration type `datetime`","path":"[Key(\"a\")]","source":"a=1979-05-27"}
+{"config_error":"unsupported TOML configuration type `float`","path":"[Key(\"x\"), Idx(1), Key(\"a\")]","source":"a=[{x=2},{x=1.5}]"}
+{"parse_error":"TOML parse error at line 2, column 3\n  |\n2 | b=9223372036854775808\n  |   ^^^^^^^^^^^^^^^^^^^\nu64 value was too large\n","source":"a=1.5\nb=9223372036854775808"}
+{"config_error":"unsupported TOML configuration type `datetime`","path":"[Key(\"a\")]","source":"a=1979-05-27\nb=1.5"}
+{"config_error":"unsupported TOML configuration type `float`","path":"[Key(\"a\")]","source":"a=1.5\nb=1979-05-27"}
+{"source":"\"$__toml_private_datetime\"=\"1979-05-27\"\nvalid=1","value":["table",[["$__toml_private_datetime",["string","1979-05-27"]],["valid",["integer",1]]]]}
+{"config_error":"unsupported TOML configuration type `datetime`","path":"[Key(\"x\")]","source":"x={\"$__toml_private_datetime\"=\"1979-05-27\",later=1}"}
+{"source":"a=[[true],[]]","value":["table",[["a",["list",[["list",[["boolean",true]]],["list",[]]]]]]]}
+{"source":"a=-9223372036854775808\nb=9223372036854775807","value":["table",[["a",["integer",-9223372036854775808]],["b",["integer",9223372036854775807]]]]}

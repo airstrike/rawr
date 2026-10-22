@@ -1,0 +1,5 @@
+error: expecting identifier
+  --> ui_tests/rawr_fn_junk_arg.rs:11:11
+   |
+11 | #[rawr_fn("wheeeee")]
+   |           ^^^^^^^^^

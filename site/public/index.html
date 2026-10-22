@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rawr: Rust Augmented With Rust</title>
+<meta name="description" content="Rawr is Rust Augmented With Rust: a scripting language that reads like Rust. The rawr crate embeds it in any Rust program on stable Rust; its first shell, rawr-iced, runs native iced apps that reload in about 0.2 s.">
+<meta property="og:title" content="Rawr: Rust Augmented With Rust">
+<meta property="og:description" content="A scripting language that reads like Rust. Embed it in any Rust program; the rawr-iced shell runs native iced apps. Pre-alpha.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Rawr: Rust Augmented With Rust. The same cart code as Rust and as a Rawr script.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Rawr: Rust Augmented With Rust">
+<meta name="twitter:description" content="A scripting language that reads like Rust. Embed it in any Rust program; the rawr-iced shell runs native iced apps. Pre-alpha.">
+<meta name="twitter:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<style>
+@property --pos { syntax: "<percentage>"; inherits: true; initial-value: 50%; }
+:root {
+  --bg: #141416; --raised: #1b1b1e; --inset: #101012; --text: #e4e4e8; --code: #cfcfd6;
+  --dim: #9a9aa3; --line: #2e2e33; --pink: #ff2e93; --rose: #ff8cc6;
+  --mono: "Fira Mono", ui-monospace, Menlo, monospace;
+  --sans: "Fira Sans", system-ui, -apple-system, sans-serif;
+  color-scheme: dark;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font: 17px/1.6 var(--sans); font-weight: 400; }
+a { color: var(--pink); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+code, pre, kbd { font-family: var(--mono); }
+p code, li code, td code, figcaption code { font-size: 0.88em; color: var(--text); background: var(--raised); border: 1px solid var(--line); padding: 0 4px; }
+.cap { font: 12px/1.4 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+.slash { color: var(--pink); margin-right: 8px; }
+
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 32px; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 12px; color: var(--dim); }
+.mark { width: 10px; height: 10px; background: var(--pink); flex: none; }
+.brand b { font: 400 14px var(--mono); color: var(--text); letter-spacing: 0.04em; }
+.links { display: flex; gap: 20px; }
+.links a { color: var(--dim); }
+.links a:hover { color: var(--text); text-decoration: none; }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+
+/* Hero: words on the left, the two files on the right. */
+.hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; padding: 72px 0 80px; align-items: start; }
+.hero h1 { font-weight: 300; font-size: clamp(40px, 5.2vw, 62px); line-height: 1.04; letter-spacing: -0.015em; margin: 16px 0 24px; }
+.hero h1 .ini { color: var(--pink); font-weight: 400; }
+.hero .lede { color: var(--dim); max-width: 34em; }
+.hero .lede + .lede { margin-top: 14px; }
+.hero .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+.btn { display: inline-block; padding: 9px 16px; border: 1px solid var(--line); background: var(--raised); color: var(--text); font: 14px/1.4 var(--sans); }
+.btn:hover { border-color: var(--dim); text-decoration: none; }
+.btn.go { background: var(--pink); border-color: var(--pink); color: var(--bg); }
+.btn.go:hover { background: var(--rose); border-color: var(--rose); }
+
+.compare { min-width: 0; }
+.tabs { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+.tabs button { font: 13px/1 var(--mono); color: var(--dim); background: none; border: 1px solid transparent; padding: 6px 10px; cursor: pointer; }
+.tabs button:hover { color: var(--text); border-color: var(--line); }
+.tabs button[aria-pressed="true"] { color: var(--text); border-color: var(--line); background: var(--raised); }
+.tabs .hint { font: 12px var(--mono); color: var(--dim); }
+.scroller { overflow-x: auto; overscroll-behavior-x: contain; }
+.stage { position: relative; display: grid; border: 1px solid var(--line); background: var(--inset); }
+.layer { grid-area: 1 / 1; display: flex; flex-direction: column; background: var(--inset); min-width: 0; }
+.layer.rawr { background: #121115; clip-path: inset(0 0 0 var(--pos)); }
+.file { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); font: 12px/1.4 var(--mono); color: var(--dim); }
+.file b { font-weight: 400; color: var(--text); }
+.rawr .file b { color: var(--pink); }
+.layer pre { flex: 1; padding: 14px 16px 16px; font-size: 13px; line-height: 1.6; color: var(--code); tab-size: 4; overflow: hidden; white-space: pre; }
+.run { padding: 10px 16px; border-top: 1px solid var(--line); font: 12px/1.5 var(--mono); color: var(--dim); }
+.run b { font-weight: 400; color: var(--text); }
+.run { display: flex; justify-content: space-between; gap: 12px; }
+.run span { color: var(--rose); white-space: nowrap; }
+.run span::before { content: "\2192  "; color: var(--dim); }
+.run b::before { content: "$ "; color: var(--dim); }
+.run b.call::before { content: none; }
+.divider { position: absolute; top: 0; bottom: 0; left: var(--pos); width: 0; z-index: 2; }
+.divider::before { content: ""; position: absolute; top: 0; bottom: 0; left: -0.5px; width: 1px; background: var(--pink); }
+.grip { position: absolute; top: 50%; left: 0; width: 36px; height: 36px; transform: translate(-50%, -50%); background: var(--pink); color: var(--bg); border: 0; display: grid; place-items: center; cursor: ew-resize; touch-action: none; font: 15px/1 var(--mono); letter-spacing: -1px; }
+.grip:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.hit { position: absolute; top: 0; bottom: 0; left: -14px; width: 28px; cursor: ew-resize; touch-action: none; }
+.dragging, .dragging * { user-select: none; -webkit-user-select: none; cursor: ew-resize; }
+.compare.tween { transition: --pos 0.45s cubic-bezier(.2,.7,.2,1); }
+.compare.intro { animation: peek 1.8s 0.5s cubic-bezier(.45,0,.2,1) both; }
+@keyframes peek { 0% { --pos: 50%; } 40% { --pos: 78%; } 75% { --pos: 34%; } 100% { --pos: 50%; } }
+.compare figcaption { margin-top: 16px; color: var(--dim); font-size: 15px; max-width: 46em; }
+.compare figcaption code { white-space: nowrap; }
+.compare figcaption strong { color: var(--text); font-weight: 400; }
+.compare figcaption small { display: block; margin-top: 8px; font-size: 13px; }
+
+/* Syntax: pink for keywords, rose for literals, brighter for names. */
+.k { color: var(--pink); }
+.s, .n { color: var(--rose); }
+.t, .m { color: var(--text); }
+.c, .p { color: var(--dim); }
+.a { color: var(--dim); }
+
+/* Sections: heading on the left, the material on the right. */
+section { border-top: 1px solid var(--line); padding: 64px 0; }
+.sec { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 56px; align-items: start; }
+.sec h2 { font-weight: 300; font-size: 32px; line-height: 1.15; letter-spacing: -0.01em; margin: 14px 0 18px; }
+.sec .side p { color: var(--dim); }
+.sec .side p + p { margin-top: 12px; }
+.sec .side p strong { color: var(--text); font-weight: 400; }
+
+.cmds { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.cmd { display: flex; align-items: stretch; border: 1px solid var(--line); background: var(--inset); min-width: 0; }
+.cmd pre { flex: 1; min-width: 0; padding: 11px 14px; font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmd pre .p { user-select: none; -webkit-user-select: none; }
+.copy { flex: none; border: 0; border-left: 1px solid var(--line); background: var(--raised); color: var(--dim); font: 12px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 0 14px; cursor: pointer; min-width: 76px; }
+.copy:hover { color: var(--text); }
+.copy.done { color: var(--pink); }
+.note { margin-top: 14px; font-size: 15px; color: var(--dim); }
+.group + .group { margin-top: 36px; }
+.group > .cap { margin-bottom: 10px; }
+
+table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); background: var(--raised); font-size: 15px; }
+td { padding: 13px 16px; border-top: 1px solid var(--line); vertical-align: top; color: var(--dim); }
+tr:first-child td { border-top: 0; }
+td:first-child { white-space: nowrap; width: 1%; }
+td:first-child code { font-size: 13px; color: var(--text); background: none; border: 0; padding: 0; }
+
+.block { border: 1px solid var(--line); background: var(--inset); }
+.block .file { background: transparent; }
+.block pre { padding: 14px 16px; font-size: 13px; line-height: 1.6; color: var(--code); overflow-x: auto; white-space: pre; }
+.block .run { border-top: 1px solid var(--line); }
+.diag .e { color: var(--pink); }
+.diag .h { color: var(--text); }
+.stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.shot { border: 1px solid var(--line); background: var(--inset); }
+.shot img { display: block; width: 100%; height: auto; }
+.shot figcaption, .fig-note { padding: 10px 14px; border-top: 1px solid var(--line); font-size: 14px; color: var(--dim); }
+.pair { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; align-items: start; }
+.pair .shot img { width: 160px; }
+
+.status { color: var(--dim); max-width: 40em; }
+.status + .status { margin-top: 12px; }
+footer { border-top: 1px solid var(--line); }
+footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-top: 18px; padding-bottom: 28px; }
+
+@media (max-width: 960px) {
+  .hero { grid-template-columns: minmax(0, 1fr); gap: 40px; padding: 48px 0 56px; }
+  .sec { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+}
+@media (max-width: 640px) {
+  body { font-size: 16px; }
+  .bar { padding: 12px 16px; }
+  .links { gap: 14px; }
+  .links .wide { display: none; }
+  .wrap { padding: 0 16px; }
+  .hero { padding-top: 36px; }
+  section { padding: 48px 0; }
+  .sec h2 { font-size: 27px; }
+  .stage { min-width: max-content; }
+  .layer pre { font-size: 11.5px; padding: 12px; }
+  .file, .run { padding-left: 12px; padding-right: 12px; }
+  .tabs .hint { display: none; }
+  td { padding: 11px 12px; display: block; border-top: 0; }
+  td:first-child { width: auto; padding-bottom: 0; }
+  tr + tr td:first-child { border-top: 1px solid var(--line); }
+  .pair { grid-template-columns: minmax(0, 1fr); }
+  .pair .shot { justify-self: start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .compare.tween { transition: none; }
+  .compare.intro { animation: none; }
+}
+</style>
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="#install">Install</a>
+    <a href="https://rawr-bot.airstrike.fyi/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+
+<main>
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <p class="cap"><span class="slash">//</span>A scripting language that reads like Rust</p>
+      <h1><span class="ini">R</span>ust <span class="ini">A</span>ugmented <span class="ini">W</span>ith <span class="ini">R</span>ust</h1>
+      <p class="lede">Rawr has Rust&rsquo;s structs, enums, traits and <code>match</code>, checked up front with rustc-style errors. Your program stays Rust; the parts you want to change while it runs are written in Rawr.</p>
+      <p class="lede">The <code>rawr</code> crate is the language, and any Rust program can embed it. A shell gives it a domain. The first one, <a href="#iced"><code>rawr-iced</code></a>, runs native <a href="https://github.com/iced-rs/iced">iced</a> apps that reload in about 0.2&nbsp;s.</p>
+      <div class="actions">
+        <a class="btn go" href="#install">Install Rawr</a>
+        <a class="btn" href="#iced">See the iced shell</a>
+      </div>
+    </div>
+
+    <figure class="compare intro" style="--pos: 50%" data-left="Rust" data-right="Rawr">
+      <div class="tabs">
+        <button type="button" data-to="100" aria-pressed="false" aria-controls="stage-cart">main.rs</button>
+        <span class="hint">drag the divider</span>
+        <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-cart">SCRIPT</button>
+      </div>
+      <div class="scroller">
+      <div class="stage" id="stage-cart">
+        <div class="layer rs">
+          <div class="file"><b>src/main.rs</b><span>Rust</span></div>
+          <pre><code data-lang="rust">enum Item {
+    Book { price: f64 },
+    Coffee { cups: i64 },
+}
+
+trait Priced {
+    fn price(&amp;self) -&gt; f64;
+}
+
+impl Priced for Item {
+    fn price(&amp;self) -&gt; f64 {
+        match self {
+            Item::Book { price } =&gt; *price,
+            Item::Coffee { cups } =&gt; 3.5 * (*cups as f64),
+        }
+    }
+}
+
+fn total(items: &amp;[Item]) -&gt; f64 {
+    let mut sum = 0.0;
+    for item in items {
+        sum += item.price();
+    }
+    sum
+}
+
+fn main() {
+    let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
+    println!("total: {}", total(&amp;cart));
+}</code></pre>
+          <div class="run"><b>cargo run</b><span>total: 27</span></div>
+        </div>
+        <div class="layer rawr" aria-hidden="true">
+          <div class="file"><b>SCRIPT</b><span>Rawr</span></div>
+          <pre><code data-lang="rust">enum Item {
+    Book { price: f64 },
+    Coffee { cups: i64 },
+}
+
+trait Priced {
+    fn price(&amp;self) -&gt; f64;
+}
+
+impl Priced for Item {
+    fn price(&amp;self) -&gt; f64 {
+        match self {
+            Item::Book { price } =&gt; *price,
+            Item::Coffee { cups } =&gt; 3.5 * (*cups as f64),
+        }
+    }
+}
+
+fn total(items: &amp;[Item]) -&gt; f64 {
+    let mut sum = 0.0;
+    for item in items {
+        sum += item.price();
+    }
+    sum
+}
+
+let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
+total(&amp;cart)</code></pre>
+          <div class="run"><b class="call">Engine::new().eval::&lt;f64&gt;(SCRIPT)</b><span>27.0</span></div>
+        </div>
+        <div class="divider">
+          <span class="hit" aria-hidden="true"></span>
+          <button type="button" class="grip" role="slider" aria-label="Compare the Rust program and the Rawr script" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="Half Rust, half Rawr" aria-controls="stage-cart"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
+        </div>
+      </div>
+      </div>
+      <figcaption>
+        <strong>Spot the difference.</strong> The enum, the trait, the <code>impl</code> and <code>fn total</code> are the same bytes. Only the ending differs: Rust needs a <code>fn main</code> that prints, while a Rawr script runs its statements from the top and hands its last expression back to the Rust program that evaluated it.
+        <small>Left: a complete Rust 2024 program; stable <code>rustc</code> compiles it without warnings and it prints <code>total: 27</code>. Right: the <code>SCRIPT</code> string in <code>examples/cart.rs</code>, which <code>cargo run --example cart</code> evaluates to <code>27</code>.</small>
+      </figcaption>
+    </figure>
+  </div>
+</div>
+
+<section id="shells">
+  <div class="wrap sec">
+    <div class="side">
+      <p class="cap"><span class="slash">//</span>Shells</p>
+      <h2>A language, then a shell for a domain</h2>
+      <p>The language core knows nothing about windows or widgets. It parses, checks and runs Rawr inside whatever Rust program embeds it.</p>
+      <p>A shell gives it a domain: the types, the commands and the reload loop. <strong>iced is the first shell</strong>; <code>rawr-iced</code> is Rawr for iced apps.</p>
+    </div>
+    <div class="stack">
+      <table>
+        <tr><td><code>rawr</code></td><td>The language. Embed it in any Rust program with <code>Engine::new().eval</code>. Builds on stable Rust 1.91 or newer.</td></tr>
+        <tr><td><code>rawr-iced</code></td><td>The first shell, for <a href="https://github.com/iced-rs/iced">iced</a> apps: reload on save in about 0.2&nbsp;s, rustc-style errors, your Rust crates imported with no bindings, <code>#[preview]</code> views and PNG snapshots, and the <code>?play</code> bot and playground.</td></tr>
+      </table>
+      <div class="block">
+        <div class="file"><b>examples/cart.rs</b><span>the host</span></div>
+        <pre><code data-lang="rust">use rawr::Engine;
+
+const SCRIPT: &amp;str = r#"
+… the Rawr script above …
+"#;
+
+fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
+    let total = Engine::new().eval::&lt;f64&gt;(SCRIPT)?;
+    println!("total: {total}");
+    Ok(())
+}</code></pre>
+        <div class="run"><b>cargo run --example cart</b><span>total: 27</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap sec">
+    <div class="side">
+      <p class="cap"><span class="slash">//</span>Install</p>
+      <h2>Install from git</h2>
+      <p><strong>The language</strong> is an ordinary crate. It builds on stable Rust 1.91 or newer.</p>
+      <p><strong>The iced shell</strong> is more demanding. It runs on Apple Silicon Macs for now and needs one pinned Rust nightly, <code>nightly-2026-07-11</code>, with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr builds iced and your own crates with that toolchain too.</p>
+    </div>
+    <div>
+      <div class="group">
+        <p class="cap">Embed the language</p>
+        <div class="cmds">
+          <div class="cmd"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre><button type="button" class="copy">Copy</button></div>
+        </div>
+        <p class="note">Then <code>Engine::new().eval::&lt;T&gt;(script)</code>, as in <code>examples/cart.rs</code> above.</p>
+      </div>
+      <div class="group">
+        <p class="cap">The iced shell: toolchain, CLI and import driver</p>
+        <div class="cmds">
+          <div class="cmd"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src</code></pre><button type="button" class="copy">Copy</button></div>
+          <div class="cmd"><pre><code>cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre><button type="button" class="copy">Copy</button></div>
+          <div class="cmd"><pre><code>cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre><button type="button" class="copy">Copy</button></div>
+        </div>
+        <p class="note"><code>rawr-cli</code> installs <code>rawr</code>. <code>rawr-import</code> installs <code>rawr-import-driver</code> next to it, which reads your Rust crates for imports. The first <code>rawr run</code> compiles iced, so it takes a few minutes; later launches reuse that build.</p>
+      </div>
+      <div class="group">
+        <p class="cap">Start an iced project</p>
+        <div class="cmds">
+          <div class="cmd"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre><button type="button" class="copy">Copy</button></div>
+        </div>
+        <p class="note"><code>rawr new</code> writes one file, <code>src/main.rawr</code>, a counter. There is no manifest until you want one. Edit it while the window is open.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="iced">
+  <div class="wrap sec">
+    <div class="side">
+      <p class="cap"><span class="slash">//</span>The iced shell</p>
+      <h2>Write iced. Reload it like a script.</h2>
+      <p><code>rawr-iced</code> runs native iced apps written in Rawr, with the same <code>impl Widget&lt;Message&gt;</code>, the same <code>column![]</code>, the same <code>match</code>, against iced master.</p>
+      <p>Save a <code>.rawr</code> file and <code>rawr run</code> reloads it in about 0.2&nbsp;s. The window stays open and keeps its state.</p>
+    </div>
+      <figure class="compare" style="--pos: 50%" data-left="main.rs" data-right="main.rawr">
+        <div class="tabs">
+          <button type="button" data-to="100" aria-pressed="false" aria-controls="stage-counter">main.rs</button>
+          <span class="hint">drag the divider</span>
+          <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-counter">main.rawr</button>
+        </div>
+        <div class="scroller">
+        <div class="stage" id="stage-counter">
+          <div class="layer rs">
+            <div class="file"><b>src/main.rs</b><span>Rust</span></div>
+            <pre><code data-lang="rust">use iced::Center;
+use iced::widget::{Widget, button, column, text};
+
+pub fn main() -&gt; iced::Result {
+    iced::run(Counter::update, Counter::view)
+}
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+    Decrement,
+}
+
+impl Counter {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Increment =&gt; {
+                self.value += 1;
+            }
+            Message::Decrement =&gt; {
+                self.value -= 1;
+            }
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        column![
+            button("Increment").on_press(Message::Increment),
+            text(self.value).size(50),
+            button("Decrement").on_press(Message::Decrement)
+        ]
+        .padding(20)
+        .align_x(Center)
+    }
+}</code></pre>
+            <div class="run"><b>cargo run</b></div>
+          </div>
+          <div class="layer rawr" aria-hidden="true">
+            <div class="file"><b>src/main.rawr</b><span>Rawr</span></div>
+            <pre><code data-lang="rust">use iced::Center;
+use iced::widget::{Widget, button, column, text};
+
+pub fn main() -&gt; iced::Result {
+    iced::run(Counter::update, Counter::view)
+}
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+    Decrement,
+}
+
+impl Counter {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Increment =&gt; {
+                self.value += 1;
+            }
+            Message::Decrement =&gt; {
+                self.value -= 1;
+            }
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        column![
+            button("Increment").on_press(Message::Increment),
+            text(self.value).size(50),
+            button("Decrement").on_press(Message::Decrement)
+        ]
+        .padding(20)
+        .align_x(Center)
+    }
+}</code></pre>
+            <div class="run"><b>rawr run</b></div>
+          </div>
+          <div class="divider">
+            <span class="hit" aria-hidden="true"></span>
+            <button type="button" class="grip" role="slider" aria-label="Compare main.rs and main.rawr" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="Half main.rs, half main.rawr" aria-controls="stage-counter"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
+          </div>
+        </div>
+        </div>
+        <figcaption>
+          <strong>Spot the difference.</strong> On the left is iced&rsquo;s own counter example. On the right is the same file saved as <code>main.rawr</code>. The diff is the file extension and the command that runs it.
+          <small>Left: <code>examples/counter</code> from iced master at <code>be88873d</code>, with its test module left out. Right: those exact bytes, which <code>rawr check</code> accepts unchanged.</small>
+        </figcaption>
+      </figure>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="side">
+      <p class="cap"><span class="slash">//</span>iced shell &middot; Commands</p>
+      <h2>One command for each part of the loop</h2>
+      <p>Everything works on a project directory or a single file. Run <code>rawr --help</code> for the full grammar.</p>
+    </div>
+    <table>
+      <tr><td><code>rawr run</code></td><td>Opens the app. Saving a <code>.rawr</code> file reloads it in place; changing your Rust crates rebuilds them natively.</td></tr>
+      <tr><td><code>rawr check</code></td><td>Type-checks without a window and reports errors the way rustc does.</td></tr>
+      <tr><td><code>rawr check --as-rust</code></td><td>Copies the project under <code>target/</code> with <code>.rawr</code> renamed to <code>.rs</code> and runs <code>cargo check</code> on it.</td></tr>
+      <tr><td><code>rawr preview</code></td><td>Opens a view marked <code>#[preview]</code> on its own. &larr; and &rarr; step through a group.</td></tr>
+      <tr><td><code>rawr snapshot</code></td><td>Renders every preview headlessly to PNG; <code>--check</code> compares them with the committed ones, <code>--update</code> accepts new ones.</td></tr>
+      <tr><td><code>rawr mcp</code></td><td>An MCP server that lets a coding agent list and render previews, run checks and screenshot the running window. <code>rawr init --claude --codex</code> registers it.</td></tr>
+      <tr><td><code>rawr doctor</code></td><td>Reports on the environment and the project.</td></tr>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="side">
+      <p class="cap"><span class="slash">//</span>iced shell &middot; Diagnostics</p>
+      <h2>Errors you already know how to read</h2>
+      <p>Delete the <code>Decrement</code> arm from the counter and <code>rawr check</code> answers the way rustc would: the code, the span, and what is missing.</p>
+    </div>
+    <div class="block diag">
+      <div class="file"><b>rawr check</b><span>exit 1</span></div>
+      <pre><code><span class="e">error[RAWR-RESOLVE-MATCH]</span><span class="h">: invalid match for `Message`: non-exhaustive patterns; missing Message::Decrement</span>
+ <span class="c">--&gt;</span> src/main.rawr:21:9-25:9
+ <span class="c">21 |</span>         match message {
+    <span class="c">|</span>         <span class="e">^^^^^^^^^^^^^^^</span>
+    <span class="c">| ...</span>
+ <span class="c">25 |</span>         }
+    <span class="c">|</span> <span class="e">^^^^^^^^</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="side">
+      <p class="cap"><span class="slash">//</span>iced shell &middot; Rust imports</p>
+      <h2>Your own Rust crates, with no bindings</h2>
+      <p>List a crate in <code>rawr.toml</code> and <code>use</code> it. Rawr reads only the items your code touches, so a custom native widget in a Cargo crate is just another widget.</p>
+      <p>This is <code>gallery_ui::Dial</code> from RawrGallery, an ordinary iced <code>Widget</code> written in Rust and driven from <code>dial.rawr</code>.</p>
+    </div>
+    <div class="stack">
+      <div class="block">
+        <div class="file"><b>rawr.toml</b></div>
+        <pre><code data-lang="toml">[rust.dependencies]
+gallery_ui = { package = "gallery-ui", path = "rust/gallery-ui" }</code></pre>
+      </div>
+      <div class="block">
+        <div class="file"><b>src/dial.rawr</b></div>
+        <pre><code data-lang="rust">use gallery_ui::Dial;
+
+let face = container(Dial::new(self.value, Message::Turn).range(0..=100))
+    .padding(LOOSE)
+    .style(inset);</code></pre>
+      </div>
+      <figure class="shot">
+        <img src="img/gallery-dial.png" width="1024" height="720" loading="lazy" alt="RawrGallery's Dial page in the Ink sheet: a square dial at 20, readouts for position and band, and Reset and Hide detail buttons">
+        <figcaption>The Dial page, rendered by <code>rawr snapshot</code>.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="side">
+      <p class="cap"><span class="slash">//</span>iced shell &middot; ?play</p>
+      <h2>Render a snippet in Discord</h2>
+      <p>In a Discord channel where the bot is turned on, write <code>?play</code> over a code block with a view or a whole app, and it replies with the frame. The playground does the same in a browser, nothing to install.</p>
+      <div class="actions" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:24px">
+        <a class="btn go" href="https://rawr-bot.airstrike.fyi/play">Open the playground</a>
+        <a class="btn" href="https://rawr-bot.airstrike.fyi/invite">Add the bot to a server</a>
+      </div>
+    </div>
+    <div class="pair">
+      <figure class="shot">
+        <img src="img/counter.png" width="320" height="340" loading="lazy" alt="The iced counter in its default dark theme: an Increment button, the number 1 and a Decrement button">
+      </figure>
+      <div class="block">
+        <div class="file"><b>Discord</b></div>
+        <pre><code><span class="k">?play</span> 160x170 msg=Message::Increment
+<span class="c">```rust</span>
+use iced::Center;
+use iced::widget::{Widget, button, column, text};
+<span class="c">// … the rest of the counter</span>
+<span class="c">```</span></code></pre>
+        <p class="fig-note">The iced counter above after one <code>Increment</code>, as <code>rawr-play</code>, the renderer behind the bot, draws it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap sec">
+    <div class="side">
+      <p class="cap"><span class="slash">//</span>Status</p>
+      <h2>Pre-alpha, plainly</h2>
+    </div>
+    <div>
+      <p class="status">Rawr is early. The language crate builds on stable Rust. The iced shell runs on Apple Silicon Macs, follows iced master, and pins one nightly. APIs, commands, file formats and error codes will change without notice.</p>
+      <p class="status">It covers a lot of Rust but not all of it. When Rawr rejects valid Rust that it claims to cover, that is a bug, and a small reproduction is the most useful report.</p>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+  </div>
+</footer>
+
+<script>
+(() => {
+  // Highlight Rust and TOML by hand: a single regex pass, no library.
+  const KW = /^(as|break|const|continue|crate|dyn|else|enum|false|fn|for|if|impl|in|let|loop|match|mod|move|mut|pub|ref|return|self|Self|static|struct|super|trait|true|type|use|where|while)$/;
+  const TOKEN = /(\/\/[^\n]*)|("(?:\\.|[^"\\])*")|(#\[[^\]\n]*\])|(\b\d[\d_]*(?:\.\d+)?\b)|(\b[A-Za-z_][A-Za-z0-9_]*!)|(\b[A-Za-z_][A-Za-z0-9_]*\b)|(\[[^\]\n]*\](?=\n|$))/g;
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const span = (c, s) => `<span class="${c}">${esc(s)}</span>`;
+  for (const el of document.querySelectorAll("code[data-lang]")) {
+    const src = el.textContent, toml = el.dataset.lang === "toml";
+    let out = "", last = 0;
+    src.replace(TOKEN, (m, com, str, attr, num, mac, word, table, at) => {
+      out += esc(src.slice(last, at));
+      last = at + m.length;
+      if (com) out += span("c", m);
+      else if (str) out += span("s", m);
+      else if (attr) out += span("a", m);
+      else if (num) out += span("n", m);
+      else if (mac) out += span("m", m);
+      else if (table && toml) out += span("k", m);
+      else if (word && !toml && KW.test(m)) out += span("k", m);
+      else if (word && !toml && /^[A-Z]/.test(m)) out += span("t", m);
+      else out += esc(m);
+      return m;
+    });
+    el.innerHTML = out + esc(src.slice(last));
+  }
+
+  // Each slider: --pos is where the right-hand file starts covering the left.
+  for (const fig of document.querySelectorAll(".compare")) {
+    const stage = fig.querySelector(".stage");
+    const grip = fig.querySelector(".grip");
+    const tabs = fig.querySelectorAll(".tabs button");
+    const left = fig.dataset.left, right = fig.dataset.right;
+    let pos = 50;
+    const set = (value, tween) => {
+      pos = Math.max(0, Math.min(100, Math.round(value * 10) / 10));
+      fig.classList.remove("intro");
+      fig.classList.toggle("tween", !!tween);
+      fig.style.setProperty("--pos", pos + "%");
+      const n = Math.round(pos);
+      grip.setAttribute("aria-valuenow", n);
+      grip.setAttribute("aria-valuetext",
+        n >= 100 ? `All ${left}` : n <= 0 ? `All ${right}` : `${n}% ${left}, ${100 - n}% ${right}`);
+      tabs[0].setAttribute("aria-pressed", n >= 100);
+      tabs[1].setAttribute("aria-pressed", n <= 0);
+    };
+    const fromPointer = (e) => {
+      const r = stage.getBoundingClientRect();
+      set(((e.clientX - r.left) / r.width) * 100, false);
+    };
+    for (const handle of [grip, fig.querySelector(".hit")]) {
+      handle.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        handle.setPointerCapture(e.pointerId);
+        document.body.classList.add("dragging");
+        grip.focus({ preventScroll: true });
+        fromPointer(e);
+      });
+      handle.addEventListener("pointermove", (e) => {
+        if (handle.hasPointerCapture(e.pointerId)) fromPointer(e);
+      });
+      const end = () => document.body.classList.remove("dragging");
+      handle.addEventListener("pointerup", end);
+      handle.addEventListener("pointercancel", end);
+    }
+    grip.addEventListener("keydown", (e) => {
+      const step = e.shiftKey ? 25 : 5;
+      const next = {
+        ArrowLeft: pos - step, ArrowDown: pos - step,
+        ArrowRight: pos + step, ArrowUp: pos + step,
+        PageDown: pos - 25, PageUp: pos + 25, Home: 0, End: 100,
+      }[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      set(next, e.key === "Home" || e.key === "End" || e.key.startsWith("Page"));
+    });
+    for (const tab of tabs) tab.addEventListener("click", () => set(Number(tab.dataset.to), true));
+    // The intro peek animates --pos itself; once it ends, the inline value holds.
+    fig.addEventListener("animationend", () => fig.classList.remove("intro"));
+  }
+
+  // Copy buttons copy the command, never the prompt.
+  for (const button of document.querySelectorAll(".copy")) {
+    button.setAttribute("aria-label", "Copy command");
+    button.addEventListener("click", async () => {
+      const text = button.parentElement.querySelector("code").textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const range = document.createRange();
+        range.selectNodeContents(button.parentElement.querySelector("code"));
+        const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+        document.execCommand("copy");
+      }
+      button.textContent = "Copied";
+      button.classList.add("done");
+      setTimeout(() => { button.textContent = "Copy"; button.classList.remove("done"); }, 1600);
+    });
+  }
+})();
+</script>
+</body>
+</html>

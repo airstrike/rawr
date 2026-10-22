@@ -1,0 +1,5 @@
+error: unknown attribute 'unknown'
+  --> ui_tests/rawr_mod_bad_attr.rs:11:12
+   |
+11 | #[rawr_mod(unknown = "thing")]
+   |            ^^^^^^^

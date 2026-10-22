@@ -1,0 +1,23 @@
+{
+  "cargo_commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+  "toolchain": "nightly-2026-07-11",
+  "binary_sha256": "984fb962474fe9eb74160a5b561a44d33c95a6dbf3a972e9aa726f0ee6aa983c",
+  "cases": 25,
+  "accepted": 4,
+  "rejected": 21,
+  "command": [
+    "cargo",
+    "+nightly-2026-07-11",
+    "metadata",
+    "--format-version=1",
+    "--no-deps",
+    "--offline",
+    "--manifest-path",
+    "<fixture>/Cargo.toml"
+  ],
+  "files": {
+    "run_workspace.py": "71b1080a21375ffcb504b49e515d7998004f613923bcb71ea31cd469db455bec",
+    "workspace-observations.jsonl": "bbdf723b2ab41c29705333be92c1e257139e15adaa1b64ca1a7e1221790a13b6"
+  },
+  "scope": "Actual Cargo acceptance and first configuration rejection; metadata suppresses manifest warnings. Warning text/order is covered by focused tests and independent source comparison, not this CLI corpus."
+}

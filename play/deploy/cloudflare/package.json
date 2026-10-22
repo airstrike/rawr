@@ -1,0 +1,19 @@
+{
+  "name": "rawr-play-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "push-image": "./push-image.sh",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/stats.test.ts test/play.test.ts",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261019.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.151.3"
+  }
+}

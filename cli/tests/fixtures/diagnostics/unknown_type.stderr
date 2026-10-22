@@ -1,0 +1,5 @@
+error[RAWR-RESOLVE-UNKNOWN-TYPE]: unknown type `Missing`
+ --> $SOURCE:2:12-2:19
+ 2 |     value: Missing,
+   |            ^^^^^^^
+  = help: declare or import `Missing`, or register it with the host

@@ -1,0 +1,10 @@
+[package]
+name = "rawr-directory"
+version = "0.1.0"
+rust-version = "1.91.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+libc = "0.2.189"
+thiserror = "2"

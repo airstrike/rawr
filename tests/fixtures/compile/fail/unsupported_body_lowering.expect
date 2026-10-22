@@ -1,0 +1,5 @@
+category=unsupported nominal syntax
+name=legacy do in checked nominal functions
+primary=1:20-20
+secondary=none
+message=Unsupported nominal syntax 'legacy do in checked nominal functions' (line 1, position 20)

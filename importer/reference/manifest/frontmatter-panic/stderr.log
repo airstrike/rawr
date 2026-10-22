@@ -1,0 +1,13 @@
+
+thread 'main' (4233720) panicked at ~/.rustup/toolchains/nightly-2026-07-11-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/str/mod.rs:861:21:
+end byte index 2 is out of bounds for string of length 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' (4233720) panicked at ~/.rustup/toolchains/nightly-2026-07-11-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/str/mod.rs:861:21:
+end byte index 2 is not a char boundary; it is inside '🦀' (bytes 1..5 of string)
+
+thread 'main' (4233720) panicked at ~/.rustup/toolchains/nightly-2026-07-11-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/str/mod.rs:861:21:
+end byte index 2 is out of bounds for string of length 1
+
+thread 'main' (4233720) panicked at ~/.rustup/toolchains/nightly-2026-07-11-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/str/mod.rs:861:21:
+end byte index 3 is out of bounds for string of length 2

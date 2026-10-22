@@ -1,0 +1,5 @@
+error: expecting attribute name
+  --> ui_tests/export_mod_path_attr.rs:11:11
+   |
+11 | #[rawr_fn(rawr::name = "thing")]
+   |           ^^^^

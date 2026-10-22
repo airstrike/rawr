@@ -1,0 +1,7 @@
+
+thread 'main' (5586551) panicked at /private/tmp/rawr-config-definition-source.rs:39:92:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' (5586551) panicked at /private/tmp/rawr-config-definition-source.rs:39:92:
+called `Option::unwrap()` on a `None` value

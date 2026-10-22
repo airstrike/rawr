@@ -1,0 +1,5 @@
+error: expecting identifier
+  --> ui_tests/export_fn_junk_arg.rs:10:13
+   |
+10 | #[export_fn("wheeeee")]
+   |             ^^^^^^^^^

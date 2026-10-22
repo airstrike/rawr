@@ -1,0 +1,42 @@
+//! rawr-iced's integration tests, as one binary rather than one per file, each
+//! linking its own copy of Rawr and iced.
+
+mod application_contract;
+mod application_entry;
+mod builtin_styles;
+mod canonical_values;
+mod components;
+mod control;
+mod counter_runtime;
+mod dependencies;
+mod diagnostics;
+mod effect_harness;
+mod facade;
+mod generated_activation;
+mod generated_application;
+mod generated_builders;
+mod generated_custom_widget;
+mod generated_preview;
+mod generated_profile;
+mod generated_recovery;
+mod generated_runner_host;
+mod generated_styles;
+mod generated_view_compile_fail;
+mod generated_view_region;
+mod idioms;
+mod intrinsic_column;
+mod intrinsic_controls;
+mod master_style;
+mod native_adapter;
+mod native_extension;
+mod nested_generic;
+mod package_application;
+mod preview_catalog;
+mod preview_metadata;
+mod reload_generation;
+mod reload_installation;
+mod subscription_plan;
+mod task_plan;
+mod themes;
+mod widget_descriptor;
+mod widget_protocol;

@@ -1,0 +1,5 @@
+[package]
+name = "package-components"
+
+[dependencies]
+controls = { path = "controls" }

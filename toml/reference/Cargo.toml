@@ -1,0 +1,23 @@
+[package]
+name = "rawr-toml-reference"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Deliberately isolated from the product workspace and rawr-toml.
+[workspace]
+resolver = "2"
+
+[dependencies]
+# Cargo ignores SemVer build metadata in requirements. Verify the full package
+# versions and archive checksums in provenance.json against the generated lock.
+toml = { version = "=1.1.2", default-features = false, features = ["std", "serde", "parse", "display", "preserve_order"] }
+toml_parser = { version = "=1.1.2", default-features = false, features = ["std", "alloc"] }
+toml_datetime = { version = "=1.1.1", default-features = false, features = ["std", "alloc", "serde"] }
+serde_spanned = { version = "=1.1.1", default-features = false, features = ["std", "alloc", "serde"] }
+indexmap = { version = "=2.14.0", default-features = false, features = ["std"] }
+hashbrown = { version = "=0.17.1", default-features = false }
+equivalent = { version = "=1.0.2", default-features = false }
+serde_core = { version = "=1.0.228", default-features = false, features = ["std", "alloc"] }
+toml_writer = { version = "=1.1.1", default-features = false, features = ["std", "alloc"] }
+winnow = "=1.0.3"

@@ -1,0 +1,5 @@
+error: requires value
+  --> ui_tests/rawr_mod_missing_value.rs:11:12
+   |
+11 | #[rawr_mod(name)]
+   |            ^^^^

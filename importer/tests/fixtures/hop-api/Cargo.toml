@@ -1,0 +1,10 @@
+[package]
+name = "hop-api"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+leaf-api = { path = "../leaf-api" }
+
+[workspace]

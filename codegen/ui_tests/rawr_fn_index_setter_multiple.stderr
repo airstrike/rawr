@@ -1,0 +1,5 @@
+error: conflicting index_set
+  --> ui_tests/rawr_fn_index_setter_multiple.rs:12:40
+   |
+12 |     #[rawr_fn(name = "foo", index_set, index_set)]
+   |                                        ^^^^^^^^^

@@ -1,0 +1,13 @@
+[package]
+name = "custom_root"
+version = "0.1.0"
+publish = false
+rust-version = "1.91.0"
+edition = "2024"
+resolver = "3"
+
+[dev-dependencies]
+custom_rawr = { package = "rawr", path = "../../.." }
+
+[features]
+metadata = []

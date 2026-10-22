@@ -1,0 +1,8 @@
+# Build context for play/Dockerfile: sources only.
+target
+**/target
+.git
+.Codex
+editors
+*.vsix
+SOL_PROMPT.md

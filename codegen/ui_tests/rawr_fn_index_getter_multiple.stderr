@@ -1,0 +1,5 @@
+error: conflicting index_get
+  --> ui_tests/rawr_fn_index_getter_multiple.rs:12:40
+   |
+12 |     #[rawr_fn(name = "foo", index_get, index_get)]
+   |                                        ^^^^^^^^^

@@ -1,0 +1,40 @@
+pub mod dial;
+
+use crate::dial::App;
+
+// This root source intentionally has content on the same line as Dial::layout.
+// Positioned lifecycle reports must retain their exact module source, not use
+// a root-source-plus-line-number guess.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Same line number as the layout hook declaration in dial.rawr.
+
+pub fn main() -> iced::Result {
+    iced::run(App::update, App::view)
+}

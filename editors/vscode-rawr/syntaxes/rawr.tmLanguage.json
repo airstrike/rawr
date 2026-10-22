@@ -1,0 +1,193 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Rawr",
+  "scopeName": "source.rawr",
+  "fileTypes": [
+    "rawr"
+  ],
+  "patterns": [
+    {
+      "include": "#rawr-attributes"
+    },
+    {
+      "include": "#module-declarations"
+    },
+    {
+      "include": "#use-declarations"
+    },
+    {
+      "include": "#framework-paths"
+    },
+    {
+      "include": "#rawr-keywords"
+    },
+    {
+      "include": "#rawr-operators"
+    },
+    {
+      "include": "#interpolated-strings"
+    },
+    {
+      "include": "source.rust"
+    }
+  ],
+  "repository": {
+    "rawr-attributes": {
+      "patterns": [
+        {
+          "name": "meta.attribute.preview.rawr",
+          "begin": "(#\\s*\\[\\s*)(preview)\\b",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.definition.attribute.rawr"
+            },
+            "2": {
+              "name": "entity.other.attribute-name.rawr"
+            }
+          },
+          "end": "\\](?=\\s*(?://|$|#\\[|pub\\b|fn\\b|struct\\b|enum\\b|impl\\b|mod\\b|use\\b))",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.attribute.rawr"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\b(name|group|seed|update|themes|snapshot|size)\\b(?=\\s*=)",
+              "name": "variable.parameter.attribute.preview.rawr"
+            },
+            {
+              "include": "source.rust"
+            }
+          ]
+        },
+        {
+          "match": "(#\\s*\\[\\s*)(widget|derive)\\b",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.attribute.rawr"
+            },
+            "2": {
+              "name": "entity.other.attribute-name.rawr"
+            }
+          }
+        }
+      ]
+    },
+    "module-declarations": {
+      "patterns": [
+        {
+          "match": "\\b(mod|module)(\\s+)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?:;|\\{))",
+          "captures": {
+            "1": {
+              "name": "keyword.control.module.rawr"
+            },
+            "3": {
+              "name": "entity.name.namespace.rawr"
+            }
+          }
+        }
+      ]
+    },
+    "use-declarations": {
+      "patterns": [
+        {
+          "match": "\\b(use)(\\s+)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?:::|;))",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.rawr"
+            },
+            "3": {
+              "name": "support.module.rawr"
+            }
+          }
+        }
+      ]
+    },
+    "framework-paths": {
+      "patterns": [
+        {
+          "match": "\\b(iced|rawr)(?=\\s*::)",
+          "name": "support.module.rawr"
+        }
+      ]
+    },
+    "rawr-keywords": {
+      "patterns": [
+        {
+          "match": "\\b(switch|until)\\b",
+          "name": "keyword.control.conditional.rawr"
+        },
+        {
+          "match": "\\b(throw|try|catch)\\b",
+          "name": "keyword.control.exception.rawr"
+        },
+        {
+          "match": "\\b(import|export)\\b",
+          "name": "keyword.control.import.rawr"
+        },
+        {
+          "match": "\\bprivate\\b",
+          "name": "storage.modifier.rawr"
+        }
+      ]
+    },
+    "rawr-operators": {
+      "patterns": [
+        {
+          "match": "!in|\\?\\?|\\?\\.|\\?\\[|\\*\\*=?",
+          "name": "keyword.operator.rawr"
+        },
+        {
+          "match": "#(?=\\{)",
+          "name": "punctuation.definition.mapping.rawr"
+        }
+      ]
+    },
+    "interpolated-strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.other.rawr",
+          "begin": "`",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.rawr"
+            }
+          },
+          "end": "`",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.rawr"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\(?:[\\\\`nrt]|u\\{[0-9A-Fa-f_]+\\})",
+              "name": "constant.character.escape.rawr"
+            },
+            {
+              "begin": "\\$\\{",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.begin.rawr"
+                }
+              },
+              "end": "\\}",
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.end.rawr"
+                }
+              },
+              "contentName": "meta.interpolation.rawr",
+              "patterns": [
+                {
+                  "include": "$self"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

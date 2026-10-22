@@ -1,0 +1,11 @@
+error: duplicate Rawr signature for 'foo'
+  --> ui_tests/rawr_fn_rename_collision.rs:17:15
+   |
+17 |     #[rawr_fn(name = "foo")]
+   |               ^^^^
+
+error: duplicated function renamed 'foo'
+  --> ui_tests/rawr_fn_rename_collision.rs:12:15
+   |
+12 |     #[rawr_fn(name = "foo")]
+   |               ^^^^

@@ -1,0 +1,30 @@
+[package]
+name = "rawr_codegen"
+version = "3.2.0"
+rust-version = "1.91.0"
+edition = "2024"
+resolver = "3"
+authors = ["Andy Terra"]
+description = "Procedural macros for the Rawr scripting language"
+keywords = ["scripting", "scripting-language", "plugin", "macros"]
+categories = ["development-tools::procedural-macro-helpers"]
+homepage = "https://github.com/airstrike/rawr"
+repository = "https://github.com/airstrike/rawr"
+license = "MIT OR Apache-2.0"
+
+[lib]
+proc-macro = true
+
+[features]
+default = []
+sync = []
+metadata = []
+
+[dependencies]
+proc-macro2 = "1.0.0"
+syn = { version = "2.0.0", features = ["full", "parsing", "printing", "proc-macro", "extra-traits"] }
+quote = "1.0.0"
+
+[dev-dependencies]
+rawr = { path = "..", version = "1.25.1", features = ["metadata"] }
+trybuild = "1.0.0"

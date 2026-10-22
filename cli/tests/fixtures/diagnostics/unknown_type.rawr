@@ -1,0 +1,3 @@
+struct Counter {
+    value: Missing,
+}

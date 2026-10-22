@@ -1,0 +1,5 @@
+error: property setter requires exactly 2 parameters
+  --> ui_tests/rawr_fn_setter_signature.rs:13:20
+   |
+13 |     pub fn test_fn(input: Point) -> bool {
+   |                    ^^^^^

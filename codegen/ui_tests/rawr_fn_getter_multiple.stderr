@@ -1,0 +1,5 @@
+error: conflicting getter
+  --> ui_tests/rawr_fn_getter_multiple.rs:12:42
+   |
+12 |     #[rawr_fn(name = "foo", get = "foo", get = "bar")]
+   |                                          ^^^

@@ -1,0 +1,241 @@
+{
+  "cargo_commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+  "crate": "ignore",
+  "version": "0.4.26",
+  "crate_checksum": "b915661dd01db3f05050265b2477bcc6527b3792388e2749b41623cc592be67d",
+  "source": "src/gitignore.rs",
+  "scope": "Connected GitignoreBuilder root preparation and add_line(None, rule), glob construction, original/kind error mapping, and ordered pattern/metadata collection; matcher compilation remains required (see COMPILATION.md)",
+  "license": "Unlicense OR MIT",
+  "containment": "Original Session; prospective string and allocation admission; terminal refusal; no matcher or selection authority",
+  "paths": {
+    "source": "ignore 0.4.26 gitignore.rs:GitignoreBuilder::new,Gitignore::strip; pathutil.rs:Unix strip_prefix,is_file_name; globset 0.4.18 lib.rs:Candidate::new,from_cow; pathutil.rs:file_name,file_name_ext,Unix normalize_path",
+    "platform": "Unix; root prefix stripping is byte-based; native lexical equality is retained for the dot-root special case",
+    "candidate_bridge": "bstr 1.12.3 ByteVec::from_path_lossy/from_os_str_lossy returns borrowed native Unix bytes",
+    "containment": "Root ownership uses admitted native path copy; candidate slices remain borrowed; scans are charged before traversal"
+  },
+  "glob_parser": {
+    "crate": "globset",
+    "version": "0.4.18",
+    "crate_checksum": "52dfc19153a48bde0cbd630453615c8151bce3a5adfac7a0aebfbf0a1e1f57e3",
+    "source": "src/glob.rs:579-606,791-1073",
+    "options": "Unix; backslash_escape=true; allow_unclosed_class=true; case_insensitive=false; literal_separator=true",
+    "scope": "Connected GlobBuilder construction: token parsing, retained source spelling, then regex emission; matcher compilation remains required",
+    "ownership": "Flat branch arena and admitted index stacks; alternatives retain indices rather than recursive token ownership"
+  },
+  "strategy_selection": {
+    "source": "globset 0.4.18 src/glob.rs:MatchStrategy::new and Glob literal helpers",
+    "order": "basename literal, literal, extension, prefix, suffix, required extension, regex",
+    "containment": "Original Session; charge token visits and prospective literal/reverse-buffer growth; preserve failed helper work and terminal refusal",
+    "scope": "Classification only; compiled strategy collections and matcher evaluation remain required"
+  },
+  "regex_tree_construction": {
+    "source": "regex-syntax 0.8.11 src/ast/parse.rs:parse_with_comments,push_alternate,push_or_add_alternation,push_group,pop_group,pop_group_end,parse_uncounted_repetition",
+    "scope": "Connected emitter output through groups/classes/alternation/repetition and post-parse nesting check into Parsed; downstream compilation remains required",
+    "containment": "Original Session; flat admitted group continuations, nodes and child buffers; retained class/scratch capacity; first alternation reserves child storage before constructing its concat, existing alternations construct before push"
+  },
+  "regex_unicode_hir": {
+    "source": "regex-syntax 0.8.11 src/hir/mod.rs:ClassUnicode::minimum_len,maximum_len,literal; Hir::class; Properties::class",
+    "scope": "Unicode class normalization and properties; class unions connected to alternation; connected to emitted-tree translation",
+    "containment": "Original Session; singleton String extent before literal ownership and properties; source class retained through conversion; empty class maps to byte failure"
+  },
+  "regex_unicode_collection": {
+    "source": "regex-syntax 0.8.11 src/hir/interval.rs:IntervalSet::new,canonicalize,is_canonical; Interval::union; char Bound",
+    "scope": "Byte/Unicode singleton-range collection, canonicalization and union; ASCII cross-conversions follow ClassUnicode::to_byte_class and ClassBytes::to_unicode_class; connected to alternation",
+    "containment": "Original Session; incoming range storage before transfer; admitted allocation-free sort comparisons; equal ranges have no payload identity; source append-before-drain merge and surrogate-gap adjacency"
+  },
+  "regex_alternation_singletons": {
+    "source": "regex-syntax 0.8.11 src/hir/mod.rs:singleton_chars,singleton_bytes,class_chars,class_bytes; src/debug.rs:utf8_decode",
+    "scope": "Ordered singleton and class-union character/byte probes, connected to consuming alternation before prefix factoring",
+    "containment": "Original Session; admitted visits and output buffers, first-scalar-only decoding, failed-probe work retained, refusal prevents fallback"
+  },
+  "regex_alternation_hir": {
+    "source": "regex-syntax 0.8.11 src/hir/mod.rs:Hir::alternation,into_kind,lift_common_prefix,derived Hir equality; src/hir/interval.rs:IntervalSet::eq",
+    "scope": "Consuming alternation flattening, ordered class normalization and common-prefix factoring; connected to emitted-tree translation",
+    "containment": "Original Session; incoming output reservation before consumption; explicit prefix and structural-equality continuations; kinds before properties; class equality excludes folded state; duplicate prefix disposal; into_kind has no replacement property allocation"
+  },
+  "regex_concat_hir": {
+    "source": "regex-syntax 0.8.11 src/hir/mod.rs:Hir::concat,into_parts,Drop",
+    "scope": "Consuming concatenation flattening and adjacent-literal normalization with flat retained child indices; connected to emitted-tree translation",
+    "containment": "Original Session; replacement properties before into_parts movement; admitted literal copies and property computation; source shallow/structural disposal ordering and exact-size incoming stack reservation"
+  },
+  "regex_repetition_hir": {
+    "source": "regex-syntax 0.8.11 src/hir/mod.rs:Hir::repetition; src/hir/translate.rs:hir_repetition child ownership",
+    "scope": "Consuming repetition normalization in flat HIR storage; connected to emitted-tree translation",
+    "containment": "Original Session; child retained before zero-width/exact-count simplification; identity moves child back out; zero count releases the whole current repetition chain iteratively after constructing Empty; flat teardown"
+  },
+  "regex_union_properties": {
+    "source": "regex-syntax 0.8.11 src/hir/mod.rs:Properties::union,LookSet::full",
+    "scope": "Property combination for alternatives and pattern sets; connected to consuming alternation normalization",
+    "containment": "Original Session; admitted first-child and source-order inspections before retained allocation; poisoned lengths, required intersections and possible unions preserved"
+  },
+  "regex_concat_properties": {
+    "source": "regex-syntax 0.8.11 src/hir/mod.rs:Properties::concat",
+    "scope": "Properties for normalized child expressions, connected to consuming concatenation construction",
+    "containment": "Original Session; admitted all-child, prefix and reverse-suffix scans before property allocation; source length/capture arithmetic and look-set stop conditions"
+  },
+  "regex_repetition_properties": {
+    "source": "regex-syntax 0.8.11 src/hir/mod.rs:Properties::repetition",
+    "scope": "Post-normalization repetition properties; repetition HIR construction remains required",
+    "containment": "Original Session property ownership; pinned saturating minimum, checked maximum, required/possible look sets and capture-count propagation"
+  },
+  "regex_base_hir": {
+    "source": "regex-syntax 0.8.11 src/hir/mod.rs:Hir::empty,literal,look,fail,class; ClassBytes::is_ascii,minimum_len,maximum_len,literal",
+    "scope": "Base consuming HIR nodes and byte class normalization, connected from parsed class through Classes::expression; structural HIR construction remains required",
+    "containment": "Original Session; private admitted literal ownership before properties; source class retained during singleton conversion; empty classes normalize to failure, empty literals to empty expressions"
+  },
+  "regex_base_properties": {
+    "source": "regex-syntax 0.8.11 src/hir/mod.rs:Properties::empty,literal,look; PropertiesI; Look::Start,End",
+    "scope": "Base empty/literal/anchor/byte-class properties; structural properties remain required",
+    "containment": "Original Session; literal UTF-8 scan before property allocation; exact one-record layout admitted before fallible vector allocation, with no shrinking conversion"
+  },
+  "regex_class_translation": {
+    "source": "regex-syntax 0.8.11 src/hir/translate.rs:visit_class_set_item_post,class_literal_byte,bytes_fold_and_negate; src/ast/visitor.rs:visit_class",
+    "scope": "Parsed byte classes to normalized base HIR through Classes::expression at emitter-fixed Unicode-disabled and case-sensitive flags",
+    "containment": "Original Session; retained translator/class-visitor buffers; pop class before endpoint conversion, source-order endpoint errors, append negation after insertion; admitted UnicodeNotAllowed source/span ownership"
+  },
+  "regex_byte_intervals": {
+    "source": "regex-syntax 0.8.11 src/hir/interval.rs:IntervalSet::push,negate; Interval::union",
+    "scope": "Canonical byte range insertion and complement; HIR class construction remains required",
+    "containment": "Original Session; admitted search and splice movement; negation appends complements while originals remain retained, then drains; folded state preserved"
+  },
+  "regex_translation_primitives": {
+    "source": "regex-syntax 0.8.11 src/hir/translate.rs:Flags,set_flags,ast_literal_to_scalar; src/ast/mod.rs:Literal::byte; globset 0.4.18 src/lib.rs:new_regex,new_regex_set",
+    "configuration": "utf8=false, dot_matches_new_line=true; other flag defaults preserved, including Unicode initially enabled until emitted (?-u)",
+    "scope": "Flag merge/restoration and literal scalar conversion only; no HIR construction or matching",
+    "containment": "Original Session; source-ordered flag scan before publishing settings; constant-size scalar conversion; terminal refusal"
+  },
+  "regex_batch": {
+    "source": "regex-automata 0.4.14 src/meta/regex.rs:Builder::build_many; src/util/primitives.rs:PatternID,WithPatternIDIter",
+    "scope": "Retained all-AST then all-HIR batch with first-failure pattern index; no executable matcher entry point",
+    "containment": "Original Session; parse before retained-vector growth; previous trees remain owned during later parsing; terminal refusal; reject unrepresentable batch length before parsing"
+  },
+  "regex_classes": {
+    "source": "regex-syntax 0.8.11 src/ast/parse.rs:parse_set_class,parse_set_class_open,push_class_open,pop_class,pop_class_op,parse_set_class_range,parse_set_class_item; src/ast/mod.rs:ClassSetUnion",
+    "scope": "Emitter-reachable literal/range bracketed classes, negation, union collapse and ClassRangeInvalid; escaping prevents nested classes and set operators",
+    "containment": "Original Session; parser-owned class continuation capacity reused across classes; admitted item buffers; exact spans and union shape; source pattern retained for range errors"
+  },
+  "regex_group_opening": {
+    "source": "regex-syntax 0.8.11 src/ast/parse.rs:parse_group",
+    "scope": "Emitter-reachable flag/noncapturing group openings; preserve probe order, flags, opening spans and admitted empty child before continuation; closing groups connect through parser.rs",
+    "containment": "Original Session and flat AST arena; no capture/lookaround grammar is emitted; unexpected emitter input is an internal state failure"
+  },
+  "regex_ast_storage": {
+    "source": "regex-syntax 0.8.11 src/ast/mod.rs:Ast constructors,Concat::into_ast,Alternation::into_ast",
+    "ownership": "Admitted flat node arena; backward child indices; no recursive child ownership; sequence collapse preserves singleton identity and span",
+    "scope": "Empty/flag/primitive/class/group/repetition/sequence storage, connected to parsing and nesting validation; HIR translation remains required"
+  },
+  "regex_flags": {
+    "source": "regex-syntax 0.8.11 src/ast/parse.rs:parse_flags,parse_flag; src/ast/mod.rs:Flags::add_item,Flags::flag_state",
+    "containment": "Original Session; admitted item ownership and duplicate/state scans; source pattern ownership on semantic error; exact spans and delimiter position",
+    "scope": "Flag parsing and state lookup, used by connected group/tree construction"
+  },
+  "regex_primitives": {
+    "source": "regex-syntax 0.8.11 src/ast/parse.rs:parse_primitive,parse_escape,parse_hex,parse_hex_digits",
+    "scope": "Emitter-reachable raw literals, dot, line anchors, meta escapes and two-digit hex escapes; not a general regex parser",
+    "containment": "Original Session; retained admitted scratch; prospective scratch string length; exact literal kind and span; malformed emitter-only input is an internal state failure",
+    "remaining": "HIR translation and matcher compilation"
+  },
+  "regex_parser_cursor": {
+    "source": "regex-syntax 0.8.11 src/ast/parse.rs:char,bump,bump_if,peek,pos,span,span_char",
+    "license": "MIT; glob/LICENSE-regex-syntax-MIT",
+    "containment": "Borrowed pattern; admitted scans; native byte offsets and scalar line/column positions; terminal refusal",
+    "scope": "Cursor component for connected AST parsing; downstream compilation remains required"
+  },
+  "regex_nesting": {
+    "source": "regex-syntax 0.8.11 src/ast/parse.rs:NestLimiter; src/ast/visitor.rs:HeapVisitor",
+    "limit": 250,
+    "containment": "Check after full AST construction while parser scratch remains owned; admitted depth-first node/class continuation buffers; first-excess span and complete source-pattern error ownership",
+    "scope": "Syntax nesting acceptance only; no HIR or matcher authority"
+  },
+  "regex_emission": {
+    "source": "globset 0.4.18 src/glob.rs:670-789",
+    "options": "case_insensitive=false; literal_separator=true; empty_alternates=false",
+    "ownership": "Explicit admitted continuation stack and byte buffers; no recursive traversal or recursive destruction",
+    "escape_predicate": {
+      "crate": "regex-syntax",
+      "version": "0.8.11",
+      "crate_checksum": "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4",
+      "source": "src/lib.rs:is_meta_character",
+      "license": "MIT OR Apache-2.0",
+      "retained_license": "glob/LICENSE-regex-syntax-MIT"
+    }
+  },
+  "regex_nfa_batch": {
+    "source": "regex-automata 0.4.14 src/nfa/thompson/compiler.rs:compile,c_alt_iter; regex-syntax 0.8.11 Hir::dot(AnyByte)",
+    "scope": "Intermediate batch starts under fixed Core configuration; finalization and executable engines remain required",
+    "containment": "Original Session; count before clear/limit; directional anchoring short circuit; synthetic AnyByte ownership through lazy-star compilation; complete first two patterns before union creation; terminal refusal"
+  },
+  "regex_nfa_pattern_startup": {
+    "source": "regex-automata 0.4.14 src/nfa/thompson/compiler.rs:Compiler::new,c_cap,compile per-pattern closure; range_trie.rs:RangeTrie::new,clear,add_empty",
+    "scope": "Constructor-reached RangeTrie ownership and individual pattern/capture/match wrapping; batch configuration and finalization remain required",
+    "containment": "Original Session; eager two-state trie ownership between deferred UTF-8 caches; forward captures before/after expression; match publication only after successful patches; terminal refusal"
+  },
+  "regex_nfa_hir_dispatch": {
+    "source": "regex-automata 0.4.14 src/nfa/thompson/compiler.rs:c,c_concat,c_alt_slice,c_alt_iter,c_repetition",
+    "scope": "Borrowed validated HIR to forward/reverse intermediate NFA fragment; complete startup, pattern/capture assembly and finalization remain required",
+    "containment": "Original Session; explicit continuation stack; shallow literal scan; minimum length only for unbounded zero minimum; source before/after-child state order; no HIR cloning"
+  },
+  "regex_nfa_literal_trie": {
+    "source": "regex-automata 0.4.14 src/nfa/thompson/literal_trie.rs:LiteralTrie,State,Frame,StateChunksIter",
+    "scope": "Literal alternation insertion and explicit-stack NFA compilation; enclosing HIR branch selection remains required",
+    "containment": "Original Session; active-chunk search envelope; new node before admitted edge shift; match chunks preserve priority; admitted sparse/union/frame ownership and iterator advances"
+  },
+  "regex_nfa_control": {
+    "source": "regex-automata 0.4.14 src/nfa/thompson/compiler.rs:c_alt_iter,c_zero_or_one,c_at_least (n=0/1),c_look,c_fail",
+    "scope": "Emitter anchors, general alternation assembly and normalized repetition continuations; literal trie and full HIR driver remain required",
+    "containment": "Original Session; move-only before/after-child continuation preserves union creation and patch order; terminal admission refusal; nullable star uses plus then question"
+  },
+  "regex_nfa_unicode_reverse": {
+    "source": "regex-automata 0.4.14 src/nfa/thompson/compiler.rs:c_unicode_class_reverse_with_suffix; src/nfa/thompson/map.rs:Utf8SuffixMap",
+    "scope": "Validated Unicode class to shrink=false reverse fragment with shared ASCII dispatch; HIR driver and finalization remain required",
+    "containment": "Original Session; deferred 1000-entry versioned cache; clear before union/end creation; admitted traversal; reverse links and post-patch cache publication; terminal refusal"
+  },
+  "regex_nfa_unicode_forward": {
+    "source": "regex-automata 0.4.14 src/nfa/thompson/compiler.rs:c_unicode_class (ASCII and forward branches)",
+    "scope": "Validated Unicode class to forward sparse fragment; enclosing HIR driver and reverse dispatch remain required",
+    "containment": "Borrowed canonical range view; ASCII end before transition allocation; non-ASCII compiler initialization before admitted range traversal; original Session and pending-state reuse"
+  },
+  "regex_nfa_utf8_compiler": {
+    "source": "regex-automata 0.4.14 src/nfa/thompson/compiler.rs:Utf8State,Utf8Compiler,Utf8Node",
+    "scope": "Sorted UTF-8 sequences to shared forward sparse NFA fragments; HIR dispatcher, reverse construction and finalization remain required",
+    "containment": "Original Session; target before cache initialization; admitted prefix scans and continuation storage; retained key during builder clone; no cache publication after semantic failure"
+  },
+  "regex_nfa_utf8_ranges": {
+    "source": "regex-syntax 0.8.11 src/utf8.rs:Utf8Sequences::new,next,ScalarRange",
+    "scope": "Ordered scalar-to-byte-range traversal; no standalone matching or NFA authority",
+    "containment": "Original Session; admitted fallible range stack and traversal steps; inline output; source surrogate/width/alignment split order; terminal refusal"
+  },
+  "regex_nfa_utf8_ranges": {
+    "source": "regex-syntax 0.8.11 src/utf8.rs:Utf8Sequences::new,next,ScalarRange",
+    "scope": "Ordered scalar-to-byte-range traversal; no standalone matching or NFA authority",
+    "containment": "Original Session; admitted fallible range stack and traversal steps; inline output; source surrogate/width/alignment split order; terminal refusal"
+  },
+  "regex_nfa_utf8_cache": {
+    "source": "regex-automata 0.4.14 src/nfa/thompson/map.rs:Utf8BoundedMap",
+    "scope": "Deferred bounded forward UTF-8 transition cache; Unicode fragment compilation and executable matching remain required",
+    "containment": "Original Session; table replacement before old ownership release; version invalidation retains stale keys; admitted FNV hashing and exact collision comparison; terminal refusal"
+  },
+  "regex_nfa_byte_fragments": {
+    "source": "regex-automata 0.4.14 src/nfa/thompson/compiler.rs:c_concat,c_literal,c_range,c_empty,c_byte_class",
+    "scope": "Forward/reverse literal chains, empty states and canonical byte-class sparse fragments; complete compiler driver and finalization remain required",
+    "containment": "Original Session; iterator admission before reads including termination; next literal state before patch; byte-class end before transition reservation; semantic failure stops construction"
+  },
+  "regex_nfa_state_builder": {
+    "crate": "regex-automata",
+    "version": "0.4.14",
+    "crate_checksum": "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f",
+    "source": "src/nfa/thompson/builder.rs:State::memory_usage,Builder::add,patch,set_size_limit,check_size_limit,state_has_small_size,start_pattern,finish_pattern,add_capture_start,add_capture_end,add_match,clear; src/util/primitives.rs:SmallIndex",
+    "scope": "Intermediate state insertion/patching, pattern registration, implicit unnamed group-zero captures and builder reuse; compiler startup and final NFA construction remain required",
+    "containment": "Original Session; prospective actual storage admission separate from pinned semantic state/edge size estimate; insertion/union patch before semantic limit result; state-ID bounds; terminal admission refusal"
+  },
+  "regex_info_properties": {
+    "source": "regex-automata 0.4.14 src/meta/regex.rs:build_many_from_hir,RegexInfo::new; regex-syntax 0.8.11 Properties::clone,union",
+    "scope": "HIR reference collection, per-pattern property clones and union connected to retained batch callback; configuration/Arc ownership and executable engines remain required",
+    "containment": "Original Session; HIR references before property clones; clone before vector growth; allocation-free borrowed union iteration; source owners retained through callback; refusal prevents next-stage execution"
+  },
+  "regex_hir_translation": {
+    "source": "regex-syntax 0.8.11 src/hir/translate.rs:visit_pre,visit_post,visit_alternation_in,push_char,push_byte,pop_concat_expr,pop_alt_expr,hir_dot,hir_assertion,hir_repetition; src/ast/visitor.rs:HeapVisitor::visit,induct,pop",
+    "scope": "Complete globset-emitted AST to flat HIR ownership, connected from consuming batch translation; executable matcher construction remains required",
+    "containment": "Original Session; previsit before descent allocation; no outer leaf continuation; retained visitor and translator stacks; source branch markers, literal aggregation, reverse collection, group flag restoration and class failure propagation"
+  }
+}

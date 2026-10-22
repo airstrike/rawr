@@ -1,0 +1,9 @@
+// rawr.airstrike.fyi: the Rawr landing page, static files only.
+// Deploy from this directory with `npx wrangler deploy`.
+// public/og/card.png is rendered by rawr-play from og/card.rs.
+{
+  "name": "rawr-site",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "public", "html_handling": "auto-trailing-slash" },
+  "routes": [{ "pattern": "rawr.airstrike.fyi", "custom_domain": true }]
+}

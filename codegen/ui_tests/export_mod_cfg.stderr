@@ -1,0 +1,5 @@
+error: expected attribute arguments in parentheses: #[rawr_fn(...)]
+  --> ui_tests/export_mod_cfg.rs:12:3
+   |
+12 | #[rawr_fn]
+   |   ^^^^^^^

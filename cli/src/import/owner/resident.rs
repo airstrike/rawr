@@ -1,0 +1,201 @@
+//! The short Rawr edit path, before Cargo, extraction or symbolic compilation.
+
+use std::path::PathBuf;
+
+use rawr::reload::source;
+use rawr_import::{process::resident, supervisor::snapshot::attempt::Scope};
+
+#[cfg(test)]
+mod tests;
+
+/// Exact consumed Rawr declarations of the admitted native owner. Comparing the
+/// whole manifest set conservatively routes any declaration edit to preparation.
+#[derive(Clone, Eq, PartialEq)]
+pub(in crate::import) struct Manifests(Box<[(PathBuf, Box<str>)]>);
+
+impl Manifests {
+    pub(in crate::import) fn from_graph(graph: &rawr::package::Graph) -> Self {
+        let mut files = graph
+            .packages()
+            .iter()
+            .filter_map(|package| {
+                package
+                    .manifest()
+                    .zip(package.manifest_text())
+                    .map(|(path, text)| (path.to_path_buf(), text.into()))
+            })
+            .collect::<Vec<_>>();
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        Self(files.into_boxed_slice())
+    }
+}
+
+/// One native generation's watched identities and their derived inputs.
+pub(super) type NativeInputs = (Box<[rawr_import::input::proof::Watch]>, source::Inputs);
+
+pub(super) enum Attempt {
+    Settled,
+    Prepare(Option<rawr_watch::StagedInputs>),
+}
+
+pub(super) fn attempt(
+    lane: &mut super::Lane,
+    adapter: &crate::watch::Adapter,
+    watch_request: &rawr::reload::scheduler::Request,
+    started: Option<rawr_import::process::hot::Started>,
+    revision: rawr_import::supervisor::Revision,
+    target: &rawr::project::Target,
+    baseline: &Manifests,
+    native_baseline: &rawr_watch::native::Baseline,
+    refresh_required: bool,
+    native_inputs: &mut Option<NativeInputs>,
+    scope: &Scope,
+    diagnostic: &rawr::diagnostic::Source,
+) -> Result<Attempt, rawr::diagnostic::Report> {
+    let native_current = adapter.resident_eligible(native_baseline);
+    let capture = (|| {
+        let graph = rawr::package::Graph::load(&rawr::Engine::new(), target)
+            .map_err(|error| crate::watch::package_report(&error, diagnostic.clone()))?;
+        // The resident route uses the same captured `[rust.limits]` profile.
+        let limits = graph.rust_limits();
+        let eligible =
+            !refresh_required && native_current && Manifests::from_graph(&graph) == *baseline;
+        let graph = source::Graph::from_package(&graph);
+        let snapshot = source::Snapshot::from_graph(&graph);
+        let expected = snapshot
+            .imported(&limits)
+            .map_err(|error| super::framework(error, diagnostic.clone()))?;
+        let bytes = snapshot
+            .imported_transport(expected, &limits)
+            .map_err(|error| super::framework(error, diagnostic.clone()))?;
+        let watch = lane
+            .native_watch()
+            .map_err(|error| super::framework(error, diagnostic.clone()))?
+            .collect::<Box<[_]>>();
+        // No native event since the baseline: the native part derived for
+        // these exact identities still stands; a Rawr edit derives only its own.
+        if !native_current || native_inputs.as_ref().is_none_or(|(key, _)| *key != watch) {
+            let derived = source::Inputs::imported(watch.iter().cloned());
+            *native_inputs = Some((watch, derived));
+        }
+        let native = &native_inputs.as_ref().expect("derived above").1;
+        let inputs = source::Inputs::from_graph(&graph).with_native(native);
+        let observation = inputs
+            .encode_observation()
+            .map_err(|error| super::framework(error, diagnostic.clone()))?;
+        // Register before the initial source check; this preserves complete
+        // current+staged watch coverage throughout candidate work.
+        let staged = adapter
+            .prepare_inputs(inputs)
+            .map_err(|error| super::framework(error, diagnostic.clone()))?;
+        let freshness = scope
+            .observe(&bytes, &limits)
+            .map_err(|error| super::framework(error, diagnostic.clone()))?;
+        Ok((bytes, freshness, observation, staged, eligible))
+    })();
+    let captured = match capture {
+        Ok(captured) => captured,
+        Err(error) => {
+            lane.cancel_compile(started)
+                .map_err(|error| super::framework(error, diagnostic.clone()))?;
+            if !adapter.gate().request_is_current(watch_request) {
+                return Ok(Attempt::Settled);
+            }
+            return Err(error);
+        }
+    };
+    let (bytes, freshness, observation, staged, eligible) = captured;
+    if !adapter.gate().request_is_current(watch_request) {
+        lane.cancel_compile(started)
+            .map_err(|error| super::framework(error, diagnostic.clone()))?;
+        return Ok(Attempt::Settled);
+    }
+    if !eligible || started.is_none() {
+        // A previous failed native replacement can suppress HotBegin while the
+        // last-good child remains live. Its next cold attempt still needs the
+        // newly discovered Rawr roots observed throughout full preparation.
+        lane.cancel_compile(started)
+            .map_err(|error| super::framework(error, diagnostic.clone()))?;
+        return Ok(Attempt::Prepare(Some(staged)));
+    }
+    let started = started.expect("eligible resident attempts retain the original HotBegin");
+    let outcome = match lane.prepare_resident(started, revision, bytes, freshness, &observation) {
+        Ok(outcome) => outcome,
+        Err(error) => return failed(error, adapter, watch_request, diagnostic),
+    };
+    match outcome {
+        resident::Outcome::Prepared(prepared) => {
+            if !adapter.resident_eligible(native_baseline)
+                || !adapter.gate().request_is_current(watch_request)
+            {
+                lane.abort_resident(prepared)
+                    .map_err(|error| super::framework(error, diagnostic.clone()))?;
+                return Ok(Attempt::Settled);
+            }
+            if let Err(error) = lane.commit_resident(prepared) {
+                return failed(error, adapter, watch_request, diagnostic);
+            }
+            for warning in adapter
+                .commit_inputs(staged)
+                .map_err(|error| super::framework(error, diagnostic.clone()))?
+            {
+                eprintln!("Rawr imported-owner watcher warning: {warning}");
+            }
+            Ok(Attempt::Settled)
+        }
+        resident::Outcome::NeedsPreparation if adapter.gate().request_is_current(watch_request) => {
+            Ok(Attempt::Prepare(Some(staged)))
+        }
+        resident::Outcome::NeedsPreparation => Ok(Attempt::Settled),
+        resident::Outcome::Obsolete => obsolete(adapter, watch_request, diagnostic),
+        resident::Outcome::Source(reason) | resident::Outcome::Resource(reason) => {
+            if !adapter.gate().request_is_current(watch_request) {
+                return Ok(Attempt::Settled);
+            }
+            Err(super::framework(reason, diagnostic.clone()))
+        }
+    }
+}
+
+/// The runner's own watcher revoked its request, possibly for the very write
+/// this owner already scheduled. Unless a newer request supersedes this one,
+/// nothing else would retry: re-arm so the current bytes are compiled again.
+fn obsolete(
+    adapter: &crate::watch::Adapter,
+    request: &rawr::reload::scheduler::Request,
+    diagnostic: &rawr::diagnostic::Source,
+) -> Result<Attempt, rawr::diagnostic::Report> {
+    if adapter.gate().request_is_current(request) {
+        adapter
+            .gate()
+            .observe(std::time::Instant::now())
+            .map_err(|error| super::framework(error, diagnostic.clone()))?;
+    }
+    Ok(Attempt::Settled)
+}
+
+fn failed(
+    error: crate::watch::native::Error,
+    adapter: &crate::watch::Adapter,
+    request: &rawr::reload::scheduler::Request,
+    diagnostic: &rawr::diagnostic::Source,
+) -> Result<Attempt, rawr::diagnostic::Report> {
+    use crate::watch::native::Error;
+    use rawr_import::process::RunnerError;
+    // The runner's own watcher revoked the commit: same race as `obsolete`.
+    if matches!(error, Error::Process(RunnerError::HotSuperseded)) {
+        return obsolete(adapter, request, diagnostic);
+    }
+    // These errors follow proven no-install/abort completion. Never suppress
+    // uncertain cleanup, lost ownership, or an unexpected protocol failure.
+    let consumed = matches!(
+        error,
+        Error::Process(
+            RunnerError::Node(_) | RunnerError::Snapshot(_) | RunnerError::HotConsumedRejected(_)
+        )
+    );
+    if consumed && !adapter.gate().request_is_current(request) {
+        return Ok(Attempt::Settled);
+    }
+    Err(super::framework(error, diagnostic.clone()))
+}

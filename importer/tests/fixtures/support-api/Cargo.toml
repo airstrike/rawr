@@ -1,0 +1,10 @@
+[package]
+name = "support-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+compiler-helper = { path = "../compiler-helper" }
+external-api = { path = "../external-api" }
+
+[workspace]

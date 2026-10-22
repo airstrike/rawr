@@ -1,0 +1,17 @@
+{
+  "schema": "rawr.phase9.counter-oracle/v1",
+  "nodes": ["toolchain", "resolution", "api", "generic", "profile", "facade", "checked", "profile-proof", "native-product", "overlay", "runner"],
+  "rows": [
+    { "scenario": "clean-cold", "outcomes": ["E", "E", "E", "E", "E", "E", "E", "E", "E", "E", "E"] },
+    { "scenario": "identical-warm", "outcomes": ["H", "H", "H", "H", "H", "H", "H", "H", "H", "H", "H"] },
+    { "scenario": "rawr-occurrence", "outcomes": ["H", "H", "H", "H", "H", "H", "E", "H", "H", "E", "H"] },
+    { "scenario": "rust-body-equal-api", "outcomes": ["H", "E", "E", "H", "H", "H", "H", "H", "H", "H", "E"] },
+    { "scenario": "rust-public-api", "outcomes": ["H", "E", "E", "E", "E", "E", "E", "E", "E", "E", "E"] },
+    { "scenario": "profile-rule", "outcomes": ["H", "H", "H", "H", "E", "H", "E", "E", "E", "E", "E"] },
+    { "scenario": "classifier-facade", "outcomes": ["H", "H", "H", "E", "H", "E", "E", "E", "E", "E", "E"] },
+    { "scenario": "demand-only", "outcomes": ["H", "H", "H", "H", "H", "H", "E", "H", "E", "E", "E"] },
+    { "scenario": "corrupt-runner", "outcomes": ["H", "H", "H", "H", "H", "H", "H", "H", "H", "H", "XE"] },
+    { "scenario": "corrupt-resolution", "outcomes": ["H", "XE", "E", "H", "H", "H", "H", "H", "H", "H", "H"] },
+    { "scenario": "concurrent-cold", "outcomes": ["E+H", "E+H", "E+H", "E+H", "E+H", "E+H", "E+H", "E+H", "E+H", "E+H", "E+H"] }
+  ]
+}

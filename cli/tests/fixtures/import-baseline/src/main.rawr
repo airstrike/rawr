@@ -1,0 +1,20 @@
+use baseline_native::label;
+use iced::Element;
+use iced::widget::text;
+
+#[derive(Default)] struct State {}
+#[derive(Debug, Clone, Copy)] enum Message { Idle }
+
+impl State {
+    fn new() -> State { State {} }
+    fn update(&mut self, message: Message) {}
+    #[preview(name = "Phase 9 Baseline", size = (96, 64))]
+    fn view(&self) -> Element<Message> { text(label()) }
+    fn title(&self) -> String { baseline_native::window_title() }
+}
+
+pub fn main() -> iced::Result {
+    iced::application(State::new, State::update, State::view)
+        .title(State::title)
+        .run()
+}

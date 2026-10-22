@@ -1,0 +1,23 @@
+use iced::Element;
+use iced::widget::{column, text};
+pub mod controls;
+
+#[derive(Default)]
+struct Counter { value: i64 }
+
+#[widget]
+impl Counter {
+    fn size(&self) -> iced::Size { throw "fixture only" }
+}
+
+#[preview(name = "counter", seed = Counter::default, snapshot = false)]
+fn preview(counter: &Counter) -> Element<'_, ()> {
+    let details = #{ "value": counter.value };
+    let label = `Count: ${counter.value}`;
+
+    switch label {
+        "" => text("empty"),
+        _ if "value" !in details => text("missing"),
+        _ => column![text(label)],
+    }
+}

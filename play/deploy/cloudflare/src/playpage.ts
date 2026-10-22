@@ -1,0 +1,250 @@
+// The playground page at /play and /play/<id>: server-rendered HTML in
+// RawrGallery's Ink sheet. A small inline script runs the snippet through
+// POST /play/render and shares it through POST /play/share.
+
+import { escape } from "./dashboard.ts";
+import { ogTags, type Og, type Snippet } from "./play.ts";
+
+export interface Example {
+  name: string;
+  code: string;
+  /** Messages sent before the preview. */
+  messages?: string[];
+}
+
+export interface Page {
+  snippet: Snippet;
+  examples: Example[];
+  /** Turnstile site key; no widget without one. */
+  sitekey: string | null;
+  /** The share this page was opened from. */
+  shared: string | null;
+  /** The link preview. */
+  og: Og;
+}
+
+/** JSON safe inside a <script> element. */
+function scriptJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
+}
+
+export function render(page: Page): string {
+  const { snippet, examples, sitekey, shared } = page;
+  const options = examples
+    .map((e, i) => `<option value="${i}">${escape(e.name)}</option>`)
+    .join("");
+  const theme = (t: string) =>
+    `<label><input type="radio" name="theme" value="${t}"${snippet.theme === t ? " checked" : ""}><span>${t}</span></label>`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rawr Playground</title>
+${ogTags(page.og, escape)}
+<meta name="theme-color" content="#ff2e93">
+${sitekey ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>' : ""}
+<style>
+:root { --bg: #141416; --raised: #1b1b1e; --inset: #101012; --text: #e4e4e8; --dim: #9a9aa3; --line: #2e2e33; --pink: #ff2e93; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--text); font: 15px/1.5 "Fira Sans", system-ui, sans-serif; display: flex; flex-direction: column; }
+a { color: var(--pink); text-decoration: none; }
+.cap, .bar, label span, button, select, footer { font: 11px/1.4 "Fira Mono", ui-monospace, monospace; letter-spacing: 0.06em; text-transform: uppercase; }
+.cap { color: var(--dim); }
+.pink { color: var(--pink); }
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; border-bottom: 1px solid var(--line); color: var(--dim); }
+.brand { display: flex; align-items: center; gap: 12px; }
+.mark { width: 10px; height: 10px; background: var(--pink); }
+.brand b { font-weight: 400; color: var(--text); font-size: 13px; letter-spacing: 0.02em; }
+.links { display: flex; gap: 16px; }
+.tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 24px; border-bottom: 1px solid var(--line); }
+button, select, input[type=text] { height: 30px; border: 1px solid var(--line); background: var(--raised); color: var(--text); padding: 0 12px; border-radius: 0; }
+input[type=text] { font: 13px "Fira Mono", ui-monospace, monospace; width: 9em; text-transform: none; }
+button { cursor: pointer; }
+button:hover, select:hover { border-color: var(--dim); }
+button.run { background: var(--pink); border-color: var(--pink); color: var(--bg); }
+button:disabled { opacity: 0.6; cursor: default; }
+.seg { display: inline-flex; }
+.seg input { display: none; }
+.seg span { display: inline-block; height: 30px; line-height: 28px; padding: 0 12px; border: 1px solid var(--line); background: var(--raised); color: var(--text); cursor: pointer; }
+.seg label + label span { border-left: 0; }
+.seg input:checked + span { background: var(--pink); border-color: var(--pink); color: var(--bg); }
+.grow { flex: 1; }
+main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 0; }
+.pane { display: flex; flex-direction: column; min-height: 0; padding: 16px 24px 24px; }
+.pane + .pane { border-left: 1px solid var(--line); }
+.pane > .cap { margin-bottom: 8px; display: flex; justify-content: space-between; gap: 8px; }
+textarea { width: 100%; resize: vertical; background: var(--inset); color: var(--text); border: 1px solid var(--line); border-radius: 0; padding: 12px; font: 13px/1.55 "Fira Mono", ui-monospace, monospace; tab-size: 4; outline: none; }
+textarea:focus { border-color: var(--dim); }
+#code { flex: 1; min-height: 360px; white-space: pre; overflow: auto; }
+#messages { height: 4.6em; white-space: pre; }
+.msgcap { margin: 12px 0 6px; }
+.out { flex: 1; min-height: 240px; border: 1px solid var(--line); background: var(--inset); display: grid; place-items: center; overflow: auto; padding: 16px; }
+.out img { max-width: 100%; height: auto; image-rendering: auto; }
+.out pre { place-self: start stretch; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 "Fira Mono", ui-monospace, monospace; }
+.out pre.error { color: var(--text); border-left: 2px solid var(--pink); padding-left: 12px; }
+.note { color: var(--dim); }
+.plain { text-transform: none; letter-spacing: 0; }
+#ts { margin-top: 12px; }
+footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 12px 24px; border-top: 1px solid var(--line); color: var(--dim); }
+@media (max-width: 760px) {
+  html, body { height: auto; }
+  main { display: block; }
+  .pane { min-height: 0; }
+  .out { min-height: 200px; }
+  .pane + .pane { border-left: 0; border-top: 1px solid var(--line); }
+  .bar, .tools, .pane, footer { padding-left: 16px; padding-right: 16px; }
+  #code { min-height: 300px; }
+  .links a.status { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="bar"><span class="brand"><span class="mark"></span><b>RAWR</b><span>Playground</span></span><span class="links"><a class="status" href="/">Status</a><a href="/invite">Add to Discord</a></span></header>
+<div class="tools">
+<select id="examples" aria-label="Examples"><option value="">Examples</option>${options}<option value="reset">Reset</option></select>
+<span class="seg">${theme("dark")}${theme("light")}</span>
+<input type="text" id="size" placeholder="size: auto" value="${escape(snippet.size)}" aria-label="Size, WxH" spellcheck="false">
+<span class="grow"></span>
+<button id="share" type="button">Share</button>
+<button id="run" class="run" type="button" title="Ctrl/Cmd + Enter">Run</button>
+</div>
+<main>
+<section class="pane">
+<p class="cap"><span><span class="pink">//</span> Code</span></p>
+<textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Code">${escape(snippet.code)}</textarea>
+<p class="cap msgcap">Messages <span class="plain">(sent before preview, separated by newline)</span></p>
+<textarea id="messages" spellcheck="false" placeholder="Message::Foo" aria-label="Messages">${escape(snippet.messages.join("\n"))}</textarea>
+${sitekey ? '<div id="ts"></div>' : ""}
+</section>
+<section class="pane">
+<p class="cap"><span><span class="pink">//</span> Output</span><span id="status">${shared ? `shared · ${escape(shared)}` : "ready"}</span></p>
+<div class="out" id="out"><p class="note">Run (Ctrl/Cmd + Enter) to see the first frame.</p></div>
+</section>
+</main>
+<script type="application/json" id="example-data">${scriptJson(examples)}</script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const code = $("code"), messages = $("messages"), out = $("out"), status = $("status");
+  const examples = JSON.parse($("example-data").textContent);
+  const sitekey = ${scriptJson(sitekey)};
+  const shared = ${scriptJson(shared)};
+  // The latest snippet stays in this browser, as on the Rust Playground:
+  // bare /play restores it; a share shows the share until it is edited.
+  const DRAFT = "rawr-play-draft";
+  const radios = () => document.querySelectorAll("input[name=theme]");
+  const fill = (s) => {
+    code.value = s.code; messages.value = (s.messages || []).join("\\n"); $("size").value = s.size || "";
+    radios().forEach((r) => { r.checked = r.value === (s.theme === "light" ? "light" : "dark"); });
+  };
+  const save = () => { try { localStorage.setItem(DRAFT, JSON.stringify(snippet())); } catch {} };
+  let saving = null;
+  const edited = () => { clearTimeout(saving); saving = setTimeout(save, 400); };
+  let widget = null, token = null, busy = false, url = null;
+  if (sitekey) {
+    const mount = () => {
+      if (!window.turnstile) return setTimeout(mount, 200);
+      widget = turnstile.render("#ts", { sitekey, appearance: "interaction-only", theme: "dark",
+        callback: (t) => { token = t; }, "expired-callback": () => { token = null; }, "refresh-expired": "auto" });
+    };
+    mount();
+  }
+  const snippet = () => ({
+    code: code.value,
+    theme: document.querySelector('input[name=theme]:checked').value,
+    size: $("size").value.trim(),
+    messages: messages.value.split("\\n"),
+  });
+  if (!shared) {
+    try {
+      const draft = JSON.parse(localStorage.getItem(DRAFT) || "null");
+      if (draft && typeof draft.code === "string" && draft.code.trim()) fill(draft);
+    } catch {}
+  }
+  for (const node of [code, messages, $("size")]) node.addEventListener("input", edited);
+  radios().forEach((r) => r.addEventListener("change", edited));
+  const show = (node) => { out.replaceChildren(node); };
+  const text = (message, cls) => { const pre = document.createElement("pre"); pre.textContent = message; if (cls) pre.className = cls; return pre; };
+  const human = (token) => new Promise((resolve) => {
+    if (!sitekey) return resolve(null);
+    const start = Date.now();
+    const wait = () => token() ? resolve(token()) : Date.now() - start > 15000 ? resolve(null) : setTimeout(wait, 150);
+    wait();
+  });
+  async function run() {
+    if (busy) return;
+    save();
+    busy = true; $("run").disabled = true; status.textContent = "running…";
+    const started = performance.now();
+    try {
+      const check = await human(() => token);
+      if (sitekey && !check) { show(text("Waiting for the browser check; try again in a moment.", "error")); return; }
+      const response = await fetch("/play/render", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...snippet(), turnstile: check }) });
+      const ms = Math.round(performance.now() - started);
+      if (response.ok && (response.headers.get("content-type") || "").startsWith("image/")) {
+        if (url) URL.revokeObjectURL(url);
+        url = URL.createObjectURL(await response.blob());
+        const img = new Image(); img.src = url; img.alt = "The first frame";
+        show(img); status.textContent = ms + " ms";
+      } else {
+        show(text(await response.text(), "error"));
+        status.textContent = response.status === 429 ? "slow down" : response.status === 422 ? "error" : "failed";
+      }
+    } catch (error) {
+      show(text("Could not reach the playground: " + error.message, "error")); status.textContent = "failed";
+    } finally {
+      busy = false; $("run").disabled = false;
+      if (widget !== null) { token = null; turnstile.reset(widget); }
+    }
+  }
+  async function share() {
+    status.textContent = "sharing…";
+    const response = await fetch("/play/share", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(snippet()) });
+    if (!response.ok) { status.textContent = "share failed"; show(text(await response.text(), "error")); return; }
+    const { id } = await response.json();
+    const link = location.origin + "/play/" + id;
+    history.replaceState(null, "", "/play/" + id);
+    try { await navigator.clipboard.writeText(link); status.textContent = "link copied · " + id; }
+    catch { status.textContent = "shared · " + id; }
+  }
+  $("run").onclick = run;
+  $("share").onclick = share;
+  $("examples").onchange = (event) => {
+    const example = event.target.value === "reset" ? examples[0] : examples[event.target.value];
+    if (example) {
+      fill({ code: example.code, messages: example.messages || [], theme: "dark", size: "" });
+      save(); history.replaceState(null, "", "/play"); run();
+    }
+    event.target.value = "";
+  };
+  document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); run(); }
+  });
+  code.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey) return;
+    event.preventDefault();
+    const { selectionStart: start, selectionEnd: end, value } = code;
+    const lineStart = value.lastIndexOf("\\n", start - 1) + 1;
+    if (event.shiftKey) {
+      const lines = value.slice(lineStart, end).split("\\n");
+      let removed = 0, first = 0;
+      const next = lines.map((line, i) => { const cut = line.match(/^ {1,4}/)?.[0].length ?? 0; if (i === 0) first = cut; removed += cut; return line.slice(cut); }).join("\\n");
+      code.setRangeText(next, lineStart, end, "preserve");
+      code.setSelectionRange(Math.max(lineStart, start - first), end - removed);
+    } else if (start === end) {
+      code.setRangeText("    ", start, end, "end");
+    } else {
+      const lines = value.slice(lineStart, end).split("\\n");
+      code.setRangeText(lines.map((line) => "    " + line).join("\\n"), lineStart, end, "preserve");
+      code.setSelectionRange(start + 4, end + 4 * lines.length);
+    }
+  });
+})();
+</script>
+</body>
+</html>
+`;
+}

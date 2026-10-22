@@ -1,0 +1,11 @@
+use iced::Element;
+use iced::widget::button;
+
+#[derive(Debug, Clone, Copy)]
+pub enum ControlsMessage {
+    Increment,
+}
+
+pub fn controls() -> Element<'_, ControlsMessage> {
+    button("Increment child").on_press(ControlsMessage::Increment)
+}

@@ -1,0 +1,5 @@
+error: use attribute 'getter = "foo"' instead
+  --> ui_tests/rawr_fn_rename_to_prop_setter.rs:12:15
+   |
+12 |     #[rawr_fn(name = "get$foo")]
+   |               ^^^^

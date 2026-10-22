@@ -1,0 +1,10 @@
+[package]
+name = "duplicate-facade"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+duplicate-one = { package = "duplicate-api", path = "../duplicate-v1" }
+duplicate-two = { package = "duplicate-api", path = "../duplicate-v2" }
+
+[workspace]

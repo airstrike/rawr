@@ -1,0 +1,5 @@
+error: unknown attribute 'unknown'
+  --> ui_tests/export_fn_bad_attr.rs:10:13
+   |
+10 | #[export_fn(unknown = "thing")]
+   |             ^^^^^^^

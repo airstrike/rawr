@@ -1,0 +1,7 @@
+normal-file: root-path=/project/child
+root-file: panicked
+normal-cli-file: root-path=/child
+root-cli-file: panicked
+inline-cli: root-path=/project/child
+environment: root-path=/project/child
+builtin: root-path=/project/child

@@ -1,0 +1,12 @@
+[package]
+name = "phase9-baseline"
+
+[rust]
+cargo-authority = "Cargo.toml"
+
+[rust.dependencies]
+baseline_native = { package = "baseline-native", path = "native" }
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced"] }
+
+[rust.exclude]
+"baseline_native::public_api_marker" = "Phase-9 classifier/facade semantic mutation"

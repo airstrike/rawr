@@ -1,0 +1,5 @@
+error: namespace is already set to 'global'
+  --> ui_tests/rawr_fn_global_multiple.rs:12:23
+   |
+12 |     #[rawr_fn(global, internal)]
+   |                       ^^^^^^^^

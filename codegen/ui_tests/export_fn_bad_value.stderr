@@ -1,0 +1,5 @@
+error: expecting string literal
+  --> ui_tests/export_fn_bad_value.rs:10:20
+   |
+10 | #[export_fn(name = true)]
+   |                    ^^^^

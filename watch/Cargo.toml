@@ -1,0 +1,22 @@
+[package]
+name = "rawr-watch"
+version = "0.1.0"
+rust-version = "1.92.0"
+edition = "2024"
+publish = false
+description = "Exact filesystem-event transport for Rawr reload hosts"
+repository = "https://github.com/airstrike/rawr"
+license = "MIT OR Apache-2.0"
+
+[features]
+# Disable native callback delivery only in explicitly selected deterministic tests.
+test-support = []
+
+[dependencies]
+notify = { package = "rawr-notify", path = "notify" }
+rawr = { path = "..", features = ["sync"] }
+
+[dev-dependencies]
+rawr = { path = "..", features = ["rust-import", "sync"] }
+rawr_import = { package = "rawr-import", path = "../importer" }
+rawr_iced = { package = "rawr-iced", path = "../iced" }

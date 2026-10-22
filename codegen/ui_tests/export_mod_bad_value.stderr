@@ -1,0 +1,5 @@
+error: expecting string literal
+  --> ui_tests/export_mod_bad_value.rs:11:18
+   |
+11 | #[rawr_fn(name = true)]
+   |                  ^^^^

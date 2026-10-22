@@ -1,0 +1,34 @@
+use controls::{ControlsMessage, controls};
+use iced::Element;
+use iced::widget::{column, text};
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Controls(ControlsMessage),
+}
+
+impl Counter {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Controls(_message) => self.value += 1,
+        }
+    }
+
+    fn view(&self) -> Element<'_, Message> {
+        let child = controls().map(Message::Controls);
+        let current = text(self.value);
+        column![
+            child,
+            current,
+        ]
+    }
+}
+
+pub fn main() -> iced::Result {
+    iced::run(Counter::update, Counter::view)
+}

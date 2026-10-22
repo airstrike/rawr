@@ -1,0 +1,22 @@
+{
+  "returncode": 0,
+  "cases": 137,
+  "statuses": {
+    "ok": 80,
+    "error": 56,
+    "source": 1
+  },
+  "pairs": 43,
+  "bytes": 50831,
+  "sha256": "ff10b534a2bca238216874524842d121cc972397b9c7dc35d1d761ce7e4a91cb",
+  "cargo_commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+  "toolchain": "nightly-2026-07-11",
+  "lock_sha256": "722441d634e7c65b44ccded2d1399ab04a41212280b209d1b65a0f0de60f878b",
+  "sources": {
+    "src/bin/spec.rs": "70daf2aed4059a6481a2cc88259a4957d482c726a1a8d7508e83b397dc7e6038",
+    "src/bin/spec/cases.rs": "9a81af8c18eef215c42f6465a12021e382f040ae7e93d67a54e480a3dd042883",
+    "run_spec.py": "4f32f2caa32d29164885f49a30aa0def00ab17d9a933a209b852e1593eee2803"
+  },
+  "binary_sha256": "64c4fde7c8ffe205972d6f8ae128ab2de34463963a8a3c68d4db46492b005c8e",
+  "expected_source_failure": "Only git+http://a%00/foo panics in the pinned reference second URL parse; product interpretation must return D317 terminal Source::SpecReparse."
+}

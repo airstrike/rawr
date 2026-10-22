@@ -1,0 +1,5 @@
+error: property getter must return a value
+  --> ui_tests/rawr_fn_getter_return.rs:13:9
+   |
+13 |     pub fn test_fn(input: &mut Point) {
+   |         ^^

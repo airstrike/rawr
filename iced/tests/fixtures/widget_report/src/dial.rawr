@@ -1,0 +1,68 @@
+use iced::Element;
+use iced::widget::text;
+use rawr_iced::widget::children::{List, list};
+use rawr_iced::widget::event::{Outcome, ignore};
+use rawr_iced::widget::layout::Size;
+
+#[derive(Default)]
+pub struct App;
+
+struct State {
+    attempts: i64,
+}
+
+struct Dial {
+    index: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Tick,
+}
+
+pub fn label() -> Element<Message> {
+    text("child")
+}
+
+#[widget]
+impl Dial {
+    fn state(&self) -> State {
+        State { attempts: 0 }
+    }
+
+    fn children(&self) -> List<Message> {
+        list![label()]
+    }
+
+    fn layout(
+        &mut self,
+        state: &mut State,
+        input: rawr_iced::widget::layout::Input,
+    ) -> rawr_iced::widget::layout::Node {
+        let index = self.index + state.attempts;
+        self.index = 0;
+        state.attempts = 1;
+        input
+            .resolve(Size::fixed(20, 20), 20, 20)
+            .child(index, 0, 0, 20, 20)
+    }
+
+    fn update(
+        &mut self,
+        state: &mut State,
+        input: rawr_iced::widget::event::Input,
+    ) -> Outcome<Message> {
+        self.index = 0;
+        ignore()
+    }
+}
+
+impl App {
+    pub fn update(&mut self, message: Message) {
+        match message { Message::Tick => () }
+    }
+
+    pub fn view(&self) -> Element<Message> {
+        Dial { index: 9 }
+    }
+}

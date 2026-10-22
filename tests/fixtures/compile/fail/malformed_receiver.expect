@@ -1,0 +1,5 @@
+category=malformed receiver
+name=message
+primary=2:15-23
+secondary=none
+message=Invalid receiver 'message'; expected '&self' or '&mut self' (line 2, position 15)

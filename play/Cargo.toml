@@ -1,0 +1,47 @@
+[package]
+name = "rawr-play"
+version = "0.1.0"
+rust-version = "1.92.0"
+edition = "2024"
+publish = false
+description = "Render untrusted Rawr/iced snippets to PNG, for a Discord `?play` bot"
+repository = "https://github.com/airstrike/rawr"
+license = "MIT OR Apache-2.0"
+
+[features]
+## Build the `rawr-play-bot` Discord binary.
+bot = ["dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:reqwest", "dep:serde_json", "dep:serenity", "dep:tokio"]
+
+[dependencies]
+# Server tokens in reports: one AES-256 block per guild ID (see src/server.rs).
+aes = "0.8"
+rawr = { path = "..", features = ["sync"] }
+rawr-iced = { path = "../iced" }
+image-webp = "0.2.4"
+jpeg-encoder = "0.6"
+png = "0.18.1"
+# Already in the bot through serenity; plain HTTP to the channel config store.
+reqwest = { version = "0.12", default-features = false, optional = true }
+serde_json = { version = "1", optional = true }
+# The playground render port (already in the bot through reqwest).
+http-body-util = { version = "0.1", optional = true }
+hyper = { version = "1", features = ["http1", "server"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+serenity = { version = "0.12.5", default-features = false, features = ["cache", "client", "gateway", "model", "rustls_backend"], optional = true }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[lib]
+name = "rawr_play"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rawr-play"
+path = "src/bin/rawr-play.rs"
+
+[[bin]]
+name = "rawr-play-bot"
+path = "src/bin/rawr-play-bot.rs"
+required-features = ["bot"]

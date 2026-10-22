@@ -1,0 +1,708 @@
+{
+  "schema": 1,
+  "cargo_commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+  "authority": "D310 contained physical selection; D311 source/status/process boundary; D313 complete human representation",
+  "status": "Test-only observation/archive/human-rendering substrate; merged config/CLI association, complete source selector, cold association and replay authority remain absent",
+  "new_rawr_modules": [
+    "membership.rs",
+    "host.rs",
+    "observed.rs",
+    "stored.rs",
+    "tests.rs",
+    "human.rs",
+    "human/tests.rs",
+    "human/mode.rs",
+    "human/mode/tests.rs"
+  ],
+  "sources": [
+    {
+      "project": "cargo",
+      "commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+      "url": "https://raw.githubusercontent.com/rust-lang/cargo/59800466c5c41c444d264b1010b4d57e85a7117f/src/cargo/ops/cargo_package/mod.rs",
+      "path": "src/cargo/ops/cargo_package/mod.rs",
+      "sha256": "64e6ce16c60941a190a086f77b8df5e79b0bd6e437aa23048464194380e2176b",
+      "bytes": 46185,
+      "local": [
+        "archive.rs",
+        "human.rs"
+      ],
+      "lines": "303-312,497-687,1091-1117",
+      "license": "MIT OR Apache-2.0",
+      "changes": "Ordered archive projection extraction: replace ambient stat with closed host; retain Copy origins and Generate kinds/presence while omitting exactly classified generated values; preserve physical original-manifest origin and metadata collision precedence over all rows; precharge ownership; replace HashMap/flatten/sort with admitted vector and bounded in-place heapsort; typed errors replace allocating diagnostics. Human comparison feeds each complete rel_str followed by LF through one persistent pinned StripBytes state when configured, using bounded counting and borrowed comparison without line decoding or output-only source authority. Mode derives from caller-supplied complete TermConfig/CLI result and the closed sealed-command environment; complete config association remains an explicit missing seam."
+    },
+    {
+      "project": "cargo",
+      "commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+      "url": "https://raw.githubusercontent.com/rust-lang/cargo/59800466c5c41c444d264b1010b4d57e85a7117f/crates/cargo-util/src/paths.rs",
+      "path": "crates/cargo-util/src/paths.rs",
+      "sha256": "77ce5172eed1315ff302e112b2f87bec8ba43cd1bc5111394ea1815b1ac2b34e",
+      "bytes": 38880,
+      "local": "archive.rs",
+      "lines": "84-116",
+      "license": "MIT OR Apache-2.0",
+      "changes": "Rooted Unix lexical normalization only, behind precharged buffers. Roots are absolute; leading relative parent retention is unreachable in this adapter."
+    },
+    {
+      "project": "cargo",
+      "commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+      "url": "https://raw.githubusercontent.com/rust-lang/cargo/59800466c5c41c444d264b1010b4d57e85a7117f/src/cargo/ops/cargo_package/vcs.rs",
+      "path": "src/cargo/ops/cargo_package/vcs.rs",
+      "sha256": "81447a23a9ea34b5fb479cb86cb208c98b0a07258697f2de653e3351a0533889",
+      "bytes": 16153,
+      "local": "rejection.rs",
+      "lines": "51-135,151-433",
+      "license": "MIT OR Apache-2.0",
+      "changes": "Read-only source-derived call-site classification under D311; not copied executable VCS implementation. Retain VCS availability where virtual-row occupancy affects physical archive collision."
+    },
+    {
+      "project": "cargo",
+      "commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+      "url": "https://raw.githubusercontent.com/rust-lang/cargo/59800466c5c41c444d264b1010b4d57e85a7117f/src/cargo/sources/path.rs",
+      "path": "src/cargo/sources/path.rs",
+      "sha256": "ad2da0382396387c739a6e5d28dd53b735b55bb0af82ae347916ad3798bf52cf",
+      "bytes": 41693,
+      "local": "rejection.rs",
+      "lines": "570-957",
+      "license": "MIT OR Apache-2.0",
+      "changes": "Read-only dependency classification; source walking implementation remains uncontained and disabled."
+    },
+    {
+      "project": "gix-filter",
+      "version": "0.32.0",
+      "path": "src/driver/init.rs",
+      "sha256": "eb6483d42728409d8dc136686752d2c710d4e20bc1f158116205b5f00fef4121",
+      "bytes": 4020,
+      "local": "rejection.rs",
+      "license": "MIT OR Apache-2.0",
+      "changes": "Read-only process-boundary classification; no filter implementation copied or executed."
+    },
+    {
+      "project": "gix-filter",
+      "version": "0.32.0",
+      "path": "src/driver/apply.rs",
+      "sha256": "bf438071abc241d6b00cc89433e1f4eb2938d80f1d9740fe6d196022d78ad605",
+      "bytes": 14398,
+      "local": "rejection.rs",
+      "license": "MIT OR Apache-2.0",
+      "changes": "Read-only process-boundary classification; no filter implementation copied or executed."
+    },
+    {
+      "project": "anstream",
+      "version": "1.0.0",
+      "archive_sha256": "824a212faf96e9acacdbd09febd34438f8f711fb84e09a8916013cd7815ca28d",
+      "license": "MIT OR Apache-2.0",
+      "local": [
+        "human.rs",
+        "human/mode.rs"
+      ],
+      "verified_sources": [
+        {
+          "path": "Cargo.toml",
+          "bytes": 5001,
+          "sha256": "43f306d58209afac8fd535b305716d668fa334e2c27195c1dc6e46eab88bccfc"
+        },
+        {
+          "path": "Cargo.toml.orig",
+          "bytes": 2165,
+          "sha256": "9a4b126ab4b8f69b202ba2ef1eb72d2dc8f4fbafe64876ae9b678f5b57b0fb18"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 11358,
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1062,
+          "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+        },
+        {
+          "path": "src/_macros.rs",
+          "bytes": 12831,
+          "sha256": "04590ef86f86bb67fb11580ab101caffde4d36da84652537da20424b72c8729a"
+        },
+        {
+          "path": "src/adapter/mod.rs",
+          "bytes": 348,
+          "sha256": "baf4237ea0b18df63609e49d93572ca27c2202a4cbec0220adb5a7e815c7d8ed"
+        },
+        {
+          "path": "src/adapter/strip.rs",
+          "bytes": 14323,
+          "sha256": "642375f9dc5836eb5aa6eba7be849a84786d22764d470672bf1f646061254c1c"
+        },
+        {
+          "path": "src/adapter/wincon.rs",
+          "bytes": 13036,
+          "sha256": "88607742fb7bbfb85e122a8dcc3188ef7c15ef332063af3a8939701dad05b90a"
+        },
+        {
+          "path": "src/auto.rs",
+          "bytes": 10735,
+          "sha256": "73b39540ac20e609ecbd32aff057a0cb1ec806374360b87e611ff83579b5582c"
+        },
+        {
+          "path": "src/buffer.rs",
+          "bytes": 1179,
+          "sha256": "597cc2a109a49f0a48888c7d882058d0ec4b771da34348d4da384ba056c6ea1c"
+        },
+        {
+          "path": "src/fmt.rs",
+          "bytes": 1424,
+          "sha256": "cc11b005c4559843bd908a57958a13c8d0922fae6aff5261f3583c90e60da73c"
+        },
+        {
+          "path": "src/lib.rs",
+          "bytes": 2731,
+          "sha256": "abe525407298c0767ba1e5678863e89cdc3024258107a9ea829b5abd48c9a56e"
+        },
+        {
+          "path": "src/stream.rs",
+          "bytes": 7129,
+          "sha256": "82565c3aa4c493e75a90a64bb6022ab9b5a5212806ac9a0548c7d2d34d5dace3"
+        },
+        {
+          "path": "src/strip.rs",
+          "bytes": 6840,
+          "sha256": "0268bdc9155fc91bd7e92337c5e3ba96999780b46fab311b00922c7a3047233c"
+        },
+        {
+          "path": "src/wincon.rs",
+          "bytes": 7084,
+          "sha256": "16afb01d151c3992bb3ee50871723f1e1f1f6b34d3f161d4a8dc6fd27db4cb1c"
+        }
+      ],
+      "changes": "Pinned source audit for allocation-free StripBytes, exact output mode, or no reachable global override. Only anstream::adapter::StripBytes is invoked; no AutoStream, terminal/env/owned helpers, or copied unsafe source."
+    },
+    {
+      "project": "anstyle-parse",
+      "version": "1.0.0",
+      "archive_sha256": "52ce7f38b242319f7cabaa6813055467063ecdc9d355bbb4ce0c68908cd8130e",
+      "license": "MIT OR Apache-2.0",
+      "local": [
+        "human.rs",
+        "human/mode.rs"
+      ],
+      "verified_sources": [
+        {
+          "path": "Cargo.toml",
+          "bytes": 4521,
+          "sha256": "fb68a322c2a6df11ca66e0f0fb79b9595e9d2f551eb9e062f44bb47de4c74367"
+        },
+        {
+          "path": "Cargo.toml.orig",
+          "bytes": 1535,
+          "sha256": "3a094a1603064c3a0854ca37c0c43ff2ae61fdf3b9c11b407da97cd1edf39367"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 11358,
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1062,
+          "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+        },
+        {
+          "path": "src/lib.rs",
+          "bytes": 14849,
+          "sha256": "564fa3ae4520332e95234fff2e57bc760b3f9168045f87870c3b3a8c6d9380e4"
+        },
+        {
+          "path": "src/params.rs",
+          "bytes": 3684,
+          "sha256": "8cfef4e2ab1961ca2d9f210da553fc6ac64bb6dbd03321f0ee7d6089ab45389c"
+        },
+        {
+          "path": "src/state/codegen.rs",
+          "bytes": 7182,
+          "sha256": "0820bb4e54d9b3f1e0e80c1935ca57466cfe60e98f556c31f19e5e1b6ed31787"
+        },
+        {
+          "path": "src/state/definitions.rs",
+          "bytes": 3739,
+          "sha256": "8a819bd7238edeb02aff3697e07fadfb8978a00f9f255812838326b904010e82"
+        },
+        {
+          "path": "src/state/mod.rs",
+          "bytes": 1327,
+          "sha256": "5c07420f7245b823bc1bcff797ae70c21cfdfaee8f326d37a6e95d529b08f38d"
+        },
+        {
+          "path": "src/state/table.rs",
+          "bytes": 30658,
+          "sha256": "673b7e9242c5248efc076086cc6923578ec2f059c0c26da21363528e20e4285c"
+        }
+      ],
+      "changes": "Pinned source audit for allocation-free StripBytes, exact output mode, or no reachable global override. Only anstream::adapter::StripBytes is invoked; no AutoStream, terminal/env/owned helpers, or copied unsafe source."
+    },
+    {
+      "project": "utf8parse",
+      "version": "0.2.2",
+      "archive_sha256": "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821",
+      "license": "MIT OR Apache-2.0",
+      "local": [
+        "human.rs",
+        "human/mode.rs"
+      ],
+      "verified_sources": [
+        {
+          "path": "Cargo.toml",
+          "bytes": 1156,
+          "sha256": "ab073da31fea03203d8e78d4d1169905474f9c9e37fa17d734c65f8e67f72c39"
+        },
+        {
+          "path": "Cargo.toml.orig",
+          "bytes": 427,
+          "sha256": "61bb87955bb142b3584d3bc359a760474553a771d9edf5a16e751578568f4376"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 9723,
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1052,
+          "sha256": "e4c9b06fa850cb9b540a5e400e9f6394cf15efcf4098144de477d1d3dae10150"
+        },
+        {
+          "path": "src/lib.rs",
+          "bytes": 3662,
+          "sha256": "161f74913ee618b6b059360122c5ca500c8f5d8521014ad06b558693e3a4f7d3"
+        },
+        {
+          "path": "src/types.rs",
+          "bytes": 3740,
+          "sha256": "09b93214394da3520ed7829a878d1bd37e067e0cd489e7437e16fce202896067"
+        }
+      ],
+      "changes": "Pinned source audit for allocation-free StripBytes, exact output mode, or no reachable global override. Only anstream::adapter::StripBytes is invoked; no AutoStream, terminal/env/owned helpers, or copied unsafe source."
+    },
+    {
+      "project": "anstyle-query",
+      "version": "1.1.5",
+      "archive_sha256": "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc",
+      "license": "MIT OR Apache-2.0",
+      "local": [
+        "human.rs",
+        "human/mode.rs"
+      ],
+      "verified_sources": [
+        {
+          "path": "Cargo.toml",
+          "bytes": 4184,
+          "sha256": "478a0950938a0e6eea2bb824607c056c9ac517a45716841fe940b6e3488323b7"
+        },
+        {
+          "path": "Cargo.toml.orig",
+          "bytes": 1218,
+          "sha256": "fab7c65e55f307103a392c58f7027a43c1b37918ae8f5e715dcb842140d693d0"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 11358,
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1062,
+          "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+        },
+        {
+          "path": "src/lib.rs",
+          "bytes": 4636,
+          "sha256": "4ce20ab732c39c004a4d768567e4ad93758eaf402262b22ef009386950232c28"
+        },
+        {
+          "path": "src/windows.rs",
+          "bytes": 2456,
+          "sha256": "76a8355df494a8152395377b7b9568615ea8fd9d6ab8ec998c6de1deb271697e"
+        }
+      ],
+      "changes": "Pinned source audit for allocation-free StripBytes, exact output mode, or no reachable global override. Only anstream::adapter::StripBytes is invoked; no AutoStream, terminal/env/owned helpers, or copied unsafe source."
+    },
+    {
+      "project": "colorchoice",
+      "version": "1.0.5",
+      "archive_sha256": "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570",
+      "license": "MIT OR Apache-2.0",
+      "local": [
+        "human.rs",
+        "human/mode.rs"
+      ],
+      "verified_sources": [
+        {
+          "path": "Cargo.toml",
+          "bytes": 3977,
+          "sha256": "403ea406945c6d350b0a0f6b5c01d5bee1e59d522059884b7f15a0b44c64b579"
+        },
+        {
+          "path": "Cargo.toml.orig",
+          "bytes": 1071,
+          "sha256": "954a31b1e693564aa84c38fbe0f71d1f7739aed2ab193b98f7966255bb48db14"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 11358,
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1062,
+          "sha256": "6efb0476a1cc085077ed49357026d8c173bf33017278ef440f222fb9cbcb66e6"
+        },
+        {
+          "path": "src/lib.rs",
+          "bytes": 2951,
+          "sha256": "9777ea67e426637377c2cb035ff41d2a4dd2a5bd6796d86e2afbfe70a8ba342d"
+        }
+      ],
+      "changes": "Pinned source audit for allocation-free StripBytes, exact output mode, or no reachable global override. Only anstream::adapter::StripBytes is invoked; no AutoStream, terminal/env/owned helpers, or copied unsafe source."
+    },
+    {
+      "project": "Cargo",
+      "commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+      "path": "src/cargo/util/context/mod.rs",
+      "bytes": 102292,
+      "sha256": "66ebf0a2d719086c376b7e03b7fe79b9fb1e8d7d5aba736fdf7ec7f559c2b901",
+      "local": "human/mode.rs",
+      "license": "MIT OR Apache-2.0",
+      "changes": "Exact-source rendering/color/CLI dependency provenance; closed environment access replaces ambient reads, typed data remains incapable of certifying merged config or command success."
+    },
+    {
+      "project": "Cargo",
+      "commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+      "path": "crates/cargo-util-terminal/src/shell.rs",
+      "bytes": 23046,
+      "sha256": "6fba30e3e27af238ba597162143fcb6a587ff0a88854e2a9c4d023bc12af4a6a",
+      "local": [
+        "human.rs",
+        "human/mode.rs"
+      ],
+      "license": "MIT OR Apache-2.0",
+      "changes": "Exact-source rendering/color/CLI dependency provenance; closed environment access replaces ambient reads, typed data remains incapable of certifying merged config or command success."
+    },
+    {
+      "project": "Cargo",
+      "commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+      "path": "src/bin/cargo/cli.rs",
+      "bytes": 30753,
+      "sha256": "e526f03c95b59789170357759663c963253a5ad17f629b2a1160592718e835f7",
+      "local": "human/mode.rs",
+      "license": "MIT OR Apache-2.0",
+      "changes": "Exact-source rendering/color/CLI dependency provenance; closed environment access replaces ambient reads, typed data remains incapable of certifying merged config or command success."
+    },
+    {
+      "project": "clap_builder",
+      "version": "4.6.0",
+      "archive_sha256": "714a53001bf66416adb0e2ef5ac857140e7dc3a0c48fb28b2f10762fc4b5069f",
+      "license": "MIT OR Apache-2.0",
+      "local": [
+        "human.rs",
+        "human/mode.rs"
+      ],
+      "verified_sources": [
+        {
+          "path": "src/builder/action.rs",
+          "sha256": "121e3f3f18094a47a9ff122ee0b6b8b2f07f49c52a7745bd504cec17f95048d5",
+          "bytes": 15568
+        },
+        {
+          "path": "src/builder/app_settings.rs",
+          "sha256": "05143ef7a7d318f5d56025e1633174c2d0e3fccb1918aee7fac77b453cc3a82e",
+          "bytes": 1922
+        },
+        {
+          "path": "src/builder/arg.rs",
+          "sha256": "f244ca0012dff5ec727c2d1c3aee7117f24fc327a2a2fb990786f262fd14ed9c",
+          "bytes": 171388
+        },
+        {
+          "path": "src/builder/arg_group.rs",
+          "sha256": "fdbf126726840340dc7fde5a088d899a1aa59dbb291f26cf23850130045306ea",
+          "bytes": 21090
+        },
+        {
+          "path": "src/builder/arg_predicate.rs",
+          "sha256": "4fe55fdd0441acb1577f28188c86f920df4863f451a7dcad8e050dbb6e1e7516",
+          "bytes": 537
+        },
+        {
+          "path": "src/builder/arg_settings.rs",
+          "sha256": "e8ad1bd6d36da43d7329b6cd86833d4cc63734e64119c6b950a45ded5e3aec9c",
+          "bytes": 2104
+        },
+        {
+          "path": "src/builder/command.rs",
+          "sha256": "5a651fcf3245cd354e1f7a9e32cede1e56eed2c6d089efd660c2c7613a663372",
+          "bytes": 180657
+        },
+        {
+          "path": "src/builder/debug_asserts.rs",
+          "sha256": "d38d80c8f13103ff53a60fa536c6cd98f034dc8e132aba5fc8551a83ef3d212c",
+          "bytes": 28729
+        },
+        {
+          "path": "src/builder/ext.rs",
+          "sha256": "b337f096992d51f686e64096fc219340c38276c7cd27199711c5862f86925d59",
+          "bytes": 1410
+        },
+        {
+          "path": "src/builder/mod.rs",
+          "sha256": "c2b552aced3607ad926c72ad6fb4ccf7dfb0df57185084f0c0427b9b5136b1c8",
+          "bytes": 1921
+        },
+        {
+          "path": "src/builder/os_str.rs",
+          "sha256": "dafa83c04943180151786e95ed5c9b6ba4999e61bc72626a6f62d51f8d9f3e7b",
+          "bytes": 8469
+        },
+        {
+          "path": "src/builder/possible_value.rs",
+          "sha256": "5f0fed011d0a713add63edeb1faacf1212ef095b6620ecb4449bddd737819d51",
+          "bytes": 6850
+        },
+        {
+          "path": "src/builder/range.rs",
+          "sha256": "5113cc1f786bce0171ca11f8383e99d4b9aa864b9f966607bfdf85d571f74d3d",
+          "bytes": 8714
+        },
+        {
+          "path": "src/builder/resettable.rs",
+          "sha256": "c4cd481051ec361529817ebae73b4dd307b0a4a3b88a3ddcecb8dd45b05db431",
+          "bytes": 5527
+        },
+        {
+          "path": "src/builder/str.rs",
+          "sha256": "155d2231baec126227d933c9f2b0c2d9655ed35a34400f8e9215fe3262aad379",
+          "bytes": 7321
+        },
+        {
+          "path": "src/builder/styled_str.rs",
+          "sha256": "04a9a2436f4c6b50e19f34fc79f721f303f3580118f3eb32239de8c29de7b99f",
+          "bytes": 7764
+        },
+        {
+          "path": "src/builder/styling.rs",
+          "sha256": "e9b5de80b697e5386a2d6ebccadb737bccee37545f7b2840e66e6bc9a04495f7",
+          "bytes": 5818
+        },
+        {
+          "path": "src/builder/tests.rs",
+          "sha256": "98d8722732e1c45aee32960fdfd763dd03dae6a04e2e5198459b57f42ee7468b",
+          "bytes": 1306
+        },
+        {
+          "path": "src/builder/value_hint.rs",
+          "sha256": "9620c65897be73c09c53aaa6d74ea3cd07f0e23191f8d89420d6fb033e4b055e",
+          "bytes": 3872
+        },
+        {
+          "path": "src/builder/value_parser.rs",
+          "sha256": "4342c19e43fc783b7adea44c74d3bd35a13ee0f7982d79e63867c9d7258d4042",
+          "bytes": 84026
+        },
+        {
+          "path": "src/derive.rs",
+          "sha256": "dc791dba6b131831902ff1b38943b73a0b1ec22e9ae7d7243557d34a63d3f8e6",
+          "bytes": 15050
+        },
+        {
+          "path": "src/error/context.rs",
+          "sha256": "156d2611a349ce826378476c9dcb3242a01ad834a095baad096a10cc2f73e1ed",
+          "bytes": 3576
+        },
+        {
+          "path": "src/error/format.rs",
+          "sha256": "4d6ebf19760331de05cabcedffe33a297fab82c9252949d904e2fe88620ec50e",
+          "bytes": 17483
+        },
+        {
+          "path": "src/error/kind.rs",
+          "sha256": "63d46fcc06df195060b6a996659f7d39452b4a30597a081a7b4878c33b6b3a31",
+          "bytes": 13634
+        },
+        {
+          "path": "src/error/mod.rs",
+          "sha256": "deb632e970f060d95ba944f0cb273434b3fc94e4a47e5c6bc08672dc47d8e749",
+          "bytes": 28799
+        },
+        {
+          "path": "src/lib.rs",
+          "sha256": "bd8987448be4ace2a3501375f6850261252f3485ea1c9879e137a2245359fbf5",
+          "bytes": 1668
+        },
+        {
+          "path": "src/macros.rs",
+          "sha256": "3f60aff102fb43aaeeecac07c1a98b040205f41972a290e0f3fc2641e8dbbc4f",
+          "bytes": 17131
+        },
+        {
+          "path": "src/mkeymap.rs",
+          "sha256": "5ff664de7fa22e03e081dfddd59e0eecb9938dbf245e6f3730da6b32f8a07217",
+          "bytes": 5013
+        },
+        {
+          "path": "src/output/fmt.rs",
+          "sha256": "d35009cc66b455fad4ad6edfe22d201187985a7bd68615d37d29873b36666dd4",
+          "bytes": 2367
+        },
+        {
+          "path": "src/output/help.rs",
+          "sha256": "b3bb6cfffe9c1113d377f1f4951a22b6ad2ba2813dcc55a146899c808cd393d3",
+          "bytes": 1234
+        },
+        {
+          "path": "src/output/help_template.rs",
+          "sha256": "5be1973ec4e42febf2e251fa32606c426ece858be373e769b21f6fa198bc874f",
+          "bytes": 40518
+        },
+        {
+          "path": "src/output/mod.rs",
+          "sha256": "74ea52be8981c30d10fda3f6c80cf51aafb15700de99aa73bc94700bca25ae11",
+          "bytes": 604
+        },
+        {
+          "path": "src/output/textwrap/core.rs",
+          "sha256": "0d45b1ebe8bba3e54e8bcbfec015be626d55803a0a46aef753eb3a4be3cabab4",
+          "bytes": 5684
+        },
+        {
+          "path": "src/output/textwrap/mod.rs",
+          "sha256": "37dd12c2c75d47129ee1213de019b0691f5f64d2389141e3c8e703665cb68669",
+          "bytes": 3668
+        },
+        {
+          "path": "src/output/textwrap/word_separators.rs",
+          "sha256": "ae3af310295e707ae1aa95633f6bb078cedf8f65662a86caa9d25420f459acc1",
+          "bytes": 2556
+        },
+        {
+          "path": "src/output/textwrap/wrap_algorithms.rs",
+          "sha256": "c1cee22c0a0dd0ffc18adb7cae8d5f105082d8b57569528cbaf778dec6b49871",
+          "bytes": 1989
+        },
+        {
+          "path": "src/output/usage.rs",
+          "sha256": "7c1e680503ac32fea1b73befaf1d6b558fa6b0e5731b6c1c0c8c7280bb21c5cd",
+          "bytes": 18783
+        },
+        {
+          "path": "src/parser/arg_matcher.rs",
+          "sha256": "d4c06b94650c7b55eff41d454339c2ea4c76397719f571aa8be38019279fffce",
+          "bytes": 7910
+        },
+        {
+          "path": "src/parser/error.rs",
+          "sha256": "7503c057412325e1449e37981e9b3446a02b30a9fb7b69bedc39540555f5eef5",
+          "bytes": 1966
+        },
+        {
+          "path": "src/parser/features/mod.rs",
+          "sha256": "6ed075e97af56bff22f22ed1ee83ff6479360e05f9d3661a3145f822c242b694",
+          "bytes": 28
+        },
+        {
+          "path": "src/parser/features/suggestions.rs",
+          "sha256": "046c361b1e8b646754e55a88676ec26ede092c777dcc1a1e8516884079f4814f",
+          "bytes": 5140
+        },
+        {
+          "path": "src/parser/matches/arg_matches.rs",
+          "sha256": "bff90ec6afeaa8133369277036ab7c191274fe6751ed0c78b621d9ad6addedba",
+          "bytes": 66814
+        },
+        {
+          "path": "src/parser/matches/matched_arg.rs",
+          "sha256": "10d79cafdae5bd8fe29bff091600e15d921ca0b36a8e2e798d4dbd9fd13e0049",
+          "bytes": 6177
+        },
+        {
+          "path": "src/parser/matches/mod.rs",
+          "sha256": "5578335f4b9103cc4060546621e5664d5e92c43848ec48c2d95a4b045373de1f",
+          "bytes": 335
+        },
+        {
+          "path": "src/parser/matches/value_source.rs",
+          "sha256": "ecb9e09db06579489daa9cbcf351381041dff7c5e2956fb96052b70b9360955b",
+          "bytes": 467
+        },
+        {
+          "path": "src/parser/mod.rs",
+          "sha256": "985c4c3bf0167c0902a1063b19b14043bbdab5e54166554790388e323668f955",
+          "bytes": 724
+        },
+        {
+          "path": "src/parser/parser.rs",
+          "sha256": "f0c96c6038bc4da44e0176ad00118048593b2f04816276ff63f32df7d83a4d05",
+          "bytes": 66353
+        },
+        {
+          "path": "src/parser/validator.rs",
+          "sha256": "86a874920f449f0159d685d139f4fde027f1fde6e532f4094a2a266890841e49",
+          "bytes": 18981
+        },
+        {
+          "path": "src/util/any_value.rs",
+          "sha256": "ac88e78c520ae84edb160c121d1277ce64db3aea7199fbddfe1024d6c312f722",
+          "bytes": 3252
+        },
+        {
+          "path": "src/util/color.rs",
+          "sha256": "bb30d024f4d4af0de21d3d790d08ca8002c9ef97d4db1137d7db0179ebf75632",
+          "bytes": 2770
+        },
+        {
+          "path": "src/util/escape.rs",
+          "sha256": "ca4b06f64dee555ac4a92a3416b6880c771047ae5487d4aaf8265b1a0069196c",
+          "bytes": 729
+        },
+        {
+          "path": "src/util/flat_map.rs",
+          "sha256": "b0ea1259d8983edd83011f71513f53a9585f9a7d075e53ff919b3f85069732ac",
+          "bytes": 6626
+        },
+        {
+          "path": "src/util/flat_set.rs",
+          "sha256": "6c7852c7fe57346ac77e84ca32a4856ebf55b6e7540cc15635077d548481160b",
+          "bytes": 2342
+        },
+        {
+          "path": "src/util/graph.rs",
+          "sha256": "f35396b6e2a427377dcbbca69b1b98737d89684a3834cfda98cbf8cc70ff9c2f",
+          "bytes": 1096
+        },
+        {
+          "path": "src/util/id.rs",
+          "sha256": "78dbfb7661944c55e07a059b1438fa6b7ad1e4051e3f0303b8bc2d7fb8f826c5",
+          "bytes": 4148
+        },
+        {
+          "path": "src/util/mod.rs",
+          "sha256": "ff57dfec6b3a71fc31d165a0d20b13cb772f3fe1f825ed478e9fda04cf85b6fc",
+          "bytes": 1136
+        },
+        {
+          "path": "src/util/str_to_bool.rs",
+          "sha256": "1ce90b4939a884eeefc73392722bdfcf906e3070c4398e1557c586c10c684cd0",
+          "bytes": 776
+        }
+      ],
+      "changes": "Pinned source audit for allocation-free StripBytes, exact output mode, or no reachable global override. Only anstream::adapter::StripBytes is invoked; no AutoStream, terminal/env/owned helpers, or copied unsafe source."
+    }
+  ],
+  "licenses": [
+    {
+      "path": "licenses/cargo-LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "path": "licenses/cargo-LICENSE-APACHE",
+      "sha256": "8ada45cd9f843acf64e4722ae262c622a2b3b3007c7310ef36ac1061a30f6adb"
+    }
+  ],
+  "cargo_codeload_sha256": "dc2728d4e9650b9871142cc3f1f0e449647e0b493775931f0b70ee1fa658a321",
+  "rendering_boundary": "Cargo command env_clear/explicit environment and piped stdout; supplied merged TermConfig result is not current configuration authority; rendering provenance is not substituted into NativeInputs."
+}

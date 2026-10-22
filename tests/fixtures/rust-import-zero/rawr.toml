@@ -1,0 +1,11 @@
+[package]
+name = "rust-import-zero"
+
+[rust]
+profile = "dev"
+
+[rust.dependencies]
+catalog = { package = "catalog-api", path = "../../../importer/tests/fixtures/catalog-api", default-features = false }
+
+[rust.exclude]
+"catalog::Product" = "the application does not expose product storage"

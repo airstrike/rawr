@@ -1,0 +1,20 @@
+{
+  "cargo_commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+  "toolchain": "nightly-2026-07-11",
+  "binary_sha256": "984fb962474fe9eb74160a5b561a44d33c95a6dbf3a972e9aa726f0ee6aa983c",
+  "cases": 336,
+  "accepted": 158,
+  "files": {
+    "run_features.py": "e996eefd3400566e61ec6fa3c5c0ec7aa6773e66e62e265cc753e7550038df2d",
+    "feature-observations.jsonl": "043c938219cc3af2f3fe926a10180abcaf2e0818044fdc7e9484985f944cf2c5"
+  },
+  "command": [
+    "<pinned-cargo>",
+    "metadata",
+    "--format-version=1",
+    "--no-deps",
+    "--offline",
+    "[--config unstable.allow-features=<list>]"
+  ],
+  "scope": "Constructor acceptance and first rejection via actual Cargo; metadata suppresses warnings. Context uses isolated Cargo home/cwd and explicit channel override. No require/query or nonlocal source execution claim."
+}

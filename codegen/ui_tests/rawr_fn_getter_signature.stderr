@@ -1,0 +1,5 @@
+error: property getter requires exactly 1 parameter
+  --> ui_tests/rawr_fn_getter_signature.rs:13:20
+   |
+13 |     pub fn test_fn(input: Point, value: bool) -> bool {
+   |                    ^^^^^

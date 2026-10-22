@@ -1,0 +1,5 @@
+category=unknown type
+name=Missing
+primary=2:14-21
+secondary=none
+message=Unknown type 'Missing' in item header (line 2, position 14)

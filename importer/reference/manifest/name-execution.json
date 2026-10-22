@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "cargo_commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+  "toolchain": "nightly-2026-07-11",
+  "cases": 707,
+  "byte_identical_repeat": true,
+  "sha256": {
+    "wrapper": "57cbf434dca7659a3fbd0c551c3576c76504a5a51250fb62fd24213b71d65a24",
+    "binary": "0ac21a0f640f79e4ebcf870fcca14de296fcaf276aa38adc30aa32dcfdf75ef7",
+    "observations": "25b0a7564d5cb475b581ffc7cdcd58085d985d4ae150c5ee6b666dd1c9e25c4d"
+  }
+}

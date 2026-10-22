@@ -1,0 +1,101 @@
+cargo-features = ["namespaces", "profile-rustflags"]
+badges = { maintenance = { status = "actively-developed" } }
+features = { default = ["dep:a"], "café" = [], "x+y" = ["a/serde"] }
+project = { name = "shadow", version = "9.8.7" }
+lib = { name = "ascii", crate-type = ["rlib"], crate_type = ["staticlib"], path = "src/naïve.rs", filename = "artifact", test = true, doctest = false, bench = true, doc = false, doc-scrape-examples = true, proc-macro = false, proc_macro = true, harness = false, required-features = ["café"], edition = "2024" }
+bin = [{ name = "tool", path = "src/bin.rs" }]
+example = [{ name = "example", test = true }]
+test = [{ name = "integration", harness = false }]
+bench = [{ name = "bench", bench = true }]
+hints = { mostly-unused = { z = nan, a = -0.0 } }
+
+[package]
+edition = "2024"
+rust-version = "1.96"
+name = "café::outil"
+version = " 1.2.3-alpha.1+build.7 "
+authors = ["Author"]
+build = ["first.rs", "second.rs"]
+metabuild = "builder"
+default-target = "aarch64-apple-darwin"
+forced-target = "wasm32-unknown-unknown"
+links = "native"
+exclude = ["tmp/**"]
+include = ["src/**"]
+publish = ["private"]
+workspace = ".."
+im-a-teapot = true
+autolib = false
+autobins = true
+autoexamples = false
+autotests = true
+autobenches = false
+default-run = "tool"
+description = "description"
+homepage = "https://example.com"
+documentation = "https://example.com/docs"
+readme = false
+keywords = ["one"]
+categories = ["development-tools"]
+license = "MIT"
+license-file = "LICENSE"
+repository = "https://example.com/repo"
+resolver = "3"
+metadata = { z = [1, true, "s"], a = { date = 2026-09-05, time = 01:02:03.123456789, utc = 2026-09-05T01:02:03Z, offset = 2026-09-05T01:02:03+00:00 } }
+unknown = { nested = [false, 1] }
+
+[dependencies]
+a = "1"
+b = { version = "^2", registry = "my-registry", registry-index = "https://registry.example", path = "../b", base = "sources", git = "https://example.com/b", branch = "main", tag = "tag", rev = "deadbeef", features = ["serde"], optional = true, default-features = false, default_features = true, package = "renamed", public = false, artifact = ["bin", "cdylib"], lib = true, target = "target", unused = { z = 1, a = 2 } }
+c = { workspace = true, features = ["feature"], default-features = false, default_features = true, optional = false, public = true, extra = "retained" }
+[dev-dependencies]
+a = "1"
+[dev_dependencies]
+b = "2"
+[build-dependencies]
+a = "3"
+[build_dependencies]
+b = "4"
+[target.'cfg(unix)'.dependencies]
+a = "1"
+[target.'cfg(unix)'.dev-dependencies]
+a = "2"
+[target.'cfg(unix)'.dev_dependencies]
+b = "3"
+[target.'cfg(unix)'.build-dependencies]
+a = "4"
+[target.'cfg(unix)'.build_dependencies]
+b = "5"
+[lints.rust]
+unsafe_code = "forbid"
+unused = { level = "warn", priority = -128, z = true, a = { first = 1 } }
+[lints.clippy]
+all = { level = { allow = [] }, priority = 127 }
+[profile.dev]
+opt-level = -7
+lto = "thin"
+codegen-backend = "llvm"
+codegen-units = 4294967295
+debug = "line-tables-only"
+split-debuginfo = "packed"
+debug-assertions = true
+rpath = false
+panic = "unwind"
+overflow-checks = true
+incremental = false
+dir-name = "dev"
+inherits = "release"
+strip = false
+rustflags = ["-Ctarget-cpu=native"]
+trim-paths = ["object", "diagnostics", "macro", "object"]
+hint-mostly-unused = true
+[profile.dev.package.'*']
+opt-level = 1
+[profile.dev.package.'foo@1.2.3+build']
+debug = 2
+[profile.dev.build-override]
+opt-level = "z"
+[patch.'crates-io']
+a = { path = "../a" }
+[replace]
+'a:1.2.3' = "2"

@@ -1,0 +1,8 @@
+error[RAWR-RESOLVE-DUPLICATE-ITEM]: duplicate item `Counter`
+ --> $SOURCE:2:8-2:15
+ 2 | struct Counter {}
+   |        ^^^^^^^
+ ::: $SOURCE:1:8-1:15
+ 1 | struct Counter {}
+   |        ------- first declaration or related definition is here
+  = help: rename or remove one of the duplicate declarations

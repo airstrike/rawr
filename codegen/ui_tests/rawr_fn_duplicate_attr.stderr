@@ -1,0 +1,5 @@
+error: duplicated attribute 'rawr_fn'
+ --> ui_tests/rawr_fn_duplicate_attr.rs:6:5
+  |
+6 |     #[rawr_fn(pure)]
+  |     ^

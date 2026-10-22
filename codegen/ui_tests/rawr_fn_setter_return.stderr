@@ -1,0 +1,5 @@
+error: property setter cannot return any value
+  --> ui_tests/rawr_fn_setter_return.rs:13:51
+   |
+13 |     pub fn test_fn(input: &mut Point, value: f32) -> bool {
+   |                                                   ^

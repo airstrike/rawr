@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pinned Cargo original-manifest observation (schema 1)",
+  "type": "object",
+  "required": ["schema", "id", "purpose", "source", "expected_acceptance", "accepted", "typed", "error", "unused_callbacks", "observed_unused", "diagnostic_cwd_elided"],
+  "properties": {
+    "schema": {"const": 1},
+    "id": {"type": "string"},
+    "purpose": {"type": "string"},
+    "source": {"type": "string"},
+    "expected_acceptance": {"type": ["boolean", "null"]},
+    "accepted": {"type": "boolean"},
+    "typed": {"type": ["object", "null"], "description": "Exhaustive project.rs tree; tagged Options/enums, complete fields, ordered map entry arrays and lossless scalar payloads. Null on any rejection."},
+    "error": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "object", "required": ["phase", "message", "display", "span"], "additionalProperties": false,
+          "properties": {
+            "phase": {"enum": ["document", "typed"]},
+            "message": {"type": "string"},
+            "display": {"type": "string"},
+            "span": {"oneOf": [{"type": "null"}, {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 2, "maxItems": 2}]}
+          }
+        }
+      ]
+    },
+    "unused_callbacks": {"type": "array", "items": {"type": "string"}},
+    "observed_unused": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "diagnostic_cwd_elided": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,5 @@
+error: conflicting setter
+  --> ui_tests/rawr_fn_getter_conflict.rs:12:42
+   |
+12 |     #[rawr_fn(name = "foo", get = "foo", set = "bar")]
+   |                                          ^^^

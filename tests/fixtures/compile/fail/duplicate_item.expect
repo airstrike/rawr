@@ -1,0 +1,5 @@
+category=duplicate item
+name=Counter
+primary=2:8-15
+secondary=1:8-15
+message=Duplicate item 'Counter'; first declared at 1:8-15 (line 2, position 8)

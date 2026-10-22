@@ -1,0 +1,11 @@
+error: duplicate Rawr signature for 'bar'
+  --> ui_tests/rawr_fn_rename_collision_oneattr_multiple.rs:17:15
+   |
+17 |     #[rawr_fn(get = "bar")]
+   |               ^^^
+
+error: duplicated function renamed 'bar'
+  --> ui_tests/rawr_fn_rename_collision_oneattr_multiple.rs:12:15
+   |
+12 |     #[rawr_fn(name = "foo", get = "bar")]
+   |               ^^^^

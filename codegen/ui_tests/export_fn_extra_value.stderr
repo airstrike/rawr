@@ -1,0 +1,5 @@
+error: extraneous value
+  --> ui_tests/export_fn_extra_value.rs:10:26
+   |
+10 | #[export_fn(return_raw = "yes")]
+   |                          ^^^^^

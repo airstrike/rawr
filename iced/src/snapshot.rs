@@ -1,0 +1,611 @@
+//! Deterministic chrome-free snapshots of compiler-proven previews.
+
+mod artifact;
+mod commit;
+mod encoding;
+mod error;
+pub mod fonts;
+mod generation;
+mod headless;
+mod image;
+mod inventory;
+mod manifest;
+mod store;
+#[doc(hidden)]
+pub mod wire;
+
+pub use commit::{Commit, Notice};
+pub use error::{Class, Error};
+pub use generation::{Difference, Outcome};
+
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use rawr::preview;
+
+/// One headlessly rendered, PNG-encoded preview.
+#[derive(Clone, Debug)]
+pub struct Png {
+    /// Physical width in pixels.
+    pub width: u32,
+    /// Physical height in pixels.
+    pub height: u32,
+    /// Encoded PNG bytes (RGBA8).
+    pub bytes: Vec<u8>,
+}
+
+/// How a one-off render sizes and scales its image.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Canvas {
+    /// Size the image to the content laid out within the preview's declared
+    /// size (the bound), instead of to the declared size itself.
+    pub fit: bool,
+    /// Logical size used on an axis the content fills (a `Fill` width).
+    pub fallback: (u32, u32),
+    /// Background margin around the content, in logical pixels.
+    pub margin: u32,
+    /// Pixels per logical pixel (2.0 for HiDPI).
+    pub scale: f32,
+    /// The scale is lowered so the larger side stays within this many pixels.
+    pub max_pixels: u32,
+}
+
+/// Render the first preview of `catalog` with its first declared theme.
+pub(crate) fn render_first(
+    catalog: Arc<preview::BoundCatalog>,
+    canvas: Option<Canvas>,
+) -> Result<Png, Error> {
+    let authority = crate::preview::catalog::Authority::static_(catalog);
+    let definition = authority.previews().first().ok_or(Error::Empty)?;
+    let theme = artifact::themes(definition)
+        .into_iter()
+        .find(|theme| matches!(theme, artifact::Theme::Explicit { .. }))
+        .unwrap_or(artifact::Theme::Native);
+    let mut renderer = match canvas {
+        Some(canvas) => headless::Renderer::with_canvas(canvas)?,
+        None => headless::Renderer::new()?,
+    };
+    let artifact = artifact::Artifact::render(&authority, definition, theme, &mut renderer)?;
+    let image = artifact.image();
+    Ok(Png {
+        width: image.width(),
+        height: image.height(),
+        bytes: image.encode()?,
+    })
+}
+
+/// Render a booted application as iced's runtime first shows it: its boot
+/// Task and `messages` applied (`Adapter::deliver`), then its view drawn
+/// once it settles, each message its widgets publish applied between
+/// frames. `theme` names a built-in theme to draw with instead of the
+/// application's own; `bound` is the canvas's declared size.
+pub fn render_application(
+    adapter: &mut crate::program::Adapter,
+    messages: Vec<crate::runtime::Message>,
+    canvas: Canvas,
+    bound: (u32, u32),
+    theme: Option<&str>,
+) -> Result<Png, Error> {
+    let mut renderer = headless::Renderer::with_canvas(canvas)?;
+    adapter.deliver(messages);
+    let theme = theme
+        .and_then(|name| {
+            iced::Theme::ALL
+                .iter()
+                .find(|theme| theme.to_string() == name)
+                .cloned()
+        })
+        .unwrap_or_else(|| adapter.theme().native().clone());
+    let frame = renderer.framing();
+    // The size of the settled content, then the view with its diagnostic
+    // overlays, which fill the window.
+    let size = renderer.size(
+        &mut |published| {
+            adapter.deliver(published);
+            frame(adapter.content())
+        },
+        iced::Size::new(bound.0 as f32, bound.1 as f32),
+    );
+    let mut view = |published: Vec<crate::runtime::Message>| {
+        adapter.deliver(published);
+        frame(adapter.view())
+    };
+    let image = renderer.render(&mut view, &theme, size)?;
+    Ok(Png {
+        width: image.width(),
+        height: image.height(),
+        bytes: image.encode()?,
+    })
+}
+
+/// Snapshot operation selected by the host.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mode {
+    /// Compare a fresh actual generation without changing baselines.
+    Check,
+    /// Transactionally promote a fresh generation as the new baseline.
+    Update,
+}
+
+/// One exact bound Catalog paired with its validated artifact roots.
+pub struct Suite {
+    catalog: crate::preview::catalog::Authority,
+    store: store::Store,
+    renderer: Mutex<Option<headless::Renderer>>,
+    selection: Option<Selection>,
+}
+
+/// The variable naming one preview to render alone: `name`, `group/name`
+/// or `subject#name`, then optionally a tab and a theme (`native`, or a
+/// declared theme by its path or last segment). `rawr mcp` sets it on its
+/// `rawr snapshot --check` child; the generated runner receives it too.
+pub const SELECTION: &str = "RAWR_SNAPSHOT_ONLY";
+
+/// One preview (and optionally one theme) to render instead of the suite.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Selection {
+    name: String,
+    theme: Option<String>,
+}
+
+impl Selection {
+    /// Parse [`SELECTION`]'s value.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        let (name, theme) = value
+            .split_once('\t')
+            .map_or((value, None), |(name, theme)| {
+                (
+                    name,
+                    Some(theme.trim().to_owned()).filter(|theme| !theme.is_empty()),
+                )
+            });
+        let name = name.trim();
+        (!name.is_empty()).then(|| Self {
+            name: name.to_owned(),
+            theme,
+        })
+    }
+
+    fn from_env() -> Option<Self> {
+        std::env::var(SELECTION)
+            .ok()
+            .as_deref()
+            .and_then(Self::parse)
+    }
+
+    fn preview(&self, definition: &preview::Definition) -> bool {
+        let name = self.name.as_str();
+        name.eq_ignore_ascii_case(definition.name())
+            || name.eq_ignore_ascii_case(&format!("{}/{}", definition.group(), definition.name()))
+            || name == definition.key().to_string()
+    }
+
+    fn theme(&self, theme: &artifact::Theme) -> bool {
+        self.theme.as_deref().is_none_or(|wanted| match theme {
+            artifact::Theme::Native => wanted.eq_ignore_ascii_case("native"),
+            artifact::Theme::Explicit { name, .. } => {
+                wanted.eq_ignore_ascii_case(name)
+                    || name.rsplit("::").next().is_some_and(|last| {
+                        wanted
+                            .rsplit("::")
+                            .next()
+                            .is_some_and(|tail| tail.eq_ignore_ascii_case(last))
+                    })
+            }
+        })
+    }
+}
+
+impl Suite {
+    pub(crate) fn new(catalog: Arc<preview::BoundCatalog>, root: PathBuf) -> Self {
+        Self {
+            catalog: crate::preview::catalog::Authority::static_(catalog),
+            store: store::Store::new(root),
+            renderer: Mutex::new(None),
+            selection: Selection::from_env(),
+        }
+    }
+
+    pub(crate) fn from_installation(
+        catalog: rawr::reload::installation::installed::Catalog,
+        root: PathBuf,
+    ) -> Self {
+        Self {
+            catalog: crate::preview::catalog::Authority::reload(catalog),
+            store: store::Store::new(root),
+            renderer: Mutex::new(None),
+            selection: Selection::from_env(),
+        }
+    }
+
+    /// Render and check or promote one complete deterministic generation.
+    ///
+    /// With a [`Selection`], only the selected preview renders, into the
+    /// actual tree alone: nothing is compared and no baseline changes.
+    pub fn execute(&self, mode: Mode) -> Result<Outcome, Error> {
+        let mut renderer = self.renderer.lock().map_err(|_| Error::RendererLock)?;
+        if renderer.is_none() {
+            *renderer = Some(headless::Renderer::new()?);
+        }
+        let renderer = renderer.as_mut().ok_or(Error::Renderer)?;
+        let generation =
+            generation::Generation::render(&self.catalog, renderer, self.selection.as_ref())?;
+        match (mode, &self.selection) {
+            (_, Some(_)) => self.store.actual_only(&generation),
+            (Mode::Check, None) => self.store.check(&generation),
+            (Mode::Update, None) => self.store.update(&generation),
+        }
+    }
+
+    /// Return the committed baseline root.
+    #[must_use]
+    pub fn baseline(&self) -> &std::path::Path {
+        self.store.baseline()
+    }
+
+    /// Return the disposable actual-artifact root.
+    #[must_use]
+    pub fn actual(&self) -> &std::path::Path {
+        self.store.actual()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{Class, Mode};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn complete_generation_is_ordered_pinned_and_baseline_immutable_on_check() {
+        let project = Project::new(source());
+        let suite = suite(&project);
+        let updated = suite.execute(Mode::Update).unwrap();
+        assert!(updated.updated());
+        assert_eq!(updated.artifacts(), 2);
+
+        let manifest = fs::read_to_string(suite.baseline().join("manifest.rawr-snapshot")).unwrap();
+        assert!(manifest.contains(&format!("rawr\t{}", rawr::VERSION)));
+        assert!(manifest.contains("renderer\ttiny-skia"));
+        assert!(manifest.contains("font\t%46ira%20%53ans%20%52egular%20%28iced%20embedded%29"));
+        assert!(manifest.contains("scale\t1.0"));
+        let native = manifest.find("native.png").unwrap();
+        let dark = manifest.find("dark.png").unwrap();
+        assert!(native < dark, "native input must precede declared themes");
+        assert!(!manifest.contains("%49gnored"));
+        assert!(pngs(suite.baseline()).iter().all(|path| {
+            path.strip_prefix(suite.baseline())
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("State-")
+        }));
+
+        let before = tree(suite.baseline());
+        let checked = suite.execute(Mode::Check).unwrap();
+        assert!(checked.is_successful());
+        assert!(checked.differences().is_empty());
+        assert_eq!(tree(suite.baseline()), before);
+        assert_eq!(tree(suite.actual()), before);
+        assert!(tree(suite.actual())
+            .keys()
+            .all(|path| !path.to_string_lossy().contains("rawr-preview-footer")));
+        for path in pngs(suite.actual()) {
+            let image = super::image::Image::read(&path).unwrap();
+            assert_eq!((image.width(), image.height()), (96, 64));
+            let row = usize::try_from(image.width()).unwrap() * 4;
+            let bottom = &image.bytes()[image.bytes().len() - row..];
+            assert!(
+                bottom
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| pixel == &bottom[..4]),
+                "host footer or diagnostic chrome must not enter `{}`",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn check_classifies_missing_pixel_size_input_and_stale_artifacts() {
+        let project = Project::new(source());
+        let suite = suite(&project);
+        suite.execute(Mode::Update).unwrap();
+        let manifest = fs::read_to_string(suite.baseline().join("manifest.rawr-snapshot")).unwrap();
+        let baseline_pngs = pngs(suite.baseline());
+        let first = baseline_pngs.first().unwrap();
+
+        fs::remove_file(first).unwrap();
+        let missing = suite.execute(Mode::Check).unwrap();
+        assert!(missing
+            .differences()
+            .iter()
+            .any(|difference| difference.class() == Class::Missing));
+
+        suite.execute(Mode::Update).unwrap();
+        let first = pngs(suite.baseline()).remove(0);
+        let image = super::image::Image::read(&first).unwrap();
+        let mut bytes = image.bytes().to_vec();
+        bytes[0] ^= 0xff;
+        super::image::Image::new(image.width(), image.height(), bytes)
+            .unwrap()
+            .write(&first)
+            .unwrap();
+        let drift = suite.execute(Mode::Check).unwrap();
+        assert!(drift
+            .differences()
+            .iter()
+            .any(|difference| difference.class() == Class::Pixel));
+
+        suite.execute(Mode::Update).unwrap();
+        let first = pngs(suite.baseline()).remove(0);
+        super::image::Image::new(1, 1, vec![0, 0, 0, 255])
+            .unwrap()
+            .write(&first)
+            .unwrap();
+        let size = suite.execute(Mode::Check).unwrap();
+        assert!(size
+            .differences()
+            .iter()
+            .any(|difference| difference.class() == Class::Size));
+
+        suite.execute(Mode::Update).unwrap();
+        let path = suite.baseline().join("stale.png");
+        super::image::Image::new(1, 1, vec![0, 0, 0, 255])
+            .unwrap()
+            .write(&path)
+            .unwrap();
+        let stale = suite.execute(Mode::Check).unwrap();
+        assert!(stale
+            .differences()
+            .iter()
+            .any(|difference| difference.class() == Class::Stale));
+
+        suite.execute(Mode::Update).unwrap();
+        assert!(
+            !path.exists(),
+            "explicit update must remove stale artifacts"
+        );
+        let changed = manifest.replace("renderer\ttiny-skia", "renderer\tambient");
+        fs::write(suite.baseline().join("manifest.rawr-snapshot"), changed).unwrap();
+        let input = suite.execute(Mode::Check).unwrap();
+        assert!(input
+            .differences()
+            .iter()
+            .any(|difference| difference.class() == Class::Input));
+    }
+
+    #[test]
+    fn corrupt_baseline_png_names_its_preview_theme_and_both_paths() {
+        let project = Project::new(source());
+        let suite = suite(&project);
+        suite.execute(Mode::Update).unwrap();
+        let expected = pngs(suite.baseline())
+            .into_iter()
+            .find(|path| path.file_name().is_some_and(|name| name == "native.png"))
+            .unwrap();
+        let relative = expected.strip_prefix(suite.baseline()).unwrap();
+        let actual = suite.actual().join(relative);
+
+        fs::write(&expected, b"not a PNG").unwrap();
+        let error = suite.execute(Mode::Check).unwrap_err();
+        assert_image_error(error, &expected, &actual, |source| {
+            matches!(source, super::Error::Decode { .. })
+        });
+
+        suite.execute(Mode::Update).unwrap();
+        let expected = pngs(suite.baseline())
+            .into_iter()
+            .find(|path| path.file_name().is_some_and(|name| name == "native.png"))
+            .unwrap();
+        grayscale(&expected, 96, 64);
+        let relative = expected.strip_prefix(suite.baseline()).unwrap();
+        let actual = suite.actual().join(relative);
+        let error = suite.execute(Mode::Check).unwrap_err();
+        assert_image_error(error, &expected, &actual, |source| {
+            matches!(source, super::Error::Format { .. })
+        });
+    }
+
+    #[test]
+    fn a_selection_renders_one_preview_and_theme_and_the_parse_lists_them_all() {
+        let project = Project::new(source());
+        let target = rawr::project::Target::discover(&project.root).unwrap();
+        let listed = rawr::package::Graph::load(&rawr::Engine::new(), &target)
+            .unwrap()
+            .previews();
+        let names: Vec<(&str, &str, bool)> = listed
+            .iter()
+            .map(|preview| {
+                (
+                    preview.group.as_str(),
+                    preview.name.as_str(),
+                    preview.snapshot,
+                )
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [("snapshot", "Default", true), ("snapshot", "Ignored", false)]
+        );
+        assert_eq!(listed[0].subject, "snapshot-fixture::State::view");
+        assert_eq!(listed[0].themes, ["State::dark"]);
+        assert_eq!(listed[0].size, (96, 64));
+
+        let mut suite = suite(&project);
+        suite.selection = super::Selection::parse("snapshot/default\tdark");
+        let rendered = suite.execute(Mode::Check).unwrap();
+        assert_eq!(rendered.artifacts(), 1);
+        assert!(rendered.differences().is_empty());
+        let actual = pngs(suite.actual());
+        assert_eq!(actual.len(), 1);
+        assert!(actual[0].ends_with("dark.png"), "{}", actual[0].display());
+        assert!(!suite.baseline().exists(), "a selection writes no baseline");
+
+        // A selection reaches a preview `rawr snapshot` skips.
+        suite.selection = super::Selection::parse("ignored");
+        assert_eq!(suite.execute(Mode::Check).unwrap().artifacts(), 1);
+        suite.selection = super::Selection::parse("nope");
+        assert!(suite.execute(Mode::Check).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transactional_update_rejects_a_symlink_without_touching_its_generation() {
+        use std::os::unix::fs::symlink;
+
+        let project = Project::new(source());
+        let suite = suite(&project);
+        suite.execute(Mode::Update).unwrap();
+        let retained = project.root.join("retained");
+        fs::rename(suite.baseline(), &retained).unwrap();
+        let before = tree(&retained);
+        symlink(&retained, suite.baseline()).unwrap();
+
+        assert!(suite.execute(Mode::Check).is_err());
+        assert_eq!(tree(&retained), before);
+        assert!(suite.execute(Mode::Update).is_err());
+        assert_eq!(tree(&retained), before);
+        assert!(fs::symlink_metadata(suite.baseline())
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    fn suite(project: &Project) -> super::Suite {
+        let target = rawr::project::Target::discover(&project.root).unwrap();
+        crate::preview::Compiler::new()
+            .unwrap()
+            .check(&target)
+            .unwrap()
+            .snapshots()
+            .unwrap()
+    }
+
+    fn pngs(root: &Path) -> Vec<PathBuf> {
+        tree(root)
+            .into_keys()
+            .filter(|path| path.extension().is_some_and(|extension| extension == "png"))
+            .map(|path| root.join(path))
+            .collect()
+    }
+
+    fn grayscale(path: &Path, width: u32, height: u32) {
+        let file = fs::File::create(path).unwrap();
+        let mut encoder = png::Encoder::new(file, width, height);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().unwrap();
+        writer
+            .write_image_data(&vec![0; (width * height) as usize])
+            .unwrap();
+    }
+
+    fn assert_image_error(
+        error: super::Error,
+        expected_path: &Path,
+        actual_path: &Path,
+        source_is_expected: impl FnOnce(&super::Error) -> bool,
+    ) {
+        let super::Error::Image {
+            identity,
+            theme,
+            expected,
+            actual,
+            source,
+        } = error
+        else {
+            panic!("expected contextual image error, got {error}");
+        };
+        assert!(identity.contains("State::view#default"), "{identity}");
+        assert_eq!(theme, "native");
+        assert_eq!(expected, expected_path);
+        assert_eq!(actual, actual_path);
+        assert!(source_is_expected(&source), "unexpected source: {source}");
+    }
+
+    fn tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn visit(root: &Path, path: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            for entry in fs::read_dir(path).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(root, &path, files);
+                } else {
+                    files.insert(
+                        path.strip_prefix(root).unwrap().to_path_buf(),
+                        fs::read(path).unwrap(),
+                    );
+                }
+            }
+        }
+
+        let mut files = BTreeMap::new();
+        if root.exists() {
+            visit(root, root, &mut files);
+        }
+        files
+    }
+
+    struct Project {
+        root: PathBuf,
+    }
+
+    impl Project {
+        fn new(source: &str) -> Self {
+            let id = NEXT.fetch_add(1, Ordering::Relaxed);
+            let root =
+                std::env::temp_dir().join(format!("rawr-snapshot-{}-{id}", std::process::id()));
+            fs::create_dir_all(root.join("src")).unwrap();
+            fs::write(
+                root.join("rawr.toml"),
+                "[package]\nname = \"snapshot-fixture\"\n",
+            )
+            .unwrap();
+            fs::write(root.join("src/main.rawr"), source).unwrap();
+            Self { root }
+        }
+    }
+
+    impl Drop for Project {
+        fn drop(&mut self) {
+            if let Ok(metadata) = fs::symlink_metadata(self.root.join("snapshots"))
+                && metadata.file_type().is_symlink()
+            {
+                fs::remove_file(self.root.join("snapshots")).unwrap();
+            }
+            fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    fn source() -> &'static str {
+        r#"
+use iced::Theme;
+use iced::Element;
+use iced::widget::text;
+
+#[derive(Default)]
+struct State { value: i64 }
+
+#[derive(Debug, Clone, Copy)]
+enum Message { Tick }
+
+impl State {
+    fn update(&mut self, message: Message) {}
+    fn dark() -> Theme { Theme::Dark }
+
+    #[preview(name = "Default", group = "snapshot", themes = [State::dark], size = (96, 64))]
+    #[preview(name = "Ignored", group = "snapshot", snapshot = false, size = (24, 24))]
+    fn view(&self) -> Element<'_, Message> { text(self.value) }
+}
+
+pub fn main() -> iced::Result { iced::run(State::update, State::view) }
+"#
+    }
+}

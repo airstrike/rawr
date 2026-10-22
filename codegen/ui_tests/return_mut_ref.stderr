@@ -1,0 +1,5 @@
+error: Rawr functions cannot return references
+  --> ui_tests/return_mut_ref.rs:14:38
+   |
+14 | pub fn test_fn(input: &mut Clonable) -> &mut bool {
+   |                                      ^

@@ -1,0 +1,5 @@
+error: references from Rawr in this position must be mutable
+  --> ui_tests/first_shared_ref.rs:12:23
+   |
+12 | pub fn test_fn(input: &NonClonable) -> bool {
+   |                       ^

@@ -1,0 +1,254 @@
+[workspace]
+members = [
+    ".",
+    "canonical",
+    "cli",
+    "codegen",
+    "codegen/tests/custom_root",
+    "directory",
+    "iced",
+    "play",
+    "importer",
+    "toml",
+    "watch",
+]
+resolver = "3"
+
+[package]
+name = "rawr"
+version = "1.25.1"
+rust-version = "1.91.0"
+edition = "2024"
+autobenches = false
+authors = ["Andy Terra"]
+description = "A Rust-shaped scripting language and application framework"
+homepage = "https://github.com/airstrike/rawr"
+repository = "https://github.com/airstrike/rawr"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+include = ["/src/**/*", "/Cargo.toml", "/README.md", "LICENSE*"]
+keywords = ["scripting", "scripting-language", "gui", "iced"]
+categories = ["gui", "parser-implementations"]
+
+[dependencies]
+smallvec = { version = "1.7.0", default-features = false, features = ["union", "const_new", "const_generics"] }
+thin-vec = { version = "0.2.13", default-features = false }
+ahash = { version = "0.8.4", default-features = false, features = ["compile-time-rng"] }
+num-traits = { version = "0.2.14", default-features = false }
+once_cell = { version = "1.20.1", default-features = false, features = ["race", "portable-atomic", "alloc"] }
+bitflags = { version = "2.3.3", default-features = false }
+futures-core = { version = "0.3.31", default-features = false }
+sha2 = { version = "0.10.9", default-features = false }
+smartstring = { version = "1.0.0", default-features = false }
+rawr_codegen = { version = "3.2.0", path = "codegen" }
+toml_edit = { version = "0.25.13", default-features = false, features = ["parse"], optional = true }
+rawr_import = { package = "rawr-import", path = "importer", optional = true }
+thiserror = { version = "2", optional = true }
+
+no-std-compat = { git = "https://gitlab.com/jD91mZM2/no-std-compat.git", version = "0.4.1", default-features = false, features = ["alloc"], optional = true }
+libm = { version = "0.2.0", default-features = false, optional = true }
+hashbrown = { version = "0.16.0", optional = true }
+core-error = { version = "0.0.0", default-features = false, features = ["alloc"], optional = true }
+serde = { version = "1.0.136", default-features = false, features = ["derive", "alloc"], optional = true }
+serde_json = { version = "1.0.45", default-features = false, features = ["alloc"], optional = true }
+unicode-xid = { version = "0.2.0", default-features = false, optional = true }
+rust_decimal = { version = "1.24.0", default-features = false, features = ["maths"], optional = true }
+getrandom = { version = "0.3.4", optional = true }
+rustyline = { version = "15.0.0", optional = true }
+document-features = { version = "0.2.0", optional = true }
+arbitrary = { version = "1.3.2", optional = true, features = ["derive"] }
+
+[dev-dependencies]
+rmp-serde = "1.1.1"
+serde_json = { version = "1.0.45", default-features = false, features = ["alloc"] }
+rawr_import = { package = "rawr-import", path = "importer", features = ["test-fixtures"] }
+
+[features]
+
+## Default features: `std`, uses runtime random numbers for hashing.
+default = ["std", "ahash/runtime-rng"] # ahash/runtime-rng trumps ahash/compile-time-rng
+## Standard features: uses compile-time random number for hashing.
+std = ["once_cell/std", "ahash/std", "num-traits/std", "smartstring/std", "dep:toml_edit"]
+## Enable Rawr manifest transformation into a zero-touch Cargo importer request.
+rust-import = ["std", "dep:rawr_import", "dep:thiserror"]
+## Build exact real-extraction integration tests with the pinned importer driver.
+rust-import-driver-tests = ["rust-import", "rawr_import/rustc-driver"]
+## Enable the pinned compiler metadata probe used by Phase 1 extraction.
+rust-import-driver = ["rust-import", "rawr_import/rustc-driver"]
+
+#! ### Enable Special Functionalities
+
+## Require that all data types implement `Send + Sync` (for multi-threaded usage).
+sync = ["no-std-compat?/compat_sync", "rawr_codegen/sync"]
+## Add support for the [`Decimal`](https://crates.io/crates/rust_decimal) data type (acts as the system floating-point type under `no_float`).
+decimal = ["rust_decimal"]
+## Enable serialization/deserialization of Rawr data types via [`serde`](https://crates.io/crates/serde).
+serde = ["dep:serde", "smartstring/serde", "smallvec/serde", "thin-vec/serde"]
+## Allow [Unicode Standard Annex #31](https://unicode.org/reports/tr31/) for identifiers.
+unicode-xid-ident = ["unicode-xid"]
+## Enable functions metadata (including doc-comments); implies [`serde`](#feature-serde).
+metadata = ["serde", "serde_json", "rawr_codegen/metadata", "smartstring/serde"]
+## Expose internal data structures (e.g. `AST` nodes).
+internals = []
+## Enable the debugging interface (implies [`internals`](#feature-internals)).
+debugging = ["internals"]
+## Features and dependencies required by `bin` tools: `decimal`, `metadata`, `serde`, `debugging` and [`rustyline`](https://crates.io/crates/rustyline).
+bin-features = ["decimal", "metadata", "serde", "debugging", "rustyline"]
+## Enable fuzzing via the [`arbitrary`](https://crates.io/crates/arbitrary) crate.
+fuzz = ["arbitrary", "rust_decimal?/rust-fuzz", "serde", "grain"]
+## Enable the experimental `grain` bytecode VM
+grain = []
+
+#! ### System Configuration Features
+
+## Use `f32` instead of `f64` as the system floating-point number type.
+f32_float = []
+## Use `i32` instead of `i64` for the system integer number type (useful for 32-bit architectures).
+## All other integer types (e.g. `u8`) are disabled.
+only_i32 = []
+## Disable all integer types (e.g. `u8`) other than `i64`.
+only_i64 = []
+
+#! ### Disable Language Features
+
+## Remove support for floating-point numbers.
+no_float = []
+## Remove support for arrays and indexing.
+no_index = []
+## Remove support for custom types, properties, method-style calls and object maps.
+no_object = []
+## Remove support for time-stamps.
+no_time = []
+## Remove support for script-defined functions (implies [`no_closure`](#feature-no_closure)).
+no_function = ["no_closure"]
+## Remove support for capturing external variables in anonymous functions (i.e. closures).
+no_closure = []
+## Remove support for loading external modules.
+no_module = []
+## Remove support for custom syntax.
+no_custom_syntax = []
+
+#! ### Performance-Related Features
+
+## Disable all safety checks.
+unchecked = []
+## Do not track position when parsing.
+no_position = []
+## Disable the script optimizer.
+no_optimize = []
+
+#! ### Compiling for `no-std`
+
+## Turn on `no-std` compilation (nightly only).
+no_std = ["no-std-compat", "num-traits/libm", "core-error", "libm", "hashbrown", "no_time"]
+
+#! ### JavaScript Interface for WASM
+
+## Use [`wasm-bindgen`](https://crates.io/crates/wasm-bindgen) as JavaScript interface.
+wasm-bindgen = ["getrandom/wasm_js"]
+
+#! ### Features used in testing environments only
+
+## Compiled with a non-stable compiler (i.e. beta or nightly)
+unstable = []
+
+## Running under a testing environment.
+testing-environ = []
+
+[[bin]]
+name = "rawr-repl"
+required-features = ["rustyline"]
+
+[[bin]]
+name = "rawr-run"
+
+[[bin]]
+name = "rawr-dbg"
+required-features = ["debugging"]
+
+# These inherited micro-benchmarks use the unstable libtest benchmark API.
+# Keep them available on nightly without making stable all-target release
+# verification attempt to compile `#![feature(test)]`.
+[[bench]]
+name = "engine"
+required-features = ["unstable"]
+
+[[bench]]
+name = "eval_array"
+required-features = ["unstable"]
+
+[[bench]]
+name = "eval_expression"
+required-features = ["unstable"]
+
+[[bench]]
+name = "eval_map"
+required-features = ["unstable"]
+
+[[bench]]
+name = "eval_module"
+required-features = ["unstable"]
+
+[[bench]]
+name = "eval_scope"
+required-features = ["unstable"]
+
+[[bench]]
+name = "eval_type"
+required-features = ["unstable"]
+
+[[bench]]
+name = "iterations"
+required-features = ["unstable"]
+
+[[bench]]
+name = "parsing"
+required-features = ["unstable"]
+
+[[bench]]
+name = "primes"
+required-features = ["unstable"]
+
+[[example]]
+name = "serde"
+required-features = ["serde"]
+
+[[example]]
+name = "definitions"
+required-features = ["metadata", "internals"]
+
+# VM-versus-walker timings. Run with `--release`; `-- --check` exits non-zero
+# on a case that has fallen below the floor recorded beside it.
+[[example]]
+name = "grain_bench"
+required-features = ["grain"]
+
+# Every other integration test, grain harnesses included, is one binary:
+# `tests/it/main.rs`. This one stays its own, and not negotiable: it installs a
+# counting global allocator and reads process-global counters as deltas around
+# each call, so any test allocating on another thread corrupts every number it
+# reports.
+[[test]]
+name = "grain_allocation_efficiency"
+path = "tests/grain/allocation.rs"
+required-features = ["grain"]
+
+[profile.dev]
+# Line tables keep file:line backtraces; full debug info made each test
+# binary hundreds of MB and the target dir tens of GB.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+#opt-level = "z"     # optimize for size
+#panic = 'abort'     # remove stack backtrace for no-std
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+web-time = { version = "1.1.0" } # WASM implementation of std::time::Instant
+
+[package.metadata.docs.rs]
+features = ["document-features", "metadata", "serde", "internals", "decimal", "debugging"]

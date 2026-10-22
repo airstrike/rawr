@@ -1,0 +1,11 @@
+[package]
+name = "outer-api"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+hop-api = { path = "../hop-api" }
+inner-api = { path = "../inner-api" }
+
+[workspace]

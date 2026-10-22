@@ -1,0 +1,6 @@
+{
+  "schema": "rawr.phase9.baseline.fixture/v1",
+  "digest_sha256": "a543318f512e336f058b55895a81f62ba77d77821cd982983c315f03c308faa5",
+  "package_list_fallbacks": 0,
+  "missing_package_list_reason": null
+}

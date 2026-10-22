@@ -1,0 +1,11 @@
+error: duplicate function 'test_fn'
+  --> ui_tests/rawr_mod_name_collisions.rs:16:12
+   |
+16 |     pub fn test_fn(input: Point) -> bool {
+   |            ^^^^^^^
+
+error: duplicated function 'test_fn'
+  --> ui_tests/rawr_mod_name_collisions.rs:12:12
+   |
+12 |     pub fn test_fn(input: Point) -> bool {
+   |            ^^^^^^^

@@ -1,0 +1,18 @@
+error[E0425]: cannot find type `Pointer` in this scope
+  --> ui_tests/rawr_mod_unknown_type.rs:12:27
+   |
+ 4 | pub struct Point {
+   | ---------------- similarly named struct `Point` defined here
+...
+12 |     pub fn test_fn(input: Pointer) -> bool {
+   |                           ^^^^^^^
+   |
+help: a struct with a similar name exists
+   |
+12 -     pub fn test_fn(input: Pointer) -> bool {
+12 +     pub fn test_fn(input: Point) -> bool {
+   |
+help: consider importing this trait
+   |
+11 +     use std::fmt::Pointer;
+   |

@@ -1,0 +1,199 @@
+{
+  "status": "Source prepared by the implementation author without resolver, Cargo, native fixture or test execution. Root then executed the isolated reference and local comparison, generated Cargo.lock/output.jsonl, and verified active parser dependencies. Execution attribution and limits are recorded below.",
+  "execution": {
+    "owner": "root",
+    "mode": "Serial offline Cargo, jobs 1; isolated manifest and target directory",
+    "run_log": "/private/tmp/rawr-p9-toml-reference-run.log",
+    "feature_tree": "/private/tmp/rawr-p9-toml-reference-features.txt",
+    "output": "output.jsonl",
+    "output_bytes": 159938,
+    "output_sha256": "a97c1ee915dd7ecca125d0077dbe5a2276f2f9df2564a57515077a638953d6b1",
+    "cases": 35,
+    "accepted": 14,
+    "rejected": 21,
+    "acceptance_expectation_mismatches": 0,
+    "reference_result": "PASS",
+    "root_reported_local_comparison": "PASS: all 35 acceptance outcomes, every valid flattened node field/order, first-error spans and bounded categories, and available raw first-error contexts. Local comparison uses toml/tests/reference.rs.",
+    "active_dependency_verification": "Root verified selected active dependency versions/checksums against the pinned Cargo.lock; implementation author also read the effective feature tree and compile log. No unbounded/debug/fast_hash/simd/unsafe feature appears in that tree.",
+    "inactive_lock_versions_differing_from_cargo_pin": [
+      {
+        "name": "memchr",
+        "version": "2.8.3"
+      },
+      {
+        "name": "proc-macro2",
+        "version": "1.0.107"
+      },
+      {
+        "name": "quote",
+        "version": "1.0.47"
+      },
+      {
+        "name": "syn",
+        "version": "2.0.119"
+      }
+    ],
+    "inactive_lock_limit": "These four packages occur in the generated lock but not the effective feature tree or compile log. This is exact active parser-path evidence, not a claim that the entire reference lock matches Cargo's lock.",
+    "locked_confirmation": {
+      "command": "cargo +nightly-2026-07-11 run --offline --locked --jobs 1 --manifest-path toml/reference/Cargo.toml --target-dir /private/tmp/rawr-p9-toml-reference-target",
+      "log": "/private/tmp/rawr-p9-toml-reference-confirmed.log",
+      "result": "PASS; after scoped source formatting, all output bytes equal output.jsonl"
+    }
+  },
+  "cargo": {
+    "commit": "59800466c5c41c444d264b1010b4d57e85a7117f",
+    "archive_url": "https://codeload.github.com/rust-lang/cargo/tar.gz/59800466c5c41c444d264b1010b4d57e85a7117f",
+    "archive_sha256": "dc2728d4e9650b9871142cc3f1f0e449647e0b493775931f0b70ee1fa658a321",
+    "lock_url": "https://raw.githubusercontent.com/rust-lang/cargo/59800466c5c41c444d264b1010b4d57e85a7117f/Cargo.lock",
+    "lock_sha256": "9a3e2c4418edbcaadbb1e5b5998a7c52c9131d2e62d64995b15307de731c8a97"
+  },
+  "prior_verification": {
+    "report": "/private/tmp/rawr-p9-toml-parser-supplement.md",
+    "report_sha256": "0bff526acdc75a441279488d1d1ef7454c866da41105610cb119ac8b825f52bc",
+    "manifest": "/private/tmp/rawr-p9-toml-parser-supplement-provenance.json",
+    "manifest_sha256": "00fb2cd8ecdfabc1cc9e7135256f3a310431d54a765a5b1d20304d9e8f6b8594",
+    "meaning": "The prior source audit verified the Cargo archive/lock and selected extracted source members against cached crate archives. This file records that evidence; it does not assert a new verification run. Additional transport-neutral pins below are transcribed from the verified Cargo.lock."
+  },
+  "packages": [
+    {
+      "name": "toml",
+      "version": "1.1.2+spec-1.1.0",
+      "checksum": "81f3d15e84cbcd896376e6730314d59fb5a87f31e4b038454184435cd57defee"
+    },
+    {
+      "name": "toml_parser",
+      "version": "1.1.2+spec-1.1.0",
+      "checksum": "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
+    },
+    {
+      "name": "toml_datetime",
+      "version": "1.1.1+spec-1.1.0",
+      "checksum": "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
+    },
+    {
+      "name": "serde_spanned",
+      "version": "1.1.1",
+      "checksum": "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+    },
+    {
+      "name": "indexmap",
+      "version": "2.14.0",
+      "checksum": "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
+    },
+    {
+      "name": "hashbrown",
+      "version": "0.17.1",
+      "checksum": "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+    },
+    {
+      "name": "equivalent",
+      "version": "1.0.2",
+      "checksum": "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+    },
+    {
+      "name": "serde_core",
+      "version": "1.0.228",
+      "checksum": "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
+    },
+    {
+      "name": "toml_writer",
+      "version": "1.1.1+spec-1.1.0",
+      "checksum": "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
+    },
+    {
+      "name": "winnow",
+      "version": "1.0.3",
+      "checksum": "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
+    }
+  ],
+  "selected_verified_sources": [
+    {
+      "package": "toml",
+      "path": "src/de/parser/mod.rs",
+      "sha256": "fa8b59a71e94ca16da04a6c07af425f64944d4f47d32aa9882e3b67ae19a7d5a",
+      "role": "Tokenization, raw wrapper order, semantic assembly after raw errors, limit 80"
+    },
+    {
+      "package": "toml",
+      "path": "src/de/parser/detable.rs",
+      "sha256": "d6e5498a19046695d8f8447b111a632d41ab7060808753a5b1950a36e0159faa",
+      "role": "Public direct document parse and recoverable parse APIs"
+    },
+    {
+      "package": "toml",
+      "path": "src/de/parser/document.rs",
+      "sha256": "375f952c38c1c64b2420cdc8faa2cac3c5454d81b4d1bbd34a67e74c089ab62b",
+      "role": "Root span, header assembly, removal/reinsertion and latest array-table descent"
+    },
+    {
+      "package": "toml",
+      "path": "src/de/parser/devalue.rs",
+      "sha256": "4d0fca1bdb99279032163baab25e64f8c0340fd713c237d2f860ecc4db01d247",
+      "role": "Public value variants and deferred integer/float spelling"
+    },
+    {
+      "package": "toml",
+      "path": "src/de/parser/dearray.rs",
+      "sha256": "e4e67bb5366da643a49d1a31214fe4f9b746b5016bec439f114062dd6e3e83c8",
+      "role": "Ordered public array view; private array-of-tables flag"
+    },
+    {
+      "package": "toml",
+      "path": "src/map.rs",
+      "sha256": "e900f48839a0ec7e0a69620c8f8fb1d312e3f4d7f27376648964e05cb03393d0",
+      "role": "Public ordered map view; private implicit/dotted/inline flags"
+    },
+    {
+      "package": "toml",
+      "path": "src/de/parser/key.rs",
+      "sha256": "e591ddab749739f5ae15eecdd55c1fe5bf1bd0f54f2f5aef85b0703cea1344d8",
+      "role": "Semantic dotted/header key-count limit"
+    },
+    {
+      "package": "toml",
+      "path": "src/de/parser/inline_table.rs",
+      "sha256": "cc4e1b96824f9b51dc5a780dd7044b664e0c42f21f6fe3366aff3d6ce499164d",
+      "role": "Dotted inline insertion and conflict rules"
+    },
+    {
+      "package": "toml_parser",
+      "path": "src/parser/event.rs",
+      "sha256": "1b7461b35a31bc70b618e7d5253edda6aae512c39a164892c3d0c82d0afe5d8f",
+      "role": "Public raw events, whitespace wrapper and signed recursion counter"
+    },
+    {
+      "package": "toml_parser",
+      "path": "src/parser/document.rs",
+      "sha256": "a9c00e6755ea4c24e45d44b95e30713e9bd909d8a64c2418d70c7cd500477a80",
+      "role": "Raw document parsing and malformed recovery control flow"
+    }
+  ],
+  "feature_boundary": {
+    "toml": [
+      "std",
+      "serde",
+      "parse",
+      "display",
+      "preserve_order"
+    ],
+    "toml_parser": [
+      "std",
+      "alloc"
+    ],
+    "winnow": [
+      "std",
+      "alloc",
+      "ascii",
+      "binary",
+      "parser"
+    ],
+    "excluded": [
+      "unbounded",
+      "debug",
+      "fast_hash",
+      "simd",
+      "unsafe"
+    ],
+    "note": "The feature boundary is the relevant pinned Cargo manifest-input parser path, not every unrelated dependency feature in a full Cargo build. Direct manifest pins constrain semantically relevant transitive packages without adding product dependencies."
+  }
+}

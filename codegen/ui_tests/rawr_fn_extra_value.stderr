@@ -1,0 +1,5 @@
+error: extraneous value
+  --> ui_tests/rawr_fn_extra_value.rs:11:24
+   |
+11 | #[rawr_fn(return_raw = "yes")]
+   |                        ^^^^^

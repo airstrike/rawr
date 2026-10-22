@@ -1,0 +1,844 @@
+//! Render untrusted Rawr/iced snippets to PNG.
+//!
+//! [`render`] accepts one of three snippet shapes, wraps it into a Rawr
+//! program with a single `#[preview]`, checks it with the canonical iced
+//! facade, and renders that preview headlessly with the same pinned
+//! tiny-skia renderer and font as `rawr snapshot`, at 2x by default.
+//!
+//! - a bare expression: `column![text("hi"), button("go")]`
+//! - a stateless `fn view() -> impl Widget<()>`
+//! - a full app: a type with `fn view(&self)` and `fn update(&mut self, ..)`
+//!
+//! A source that declares its own `#[preview]` is refused: its size would
+//! bypass [`MAX_SIDE`].
+//!
+//! Snippets are untrusted. Every render runs on a fresh Engine with bounded
+//! operations, call depth, data sizes, and a wall-clock deadline; the iced
+//! facade exposes no filesystem or network functions to scripts.
+
+#[cfg(feature = "bot")]
+pub mod channels;
+pub mod message;
+pub mod server;
+#[cfg(feature = "bot")]
+pub mod stats;
+#[cfg(feature = "bot")]
+pub mod web;
+
+use std::fmt;
+use std::time::{Duration, Instant};
+
+/// A rendered PNG.
+pub type Png = rawr_iced::snapshot::Png;
+
+/// Image format of a reply.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Format {
+    /// Lossless PNG, as rendered.
+    #[default]
+    Png,
+    /// Baseline JPEG at quality 90.
+    Jpeg,
+    /// Lossless WebP.
+    Webp,
+}
+
+impl Format {
+    /// File extension, without the dot.
+    #[must_use]
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Webp => "webp",
+        }
+    }
+}
+
+impl std::str::FromStr for Format {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "png" => Ok(Self::Png),
+            "jpg" | "jpeg" => Ok(Self::Jpeg),
+            "webp" => Ok(Self::Webp),
+            _ => Err(format!("unknown format `{value}`; expected png, jpg or webp")),
+        }
+    }
+}
+
+/// Encode a render in `format`.
+pub fn encode(png: &Png, format: Format) -> Result<Vec<u8>, PlayError> {
+    if format == Format::Png {
+        return Ok(png.bytes.clone());
+    }
+    let failed = |error: &dyn fmt::Display| PlayError::Render(format!("cannot encode: {error}"));
+    let mut reader = png::Decoder::new(std::io::Cursor::new(&png.bytes))
+        .read_info()
+        .map_err(|error| failed(&error))?;
+    let mut rgba = vec![0; reader.output_buffer_size().unwrap_or_default()];
+    reader.next_frame(&mut rgba).map_err(|error| failed(&error))?;
+    let (width, height) = (png.width, png.height);
+    let mut bytes = Vec::new();
+    match format {
+        Format::Png => unreachable!(),
+        Format::Jpeg => {
+            let side = |side: u32| u16::try_from(side).map_err(|error| failed(&error));
+            jpeg_encoder::Encoder::new(&mut bytes, 90)
+                .encode(&rgba, side(width)?, side(height)?, jpeg_encoder::ColorType::Rgba)
+                .map_err(|error| failed(&error))?;
+        }
+        Format::Webp => image_webp::WebPEncoder::new(&mut bytes)
+            .encode(&rgba, width, height, image_webp::ColorType::Rgba8)
+            .map_err(|error| failed(&error))?,
+    }
+    Ok(bytes)
+}
+
+/// Built-in theme used for the render.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Theme {
+    /// iced's `Theme::Light`.
+    Light,
+    /// iced's `Theme::Dark`.
+    #[default]
+    Dark,
+}
+
+impl Theme {
+    const fn variant(self) -> &'static str {
+        match self {
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+}
+
+impl std::str::FromStr for Theme {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "light" => Ok(Self::Light),
+            "dark" => Ok(Self::Dark),
+            _ => Err(format!("unknown theme `{value}`; expected dark or light")),
+        }
+    }
+}
+
+/// Per-render resource limits for untrusted snippets.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Limits {
+    /// Maximum script operations per evaluation (boot, update, view).
+    pub operations: u64,
+    /// Maximum call depth; never raised above the engine's default.
+    pub call_depth: usize,
+    /// Maximum string length in bytes.
+    pub string_size: usize,
+    /// Maximum array length.
+    pub array_size: usize,
+    /// Maximum object-map size.
+    pub map_size: usize,
+    /// Wall-clock budget for script evaluation in one render.
+    pub time: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            operations: 1_000_000,
+            call_depth: 32,
+            string_size: 64 * 1024,
+            array_size: 10_000,
+            map_size: 10_000,
+            time: Duration::from_secs(2),
+        }
+    }
+}
+
+/// Render options.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Options {
+    /// Logical `(width, height)`; `None` fits the image to the content.
+    pub size: Option<(u32, u32)>,
+    /// Pixels per logical pixel; lowered so no side passes [`MAX_SIDE`].
+    pub scale: u32,
+    /// Theme to render with.
+    pub theme: Theme,
+    /// Messages applied, in order, to a full app's default State before the
+    /// view renders, e.g. `Message::Increment`.
+    pub messages: Vec<String>,
+    /// Per-render limits.
+    pub limits: Limits,
+}
+
+/// Parse `WxH` (e.g. `400x300`) into a size.
+pub fn parse_size(value: &str) -> Result<(u32, u32), String> {
+    let (width, height) = value
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("size `{value}` must look like 400x300"))?;
+    let side = |text: &str| {
+        text.trim()
+            .parse::<u32>()
+            .map_err(|_| format!("size `{value}` must look like 400x300"))
+    };
+    Ok((side(width)?, side(height)?))
+}
+
+/// Largest accepted width or height.
+pub const MAX_SIDE: u32 = 2048;
+
+/// Logical size used on an axis an auto-fit snippet fills (`Fill` width).
+pub const FALLBACK_SIZE: (u32, u32) = (480, 360);
+
+/// Background margin around an auto-fit snippet, in logical pixels.
+pub const MARGIN: u32 = 12;
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            size: None,
+            scale: 2,
+            theme: Theme::default(),
+            messages: Vec::new(),
+            limits: Limits::default(),
+        }
+    }
+}
+
+/// Why a snippet did not render.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlayError {
+    /// Options were rejected before compiling.
+    Options(String),
+    /// The snippet did not check as Rawr; carries rendered diagnostics.
+    Compile(String),
+    /// The snippet checked but failed while evaluating or rendering.
+    Render(String),
+    /// The snippet ran past a limit (operations, depth, size, or time).
+    Limit(String),
+}
+
+impl PlayError {
+    /// The human-readable text, suitable for a reply code block.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Options(text) | Self::Compile(text) | Self::Render(text) | Self::Limit(text) => {
+                text
+            }
+        }
+    }
+}
+
+impl fmt::Display for PlayError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.text())
+    }
+}
+
+impl std::error::Error for PlayError {}
+
+/// Identity used for the wrapped source in diagnostics.
+pub const SOURCE_NAME: &str = "play.rawr";
+
+/// Check, evaluate, and render one snippet to a PNG.
+pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
+    validate(options)?;
+    let program = wrap(source, options)?;
+    let deadline = Instant::now() + options.limits.time;
+    let canvas = rawr_iced::snapshot::Canvas {
+        fit: options.size.is_none(),
+        fallback: FALLBACK_SIZE,
+        margin: if options.size.is_none() { MARGIN } else { 0 },
+        scale: options.scale as f32,
+        max_pixels: MAX_SIDE,
+    };
+    let rendered = if shape(source) == Shape::App {
+        render_application(&program, source, options, canvas, deadline)
+    } else {
+        let compiler = rawr_iced::preview::Compiler::configured(sandbox(&options.limits, deadline))
+            .map_err(|error| PlayError::Render(error.to_string()))?;
+        let checked = compiler
+            .check_named_source(SOURCE_NAME, &program)
+            .map_err(|error| PlayError::Compile(report(&error.report(diagnostic(&program)))))?;
+        checked
+            .render_png_with(canvas)
+            .map_err(|error| classify(&error.to_string(), &options.limits))
+    };
+    if Instant::now() >= deadline {
+        return Err(PlayError::Limit(TIME_LIMIT.into()));
+    }
+    rendered
+}
+
+/// A full app runs as `rawr run` would show it, headless: booted, given
+/// the options' messages, and drawn once its view settles.
+fn render_application(
+    program: &str,
+    source: &str,
+    options: &Options,
+    canvas: rawr_iced::snapshot::Canvas,
+    deadline: Instant,
+) -> Result<Png, PlayError> {
+    let compiler = rawr_iced::application::Compiler::configured(sandbox(&options.limits, deadline))
+        .map_err(|error| PlayError::Render(error.to_string()))?;
+    let compile = |error: rawr_iced::application::Error| {
+        PlayError::Compile(report(&error.report(diagnostic(program))))
+    };
+    let mut adapter = compiler
+        .check_named_source(SOURCE_NAME, program)
+        .and_then(rawr_iced::application::Checked::prepare)
+        .map_err(compile)?
+        .into_adapter();
+    let messages = (0..options.messages.len())
+        .map(|index| {
+            adapter
+                .message_of(&format!("{MESSAGE}{index}"))
+                .expect("each message is wrapped as a function")
+                .map_err(|error| classify(&error.to_string(), &options.limits))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    // The app's own `.theme(f)` wins over the built-in theme.
+    let theme = app_theme(source).is_none().then(|| options.theme.variant());
+    let bound = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
+    rawr_iced::snapshot::render_application(&mut adapter, messages, canvas, bound, theme)
+        .map_err(|error| classify(&error.to_string(), &options.limits))
+}
+
+/// The untrusted-snippet limits on an Engine.
+fn sandbox(limits: &Limits, deadline: Instant) -> impl FnOnce(&mut rawr::Engine) + use<> {
+    let limits = limits.clone();
+    move |engine| {
+        let depth = engine.max_call_levels().min(limits.call_depth);
+        engine
+            .set_max_operations(limits.operations)
+            .set_max_call_levels(depth)
+            .set_max_string_size(limits.string_size)
+            .set_max_array_size(limits.array_size)
+            .set_max_map_size(limits.map_size)
+            .on_progress(move |_| (Instant::now() >= deadline).then(|| TIME_LIMIT.into()))
+            // Untyped `fn f(x) { .. }` bodies reach the base
+            // language: no output, no module files, no eval, no sleeping.
+            .on_print(|_| {})
+            .on_debug(|_, _, _| {})
+            .set_module_resolver(rawr::module_resolvers::DummyModuleResolver::new());
+        for symbol in ["import", "eval", "print", "debug"] {
+            engine.disable_symbol(symbol);
+        }
+        let refuse = || Err::<(), Box<rawr::EvalAltResult>>("sleep is not available in ?play".into());
+        engine
+            .register_fn("sleep", move |_: rawr::INT| refuse())
+            .register_fn("sleep", move |_: rawr::FLOAT| refuse());
+    }
+}
+
+/// The function a full app's `index`th message is wrapped as.
+const MESSAGE: &str = "rawr_play_message_";
+
+const TIME_LIMIT: &str = "render time limit exceeded";
+
+fn validate(options: &Options) -> Result<(), PlayError> {
+    if !(1..=4).contains(&options.scale) {
+        return Err(PlayError::Options(format!(
+            "scale must be between 1 and 4, got {}",
+            options.scale
+        )));
+    }
+    let (width, height) = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
+    for (name, side) in [("width", width), ("height", height)] {
+        if side == 0 || side > MAX_SIDE {
+            return Err(PlayError::Options(format!(
+                "{name} must be between 1 and {MAX_SIDE}, got {side}"
+            )));
+        }
+    }
+    for message in &options.messages {
+        let ok = !message.trim().is_empty()
+            && message
+                .chars()
+                .all(|c| !matches!(c, ';' | '{' | '}' | '\n' | '\r' | '#'));
+        if !ok {
+            return Err(PlayError::Options(format!(
+                "message `{message}` must be one expression like `Message::Increment`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn diagnostic(program: &str) -> Option<rawr::diagnostic::Source> {
+    rawr::diagnostic::Source::new(SOURCE_NAME, program).ok()
+}
+
+fn report(report: &rawr::diagnostic::Report) -> String {
+    rawr::diagnostic::render(report)
+}
+
+fn classify(text: &str, limits: &Limits) -> PlayError {
+    let lower = text.to_ascii_lowercase();
+    let reason = if lower.contains(TIME_LIMIT) || lower.contains("terminated") {
+        TIME_LIMIT.to_owned()
+    } else if lower.contains("too many operations") {
+        format!(
+            "operation limit exceeded: more than {} operations (an endless loop?)",
+            limits.operations
+        )
+    } else if lower.contains("stack overflow") {
+        format!(
+            "call depth limit exceeded: deeper than {} calls (endless recursion?)",
+            limits.call_depth
+        )
+    } else if lower.contains("too large") {
+        let what = text.rsplit(": ").next().unwrap_or(text);
+        format!(
+            "size limit exceeded: {what} (strings up to {} bytes, arrays and maps up to {} items)",
+            limits.string_size, limits.array_size
+        )
+    } else {
+        return PlayError::Render(text.to_owned());
+    };
+    PlayError::Limit(reason)
+}
+
+/// The snippet shape [`wrap`] recognized.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Shape {
+    /// The source declares its own `#[preview]`; refused.
+    Preview,
+    /// A type with `fn view(&self)`.
+    App,
+    /// A stateless `fn view()`.
+    View,
+    /// A bare expression.
+    Expression,
+}
+
+/// Imports added to `fn view()` and expression snippets that have none.
+const PRELUDE: &str = "use iced::{Alignment, Center, Color, Element, Fill, Length, Theme, Widget}; \
+use iced::widget::{button, checkbox, column, container, row, scrollable, slider, space, text, \
+text_input, toggler}; ";
+
+/// Classify a snippet without wrapping it.
+#[must_use]
+pub fn shape(source: &str) -> Shape {
+    if source.contains("#[preview") {
+        Shape::Preview
+    } else if let Some(at) = find_view(source) {
+        let parameters = source[at..]
+            .split_once('(')
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map_or("", |(parameters, _)| parameters.trim());
+        if !parameters.is_empty() {
+            Shape::App
+        } else {
+            Shape::View
+        }
+    } else {
+        Shape::Expression
+    }
+}
+
+/// Wrap a snippet into a program: a view or an expression gets one
+/// `#[preview]`; a full app runs as itself, given a `main` when it has none
+/// and each message as a function returning its Message.
+///
+/// User lines keep their line numbers: added imports and attributes share
+/// the first line or the `fn view` line, and helpers go after the source.
+pub fn wrap(source: &str, options: &Options) -> Result<String, PlayError> {
+    let (width, height) = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
+    let size = format!("size = ({width}, {height})");
+    let source = &without_tests(source);
+    let source = source.as_str();
+    let theme_fn = format!(
+        "\nfn rawr_play_theme() -> iced::Theme {{ iced::Theme::{} }}\n",
+        options.theme.variant()
+    );
+    let themes = "themes = [rawr_play_theme]";
+    let shape = shape(source);
+    if !options.messages.is_empty() && shape != Shape::App {
+        return Err(PlayError::Options(
+            "messages need a full app with `fn view(&self)` and `fn update(&mut self, ..)`".into(),
+        ));
+    }
+    let prelude = if source
+        .lines()
+        .any(|line| line.trim_start().starts_with("use "))
+    {
+        ""
+    } else {
+        PRELUDE
+    };
+    Ok(match shape {
+        // A hand-written `#[preview]` could pick any canvas size.
+        Shape::Preview => {
+            return Err(PlayError::Options(
+                "?play adds `#[preview]` itself; remove it and use size=WxH".into(),
+            ));
+        }
+        Shape::Expression => format!(
+            "{prelude}#[preview({size}, {themes})] fn view() -> impl iced::widget::Widget<()> {{ {source}\n}}{theme_fn}"
+        ),
+        Shape::View => {
+            let at = find_view(source).expect("view shape has a view fn");
+            format!(
+                "{prelude}{}#[preview({size}, {themes})] {}{theme_fn}",
+                &source[..at],
+                &source[at..]
+            )
+        }
+        // A full app runs as itself: given a `main` when it has none, and
+        // each message as a function of its Message type.
+        Shape::App => {
+            let at = find_view(source).expect("app shape has a view fn");
+            let mut program = source.to_owned();
+            if !source.contains("iced::run(") && !source.contains("iced::application(") {
+                let state = app_state(source, at).ok_or_else(|| {
+                    PlayError::Options("cannot find the State type that owns `fn view`".into())
+                })?;
+                let callbacks = if view_signature(&source[at..]).contains("self") {
+                    format!("{state}::update, {state}::view")
+                } else {
+                    "update, view".into()
+                };
+                program.push_str(&format!(
+                    "\npub fn main() -> iced::Result {{ iced::run({callbacks}) }}\n"
+                ));
+            }
+            if !options.messages.is_empty() {
+                let message = message_type(source).ok_or_else(|| {
+                    PlayError::Options("cannot find the Message type `fn update` takes".into())
+                })?;
+                for (index, expression) in options.messages.iter().enumerate() {
+                    program.push_str(&format!(
+                        "\nfn {MESSAGE}{index}() -> {message} {{ {expression} }}\n"
+                    ));
+                }
+            }
+            program
+        }
+    })
+}
+
+/// The parameters of the `fn view` at the start of `view`.
+fn view_signature(view: &str) -> &str {
+    view.split_once('(')
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map_or("", |(parameters, _)| parameters)
+}
+
+/// The type of `fn update`'s last parameter: the app's Message.
+fn message_type(source: &str) -> Option<String> {
+    let (_, rest) = source.split_once("fn update(")?;
+    let mut depth = 0usize;
+    let end = rest.char_indices().find_map(|(at, c)| match c {
+        '(' | '<' | '[' => {
+            depth += 1;
+            None
+        }
+        ')' if depth == 0 => Some(at),
+        ')' | '>' | ']' => {
+            depth = depth.saturating_sub(1);
+            None
+        }
+        _ => None,
+    })?;
+    let parameters = &rest[..end];
+    let mut depth = 0usize;
+    let last = parameters
+        .char_indices()
+        .filter(|(_, c)| {
+            match c {
+                '(' | '<' | '[' => depth += 1,
+                ')' | '>' | ']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            *c == ',' && depth == 0
+        })
+        .last()
+        .map_or(parameters, |(at, _)| &parameters[at + 1..]);
+    let (_, ty) = last.split_once(':')?;
+    let ty = ty.trim();
+    (!ty.is_empty()).then(|| ty.to_owned())
+}
+
+/// `source` with each `#[cfg(test)]` item (such as `mod tests { .. }`)
+/// blanked, keeping line numbers: a pasted example often ends with tests.
+fn without_tests(source: &str) -> String {
+    const ATTRIBUTE: &str = "#[cfg(test)]";
+    let mut out = source.to_owned();
+    let mut from = 0;
+    while let Some(found) = out[from..].find(ATTRIBUTE) {
+        let start = from + found;
+        let mut depth = 0usize;
+        let mut end = out.len();
+        for (offset, c) in out[start + ATTRIBUTE.len()..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' if depth > 0 => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = start + ATTRIBUTE.len() + offset + 1;
+                        break;
+                    }
+                }
+                ';' if depth == 0 => {
+                    end = start + ATTRIBUTE.len() + offset + 1;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let blank: String = out[start..end]
+            .chars()
+            .map(|c| if c == '\n' { c } else { ' ' })
+            .collect();
+        out.replace_range(start..end, &blank);
+        from = start + blank.len();
+    }
+    out
+}
+
+/// Byte offset of `fn view` (or `pub fn view`) followed by `(`.
+fn find_view(source: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(found) = source[from..].find("fn view") {
+        let at = from + found;
+        let after = source[at + "fn view".len()..].trim_start();
+        let boundary = at == 0
+            || !source[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if boundary && after.starts_with('(') {
+            let before = source[..at].trim_end();
+            return Some(match before.strip_suffix("pub") {
+                Some(rest) => rest.len(),
+                None => at,
+            });
+        }
+        from = at + 1;
+    }
+    None
+}
+
+/// The State type for a view at `at`: the nearest preceding `impl Name`, or
+/// the `&Name` parameter of a free `fn view(state: &Name)`.
+/// The path an app passes to `.theme(..)`, such as `App::theme` or `ink`.
+fn app_theme(source: &str) -> Option<&str> {
+    let (_, rest) = source.split_once(".theme(")?;
+    let path = rest[..rest.find(')')?].trim();
+    let valid = !path.is_empty()
+        && path
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == ':');
+    valid.then_some(path)
+}
+
+fn app_state(source: &str, at: usize) -> Option<String> {
+    let ident = |text: &str| -> String {
+        text.chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect()
+    };
+    let view = view_signature(&source[at..]);
+    if !view.contains("self") {
+        let (_, rest) = view.split_once('&')?;
+        let name = ident(rest.trim_start());
+        return (!name.is_empty()).then_some(name);
+    }
+    let impl_at = source[..at].rfind("impl ")?;
+    let name = ident(source[impl_at + "impl ".len()..].trim_start());
+    (!name.is_empty()).then_some(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render, shape, Options, PlayError, Shape};
+
+    fn is_png(bytes: &[u8]) -> bool {
+        bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+    }
+
+    #[test]
+    fn render_app_keeps_its_own_theme() {
+        let app = |theme: &str| {
+            format!(
+                "use iced::{{Color, Theme, Widget}};\nuse iced::widget::text;\n\
+                 pub fn main() -> iced::Result {{ iced::application(App::default, App::update, App::view){theme}.run() }}\n\
+                 #[derive(Default)] struct App;\n#[derive(Debug, Clone)] enum Message {{}}\n\
+                 impl App {{\n    fn update(&mut self, _message: Message) {{}}\n\
+                 fn theme(&self) -> Theme {{ Theme::custom(\"Red\", iced::theme::palette::Seed {{ background: Color::from_rgb8(0xff, 0, 0), text: Color::WHITE, primary: Color::WHITE, success: Color::WHITE, warning: Color::WHITE, danger: Color::WHITE }}) }}\n\
+                 fn view(&self) -> impl Widget<Message> {{ text(\"hi\") }}\n}}\n"
+            )
+        };
+        let options = Options {
+            size: Some((40, 20)),
+            ..Options::default()
+        };
+        let red = render(&app(".theme(App::theme)"), &options).unwrap();
+        let plain = render(&app(""), &options).unwrap();
+        assert!(is_png(&red.bytes));
+        assert_ne!(red.bytes, plain.bytes, "the app's theme is drawn");
+    }
+
+    #[test]
+    fn render_expression_shape() {
+        let source = r#"column![text("hi"), button("go")]"#;
+        assert_eq!(shape(source), Shape::Expression);
+        let options = Options {
+            size: Some((120, 80)),
+            ..Options::default()
+        };
+        let png = render(source, &options).unwrap();
+        assert_eq!((png.width, png.height), (240, 160), "2x HiDPI");
+        assert!(is_png(&png.bytes));
+    }
+
+    #[test]
+    fn render_view_fn_shape() {
+        let source = "fn view() -> impl Widget<()> {\n    row![\"left\", text(\"right\")].spacing(8)\n}\n";
+        assert_eq!(shape(source), Shape::View);
+        let png = render(source, &Options::default()).unwrap();
+        assert!(is_png(&png.bytes));
+    }
+
+    #[test]
+    fn render_app_shape_with_messages() {
+        let source = r#"
+use iced::widget::{Widget, button, column, text};
+
+#[derive(Default)]
+struct State { value: i64 }
+
+#[derive(Debug, Clone, Copy)]
+enum Message { Increment }
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message { Message::Increment => self.value += 1 }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![text(self.value), button("+").on_press(Message::Increment)]
+    }
+}
+"#;
+        assert_eq!(shape(source), Shape::App);
+        let plain = render(source, &Options::default()).unwrap();
+        let options = Options {
+            messages: vec!["Message::Increment".into(), "Message::Increment".into()],
+            ..Options::default()
+        };
+        let stepped = render(source, &options).unwrap();
+        assert!(is_png(&stepped.bytes));
+        assert_ne!(plain.bytes, stepped.bytes, "messages must change the view");
+    }
+
+    #[test]
+    fn render_runaway_loop_hits_a_limit() {
+        let source = "fn view() -> impl Widget<()> {\n    let mut n = 0;\n    loop { n += 1; }\n    text(n)\n}\n";
+        let error = render(source, &Options::default()).unwrap_err();
+        assert!(matches!(error, PlayError::Limit(_)), "{error:?}");
+        assert!(error.text().contains("operation limit"), "{error}");
+
+        let options = Options {
+            limits: super::Limits {
+                operations: u64::MAX,
+                time: std::time::Duration::from_millis(50),
+                ..super::Limits::default()
+            },
+            ..Options::default()
+        };
+        let error = render(source, &options).unwrap_err();
+        assert!(matches!(error, PlayError::Limit(_)), "{error:?}");
+        assert!(error.text().contains(super::TIME_LIMIT), "{error}");
+    }
+
+    #[test]
+    fn render_size_and_depth_limits() {
+        let huge = "fn view() -> impl Widget<()> {\n    let mut s = String::new();\n    for i in 0..10000000 { s.push_str(\"xxxxxxxxxxxxxxxxxxxx\"); }\n    text(s)\n}\n";
+        let error = render(huge, &Options::default()).unwrap_err();
+        assert!(matches!(error, PlayError::Limit(_)) && error.text().contains("size limit"), "{error:?}");
+        let deep = "fn f(n: i64) -> i64 { f(n + 1) + 1 }\nfn view() -> impl Widget<()> { text(f(0)) }\n";
+        let error = render(deep, &Options::default()).unwrap_err();
+        assert!(matches!(error, PlayError::Limit(_)) && error.text().contains("call depth"), "{error:?}");
+    }
+
+    #[test]
+    fn render_sandbox_refuses_escapes() {
+        let view = "\nfn view() -> impl Widget<()> { leak(1); text(\"x\") }\n";
+        for body in [
+            "print(\"out\"); x",
+            "debug(\"out\"); x",
+            "eval(\"40 + 2\")",
+            "import \"iced/examples/application_counter\" as m; x",
+            "sleep(100); x",
+        ] {
+            let source = format!("fn leak(x) {{ {body} }}{view}");
+            assert!(render(&source, &Options::default()).is_err(), "{body}");
+        }
+        let preview = "#[preview(size = (60000, 60000))]\nfn view() -> impl Widget<()> { text(\"x\") }\n";
+        let error = render(preview, &Options::default()).unwrap_err();
+        assert!(matches!(error, PlayError::Options(_)), "{error:?}");
+    }
+
+    #[test]
+    fn render_encodes_jpeg_and_webp() {
+        let options = Options { size: Some((64, 32)), ..Options::default() };
+        let png = render("text(\"hi\")", &options).unwrap();
+        let jpeg = super::encode(&png, super::Format::Jpeg).unwrap();
+        assert!(jpeg.starts_with(&[0xff, 0xd8]));
+        let webp = super::encode(&png, super::Format::Webp).unwrap();
+        assert!(webp.starts_with(b"RIFF") && &webp[8..12] == b"WEBP");
+    }
+
+    #[test]
+    fn render_compile_error_carries_diagnostics() {
+        let error = render("column![text(\"hi\")", &Options::default()).unwrap_err();
+        let PlayError::Compile(text) = error else {
+            panic!("expected a compile error, got {error:?}");
+        };
+        assert!(text.contains("play.rawr"), "{text}");
+    }
+
+    #[test]
+    fn render_fits_the_content() {
+        let small = render("text(\"hi\")", &Options::default()).unwrap();
+        let tall = render("column![text(\"a\"), text(\"b\"), text(\"c\")]", &Options::default()).unwrap();
+        // A margin on each side at 2x, plus the text, well under the bound.
+        assert!(small.width > 4 * super::MARGIN && small.width < 200, "{}x{}", small.width, small.height);
+        assert!(tall.height > small.height && tall.width < 200);
+        // A `Fill` width takes the fallback width.
+        let fill = render("text_input(\"name\", \"\")", &Options::default()).unwrap();
+        assert_eq!(fill.width, 2 * super::FALLBACK_SIZE.0);
+    }
+
+    /// Andy's master component: "hi" shows only once the `()` message
+    /// has shown the component, its sensor has fired, and its `update` has
+    /// taken that Event, frames after the message.
+    #[test]
+    fn render_master_component_settles() {
+        let source = include_str!("../tests/fixtures/component.rs");
+        assert_eq!(shape(source), Shape::App);
+        let shown = Options {
+            messages: vec!["()".into()],
+            ..Options::default()
+        };
+        let plain = render(source, &Options::default()).unwrap();
+        let hi = render(source, &shown).unwrap();
+        assert!(is_png(&hi.bytes));
+        assert_eq!(plain.width, hi.width, "the button sets the width");
+        assert!(hi.height > plain.height, "\"hi\" is drawn below \"show\"");
+    }
+
+    #[test]
+    fn render_iced_counter_example_verbatim() {
+        let source = include_str!("../tests/fixtures/counter.rs");
+        assert_eq!(shape(&super::without_tests(source)), Shape::App);
+        let png = render(source, &Options::default()).unwrap();
+        assert!(is_png(&png.bytes));
+        assert!(png.width < 600 && png.height < 600, "{}x{}", png.width, png.height);
+    }
+}

@@ -1,0 +1,6 @@
+{"panic":true,"source":"---\n-"}
+{"panic":true,"source":"---\n-🦀"}
+{"error":"closing code fence has 1 less `-` than the opening fence","primary":{"end":6,"start":4},"source":"---\n--","visible":[{"end":3,"start":0}]}
+{"error":"closing code fence has 1 less `-` than the opening fence","primary":{"end":6,"start":4},"source":"---\n--🦀","visible":[{"end":3,"start":0}]}
+{"panic":true,"source":"---\nx\n-"}
+{"panic":true,"source":"----\n--"}

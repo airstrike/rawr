@@ -1,0 +1,5 @@
+error: requires value
+  --> ui_tests/export_fn_missing_value.rs:10:13
+   |
+10 | #[export_fn(name)]
+   |             ^^^^

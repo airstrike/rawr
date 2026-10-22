@@ -1,0 +1,49 @@
+[workspace]
+members = ["a", "b"]
+exclude = ["excluded"]
+default-members = ["b"]
+resolver = "3"
+metadata = { z = true, a = [1, 2] }
+[workspace.package]
+version = "1.2.3-alpha+build"
+authors = ["Author"]
+description = "description"
+homepage = "https://example.com"
+documentation = "https://example.com/docs"
+readme = "README.md"
+keywords = ["one"]
+categories = ["development-tools"]
+license = "MIT"
+license-file = "LICENSE"
+repository = "https://example.com/repo"
+publish = false
+edition = "2024"
+badges = { maintenance = { status = "experimental" } }
+exclude = ["tmp/**"]
+include = ["src/**"]
+rust-version = "1.96.0"
+[workspace.dependencies]
+a = "1"
+b = { path = "../b", extra = 5 }
+[workspace.lints.rust]
+unsafe_code = "deny"
+[package]
+name = "member"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+exclude.workspace = true
+include.workspace = true
+publish.workspace = true
+description.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+license-file.workspace = true
+repository.workspace = true
+[lints]
+workspace = true

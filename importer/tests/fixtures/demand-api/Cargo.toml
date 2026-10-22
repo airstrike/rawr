@@ -1,0 +1,10 @@
+[package]
+name = "demand-api"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+inner-api = { path = "../inner-api" }
+
+[workspace]

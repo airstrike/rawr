@@ -1,0 +1,6 @@
+use crate::model::Thing;
+
+pub fn total() -> i64 {
+    let thing = Thing::new(21);
+    thing.doubled()
+}

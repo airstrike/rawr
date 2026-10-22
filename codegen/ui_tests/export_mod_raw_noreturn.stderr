@@ -1,0 +1,5 @@
+error: functions marked with 'return_raw' must return Result<T, Box<EvalAltResult>>
+  --> ui_tests/export_mod_raw_noreturn.rs:11:11
+   |
+11 | #[rawr_fn(return_raw)]
+   |           ^^^^^^^^^^

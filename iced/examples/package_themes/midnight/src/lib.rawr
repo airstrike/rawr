@@ -1,0 +1,14 @@
+use iced::Theme;
+use rawr_iced::theme::{Palette, custom};
+
+pub fn midnight() -> Theme {
+    let palette = Palette::new(
+        "#10131a",
+        "#e7eaf0",
+        "#8bb8ff",
+        "#78dba9",
+        "#f4cc67",
+        "#ff7d8b",
+    );
+    custom("Midnight package", palette)
+}

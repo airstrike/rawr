@@ -1,0 +1,24 @@
+error[E0433]: cannot find `test_mod` in `test_module`
+  --> ui_tests/rawr_mod_inner_cfg_false.rs:24:21
+   |
+24 |     if test_module::test_mod::test_fn(n) {
+   |                     ^^^^^^^^ could not find `test_mod` in `test_module`
+   |
+note: found an item that was configured out
+  --> ui_tests/rawr_mod_inner_cfg_false.rs:12:13
+   |
+11 |     #[cfg(feature = "unset_feature")]
+   |           ------------------------- the item is gated behind the `unset_feature` feature
+12 |     pub mod test_mod {
+   |             ^^^^^^^^
+
+warning: unexpected `cfg` condition value: `unset_feature`
+  --> ui_tests/rawr_mod_inner_cfg_false.rs:11:11
+   |
+11 |     #[cfg(feature = "unset_feature")]
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `default`, `metadata`, and `sync`
+   = help: consider adding `unset_feature` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default

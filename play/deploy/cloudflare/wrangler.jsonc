@@ -1,0 +1,45 @@
+// rawr-play on Cloudflare Containers. Build and push the image with
+// ./push-image.sh (it rewrites "image" below), then `npx wrangler deploy`.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rawr-play",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "PlayBot",
+      // A registry address, not a Dockerfile, so deploy never calls docker.
+      "image": "registry.cloudflare.com/fce80b8101fbb2f85548560babc6c7bc/rawr-play:622ff47e6fd2",
+      // lite: 1/16 vCPU, 256 MiB. A render peaks well under that (see
+      // play/README.md); "basic" (1/4 vCPU, 1 GiB) renders faster.
+      "instance_type": "lite",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "PLAY_BOT", "class_name": "PlayBot" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PlayBot"] }],
+  // Restart the bot within five minutes if it ever stops.
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": {
+    "PLAY_WORKERS": "1",
+    "PLAY_MEMORY_MB": "256",
+    "PLAY_TIMEOUT_MS": "10000",
+    // Script time per render; 2 s was too tight for large canvases on lite.
+    "PLAY_TIME_MS": "5000",
+    // The image's commit (push-image.sh writes it): a running bot started
+    // from another image is restarted by the next cron or /health.
+    // Turnstile's public site key for /play (the secret is TURNSTILE_SECRET).
+    "TURNSTILE_SITEKEY": "0x4AAAAAAFfQTZDPbRvs2kSG",
+    "PLAY_VERSION": "622ff47e6fd2"
+  },
+  // /invite (the redirect with its link preview) and /og/ are static files;
+  // public/og/invite.png is rendered by rawr-play from og/card.rs.
+  // /play's examples: play/tests/fixtures/*.rs, imported as text.
+  "rules": [{ "type": "Text", "globs": ["**/*.rs"], "fallthrough": false }],
+  "assets": { "directory": "public", "binding": "ASSETS", "html_handling": "drop-trailing-slash" },
+  "routes": [{ "pattern": "rawr-bot.airstrike.fyi", "custom_domain": true }]
+  // DISCORD_TOKEN is a secret: `npx wrangler secret put DISCORD_TOKEN`.
+}

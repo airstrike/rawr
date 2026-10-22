@@ -1,0 +1,27 @@
+{
+  "schema": "rawr.iced.profile-equivalence/v1",
+  "phase": 6,
+  "positive": [
+    "ordinary-constructor",
+    "ordinary-consuming-builder",
+    "ordinary-style-function-item",
+    "exact-widget-impl-boxed",
+    "unannotated-custom-widget"
+  ],
+  "semantic_retain": [
+    "application-owner",
+    "preview-owner",
+    "generation-authenticated-event",
+    "task-plan",
+    "subscription-plan",
+    "view-region",
+    "candidate-admission"
+  ],
+  "negative": [
+    "widget-name-without-impl",
+    "from-without-widget-impl",
+    "transitive-conversion",
+    "native-element-in-durable-state",
+    "dual-canonical-owner"
+  ]
+}

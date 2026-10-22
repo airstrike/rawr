@@ -1,0 +1,5 @@
+error: index getter requires exactly 2 parameters
+  --> ui_tests/rawr_fn_index_getter_signature.rs:13:20
+   |
+13 |     pub fn test_fn(input: Point) -> bool {
+   |                    ^^^^^

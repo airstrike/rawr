@@ -1,0 +1,219 @@
+// The web playground's pure parts: share ids, share validation and the
+// per-IP rate limiter the PlayBot Durable Object keeps in memory.
+
+/** Longest snippet, in bytes (the bot checks it again). */
+export const MAX_CODE = 16 * 1024;
+/** Largest stored share, in bytes of canonical JSON. */
+export const MAX_SHARE = 64 * 1024;
+export const MAX_MESSAGES = 32;
+export const ID_LENGTH = 10;
+export const ID_PATTERN = /^[0-9A-Za-z]{10}$/;
+
+/** What a share keeps: the code and the run options, nothing about who. */
+export interface Snippet {
+  code: string;
+  theme: "dark" | "light";
+  size: string;
+  messages: string[];
+}
+
+/** The snippet in a request body, normalized, or an error. */
+export function parseSnippet(body: unknown): Snippet | string {
+  if (typeof body !== "object" || body === null) return "bad request";
+  const b = body as Record<string, unknown>;
+  if (typeof b.code !== "string" || b.code.trim() === "") return "write some code first";
+  if (new TextEncoder().encode(b.code).length > MAX_CODE) return `the code is over ${MAX_CODE / 1024} KiB`;
+  const theme = b.theme === "light" ? "light" : "dark";
+  const size = typeof b.size === "string" ? b.size.trim() : "";
+  if (size !== "" && !/^\d{1,4}x\d{1,4}$/i.test(size)) return "size is WxH, like 400x300";
+  const raw = b.messages ?? [];
+  if (!Array.isArray(raw) || !raw.every((m) => typeof m === "string")) return "messages are text";
+  const messages = (raw as string[]).map((m) => m.trim()).filter((m) => m !== "");
+  if (messages.length > MAX_MESSAGES) return `at most ${MAX_MESSAGES} messages`;
+  if (messages.some((m) => m.length > 256)) return "a message is over 256 characters";
+  return { code: b.code, theme, size: size.toLowerCase(), messages };
+}
+
+/** The stored form: fixed key order, so equal snippets are equal bytes. */
+export function canonical(snippet: Snippet): string {
+  const { code, theme, size, messages } = snippet;
+  return JSON.stringify({ code, theme, size, messages });
+}
+
+const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/** A share's id: the first 64 bits of the SHA-256 of its canonical form, in base 62. */
+export async function shareId(text: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  let n = 0n;
+  for (const byte of digest.slice(0, 8)) n = (n << 8n) | BigInt(byte);
+  let id = "";
+  for (let i = 0; i < ID_LENGTH; i++) {
+    id = DIGITS[Number(n % 62n)] + id;
+    n /= 62n;
+  }
+  return id;
+}
+
+/** Hex HMAC-SHA256 of `text` under `key`. */
+export async function hmac(key: string, text: string): Promise<string> {
+  const k = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(key),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(text)));
+  return [...mac].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Equal strings, compared in time that depends only on the length. */
+export function same(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+export interface Window {
+  /** Requests allowed per window. */
+  max: number;
+  ms: number;
+}
+
+/** Sliding-window limits per key (a hashed IP), in memory. */
+export class Limiter {
+  private seen = new Map<string, number[]>();
+  private readonly windows: Window[];
+  private readonly maxKeys: number;
+  private readonly longest: number;
+
+  constructor(windows: Window[], maxKeys = 10_000) {
+    this.windows = windows;
+    this.maxKeys = maxKeys;
+    this.longest = Math.max(...windows.map((w) => w.ms));
+  }
+
+  /** Count a request at `now` (ms); 0 if allowed, else seconds until it would be. */
+  take(key: string, now: number): number {
+    const times = (this.seen.get(key) ?? []).filter((t) => t > now - this.longest);
+    let wait = 0;
+    for (const w of this.windows) {
+      const inside = times.filter((t) => t > now - w.ms);
+      if (inside.length >= w.max) wait = Math.max(wait, inside[inside.length - w.max] + w.ms - now);
+    }
+    if (wait > 0) {
+      this.seen.set(key, times);
+      return Math.ceil(wait / 1000);
+    }
+    times.push(now);
+    this.seen.delete(key);
+    this.seen.set(key, times);
+    if (this.seen.size > this.maxKeys) {
+      const oldest = this.seen.keys().next().value;
+      if (oldest !== undefined) this.seen.delete(oldest);
+    }
+    return 0;
+  }
+}
+
+/** Playground renders: 6 a minute and 60 an hour per IP. */
+export const RENDER_LIMITS: Window[] = [
+  { max: 6, ms: 60_000 },
+  { max: 60, ms: 3_600_000 },
+];
+/** Shares: 10 a minute and 100 an hour per IP. */
+export const SHARE_LIMITS: Window[] = [
+  { max: 10, ms: 60_000 },
+  { max: 100, ms: 3_600_000 },
+];
+
+/** Previews: 10 uncached renders a minute and 60 an hour per IP. */
+export const PREVIEW_LIMITS: Window[] = [
+  { max: 10, ms: 60_000 },
+  { max: 60, ms: 3_600_000 },
+];
+/** Largest preview PNG kept, in bytes. */
+export const MAX_PREVIEW = 1024 * 1024;
+/** How long a preview that failed for a passing reason (busy, unreachable) is not retried. */
+export const RETRY_MS = 10 * 60_000;
+/** Shares not visited for longer than this many days are purged. */
+export const KEEP_DAYS = 30;
+
+/** The width and height in a PNG's header, or null if it is not a PNG. */
+export function pngSize(bytes: Uint8Array): { width: number; height: number } | null {
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (bytes.length < 24 || signature.some((b, i) => bytes[i] !== b)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
+/** The first non-blank line of the code, trimmed, at most 150 characters. */
+export function firstLine(code: string): string {
+  const line = code.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
+  return line.length > 150 ? line.slice(0, 149) + "…" : line;
+}
+
+/** Headers of a preview image: forever when it can never change, else briefly. */
+export function previewHeaders(permanent: boolean): Record<string, string> {
+  return {
+    "content-type": "image/png",
+    "cache-control": permanent ? "public, max-age=31536000, immutable" : "public, max-age=300",
+  };
+}
+
+/** The UTC day number of `now` (ms). */
+export function day(now: number): number {
+  return Math.floor(now / 86_400_000);
+}
+
+/**
+ * One purge pass over shares and the day each was last visited (undefined:
+ * never recorded): shares unvisited for more than KEEP_DAYS go, and shares
+ * without a day are stamped with today rather than removed.
+ */
+export function purgeSelection(
+  seen: Map<string, number | undefined>,
+  today: number,
+): { remove: string[]; stamp: string[] } {
+  const remove: string[] = [];
+  const stamp: string[] = [];
+  for (const [id, last] of seen) {
+    if (last === undefined) stamp.push(id);
+    else if (today - last > KEEP_DAYS) remove.push(id);
+  }
+  return { remove, stamp };
+}
+
+export interface Og {
+  title: string;
+  description: string;
+  url: string;
+  image: string;
+  alt: string;
+  width?: number;
+  height?: number;
+}
+
+/** Open Graph and Twitter card tags, escaped. */
+export function ogTags(og: Og, escape: (text: string) => string): string {
+  const meta = (attr: string, name: string, content: string) =>
+    `<meta ${attr}="${name}" content="${escape(content)}">`;
+  return [
+    meta("property", "og:title", og.title),
+    meta("property", "og:description", og.description),
+    meta("property", "og:type", "website"),
+    meta("property", "og:url", og.url),
+    meta("property", "og:image", og.image),
+    ...(og.width && og.height
+      ? [meta("property", "og:image:width", String(og.width)), meta("property", "og:image:height", String(og.height))]
+      : []),
+    meta("property", "og:image:alt", og.alt),
+    meta("name", "twitter:card", "summary_large_image"),
+    meta("name", "twitter:title", og.title),
+    meta("name", "twitter:description", og.description),
+    meta("name", "twitter:image", og.image),
+    meta("name", "description", og.description),
+  ].join("\n");
+}
