@@ -4728,7 +4728,7 @@ impl Keyed {
 /// Rust's integer types. All are an `i64` at runtime: the kind decides the
 /// range arithmetic is checked against and what `as` truncates to.
 /// `u64` and `usize` stop at `i64::MAX`. `Var` is a literal's
-/// `{integer}`, bound by inference (`Inference::resolve`) and `i64` when
+/// `{integer}`, bound by inference (`Inference::resolve`) and `i32` when
 /// nothing binds it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Int {
@@ -7413,6 +7413,10 @@ struct Parser<'a> {
     /// Type witnesses passed for `Default`-bounded generic parameters,
     /// written over their placeholders once the types are inferred.
     pending_witnesses: Vec<(String, Ty, Span)>,
+    /// Arithmetic on a literal's `{integer}` whose kind inference had not
+    /// settled: each placeholder, written over with the kind's code once
+    /// it has (`i32` when nothing binds it, as in Rust).
+    pending_int_kinds: Vec<(String, Ty)>,
     /// `Default::default()` calls whose type inference fixes later:
     /// `(placeholder, type, span)`, written over with the type's default.
     pending_defaults: Vec<(String, Ty, Span)>,
@@ -7592,6 +7596,7 @@ impl<'a> Parser<'a> {
             pending_traits: Vec::new(),
             pending_projections: Vec::new(),
             pending_witnesses: Vec::new(),
+            pending_int_kinds: Vec::new(),
             pending_defaults: Vec::new(),
             no_struct: false,
             split_angle: None,
@@ -8335,15 +8340,26 @@ impl<'a> Parser<'a> {
     /// Write each pending witness over its placeholder (same length, so
     /// source locations stay exact).
     fn finish_witnesses(&mut self) -> Result<(), Error> {
-        // Rust's fallback: an unconstrained literal is an `i64` or `f64`.
+        // Rust's fallback: an unconstrained literal is an `i32` or `f64`.
         for (id, integer) in std::mem::take(&mut self.literal_kinds) {
             let (kind, default) = if integer {
-                (Ty::Int(Int::Var(id)), Ty::Int(Int::I64))
+                (Ty::Int(Int::Var(id)), Ty::Int(Int::I32))
             } else {
                 (Ty::Float(Float::Var(id)), Ty::Float(Float::F64))
             };
             if self.inference.resolve(&kind) == kind {
                 self.inference.bind(id, default);
+            }
+        }
+        for (placeholder, ty) in std::mem::take(&mut self.pending_int_kinds) {
+            let code = match self.inference.resolve(&ty) {
+                Ty::Int(Int::Var(_)) => kind_code(Ty::Int(Int::I32)),
+                ty => kind_code(ty),
+            };
+            let replacement = format!("{code:<width$}", width = placeholder.len());
+            self.output.replace_same_length(&placeholder, &replacement);
+            for closure in &mut self.lifted {
+                closure.body.replace_same_length(&placeholder, &replacement);
             }
         }
         self.finish_instances()?;
@@ -18093,8 +18109,14 @@ impl<'a> Parser<'a> {
     /// `f32` result rounded to `f32`.
     fn checked_arithmetic(&mut self, mut value: ParsedExpr, symbol: &str) -> ParsedExpr {
         let code = match self.inference.resolve(&value.ty) {
-            Ty::Int(kind) if kind.checked() => kind_code(Ty::Int(kind)),
-            Ty::Float(Float::F32) => kind_code(Ty::Float(Float::F32)),
+            Ty::Int(kind) if kind.checked() => kind_code(Ty::Int(kind)).to_string(),
+            Ty::Float(Float::F32) => kind_code(Ty::Float(Float::F32)).to_string(),
+            // Its kind is known once inference settles (`finish_witnesses`).
+            Ty::Int(Int::Var(_)) => {
+                let placeholder = format!("__rawr_int_kind_{:08}", self.pending_int_kinds.len());
+                self.pending_int_kinds.push((placeholder.clone(), value.ty.clone()));
+                placeholder
+            }
             _ => return value,
         };
         let verb = match symbol {
@@ -18110,7 +18132,7 @@ impl<'a> Parser<'a> {
             PreludeOp::Narrow,
             [
                 source,
-                code.to_string().into(),
+                code.into(),
                 format!("{:?}", format!("attempt to {verb} with overflow")).into(),
             ],
         );
@@ -21116,6 +21138,7 @@ impl<'a> Parser<'a> {
 
     /// `{ statements; tail }`: a block whose bindings end with it and whose
     /// value is its tail, as in Rust.
+    #[inline(never)]
     fn parse_block_expr(&mut self) -> Result<ParsedExpr, Error> {
         let original = self.bindings.clone();
         let outer = std::mem::replace(&mut self.no_struct, false);
@@ -21503,6 +21526,7 @@ impl<'a> Parser<'a> {
 
     /// A panic macro's own message, `format!`'s text of its arguments, or
     /// `None` without any.
+    #[inline(never)]
     fn panic_format(
         &mut self,
         parts: Vec<Vec<(Token, Position)>>,
@@ -21527,6 +21551,7 @@ impl<'a> Parser<'a> {
     /// `assert_eq!(a, b, ..)` and `assert_ne!`: as Rust expands them, both
     /// sides borrowed once and compared, and on failure a panic showing
     /// both with `{:?}`.
+    #[inline(never)]
     fn parse_assert_compare(
         &mut self,
         (operator, symbol): (Token, &str),
@@ -21597,6 +21622,7 @@ impl<'a> Parser<'a> {
     /// A call of `std::mem`'s `swap`, `replace` or `take` at `name`, by
     /// its path (`std::mem::swap`, `mem::swap`) or imported (`swap`): the
     /// function and the tokens before its name.
+    #[inline(never)]
     fn mem_path(&mut self, name: &str) -> Option<(&'static str, usize)> {
         let mut ahead = self.input.clone();
         let tokens: Vec<Token> = (0..5)
@@ -21641,6 +21667,7 @@ impl<'a> Parser<'a> {
 
     /// `swap(&mut a, &mut b)`, `replace(&mut a, value)` (the old value) and
     /// `take(&mut a)` (the old value, `a` left as its `Default`).
+    #[inline(never)]
     fn parse_mem_call(&mut self, function: &str, name_span: Span) -> Result<ParsedExpr, Error> {
         let (mut arguments, end) = self.parse_borrowing_arguments("`std::mem` arguments")?;
         let call = span(name_span.start(), end);

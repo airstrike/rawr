@@ -6392,3 +6392,27 @@ fn language_nested_fn_items() {
     );
     assert_eq!(value, "9 25 inner 2");
 }
+
+#[test]
+fn language_untyped_integers_are_i32() {
+    let error = rejected("pub fn run() -> i64 { let f = (1..=20).fold(1, |a, b| a * b); println!(\"{}\", f); 0 } run()");
+    assert!(error.contains("attempt to multiply with overflow"), "{error}");
+    let error = rejected("pub fn run() -> i64 { let mut x = 2147483600; for _ in 0..100 { x += 1; } println!(\"{}\", x); 0 } run()");
+    assert!(error.contains("attempt to add with overflow"), "{error}");
+    // A literal an `i64` binds is an `i64`, before or after the arithmetic.
+    let value = run(r#"
+        fn widen(x: i64) -> i64 { x }
+        pub fn run() -> i64 {
+            let mut x = 2147483600;
+            x += 100;
+            let y: i64 = 3_000_000_000 * 2;
+            widen(x) + y
+        }
+        run()
+    "#);
+    assert_eq!(value, 2_147_483_700 + 6_000_000_000);
+    let value = run_string(
+        "pub fn run() -> String { let n = 7; let m = n * 6; format!(\"{} {}\", m, (1..=10).fold(1, |a, b| a * b)) } run()",
+    );
+    assert_eq!(value, "42 3628800");
+}
