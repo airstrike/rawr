@@ -598,6 +598,21 @@ impl Registry {
         Some(item)
     }
 
+    /// The paths of the free functions and macros named `name`, in any
+    /// module: `iced::widget::center` for `center`.
+    pub(crate) fn functions_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = String> + 'a {
+        self.items
+            .iter()
+            .filter(move |item| {
+                item.path_ref().name() == name
+                    && matches!(
+                        item.kind(),
+                        item::Kind::Function | item::Kind::IntrinsicFunction
+                    )
+            })
+            .map(item::Definition::path)
+    }
+
     /// Items declared directly under `owner`, such as a type's methods.
     pub(crate) fn members<'a>(&'a self, owner: &str) -> impl Iterator<Item = &'a item::Definition> {
         let owner = path::Path::parse(owner).ok();

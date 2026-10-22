@@ -1819,6 +1819,9 @@ struct Tables {
     functions: BTreeMap<(crate::program::source::Id, ImmutableString), ScriptFunction>,
     functions_by_key: BTreeMap<crate::item::Key, ScriptFunction>,
     widgets: BTreeMap<type_def::Identity, crate::widget::Definition>,
+    /// The names of the program's legacy functions, which calls reach
+    /// untyped.
+    legacy_functions: BTreeSet<ImmutableString>,
     sources: crate::program::source::Table,
     application_runtime: crate::application::RuntimeGraph,
     /// The application boot item, whose tuple output is a startup envelope.
@@ -2241,6 +2244,14 @@ impl Models {
             functions,
             functions_by_key,
             widgets,
+            legacy_functions: program
+                .items
+                .iter()
+                .filter_map(|shell| match &shell.kind {
+                    item::Kind::LegacyFunction(function) => Some(function.name.text.clone()),
+                    _ => None,
+                })
+                .collect(),
             sources: program.source.table().clone(),
             application_runtime,
             boot: program
@@ -7548,6 +7559,10 @@ struct Parser<'a> {
     /// that copies it into a local before the statement and the code that
     /// stores it back after (`self.counts.entry(k)`).
     field_entries: Vec<(origin::Fragment, origin::Fragment)>,
+    /// The engine's global modules: the native functions a call may name.
+    native_modules: Vec<crate::SharedModule>,
+    /// Calls of names no function of the crate's has, with their spans.
+    unresolved_calls: Vec<(ImmutableString, Span)>,
     /// Patterns matched on `&mut` places whose bindings are in scope.
     write_backs: Vec<WriteBack>,
     /// The expression depth at which `&mut place` is read: a direct
@@ -7791,6 +7806,8 @@ impl<'a> Parser<'a> {
             pipelines: BTreeMap::new(),
             last_range: None,
             field_entries: Vec::new(),
+            native_modules: engine.global_modules.clone(),
+            unresolved_calls: Vec::new(),
             write_backs: Vec::new(),
             mutable_borrow: None,
             bound_iterators: BTreeMap::new(),
@@ -8092,6 +8109,56 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_method_body(&mut self, definition: &method::Definition) -> Result<Lowered, Error> {
+        let lowered = self.parse_method_body_unexplained(definition);
+        lowered.map_err(|error| self.explain_unresolved(error))
+    }
+
+    fn parse_function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
+        let lowered = self.parse_function_body_unexplained(definition);
+        lowered.map_err(|error| self.explain_unresolved(error))
+    }
+
+    /// A type mismatch on the untyped value of a call to a name no function
+    /// has: an unknown function, with the library function of that name to
+    /// import when there is one.
+    fn explain_unresolved(&self, error: Error) -> Error {
+        let Error::TypeMismatch {
+            actual, expression, ..
+        } = &error
+        else {
+            return error;
+        };
+        if actual.as_str() != "<dynamic>" {
+            return error;
+        }
+        let Some((name, call)) = self
+            .unresolved_calls
+            .iter()
+            .find(|(_, call)| call.start() == expression.start())
+        else {
+            return error;
+        };
+        let native = self.native_modules.iter().any(|module| {
+            module
+                .iter_fn()
+                .any(|(_, metadata)| metadata.name.as_str() == name.as_str())
+        });
+        if native {
+            return error;
+        }
+        let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
+        imports.sort_by_key(|path| (path.len(), path.clone()));
+        Error::UnknownFunction {
+            name: name.clone(),
+            import: imports.into_iter().next().map(Into::into),
+            reference: Span::new(call.start(), text_end(call.start(), name)),
+        }
+    }
+
+    fn parse_method_body_unexplained(
+        &mut self,
+        definition: &method::Definition,
+    ) -> Result<Lowered, Error> {
         // The value of an associated `const NAME: T = value;` is a tail.
         if definition.constant() {
             self.parse_statement()?;
@@ -8184,7 +8251,10 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
+    fn parse_function_body_unexplained(
+        &mut self,
+        definition: &item::Function,
+    ) -> Result<Lowered, Error> {
         let mut startup_tail = false;
         if definition.body.constant {
             // The initializer of `const NAME: T = value;` is a tail.
@@ -26694,6 +26764,14 @@ impl<'a> Parser<'a> {
                 argument.span,
                 "passed to an ordinary or unresolved function",
             )?;
+        }
+        // A name that is no function of the crate's: an engine's native
+        // function may still take it at runtime, untyped. Should its value
+        // be needed as a type, the error names the function
+        // (`explain_unresolved`).
+        if function.is_none() && !self.models.legacy_functions.contains(&name) {
+            self.unresolved_calls
+                .push((name.clone(), span(name_span.start(), end)));
         }
         let mut witnesses = Vec::new();
         let output = if let Some(function) = function {

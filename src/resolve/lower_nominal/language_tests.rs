@@ -7025,3 +7025,9 @@ fn language_patterns_on_mut_places_write_their_bindings_back() {
     "#);
     assert_eq!(value, 8 * 1000000 + 1 * 10000 + 2 * 1000 + 12 * 10 + 3 + 4 * 100 + 2 * 100000);
 }
+
+#[test]
+fn language_a_call_of_no_function_names_it() {
+    let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
+    assert!(error.contains("nknown function") && error.contains("centre"), "{error}");
+}

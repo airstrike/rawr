@@ -180,3 +180,27 @@ fn cli_reports_a_plain_compile_error_on_stderr() {
     assert!(result.stdout.is_empty());
     assert!(String::from_utf8_lossy(&result.stderr).contains("play.rawr:2:"));
 }
+
+#[test]
+fn cli_renders_a_snippet_using_any_widget_helper() {
+    render_fixture("center");
+}
+
+#[test]
+fn cli_names_an_unknown_function_and_quotes_only_what_was_written() {
+    let source = include_str!("fixtures/unknown_function.rs");
+    let result = run_stdin(source, &["--format", "png"]);
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("unknown function `centre`"), "{stderr}");
+    // The quoted line is the snippet as written, nothing the wrapping added.
+    let quoted = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix(" 1 | "))
+        .unwrap_or_else(|| panic!("{stderr}"));
+    assert_eq!(quoted, source.trim_end());
+    // A facade helper of the name says where it is.
+    let result = run_stdin("use iced::widget::text;\nfn view() -> impl iced::Widget<()> { center(text(\"a\")) }\n", &["--format", "png"]);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("use iced::widget::center;"), "{stderr}");
+}
