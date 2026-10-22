@@ -1056,6 +1056,16 @@ impl State {
     }
 
     #[test]
+    fn run_plain_panic_exits_101_like_rust() {
+        let output = text("println!(\"before\");\nassert_eq!(1 + 1, 3);");
+        assert_eq!(output.status, 101);
+        assert!(!output.limit);
+        let text = output.text();
+        assert!(text.starts_with("before\n"), "{text}");
+        assert!(text.contains("assertion `left == right` failed\n  left: 2\n right: 3"), "{text}");
+    }
+
+    #[test]
     fn run_plain_statement_errors_keep_their_positions() {
         let error = super::run("let x: i64 = \"s\";", &Options::default()).unwrap_err();
         let PlayError::Compile(text) = error else {
@@ -1133,7 +1143,7 @@ impl State {
             let source = format!("fn leak(x) {{ {body} }}\nfn main() {{ leak(1); }}\n");
             let refused = match super::run(&source, &Options::default()) {
                 Err(_) => true,
-                Ok(super::Outcome::Text(output)) => output.status == 1,
+                Ok(super::Outcome::Text(output)) => output.status != 0,
                 Ok(super::Outcome::Image(_)) => false,
             };
             assert!(refused, "{body}");

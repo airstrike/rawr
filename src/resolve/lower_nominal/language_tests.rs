@@ -6159,3 +6159,57 @@ fn language_block_expressions() {
     assert!(unit_tail.contains("expected 'i64', found '()'"), "{unit_tail}");
     rejected("pub fn run() -> i64 { { let t = 1; } t } run()");
 }
+
+#[test]
+fn language_panic_macros() {
+    let value = run_string(
+        r#"
+        fn later() -> i64 { todo!() }
+        fn never() -> i64 { unimplemented!() }
+        pub fn run() -> String {
+            let x = 5;
+            assert!(x > 1);
+            assert!(x > 1, "x was {}", x);
+            assert_eq!(x, 5);
+            assert_eq!(x, 5, "x was {}", x);
+            assert_ne!(x, 4);
+            debug_assert!(true);
+            debug_assert_eq!(x + 1, 6);
+            debug_assert_ne!(String::from("a"), "b".to_string());
+            assert_eq!(vec![1, 2], vec![1, 2]);
+            let y = match x { 5 => 10, _ => unreachable!("bad {}", x) };
+            let z = if y > 3 { y } else { panic!("small") };
+            format!("ok {} {}", y, z)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "ok 10 10");
+    for (body, message) in [
+        ("panic!()", "explicit panic"),
+        ("panic!(\"boom {}\", x)", "boom 5"),
+        ("assert!(x < 1)", "assertion failed: x < 1"),
+        ("assert!(s.len()==9 && !s.is_empty())", "assertion failed: s.len() == 9 && !s.is_empty()"),
+        ("assert!(x < 1, \"x was {x}\")", "x was 5"),
+        ("assert_eq!(x, 4)", "assertion `left == right` failed\n  left: 5\n right: 4"),
+        (
+            "assert_eq!(s, \"q\", \"with {} args\", 2)",
+            "assertion `left == right` failed: with 2 args\n  left: \"ab\"\n right: \"q\"",
+        ),
+        ("assert_ne!(x, 5)", "assertion `left != right` failed\n  left: 5\n right: 5"),
+        ("debug_assert!(-x > 0)", "assertion failed: -x > 0"),
+        ("todo!()", "not yet implemented"),
+        ("todo!(\"later\")", "not yet implemented: later"),
+        ("unimplemented!()", "not implemented"),
+        ("unimplemented!(\"not {}\", \"here\")", "not implemented: not here"),
+        ("unreachable!()", "internal error: entered unreachable code"),
+        ("unreachable!(\"x is {}\", x)", "internal error: entered unreachable code: x is 5"),
+    ] {
+        let error = rejected(&format!(
+            "pub fn run() -> i64 {{ let x = 5; let s = String::from(\"ab\"); {body}; 0 }} run()"
+        ));
+        assert!(error.contains(message), "{body}: {error}");
+    }
+    let mismatch = rejected("pub fn run() -> i64 { assert!(1); 0 } run()");
+    assert!(mismatch.contains("expected 'bool'"), "{mismatch}");
+}

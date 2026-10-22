@@ -21009,6 +21009,13 @@ impl<'a> Parser<'a> {
             ));
         }
         if matches!(self.peek(), Token::Bang)
+            && PANIC_MACROS.contains(&name.as_str())
+            && self.models.import(&name).is_none()
+        {
+            self.next();
+            return self.parse_panic_macro(&name, name_span);
+        }
+        if matches!(self.peek(), Token::Bang)
             && name.as_str() == "vec"
             && self.models.import(&name).is_none()
         {
@@ -21140,6 +21147,165 @@ impl<'a> Parser<'a> {
             return self.parse_host_macro(items, owner, name_span);
         }
         self.parse_name_value(name, name_span)
+    }
+
+    /// `panic!`, `assert!`, `assert_eq!`, `assert_ne!`, their `debug_`
+    /// forms, `unreachable!`, `todo!` and `unimplemented!` after the `!`,
+    /// with Rust's messages. A panic throws its message.
+    #[inline(never)]
+    fn parse_panic_macro(&mut self, name: &str, name_span: Span) -> Result<ParsedExpr, Error> {
+        let (tokens, end) = self.take_argument_tokens()?;
+        let call = span(name_span.start(), end);
+        let name = name.strip_prefix("debug_").unwrap_or(name);
+        if let Some(operator) = match name {
+            "assert_eq" => Some((Token::EqualsTo, "==")),
+            "assert_ne" => Some((Token::NotEqualsTo, "!=")),
+            _ => None,
+        } {
+            return self.parse_assert_compare(operator, tokens, name_span, end);
+        }
+        if name == "assert" {
+            let mut parts = split_arguments(tokens);
+            if parts.first().is_none_or(Vec::is_empty) {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "`assert!` without a condition".into(),
+                    source: call,
+                });
+            }
+            let condition_tokens = parts.remove(0);
+            let text = format!("assertion failed: {}", token_text(&condition_tokens));
+            let mut spliced = condition_tokens;
+            spliced.push((Token::RightParen, end));
+            self.splice_tokens(spliced);
+            let condition = self.parse_expr()?;
+            self.expect(Token::RightParen, "')' after the condition of `assert!`")?;
+            self.require_type(&Ty::Bool, &condition.ty, condition.span)?;
+            let message = match self.panic_format(parts, name_span, end)? {
+                Some(message) => message,
+                None => origin::Fragment::plain(format!("{text:?}")),
+            };
+            let mut source = origin::Fragment::plain("if !(");
+            source.push(condition.rendered_source());
+            source.push_text(") { throw ");
+            source.push(message);
+            source.push_text("; }");
+            return Ok(self.operator_expr(source, Ty::Unit, call));
+        }
+        let prefix = match name {
+            "todo" => Some("not yet implemented"),
+            "unimplemented" => Some("not implemented"),
+            "unreachable" => Some("internal error: entered unreachable code"),
+            _ => None,
+        };
+        let message = match (self.panic_format(split_arguments(tokens), name_span, end)?, prefix) {
+            (Some(message), None) => message,
+            (Some(message), Some(prefix)) => {
+                let mut text = origin::Fragment::plain(format!("{:?} + (", format!("{prefix}: ")));
+                text.push(message);
+                text.push_text(")");
+                text
+            }
+            (None, prefix) => {
+                origin::Fragment::plain(format!("{:?}", prefix.unwrap_or("explicit panic")))
+            }
+        };
+        let mut source = origin::Fragment::plain("{ throw ");
+        source.push(message);
+        source.push_text("; }");
+        Ok(self.operator_expr(source, Ty::Never, call))
+    }
+
+    /// A panic macro's own message, `format!`'s text of its arguments, or
+    /// `None` without any.
+    fn panic_format(
+        &mut self,
+        parts: Vec<Vec<(Token, Position)>>,
+        name_span: Span,
+        end: Position,
+    ) -> Result<Option<origin::Fragment>, Error> {
+        if parts.iter().all(Vec::is_empty) {
+            return Ok(None);
+        }
+        let mut spliced = Vec::new();
+        for (index, part) in parts.into_iter().enumerate() {
+            if index > 0 {
+                spliced.push((Token::Comma, end));
+            }
+            spliced.extend(part);
+        }
+        spliced.push((Token::RightParen, end));
+        self.splice_tokens(spliced);
+        Ok(Some(self.parse_format(name_span, true)?.rendered_source()))
+    }
+
+    /// `assert_eq!(a, b, ..)` and `assert_ne!`: as Rust expands them, both
+    /// sides borrowed once and compared, and on failure a panic showing
+    /// both with `{:?}`.
+    fn parse_assert_compare(
+        &mut self,
+        (operator, symbol): (Token, &str),
+        tokens: Vec<(Token, Position)>,
+        name_span: Span,
+        end: Position,
+    ) -> Result<ParsedExpr, Error> {
+        let mut parts = split_arguments(tokens).into_iter();
+        let (Some(left), Some(right)) = (parts.next(), parts.next()) else {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "an assertion without two values".into(),
+                source: span(name_span.start(), end),
+            });
+        };
+        if left.is_empty() || right.is_empty() {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "an assertion without two values".into(),
+                source: span(name_span.start(), end),
+            });
+        }
+        let rest: Vec<_> = parts.collect();
+        let at = name_span.start();
+        let left_name = self.temporary("left");
+        let right_name = self.temporary("right");
+        let ident = |name: &str, position: Position| {
+            (Token::Identifier(Box::new(name.into())), position)
+        };
+        let mut spliced = vec![(Token::LeftBrace, at), (Token::Let, at), ident(&left_name, at)];
+        spliced.extend([(Token::Equals, at), (Token::Ampersand, at), (Token::LeftParen, at)]);
+        let left_end = left.last().map_or(at, |(_, position)| *position);
+        spliced.extend(left);
+        spliced.extend([(Token::RightParen, left_end), (Token::SemiColon, left_end)]);
+        spliced.extend([(Token::Let, at), ident(&right_name, at), (Token::Equals, at)]);
+        spliced.extend([(Token::Ampersand, at), (Token::LeftParen, at)]);
+        let right_end = right.last().map_or(at, |(_, position)| *position);
+        spliced.extend(right);
+        spliced.extend([(Token::RightParen, right_end), (Token::SemiColon, right_end)]);
+        spliced.extend([(Token::If, at), (Token::Bang, at), (Token::LeftParen, at)]);
+        spliced.extend([(Token::Multiply, at), ident(&left_name, at), (operator, at)]);
+        spliced.extend([(Token::Multiply, at), ident(&right_name, at), (Token::RightParen, at)]);
+        spliced.extend([(Token::LeftBrace, at), ident("panic", at), (Token::Bang, at)]);
+        spliced.push((Token::LeftParen, at));
+        let custom = !rest.iter().all(Vec::is_empty);
+        let colon = if custom { ": {}" } else { "" };
+        let template =
+            format!("assertion `left {symbol} right` failed{colon}\n  left: {{:?}}\n right: {{:?}}");
+        spliced.push((Token::StringConstant(Box::new(template.into())), at));
+        if custom {
+            spliced.extend([(Token::Comma, at), ident("format", at), (Token::Bang, at)]);
+            spliced.push((Token::LeftParen, at));
+            for (index, part) in rest.into_iter().enumerate() {
+                if index > 0 {
+                    spliced.push((Token::Comma, end));
+                }
+                spliced.extend(part);
+            }
+            spliced.push((Token::RightParen, end));
+        }
+        spliced.extend([(Token::Comma, at), ident(&left_name, at), (Token::Comma, at)]);
+        spliced.extend([ident(&right_name, at), (Token::RightParen, at)]);
+        spliced.extend([(Token::RightBrace, end), (Token::RightBrace, end)]);
+        self.splice_tokens(spliced);
+        let mut value = self.parse_block_expr()?;
+        value.span = span(name_span.start(), end);
+        Ok(value)
     }
 
     /// `print!`, `println!`, `eprint!`, `eprintln!` after the name:
@@ -31269,6 +31435,116 @@ fn unsigned_order(value: origin::Fragment) -> origin::Fragment {
 }
 
 /// `=` or a compound assignment.
+/// The panic macros of Rust's prelude (`parse_panic_macro`).
+const PANIC_MACROS: &[&str] = &[
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "unreachable",
+    "todo",
+    "unimplemented",
+];
+
+/// Macro arguments split at their top-level commas.
+fn split_arguments(tokens: Vec<(Token, Position)>) -> Vec<Vec<(Token, Position)>> {
+    let mut parts = vec![Vec::new()];
+    let mut depth = 0usize;
+    for (token, position) in tokens {
+        match token {
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                depth += 1;
+            }
+            Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                depth = depth.saturating_sub(1);
+            }
+            Token::Comma if depth == 0 => {
+                parts.push(Vec::new());
+                continue;
+            }
+            _ => {}
+        }
+        parts
+            .last_mut()
+            .expect("there is always a part")
+            .push((token, position));
+    }
+    if parts.len() > 1 && parts.last().is_some_and(Vec::is_empty) {
+        parts.pop();
+    }
+    parts
+}
+
+/// An expression's tokens as Rust's `stringify!` prints them: binary
+/// operators spaced, nothing around `.`, `::` and brackets.
+fn token_text(tokens: &[(Token, Position)]) -> String {
+    let mut text = String::new();
+    let mut previous: Option<&Token> = None;
+    let mut unary = false;
+    for (token, _) in tokens {
+        let word = match token {
+            Token::StringConstant(value) => format!("{:?}", value.as_str()),
+            Token::CharConstant(value) => format!("{value:?}"),
+            token => token.to_string(),
+        };
+        let operand_before = previous.is_some_and(ends_operand);
+        let tight_before = matches!(
+            token,
+            Token::Period
+                | Token::Comma
+                | Token::RightParen
+                | Token::RightBracket
+                | Token::SemiColon
+                | Token::DoubleColon
+                | Token::Unit
+        ) || matches!(token, Token::Reserved(word) if word.as_str() == "?")
+            || matches!(token, Token::LeftParen | Token::LeftBracket | Token::Bang)
+            && operand_before
+            || matches!(token, Token::LeftParen | Token::LeftBracket)
+                && matches!(previous, Some(Token::Bang));
+        let tight_after_previous = unary
+            || matches!(
+                previous,
+                Some(Token::Period | Token::LeftParen | Token::LeftBracket | Token::DoubleColon)
+            );
+        if previous.is_some() && !tight_before && !tight_after_previous {
+            text.push(' ');
+        }
+        // `-x`, `!x`, `&x`, `*x`: a prefix operator where no operand ends.
+        unary = matches!(
+            token,
+            Token::UnaryMinus | Token::Minus | Token::Bang | Token::Ampersand | Token::Multiply
+        ) && !operand_before;
+        text.push_str(&word);
+        previous = Some(token);
+    }
+    text
+}
+
+/// Whether an operand can end at `token`, so an operator after it is binary.
+fn ends_operand(token: &Token) -> bool {
+    match token {
+        Token::Identifier(_)
+        | Token::IntegerConstant(_)
+        | Token::StringConstant(_)
+        | Token::CharConstant(_)
+        | Token::True
+        | Token::False
+        | Token::Unit
+        | Token::RightParen
+        | Token::RightBracket
+        | Token::RightBrace
+        | Token::SelfValue => true,
+        #[cfg(not(feature = "no_float"))]
+        Token::FloatConstant(_) => true,
+        Token::Reserved(word) => word.as_str() == "?",
+        _ => false,
+    }
+}
+
 fn assignment_token(token: &Token) -> bool {
     *token == Token::Equals || compound_operator(token).is_some()
 }

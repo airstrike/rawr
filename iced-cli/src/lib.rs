@@ -141,8 +141,11 @@ fn execute_command(
             })? {
                 Ok(loaded) => loaded,
                 Err(base) => {
-                    let failed = base::run(base)
-                        .map_err(|report| Error::Run(run::Error::Application { report }))?;
+                    let failed = base::run(base).map_err(
+                        |(base::Failed::Compile(report) | base::Failed::Panic(report))| {
+                            Error::Run(run::Error::Application { report })
+                        },
+                    )?;
                     return Ok(failed.map(|error| Report {
                         message: String::new(),
                         warning: Some(error),

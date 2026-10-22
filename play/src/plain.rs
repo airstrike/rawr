@@ -26,6 +26,9 @@ pub const MAX_OUTPUT: usize = 64 * 1024;
 /// What ends output cut at [`MAX_OUTPUT`].
 pub const TRUNCATED: &str = "… output truncated";
 
+/// The status of a program that panicked, as Rust's.
+pub const PANIC_STATUS: i32 = 101;
+
 const TIME_LIMIT: &str = "time limit exceeded";
 const OUTPUT_LIMIT: &str = "output limit exceeded";
 
@@ -54,8 +57,8 @@ impl Stream {
 pub struct Output {
     /// Runs of text, each from one stream; neighbours differ in stream.
     pub chunks: Vec<(Stream, String)>,
-    /// 0, or 1 when `main` returned `Err`, the program failed at run time or
-    /// a limit stopped it.
+    /// 0, 1 when `main` returned `Err` or a limit stopped it, or 101 when
+    /// the program panicked.
     pub status: i32,
     /// Whether the output passed [`MAX_OUTPUT`] and was cut.
     pub truncated: bool,
@@ -258,9 +261,13 @@ impl Parsed {
                             // The renderer's wording names a render.
                             reason.replace(crate::TIME_LIMIT, TIME_LIMIT)
                         }
-                        _ => rawr::diagnostic::Report::from_evaluation(Some(evidence), &error)
-                            .map(|report| crate::report(&report, &program, source))
-                            .unwrap_or(text),
+                        _ => {
+                            // A panic: Rust's exit status.
+                            output.status = PANIC_STATUS;
+                            rawr::diagnostic::Report::from_evaluation(Some(evidence), &error)
+                                .map(|report| crate::report(&report, &program, source))
+                                .unwrap_or(text)
+                        }
                     };
                     output.push(Stream::Stderr, &format!("{}\n", message.trim_end()));
                 }
