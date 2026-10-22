@@ -2602,21 +2602,20 @@ fn render_source(
 ) -> Result<(), request::Error> {
     let mut main = Vec::new();
     let output = &mut main;
-    let facade = if profile.projections().is_empty() {
-        None
-    } else {
-        Some(
-            crate::surface::facade::Plan::decode(
-                facade_plan.ok_or(request::Error::Drift {
+    if !profile.projections().is_empty() && facade_plan.is_none() {
+        return Err(request::Error::Drift {
+            field: "generated profile facade plan",
+        });
+    }
+    let facade = facade_plan
+        .map(|bytes| {
+            crate::surface::facade::Plan::decode(bytes, &crate::cargo::Limits::standard()).map_err(
+                |_| request::Error::Drift {
                     field: "generated profile facade plan",
-                })?,
-                &crate::cargo::Limits::standard(),
+                },
             )
-            .map_err(|_| request::Error::Drift {
-                field: "generated profile facade plan",
-            })?,
-        )
-    };
+        })
+        .transpose()?;
     output
         .write_all(
             b"#![forbid(unsafe_code)]\n\
@@ -2641,11 +2640,7 @@ fn render_source(
     .map_err(|_| request::Error::Encoding)?;
     // Each trait the program names is in scope for every adapter, so a
     // method it provides resolves as it does in the program.
-    if let Some(bytes) = facade_plan {
-        let plan = crate::surface::facade::Plan::decode(bytes, &crate::cargo::Limits::standard())
-            .map_err(|_| request::Error::Drift {
-                field: "generated facade plan",
-            })?;
+    if let Some(plan) = &facade {
         for facade in plan.facades() {
             for path in facade.traits() {
                 writeln!(
@@ -3521,13 +3516,14 @@ fn render_adapter(
                             }
                         )
                         .map_err(|_| request::Error::Encoding)?;
-                        render_container_path(
+                        render_container_path_with(
                             &path,
                             signature,
                             substitutions,
                             constants,
                             *container_parameters,
                             true,
+                            facade,
                             output,
                         )?;
                         write!(output, ", _>(receiver, |receiver| receiver.{}", plan.name())
@@ -5209,10 +5205,51 @@ fn render_container_path(
     type_position: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    render_container_path_with(
+        path,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        type_position,
+        None,
+        output,
+    )
+}
+
+/// The container path, its imported type arguments written out from the
+/// facade plan: a receiver's type must be exact (`DateTime<Local>`), as
+/// the arena finds a value by its type.
+#[allow(clippy::too_many_arguments)]
+fn render_container_path_with(
+    path: &str,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    type_position: bool,
+    concrete: Option<&crate::surface::facade::Plan>,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
     let partition = partition_generics(signature, substitutions, constants, container_parameters)?;
     output
         .write_all(path.as_bytes())
         .map_err(|_| request::Error::Encoding)?;
+    if let Some(facade) = concrete
+        && !partition.container_parameters.is_empty()
+        && partition.container_constants.is_empty()
+        && partition.container_types.len() == partition.container_parameters.len()
+    {
+        let rendered = partition
+            .container_types
+            .iter()
+            .map(|ty| concrete_type(ty, facade))
+            .collect::<Option<Vec<_>>>();
+        if let Some(rendered) = rendered {
+            return write!(output, "<{}>", rendered.join(", "))
+                .map_err(|_| request::Error::Encoding);
+        }
+    }
     render_generic_arguments(
         partition.container_parameters,
         partition.container_types,
@@ -5220,6 +5257,49 @@ fn render_container_path(
         if type_position { b"<" } else { b"::<" },
         output,
     )
+}
+
+/// The Rust spelling of `ty`, its imported types by their facade paths, or
+/// `None` when it has no exact spelling.
+fn concrete_type(ty: &convert::Type, facade: &crate::surface::facade::Plan) -> Option<String> {
+    Some(match ty {
+        convert::Type::Unit => "()".to_owned(),
+        convert::Type::Builtin(convert::Builtin::String) => "String".to_owned(),
+        convert::Type::Builtin(convert::Builtin::InclusiveRange) => {
+            "std::ops::RangeInclusive<i64>".to_owned()
+        }
+        convert::Type::Builtin(builtin) => builtin.rust_name()?.to_owned(),
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            let (root, ty) = facade.facades().find_map(|owner| {
+                owner
+                    .types()
+                    .find(|ty| ty.identity() == definition.as_bytes())
+                    .map(|ty| (owner.root(), ty))
+            })?;
+            let mut text = format!("{root}::{}", ty.path());
+            if !arguments.is_empty() {
+                let arguments = arguments
+                    .iter()
+                    .map(|argument| concrete_type(argument, facade))
+                    .collect::<Option<Vec<_>>>()?;
+                text.push('<');
+                text.push_str(&arguments.join(", "));
+                text.push('>');
+            }
+            text
+        }
+        convert::Type::Option(element) => format!("Option<{}>", concrete_type(element, facade)?),
+        convert::Type::Result(ok, err) => format!(
+            "Result<{}, {}>",
+            concrete_type(ok, facade)?,
+            concrete_type(err, facade)?
+        ),
+        convert::Type::ProfileMessage { payload, .. } => concrete_type(payload, facade)?,
+        convert::Type::FunctionItem { .. } | convert::Type::Parameter(_) => return None,
+    })
 }
 
 fn render_item_turbofish(

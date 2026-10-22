@@ -975,22 +975,29 @@ impl Builder {
             + SendSync
             + 'static,
     ) -> Result<&mut Self, Error> {
-        let definition = self
+        let fingerprints = self
             .definition
             .items()
-            .find(|definition| {
+            .filter(|definition| {
                 definition
                     .imported_identity()
                     .is_some_and(|identity| identity.fingerprint() == selector)
             })
-            .ok_or_else(|| Error::UnknownItem {
+            .map(host::item::Definition::fingerprint)
+            .collect::<Vec<_>>();
+        if fingerprints.is_empty() {
+            return Err(Error::UnknownItem {
                 facade: self.definition.root().into(),
                 item: format!("<imported selector {selector:02x?}>").into(),
-            })?;
+            });
+        }
         // An instance reached through two paths is bound once.
-        self.instances
-            .entry((definition.fingerprint(), instance))
-            .or_insert_with(|| Shared::new(Contextual(callback)));
+        let callback: Shared<dyn Callback> = Shared::new(Contextual(callback));
+        for fingerprint in fingerprints {
+            self.instances
+                .entry((fingerprint, instance))
+                .or_insert_with(|| callback.clone());
+        }
         Ok(self)
     }
 
@@ -1004,26 +1011,41 @@ impl Builder {
             + SendSync
             + 'static,
     ) -> Result<&mut Self, Error> {
-        let definition = self
+        // The same Rust item under several paths (`TimeDelta::num_minutes`
+        // and its alias `Duration::num_minutes`) is one binding.
+        let definitions = self
             .definition
             .items()
-            .find(|definition| {
+            .filter(|definition| {
                 definition
                     .imported_identity()
                     .is_some_and(|identity| identity.fingerprint() == selector)
             })
-            .ok_or_else(|| Error::UnknownItem {
+            .collect::<Vec<_>>();
+        let Some(first) = definitions.first() else {
+            return Err(Error::UnknownItem {
                 facade: self.definition.root().into(),
                 item: format!("<imported selector {selector:02x?}>").into(),
-            })?;
-        let fingerprint = definition.fingerprint();
-        if self.bindings.contains_key(&fingerprint) {
+            });
+        };
+        if definitions
+            .iter()
+            .all(|definition| self.bindings.contains_key(&definition.fingerprint()))
+        {
             return Err(Error::DuplicateBinding {
-                item: definition.path().to_string().into(),
+                item: first.path().to_string().into(),
             });
         }
-        self.bindings
-            .insert(fingerprint, Shared::new(Contextual(callback)));
+        let callback: Shared<dyn Callback> = Shared::new(Contextual(callback));
+        let fingerprints = definitions
+            .iter()
+            .map(|definition| definition.fingerprint())
+            .collect::<Vec<_>>();
+        for fingerprint in fingerprints {
+            self.bindings
+                .entry(fingerprint)
+                .or_insert_with(|| callback.clone());
+        }
         Ok(self)
     }
 

@@ -2232,6 +2232,19 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 continue;
             };
             self.ensure_with_demand(def_id, namespace(ns), Demand::SelectedRoot)?;
+            // `pub type Duration = TimeDelta;` names the type with its
+            // members: selecting the alias selects the type.
+            let (def_id, kind) = match kind {
+                DefKind::TyAlias => match tcx.type_of(def_id).instantiate_identity().skip_norm_wip().kind() {
+                    ty::Adt(definition, arguments) if arguments.is_empty() => {
+                        let target = definition.did();
+                        self.ensure_with_demand(target, Namespace::Type, Demand::SelectedRoot)?;
+                        (target, tcx.def_kind(target))
+                    }
+                    _ => (def_id, kind),
+                },
+                _ => (def_id, kind),
+            };
             if kind == DefKind::Mod && !rest.is_empty() {
                 self.select_path(def_id, rest, depth.saturating_add(1))?;
             } else if matches!(kind, DefKind::Struct | DefKind::Enum)
@@ -2255,8 +2268,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     /// trait implemented for the type itself selects that member of its
     /// implementation. A blanket implementation (`impl<R: RngCore> Rng for
     /// R`) applies to the type as if the crate wrote `impl Rng for Type`.
-    /// rustc proves the type implements the trait. Only a type without
-    /// generic parameters and a trait without its own are looked up.
+    /// rustc proves the type implements the trait, under the type's own
+    /// bounds for a generic type. Only a trait without generic parameters
+    /// of its own is looked up.
     fn resolve_member_demands(&mut self) -> Result<(), String> {
         let tcx = self.tcx;
         let mut demands = std::mem::take(&mut self.member_demands);
@@ -2265,9 +2279,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         });
         demands.dedup();
         for (adt, member) in demands {
-            if tcx.generics_of(adt).count() != 0 {
-                continue;
-            }
+            let generic = tcx.generics_of(adt).count() != 0;
             let name = Symbol::intern(&member);
             let inherent = tcx.inherent_impls(adt).iter().any(|implementation| {
                 tcx.associated_items(*implementation)
@@ -2350,8 +2362,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     .collect::<Vec<_>>();
                 // Coherence admits one blanket implementation of a trait
                 // for any one type. Several candidates whose bounds rustc
-                // would have to choose between are left unresolved.
-                if let [implementation] = blankets.as_slice() {
+                // would have to choose between are left unresolved, as is
+                // a blanket implementation for a generic type.
+                if let [implementation] = blankets.as_slice()
+                    && !generic
+                {
                     self.apply_blanket(*implementation, adt, self_ty, obligation)?;
                 }
             }

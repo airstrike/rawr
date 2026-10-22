@@ -1872,15 +1872,14 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
         Representability::Invocation(plan) => (
             match outcome.identity().selector() {
                 Selector::AssociatedFunction { .. } => ItemKind::AssociatedFunction,
-                Selector::Method { .. }
-                    if matches!(
-                        plan.receiver(),
-                        Some(representability::ownership::Receiver::Owned)
-                    ) =>
-                {
-                    ItemKind::OwnedMethod
-                }
-                Selector::Method { .. } => return Err(super::Error::InstanceMismatch),
+                Selector::Method { .. } => match plan.receiver() {
+                    Some(representability::ownership::Receiver::Owned) => ItemKind::OwnedMethod,
+                    Some(representability::ownership::Receiver::Shared) => ItemKind::SharedMethod,
+                    Some(representability::ownership::Receiver::Mutable) => {
+                        ItemKind::MutableMethod
+                    }
+                    None => return Err(super::Error::InstanceMismatch),
+                },
                 _ => return Err(super::Error::ForeignIdentity),
             },
             signature(plan.signature())?,

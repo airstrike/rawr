@@ -273,6 +273,15 @@ impl Export {
         }
     }
 
+    /// This path to `target` instead: a type alias's path to the type it
+    /// names (`chrono::Duration` to `TimeDelta`).
+    pub(crate) fn retargeted(&self, target: identity::Definition) -> Self {
+        Self {
+            target,
+            ..self.clone()
+        }
+    }
+
     /// The selected source-visible path identity.
     pub const fn key(&self) -> &identity::Export {
         &self.key

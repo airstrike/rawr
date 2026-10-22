@@ -855,6 +855,19 @@ fn build(
     for module in modules {
         builder.imported_module(&module, allocation)?;
     }
+    // The members of a type the profile owns are the profile's under each
+    // of the type's paths (iced's `Application` and
+    // `application::Application`).
+    let owned = facade
+        .types()
+        .filter(|ty| profile.owns_type(facade, ty))
+        .map(|ty| *ty.identity())
+        .collect::<Vec<_>>();
+    let owned_path = |path: &str| {
+        facade
+            .types()
+            .any(|ty| ty.path() == path && owned.contains(ty.identity()))
+    };
     for ty in facade.types() {
         if profile.owns_type(facade, ty) {
             continue;
@@ -895,7 +908,11 @@ fn build(
         }
     }
     for item in facade.items() {
-        if !profile.owns_item(facade, item) {
+        let owner_owned = item
+            .path()
+            .rsplit_once("::")
+            .is_some_and(|(owner, _)| owned_path(owner));
+        if !profile.owns_item(facade, item) && !owner_owned {
             let definition = item_definition(facade, item, profile)
                 .map_err(|source| entry_error(facade.root(), item.path(), source))?;
             builder

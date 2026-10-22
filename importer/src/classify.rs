@@ -701,13 +701,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         Ok(())
     }
 
+    /// A type's generic parameters. Its bounds (`Tz: TimeZone`) hold or
+    /// fail where rustc compiles the bridge at the concrete types.
     fn parameters(
         &self,
         generics: &model::Generics,
     ) -> Result<Box<[representability::signature::Parameter]>, Failure> {
-        if generics.predicates().len() != 0 {
-            return Err(representability::reject::Kind::Predicate.into());
-        }
         self.declared_parameters(generics)
     }
 
@@ -2466,6 +2465,12 @@ impl<P: api::Phase> Context<'_, P> {
                     .definitions()
                     .nth(definition_index)
                     .ok_or(Error::Cardinality)?;
+                // `pub type Duration = TimeDelta;` is another path to the
+                // type it names, with that type's members.
+                let aliased = self.alias_target(definition);
+                let retargeted = aliased.map(|target| export.retargeted(target.id().clone()));
+                let export = retargeted.as_ref().unwrap_or(export);
+                let definition = aliased.unwrap_or(definition);
                 let implementation = match definition.owner() {
                     model::Owner::Implementation(owner) => {
                         let index = self
@@ -2505,6 +2510,28 @@ impl<P: api::Phase> Context<'_, P> {
                 })
             }
         }
+    }
+
+    /// The type a non-generic alias of a non-generic struct or enum names.
+    fn alias_target(&self, definition: &model::Definition) -> Option<&model::Definition> {
+        let model::Kind::TypeAlias { ty, generics } = definition.kind() else {
+            return None;
+        };
+        if generics.parameters().len() != 0 || generics.predicates().len() != 0 {
+            return None;
+        }
+        let model::Type::Definition { id, arguments } = ty else {
+            return None;
+        };
+        if !arguments.is_empty() {
+            return None;
+        }
+        let target = self.graph.definitions().nth(self.graph.definition_index(id)?)?;
+        matches!(
+            target.kind(),
+            model::Kind::Struct { .. } | model::Kind::Enum { .. }
+        )
+        .then_some(target)
     }
 
     fn implementations(
@@ -2617,10 +2644,10 @@ impl<P: api::Phase> Context<'_, P> {
         use representability::{callable, reject, Representability};
 
         let retained_before = (self.retained_items.get(), self.retained_bytes.get());
+        // An inherent or trait implementation for the generic type itself
+        // (`impl<Tz: TimeZone> Datelike for DateTime<Tz>`): its methods take
+        // the type's arguments from the receiver.
         let result = (|| -> Result<Representability, Failure> {
-            if !matches!(implementation.trait_ref(), model::Trait::Inherent) {
-                return Err(reject::Kind::GenericImplementation.into());
-            }
             let model::Type::Definition { id, arguments } = implementation.self_type() else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
@@ -2665,15 +2692,6 @@ impl<P: api::Phase> Context<'_, P> {
             let Representability::FunctionItem(item) = self.function(signature, &inherited)? else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
-            if matches!(
-                item.receiver(),
-                Some(
-                    representability::ownership::Receiver::Shared
-                        | representability::ownership::Receiver::Mutable
-                )
-            ) {
-                return Err(reject::Kind::GenericImplementation.into());
-            }
             Ok(Representability::Invocation(callable::Invocation::new(
                 item,
                 container_parameters,
@@ -4325,10 +4343,8 @@ mod tests {
                 shorter: model::Lifetime::Erased,
             }]),
         );
-        assert_eq!(
-            rejection(context.parameters(&predicate_generics)),
-            Kind::Predicate
-        );
+        // A bound is rustc's to check where the bridge names the type.
+        assert!(context.parameters(&predicate_generics).is_ok());
         assert_eq!(
             rejection(context.constant(
                 &model::Type::Primitive("i64".into()),
