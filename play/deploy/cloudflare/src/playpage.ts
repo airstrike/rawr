@@ -1,6 +1,7 @@
 // The playground page at /play and /play/<id>: server-rendered HTML in
 // RawrGallery's Ink sheet. A small inline script runs the snippet through
-// POST /play/render and shares it through POST /play/share.
+// POST /play/render and shares it through POST /play/share. A run shows an
+// iced snippet's first frame, or a plain program's output as a terminal.
 
 import { escape } from "./dashboard.ts";
 import { ogTags, type Og, type Snippet } from "./play.ts";
@@ -85,6 +86,9 @@ textarea:focus { border-color: var(--dim); }
 .out img { max-width: 100%; height: auto; image-rendering: auto; }
 .out pre { place-self: start stretch; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 "Fira Mono", ui-monospace, monospace; }
 .out pre.error { color: var(--text); border-left: 2px solid var(--pink); padding-left: 12px; }
+.out pre.term { color: var(--text); }
+.term .err { color: #ff8fc4; }
+.term .exit, .term .none { color: var(--dim); }
 .note { color: var(--dim); }
 .plain { text-transform: none; letter-spacing: 0; }
 #ts { margin-top: 12px; }
@@ -121,7 +125,7 @@ ${sitekey ? '<div id="ts"></div>' : ""}
 </section>
 <section class="pane">
 <p class="cap"><span><span class="pink">//</span> Output</span><span id="status">${shared ? `shared · ${escape(shared)}` : "ready"}</span></p>
-<div class="out" id="out"><p class="note">Run (Ctrl/Cmd + Enter) to see the first frame.</p></div>
+<div class="out" id="out" aria-live="polite"><p class="note">Run (Ctrl/Cmd + Enter). iced code shows its first frame. Other programs show their output.</p></div>
 </section>
 </main>
 <script type="application/json" id="example-data">${scriptJson(examples)}</script>
@@ -168,6 +172,15 @@ ${sitekey ? '<div id="ts"></div>' : ""}
   radios().forEach((r) => r.addEventListener("change", edited));
   const show = (node) => { out.replaceChildren(node); };
   const text = (message, cls) => { const pre = document.createElement("pre"); pre.textContent = message; if (cls) pre.className = cls; return pre; };
+  // A plain program's output: stdout, stderr in its own colour, then the exit status if not 0.
+  const terminal = (result) => {
+    const pre = text("", "term");
+    const add = (value, cls) => { const span = document.createElement("span"); span.textContent = value; if (cls) span.className = cls; pre.append(span); };
+    for (const chunk of result.output || []) add(chunk.text, chunk.stream === "stderr" ? "err" : "");
+    if (!(result.output || []).some((chunk) => chunk.text !== "")) add("(no output)\\n", "none");
+    if (result.status !== 0) add("exit status " + result.status + "\\n", "exit");
+    return pre;
+  };
   const human = (token) => new Promise((resolve) => {
     if (!sitekey) return resolve(null);
     const start = Date.now();
@@ -185,7 +198,11 @@ ${sitekey ? '<div id="ts"></div>' : ""}
       const response = await fetch("/play/render", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ ...snippet(), turnstile: check }) });
       const ms = Math.round(performance.now() - started);
-      if (response.ok && (response.headers.get("content-type") || "").startsWith("image/")) {
+      const type = response.headers.get("content-type") || "";
+      if (response.ok && type.startsWith("application/json")) {
+        const result = await response.json();
+        show(terminal(result)); status.textContent = ms + " ms" + (result.status !== 0 ? " · exit " + result.status : "");
+      } else if (response.ok && type.startsWith("image/")) {
         if (url) URL.revokeObjectURL(url);
         url = URL.createObjectURL(await response.blob());
         const img = new Image(); img.src = url; img.alt = "The first frame";

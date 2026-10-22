@@ -15,7 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use crate::{Format, Options};
+use crate::{Format, Options, Output};
 
 /// Marker that turns a message into a render request.
 pub const MARKER: &str = "?play";
@@ -129,25 +129,41 @@ pub enum Reply {
     Text(String),
 }
 
-/// Decide the reply from a finished `rawr-play` process: the image on
-/// success, its error text on a clean failure, and a short notice when it
-/// was killed (out of memory under `--memory-mb`, or a crash).
+/// What a finished `rawr-play` process gave: an iced snippet's image, or a
+/// plain program's output.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Done {
+    /// The encoded image.
+    Image(Vec<u8>),
+    /// The program's output.
+    Text(Output),
+}
+
+/// Decide the reply from a finished `rawr-play` process: the image or the
+/// output on success, its error text on a clean failure, and a short
+/// notice when it was killed (out of memory under `--memory-mb`, or a
+/// crash).
 #[must_use]
 pub fn reply(success: bool, stdout: Vec<u8>, stderr: &str) -> Reply {
     match outcome(success, stdout, stderr) {
-        Ok(image) => Reply::Image(image),
+        Ok(Done::Image(image)) => Reply::Image(image),
+        Ok(Done::Text(output)) => Reply::Text(output_text(&output)),
         Err(text) => Reply::Text(error_text(&text)),
     }
 }
 
-/// The image of a finished `rawr-play` process, or its error text unfenced
-/// (as [`reply`] reads it; the playground shows it as is).
-pub fn outcome(success: bool, stdout: Vec<u8>, stderr: &str) -> Result<Vec<u8>, String> {
+/// The result of a finished `rawr-play` process, or its error text
+/// unfenced (as [`reply`] reads it; the playground shows it as is). A
+/// result starting with `{` is a plain program's output.
+pub fn outcome(success: bool, stdout: Vec<u8>, stderr: &str) -> Result<Done, String> {
+    if success && stdout.first() == Some(&b'{') {
+        return Output::from_json(&stdout).map(Done::Text);
+    }
     if success && !stdout.is_empty() {
         if stdout.len() > MAX_ATTACHMENT {
             return Err("the image is too large to upload; try a smaller size".to_owned());
         }
-        return Ok(stdout);
+        return Ok(Done::Image(stdout));
     }
     let stderr = stderr.trim();
     if success || stderr.is_empty() || stderr.contains("memory allocation") {
@@ -204,6 +220,34 @@ pub fn channels(list: &str) -> Result<HashSet<u64>, String> {
         .collect()
 }
 
+/// A plain program's output as a reply: fenced as text and cut to fit
+/// Discord with a note, then its exit status when that is not 0.
+#[must_use]
+pub fn output_text(output: &Output) -> String {
+    const OPEN: &str = "```text\n";
+    const CLOSE: &str = "\n```";
+    const CUT: &str = "\n… cut to fit Discord";
+    let status = if output.status == 0 {
+        String::new()
+    } else {
+        format!("\nexit status {}", output.status)
+    };
+    let text = output.text().replace("```", "`\u{200b}``");
+    let text = text.trim_end();
+    let text = if text.is_empty() { "(no output)" } else { text };
+    let budget = MAX_REPLY - OPEN.len() - CLOSE.len() - CUT.len() - status.len();
+    let body = if text.len() > budget {
+        let mut end = budget;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}{CUT}", text[..end].trim_end())
+    } else {
+        text.to_owned()
+    };
+    format!("{OPEN}{body}{CLOSE}{status}")
+}
+
 /// Fence error text and keep the whole reply within Discord's limit.
 #[must_use]
 pub fn error_text(text: &str) -> String {
@@ -229,7 +273,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        channels, error_text, parse, reply, RateLimit, Reply, Request, MAX_ATTACHMENT, MAX_REPLY,
+        channels, error_text, output_text, parse, reply, RateLimit, Reply, Request,
+        MAX_ATTACHMENT, MAX_REPLY,
     };
     use crate::{Format, Options, Theme};
 
@@ -317,6 +362,36 @@ mod tests {
         assert!(text.contains("too large"), "{text}");
         let long = error_text(&"é".repeat(5000));
         assert!(long.len() <= MAX_REPLY && long.ends_with("…\n```"));
+    }
+
+    #[test]
+    fn message_reply_for_a_plain_program() {
+        use crate::plain::Stream::{Stderr, Stdout};
+        let output = crate::Output {
+            chunks: vec![(Stdout, "total: 27\n".into())],
+            ..crate::Output::default()
+        };
+        assert_eq!(
+            reply(true, output.to_json().into_bytes(), ""),
+            Reply::Text("```text\ntotal: 27\n```".into())
+        );
+        let failed = crate::Output {
+            chunks: vec![(Stdout, "a\n".into()), (Stderr, "Error: \"no\"\n".into())],
+            status: 1,
+            ..crate::Output::default()
+        };
+        assert_eq!(output_text(&failed), "```text\na\nError: \"no\"\n```\nexit status 1");
+        let silent = output_text(&crate::Output::default());
+        assert_eq!(silent, "```text\n(no output)\n```");
+        let long = crate::Output {
+            chunks: vec![(Stdout, "line ```\n".repeat(500))],
+            status: 1,
+            ..crate::Output::default()
+        };
+        let text = output_text(&long);
+        assert!(text.len() <= MAX_REPLY, "{}", text.len());
+        assert!(text.ends_with("… cut to fit Discord\n```\nexit status 1"), "{text}");
+        assert_eq!(text.matches("```").count(), 2, "{text}");
     }
 
     #[test]

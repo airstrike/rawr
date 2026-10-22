@@ -1,4 +1,5 @@
-//! `rawr-play-bot`: render `?play` code blocks posted to Discord.
+//! `rawr-play-bot`: run `?play` code blocks posted to Discord. An iced
+//! snippet replies with its image, a plain program with its output.
 //!
 //! Each render runs in its own `rawr-play` process (beside this binary, or
 //! `PLAY_RENDERER`), so a render past `PLAY_TIMEOUT_MS` is killed and one
@@ -32,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rawr_play::channels::{self, Channels, Parents, Store};
-use rawr_play::message::{self, RateLimit, Reply};
+use rawr_play::message::{self, Done, RateLimit, Reply};
 use rawr_play::server::ServerKey;
 use rawr_play::stats::{self, Batch, Outcome, Report, Status};
 use serenity::all::{
@@ -64,9 +65,10 @@ struct Handler {
     replies: Mutex<(HashMap<MessageId, MessageId>, VecDeque<MessageId>)>,
 }
 
-/// A render's result: the image or its error text, how it ended, how long.
+/// A render's result: the image or output, or its error text, how it
+/// ended, how long.
 struct Rendered {
-    result: Result<Vec<u8>, String>,
+    result: Result<Done, String>,
     outcome: Outcome,
     millis: u128,
 }
@@ -129,7 +131,7 @@ impl Renderer {
         &self,
         request: &message::Request,
         format: rawr_play::Format,
-    ) -> (Result<Vec<u8>, String>, Outcome) {
+    ) -> (Result<Done, String>, Outcome) {
         let child = tokio::process::Command::new(&self.path)
             .args(request.args(format, self.memory_mb))
             .args(self.fonts.iter().flat_map(|dir| ["--fonts", dir.as_str()]))
@@ -161,7 +163,12 @@ impl Renderer {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let success = output.status.success();
                 let outcome = stats::classify(success, !output.stdout.is_empty(), &stderr);
-                (message::outcome(success, output.stdout, &stderr), outcome)
+                let result = message::outcome(success, output.stdout, &stderr);
+                let outcome = match &result {
+                    Ok(Done::Text(output)) => stats::classify_output(output),
+                    _ => outcome,
+                };
+                (result, outcome)
             }
             Ok(Err(error)) => {
                 eprintln!("rawr-play-bot: render failed: {error}");
@@ -653,14 +660,17 @@ impl Handler {
         };
         self.shared.record(rendered.outcome, rendered.millis, guild);
         match rendered.result {
-            Ok(image) => Reply::Image(image),
+            Ok(Done::Image(image)) => Reply::Image(image),
+            Ok(Done::Text(output)) => Reply::Text(message::output_text(&output)),
             Err(text) => Reply::Text(message::error_text(&text)),
         }
     }
 }
 
 /// Serve `POST /render` (the playground, through the Worker) and `GET
-/// /health` on `port`: PNG on success, the error text as 422 otherwise.
+/// /health` on `port`: a PNG, or a plain program's output as JSON
+/// (`rawr_play::Output::to_json`), on success; the error text as 422
+/// otherwise.
 async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
     use http_body_util::{BodyExt, Full, Limited};
     use hyper::body::{Bytes, Incoming};
@@ -729,7 +739,12 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                                 .unwrap()
                                 .record_web(rendered.outcome, rendered.millis);
                             match rendered.result {
-                                Ok(image) => reply(StatusCode::OK, "image/png", image),
+                                Ok(Done::Image(image)) => reply(StatusCode::OK, "image/png", image),
+                                Ok(Done::Text(output)) => reply(
+                                    StatusCode::OK,
+                                    "application/json",
+                                    output.to_json().into_bytes(),
+                                ),
                                 Err(error) => text(StatusCode::UNPROCESSABLE_ENTITY, error),
                             }
                         }

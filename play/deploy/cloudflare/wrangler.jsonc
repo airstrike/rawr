@@ -36,8 +36,9 @@
     "TURNSTILE_SITEKEY": "0x4AAAAAAFfQTZDPbRvs2kSG",
     "PLAY_VERSION": "02d0d62d6b92"
   },
-  // /play's examples: play/tests/fixtures/*.rs, imported as text.
-  "rules": [{ "type": "Text", "globs": ["**/*.rs"], "fallthrough": false }],
+  // /play's examples (play/tests/fixtures/*.rs) and the landing page
+  // (site/public/index.html, whose snippets /play/run accepts), as text.
+  "rules": [{ "type": "Text", "globs": ["**/*.rs", "**/*.html"], "fallthrough": false }],
   // dist/ is site/public (the landing page at /, /og/card.png) and public/
   // (/bot/invite, the redirect with its link preview; /og/invite.png, which
   // rawr-play renders from og/card.rs), merged by build.mjs.

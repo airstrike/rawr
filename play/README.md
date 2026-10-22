@@ -1,13 +1,30 @@
 # rawr-play
 
-Render a Rawr/iced snippet to a PNG. One long-running process links `rawr` and
-`rawr-iced` as libraries. It runs no rustc and no importer per request. A
+Run a Rawr snippet. A snippet that uses iced renders to a PNG. A plain
+program runs and returns its output as text. One long-running process links
+`rawr` and `rawr-iced` as libraries. It runs no rustc and no importer per request. A
 snippet is checked as Rawr, its view is evaluated headlessly, and the result
 is rendered with the `rawr snapshot` path: tiny-skia, scale 1.0, and the
 embedded Fira Sans font. It needs no GPU, so it runs on any Linux VM or
 container.
 
-## Snippet shapes
+## Plain programs and iced snippets
+
+The snippet is parsed once. rawr-iced's manifest (`iced/manifest.toml`)
+says what is iced's, as it does for `rawr`. A snippet is iced's when it
+names the `iced` crate. It is also iced's when it uses a name of the
+manifest's `prelude` that it neither declares nor imports, such as `column!`
+or `text`. Every other snippet is a plain program.
+
+A plain program runs on the base language from that same parse, as `rawr
+run` runs a file: its top level, then `fn main` if it has one. A snippet of
+statements alone becomes the body of `fn main`. Its final expression is
+printed with `{:?}`, so `1 + 2` prints `3`. A `main` that returns `Err`
+prints `Error: ..` and exits with status 1. A runtime error or a limit also
+exits with status 1. Output is capped at 64 KiB. A program that writes more
+is stopped and its output ends with `… output truncated`.
+
+## Snippet shapes for iced
 
 - A bare expression: `column![text("hi"), button("go")]`
 - A stateless view: `fn view() -> impl Widget<()> { ... }`
@@ -15,8 +32,8 @@ container.
   Messages (`--message` / `msg=`) are applied in order to `State::default()`
   before the view renders.
 
-Expressions and `fn view()` snippets without `use` lines get the common iced
-imports. A snippet with its own `#[preview]` is refused (its size would
+Expressions and `fn view()` snippets without `use` lines get the imports in
+the manifest's `prelude`. A snippet with its own `#[preview]` is refused (its size would
 bypass the 2048 cap); use `size=WxH` instead.
 
 ## CLI
@@ -28,7 +45,18 @@ echo 'text("hi")' | cargo run -p rawr-play -- - --format webp -o - > target/play
 ```
 
 The format follows `--format png|jpg|webp`, else the output extension, else
-PNG. `--time-ms N` sets the script time budget and `--memory-mb N` caps the
+PNG. A plain program writes JSON where an image would go. The JSON is one
+object that starts with `{`, and no image does:
+
+```json
+{"kind":"text","status":0,"output":[{"stream":"stdout","text":"total: 27\n"}],"truncated":false,"limit":false}
+```
+
+`output` holds the program's stdout and stderr in the order it wrote them.
+Each entry is one run of text from one stream. `status` is 0, or 1 when
+`main` returned `Err`, the program failed or a limit stopped it. `limit`
+says whether a limit stopped it. `truncated` says whether the output passed
+64 KiB. `--time-ms N` sets the script time budget and `--memory-mb N` caps the
 process's address space (`RLIMIT_AS`, Linux only). Errors go to stderr with
 exit status 1.
 
@@ -51,6 +79,9 @@ The bot replies to a message whose first line starts with `?play`, or whose
 code fence info string contains `?play`. The snippet is the first code
 block: ` ```rust `, ` ```rawr ` or a bare fence. It answers with the image
 attached, or with the error text in a code block (at most 2000 characters).
+A plain program gets its output in a ` ```text ` block. Output longer than
+Discord allows is cut, with a note. A non-zero exit status follows the
+block.
 It ignores bots. When the author edits a message it already answered, it
 re-renders and edits its reply. Over the rate limit it reacts with ⏳ and
 does not render.
@@ -126,6 +157,9 @@ on stdout. The bot kills it at `PLAY_TIMEOUT_MS`. On Linux the process's
 address space is capped at `PLAY_MEMORY_MB`, so a runaway allocation aborts
 that render only and the bot replies "out of memory".
 
+A plain program runs under the same process limits. Its Engine has the same
+limits as a render. Its output is capped at 64 KiB.
+
 Inside, a fresh Engine has: 1,000,000 operations per evaluation, call depth
 of at most 32, 64 KiB strings, 10,000-element arrays and maps, and a
 wall-clock deadline checked from the progress callback. Canvas sides are at
@@ -196,7 +230,8 @@ cargo run -p rawr-play -- encrypt-server <guild id>... # the token of a known se
 (Tab indents, Ctrl/Cmd+Enter runs), dark/light, an optional size, messages
 (one `Message` expression per line, like `msg=`), iced's examples from
 `play/tests/fixtures` (embedded when the Worker is built) and the output: the
-PNG, or the same error text the bot replies with. **Share** stores the code
+PNG, a plain program's output as a terminal with its exit status, or the same
+error text the bot replies with. **Share** stores the code
 and options in the Durable Object under a content-addressed id
 (`/play/<id>`, at most 64 KiB; the same snippet is the same id).
 
@@ -206,7 +241,9 @@ rendered once (concurrent first requests share the render; a share warms
 it), kept in the Durable Object's SQLite (at most 1 MiB) and in the edge
 cache, and served `immutable`, since an id is a content hash. A snippet that
 does not render gets an error card (`public/og/play-error.png`, drawn from
-`og/error.rs`), kept too; a busy or unreachable renderer is retried after
+`og/error.rs`), kept too. A plain program's share keeps its output. Its
+link shows the site's card (`site/public/og/card.png`), and its first line
+of output is the description; a busy or unreachable renderer is retried after
 ten minutes. Uncached previews are limited per IP (10 a minute, 60 an hour),
 without Turnstile. Shares not visited (page or image) for 30 days are
 purged by the cron once a day, with their previews. The editor keeps the
@@ -216,7 +253,9 @@ counter.
 
 Renders go Worker → Durable Object → the bot's HTTP port (`PLAY_HTTP_PORT`,
 8080, reachable only through the Durable Object) → the same child-process
-renderer as `?play`, with the same limits. Playground renders share the pool
+renderer as `?play`, with the same limits. The bot's `POST /render` answers
+with `image/png`, or with `application/json` for a plain program's output.
+Playground renders share the pool
 but run one at a time and never ahead of a waiting Discord render. Each IP
 (kept only as an HMAC) gets 6 runs a minute and 60 an hour, and 10 shares a
 minute; code is capped at 16 KiB; Cloudflare Turnstile (site key in
@@ -226,6 +265,14 @@ skips Turnstile but not the limits. The HMAC key is the log key's 64 hex
 digits as text, not the 32 bytes they spell:
 `printf 'rawr-play admin' | openssl dgst -sha256 -hmac "$(cat ~/.config/rawr-play/log-key)" -r`. The dashboard counts
 playground runs apart from Discord's.
+
+The landing page has Run buttons for its own files. They call `POST
+/play/run` with a file's exact text. That route needs no Turnstile. It
+accepts only the text of a `<code data-run>` element in
+`site/public/index.html`, checked by SHA-256. The Worker embeds that page
+when it is built, so the list is always the deployed page's. A result is
+cached for each image version. Uncached runs are limited per IP (20 a
+minute, 120 an hour).
 
 A deploy does not replace a Durable Object's running container, which keeps
 the image it started from. `push-image.sh` writes the image's commit into

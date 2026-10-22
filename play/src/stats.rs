@@ -21,13 +21,26 @@ pub const MAX_DURATIONS: usize = 10_000;
 /// How a render ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outcome {
-    /// An image was sent.
+    /// An image or a program's output was sent.
     Ok,
     /// The snippet did not check or failed while running.
     Code,
     /// A limit stopped it: time, operations, depth, size, memory, the
     /// process timeout, or a crash.
     Limit,
+}
+
+/// Classify a plain program's output: stopped by a limit, failed (a
+/// non-zero exit status), or run.
+#[must_use]
+pub fn classify_output(output: &crate::Output) -> Outcome {
+    if output.limit {
+        Outcome::Limit
+    } else if output.status != 0 {
+        Outcome::Code
+    } else {
+        Outcome::Ok
+    }
 }
 
 /// Classify a finished `rawr-play` process as [`message::reply`] reads it.

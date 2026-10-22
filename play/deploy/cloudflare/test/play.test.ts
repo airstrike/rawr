@@ -187,3 +187,48 @@ test("days and the purge selection", () => {
   assert.deepEqual(remove, ["old"]);
   assert.deepEqual(stamp, ["unstamped"], "untimestamped shares are stamped, not removed");
 });
+
+test("the landing page's runnable sources are its files, exactly", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { decodeHtml, runnable, sha256 } = await import("../src/play.ts");
+  const root = new URL("../../../../", import.meta.url);
+  const html = readFileSync(new URL("site/public/index.html", root), "utf8");
+  const sources = runnable(html);
+  assert.equal(sources.length, 2, "cart.rawr and the counter");
+  // What the page shows (and its Run button sends) is examples/cart.rawr.
+  assert.equal(sources[0], readFileSync(new URL("examples/cart.rawr", root), "utf8").trimEnd());
+  assert.match(sources[1], /^use iced::Center;\n/);
+  assert.ok(sources[1].includes("fn view(&self) -> impl Widget<Message> {"));
+  assert.equal(decodeHtml("&amp;self &lt;T&gt; &rsquo; &#39; &#x41;"), "&self <T> ’ ' A");
+  // The allow-list is the set of their hashes; anything else is refused.
+  const allowed = new Set(await Promise.all(sources.map(sha256)));
+  assert.ok(allowed.has(await sha256(sources[0])));
+  assert.ok(!allowed.has(await sha256(sources[0] + " ")));
+  assert.equal(await sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+});
+
+test("text results are read back, and give a preview line", async () => {
+  const { firstOutputLine, parseTextResult } = await import("../src/play.ts");
+  const json = '{"kind":"text","status":1,"output":[{"stream":"stdout","text":"\\ntotal: 27\\n"},{"stream":"stderr","text":"Error: \\"x\\"\\n"}],"truncated":false,"limit":false}';
+  const result = parseTextResult(json);
+  assert.ok(result);
+  assert.equal(result.status, 1);
+  assert.equal(result.output.length, 2);
+  assert.equal(firstOutputLine(result), "total: 27");
+  assert.equal(parseTextResult("\x89PNG"), null);
+  assert.equal(parseTextResult('{"kind":"image"}'), null);
+});
+
+test("landing runs are limited lightly per IP", async () => {
+  const { LANDING_LIMITS } = await import("../src/play.ts");
+  const limiter = new Limiter(LANDING_LIMITS);
+  for (let i = 0; i < 20; i++) assert.equal(limiter.take("ip", 1_000 + i), 0);
+  assert.ok(limiter.take("ip", 2_000) > 0);
+  assert.equal(limiter.take("other", 2_000), 0);
+});
+
+test("the playground shows text results as a terminal", () => {
+  const page = render({ snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG });
+  assert.ok(page.includes('const terminal = (result)'));
+  assert.ok(page.includes('type.startsWith("application/json")'));
+});

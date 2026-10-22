@@ -87,6 +87,20 @@ p code, li code, td code, figcaption code { font-size: 0.88em; color: var(--text
 .run span { color: var(--rose); }
 .run span.quiet { color: var(--dim); }
 .rawr .run { background: #0e0c10; }
+/* Live results from a Run button: stdout, stderr and the exit status inline; a frame as an image. */
+.run .live span { display: inline; }
+.run .live .err { color: #ff8fc4; }
+.run .live .exit { color: var(--dim); }
+.run img.frame { display: block; margin: 6px 0 2px auto; max-width: 100%; height: auto; image-rendering: auto; }
+.runbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; }
+.runbar[hidden] { display: none; }
+.runbtn { font: 13px/1 var(--mono); color: var(--bg); background: var(--pink); border: 1px solid var(--pink); padding: 7px 12px; cursor: pointer; }
+.runbtn:hover { background: var(--rose); border-color: var(--rose); }
+.runbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.runbtn:disabled { opacity: 0.6; cursor: progress; }
+.runbtn.small { font-size: 11px; padding: 4px 9px; letter-spacing: 0.04em; }
+.runnote { font: 12px/1.5 var(--mono); color: var(--dim); }
+.filetools { display: inline-flex; align-items: center; gap: 12px; }
 /* The right-hand file mirrors its name and command to the right edge, so both show at any split. */
 .layer.rawr .file { flex-direction: row-reverse; }
 .layer.rawr .run { text-align: right; }
@@ -254,7 +268,7 @@ fn main() {
         </div>
         <div class="layer rawr" aria-hidden="true">
           <div class="file"><b>cart.rawr</b><span>Rawr</span></div>
-          <pre><code data-lang="rust">enum Item {
+          <pre><code data-lang="rust" data-run id="src-cart">enum Item {
     Book { price: f64 },
     Coffee { cups: i64 },
 }
@@ -284,7 +298,7 @@ fn main() {
     let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
     println!("total: {}", total(&amp;cart));
 }</code></pre>
-          <div class="run"><b>rawr run cart.rawr</b><span>total: 27</span></div>
+          <div class="run"><b>rawr run cart.rawr</b><span id="out-cart">total: 27</span></div>
         </div>
         <div class="divider">
           <span class="hit" aria-hidden="true"></span>
@@ -292,6 +306,7 @@ fn main() {
         </div>
       </div>
       </div>
+      <div class="runbar" hidden><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" data-note="note-cart">Run cart.rawr</button><span class="runnote" id="note-cart" role="status">Runs this file on the <a href="/play">playground</a>&rsquo;s server.</span></div>
       <figcaption>
         The two files are identical. <code>cargo run</code> builds it as Rust and <code>rawr run</code> runs it as Rawr. Both print <code>total: 27</code>.
         <small>Right: <code>examples/cart.rawr</code>. Left: the same file copied to <code>src/main.rs</code>; stable <code>rustc</code> (edition 2024) compiles it without warnings.</small>
@@ -316,7 +331,7 @@ fn main() {
         <tr><td><code>rawr-iced</code></td><td>Runs programs that use <a href="https://github.com/iced-rs/iced">iced</a>. It adds:<ul><li>reload on save in about 0.2&nbsp;s</li><li>imports of your own Rust crates without bindings</li><li><code>#[preview]</code> views and PNG snapshots</li><li>the <code>?play</code> bot and playground</li></ul></td></tr>
       </table>
       <div class="block">
-        <div class="file"><b>examples/cart.rs</b><span>the host</span></div>
+        <div class="file"><b>examples/cart.rs</b><span class="filetools"><span>the host</span><button type="button" class="runbtn small" data-source="src-cart" data-out="out-host" aria-label="Run cart.rawr, the file this host runs" hidden>Run</button></span></div>
         <pre><code data-lang="rust">//! Rawr embedded: Rust code running a Rust-shaped script.
 use rawr::{Engine, Scope};
 
@@ -325,7 +340,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
     let ast = engine.compile(include_str!("cart.rawr"))?;
     engine.call_fn::&lt;()&gt;(&amp;mut Scope::new(), &amp;ast, "main", ())
 }</code></pre>
-        <div class="run"><b>cargo run --example cart</b><span>total: 27</span></div>
+        <div class="run"><b>cargo run --example cart</b><span id="out-host" aria-live="polite">total: 27</span></div>
       </div>
     </div>
   </div>
@@ -437,7 +452,7 @@ impl Counter {
           </div>
           <div class="layer rawr" aria-hidden="true">
             <div class="file"><b>src/main.rawr</b><span>Rawr</span></div>
-            <pre><code data-lang="rust">use iced::Center;
+            <pre><code data-lang="rust" data-run id="src-counter">use iced::Center;
 use iced::widget::{Widget, button, column, text};
 
 pub fn main() -&gt; iced::Result {
@@ -477,7 +492,7 @@ impl Counter {
         .align_x(Center)
     }
 }</code></pre>
-            <div class="run"><b>rawr run</b><span class="quiet">(opens a window)</span></div>
+            <div class="run"><b>rawr run</b><span class="quiet" id="out-counter">(opens a window)</span></div>
           </div>
           <div class="divider">
             <span class="hit" aria-hidden="true"></span>
@@ -485,6 +500,7 @@ impl Counter {
           </div>
         </div>
         </div>
+        <div class="runbar" hidden><button type="button" class="runbtn" data-source="src-counter" data-out="out-counter" data-note="note-counter">Run main.rawr</button><span class="runnote" id="note-counter" role="status">Draws its first frame on the <a href="/play">playground</a>&rsquo;s server.</span></div>
         <figcaption>
           On the left is iced&rsquo;s own counter example. On the right is the same file saved as <code>main.rawr</code>. Only the file extension and the command differ.
           <small>Left: <code>examples/counter</code> from iced master at <code>be88873d</code>, with its test module left out. Right: those exact bytes, which <code>rawr check</code> accepts unchanged.</small>
@@ -692,6 +708,60 @@ use iced::widget::{Widget, button, column, text};
     for (const tab of tabs) tab.addEventListener("click", () => set(Number(tab.dataset.to), true));
     // The intro peek animates --pos itself; once it ends, the inline value holds.
     fig.addEventListener("animationend", () => fig.classList.remove("intro"));
+  }
+
+  // Run buttons send the page's own file to /play/run (the only sources it
+  // accepts) and put what it printed, or the frame it drew, in that file's
+  // terminal strip. Without JS the buttons stay hidden and the strips keep
+  // their static text.
+  for (const button of document.querySelectorAll(".runbtn")) {
+    const bar = button.closest(".runbar");
+    (bar || button).hidden = false;
+    const out = document.getElementById(button.dataset.out);
+    const note = button.dataset.note ? document.getElementById(button.dataset.note) : null;
+    const label = button.textContent;
+    const say = (text) => { if (note) note.textContent = text; };
+    button.addEventListener("click", async () => {
+      const code = document.getElementById(button.dataset.source).textContent;
+      button.disabled = true;
+      button.textContent = "Running\u2026";
+      say("Running on the server\u2026");
+      try {
+        const response = await fetch("/play/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) });
+        const type = response.headers.get("content-type") || "";
+        const live = document.createElement("span");
+        live.className = "live";
+        if (response.ok && type.startsWith("application/json")) {
+          const result = await response.json();
+          const add = (text, cls) => { const span = document.createElement("span"); span.textContent = text; if (cls) span.className = cls; live.append(span); };
+          for (const chunk of result.output || []) add(chunk.text, chunk.stream === "stderr" ? "err" : "");
+          const last = live.lastChild;
+          if (last) last.textContent = last.textContent.replace(/\n$/, "");
+          if (result.status !== 0) add((last ? "\n" : "") + "exit status " + result.status, "exit");
+          out.replaceChildren(live);
+          say("Output: " + live.textContent);
+        } else if (response.ok && type.startsWith("image/")) {
+          const img = new Image();
+          img.className = "frame";
+          img.alt = "The counter's first frame, drawn by rawr-iced on the server";
+          img.src = URL.createObjectURL(await response.blob());
+          await img.decode().catch(() => {});
+          // Rendered at 2x: show it at its logical size.
+          if (img.naturalWidth) img.width = img.naturalWidth / 2;
+          live.append(img);
+          out.replaceChildren(live);
+          say("Ran. The first frame is shown under the command.");
+        } else {
+          say("Could not run it: " + (await response.text()).slice(0, 200));
+        }
+        out.classList.remove("quiet");
+      } catch (error) {
+        say("Could not reach the server: " + error.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = label;
+      }
+    });
   }
 
   // Copy buttons copy the command, never the prompt.

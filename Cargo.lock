@@ -2975,6 +2975,7 @@ dependencies = [
  "libc",
  "png",
  "rawr",
+ "rawr-cli",
  "rawr-iced",
  "reqwest",
  "serde_json",

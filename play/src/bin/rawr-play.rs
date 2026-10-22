@@ -5,8 +5,14 @@
 //! only, never the system's (the `?play` container's fonts; tests use it so
 //! a Mac's fonts cannot hide a missing glyph).
 //!
-//! `-` reads the snippet from stdin or writes the image to stdout. The bot
+//! `-` reads the snippet from stdin or writes the result to stdout. The bot
 //! runs one of these per render, so `--memory-mb` caps the whole process.
+//!
+//! A snippet that uses iced writes its image. A plain program writes its
+//! output instead, as one JSON object (`rawr_play::Output::to_json`):
+//! `{"kind":"text","status":0,"output":[{"stream":"stdout","text":".."}],..}`.
+//! A result starting with `{` is text; no image starts with it. Errors
+//! (diagnostics, bad options) go to stderr with exit status 1, as before.
 //!
 //! `rawr-play decrypt-server <token>...` prints the guild ID behind each
 //! server token on the bot's dashboard, and `rawr-play encrypt-server <id>...`
@@ -106,18 +112,28 @@ fn run(args: Vec<String>) -> Result<(), String> {
         std::fs::read_to_string(&input).map(|text| source = text)
     };
     read.map_err(|error| format!("cannot read {input}: {error}"))?;
-    let png = rawr_play::render(&source, &options).map_err(|error| error.to_string())?;
-    let bytes = rawr_play::encode(&png, format).map_err(|error| error.to_string())?;
+    let (bytes, summary) = match rawr_play::run(&source, &options).map_err(|error| error.to_string())? {
+        rawr_play::Outcome::Image(png) => {
+            let bytes = rawr_play::encode(&png, format).map_err(|error| error.to_string())?;
+            let summary = format!("{}x{}, {} bytes", png.width, png.height, bytes.len());
+            (bytes, summary)
+        }
+        rawr_play::Outcome::Text(output) => {
+            let bytes = output.to_json().into_bytes();
+            let summary = format!("text, exit status {}, {} bytes", output.status, bytes.len());
+            (bytes, summary)
+        }
+    };
     if output == "-" {
         let mut stdout = std::io::stdout().lock();
         stdout
             .write_all(&bytes)
             .and_then(|()| stdout.flush())
-            .map_err(|error| format!("cannot write the image: {error}"))?;
+            .map_err(|error| format!("cannot write the result: {error}"))?;
     } else {
         std::fs::write(&output, &bytes)
             .map_err(|error| format!("cannot write {output}: {error}"))?;
-        println!("{output} ({}x{}, {} bytes)", png.width, png.height, bytes.len());
+        println!("{output} ({summary})");
     }
     Ok(())
 }

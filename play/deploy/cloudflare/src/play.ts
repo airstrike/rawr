@@ -217,3 +217,75 @@ export function ogTags(og: Og, escape: (text: string) => string): string {
     meta("name", "description", og.description),
   ].join("\n");
 }
+
+/** Landing-page runs: 20 a minute and 120 an hour per IP (cached results are free). */
+export const LANDING_LIMITS: Window[] = [
+  { max: 20, ms: 60_000 },
+  { max: 120, ms: 3_600_000 },
+];
+
+/** Hex SHA-256 of `text` as UTF-8. */
+export async function sha256(text: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  return [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“" };
+
+/** Text with HTML character references decoded, as a browser's `textContent` reads it. */
+export function decodeHtml(html: string): string {
+  return html.replace(/&(#x[0-9a-fA-F]+|#\d+|[A-Za-z]+);/g, (whole, name: string) => {
+    if (name.startsWith("#x")) return String.fromCodePoint(parseInt(name.slice(2), 16));
+    if (name.startsWith("#")) return String.fromCodePoint(parseInt(name.slice(1), 10));
+    return ENTITIES[name] ?? whole;
+  });
+}
+
+/**
+ * The sources the landing page runs: the text of each `<code data-run>`
+ * element in its HTML. The page sends exactly that text, so these are the
+ * only sources /play/run accepts without Turnstile.
+ */
+export function runnable(html: string): string[] {
+  const sources: string[] = [];
+  for (const match of html.matchAll(/<code\b[^>]*\bdata-run\b[^>]*>([\s\S]*?)<\/code>/g)) {
+    sources.push(decodeHtml(match[1]));
+  }
+  return sources;
+}
+
+/** One stream's run of a plain program's output. */
+export interface Chunk {
+  stream: "stdout" | "stderr";
+  text: string;
+}
+
+/** A plain program's output, as rawr-play writes it. */
+export interface TextResult {
+  kind: "text";
+  status: number;
+  output: Chunk[];
+  truncated: boolean;
+  limit: boolean;
+}
+
+/** A text result read from JSON, or null. */
+export function parseTextResult(json: string): TextResult | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  const v = value as Partial<TextResult> | null;
+  if (!v || v.kind !== "text" || typeof v.status !== "number" || !Array.isArray(v.output)) return null;
+  const output = v.output.filter(
+    (c): c is Chunk => !!c && (c.stream === "stdout" || c.stream === "stderr") && typeof c.text === "string",
+  );
+  return { kind: "text", status: v.status, output, truncated: v.truncated === true, limit: v.limit === true };
+}
+
+/** The first non-blank line a program wrote, at most 150 characters, for a link preview. */
+export function firstOutputLine(result: TextResult): string {
+  return firstLine(result.output.map((c) => c.text).join(""));
+}

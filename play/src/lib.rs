@@ -1,4 +1,10 @@
-//! Render untrusted Rawr/iced snippets to PNG.
+//! Run untrusted Rawr snippets: render an iced snippet to PNG, or run a
+//! plain program and return its output as text.
+//!
+//! [`run`] parses a snippet once and asks rawr-iced's own claims (its
+//! manifest) whether it is iced's: it names `iced`, or uses a name of the
+//! prelude `?play` imports. A plain program runs on the base language (see
+//! [`plain`]); an iced one goes to [`render`].
 //!
 //! [`render`] accepts one of three snippet shapes, wraps it into a Rawr
 //! program with a single `#[preview]`, checks it with the canonical iced
@@ -19,6 +25,7 @@
 #[cfg(feature = "bot")]
 pub mod channels;
 pub mod message;
+pub mod plain;
 pub mod server;
 #[cfg(feature = "bot")]
 pub mod stats;
@@ -26,7 +33,10 @@ pub mod stats;
 pub mod web;
 
 use std::fmt;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+
+pub use plain::Output;
 
 /// A rendered PNG.
 pub type Png = rawr_iced::snapshot::Png;
@@ -243,7 +253,55 @@ impl std::error::Error for PlayError {}
 /// Identity used for the wrapped source in diagnostics.
 pub const SOURCE_NAME: &str = "play.rawr";
 
-/// Check, evaluate, and render one snippet to a PNG.
+/// What a snippet gave: the first frame of an iced snippet, or a plain
+/// program's output.
+#[derive(Clone, Debug)]
+pub enum Outcome {
+    /// The rendered PNG.
+    Image(Png),
+    /// The text a plain program wrote, and how it ended.
+    Text(Output),
+}
+
+/// What brings a snippet to rawr-iced: its manifest's claims.
+#[must_use]
+pub fn iced_claims() -> &'static rawr::layer::Claims {
+    static CLAIMS: OnceLock<rawr::layer::Claims> = OnceLock::new();
+    CLAIMS.get_or_init(|| {
+        rawr_cli::layer::Manifest::parse(rawr_iced::MANIFEST)
+            .expect("rawr-iced's manifest is one rawr reads")
+            .claims
+    })
+}
+
+/// Run one snippet: render it when rawr-iced claims it, else run it as a
+/// plain program.
+pub fn run(source: &str, options: &Options) -> Result<Outcome, PlayError> {
+    run_claimed(source, options, iced_claims())
+}
+
+/// [`run`], with `claims` deciding what is iced's.
+pub fn run_claimed(
+    source: &str,
+    options: &Options,
+    claims: &rawr::layer::Claims,
+) -> Result<Outcome, PlayError> {
+    validate(options)?;
+    let deadline = Instant::now() + options.limits.time;
+    let parsed = plain::Parsed::new(source, &options.limits, deadline)?;
+    if parsed.claimed(claims) {
+        drop(parsed);
+        return render(source, options).map(Outcome::Image);
+    }
+    if !options.messages.is_empty() {
+        return Err(PlayError::Options(
+            "messages need an iced app with `fn view(&self)` and `fn update(&mut self, ..)`".into(),
+        ));
+    }
+    parsed.run(source, &options.limits).map(Outcome::Text)
+}
+
+/// Check, evaluate, and render one iced snippet to a PNG.
 pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
     validate(options)?;
     let program = wrap(source, options)?;
@@ -325,6 +383,7 @@ fn sandbox(limits: &Limits, deadline: Instant) -> impl FnOnce(&mut rawr::Engine)
             // language: no output, no module files, no eval, no sleeping.
             .on_print(|_| {})
             .on_debug(|_, _, _| {})
+            .on_output(|_, _| {})
             .set_module_resolver(rawr::module_resolvers::DummyModuleResolver::new());
         for symbol in ["import", "eval", "print", "debug"] {
             engine.disable_symbol(symbol);
@@ -515,11 +574,6 @@ pub enum Shape {
     Expression,
 }
 
-/// Imports added to `fn view()` and expression snippets that have none.
-const PRELUDE: &str = "use iced::{Alignment, Center, Color, Element, Fill, Length, Theme, Widget}; \
-use iced::widget::{button, checkbox, column, container, row, scrollable, slider, space, text, \
-text_input, toggler}; ";
-
 /// Classify a snippet without wrapping it.
 #[must_use]
 pub fn shape(source: &str) -> Shape {
@@ -562,13 +616,15 @@ pub fn wrap(source: &str, options: &Options) -> Result<String, PlayError> {
             "messages need a full app with `fn view(&self)` and `fn update(&mut self, ..)`".into(),
         ));
     }
+    // rawr-iced's prelude, for `fn view()` and expression snippets that
+    // import nothing themselves.
     let prelude = if source
         .lines()
         .any(|line| line.trim_start().starts_with("use "))
     {
-        ""
+        String::new()
     } else {
-        PRELUDE
+        iced_claims().prelude_imports()
     };
     Ok(match shape {
         // A hand-written `#[preview]` could pick any canvas size.
@@ -943,6 +999,147 @@ impl State {
         assert!(is_png(&hi.bytes));
         assert_eq!(plain.width, hi.width, "the button sets the width");
         assert!(hi.height > plain.height, "\"hi\" is drawn below \"show\"");
+    }
+
+    fn text(source: &str) -> super::Output {
+        match super::run(source, &Options::default()).unwrap() {
+            super::Outcome::Text(output) => output,
+            super::Outcome::Image(_) => panic!("{source} rendered an image"),
+        }
+    }
+
+    fn image(source: &str) -> super::Png {
+        match super::run(source, &Options::default()).unwrap() {
+            super::Outcome::Image(png) => png,
+            super::Outcome::Text(output) => panic!("{source} ran as text: {output:?}"),
+        }
+    }
+
+    #[test]
+    fn run_plain_program_prints_its_output() {
+        let cart = text(include_str!("../../examples/cart.rawr"));
+        assert_eq!(cart.text(), "total: 27\n");
+        assert_eq!((cart.status, cart.truncated, cart.limit), (0, false, false));
+    }
+
+    #[test]
+    fn run_plain_program_interleaves_streams_in_order() {
+        use super::plain::Stream::{Stderr, Stdout};
+        let output = text("fn main() {\n    println!(\"a\");\n    eprintln!(\"b\");\n    print!(\"c\");\n    println!(\"d\");\n}\n");
+        assert_eq!(
+            output.chunks,
+            [(Stdout, "a\n".into()), (Stderr, "b\n".into()), (Stdout, "cd\n".into())]
+        );
+        let json = output.to_json();
+        assert!(json.starts_with('{'), "{json}");
+        assert_eq!(super::Output::from_json(json.as_bytes()).unwrap(), output);
+    }
+
+    #[test]
+    fn run_plain_main_returning_err_exits_1() {
+        let output = text("fn main() -> Result<(), String> {\n    println!(\"before\");\n    Err(\"bad\".to_string())\n}\n");
+        assert_eq!(output.status, 1);
+        assert_eq!(output.text(), "before\nError: \"bad\"\n");
+        assert!(!output.limit);
+    }
+
+    #[test]
+    fn run_plain_expression_prints_its_value() {
+        assert_eq!(text("1 + 2").text(), "3\n");
+        assert_eq!(text("vec![1, 2, 3].iter().sum::<i64>()").text(), "6\n");
+        assert_eq!(text("let a = 20;\na + 7").text(), "27\n");
+        assert_eq!(text("println!(\"hi\")").text(), "hi\n");
+    }
+
+    #[test]
+    fn run_plain_endless_loop_hits_the_time_limit() {
+        let options = Options {
+            limits: super::Limits {
+                operations: u64::MAX,
+                time: std::time::Duration::from_millis(100),
+                ..super::Limits::default()
+            },
+            ..Options::default()
+        };
+        let source = "fn main() {\n    println!(\"start\");\n    let mut n = 0;\n    loop { n += 1; }\n}\n";
+        let super::Outcome::Text(output) = super::run(source, &options).unwrap() else {
+            panic!("a plain program runs as text");
+        };
+        assert_eq!((output.status, output.limit), (1, true));
+        assert_eq!(output.text(), "start\ntime limit exceeded\n");
+    }
+
+    #[test]
+    fn run_plain_output_is_cut_and_the_program_stopped() {
+        let options = Options {
+            limits: super::Limits {
+                operations: u64::MAX,
+                time: std::time::Duration::from_secs(20),
+                ..super::Limits::default()
+            },
+            ..Options::default()
+        };
+        let source = "fn main() {\n    loop { println!(\"0123456789abcdef\"); }\n}\n";
+        let started = std::time::Instant::now();
+        let super::Outcome::Text(output) = super::run(source, &options).unwrap() else {
+            panic!("a plain program runs as text");
+        };
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "stopped once full");
+        assert!(output.truncated && output.limit && output.status == 1);
+        let text = output.text();
+        assert!(text.len() <= super::plain::MAX_OUTPUT + 64, "{}", text.len());
+        assert!(text.ends_with("… output truncated\n"), "{}", &text[text.len() - 40..]);
+    }
+
+    #[test]
+    fn run_plain_compile_error_is_a_diagnostic() {
+        let error = super::run("fn main() {\n    let x: i64 = \"s\";\n}\n", &Options::default()).unwrap_err();
+        let PlayError::Compile(text) = error else {
+            panic!("expected a compile error, got {error:?}");
+        };
+        assert!(text.contains("play.rawr:2:"), "{text}");
+    }
+
+    #[test]
+    fn run_iced_snippets_still_render() {
+        // Named `iced`, or only names of rawr-iced's prelude.
+        assert!(is_png(&image("column![text(\"hi\")]").bytes));
+        assert!(is_png(&image("fn view() -> impl Widget<()> {\n    text(\"x\")\n}\n").bytes));
+        assert!(is_png(&image(include_str!("../tests/fixtures/counter.rs")).bytes));
+    }
+
+    #[test]
+    fn run_plain_sandbox_refuses_escapes() {
+        for body in ["eval(\"40 + 2\")", "import \"x\" as m; x", "sleep(100); x"] {
+            let source = format!("fn leak(x) {{ {body} }}\nfn main() {{ leak(1); }}\n");
+            let refused = match super::run(&source, &Options::default()) {
+                Err(_) => true,
+                Ok(super::Outcome::Text(output)) => output.status == 1,
+                Ok(super::Outcome::Image(_)) => false,
+            };
+            assert!(refused, "{body}");
+        }
+    }
+
+    #[test]
+    fn run_decides_by_the_claims() {
+        // A fake claimant: a crate `gui` with the prelude name `label`.
+        let claims = rawr::layer::Claims {
+            crates: vec!["gui".into()],
+            sections: Vec::new(),
+            prelude: vec!["gui::label".into()],
+        };
+        let options = Options::default();
+        // rawr-iced's prelude name, unclaimed here: plain, so `text` is unknown.
+        assert!(super::run_claimed("text(\"x\")", &options, &claims).is_err());
+        let plain = super::run_claimed("1 + 2", &options, &claims).unwrap();
+        assert!(matches!(plain, super::Outcome::Text(ref output) if output.text() == "3\n"));
+        // Claimed by the fake prelude, so handed to the renderer, which
+        // knows no `label`: a compile error from the iced side.
+        let claimed = super::run_claimed("label(\"x\")", &options, &claims).unwrap_err();
+        assert!(matches!(claimed, PlayError::Compile(_)), "{claimed:?}");
+        // The real claims: `text` is rawr-iced's.
+        assert!(super::iced_claims().prelude.iter().any(|path| path.ends_with("::text")));
     }
 
     #[test]

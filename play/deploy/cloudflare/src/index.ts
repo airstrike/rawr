@@ -21,7 +21,13 @@
 // /play is a web playground: the Worker serves the page, keeps shares in this
 // Durable Object (content-addressed), limits each IP (by HMAC, never in
 // clear), checks Turnstile, and forwards renders to the bot's HTTP port,
-// which only this Durable Object can reach.
+// which only this Durable Object can reach. A render is an iced snippet's
+// PNG or a plain program's output (JSON).
+//
+// POST /play/run runs the landing page's own snippets without Turnstile:
+// only sources whose SHA-256 is one of the page's `<code data-run>` texts
+// (the page is embedded in this Worker when it is built, so the list is the
+// deployed page's). Results are cached per image version.
 
 import { Container, ContainerProxy, getContainer, type OutboundHandlerContext } from "@cloudflare/containers";
 import { render, type Dashboard } from "./dashboard.ts";
@@ -29,6 +35,7 @@ import { COUNTER, EXAMPLES } from "./examples.ts";
 import {
   ID_PATTERN,
   KEEP_DAYS,
+  LANDING_LIMITS,
   Limiter,
   MAX_PREVIEW,
   MAX_SHARE,
@@ -36,12 +43,16 @@ import {
   RETRY_MS,
   day,
   firstLine,
+  firstOutputLine,
+  parseTextResult,
   pngSize,
   previewHeaders,
   purgeSelection,
   RENDER_LIMITS,
   SHARE_LIMITS,
   canonical,
+  runnable,
+  sha256,
   hmac,
   parseSnippet,
   same,
@@ -50,6 +61,7 @@ import {
   type Snippet,
 } from "./play.ts";
 import { render as renderPlay } from "./playpage.ts";
+import landing from "../../../../site/public/index.html";
 import {
   addWebRateLimited,
   emptyStats,
@@ -82,9 +94,13 @@ const OLD_HOST = "rawr-bot.airstrike.fyi";
 /** Old paths that moved under /bot; every other path is the same on the new host. */
 const MOVED: Record<string, string> = { "/": "/bot", "/invite": "/bot/invite", "/health": "/bot/health" };
 
-/** A share's preview: its PNG, or a failure (kept forever for a code error or a limit). */
+/**
+ * A share's preview: its PNG, a plain program's output (JSON), or a failure
+ * (kept forever for a code error or a limit).
+ */
 export type Preview =
   | { kind: "png"; png: Uint8Array; rendered?: boolean }
+  | { kind: "text"; output: string }
   | { kind: "failed"; permanent: boolean }
   | { kind: "missing" }
   | { kind: "limited"; wait: number };
@@ -122,6 +138,7 @@ export class PlayBot extends Container<Env> {
   private renders = new Limiter(RENDER_LIMITS);
   private shares = new Limiter(SHARE_LIMITS);
   private previews = new Limiter(PREVIEW_LIMITS);
+  private landing = new Limiter(LANDING_LIMITS);
   /** Renders in flight by share id, so concurrent first requests render once. */
   private rendering = new Map<string, Promise<Preview>>();
   /** The day each share was last seen visiting, as stored (saves reads). */
@@ -177,8 +194,9 @@ export class PlayBot extends Container<Env> {
   }
 
   /** Count a playground request from `ip` (a hash); seconds to wait, or 0. */
-  async allow(kind: "render" | "share", ip: string): Promise<number> {
-    const wait = (kind === "render" ? this.renders : this.shares).take(ip, Date.now());
+  async allow(kind: "render" | "share" | "landing", ip: string): Promise<number> {
+    const limiter = kind === "render" ? this.renders : kind === "share" ? this.shares : this.landing;
+    const wait = limiter.take(ip, Date.now());
     if (wait > 0 && kind === "render") {
       const stats = (await this.ctx.storage.get<Stats>(STATS_KEY)) ?? emptyStats();
       await this.ctx.storage.put(STATS_KEY, addWebRateLimited(stats, Date.now()));
@@ -207,18 +225,26 @@ export class PlayBot extends Container<Env> {
     this.seenDays.set(id, today);
   }
 
+  private tableReady = false;
+
+  /** The previews: a PNG, or `output` (a plain program's JSON), or neither for a failure. */
   private previewTable(): SqlStorage {
     const sql = this.ctx.storage.sql;
+    if (this.tableReady) return sql;
     sql.exec(
       "CREATE TABLE IF NOT EXISTS play_previews (id TEXT PRIMARY KEY, png BLOB, permanent INTEGER NOT NULL, retry_at INTEGER NOT NULL)",
     );
+    const columns = sql.exec("PRAGMA table_info(play_previews)").toArray();
+    if (!columns.some((column) => column.name === "output")) sql.exec("ALTER TABLE play_previews ADD COLUMN output TEXT");
+    this.tableReady = true;
     return sql;
   }
 
-  /** The stored preview's size, without rendering. */
-  async previewSize(id: string): Promise<{ width: number; height: number } | null> {
-    const rows = this.previewTable().exec("SELECT png FROM play_previews WHERE id = ?", id).toArray();
-    const png = rows[0]?.png;
+  /** What the stored preview is, without rendering: an image's size, or a program's output. */
+  async previewInfo(id: string): Promise<{ width: number; height: number } | { output: string } | null> {
+    const rows = this.previewTable().exec("SELECT png, output FROM play_previews WHERE id = ?", id).toArray();
+    const { png, output } = rows[0] ?? {};
+    if (typeof output === "string") return { output };
     return png instanceof ArrayBuffer ? pngSize(new Uint8Array(png)) : null;
   }
 
@@ -229,9 +255,10 @@ export class PlayBot extends Container<Env> {
    */
   async preview(id: string, ip: string | null): Promise<Preview> {
     const sql = this.previewTable();
-    const row = sql.exec("SELECT png, permanent, retry_at FROM play_previews WHERE id = ?", id).toArray()[0];
+    const row = sql.exec("SELECT png, output, permanent, retry_at FROM play_previews WHERE id = ?", id).toArray()[0];
     if (row) {
       if (row.png instanceof ArrayBuffer) return { kind: "png", png: new Uint8Array(row.png) };
+      if (typeof row.output === "string") return { kind: "text", output: row.output };
       if (row.permanent || Date.now() < Number(row.retry_at)) return { kind: "failed", permanent: Boolean(row.permanent) };
     }
     const pending = this.rendering.get(id);
@@ -256,6 +283,16 @@ export class PlayBot extends Container<Env> {
       );
     } catch {
       return this.failed(id, false);
+    }
+    if (response.ok && (response.headers.get("content-type") ?? "").startsWith("application/json")) {
+      const output = await response.text();
+      if (output.length > MAX_PREVIEW || !parseTextResult(output)) return this.failed(id, true);
+      this.previewTable().exec(
+        "INSERT OR REPLACE INTO play_previews (id, png, output, permanent, retry_at) VALUES (?, NULL, ?, 1, 0)",
+        id,
+        output,
+      );
+      return { kind: "text", output };
     }
     if (response.ok) {
       const png = new Uint8Array(await response.arrayBuffer());
@@ -549,13 +586,66 @@ async function previewImage(request: Request, env: Env, ctx: ExecutionContext, i
       response.headers.set("x-preview", preview.rendered ? "rendered" : "stored");
       return response;
     }
+    case "text":
     case "failed": {
-      const card = await env.ASSETS.fetch(new Request(`${SITE}/og/play-error.png`));
-      const response = new Response(card.body, { headers: previewHeaders(preview.permanent) });
+      // A plain program's share shows the site's card; its output is in
+      // the description. A failure shows the error card.
+      const text = preview.kind === "text";
+      const card = await env.ASSETS.fetch(new Request(`${SITE}/og/${text ? "card" : "play-error"}.png`));
+      const response = new Response(card.body, { headers: previewHeaders(text || preview.permanent) });
       ctx.waitUntil(cache.put(key, response.clone()));
       return response;
     }
   }
+}
+
+/** The SHA-256 of each source the landing page runs, computed once per isolate. */
+let landingHashes: Promise<Set<string>> | undefined;
+function landingSources(): Promise<Set<string>> {
+  landingHashes ??= Promise.all(runnable(landing).map(sha256)).then((hashes) => new Set(hashes));
+  return landingHashes;
+}
+
+/**
+ * POST /play/run: one of the landing page's own snippets, by its exact
+ * source, without Turnstile. Any other source is refused. Each result is
+ * cached for the deployed image; uncached runs are limited per IP.
+ */
+async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const body = (await readJson(request, 48 * 1024)) as Record<string, unknown> | null;
+  const code = body?.code;
+  if (typeof code !== "string") return plain("bad request", 400);
+  const hash = await sha256(code);
+  if (!(await landingSources()).has(hash)) {
+    return plain("only the landing page's snippets run here; use /play for your own code", 403);
+  }
+  const cache = caches.default;
+  const key = new Request(`${SITE}/play/run/${hash}/${env.PLAY_VERSION}`);
+  const hit = await cache.match(key);
+  if (hit) {
+    const response = new Response(hit.body, hit);
+    response.headers.set("x-run", "cache");
+    return response;
+  }
+  const bot = getContainer(env.PLAY_BOT);
+  const wait = await bot.allow("landing", await ipHash(request, env));
+  if (wait > 0) return plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) });
+  const snippet: Snippet = { code, theme: "dark", size: "", messages: [] };
+  let response: Response;
+  try {
+    response = await bot.fetch(
+      new Request("http://container/render", { method: "POST", headers: { "content-type": "application/json" }, body: canonical(snippet) }),
+    );
+  } catch (error) {
+    return plain(`the runner is not reachable right now (${String(error).slice(0, 200)})`, 503);
+  }
+  const bytes = await response.arrayBuffer();
+  const type = response.headers.get("content-type") ?? "text/plain";
+  if (!response.ok) return new Response(bytes, { status: response.status, headers: { "content-type": type, "cache-control": "no-store" } });
+  const result = new Response(bytes, { headers: { "content-type": type, "cache-control": "public, max-age=86400" } });
+  ctx.waitUntil(cache.put(key, result.clone()));
+  result.headers.set("x-run", "ran");
+  return result;
 }
 
 async function play(request: Request, env: Env, ctx: ExecutionContext, path: string): Promise<Response> {
@@ -588,6 +678,9 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
       return plain(`the renderer is not reachable right now (${String(error).slice(0, 200)})`, 503);
     }
   }
+  if (path === "/play/run" && request.method === "POST") {
+    return landingRun(request, env, ctx);
+  }
   if (path === "/play/share" && request.method === "POST") {
     const snippet = parseSnippet(await readJson(request, 2 * MAX_SHARE));
     if (typeof snippet === "string") return plain(snippet, 400);
@@ -606,7 +699,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
   let shared: string | null = null;
   let og = {
     title: "Rawr Playground",
-    description: "Write iced code and see its first frame, rendered by Rawr.",
+    description: "Write Rawr code and run it. iced code shows its first frame. Other programs show their output.",
     url: `${SITE}/play`,
     image: `${SITE}/og/invite.png`,
     alt: "Rawr: iced code and the frame it renders",
@@ -622,15 +715,26 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     snippet = parsed;
     shared = id;
     ctx.waitUntil(bot.visit(id));
-    const size = await bot.previewSize(id);
-    og = {
-      title: "Rawr Playground",
-      description: firstLine(snippet.code) || "An iced snippet rendered by Rawr",
-      url: `${SITE}/play/${id}`,
-      image: `${SITE}/play/${id}.png`,
-      alt: "The first frame of this snippet, rendered by Rawr",
-      ...(size ?? {}),
-    };
+    const info = await bot.previewInfo(id);
+    const output = info && "output" in info ? parseTextResult(info.output) : null;
+    og = output
+      ? {
+          title: "Rawr Playground",
+          description: firstOutputLine(output) || firstLine(snippet.code) || "A Rawr program and its output",
+          url: `${SITE}/play/${id}`,
+          image: `${SITE}/play/${id}.png`,
+          alt: "Rawr",
+          width: 1200,
+          height: 630,
+        }
+      : {
+          title: "Rawr Playground",
+          description: firstLine(snippet.code) || "An iced snippet rendered by Rawr",
+          url: `${SITE}/play/${id}`,
+          image: `${SITE}/play/${id}.png`,
+          alt: "The first frame of this snippet, rendered by Rawr",
+          ...(info && "width" in info ? info : {}),
+        };
   }
   const page = renderPlay({ snippet, examples: EXAMPLES, sitekey: env.TURNSTILE_SITEKEY ?? null, shared, og });
   return html(request.method === "HEAD" ? "" : page);

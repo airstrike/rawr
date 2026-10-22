@@ -4,25 +4,28 @@ version = "0.1.0"
 rust-version = "1.95.0"
 edition = "2024"
 publish = false
-description = "Render untrusted Rawr/iced snippets to PNG, for a Discord `?play` bot"
+description = "Run untrusted Rawr snippets for a Discord `?play` bot: iced ones render to PNG, plain programs return their output"
 repository = "https://github.com/airstrike/rawr"
 license = "MIT OR Apache-2.0"
 
 [features]
 ## Build the `rawr-play-bot` Discord binary.
-bot = ["dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:reqwest", "dep:serde_json", "dep:serenity", "dep:tokio"]
+bot = ["dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:reqwest", "dep:serenity", "dep:tokio"]
 
 [dependencies]
 # Server tokens in reports: one AES-256 block per guild ID (see src/server.rs).
 aes = "0.8"
 rawr = { path = "..", features = ["sync"] }
+# Reads rawr-iced's manifest (its claims and prelude) as `rawr` does.
+rawr-cli = { path = "../cli" }
 rawr-iced = { path = "../iced" }
 image-webp = "0.2.4"
 jpeg-encoder = "0.6"
 png = "0.18.1"
 # Already in the bot through serenity; plain HTTP to the channel config store.
 reqwest = { version = "0.12", default-features = false, optional = true }
-serde_json = { version = "1", optional = true }
+# A plain program's output, as JSON.
+serde_json = "1"
 # The playground render port (already in the bot through reqwest).
 http-body-util = { version = "0.1", optional = true }
 hyper = { version = "1", features = ["http1", "server"], optional = true }

@@ -217,9 +217,9 @@ changing `.rawr` files does not.
 
 ## What's ?play?
 
-A renderer for snippets. In a Discord channel where the bot is turned on, write
-`?play` above a code block holding an expression, a view or a whole app, and it
-replies with the rendered frame.
+A runner for snippets. In a Discord channel where the bot is turned on, write
+`?play` above a code block. A snippet that uses iced can be an expression, a
+view or a whole app. The bot replies with its rendered frame.
 
 ````text
 ?play 320x200 light msg=Message::Increment
@@ -227,6 +227,10 @@ replies with the rendered frame.
 column![text("hi"), button("go")]
 ```
 ````
+
+A plain program is one that does not use iced. The bot runs it and replies
+with its output as text. It shows the exit status when that is not 0. A bare
+expression such as `1 + 2` prints its value.
 
 Options are `WxH` (up to 2048 per side), `dark` or `light`, and repeated
 `msg=EXPR` messages applied before rendering. The
