@@ -763,6 +763,13 @@ pub type OnPrintCallback = dyn Fn(&str);
 #[cfg(feature = "sync")]
 pub type OnPrintCallback = dyn Fn(&str) + Send + Sync;
 
+/// Callback function for `print!`, `println!`, `eprint!` and `eprintln!`.
+#[cfg(not(feature = "sync"))]
+pub type OnOutputCallback = dyn Fn(crate::Output, &str);
+/// Callback function for `print!`, `println!`, `eprint!` and `eprintln!`.
+#[cfg(feature = "sync")]
+pub type OnOutputCallback = dyn Fn(crate::Output, &str) + Send + Sync;
+
 /// Callback function for debugging.
 #[cfg(not(feature = "sync"))]
 pub type OnDebugCallback = dyn Fn(&str, Option<&str>, Position);

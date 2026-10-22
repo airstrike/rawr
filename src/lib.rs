@@ -278,6 +278,7 @@ pub use api::custom_syntax::Expression;
 #[cfg(not(feature = "no_std"))]
 #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 pub use api::files::{eval_file, run_file};
+pub use api::events::Output;
 pub use api::{eval::eval, run::run};
 pub use ast::{FnAccess, AST};
 use defer::Deferred;

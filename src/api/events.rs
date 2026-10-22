@@ -5,6 +5,17 @@ use crate::{Dynamic, Engine, EvalContext, Position, RawrResultOf, VarDefInfo};
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
 
+/// Where `print!`/`println!` (standard output) and `eprint!`/`eprintln!`
+/// (standard error) send their text.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum Output {
+    /// `print!` and `println!`.
+    Stdout,
+    /// `eprint!` and `eprintln!`.
+    Stderr,
+}
+
 impl Engine {
     /// Provide a callback that will be invoked before each variable access.
     ///
@@ -273,6 +284,39 @@ impl Engine {
     #[inline(always)]
     pub fn on_print(&mut self, callback: impl Fn(&str) + SendSync + 'static) -> &mut Self {
         self.print = Some(Box::new(callback));
+        self
+    }
+    /// Override default action of `print!`, `println!`, `eprint!` and
+    /// `eprintln!` (write to stdout or stderr). The text is exactly what the
+    /// macro writes, its newline included for `println!` and `eprintln!`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
+    /// # use std::sync::{Arc, RwLock};
+    /// use rawr::{Engine, Output};
+    ///
+    /// let result = Arc::new(RwLock::new(String::new()));
+    ///
+    /// let mut engine = Engine::new();
+    ///
+    /// let logger = result.clone();
+    /// engine.on_output(move |output, text| {
+    ///     if output == Output::Stdout {
+    ///         logger.write().unwrap().push_str(text);
+    ///     }
+    /// });
+    ///
+    /// engine.eval::<()>(r#"fn main() { let n = 42; print!("n = "); println!("{n}"); } main()"#)?;
+    ///
+    /// assert_eq!(*result.read().unwrap(), "n = 42\n");
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[inline(always)]
+    pub fn on_output(&mut self, callback: impl Fn(Output, &str) + SendSync + 'static) -> &mut Self {
+        self.output = Some(Box::new(callback));
         self
     }
     /// Override default action of `debug` (print to stdout using [`println!`])

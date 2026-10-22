@@ -2696,6 +2696,9 @@ enum PreludeOp {
     /// `s.parse::<T>()` for the target kind (`ExecutableOp::Kinded`): a
     /// `Result` of the value or the std error's message.
     Parse,
+    /// `print!`, `println!`, `eprint!`, `eprintln!`: `print(text, stderr)`,
+    /// through the engine's output callback.
+    Print,
 }
 
 impl PreludeOp {
@@ -2756,6 +2759,7 @@ impl PreludeOp {
             Self::IntMethod => "int.method",
             Self::Parse => "str.parse",
             Self::StrMethod => "str.method",
+            Self::Print => "io.print",
         }
     }
 
@@ -2818,6 +2822,7 @@ impl PreludeOp {
             ],
             Self::Cast => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
             Self::Parse => vec![TypeId::of::<ImmutableString>()],
+            Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
             Self::StrMethod => vec![
                 TypeId::of::<ImmutableString>(),
                 TypeId::of::<crate::INT>(),
@@ -2974,6 +2979,8 @@ impl PreludeOp {
             Self::VecMethod => return vec_method(args),
             Self::IntMethod => return int_method([3, 3], args),
             Self::Parse => return Ok(parse_text(&args[0].clone_cast::<ImmutableString>(), 3)),
+            // The engine's output callback needs the call context.
+            Self::Print => return Err(invariant("`print!` runs with its call context")),
             Self::StrMethod => {
                 let text = args[0].clone_cast::<ImmutableString>();
                 let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
@@ -4417,6 +4424,20 @@ impl ExecutableOp {
                 }
                 Ok(args[0].take())
             }
+            Self::Prelude(PreludeOp::Print) => {
+                let output = if args[1].as_bool().unwrap_or(false) {
+                    crate::Output::Stderr
+                } else {
+                    crate::Output::Stdout
+                };
+                if let Some(write) = context
+                    .as_ref()
+                    .and_then(|context| context.engine().output.as_ref())
+                {
+                    write(output, &args[0].clone_cast::<ImmutableString>());
+                }
+                Ok(Dynamic::UNIT)
+            }
             Self::Prelude(op) => op.invoke(args, models),
             Self::Kinded {
                 op: PreludeOp::Parse,
@@ -4438,6 +4459,8 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
         ExecutableOp::Prelude(op) => op.by_reference(),
         _ => None,
     };
+    // Output is a side effect: never folded or dropped.
+    let op_is_print = matches!(op, ExecutableOp::Prelude(PreludeOp::Print));
     let func: Shared<crate::func::native::FnAny> =
         Shared::new(move |context, args| op.invoke(context, args, &models, requirement.as_ref()));
     let func = match by_reference {
@@ -4451,7 +4474,7 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
             func,
             has_context: true,
             is_pure: true,
-            is_volatile: false,
+            is_volatile: op_is_print,
         },
     };
     FuncRegistration::new(name)
@@ -20863,6 +20886,20 @@ impl<'a> Parser<'a> {
             self.next();
             return self.parse_format(name_span, false);
         }
+        // `print!`, `println!`, `eprint!`, `eprintln!`.
+        if matches!(self.peek(), Token::Bang)
+            && let Some(stream) = match name.as_str() {
+                // `print` is a legacy keyword; the lexer renames it.
+                "print" | "__rawr_print" => Some((false, false)),
+                "println" => Some((false, true)),
+                "eprint" => Some((true, false)),
+                "eprintln" => Some((true, true)),
+                _ => None,
+            }
+            && self.models.import(&name).is_none()
+        {
+            return self.parse_print(stream, name_span);
+        }
         // `write!(f, ..)` and `writeln!(f, ..)` into a `fmt` body's formatter.
         if matches!(self.peek(), Token::Bang)
             && matches!(name.as_str(), "write" | "writeln")
@@ -21035,6 +21072,37 @@ impl<'a> Parser<'a> {
             return self.parse_host_macro(items, owner, name_span);
         }
         self.parse_name_value(name, name_span)
+    }
+
+    /// `print!`, `println!`, `eprint!`, `eprintln!` after the name:
+    /// `format!`'s text, written through the engine's output callback. Kept
+    /// out of [`Self::parse_name_primary`]'s recursive frame.
+    #[inline(never)]
+    fn parse_print(
+        &mut self,
+        (stderr, newline): (bool, bool),
+        name_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        self.next();
+        // `println!()` lexes its parentheses as one `()` token.
+        let (mut text, end) = if newline && matches!(self.peek(), Token::Unit) {
+            let (_, position) = self.next();
+            (origin::Fragment::plain("\"\""), position)
+        } else {
+            self.expect(Token::LeftParen, "'(' and a format string after the macro name")?;
+            let text = self.parse_format(name_span, true)?;
+            let end = text.span.end();
+            (text.rendered_source(), end)
+        };
+        if newline {
+            let mut line = origin::Fragment::plain("(");
+            line.push(text);
+            line.push_text(") + \"\\n\"");
+            text = line;
+        }
+        let stderr = origin::Fragment::plain(if stderr { "true" } else { "false" });
+        let source = self.prelude_op(PreludeOp::Print, [text, stderr]);
+        Ok(self.operator_expr(source, Ty::Unit, span(name_span.start(), end)))
     }
 
     /// The rest of [`Self::parse_name_primary`], kept out of its frame: a

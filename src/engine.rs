@@ -3,8 +3,8 @@
 use crate::api::default_limits::MAX_STRINGS_INTERNED;
 use crate::api::options::LangOptions;
 use crate::func::native::{
-    locked_write, OnDebugCallback, OnDefVarCallback, OnParseTokenCallback, OnPrintCallback,
-    OnVarCallback,
+    locked_write, OnDebugCallback, OnDefVarCallback, OnOutputCallback, OnParseTokenCallback,
+    OnPrintCallback, OnVarCallback,
 };
 use crate::packages::{Package, StandardPackage};
 use crate::tokenizer::Token;
@@ -143,6 +143,8 @@ pub struct Engine {
     pub(crate) print: Option<Box<OnPrintCallback>>,
     /// Callback closure for implementing the `debug` command.
     pub(crate) debug: Option<Box<OnDebugCallback>>,
+    /// Callback closure for `print!`, `println!`, `eprint!` and `eprintln!`.
+    pub(crate) output: Option<Box<OnOutputCallback>>,
     /// Callback closure for progress reporting.
     #[cfg(not(feature = "unchecked"))]
     pub(crate) progress: Option<Box<crate::func::native::OnProgressCallback>>,
@@ -291,6 +293,7 @@ impl Engine {
 
         print: None,
         debug: None,
+        output: None,
 
         #[cfg(not(feature = "unchecked"))]
         progress: None,
@@ -339,6 +342,10 @@ impl Engine {
                 (None, crate::Position::NONE) => println!("{s}"),
                 #[cfg(not(feature = "no_position"))]
                 (None, pos) => println!("{pos:?} | {s}"),
+            }));
+            engine.output = Some(Box::new(|output, text| match output {
+                crate::Output::Stdout => print!("{text}"),
+                crate::Output::Stderr => eprint!("{text}"),
             }));
         }
 

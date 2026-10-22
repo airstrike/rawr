@@ -226,6 +226,54 @@ fn language_string_building() {
 }
 
 #[test]
+fn language_print_macros_format_like_format() {
+    use std::sync::{Arc, Mutex};
+    let written = Arc::new(Mutex::new(Vec::<(crate::Output, String)>::new()));
+    let mut engine = Engine::new();
+    let log = written.clone();
+    engine.on_output(move |output, text| log.lock().unwrap().push((output, text.to_owned())));
+    engine
+        .eval::<()>(
+            r#"
+            fn main() {
+                let n = 7;
+                print!("{n:>3}|");
+                println!("{}{unit}", n * 2, unit = "px");
+                println!();
+                eprint!("{:?}", Some("x"));
+                eprintln!("{{{}}}", 1.5);
+            }
+            main()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (out, err) = (crate::Output::Stdout, crate::Output::Stderr);
+    assert_eq!(
+        *written.lock().unwrap(),
+        [
+            (out, "  7|".to_owned()),
+            (out, "14px\n".to_owned()),
+            (out, "\n".to_owned()),
+            (err, "Some(\"x\")".to_owned()),
+            (err, "{1.5}\n".to_owned()),
+        ]
+    );
+    // Rust's text for floats: `{}` drops a zero fraction, `{:?}` keeps it.
+    let floats = Engine::new()
+        .eval::<String>(r#"format!("{} {} {:?} {:?} {} {:?}", 27.0, 27.5, 27.0, 27.5, 27, "s")"#)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        floats,
+        format!("{} {} {:?} {:?} {} {:?}", 27.0, 27.5, 27.0, 27.5, 27, "s")
+    );
+    rejected(r#"pub fn run() -> i64 { println!("{}", 1, 2); 0 } run()"#);
+    rejected(r#"pub fn run() -> i64 { print!("{}"); 0 } run()"#);
+    rejected(r#"pub fn run() -> i64 { eprintln!("{:+}", "x"); 0 } run()"#);
+    rejected(r#"pub fn run() -> i64 { print!(); 0 } run()"#);
+    rejected(r#"pub fn run() -> i64 { let x: i64 = println!("a"); x } run()"#);
+}
+
+#[test]
 fn language_constants() {
     let value = run(r#"
         pub const GAP: i64 = 4 * 2;

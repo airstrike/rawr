@@ -3207,10 +3207,7 @@ fn parse_private_function(
             Some(false)
         }
     };
-    Ok(
-        parse_legacy_function_outline(input, tokenizer_control, start, name, first)?
-            .map(crate::item::Parsed::LegacyFunction),
-    )
+    parse_legacy_function_outline(input, tokenizer_control, start, name, first)
 }
 
 #[cfg(not(feature = "no_function"))]
@@ -3220,7 +3217,7 @@ fn parse_legacy_function_outline(
     start: Position,
     name: crate::item::Name,
     open: Option<bool>,
-) -> ParseResult<Option<crate::item::LegacyFunction>> {
+) -> ParseResult<Option<crate::item::Parsed>> {
     let parameter_count = if let Some(has_parameter) = open {
         let mut depth = 1_usize;
         let mut count = 0_usize;
@@ -3270,17 +3267,41 @@ fn parse_legacy_function_outline(
     };
     let (body_span, body_syntax) = parse_body_syntax(input, tokenizer_control, open)?;
 
-    if name.text != "main" && !attempts_iced_application(&body_syntax) {
+    let attempts_application = attempts_iced_application(&body_syntax);
+    if name.text != "main" && !attempts_application {
         return Ok(None);
     }
+    // Rust's `fn main() { .. }`: a function returning `()`. One that starts
+    // an iced application stays an outline for the entry diagnostic.
+    if parameter_count == 0 && !attempts_application {
+        let span = Span::new(start, body_span.end());
+        return Ok(Some(crate::item::Parsed::Function(crate::item::Function {
+            header: crate::item::Header {
+                attributes: Box::default(),
+                visibility: None,
+                span: Span::new(start, after(open, 1)),
+            },
+            name,
+            generics: Box::default(),
+            receiver: None,
+            parameters: Box::default(),
+            output: None,
+            body_span,
+            body_syntax,
+            constant: false,
+            span,
+        })));
+    }
 
-    Ok(Some(crate::item::LegacyFunction {
-        name,
-        parameter_count,
-        body_span,
-        body_syntax,
-        span: Span::new(start, body_span.end()),
-    }))
+    Ok(Some(crate::item::Parsed::LegacyFunction(
+        crate::item::LegacyFunction {
+            name,
+            parameter_count,
+            body_span,
+            body_syntax,
+            span: Span::new(start, body_span.end()),
+        },
+    )))
 }
 
 #[cfg(not(feature = "no_function"))]
