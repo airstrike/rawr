@@ -138,6 +138,12 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     obligation_candidates: HashMap<TraitObligationKey<'tcx>, Vec<DefId>>,
     scalar_predicate_proofs: BTreeMap<ScalarPredicateKey, ScalarPredicateProof>,
     active_demand: Demand,
+    /// `Type::member` paths Rawr demanded: a member the type may have
+    /// through a trait it implements.
+    member_demands: Vec<(DefId, String)>,
+    /// A blanket trait implementation applied to one concrete type, as if
+    /// the crate wrote `impl Trait for Type`.
+    applications: BTreeMap<String, Implementation>,
     budget: &'budget mut Budget,
     diagnostic: &'diagnostic mut Option<Diagnostic>,
 }
@@ -1271,6 +1277,8 @@ fn extract<'tcx>(
         obligation_candidates: HashMap::new(),
         scalar_predicate_proofs: BTreeMap::new(),
         active_demand: Demand::ShapeOnly,
+        member_demands: Vec::new(),
+        applications: BTreeMap::new(),
         budget,
         diagnostic,
     };
@@ -1297,6 +1305,8 @@ fn extract<'tcx>(
             builder.select_path(selected.as_def_id(), &path[1..], 0)?;
         }
         builder.drain_scheduler()?;
+        builder.resolve_member_demands()?;
+        builder.drain_scheduler()?;
         builder.collect_external_exports(selected.as_def_id(), Vec::new(), &[], 0, true)?;
     }
     let mut definitions = Vec::new();
@@ -1311,6 +1321,11 @@ fn extract<'tcx>(
         .try_reserve_exact(builder.implementations.len())
         .map_err(|error| format!("implementation ledger allocation failed: {error}"))?;
     implementations.extend(builder.implementations.into_values());
+    builder.budget.items(builder.applications.len())?;
+    implementations
+        .try_reserve(builder.applications.len())
+        .map_err(|error| format!("implementation ledger allocation failed: {error}"))?;
+    implementations.extend(builder.applications.into_values());
     let mut scalar_predicate_proofs = Vec::new();
     builder
         .budget
@@ -2219,8 +2234,202 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             self.ensure_with_demand(def_id, namespace(ns), Demand::SelectedRoot)?;
             if kind == DefKind::Mod && !rest.is_empty() {
                 self.select_path(def_id, rest, depth.saturating_add(1))?;
+            } else if matches!(kind, DefKind::Struct | DefKind::Enum)
+                && let [member] = rest
+                && member != "*"
+            {
+                // `Type::member`: the type's own member, or one a trait it
+                // implements provides.
+                self.budget.items(1)?;
+                self.member_demands
+                    .try_reserve(1)
+                    .map_err(|error| format!("member demand allocation failed: {error}"))?;
+                self.member_demands.push((def_id, member.clone()));
             }
         }
+        Ok(())
+    }
+
+    /// Each demanded `Type::member` that is no inherent member of the type:
+    /// the member of every trait the type implements that declares it. A
+    /// trait implemented for the type itself selects that member of its
+    /// implementation. A blanket implementation (`impl<R: RngCore> Rng for
+    /// R`) applies to the type as if the crate wrote `impl Rng for Type`.
+    /// rustc proves the type implements the trait. Only a type without
+    /// generic parameters and a trait without its own are looked up.
+    fn resolve_member_demands(&mut self) -> Result<(), String> {
+        let tcx = self.tcx;
+        let mut demands = std::mem::take(&mut self.member_demands);
+        demands.sort_unstable_by_key(|(adt, member)| {
+            (tcx.def_path_hash(*adt).to_raw_def_path_hash().0, member.clone())
+        });
+        demands.dedup();
+        for (adt, member) in demands {
+            if tcx.generics_of(adt).count() != 0 {
+                continue;
+            }
+            let name = Symbol::intern(&member);
+            let inherent = tcx.inherent_impls(adt).iter().any(|implementation| {
+                tcx.associated_items(*implementation)
+                    .filter_by_name_unhygienic(name)
+                    .next()
+                    .is_some()
+            });
+            if inherent {
+                continue;
+            }
+            let self_ty = tcx.type_of(adt).instantiate_identity().skip_norm_wip();
+            let param_env = tcx.param_env(adt);
+            let mut traits = tcx
+                .visible_traits()
+                .filter(|trait_id| {
+                    tcx.generics_of(*trait_id).count() == 1
+                        && tcx
+                            .associated_items(*trait_id)
+                            .filter_by_name_unhygienic(name)
+                            .any(|item| item.is_fn())
+                })
+                .collect::<Vec<_>>();
+            traits.sort_unstable_by_key(|trait_id| {
+                tcx.def_path_hash(*trait_id).to_raw_def_path_hash().0
+            });
+            traits.dedup();
+            for trait_id in traits {
+                self.edge(1)?;
+                let applies = tcx
+                    .infer_ctxt()
+                    .build(ty::TypingMode::non_body_analysis())
+                    .type_implements_trait(trait_id, [self_ty], param_env)
+                    .must_apply_modulo_regions();
+                if !applies {
+                    continue;
+                }
+                let Some(trait_item) = tcx
+                    .associated_items(trait_id)
+                    .filter_by_name_unhygienic(name)
+                    .find(|item| item.is_fn())
+                    .map(|item| item.def_id)
+                else {
+                    continue;
+                };
+                let mut candidates = Vec::new();
+                tcx.for_each_relevant_impl(trait_id, self_ty, |implementation| {
+                    candidates.push(implementation);
+                });
+                let own = candidates.iter().copied().find(|implementation| {
+                    tcx.impl_opt_trait_ref(*implementation).is_some_and(|reference| {
+                        matches!(
+                            reference.instantiate_identity().skip_norm_wip().self_ty().kind(),
+                            ty::Adt(definition, _) if definition.did() == adt
+                        )
+                    })
+                });
+                let arguments = tcx.mk_args(&[self_ty.into()]);
+                let obligation = AssociatedObligation {
+                    kind: AssociatedDemandKind::SelectedMember,
+                    trait_item: Some(trait_item),
+                    arguments: Some(arguments),
+                    param_env,
+                };
+                if let Some(implementation) = own {
+                    self.request_implementation(implementation, adt, Some(obligation))?;
+                    continue;
+                }
+                let blankets = candidates
+                    .iter()
+                    .copied()
+                    .filter(|implementation| {
+                        tcx.generics_of(*implementation).count() == 1
+                            && tcx.impl_opt_trait_ref(*implementation).is_some_and(|reference| {
+                                matches!(
+                                    reference.instantiate_identity().skip_norm_wip().self_ty().kind(),
+                                    ty::Param(_)
+                                )
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                // Coherence admits one blanket implementation of a trait
+                // for any one type. Several candidates whose bounds rustc
+                // would have to choose between are left unresolved.
+                if let [implementation] = blankets.as_slice() {
+                    self.apply_blanket(*implementation, adt, self_ty, obligation)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The blanket implementation `implementation` applied to the concrete
+    /// type `adt`: an implementation of the trait for that type, with the
+    /// demanded member and no generics of its own.
+    fn apply_blanket(
+        &mut self,
+        implementation: DefId,
+        adt: DefId,
+        self_ty: Ty<'tcx>,
+        obligation: AssociatedObligation<'tcx>,
+    ) -> Result<(), String> {
+        let tcx = self.tcx;
+        let mut digest = Sha256::new();
+        digest.update(b"rawr.blanket-application/v1");
+        digest.update(tcx.def_path_hash(implementation).to_raw_def_path_hash().0);
+        digest.update(tcx.def_path_hash(adt).to_raw_def_path_hash().0);
+        let digest = digest.finalize();
+        let key = hex(&digest[..16])?;
+        let instantiated = tcx
+            .impl_opt_trait_ref(implementation)
+            .ok_or_else(|| "blanket implementation lost its trait".to_owned())?
+            .instantiate(tcx, tcx.mk_args(&[self_ty.into()]))
+            .skip_norm_wip();
+        let identity = tcx
+            .impl_opt_trait_ref(implementation)
+            .map(|reference| reference.instantiate_identity().skip_norm_wip());
+        match implementation_crate_authority(self.is_sysroot_crate(implementation.krate)?) {
+            ImplementationCrateAuthority::Sysroot => self.register_sysroot(implementation.krate)?,
+            ImplementationCrateAuthority::External => self.register_external(implementation.krate)?,
+        }
+        let mut id = self.id(implementation, Namespace::Type)?;
+        id.def_path_hash = key.clone();
+        let mut obligations = BTreeMap::new();
+        obligations.insert(self.associated_obligation_order_key(obligation), obligation);
+        let associated =
+            self.expand_associated_obligations(implementation, identity, &obligations, &id)?;
+        if let Some(existing) = self.applications.get_mut(&key) {
+            existing.associated.extend(associated);
+            existing.associated.sort_unstable();
+            existing.associated.dedup();
+            return Ok(());
+        }
+        self.ensure(adt, Namespace::Type)?;
+        self.ensure(instantiated.def_id, Namespace::Type)?;
+        let relevance = vec![
+            self.id(adt, Namespace::Type)?,
+            self.id(instantiated.def_id, Namespace::Type)?,
+        ];
+        let header = tcx.impl_trait_header(implementation);
+        let record = Implementation {
+            key: key.clone(),
+            id,
+            relevance,
+            trait_ref: Trait::Trait {
+                id: self.id(instantiated.def_id, Namespace::Type)?,
+                arguments: self.arguments(instantiated.args, adt, 0)?,
+            },
+            self_type: self.type_of(self_ty, adt, 0)?,
+            safety: safety(header.safety),
+            polarity: Polarity::Positive,
+            const_impl: false,
+            default_impl: false,
+            generics: Generics {
+                parameters: Vec::new(),
+                predicates: Vec::new(),
+            },
+            associated,
+            span: self.span(tcx.def_span(implementation))?,
+            origin: self.origin(tcx.def_span(implementation))?,
+        };
+        self.budget.items(1)?;
+        self.applications.insert(key, record);
         Ok(())
     }
 

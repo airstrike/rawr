@@ -11618,7 +11618,16 @@ impl<'a> Parser<'a> {
                 .rsplit_once("::")
                 .map(|(owner, _)| owner.to_string())
                 .unwrap_or_default();
-            if definition.path() != owner {
+            // Another alias of the same imported Rust type is the same
+            // receiver.
+            let same_import = definition.identity().imported().is_some_and(|identity| {
+                self.models
+                    .host
+                    .type_(&owner)
+                    .and_then(|aliased| aliased.identity().imported())
+                    == Some(identity)
+            });
+            if definition.path() != owner && !same_import {
                 return Err(Error::InvalidHostOperation {
                     item: item.path().into(),
                     reason: format!(
@@ -13073,7 +13082,14 @@ impl<'a> Parser<'a> {
         }
 
         let resolved = self.inference.resolve(&receiver.ty);
-        let Some(definition) = resolved.host_alias().cloned() else {
+        #[cfg(feature = "rust-import")]
+        let alias = resolved
+            .host_alias()
+            .cloned()
+            .or_else(|| self.imported_member_owner(&resolved, &member));
+        #[cfg(not(feature = "rust-import"))]
+        let alias = resolved.host_alias().cloned();
+        let Some(definition) = alias else {
             return Err(self.unsupported("host method receiver type"));
         };
         let path = format!("{}::{member}", definition.path());
@@ -13343,7 +13359,7 @@ impl<'a> Parser<'a> {
 
     #[cfg(feature = "rust-import")]
     fn ambiguous_imported_member(
-        &self,
+        &mut self,
         ty: &Ty,
         member: &str,
         member_span: Span,
@@ -13353,12 +13369,31 @@ impl<'a> Parser<'a> {
         if alias.is_some() {
             return None;
         }
+        // Every alias names the same Rust type: a method any alias has is
+        // the type's own.
+        if method && self.imported_member_owner(ty, member).is_some() {
+            return None;
+        }
         let paths = self
             .models
             .host
             .imported_type_paths(identity, owner)?
             .collect::<Vec<_>>();
         let first = paths.first()?;
+        // A method no alias has yet may come from a trait the type
+        // implements: demand it through the first alias.
+        if method
+            && paths.iter().all(|path| {
+                self.models.host.entry(&format!("{path}::{member}")).is_none()
+            })
+        {
+            let error = Error::UnknownMember {
+                owner: first.as_str().into(),
+                member: member.into(),
+                reference: member_span,
+            };
+            return Some(self.native_miss(true, error));
+        }
         let item = if method {
             format!("{first}::{member}")
         } else {
@@ -13373,6 +13408,29 @@ impl<'a> Parser<'a> {
             .into(),
             operation: member_span,
         })
+    }
+
+    /// The first alias of an imported value's type that has `member`, for a
+    /// value no alias names (a function's result). Every alias is the same
+    /// Rust type, so the method is the same through each.
+    #[cfg(feature = "rust-import")]
+    fn imported_member_owner(
+        &self,
+        ty: &Ty,
+        member: &str,
+    ) -> Option<crate::host::type_def::Definition> {
+        let (identity, owner, None) = ty.imported_alias_context()? else {
+            return None;
+        };
+        self.models
+            .host
+            .imported_type_paths(identity, owner)?
+            .find(|path| {
+                self.models
+                    .host_items(&format!("{path}::{member}"))
+                    .is_some()
+            })
+            .and_then(|path| self.models.host.type_(&path).cloned())
     }
 
     fn require_mutable_host_receiver(

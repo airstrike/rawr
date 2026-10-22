@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 6;
+const SCHEMA: u32 = 7;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -139,6 +139,10 @@ pub struct Facade {
     root: Box<str>,
     types: Box<[TypeDefinition]>,
     items: Box<[Item]>,
+    /// The traits Rawr code names (`use rand::Rng;`), in path order. Each
+    /// is a module to Rawr. The bridge brings each into scope, so a method
+    /// a trait provides resolves in Rust as it does in the program.
+    traits: Box<[Box<str>]>,
 }
 
 /// One imported nominal definition and complete admitted shape.
@@ -295,10 +299,17 @@ impl Plan {
     ) -> Result<Box<[u8]>, super::Error> {
         let mut facades = Vec::<Facade>::new();
         for outcome in outcomes {
-            if matches!(
+            let named_trait = matches!(
                 outcome.representability(),
-                Representability::Excluded(_) | Representability::Rejected(_)
-            ) {
+                Representability::Rejected(reason)
+                    if reason.kind() == representability::reject::Kind::Trait
+            );
+            if !named_trait
+                && matches!(
+                    outcome.representability(),
+                    Representability::Excluded(_) | Representability::Rejected(_)
+                )
+            {
                 continue;
             }
             let root = outcome.export().root_alias();
@@ -314,6 +325,7 @@ impl Plan {
                             root: copy(root)?,
                             types: Box::default(),
                             items: Box::default(),
+                            traits: Box::default(),
                         },
                     );
                     index
@@ -321,6 +333,15 @@ impl Plan {
             };
             let relative = path(outcome.export().path())?;
             let facade = &mut facades[index];
+            if named_trait {
+                let mut traits = std::mem::take(&mut facade.traits).into_vec();
+                if let Err(position) = traits.binary_search(&relative) {
+                    traits.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                    traits.insert(position, relative);
+                }
+                facade.traits = traits.into_boxed_slice();
+                continue;
+            }
             if let Some(ty) = type_definition(&relative, outcome)? {
                 let mut types = std::mem::take(&mut facade.types).into_vec();
                 types.try_reserve(1).map_err(|_| super::Error::Allocation)?;
@@ -675,6 +696,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             root: ROOT_FIXTURE.into(),
             types,
             items: Box::default(),
+            traits: Box::default(),
         }]),
     })
     .expect("the static iced semantic fixture encodes")
@@ -769,6 +791,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
                 root: "dial".into(),
                 types: Box::from([dial]),
                 items: Box::default(),
+                traits: Box::default(),
             },
             iced,
         ]),
@@ -897,6 +920,10 @@ impl Facade {
     /// Iterate exact item overloads.
     pub fn items(&self) -> impl ExactSizeIterator<Item = &Item> {
         self.items.iter()
+    }
+    /// Iterate the traits Rawr code names, relative to the root.
+    pub fn traits(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.traits.iter().map(AsRef::as_ref)
     }
 }
 
@@ -1816,6 +1843,27 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
             match outcome.identity().selector() {
                 Selector::Function { .. } => ItemKind::Function,
                 Selector::AssociatedFunction { .. } => ItemKind::AssociatedFunction,
+                // A generic method Rawr calls at the types it infers: every
+                // parameter a type, none a callable.
+                Selector::Method { .. }
+                    if plan.class().is_none()
+                        && plan.signature().parameters().iter().all(|parameter| {
+                            parameter.kind() == representability::signature::Kind::Type
+                        }) =>
+                {
+                    match plan.receiver() {
+                        Some(representability::ownership::Receiver::Owned) => {
+                            ItemKind::OwnedMethod
+                        }
+                        Some(representability::ownership::Receiver::Shared) => {
+                            ItemKind::SharedMethod
+                        }
+                        Some(representability::ownership::Receiver::Mutable) => {
+                            ItemKind::MutableMethod
+                        }
+                        None => return Ok(None),
+                    }
+                }
                 Selector::Method { .. } => return Ok(None),
                 _ => return Err(super::Error::ForeignIdentity),
             },

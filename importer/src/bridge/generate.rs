@@ -2639,9 +2639,27 @@ fn render_source(
         ";\npub(super) static COMPILE_SNAPSHOT: bool = {compile_snapshot};"
     )
     .map_err(|_| request::Error::Encoding)?;
+    // Each trait the program names is in scope for every adapter, so a
+    // method it provides resolves as it does in the program.
+    if let Some(bytes) = facade_plan {
+        let plan = crate::surface::facade::Plan::decode(bytes, &crate::cargo::Limits::standard())
+            .map_err(|_| request::Error::Drift {
+                field: "generated facade plan",
+            })?;
+        for facade in plan.facades() {
+            for path in facade.traits() {
+                writeln!(
+                    stamps,
+                    "#[allow(unused_imports)]\npub(super) use {}::{path} as _;",
+                    facade.root()
+                )
+                .map_err(|_| request::Error::Encoding)?;
+            }
+        }
+    }
     output
         .write_all(
-            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT, PROFILE_FINGERPRINT};\n",
+            b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT, PROFILE_FINGERPRINT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\n",
         )
         .map_err(|_| request::Error::Encoding)?;
     // The facade plan is megabytes of data: rustc reads it with

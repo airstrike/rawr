@@ -925,6 +925,17 @@ fn build(
     if let Some(seed) = compatibility {
         builder.install_compatibility_projections(seed)?;
     }
+    // A trait the program names is a module (`use rand::Rng;`), unless the
+    // profile already gives its path a meaning (iced's `Widget`).
+    for path in facade.traits() {
+        let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
+        for module in prefixes.chain(std::iter::once(path)) {
+            match builder.imported_module(module, allocation) {
+                Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
     builder.finish_imported(allocation).map_err(Error::from)
 }
 

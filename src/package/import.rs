@@ -303,12 +303,6 @@ impl crate::Engine {
                 }
                 Err(crate::resolve::ImportedFailure::Lowering(failure)) => {
                     let (evidence, error) = failure.into_parts();
-                    if let Some(report) =
-                        imported_lowering_report(&evidence, &error, &sources, &paths)
-                            .map_err(super::Error::diagnostic)?
-                    {
-                        return Err(super::Error::import_diagnostic(report));
-                    }
                     let demand = match error.err_type() {
                         crate::ParseErrorType::Resolution(resolution) => {
                             match rust_miss(contract, resolution) {
@@ -320,6 +314,18 @@ impl crate::Engine {
                         }
                         _ => None,
                     };
+                    if let Some(report) =
+                        imported_lowering_report(&evidence, &error, &sources, &paths)
+                            .map_err(super::Error::diagnostic)?
+                    {
+                        let error = super::Error::import_diagnostic(report);
+                        return Err(match demand {
+                            Some((path, through_alias)) => {
+                                error.with_rust_demand(&path, through_alias)
+                            }
+                            None => error,
+                        });
+                    }
                     let error = super::Error::compilation(sources.clone(), evidence, error);
                     return Err(match demand {
                         Some((path, through_alias)) => error.with_rust_demand(&path, through_alias),
@@ -786,10 +792,12 @@ fn rust_miss(
         return None;
     }
     let through_alias = contract.reaches_through_crate_alias(&path);
-    // A member missing from a resolved owner is a real miss: a demanded type
-    // already brings its complete impl tables.
-    if matches!(error, R::UnknownMember { .. }) && !through_alias {
-        return None;
+    // A member missing from a resolved owner may be one a trait the type
+    // implements provides. A demanded type brings its own impl tables, and
+    // demanding `Type::member` brings the member of each trait it
+    // implements. Demanded once, a member still missing is a real miss.
+    if matches!(error, R::UnknownMember { .. }) {
+        return Some(Miss::Demand(path, through_alias));
     }
     match contract.rust_lookup(&path) {
         Some(Lookup::Missing {
@@ -1071,6 +1079,8 @@ fn import_path(
 struct Facade<'contract> {
     root: &'contract str,
     entries: Vec<Entry<'contract>>,
+    /// The traits the program names: modules, as in the facade plan.
+    traits: Vec<Box<str>>,
 }
 
 struct Entry<'contract> {
@@ -1224,6 +1234,36 @@ fn install(
         .try_reserve_exact(facade_count)
         .map_err(|_| Error::Allocation)?;
     for outcome in contract.outcomes() {
+        let named_trait = matches!(
+            outcome.representability(),
+            Representability::Rejected(reason)
+                if reason.kind() == representability::reject::Kind::Trait
+        );
+        if named_trait {
+            let root = outcome.export().root_alias();
+            let relative = relative_path(outcome.export(), allocation)?;
+            let index = match facades.binary_search_by(|facade| facade.root.cmp(root)) {
+                Ok(index) => index,
+                Err(index) => {
+                    facades.try_reserve(1).map_err(|_| Error::Allocation)?;
+                    facades.insert(
+                        index,
+                        Facade {
+                            root,
+                            entries: Vec::new(),
+                            traits: Vec::new(),
+                        },
+                    );
+                    index
+                }
+            };
+            let traits = &mut facades[index].traits;
+            if let Err(position) = traits.binary_search_by(|path| path.as_ref().cmp(&relative)) {
+                traits.try_reserve(1).map_err(|_| Error::Allocation)?;
+                traits.insert(position, relative.into_boxed_str());
+            }
+            continue;
+        }
         if matches!(
             outcome.representability(),
             Representability::Excluded(_) | Representability::Rejected(_)
@@ -1245,6 +1285,7 @@ fn install(
                     Facade {
                         root,
                         entries: Vec::new(),
+                        traits: Vec::new(),
                     },
                 );
                 index
@@ -1370,6 +1411,17 @@ fn build(
     }
     for module in modules {
         builder.imported_module(&module, allocation)?;
+    }
+    // A trait the program names is a module (`use rand::Rng;`), unless a
+    // type already has its path.
+    for path in &facade.traits {
+        let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
+        for module in prefixes.chain(std::iter::once(path.as_ref())) {
+            match builder.imported_module(module, allocation) {
+                Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
 
     for entry in &facade.entries {
