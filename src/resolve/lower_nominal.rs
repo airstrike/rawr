@@ -379,6 +379,51 @@ fn imported_surface_type(
     })
 }
 
+/// An instance type as `imported_surface_type` converts it, without
+/// allocation accounting: the key of a call's instance.
+#[cfg(feature = "rust-import")]
+fn instance_surface_type(
+    inference: &Inference,
+    ty: &Ty,
+) -> Option<rawr_import::classify::representability::convert::Type> {
+    use rawr_import::classify::representability::convert::{Builtin, Type};
+    Some(match inference.resolved_ref(ty) {
+        Ty::Unit => Type::Unit,
+        Ty::Bool => Type::Builtin(Builtin::Bool),
+        Ty::Char => Type::Builtin(Builtin::Char),
+        Ty::Float(Float::F32) => Type::Builtin(Builtin::F32),
+        Ty::Float(_) => Type::Builtin(Builtin::F64),
+        Ty::Int(kind) => Type::Builtin(match kind {
+            Int::I8 => Builtin::I8,
+            Int::I16 => Builtin::I16,
+            Int::I32 | Int::Var(_) => Builtin::I32,
+            Int::I64 => Builtin::I64,
+            Int::Isize => Builtin::Isize,
+            Int::U8 => Builtin::U8,
+            Int::U16 => Builtin::U16,
+            Int::U32 => Builtin::U32,
+            Int::U64 => Builtin::U64,
+            Int::Usize => Builtin::Usize,
+        }),
+        Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
+        Ty::String => Type::Builtin(Builtin::String),
+        Ty::ProfileMessage { payload, seal, .. } => Type::ProfileMessage {
+            mapper: *seal,
+            payload: Box::new(instance_surface_type(inference, payload)?),
+        },
+        Ty::Host { proof, arguments } => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::authenticated(
+                *proof.definition.identity().imported()?.as_bytes(),
+            ),
+            arguments: arguments
+                .iter()
+                .map(|argument| instance_surface_type(inference, argument))
+                .collect::<Option<_>>()?,
+        },
+        _ => return None,
+    })
+}
+
 #[cfg(not(feature = "no_function"))]
 pub(super) fn lower(
     engine: &Engine,
@@ -7394,6 +7439,9 @@ struct Parser<'a> {
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
     pending_turbofish: Option<Vec<Ty>>,
+    /// The turbofish of the host function call whose signature is being
+    /// instantiated (`rand::random::<f64>()`).
+    host_turbofish: Option<Vec<Ty>>,
     /// The trait arguments a qualified call wrote (`<C as Convert<i64>>::f`,
     /// `Convert::<i64>::f`), for the trait call it makes.
     explicit_trait_arguments: Option<Vec<Ty>>,
@@ -7608,6 +7656,7 @@ impl<'a> Parser<'a> {
             pending_parses: Vec::new(),
             generics: BTreeMap::new(),
             pending_turbofish: None,
+            host_turbofish: None,
             explicit_trait_arguments: None,
             binding_mode: std::cell::Cell::new(None),
             slice_arity: std::cell::Cell::new(0),
@@ -10718,8 +10767,13 @@ impl<'a> Parser<'a> {
                     })
                     .collect::<Result<Vec<_>, _>>()?
                     .into_boxed_slice();
+                #[cfg(feature = "rust-import")]
+                let instance = self.imported_instance_key(&item, &requirements);
+                #[cfg(not(feature = "rust-import"))]
+                let instance = None;
                 ExecutableOp::Intrinsic {
-                    proof: intrinsic::Proof::new(facade, owner, &item, operands, output, span),
+                    proof: intrinsic::Proof::new(facade, owner, &item, operands, output, span)
+                        .with_instance(instance),
                 }
             }
             Op::Perform {
@@ -11534,6 +11588,21 @@ impl<'a> Parser<'a> {
         arguments: Option<&[ParsedExpr]>,
     ) -> Result<InstantiatedHostSignature, Error> {
         let mut parameters = BTreeMap::<ImmutableString, Ty>::new();
+        if let Some(types) = self.host_turbofish.clone() {
+            let names = item
+                .signature()
+                .declared_type_parameters()
+                .collect::<Vec<_>>();
+            if names.len() != types.len() {
+                return Err(Error::InvalidTypeArguments {
+                    ty: item.path().into(),
+                    expected: names.len(),
+                    actual: types.len(),
+                    reference: Span::NONE,
+                });
+            }
+            parameters.extend(names.into_iter().zip(types));
+        }
         let resolved_receiver = receiver.map(|ty| self.inference.resolve(ty));
         let host_receiver = resolved_receiver.as_ref().map(|ty| match ty {
             Ty::Reference { target, .. } => target.as_ref(),
@@ -11929,6 +11998,31 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The key of the instance a call of a generic imported item uses:
+    /// its types in the item's declared order, as the bridge keys the
+    /// adapter it generated for them.
+    #[cfg(feature = "rust-import")]
+    fn imported_instance_key(
+        &self,
+        item: &crate::host::item::Definition,
+        requirements: &[(ImmutableString, Ty, capability::Set)],
+    ) -> Option<[u8; 32]> {
+        if item.imported_identity().is_none() || requirements.is_empty() {
+            return None;
+        }
+        let types = item
+            .signature()
+            .declared_type_parameters()
+            .map(|name| {
+                let (_, ty, _) = requirements
+                    .iter()
+                    .find(|(candidate, _, _)| *candidate == name)?;
+                instance_surface_type(&self.inference, ty)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(rawr_import::surface::instance::key(&types))
+    }
+
     fn push_intrinsic(
         &mut self,
         item: crate::host::item::Definition,
@@ -12191,8 +12285,10 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         self.supply_display_labeller(items, &mut arguments, call)?;
         self.deref_facade_strings(items, &mut arguments)?;
-        let (item, signature) =
-            self.select_host_signature(items, None, &mut arguments, false, call)?;
+        self.host_turbofish = self.pending_turbofish.take();
+        let selected = self.select_host_signature(items, None, &mut arguments, false, call);
+        self.host_turbofish = None;
+        let (item, signature) = selected?;
         if signature.inputs.len() != arguments.len() {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
@@ -26589,6 +26685,22 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let mut segments = vec![(first, first_span)];
         while matches!(self.peek(), Token::DoubleColon) {
+            // `path::f::<T>(..)`: the called function's type arguments.
+            if matches!(self.peek_second(), Token::LessThan) {
+                self.next();
+                self.next();
+                let mut types = vec![self.parse_local_type()?];
+                while matches!(self.peek(), Token::Comma) {
+                    self.next();
+                    if matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                        break;
+                    }
+                    types.push(self.parse_local_type()?);
+                }
+                self.expect_close_angle("'>' after turbofish type arguments")?;
+                self.pending_turbofish = Some(types);
+                break;
+            }
             self.next();
             segments.push(self.expect_qualified_name()?);
         }
@@ -29986,8 +30098,19 @@ impl<'a> Parser<'a> {
                 operation: span,
             });
         }
+        // The instance's types in the item's declared parameter order.
         let mut types = self.imported_entries(requirements.len())?;
-        for (_, ty, _) in requirements.iter() {
+        let declared = item.signature().declared_type_parameters().collect::<Vec<_>>();
+        let ordered = declared
+            .iter()
+            .filter_map(|name| requirements.iter().find(|(candidate, _, _)| candidate == name))
+            .collect::<Vec<_>>();
+        let ordered = if ordered.len() == requirements.len() {
+            ordered
+        } else {
+            requirements.iter().collect()
+        };
+        for (_, ty, _) in ordered {
             types.push(imported_surface_type(
                 &self.inference,
                 ty,

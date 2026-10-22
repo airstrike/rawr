@@ -1270,7 +1270,11 @@ fn predicate_proofs(
             .identity()
             .definition()
             .ok_or(Error::InstanceMismatch)?;
-        let scalar = scalar_predicate_type(concrete).ok_or(Error::InstanceMismatch)?;
+        // A bound the importer cannot prove for this type is left to
+        // rustc, which checks it where the bridge calls the item.
+        let Some(scalar) = scalar_predicate_type(concrete) else {
+            continue;
+        };
         let mut completed = None;
         for proof in contract.raw_graph().scalar_predicate_proofs() {
             if identity::Definition::of(proof.owner()) != owner
@@ -1284,11 +1288,14 @@ fn predicate_proofs(
                 return Err(Error::InstanceMismatch);
             }
         }
+        let Some(completed) = completed else {
+            continue;
+        };
         let crate::api::model::ScalarPredicateOutcome::Positive {
             implementation: proven,
-        } = completed.ok_or(Error::InstanceMismatch)?.outcome()
+        } = completed.outcome()
         else {
-            return Err(Error::InstanceMismatch);
+            continue;
         };
         let mut selected = None;
         for implementation in contract.raw_graph().implementations() {
@@ -1318,7 +1325,9 @@ fn predicate_proofs(
                 return Err(Error::InstanceMismatch);
             }
         }
-        proofs.push(selected.ok_or(Error::InstanceMismatch)?);
+        if let Some(selected) = selected {
+            proofs.push(selected);
+        }
     }
     Ok(proofs.into_boxed_slice())
 }

@@ -694,8 +694,9 @@ fn unavailable_evidence<'contract>(
             source: outcome.origin()?.source(),
             declaration: outcome.origin()?.declaration(),
         },
+        R::FunctionItem(plan) if callable_generic(plan) => return None,
         R::FunctionItem(_) => UnavailableEvidence {
-            reason: "generic function items are deferred until concrete substitution proof exists"
+            reason: "a generic function with a const or closure parameter is not supported in Rawr yet"
                 .into(),
             source: outcome.origin()?.source(),
             declaration: outcome.origin()?.declaration(),
@@ -1515,13 +1516,14 @@ fn imported_item(
 ) -> Result<Option<host::item::Definition>, Error> {
     use rawr_import::surface::identity::Selector;
 
-    let retains_item = matches!(
-        outcome.representability(),
+    let retains_item = match outcome.representability() {
         Representability::Function(_)
-            | Representability::Method(_)
-            | Representability::Constant(_)
-            | Representability::Invocation(_)
-    );
+        | Representability::Method(_)
+        | Representability::Constant(_)
+        | Representability::Invocation(_) => true,
+        Representability::FunctionItem(plan) => callable_generic(plan),
+        _ => false,
+    };
     if retains_item {
         let selector_bytes = outcome.identity().selector().retained_bytes();
         let bytes = selector_bytes.and_then(|selector| {
@@ -1582,6 +1584,28 @@ fn imported_item(
             }
             .imported(outcome.identity().selector().try_clone()?),
         ),
+        // A generic function Rawr calls at the types it infers or a
+        // turbofish names. The bridge calls it at those types, where rustc
+        // checks its bounds.
+        Representability::FunctionItem(plan) if callable_generic(plan) => Some(
+            match outcome.identity().selector() {
+                Selector::AssociatedFunction { .. } => host::item::Definition::associated_function(
+                    path,
+                    signature(types, plan.signature(), allocation)?,
+                )?,
+                Selector::Function { .. } => host::item::Definition::function(
+                    path,
+                    signature(types, plan.signature(), allocation)?,
+                )?,
+                Selector::Method { .. } => host::item::Definition::method(
+                    path,
+                    receiver(plan.receiver().ok_or(Error::Cardinality)?),
+                    signature(types, plan.signature(), allocation)?,
+                )?,
+                _ => return Err(Error::Cardinality),
+            }
+            .imported(outcome.identity().selector().try_clone()?),
+        ),
         Representability::Value(_)
         | Representability::Struct(_)
         | Representability::Enum(_)
@@ -1590,6 +1614,17 @@ fn imported_item(
         | Representability::Rejected(_) => None,
     };
     Ok(item)
+}
+
+/// A generic item Rawr calls directly: every parameter a type, none a
+/// callable (those are function-item operands).
+fn callable_generic(plan: &representability::callable::Item) -> bool {
+    plan.class().is_none()
+        && plan
+            .signature()
+            .parameters()
+            .iter()
+            .all(|parameter| parameter.kind() == representability::signature::Kind::Type)
 }
 
 fn unqualified_path_bytes(path: &str) -> Option<usize> {

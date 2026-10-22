@@ -8,6 +8,9 @@ use std::prelude::v1::*;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Definition {
     type_parameters: Box<[(host::path::Path, capability::Set)]>,
+    /// Each type parameter's index in `type_parameters`, in the order the
+    /// item declares them (`fn f<T, R>` is `T`, then `R`).
+    declared: Box<[u32]>,
     parameters: Box<[host::type_ref::Type]>,
     output: host::type_ref::Type,
 }
@@ -24,6 +27,7 @@ pub struct Fingerprint {
 #[derive(Clone, Debug, Default)]
 pub struct Builder {
     type_parameters: Vec<(host::path::Path, capability::Set)>,
+    declared: Vec<u32>,
     parameters: Vec<host::type_ref::Type>,
     output: Option<host::type_ref::Type>,
 }
@@ -34,6 +38,7 @@ impl Builder {
     pub const fn new() -> Self {
         Self {
             type_parameters: Vec::new(),
+            declared: Vec::new(),
             parameters: Vec::new(),
             output: None,
         }
@@ -67,7 +72,17 @@ impl Builder {
         self.type_parameters
             .try_reserve(1)
             .map_err(|_| host::Error::Allocation)?;
+        self.declared
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
         self.type_parameters.insert(index, (path, requirements));
+        let index = u32::try_from(index).map_err(|_| host::Error::Allocation)?;
+        for position in &mut self.declared {
+            if *position >= index {
+                *position += 1;
+            }
+        }
+        self.declared.push(index);
         Ok(self)
     }
 
@@ -100,6 +115,7 @@ impl Builder {
     pub fn finish(self) -> Definition {
         Definition {
             type_parameters: self.type_parameters.into_boxed_slice(),
+            declared: self.declared.into_boxed_slice(),
             parameters: self.parameters.into_boxed_slice(),
             output: self.output.unwrap_or_else(host::type_ref::Type::unit),
         }
@@ -167,8 +183,14 @@ impl Definition {
         for parameter in &self.parameters {
             parameters.push(parameter.try_clone()?);
         }
+        let mut declared = Vec::new();
+        declared
+            .try_reserve_exact(self.declared.len())
+            .map_err(|_| rawr_import::surface::Error::Allocation)?;
+        declared.extend_from_slice(&self.declared);
         Ok(Self {
             type_parameters: type_parameters.into_boxed_slice(),
+            declared: declared.into_boxed_slice(),
             parameters: parameters.into_boxed_slice(),
             output: self.output.try_clone()?,
         })
@@ -194,6 +216,16 @@ impl Definition {
             .binary_search_by(|(candidate, _)| candidate.cmp(&parameter))
             .ok()
             .map(|index| self.type_parameters[index].1)
+    }
+
+    /// The type parameters' names in the order the item declares them,
+    /// the order of a turbofish and of an imported instance's types.
+    pub(crate) fn declared_type_parameters(&self) -> impl Iterator<Item = ImmutableString> + '_ {
+        self.declared.iter().filter_map(|index| {
+            self.type_parameters
+                .get(*index as usize)
+                .map(|(name, _)| name.to_string().into())
+        })
     }
 
     pub(crate) fn type_parameters(
@@ -304,6 +336,7 @@ impl Definition {
         let type_parameters = self.type_parameters.clone();
         Ok(Self {
             type_parameters,
+            declared: self.declared.clone(),
             parameters: parameters.into_boxed_slice(),
             output,
         })

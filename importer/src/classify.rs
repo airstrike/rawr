@@ -791,6 +791,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 .try_reserve_exact(generics.predicates().len())
                 .map_err(|_| Error::Allocation)?;
             for predicate in generics.predicates() {
+                // Any other bound (`R: SampleRange<T>`, `StandardUniform:
+                // Distribution<T>`, an outlives bound) holds or fails where
+                // rustc compiles the bridge's call at the concrete types.
                 let model::Predicate::Bound {
                     ty: model::Type::Parameter { index, .. },
                     bound:
@@ -802,7 +805,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         },
                 } = predicate
                 else {
-                    return Err(representability::reject::Kind::Predicate.into());
+                    continue;
                 };
                 if !binders.is_empty()
                     || arguments.iter().any(|argument| {
@@ -815,11 +818,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         )
                     })
                 {
-                    return Err(representability::reject::Kind::Predicate.into());
+                    continue;
                 }
-                self.graph
-                    .definition_index(trait_id)
-                    .ok_or(representability::reject::Kind::UnresolvedDefinition)?;
+                if self.graph.definition_index(trait_id).is_none() {
+                    continue;
+                }
                 predicates.push(representability::predicate::Bound::new(
                     *index,
                     crate::surface::identity::Definition::of(trait_id),

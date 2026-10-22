@@ -34,7 +34,7 @@ use std::cell::RefCell;
 use __rawr_internal::{Dynamic, ImmutableString};
 
 #[derive(Clone, Copy)]
-struct Adapter { identity: [u8; 32], signature: [u8; 32], selector: [u8; 32], bound: bool, root: &'static str, witness: u8, arguments: u32, invoke: Invoke }
+struct Adapter { identity: [u8; 32], signature: [u8; 32], selector: [u8; 32], instance: [u8; 32], bound: bool, root: &'static str, witness: u8, arguments: u32, invoke: Invoke }
 type Invoke = fn(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>;
 type Project = fn(
     Box<dyn Any>,
@@ -604,6 +604,11 @@ fn imported_runtime(
             builder.bind_event_replay(event, runtime_project)?;
         }
         for adapter in adapters().copied().filter(|adapter| adapter.bound && adapter.root == definition.root()) {
+            // Each instance of a generic item has its own adapter, which
+            // a call reaches by the key of its instance's types.
+            if adapter.instance != [0; 32] {
+                builder.bind_imported_instance(adapter.selector, adapter.instance, move |call, values| runtime_invoke(adapter, call, values))?;
+            }
             if builder.accepts_imported(&adapter.selector) {
                 builder.bind_imported(adapter.selector, move |call, values| runtime_invoke(adapter, call, values))?;
             }
@@ -2755,6 +2760,8 @@ fn render_source(
             byte_array(&mut file, &signature(plan)?)?;
             write!(file, ", selector: ").map_err(|_| request::Error::Encoding)?;
             byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
+            write!(file, ", instance: ").map_err(|_| request::Error::Encoding)?;
+            byte_array(&mut file, &instance_key(plan))?;
             write!(
                 file,
                 ", bound: {}, root: {:?}, witness: {}",
@@ -2786,6 +2793,19 @@ fn render_source(
     }
     sources.push((SURFACE_PATH.into(), stamps));
     Ok(())
+}
+
+/// The key a call of this adapter's instance carries, or zeros for an
+/// item that is not generic.
+fn instance_key(plan: &Plan) -> [u8; 32] {
+    match plan.operation() {
+        Operation::Function { substitutions, .. } | Operation::Method { substitutions, .. }
+            if !substitutions.is_empty() =>
+        {
+            crate::surface::instance::key(substitutions)
+        }
+        _ => [0; 32],
+    }
 }
 
 /// Each adapter lives in one module per imported crate and identity

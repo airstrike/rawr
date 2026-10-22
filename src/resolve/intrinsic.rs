@@ -24,6 +24,8 @@ pub(super) struct Proof {
     operands: Box<[Operand]>,
     output: Type,
     span: Span,
+    /// The instance of a generic imported item this call uses.
+    instance: Option<[u8; 32]>,
 }
 
 impl Operand {
@@ -55,7 +57,14 @@ impl Proof {
             operands,
             output,
             span,
+            instance: None,
         }
+    }
+
+    /// This call of one instance of a generic imported item.
+    pub(super) const fn with_instance(mut self, instance: Option<[u8; 32]>) -> Self {
+        self.instance = instance;
+        self
     }
 
     pub(super) const fn operands(&self) -> &[Operand] {
@@ -76,7 +85,7 @@ impl Proof {
     }
 
     pub(super) fn runtime_requirement(&self) -> host::runtime::Requirement {
-        host::runtime::Requirement::new(
+        let requirement = host::runtime::Requirement::new(
             self.owner.clone(),
             self.item.clone(),
             self.path.clone(),
@@ -87,7 +96,10 @@ impl Proof {
                 .into_boxed_slice(),
             self.output.clone(),
             self.receiver,
-        )
+        );
+        #[cfg(feature = "rust-import")]
+        let requirement = requirement.with_instance(self.instance);
+        requirement
     }
 
     pub(super) fn symbol_id(&self) -> u64 {

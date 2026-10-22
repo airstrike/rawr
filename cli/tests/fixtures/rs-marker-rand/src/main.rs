@@ -1,6 +1,6 @@
 // rawr
-// Flip coins with rand. Rawr imports rand from this crate's Cargo.toml,
-// with no rawr.toml.
+// Flip coins and roll dice with rand. Rawr imports rand from this crate's
+// Cargo.toml, with no rawr.toml.
 
 fn main() {
     let _rng = rand::rng();
@@ -13,4 +13,12 @@ fn main() {
     }
     println!("{} flips", flips);
     println!("fair: {}", heads > 400 && heads < 600);
+
+    // Generic functions, at the types the code names or infers.
+    let die: u32 = rand::random_range(1..=6);
+    println!("die in range: {}", die >= 1 && die <= 6);
+    let x: f64 = rand::random();
+    println!("unit interval: {}", x >= 0.0 && x < 1.0);
+    let byte = rand::random::<u8>();
+    println!("byte: {}", u32::from(byte) <= 255);
 }

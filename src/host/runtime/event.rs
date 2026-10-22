@@ -158,6 +158,7 @@ impl Site {
             operands: vec![self.source.clone()].into_boxed_slice(),
             output: self.target.clone(),
             receiver: None,
+            instance: None,
             bound: super::Bound::default(),
         }
     }

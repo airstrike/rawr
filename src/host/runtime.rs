@@ -130,6 +130,10 @@ where
 pub struct Builder {
     definition: host::facade::Definition,
     bindings: BTreeMap<host::item::Fingerprint, Shared<dyn Callback>>,
+    /// One binding per instance of a generic imported item, keyed by the
+    /// item and its instance's types (`rand::random::<f64>` and `::<u8>`).
+    #[cfg(feature = "rust-import")]
+    instances: BTreeMap<(host::item::Fingerprint, [u8; 32]), Shared<dyn Callback>>,
     structural: BTreeMap<host::structural::Definition, Shared<dyn Callback>>,
     #[cfg(feature = "rust-import")]
     events: BTreeMap<event::Key, Shared<dyn Callback>>,
@@ -145,6 +149,8 @@ pub struct Facade {
     dependency: host::facade::Dependency,
     dependencies: Box<[host::facade::Dependency]>,
     bindings: BTreeMap<host::item::Fingerprint, Shared<dyn Callback>>,
+    #[cfg(feature = "rust-import")]
+    instances: BTreeMap<(host::item::Fingerprint, [u8; 32]), Shared<dyn Callback>>,
     structural: BTreeMap<host::structural::Definition, Shared<dyn Callback>>,
     #[cfg(feature = "rust-import")]
     events: BTreeMap<event::Key, Shared<dyn Callback>>,
@@ -172,6 +178,9 @@ pub(crate) struct Requirement {
     operands: Box<[type_ref::Type]>,
     output: type_ref::Type,
     receiver: Option<crate::receiver::Mode>,
+    /// The instance of a generic imported item this call uses.
+    #[cfg(feature = "rust-import")]
+    instance: Option<[u8; 32]>,
     bound: Bound,
 }
 
@@ -476,6 +485,8 @@ impl Builder {
         Self {
             definition,
             bindings: BTreeMap::new(),
+            #[cfg(feature = "rust-import")]
+            instances: BTreeMap::new(),
             structural: BTreeMap::new(),
             #[cfg(feature = "rust-import")]
             events: BTreeMap::new(),
@@ -952,6 +963,37 @@ impl Builder {
         Ok(self)
     }
 
+    /// Bind one generated adapter to one instance of a generic imported
+    /// item: the item's selector and its instance's types.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    pub fn bind_imported_instance(
+        &mut self,
+        selector: [u8; 32],
+        instance: [u8; 32],
+        callback: impl Fn(&Call<'_>, &mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>
+            + SendSync
+            + 'static,
+    ) -> Result<&mut Self, Error> {
+        let definition = self
+            .definition
+            .items()
+            .find(|definition| {
+                definition
+                    .imported_identity()
+                    .is_some_and(|identity| identity.fingerprint() == selector)
+            })
+            .ok_or_else(|| Error::UnknownItem {
+                facade: self.definition.root().into(),
+                item: format!("<imported selector {selector:02x?}>").into(),
+            })?;
+        // An instance reached through two paths is bound once.
+        self.instances
+            .entry((definition.fingerprint(), instance))
+            .or_insert_with(|| Shared::new(Contextual(callback)));
+        Ok(self)
+    }
+
     /// Bind one exact generated imported selector without widening to sibling overloads.
     #[cfg(feature = "rust-import")]
     #[doc(hidden)]
@@ -1025,6 +1067,8 @@ impl Builder {
             dependency,
             dependencies,
             bindings: self.bindings,
+            #[cfg(feature = "rust-import")]
+            instances: self.instances,
             structural: self.structural,
             #[cfg(feature = "rust-import")]
             events: self.events,
@@ -1400,6 +1444,12 @@ impl Registry {
             return None;
         }
         match &requirement.binding {
+            #[cfg(feature = "rust-import")]
+            Binding::Item(item) => requirement
+                .instance
+                .and_then(|instance| facade.instances.get(&(item.clone(), instance)))
+                .or_else(|| facade.bindings.get(item)),
+            #[cfg(not(feature = "rust-import"))]
             Binding::Item(item) => facade.bindings.get(item),
             Binding::Structural(definition) => facade.structural.get(definition),
             #[cfg(feature = "rust-import")]
@@ -1465,8 +1515,17 @@ impl Requirement {
             operands,
             output,
             receiver,
+            #[cfg(feature = "rust-import")]
+            instance: None,
             bound: Bound::default(),
         }
+    }
+
+    /// The same requirement of one instance of a generic imported item.
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn with_instance(mut self, instance: Option<[u8; 32]>) -> Self {
+        self.instance = instance;
+        self
     }
 
     #[cfg(feature = "rust-import")]
@@ -1483,6 +1542,8 @@ impl Requirement {
                 .into_boxed_slice(),
             output: proof.output().clone(),
             receiver: proof.receiver(),
+            #[cfg(feature = "rust-import")]
+            instance: None,
             bound: Bound::default(),
         }
     }
