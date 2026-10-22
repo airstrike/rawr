@@ -15,6 +15,10 @@ pub enum Builtin {
     F64,
     /// `i64`.
     I64,
+    /// `u64`, an integer at runtime.
+    U64,
+    /// `u32`, an integer at runtime.
+    U32,
     /// `RangeInclusive<i64>`.
     InclusiveRange,
     /// `RangeInclusive<f64>`.
@@ -923,6 +927,8 @@ impl crate::preview::digest::Write for Type {
                 Builtin::String => 0x2325,
                 Builtin::InclusiveRange => 0x2326,
                 Builtin::FloatInclusiveRange => 0x2327,
+                Builtin::U64 => 0x2328,
+                Builtin::U32 => 0x2329,
             }),
             Shape::Registered { path, arguments } => {
                 writer.tag(0x2305);

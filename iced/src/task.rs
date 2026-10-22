@@ -45,6 +45,7 @@ enum PreparedKind {
 pub(crate) enum Native {
     Exit,
     LatestWindow,
+    ScaleFactor(iced::window::Id),
     CloseWindow(iced::window::Id),
     FocusNext,
     FocusPrevious,
@@ -73,6 +74,9 @@ impl Native {
             Self::Exit => iced::exit(),
             Self::LatestWindow => {
                 iced::window::latest().map(|id| Ok(rawr::option::from(id)))
+            }
+            Self::ScaleFactor(id) => {
+                iced::window::scale_factor(id).map(|factor| Ok(Dynamic::from(f64::from(factor))))
             }
             Self::CloseWindow(id) => iced::window::close(id),
             Self::FocusNext => iced::widget::operation::focus_next(),
@@ -613,6 +617,14 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             })
             .expect("the iced facade must retain every scrollable operation");
     }
+    builder
+        .bind_with_context("iced::window::scale_factor", |call, args| {
+            let [id] = args else {
+                return Err(arity("window::scale_factor", 1, args.len()));
+            };
+            native_task(call, Native::ScaleFactor(take_value(id, "window::Id")?))
+        })
+        .expect("the iced facade must retain window::scale_factor");
     builder
         .bind_with_context("iced::window::close", |call, args| {
             if args.len() != 1 {

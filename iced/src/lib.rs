@@ -568,6 +568,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             text_signature(input)?,
         )?)?;
     }
+    // `text!("{} items", n)`: `text(format!(..))`.
+    builder.item(item::Definition::intrinsic_macro(
+        "widget::text",
+        text_signature(type_ref::Builtin::String)?,
+    )?)?;
     builder.item(item::Definition::function(
         "widget::text_input",
         text_input_signature()?,
@@ -1766,7 +1771,7 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         )?)?;
     }
     for (name, output) in [
-        ("as_secs", type_ref::Builtin::I64),
+        ("as_secs", type_ref::Builtin::U64),
         ("as_millis", type_ref::Builtin::I64),
         ("as_micros", type_ref::Builtin::I64),
         ("as_nanos", type_ref::Builtin::I64),
@@ -1804,9 +1809,9 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         )?)?;
     }
     for (name, output) in [
-        ("subsec_millis", type_ref::Type::builtin(type_ref::Builtin::I64)),
-        ("subsec_micros", type_ref::Type::builtin(type_ref::Builtin::I64)),
-        ("subsec_nanos", type_ref::Type::builtin(type_ref::Builtin::I64)),
+        ("subsec_millis", type_ref::Type::builtin(type_ref::Builtin::U32)),
+        ("subsec_micros", type_ref::Type::builtin(type_ref::Builtin::U32)),
+        ("subsec_nanos", type_ref::Type::builtin(type_ref::Builtin::U32)),
         ("is_zero", type_ref::Type::builtin(type_ref::Builtin::Bool)),
     ] {
         let mut reader = signature::Builder::new();
@@ -1841,6 +1846,7 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         ("Point", &["x", "y"][..]),
         ("Vector", &["x", "y"][..]),
         ("Rectangle", &["x", "y", "width", "height"][..]),
+        ("Color", &["r", "g", "b", "a"][..]),
     ] {
         for field in fields {
             let mut reader = signature::Builder::new();
@@ -1855,6 +1861,35 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
     builder.item(item::Definition::intrinsic_macro(
         "color",
         repeated_builtin_signature(type_ref::Builtin::I64, 1, "Color")?,
+    )?)?;
+    // A literal's channels: `Color { a: 0.8, ..Color::BLACK }`.
+    for name in ["r", "g", "b", "a"] {
+        let mut setter = signature::Builder::new();
+        setter.parameter(type_ref::Type::builtin(type_ref::Builtin::F64));
+        setter.output(type_ref::Type::registered("Color")?);
+        builder.item(item::Definition::method(
+            format!("Color::{name}"),
+            receiver::Mode::Owned,
+            setter.finish(),
+        )?)?;
+    }
+    // `color.scale_alpha(0.5)` and `color.inverse()`.
+    let mut scale_alpha = signature::Builder::new();
+    scale_alpha.parameter(type_ref::Type::builtin(type_ref::Builtin::F64));
+    scale_alpha.output(type_ref::Type::registered("Color")?);
+    builder.item(item::Definition::method(
+        "Color::scale_alpha",
+        receiver::Mode::Owned,
+        scale_alpha.finish(),
+    )?)?;
+    builder.item(item::Definition::method(
+        "Color::inverse",
+        receiver::Mode::Owned,
+        output_signature("Color")?,
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "time::Duration::default",
+        output_signature("time::Duration")?,
     )?)?;
     Ok(())
 }
@@ -2250,6 +2285,16 @@ fn declare_native_tasks(builder: &mut facade::Builder) -> Result<(), host::Error
         [type_ref::Type::option(type_ref::Type::registered("window::Id")?)],
     )?);
     builder.item(item::Definition::function("window::latest", latest.finish())?)?;
+    let mut scale_factor = signature::Builder::new();
+    scale_factor.parameter(type_ref::Type::registered("window::Id")?);
+    scale_factor.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::builtin(type_ref::Builtin::F64)],
+    )?);
+    builder.item(item::Definition::function(
+        "window::scale_factor",
+        scale_factor.finish(),
+    )?)?;
     declare_operations(builder)?;
     let mut close = signature::Builder::new();
     close.type_parameter("Message", &[])?;

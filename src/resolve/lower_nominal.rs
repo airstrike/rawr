@@ -11293,7 +11293,18 @@ impl<'a> Parser<'a> {
                 capability != capability::Kind::Default
                     && crate::capability::builtin_supports("i64", capability)
             }
-            Ty::Reference { .. } => false,
+            // `&T` compares, orders, hashes and prints as `T` does; a shared
+            // reference is `Copy`.
+            Ty::Reference { mutable, target } => match capability {
+                capability::Kind::PartialEq
+                | capability::Kind::Eq
+                | capability::Kind::PartialOrd
+                | capability::Kind::Ord
+                | capability::Kind::Hash
+                | capability::Kind::Debug => self.type_provides(&target, capability),
+                capability::Kind::Clone | capability::Kind::Copy => !mutable,
+                _ => false,
+            },
             // Maps and sets are `Default`, never `Copy`, and otherwise derive
             // from their arguments; only the B-tree kinds are ordered.
             Ty::Keyed(kind, arguments) => match capability {
@@ -11546,6 +11557,19 @@ impl<'a> Parser<'a> {
         repeated: bool,
         call: Span,
     ) -> Result<(crate::host::item::Definition, InstantiatedHostSignature), Error> {
+        // A call takes the functions of a path that also holds a macro
+        // (`text` and `text!`).
+        let functions;
+        let items = if !repeated && items.iter().any(|item| !item.kind().is_macro()) {
+            functions = items
+                .iter()
+                .filter(|item| !item.kind().is_macro())
+                .cloned()
+                .collect::<Vec<_>>();
+            &functions[..]
+        } else {
+            items
+        };
         // A named function passed to the host is its symbolic callable.
         // One taking a typed number, as `Message::Changed(u8)` for a
         // slider's `i64`, takes it as its runtime kind, as the facade's
@@ -11592,6 +11616,7 @@ impl<'a> Parser<'a> {
         }
 
         let mut matched = None;
+        let mut matched_stringy = false;
         let mut match_count = 0;
         for item in items {
             let checkpoint = self.inference.checkpoint();
@@ -11620,7 +11645,14 @@ impl<'a> Parser<'a> {
             };
             if matches_inputs && self.host_requirements_hold(&signature) {
                 match_count += 1;
-                if matched.is_none() {
+                // A form taking a string comes first for an argument whose
+                // type is not known yet.
+                let stringy = signature
+                    .inputs
+                    .iter()
+                    .any(|input| self.inference.resolve(input) == Ty::String);
+                if matched.is_none() || stringy && !matched_stringy {
+                    matched_stringy = stringy;
                     matched = Some((item.clone(), signature, self.inference.patch(checkpoint)));
                 }
             }
@@ -11649,6 +11681,17 @@ impl<'a> Parser<'a> {
                         operation: call,
                     });
                 };
+                self.inference.apply(patch);
+                Ok((item, signature))
+            }
+            // An argument whose type is not known yet (a closure's
+            // parameter, which Rust infers from a later call) takes the
+            // first form, as the later uses then must.
+            _ if arguments
+                .iter()
+                .any(|argument| matches!(self.inference.resolve(&argument.ty), Ty::Infer(_)))
+                && let Some((item, signature, patch)) = matched =>
+            {
                 self.inference.apply(patch);
                 Ok((item, signature))
             }
@@ -11989,6 +12032,8 @@ impl<'a> Parser<'a> {
             Shape::Builtin(Builtin::Char) => Ty::Char,
             Shape::Builtin(Builtin::F64) => Ty::Float(Float::F64),
             Shape::Builtin(Builtin::I64) => Ty::Int(Int::I64),
+            Shape::Builtin(Builtin::U64) => Ty::Int(Int::U64),
+            Shape::Builtin(Builtin::U32) => Ty::Int(Int::U32),
             Shape::Builtin(Builtin::String) => Ty::String,
             Shape::Builtin(Builtin::InclusiveRange) => Ty::InclusiveRange,
             Shape::Builtin(Builtin::FloatInclusiveRange) => Ty::FloatRange,
@@ -13275,6 +13320,43 @@ impl<'a> Parser<'a> {
             });
         }
         self.expect(Token::Bang, "'!' after an intrinsic macro name")?;
+        // A macro taking one string reads `format!`'s arguments: iced's
+        // `text!("{} items", n)`.
+        let formats = items.iter().all(|item| {
+            item.signature().parameters()
+                == [crate::host::type_ref::Type::builtin(
+                    crate::host::type_ref::Builtin::String,
+                )]
+        });
+        if formats && matches!(self.peek(), Token::LeftParen) {
+            let text = self.parse_format(name_span, false)?;
+            let call = text.span;
+            let mut arguments = vec![text];
+            let (item, signature) =
+                self.select_host_signature(&items, None, &mut arguments, true, call)?;
+            let output = self.inference.resolve(&signature.output);
+            let (outcome, evaluation) = (item.outcome(), item.evaluation());
+            let helper = self.push_intrinsic(
+                item,
+                owner,
+                None,
+                &mut arguments,
+                output.clone(),
+                signature.requirements,
+                call,
+            )?;
+            let (prelude, source) = self.private_call(&helper, arguments);
+            return Ok(ParsedExpr {
+                prelude,
+                source,
+                ty: output,
+                span: call,
+                lvalue: None,
+                outcome,
+                evaluation,
+            }
+            .retain_origin());
+        }
         // As in Rust, a macro takes `[..]`, `(..)` or `{..}` alike.
         let close = match self.peek() {
             Token::LeftBracket => Token::RightBracket,

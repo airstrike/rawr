@@ -1106,3 +1106,22 @@ pub fn main() -> iced::Result {
     };
     assert!(error.to_string().contains("E0117"), "{error}");
 }
+
+#[test]
+fn text_formats_like_format_and_colors_read_their_channels() {
+    let adapter = boot_with(
+        r#"{
+            let color = Color::from_rgb8(255, 0, 0).scale_alpha(0.5).inverse();
+            let theme: Option<Theme> = Some(Theme::Dark);
+            let same = theme.as_ref() == Some(&Theme::Dark);
+            let wait = iced::time::Duration::default();
+            column![
+                text!("alpha {:.2} red {}", color.a, color.r),
+                text!("same {same} {}", wait.as_secs()),
+            ]
+        }"#,
+        "",
+    );
+    find(&adapter, "alpha 0.50 red 0");
+    find(&adapter, "same true 0");
+}

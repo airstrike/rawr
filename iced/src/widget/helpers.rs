@@ -978,6 +978,72 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
     reader::<iced::Rectangle>(builder, "iced::Rectangle::y", |bounds| bounds.y);
     reader::<iced::Rectangle>(builder, "iced::Rectangle::width", |bounds| bounds.width);
     reader::<iced::Rectangle>(builder, "iced::Rectangle::height", |bounds| bounds.height);
+    // A channel read (`color.a`), or set by a literal (`Color { a: 0.8, ..base }`).
+    fn channel<'a>(color: &'a mut iced::Color, name: &str) -> &'a mut f32 {
+        match name {
+            "r" => &mut color.r,
+            "g" => &mut color.g,
+            "b" => &mut color.b,
+            _ => &mut color.a,
+        }
+    }
+    for name in ["r", "g", "b", "a"] {
+        let path = format!("iced::Color::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let mut color = args
+                    .first()
+                    .and_then(|color| color.read_lock::<iced::Color>().map(|color| *color))
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                match args {
+                    [_] => Ok(Dynamic::from(f64::from(*channel(&mut color, name)))),
+                    [_, value] => {
+                        let value = value.as_float().map_err(|actual| {
+                            runtime_error(format!("`{path}` expects a float, found `{actual}`"))
+                        })?;
+                        *channel(&mut color, name) = value as f32;
+                        Ok(Dynamic::from(color))
+                    }
+                    _ => Err(arity(&path, 2, args.len())),
+                }
+            })
+            .expect("the iced facade must retain every Color channel");
+    }
+    builder
+        .bind("iced::Color::scale_alpha", |args| {
+            let [color, factor] = args else {
+                return Err(arity("Color::scale_alpha", 2, args.len()));
+            };
+            let color = color
+                .read_lock::<iced::Color>()
+                .map(|color| *color)
+                .ok_or_else(|| runtime_error("`Color::scale_alpha` read a value of another type".into()))?;
+            let factor = factor
+                .as_float()
+                .map_err(|actual| runtime_error(format!("`Color::scale_alpha` expects a float, found `{actual}`")))?;
+            Ok(Dynamic::from(color.scale_alpha(factor as f32)))
+        })
+        .expect("the iced facade must retain Color::scale_alpha");
+    builder
+        .bind("iced::Color::inverse", |args| {
+            let [color] = args else {
+                return Err(arity("Color::inverse", 1, args.len()));
+            };
+            let color = color
+                .read_lock::<iced::Color>()
+                .map(|color| *color)
+                .ok_or_else(|| runtime_error("`Color::inverse` read a value of another type".into()))?;
+            Ok(Dynamic::from(color.inverse()))
+        })
+        .expect("the iced facade must retain Color::inverse");
+    builder
+        .bind("iced::time::Duration::default", |args| {
+            if !args.is_empty() {
+                return Err(arity("Duration::default", 0, args.len()));
+            }
+            Ok(Dynamic::from(std::time::Duration::default()))
+        })
+        .expect("the iced facade must retain Duration::default");
 }
 
 fn bind_font(builder: &mut host::runtime::Builder) {

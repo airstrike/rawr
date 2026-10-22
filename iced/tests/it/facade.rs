@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [126, 69, 53, 207, 24, 118, 247, 90, 173, 71, 194, 90, 232, 120, 180, 39]
+        [31, 92, 189, 182, 143, 63, 84, 178, 139, 77, 199, 248, 77, 91, 219, 191]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
@@ -380,7 +380,9 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     );
     let mut text = second
         .items()
-        .filter(|item| item.path() == "iced::widget::text")
+        .filter(|item| {
+            item.path() == "iced::widget::text" && item.kind() == host::item::Kind::Function
+        })
         .map(|item| item.signature().parameters()[0].clone())
         .collect::<Vec<_>>();
     text.sort();
