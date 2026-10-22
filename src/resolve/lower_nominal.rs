@@ -1631,6 +1631,24 @@ fn private_method_name(definition: &method::Definition) -> String {
 
 /// A path naming a free value and free functions, as a Rust `fn` item: the
 /// value where it is not called, the functions where it is.
+/// A facade path may name a macro and a value independently, as in Rust:
+/// `column![..]` takes the macro and `column(..)` the function. A path in
+/// one namespace keeps its items, so a wrong call syntax still reaches the
+/// diagnostic that names the right one.
+fn macro_or_value(
+    items: Vec<crate::host::item::Definition>,
+    bang: bool,
+) -> Vec<crate::host::item::Definition> {
+    let is_macro = |item: &crate::host::item::Definition| item.kind().is_macro();
+    if items.iter().all(is_macro) || !items.iter().any(is_macro) {
+        return items;
+    }
+    items
+        .into_iter()
+        .filter(|item| is_macro(item) == bang)
+        .collect()
+}
+
 fn value_or_call(
     items: Vec<crate::host::item::Definition>,
     called: bool,
@@ -11188,7 +11206,7 @@ impl<'a> Parser<'a> {
             0 => Err(Error::InvalidHostOperation {
                 item: first.path().into(),
                 reason: format!(
-                    "no exact overload matches ({})",
+                    "no form of it takes ({})",
                     arguments
                         .iter()
                         .map(|argument| self.inference.resolve(&argument.ty).name(&self.models))
@@ -11212,7 +11230,7 @@ impl<'a> Parser<'a> {
             _ => Err(Error::InvalidHostOperation {
                 item: first.path().into(),
                 reason: format!(
-                    "{} exact overloads match the resolved receiver and argument types",
+                    "{} forms of it take these arguments; annotate a type to pick one",
                     match_count
                 )
                 .into(),
@@ -11980,10 +11998,17 @@ impl<'a> Parser<'a> {
         ) {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: format!(
-                    "registered {:?} item cannot use function-call syntax",
-                    item.kind()
-                )
+                reason: if item.kind().is_macro() {
+                    format!(
+                        "`{name}` is a macro here; write `{name}![..]`",
+                        name = item.path_ref().name()
+                    )
+                } else {
+                    format!(
+                        "`{name}` is not a function; write it without `(..)`",
+                        name = item.path_ref().name()
+                    )
+                }
                 .into(),
                 operation: name_span,
             });
@@ -12686,10 +12711,19 @@ impl<'a> Parser<'a> {
         if item.kind() != crate::host::item::Kind::IntrinsicMacro {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: format!(
-                    "registered {:?} item does not own intrinsic-macro grammar",
-                    item.kind()
-                )
+                reason: if matches!(
+                    item.kind(),
+                    crate::host::item::Kind::Function
+                        | crate::host::item::Kind::IntrinsicFunction
+                        | crate::host::item::Kind::AssociatedFunction
+                ) {
+                    format!(
+                        "`{name}` is a function here; write `{name}(..)`",
+                        name = item.path_ref().name()
+                    )
+                } else {
+                    format!("`{}` is not a macro", item.path_ref().name())
+                }
                 .into(),
                 operation: name_span,
             });
@@ -12698,7 +12732,8 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek(), Token::LeftBracket) {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: "intrinsic list macro requires bracket syntax `![...]`".into(),
+                reason: format!("write `{}![..]` with square brackets", item.path_ref().name())
+                    .into(),
                 operation: span(name_span.start(), self.position()),
             });
         }
@@ -12711,7 +12746,7 @@ impl<'a> Parser<'a> {
             } else if !matches!(self.peek(), Token::RightBracket) {
                 return Err(Error::InvalidHostOperation {
                     item: item.path().into(),
-                    reason: "list-builder elements require `,` separators".into(),
+                    reason: "separate the elements with commas".into(),
                     operation: span(name_span.start(), self.position()),
                 });
             }
@@ -12813,8 +12848,7 @@ impl<'a> Parser<'a> {
         }) {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: format!("registered {:?} item is not a receiver method", item.kind())
-                    .into(),
+                reason: format!("`{}` is not a method", item.path_ref().name()).into(),
                 operation: member_span,
             });
         }
@@ -21050,7 +21084,7 @@ impl<'a> Parser<'a> {
             let Some(binding) = self.models.import(&name).cloned() else {
                 return Err(Error::InvalidHostOperation {
                     item: name,
-                    reason: "no imported registered intrinsic macro owns this spelling".into(),
+                    reason: "no macro of this name is in scope; import it with `use`".into(),
                     operation: name_span,
                 });
             };
@@ -21065,10 +21099,11 @@ impl<'a> Parser<'a> {
             else {
                 return Err(Error::InvalidHostOperation {
                     item: binding.qualified,
-                    reason: "import does not name a registered intrinsic macro".into(),
+                    reason: "it is not a macro".into(),
                     operation: name_span,
                 });
             };
+            let items = macro_or_value(items.into_vec(), true).into_boxed_slice();
             return self.parse_host_macro(items, owner, name_span);
         }
         self.parse_name_value(name, name_span)
@@ -21448,7 +21483,8 @@ impl<'a> Parser<'a> {
                     owner,
                 } = binding.target
                 {
-                    let items = value_or_call(items.into_vec(), true).into_boxed_slice();
+                    let items = value_or_call(macro_or_value(items.into_vec(), false), true)
+                        .into_boxed_slice();
                     return self.parse_host_function(items, owner, name_span);
                 }
             }
@@ -21476,7 +21512,7 @@ impl<'a> Parser<'a> {
             {
                 return self.parse_imported_function_item(items, owner, name_span);
             }
-            let items = value_or_call(items.into_vec(), false);
+            let items = value_or_call(macro_or_value(items.into_vec(), false), false);
             let [item] = items.as_slice() else {
                 return Err(Error::InvalidHostOperation {
                     item: binding.qualified,
@@ -25069,7 +25105,7 @@ impl<'a> Parser<'a> {
                 let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                     return Err(Error::InvalidConstruction {
                         owner: definition.path().into(),
-                        reason: "a facade struct literal without `..base` needs `default()`".into(),
+                        reason: "this struct needs every field, or `..base` from a value of it".into(),
                         construction: name_span,
                     });
                 };
@@ -25898,6 +25934,7 @@ impl<'a> Parser<'a> {
                 return Err(error);
             };
             let item_owner = self.models.item_owner(&path).cloned();
+            let items = macro_or_value(items, matches!(self.peek(), Token::Bang));
             let items = value_or_call(items, matches!(self.peek(), Token::LeftParen | Token::Unit));
             return if items
                 .first()
@@ -25951,9 +25988,14 @@ impl<'a> Parser<'a> {
                 .map(<[_]>::to_vec)
             {
                 let item_owner = self.models.item_owner(&path).cloned();
+                let items = macro_or_value(items, matches!(self.peek(), Token::Bang));
                 let items =
                     value_or_call(items, matches!(self.peek(), Token::LeftParen | Token::Unit));
-                return if items.len() == 1
+                return if items.first().is_some_and(|item| item.kind().is_macro())
+                    && matches!(self.peek(), Token::Bang)
+                {
+                    self.parse_host_macro(items.into_boxed_slice(), item_owner, path_span)
+                } else if items.len() == 1
                     && matches!(
                         items[0].kind(),
                         crate::host::item::Kind::AssociatedValue | crate::host::item::Kind::Value
@@ -26048,8 +26090,17 @@ impl<'a> Parser<'a> {
                 return Err(self.native_miss(self.models.host.entry(&path).is_none(), error));
             };
             let item_owner = self.models.item_owner(&path).cloned();
+            let items = macro_or_value(items, matches!(self.peek(), Token::Bang));
             let items = value_or_call(items, matches!(self.peek(), Token::LeftParen | Token::Unit));
-            return if items.len() == 1
+            return if items.first().is_some_and(|item| item.kind().is_macro())
+                && matches!(self.peek(), Token::Bang)
+            {
+                self.parse_host_macro(
+                    items.into_boxed_slice(),
+                    item_owner,
+                    span(owner_span.start(), member_span.end()),
+                )
+            } else if items.len() == 1
                 && matches!(
                     items[0].kind(),
                     crate::host::item::Kind::AssociatedValue | crate::host::item::Kind::Value
@@ -26080,9 +26131,19 @@ impl<'a> Parser<'a> {
                     && self.models.function(root).is_none()
                     && !self.bindings.contains_key(root)
             });
-            let error = Error::UnknownType {
-                name: owner,
-                reference: owner_span,
+            // A library module or type that exists lacks only the member:
+            // `iced::widget::Column::missing`.
+            let error = if self.models.host.entry(&owner).is_some() {
+                Error::UnknownMember {
+                    owner,
+                    member,
+                    reference: member_span,
+                }
+            } else {
+                Error::UnknownType {
+                    name: owner,
+                    reference: owner_span,
+                }
             };
             #[cfg(feature = "rust-import")]
             let error = self.native_miss(native, error);
@@ -27548,6 +27609,9 @@ impl<'a> Parser<'a> {
             value.source.cover(value.span);
             return Ok(Some(helper));
         }
+        if self.coerce_children(&source, &target, value)? {
+            return Ok(None);
+        }
         let checkpoint = self.inference.checkpoint();
         if let Some((key, projected)) = self.selected_projection(&source, &target)
             && self.unify_type(&target, &projected)
@@ -27577,6 +27641,98 @@ impl<'a> Parser<'a> {
         self.inference.rollback(checkpoint);
         self.require_type(&target, &source, value.span)?;
         Ok(None)
+    }
+
+    /// iced's `impl IntoIterator<Item = impl Into<Element>>`, a facade slice
+    /// of Elements: a `Vec`, array or iterator of widgets converts each one,
+    /// as `column(texts)` takes a `Vec<Text>`.
+    fn coerce_children(
+        &mut self,
+        source: &Ty,
+        target: &Ty,
+        value: &mut ParsedExpr,
+    ) -> Result<bool, Error> {
+        let Ty::Array {
+            element: target_element,
+            length: None,
+        } = target
+        else {
+            return Ok(false);
+        };
+        let target_element = self.inference.resolve(target_element);
+        let source_element = match source {
+            Ty::Array { element, .. } | Ty::Iter(element) => self.inference.resolve(element),
+            _ => return Ok(false),
+        };
+        let fixed = matches!(source, Ty::Array { length: Some(_), .. });
+        let iterator = matches!(source, Ty::Iter(_));
+        if !matches!(target_element, Ty::Host { .. })
+            || !matches!(source_element, Ty::Host { .. } | Ty::Script(..))
+        {
+            return Ok(false);
+        }
+        let same = {
+            let checkpoint = self.inference.checkpoint();
+            let same = match (&target_element, &source_element) {
+                (
+                    Ty::Host {
+                        proof: expected, ..
+                    },
+                    Ty::Host { proof: actual, .. },
+                ) => same_host_definition(
+                    &expected.definition,
+                    &expected.owner,
+                    &actual.definition,
+                    &actual.owner,
+                ),
+                _ => false,
+            } && self.unify_type(&target_element, &source_element);
+            if same {
+                self.inference.commit(checkpoint);
+            } else {
+                self.inference.rollback(checkpoint);
+            }
+            same
+        };
+        if same {
+            if !fixed && !iterator {
+                return Ok(false);
+            }
+            // An array or an iterator of Elements already: only its type
+            // widens to the slice.
+            if iterator {
+                self.collect_children(value);
+            }
+            value.ty = target.clone();
+            return Ok(true);
+        }
+        let item = self.temporary("child");
+        let mut element =
+            self.operator_expr(origin::Fragment::plain(item.clone()), source_element, value.span);
+        self.coerce_expr(&target_element, &mut element)?;
+        if iterator {
+            self.collect_children(value);
+        }
+        let mut rendered = origin::Fragment::plain("(");
+        rendered.push(value.rendered_source());
+        rendered.push_text(format!(").map(|{item}| "));
+        rendered.push(element.rendered_source());
+        rendered.push_text(")");
+        value.prelude = origin::Fragment::default();
+        value.source = rendered;
+        value.ty = target.clone();
+        value.lvalue = None;
+        value.source.cover(value.span);
+        Ok(true)
+    }
+
+    /// An iterator passed where the facade takes a slice: the array of its
+    /// items.
+    fn collect_children(&mut self, value: &mut ParsedExpr) {
+        if let Some((items, _)) = self.collected_items(value) {
+            value.prelude = origin::Fragment::default();
+            value.source = items;
+        }
     }
 
     #[cfg(feature = "rust-import")]

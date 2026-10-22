@@ -435,22 +435,22 @@ fn intrinsic_macro_errors_are_positioned_and_name_the_registered_item() {
         (
             "column![text(1) text(2)]",
             "iced::widget::column",
-            "require `,` separators",
+            "separate the elements with commas",
         ),
         (
             "button![text(1)]",
             "iced::widget::button",
-            "does not own intrinsic-macro grammar",
+            "`button` is a function here; write `button(..)`",
         ),
         (
             "column!(text(1))",
             "iced::widget::column",
-            "requires bracket syntax",
+            "write `column![..]` with square brackets",
         ),
         (
             "missing![text(1)]",
             "missing",
-            "no imported registered intrinsic macro",
+            "no macro of this name is in scope",
         ),
         ("column![42]", "iced::Element", "Type mismatch"),
     ] {
@@ -472,21 +472,42 @@ fn intrinsic_macro_errors_are_positioned_and_name_the_registered_item() {
 }
 
 #[test]
+fn column_is_a_macro_and_a_function_as_in_iced() {
+    for body in [
+        "column![text(1), button(\"ok\").on_press(Message::Tick)]",
+        "column(vec![text(1), text(2)])",
+        "column([text(1), text(2)])",
+        "column((0..3).map(|i| text(i)))",
+        "iced::widget::column(vec![text(1)])",
+        "iced::widget::column![text(1)]",
+        "Column::new().push(text(1)).push(button(\"ok\"))",
+        "Column::with_children(vec![text(1)])",
+        "iced::widget::Column::from_vec(vec![text(1)])",
+        "column(vec![text(1)]).extend([text(2), text(3)])",
+        "let mut children = Vec::new(); for i in [1, 2, 3].into_iter() { children.push(text(i)); } Column::from_vec(children)",
+    ] {
+        compile_probe(body).unwrap_or_else(|error| panic!("{body}: {error}"));
+    }
+    let error = compile_probe("column(text(1))").unwrap_err();
+    assert!(error.to_string().contains("Type mismatch"), "{error}");
+}
+
+#[test]
 fn facade_calls_and_owned_methods_check_arity_and_types() {
     compile_probe("column![button(\"ok\").on_press(Message::Tick).padding(20)]").unwrap();
 
     for (body, expected) in [
         (
             "button().on_press(Message::Tick)",
-            "no exact overload matches ()",
+            "no form of it takes ()",
         ),
         (
             "column![button(\"ok\").on_press(Message::Tick)].padding()",
-            "no exact overload matches ()",
+            "no form of it takes ()",
         ),
         (
             "column![button(\"ok\").on_press(Message::Tick)].padding(true)",
-            "no exact overload matches (bool)",
+            "no form of it takes (bool)",
         ),
     ] {
         let error = compile_probe(body).unwrap_err();

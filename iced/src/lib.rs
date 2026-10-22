@@ -363,6 +363,27 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         "widget::row",
         collection_signature("widget::Row")?,
     )?)?;
+    // iced's `column(children)` and `row(children)` beside the macros of the
+    // same name, with the `Column` and `Row` constructors they call.
+    for (function, owner) in [
+        ("widget::column", "widget::Column"),
+        ("widget::row", "widget::Row"),
+    ] {
+        builder.item(item::Definition::function(
+            function,
+            children_signature(owner)?,
+        )?)?;
+        for name in ["with_children", "from_vec"] {
+            builder.item(item::Definition::associated_function(
+                format!("{owner}::{name}"),
+                children_signature(owner)?,
+            )?)?;
+        }
+        builder.item(item::Definition::associated_function(
+            format!("{owner}::new"),
+            generic_empty_signature(owner)?,
+        )?)?;
+    }
     builder.item(item::Definition::function(
         "widget::container",
         container_signature()?,
@@ -612,6 +633,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
                 [type_ref::Type::parameter("Message")?],
             )?],
         )?;
+        // iced's `extend(impl IntoIterator<Item = impl Into<Element>>)`.
+        builders(&mut builder, owner, "extend", [children()?])?;
     }
     padding_builders(&mut builder, "widget::Container")?;
     builders(
@@ -1209,6 +1232,36 @@ fn collection_signature(output: &str) -> Result<signature::Definition, host::Err
         "Element",
         [type_ref::Type::parameter("Message")?],
     )?);
+    signature.output(type_ref::Type::applied(
+        output,
+        [type_ref::Type::parameter("Message")?],
+    )?);
+    Ok(signature.finish())
+}
+
+/// `impl IntoIterator<Item = impl Into<Element>>`: a `Vec` or array of
+/// widgets, each converted into an Element.
+fn children() -> Result<type_ref::Type, host::Error> {
+    Ok(type_ref::Type::slice(type_ref::Type::applied(
+        "Element",
+        [type_ref::Type::parameter("Message")?],
+    )?))
+}
+
+fn children_signature(output: &str) -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Message", &[])?;
+    signature.parameter(children()?);
+    signature.output(type_ref::Type::applied(
+        output,
+        [type_ref::Type::parameter("Message")?],
+    )?);
+    Ok(signature.finish())
+}
+
+fn generic_empty_signature(output: &str) -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Message", &[])?;
     signature.output(type_ref::Type::applied(
         output,
         [type_ref::Type::parameter("Message")?],
@@ -2685,7 +2738,7 @@ mod tests {
             })
             .unwrap();
         facade
-            .bind_with_context("iced::widget::column", |call, args| {
+            .bind_macro_with_context("iced::widget::column", |call, args| {
                 assert_eq!(args.len(), 2);
                 assert!(args.iter().all(|value| value.is::<crate::widget::Value>()));
                 Ok(Dynamic::from(test_column(call)))

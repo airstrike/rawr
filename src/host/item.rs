@@ -31,6 +31,18 @@ pub enum Kind {
     Method,
 }
 
+impl Kind {
+    /// Whether this kind lives in the macro namespace.
+    ///
+    /// As in Rust, one path may name a macro and a value independently:
+    /// `column![..]` and `column(..)` are two items under one name, and
+    /// call syntax picks between them.
+    #[must_use]
+    pub const fn is_macro(self) -> bool {
+        matches!(self, Self::IntrinsicMacro)
+    }
+}
+
 /// One validated static host item declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Definition {

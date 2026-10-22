@@ -937,11 +937,12 @@ impl Builder {
                 incoming: "item",
             });
         }
-        if let Ok(index) = self.item_index(&path) {
-            let existing = self.items[index]
+        if let Ok(index) = self.item_index(&path)
+            && let Some(existing) = self.items[index]
                 .1
-                .first()
-                .expect("facade item sets are never empty");
+                .iter()
+                .find(|existing| same_namespace(existing, &item))
+        {
             if !compatible_overload(existing, &item) {
                 return Err(host::Error::IncompatibleFacadeOverload {
                     item: path.to_string().into(),
@@ -1126,7 +1127,9 @@ impl Builder {
             resolved.sort_by_key(host::item::Definition::fingerprint);
             for (index, item) in resolved.iter().enumerate() {
                 for existing in &resolved[..index] {
-                    if existing.signature().same_inputs(item.signature())? {
+                    if same_namespace(existing, item)
+                        && existing.signature().same_inputs(item.signature())?
+                    {
                         return Err(host::Error::DuplicateFacadeOverloadInputs {
                             item: item.path().into(),
                         });
@@ -1205,7 +1208,9 @@ impl Builder {
             items[start..].sort_by_key(host::item::Definition::fingerprint);
             for (offset, item) in items[start..].iter().enumerate() {
                 for existing in &items[start..start + offset] {
-                    if existing.signature().same_inputs(item.signature())? {
+                    if same_namespace(existing, item)
+                        && existing.signature().same_inputs(item.signature())?
+                    {
                         return Err(host::Error::DuplicateFacadeOverloadInputs {
                             item: item.path().into(),
                         });
@@ -1314,10 +1319,9 @@ fn append_profile_items(
         .map_err(|_| host::Error::Allocation)?;
     for candidate in profile {
         let mut replaced = false;
-        for existing in items
-            .iter()
-            .filter(|existing| existing.path_ref() == candidate.path_ref())
-        {
+        for existing in items.iter().filter(|existing| {
+            existing.path_ref() == candidate.path_ref() && same_namespace(existing, &candidate)
+        }) {
             if !compatible_overload(existing, &candidate) {
                 return Err(host::Error::IncompatibleFacadeOverload {
                     item: candidate.path().into(),
@@ -1351,6 +1355,7 @@ fn append_profile_items(
             .iter()
             .rev()
             .take_while(|existing| existing.path_ref() == item.path_ref())
+            .filter(|existing| same_namespace(existing, item))
         {
             if !compatible_overload(existing, item) {
                 return Err(host::Error::IncompatibleFacadeOverload {
@@ -1371,6 +1376,13 @@ fn append_profile_items(
     Ok(())
 }
 
+/// Rust keeps macros apart from values, so a macro and a function may share a
+/// path without being overloads of each other: iced's `column![..]` and
+/// `column(..)`. Overload rules apply within one namespace.
+fn same_namespace(left: &host::item::Definition, right: &host::item::Definition) -> bool {
+    left.kind().is_macro() == right.kind().is_macro()
+}
+
 /// Overloads share a kind and receiver, with two Rust-shaped exceptions. A
 /// free value may share its path with free functions, as a Rust `fn` item is
 /// both a value and callable: `button::primary` names the value,
@@ -1378,6 +1390,7 @@ fn append_profile_items(
 /// without parameters) may share its name with owned builder methods, as
 /// iced's `style.border` and `style.border(..)`.
 fn compatible_overload(existing: &host::item::Definition, item: &host::item::Definition) -> bool {
+    debug_assert!(same_namespace(existing, item));
     use host::item::Kind;
     let value = |item: &host::item::Definition| item.kind() == Kind::Value;
     let function = |item: &host::item::Definition| item.kind() == Kind::Function;

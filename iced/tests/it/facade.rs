@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [61, 233, 59, 59, 225, 30, 4, 135, 30, 245, 98, 217, 204, 99, 222, 86]
+        [93, 3, 248, 91, 151, 239, 104, 9, 141, 129, 119, 140, 52, 233, 205, 100]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
@@ -231,14 +231,16 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
         registry.item("iced::run").unwrap().kind(),
         host::item::Kind::IntrinsicFunction
     );
-    assert_eq!(
-        registry.item("iced::widget::column").unwrap().kind(),
-        host::item::Kind::IntrinsicMacro
-    );
-    assert_eq!(
-        registry.item("iced::widget::row").unwrap().kind(),
-        host::item::Kind::IntrinsicMacro
-    );
+    // `column![..]` and `column(..)`: a macro and a function of one name.
+    for path in ["iced::widget::column", "iced::widget::row"] {
+        let mut kinds = second
+            .items()
+            .filter(|item| item.path() == path)
+            .map(|item| item.kind())
+            .collect::<Vec<_>>();
+        kinds.sort();
+        assert_eq!(kinds, [host::item::Kind::Function, host::item::Kind::IntrinsicMacro]);
+    }
     assert_eq!(
         registry.item("iced::Application::run").unwrap().kind(),
         host::item::Kind::IntrinsicMethod

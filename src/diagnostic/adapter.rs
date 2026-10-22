@@ -393,17 +393,23 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         | resolve::Error::DuplicateMethod { .. } => {
             builder.help("rename or remove one of the duplicate declarations")
         }
-        resolve::Error::UnknownType { name, .. } => builder.help(format!(
-            "declare or import `{name}`, or register it with the host"
-        )),
-        resolve::Error::UnknownImport { path, .. } => {
-            builder.help(format!("register or correct compile-time import `{path}`"))
+        resolve::Error::UnknownType { name, .. } if name.contains("::") => builder.help(
+            format!("`{name}` isn't available in Rawr yet, or the path is misspelled"),
+        ),
+        resolve::Error::UnknownType { name, .. } => {
+            builder.help(format!("declare `{name}`, or import it with `use`"))
         }
+        resolve::Error::UnknownMember { owner, member, .. } if owner.contains("::") => {
+            builder.help(format!(
+                "`{owner}::{member}` isn't available in Rawr yet, or the name is misspelled"
+            ))
+        }
+        resolve::Error::UnknownImport { path, .. } => builder.help(format!(
+            "`{path}` isn't available in Rawr yet, or the path is misspelled"
+        )),
         resolve::Error::MissingCapability {
             owner, capability, ..
-        } => builder.help(format!(
-            "derive or register `{capability}` support for `{owner}`"
-        )),
+        } => builder.help(format!("derive `{capability}` for `{owner}`")),
         _ => builder,
     }
 }
@@ -602,7 +608,7 @@ fn resolution_message(error: &resolve::Error) -> String {
             ..
         } => format!("invalid call to `{owner}::{method}`: {reason}"),
         resolve::Error::InvalidHostOperation { item, reason, .. } => {
-            format!("invalid host operation `{item}`: {reason}")
+            format!("cannot use `{item}` here: {reason}")
         }
         resolve::Error::UnusedValue { value, .. } => {
             format!("unused `{value}` must be returned, bound, or explicitly consumed")
@@ -626,7 +632,7 @@ fn resolution_message(error: &resolve::Error) -> String {
             format!("invalid match for `{owner}`: {reason}")
         }
         resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
-            format!("unsupported nominal syntax `{construct}`")
+            format!("unsupported syntax: {construct}")
         }
         resolve::Error::Application(error) => application_message(error),
         resolve::Error::InvalidPreview {

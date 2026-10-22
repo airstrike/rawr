@@ -116,3 +116,12 @@ fn cli_renders_master_component_after_its_message() {
     let hi = render_fixture_with("component", "component_hi", &["--message", "()"]);
     assert_ne!(show, hi);
 }
+
+#[test]
+fn cli_renders_a_column_built_from_a_vec() {
+    // Two snippets from the iced Discord: a `Vec<Text>` pushed in a loop,
+    // made a column by `Column::from_vec` and by the `column` function.
+    let from_vec = render_fixture("column_from_vec");
+    let function = render_fixture("column_fn");
+    assert_eq!(from_vec, function);
+}

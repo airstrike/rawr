@@ -990,50 +990,57 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
         })
         .expect("the iced facade must retain the exact button item");
     builder
-        .bind_with_context("iced::widget::column", |call, args| {
+        .bind_macro_with_context("iced::widget::column", |call, args| {
             let children = args
                 .iter_mut()
                 .map(|value| take::<widget::Value>(value, "iced::Element"))
                 .collect::<Result<Vec<_>, _>>()?;
-            let mode = widget::key::Mode::bind(&children)
-                .map_err(|error| runtime_error(error.to_string()))?;
-            Ok(Dynamic::from(marker::Column {
-                witness: call.output_witness().map_err(witness_error)?,
-                identity: widget::Identity::unique(),
-                children,
-                mode,
-                spacing: 0.0,
-                padding: iced::Padding::ZERO,
-                width: iced::Length::Fit,
-                height: None,
-                align_x: iced::Alignment::Start,
-            }))
+            new_column(call, children)
         })
-        .expect("the iced facade must retain the exact column item");
+        .expect("the iced facade must retain the exact column macro");
     builder
-        .bind_with_context("iced::widget::row", |call, args| {
+        .bind_macro_with_context("iced::widget::row", |call, args| {
             let children = args
                 .iter_mut()
                 .map(|value| take::<widget::Value>(value, "iced::Element"))
                 .collect::<Result<Vec<_>, _>>()?;
-            if !matches!(widget::key::Mode::bind(&children), Ok(widget::key::Mode::Positional)) {
-                return Err(runtime_error(
-                    "built-in Row requires positional children; keyed reconciliation is owned by Column"
-                        .to_string(),
-                ));
-            }
-            Ok(Dynamic::from(marker::Row {
-                witness: call.output_witness().map_err(witness_error)?,
-                identity: widget::Identity::unique(),
-                children,
-                spacing: 0.0,
-                padding: iced::Padding::ZERO,
-                width: iced::Length::Fit,
-                height: iced::Length::Fit,
-                align_y: iced::Alignment::Start,
-            }))
+            new_row(call, children)
         })
-        .expect("the iced facade must retain the exact row item");
+        .expect("the iced facade must retain the exact row macro");
+    for path in [
+        "iced::widget::column",
+        "iced::widget::Column::with_children",
+        "iced::widget::Column::from_vec",
+    ] {
+        builder
+            .bind_with_context(path, |call, args| {
+                if args.len() != 1 {
+                    return Err(arity("column", 1, args.len()));
+                }
+                new_column(call, take_children(args[0])?)
+            })
+            .expect("the iced facade must retain the exact column functions");
+    }
+    for path in [
+        "iced::widget::row",
+        "iced::widget::Row::with_children",
+        "iced::widget::Row::from_vec",
+    ] {
+        builder
+            .bind_with_context(path, |call, args| {
+                if args.len() != 1 {
+                    return Err(arity("row", 1, args.len()));
+                }
+                new_row(call, take_children(args[0])?)
+            })
+            .expect("the iced facade must retain the exact row functions");
+    }
+    builder
+        .bind_with_context("iced::widget::Column::new", |call, _| new_column(call, Vec::new()))
+        .expect("the iced facade must retain the exact Column::new item");
+    builder
+        .bind_with_context("iced::widget::Row::new", |call, _| new_row(call, Vec::new()))
+        .expect("the iced facade must retain the exact Row::new item");
     builder
         .bind_with_context("iced::widget::container", |call, args| {
             if args.len() != 1 {
@@ -1527,6 +1534,18 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             Ok(Dynamic::from(column))
         })
         .expect("the iced facade must retain the exact Column::push item");
+    builder
+        .bind("iced::widget::Column::extend", |args| {
+            if args.len() != 2 {
+                return Err(arity("Column::extend", 2, args.len()));
+            }
+            let mut column = take::<marker::Column>(args[0], "iced::widget::Column")?;
+            column.children.extend(take_children(args[1])?);
+            column.mode = widget::key::Mode::bind(&column.children)
+                .map_err(|error| runtime_error(error.to_string()))?;
+            Ok(Dynamic::from(column))
+        })
+        .expect("the iced facade must retain the exact Column::extend item");
     bind_row_builders(builder);
     bind_container_builders(builder);
     bind_space_builders(builder);
@@ -1729,6 +1748,17 @@ fn bind_row_builders(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(row))
         })
         .expect("the iced facade must retain the exact Row::push item");
+    builder
+        .bind("iced::widget::Row::extend", |args| {
+            let mut row = take_row(args, "Row::extend")?;
+            let children = take_children(args[1])?;
+            if children.iter().any(|child| child.key().is_some()) {
+                return Err(positional_row());
+            }
+            row.children.extend(children);
+            Ok(Dynamic::from(row))
+        })
+        .expect("the iced facade must retain the exact Row::extend item");
     builder
         .bind("iced::widget::Row::align_y", |args| {
             let mut row = take_row(args, "Row::align_y")?;
@@ -2258,6 +2288,63 @@ fn set_space_width(space: &mut marker::Space, value: iced::Length) {
 
 fn set_space_height(space: &mut marker::Space, value: iced::Length) {
     space.height = value;
+}
+
+/// The children of `column(..)`, `Column::extend(..)` and their kin: an
+/// array of Elements.
+fn take_children(value: &mut Dynamic) -> Result<Vec<widget::Value>, Box<EvalAltResult>> {
+    let children = value.take().into_array().map_err(|actual| {
+        runtime_error(format!("expected a list of widgets, found `{actual}`"))
+    })?;
+    children
+        .into_iter()
+        .map(|mut child| take::<widget::Value>(&mut child, "iced::Element"))
+        .collect()
+}
+
+fn new_column(
+    call: &host::runtime::Call<'_>,
+    children: Vec<widget::Value>,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    let mode =
+        widget::key::Mode::bind(&children).map_err(|error| runtime_error(error.to_string()))?;
+    Ok(Dynamic::from(marker::Column {
+        witness: call.output_witness().map_err(witness_error)?,
+        identity: widget::Identity::unique(),
+        children,
+        mode,
+        spacing: 0.0,
+        padding: iced::Padding::ZERO,
+        width: iced::Length::Fit,
+        height: None,
+        align_x: iced::Alignment::Start,
+    }))
+}
+
+fn new_row(
+    call: &host::runtime::Call<'_>,
+    children: Vec<widget::Value>,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    if !matches!(widget::key::Mode::bind(&children), Ok(widget::key::Mode::Positional)) {
+        return Err(positional_row());
+    }
+    Ok(Dynamic::from(marker::Row {
+        witness: call.output_witness().map_err(witness_error)?,
+        identity: widget::Identity::unique(),
+        children,
+        spacing: 0.0,
+        padding: iced::Padding::ZERO,
+        width: iced::Length::Fit,
+        height: iced::Length::Fit,
+        align_y: iced::Alignment::Start,
+    }))
+}
+
+fn positional_row() -> Box<EvalAltResult> {
+    runtime_error(
+        "built-in Row requires positional children; keyed reconciliation is owned by Column"
+            .to_string(),
+    )
 }
 
 fn project<T>(

@@ -89,6 +89,13 @@ pub struct Instantiation<'a> {
     registry: &'a Registry,
 }
 
+/// The namespace a runtime binding targets where a path names both.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Namespace {
+    Value,
+    Macro,
+}
+
 struct Plain<F>(F);
 
 impl<F> Callback for Plain<F>
@@ -848,6 +855,9 @@ impl Builder {
     }
 
     /// Bind one exact qualified facade item to a native callback.
+    ///
+    /// Where a path names both a macro and a function, this binds the
+    /// function; [`Self::bind_macro`] binds the macro.
     pub fn bind(
         &mut self,
         path: impl Into<ImmutableString>,
@@ -855,32 +865,13 @@ impl Builder {
             + SendSync
             + 'static,
     ) -> Result<&mut Self, Error> {
-        let path = path.into();
-        let items = self
-            .definition
-            .overloads(&path)
-            .ok_or_else(|| Error::UnknownItem {
-                facade: self.definition.root().into(),
-                item: path.clone(),
-            })?;
-        let fingerprints = items
-            .iter()
-            .map(host::item::Definition::fingerprint)
-            .collect::<Vec<_>>();
-        if fingerprints
-            .iter()
-            .any(|fingerprint| self.bindings.contains_key(fingerprint))
-        {
-            return Err(Error::DuplicateBinding { item: path });
-        }
-        let callback: Shared<dyn Callback> = Shared::new(Plain(callback));
-        for fingerprint in fingerprints {
-            self.bindings.insert(fingerprint, callback.clone());
-        }
-        Ok(self)
+        self.bind_callback(path.into(), Namespace::Value, Shared::new(Plain(callback)))
     }
 
     /// Bind one exact item with sealed invocation-local witness authority.
+    ///
+    /// Where a path names both a macro and a function, this binds the
+    /// function; [`Self::bind_macro_with_context`] binds the macro.
     pub fn bind_with_context(
         &mut self,
         path: impl Into<ImmutableString>,
@@ -888,7 +879,45 @@ impl Builder {
             + SendSync
             + 'static,
     ) -> Result<&mut Self, Error> {
-        let path = path.into();
+        self.bind_callback(
+            path.into(),
+            Namespace::Value,
+            Shared::new(Contextual(callback)),
+        )
+    }
+
+    /// Bind the macro a path names, beside any function of the same name.
+    pub fn bind_macro(
+        &mut self,
+        path: impl Into<ImmutableString>,
+        callback: impl Fn(&mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>
+            + SendSync
+            + 'static,
+    ) -> Result<&mut Self, Error> {
+        self.bind_callback(path.into(), Namespace::Macro, Shared::new(Plain(callback)))
+    }
+
+    /// [`Self::bind_macro`] with invocation-local witness authority.
+    pub fn bind_macro_with_context(
+        &mut self,
+        path: impl Into<ImmutableString>,
+        callback: impl Fn(&Call<'_>, &mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>
+            + SendSync
+            + 'static,
+    ) -> Result<&mut Self, Error> {
+        self.bind_callback(
+            path.into(),
+            Namespace::Macro,
+            Shared::new(Contextual(callback)),
+        )
+    }
+
+    fn bind_callback(
+        &mut self,
+        path: ImmutableString,
+        namespace: Namespace,
+        callback: Shared<dyn Callback>,
+    ) -> Result<&mut Self, Error> {
         let items = self
             .definition
             .overloads(&path)
@@ -896,17 +925,27 @@ impl Builder {
                 facade: self.definition.root().into(),
                 item: path.clone(),
             })?;
+        // A path in one namespace binds whatever it names; a path in both
+        // binds the namespace asked for.
+        let mixed = items.iter().any(|item| item.kind().is_macro())
+            && items.iter().any(|item| !item.kind().is_macro());
         let fingerprints = items
             .iter()
+            .filter(|item| !mixed || item.kind().is_macro() == (namespace == Namespace::Macro))
             .map(host::item::Definition::fingerprint)
             .collect::<Vec<_>>();
+        if fingerprints.is_empty() {
+            return Err(Error::UnknownItem {
+                facade: self.definition.root().into(),
+                item: path,
+            });
+        }
         if fingerprints
             .iter()
             .any(|fingerprint| self.bindings.contains_key(fingerprint))
         {
             return Err(Error::DuplicateBinding { item: path });
         }
-        let callback: Shared<dyn Callback> = Shared::new(Contextual(callback));
         for fingerprint in fingerprints {
             self.bindings.insert(fingerprint, callback.clone());
         }

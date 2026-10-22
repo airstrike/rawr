@@ -81,7 +81,20 @@ fn unknown_type_adapter_is_actionable_and_positioned() {
 
     assert_eq!(report.code(), code::RESOLVE_UNKNOWN_TYPE);
     assert_eq!(report.labels().len(), 1);
-    assert!(report.help().unwrap().contains("register it with the host"));
+    assert!(report.help().unwrap().contains("import it with `use`"));
+}
+
+#[test]
+fn unknown_qualified_type_says_it_is_not_available_yet() {
+    let text = "struct Counter { value: lib::widget::Missing }\n";
+    let error = Engine::new().compile(text).unwrap_err();
+    let report = Report::from_parse(Source::new("main.rawr", text).unwrap(), &error).unwrap();
+
+    assert_eq!(report.code(), code::RESOLVE_UNKNOWN_TYPE);
+    assert_eq!(
+        report.help().unwrap(),
+        "`lib::widget::Missing` isn't available in Rawr yet, or the path is misspelled"
+    );
 }
 
 #[cfg(feature = "serde")]

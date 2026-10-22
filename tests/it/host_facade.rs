@@ -65,6 +65,91 @@ pub fn styled() -> i64 { button(primary) }
 }
 
 #[test]
+fn one_name_is_a_macro_a_function_and_a_module_by_call_syntax() {
+    let mut engine = Engine::new();
+    engine.register_host_facade(three_namespace_facade()).unwrap();
+    let facade = three_namespace_facade();
+    assert_eq!(facade.items().filter(|item| item.path() == "api::widget::thing").count(), 2);
+
+    // The macro yields a String, the function an i64, the module a constant:
+    // each line type-checks only when its syntax picks its own namespace.
+    for source in [
+        r#"
+use api::widget::thing;
+pub fn all() -> i64 {
+    let label: String = thing![1, 2, 3];
+    let sum: i64 = thing(1, 2);
+    sum + thing::LIMIT + label.len() as i64
+}
+"#,
+        r#"
+pub fn qualified() -> i64 {
+    let label: String = api::widget::thing![1];
+    api::widget::thing(1, 2) + api::widget::thing::LIMIT + label.len() as i64
+}
+"#,
+    ] {
+        engine.compile(source).unwrap();
+    }
+
+    // A name in one namespace says which syntax it takes.
+    let mut builder = facade::Builder::new("ui", facade::Abi::new(1).unwrap()).unwrap();
+    let mut list = signature::Builder::new();
+    list.parameter(type_ref::Type::builtin(type_ref::Builtin::I64)).output(type_ref::Type::builtin(type_ref::Builtin::I64));
+    builder.item(item::Definition::intrinsic_macro("list", list.finish()).unwrap()).unwrap();
+    let mut call = signature::Builder::new();
+    call.parameter(type_ref::Type::builtin(type_ref::Builtin::I64)).output(type_ref::Type::builtin(type_ref::Builtin::I64));
+    builder.item(item::Definition::function("make", call.finish()).unwrap()).unwrap();
+    let mut engine = Engine::new();
+    engine.register_host_facade(builder.finish().unwrap()).unwrap();
+    let error = engine.compile("use ui::list; pub fn f() -> i64 { list(1) }").unwrap_err();
+    assert!(error.to_string().contains("`list` is a macro here; write `list![..]`"), "{error}");
+    let error = engine.compile("use ui::make; pub fn f() -> i64 { make![1] }").unwrap_err();
+    assert!(error.to_string().contains("`make` is a function here; write `make(..)`"), "{error}");
+}
+
+#[test]
+fn a_macro_and_a_function_of_one_name_are_not_overloads() {
+    let mut builder = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
+    builder.module("widget").unwrap();
+    // The same inputs in both namespaces are no duplicate.
+    let mut list = signature::Builder::new();
+    list.parameter(type_ref::Type::builtin(type_ref::Builtin::I64)).output(type_ref::Type::builtin(type_ref::Builtin::I64));
+    let list = list.finish();
+    builder.item(item::Definition::intrinsic_macro("widget::thing", list.clone()).unwrap()).unwrap();
+    builder.item(item::Definition::function("widget::thing", list.clone()).unwrap()).unwrap();
+    builder.finish().unwrap();
+
+    // Within the value namespace the overload rules still hold.
+    let mut builder = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
+    builder.module("widget").unwrap();
+    builder.item(item::Definition::intrinsic_macro("widget::thing", list.clone()).unwrap()).unwrap();
+    builder.item(item::Definition::function("widget::thing", list.clone()).unwrap()).unwrap();
+    assert!(matches!(
+        builder.item(item::Definition::intrinsic_function("widget::thing", list).unwrap()),
+        Err(host::Error::IncompatibleFacadeOverload { .. })
+    ));
+}
+
+fn three_namespace_facade() -> facade::Definition {
+    let mut builder = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
+    builder.module("widget").unwrap();
+    builder.module("widget::thing").unwrap();
+    let mut list = signature::Builder::new();
+    list.parameter(type_ref::Type::builtin(type_ref::Builtin::I64)).output(type_ref::Type::builtin(type_ref::Builtin::String));
+    builder.item(item::Definition::intrinsic_macro("widget::thing", list.finish()).unwrap()).unwrap();
+    let mut call = signature::Builder::new();
+    call.parameter(type_ref::Type::builtin(type_ref::Builtin::I64))
+        .parameter(type_ref::Type::builtin(type_ref::Builtin::I64))
+        .output(type_ref::Type::builtin(type_ref::Builtin::I64));
+    builder.item(item::Definition::function("widget::thing", call.finish()).unwrap()).unwrap();
+    builder
+        .item(item::Definition::value("widget::thing::LIMIT", type_ref::Type::builtin(type_ref::Builtin::I64)).unwrap())
+        .unwrap();
+    builder.finish().unwrap()
+}
+
+#[test]
 fn module_type_and_type_item_collisions_remain_rejected() {
     let mut module_type = facade::Builder::new("api", facade::Abi::new(1).unwrap()).unwrap();
     module_type.module("widget").unwrap();
