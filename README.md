@@ -10,10 +10,10 @@ traits and `match`. It checks your code before running it and reports errors
 the way rustc does. Your program stays Rust. You write the parts you want to
 change while it runs in Rawr.
 
-The `rawr` crate is the language. Any Rust program can embed it. Layers add a
-domain on top. `rawr-iced` is the first layer, for
-[iced](https://github.com/iced-rs/iced) apps. Rawr loads it when your code
-uses iced.
+The `rawr` crate is the language. Any Rust program can embed it. The `rawr`
+command runs Rawr programs. rawr-iced adds support for
+[iced](https://github.com/iced-rs/iced) apps. Install it and `rawr` hands
+programs that use iced to it.
 
 ## What does it look like?
 
@@ -141,25 +141,36 @@ To embed the language, add the crate. It builds on stable Rust 1.91 or newer:
 cargo add --git https://github.com/airstrike/rawr rawr
 ```
 
-The `rawr` command is more demanding, even for scripts without iced: it
-carries rawr-iced, runs on Apple Silicon Macs for now, and needs one pinned
-Rust nightly, `nightly-2026-07-11`, with the `rustc-dev` and `rust-src`
+The `rawr` command runs Rawr programs. It builds on stable Rust too:
+
+```sh
+cargo install --locked --git https://github.com/airstrike/rawr rawr-cli
+```
+
+`rawr-cli` installs `rawr`. A program without iced runs once and exits. It
+doesn't build anything or hot reload.
+
+rawr-iced adds iced support. Install it and `rawr` hands programs that use
+iced to it. It runs on Apple Silicon Macs for now. It needs one pinned Rust
+nightly, `nightly-2026-07-11`, with the `rustc-dev` and `rust-src`
 components. Rawr builds iced and your own crates with that toolchain too.
 
 ```sh
 rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-cli
+cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver
 ```
 
-`rawr-cli` installs `rawr`. `rawr-import` installs `rawr-import-driver` next
-to it. The driver reads your Rust crates for imports. `cargo install` builds
-iced into `rawr`, so it takes a few minutes. After that, an iced app opens in
-seconds. A project with its own Rust crates compiles them on its first run. A
-script without iced runs once and exits. It doesn't build anything or hot
-reload.
+`rawr-iced-cli` installs `rawr-iced`. `rawr-import` installs
+`rawr-import-driver` in the same directory. The driver reads your Rust crates
+for imports. `rawr` finds `rawr-iced` next to itself or on `PATH`.
+`cargo install` builds iced into `rawr-iced`, so it takes a few minutes.
+After that, an iced app opens in seconds. A project with its own Rust crates
+compiles them on its first run.
 
 ## How do I start an iced project?
+
+With rawr-iced installed:
 
 ```sh
 rawr new hello && cd hello && rawr run
@@ -176,8 +187,9 @@ The other commands you will use:
   compare them with the committed images or replace them.
 - `rawr doctor`: report on the environment and the project.
 
-Every command takes a project directory or a single file. `rawr --help` lists
-them all.
+`rawr new`, `rawr preview` and `rawr snapshot` come with rawr-iced. Every
+command takes a project directory or a single file. `rawr --help` lists them
+all.
 
 ## Can I use my own Rust code?
 
@@ -217,9 +229,9 @@ To add the bot to a server, use the
 
 ## How far along is it?
 
-Pre-alpha. The `rawr` command runs only on Apple Silicon Macs. rawr-iced
-follows iced master. Both pin one nightly. APIs, commands, file formats and error
-codes will change without notice.
+Pre-alpha. The `rawr` command builds on stable Rust. rawr-iced runs only on
+Apple Silicon Macs. It follows iced master and pins one nightly. APIs,
+commands, file formats and error codes will change without notice.
 
 Rawr doesn't cover all of Rust yet. Known gaps include:
 
