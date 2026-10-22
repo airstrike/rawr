@@ -144,6 +144,8 @@ mod module;
 mod optimizer;
 /// Rawr's `Option<T>` at runtime, and its round trip to Rust's `Option<T>`.
 pub mod option;
+#[cfg(feature = "std")]
+pub mod layer;
 /// Static Rawr source and local-package graphs.
 #[cfg(feature = "std")]
 pub mod package;

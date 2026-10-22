@@ -5,6 +5,7 @@
 // Boxing variants would change the CLI library's exhaustively matched API.
 #![allow(clippy::result_large_err)]
 
+mod base;
 mod check;
 pub mod command;
 pub mod compile;
@@ -119,8 +120,32 @@ fn execute_command(
     command: command::Command,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<Option<Report>, Error> {
+    // Whether a layer goes on the base is decided from the source, before
+    // any layer's work; a private profile only ever selects an import.
+    let base = |path: Option<&std::path::PathBuf>| {
+        #[cfg(feature = "import-baseline")]
+        if profile.is_some() {
+            return Ok(None);
+        }
+        match base::layer(path)? {
+            base::Program::Base(target, graph) => Ok(Some((target, graph))),
+            // rawr-iced, the only layer, is the rest of each command.
+            base::Program::Layered(_) => Ok(None),
+        }
+    };
     match command {
         command::Command::Run { path } => {
+            if let Some((target, graph)) = base(path.as_ref()).map_err(|report| {
+                Error::Run(run::Error::Compile(compile::Error::from_report(report)))
+            })? {
+                let failed = base::run(&target, graph)
+                    .map_err(|report| Error::Run(run::Error::Application { report }))?;
+                return Ok(failed.map(|error| Report {
+                    message: String::new(),
+                    warning: Some(error),
+                    successful: false,
+                }));
+            }
             #[cfg(feature = "import-baseline")]
             run::execute_with_profile(path, profile).map_err(Error::Run)?;
             #[cfg(not(feature = "import-baseline"))]
@@ -202,6 +227,17 @@ fn execute_command(
             }))
         }
         command::Command::Check { path } => {
+            if let Some((target, graph)) = base(path.as_ref())
+                .map_err(|report| Error::Compile(compile::Error::from_report(report)))?
+            {
+                let source = base::check(&target, graph)
+                    .map_err(|report| Error::Compile(compile::Error::from_report(report)))?;
+                return Ok(Some(Report {
+                    message: format!("Checked {}", source.display()),
+                    warning: None,
+                    successful: true,
+                }));
+            }
             #[cfg(feature = "import-baseline")]
             let source = check::execute_with_profile(path, profile).map_err(Error::Compile)?;
             #[cfg(not(feature = "import-baseline"))]

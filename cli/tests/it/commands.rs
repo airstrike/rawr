@@ -477,6 +477,120 @@ fn doctor_extension_locations_are_future_ready_warnings() {
     assert!(stdout.contains(&missing.display().to_string()));
 }
 
+/// A program with no layer runs on the base alone: no cargo, rustc, store
+/// or window. With those unreachable and the sandbox read-only in effect, it
+/// still runs, and leaves the sandbox exactly as it was.
+fn base_command(sandbox: &Sandbox) -> Command {
+    let mut command = rawr_command();
+    let missing = sandbox.path().join("missing");
+    command
+        .current_dir(sandbox.path())
+        .env("PATH", "")
+        .env("HOME", &missing)
+        .env("CARGO_HOME", &missing)
+        .env("RUSTUP_HOME", &missing);
+    command
+}
+
+#[test]
+fn base_runs_the_cart_with_no_layer_and_no_build() {
+    let sandbox = Sandbox::new("base-cart");
+    let source = sandbox.path().join("cart.rawr");
+    fs::write(&source, include_str!("../../../examples/cart.rawr")).unwrap();
+    let before = tree(sandbox.path());
+
+    let run = base_command(&sandbox)
+        .args(["run", "cart.rawr"])
+        .output()
+        .unwrap();
+    let checked = base_command(&sandbox)
+        .args(["check", "cart.rawr"])
+        .output()
+        .unwrap();
+
+    assert_success(&run);
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "total: 27\n");
+    assert!(run.stderr.is_empty());
+    assert_success(&checked);
+    assert!(String::from_utf8_lossy(&checked.stdout).starts_with("Checked "));
+    assert_eq!(tree(sandbox.path()), before);
+}
+
+#[test]
+fn base_prints_a_final_value_and_main_output() {
+    let sandbox = Sandbox::new("base-output");
+    fs::write(
+        sandbox.path().join("value.rawr"),
+        "let x = 20.0 + 7.0;\nx\n",
+    )
+    .unwrap();
+    fs::write(
+        sandbox.path().join("main.rawr"),
+        "fn main() {\n    print!(\"a\");\n    println!(\"{}\", 1 + 1);\n    eprintln!(\"to stderr\");\n}\n",
+    )
+    .unwrap();
+
+    let value = base_command(&sandbox)
+        .args(["run", "value.rawr"])
+        .output()
+        .unwrap();
+    let main = base_command(&sandbox)
+        .args(["run", "main.rawr"])
+        .output()
+        .unwrap();
+
+    assert_success(&value);
+    assert_eq!(String::from_utf8_lossy(&value.stdout), "27.0\n");
+    assert_success(&main);
+    assert_eq!(String::from_utf8_lossy(&main.stdout), "a2\n");
+    assert_eq!(String::from_utf8_lossy(&main.stderr), "to stderr\n");
+}
+
+#[test]
+fn base_main_returning_err_fails_like_rust() {
+    let sandbox = Sandbox::new("base-err");
+    fs::write(
+        sandbox.path().join("err.rawr"),
+        "fn main() -> Result<(), String> {\n    Err(String::from(\"boom\"))\n}\n",
+    )
+    .unwrap();
+
+    let output = base_command(&sandbox)
+        .args(["run", "err.rawr"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "Error: \"boom\"\n");
+}
+
+#[test]
+fn base_type_errors_are_the_same_diagnostic_for_check_and_run() {
+    let sandbox = Sandbox::new("base-type-error");
+    let source = sandbox.path().join("wrong.rawr");
+    fs::write(&source, "fn main() {\n    let x: i64 = \"text\";\n}\n").unwrap();
+
+    let checked = base_command(&sandbox)
+        .args(["check", "wrong.rawr"])
+        .output()
+        .unwrap();
+    let run = base_command(&sandbox)
+        .args(["run", "wrong.rawr"])
+        .output()
+        .unwrap();
+
+    assert!(!checked.status.success());
+    assert!(!run.status.success());
+    assert_eq!(checked.stderr, run.stderr);
+    let stderr = String::from_utf8_lossy(&checked.stderr);
+    assert!(stderr.starts_with("error[RAWR-RESOLVE-"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("{}:2:", source.display())),
+        "{stderr}"
+    );
+}
+
 fn fixture_path(stem: &str, extension: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/diagnostics")

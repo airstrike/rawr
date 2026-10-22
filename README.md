@@ -9,18 +9,16 @@ A scripting language that reads like Rust: the same structs, enums, traits and
 `match`, checked up front with rustc-style errors. Your program stays Rust; the
 parts you want to change while it runs are written in Rawr.
 
-The `rawr` crate is the language, and any Rust program can embed it. A shell
-gives it a domain. The first one is `rawr-iced`, for
-[iced](https://github.com/iced-rs/iced) apps.
+The `rawr` crate is the language, and any Rust program can embed it. Layers
+add a domain on top. The first is `rawr-iced`, for
+[iced](https://github.com/iced-rs/iced) apps; it is brought in when your code
+uses iced.
 
 ## What does it look like?
 
-On its own, embedded in a Rust program:
+On its own, `cart.rawr`:
 
 ```rust
-use rawr::Engine;
-
-const SCRIPT: &str = r#"
 enum Item {
     Book { price: f64 },
     Coffee { cups: i64 },
@@ -47,20 +45,34 @@ fn total(items: &[Item]) -> f64 {
     sum
 }
 
-let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
-total(&cart)
-"#;
+fn main() {
+    let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
+    println!("total: {}", total(&cart));
+}
+```
+
+```sh
+$ rawr run cart.rawr
+total: 27
+```
+
+It is also a Rust program: rename it to `cart.rs` and rustc prints the same.
+
+Embedded in a Rust program, the same file:
+
+```rust
+use rawr::{Engine, Scope};
 
 fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    let total = Engine::new().eval::<f64>(SCRIPT)?;
-    println!("total: {total}");
-    Ok(())
+    let engine = Engine::new();
+    let ast = engine.compile(include_str!("cart.rawr"))?;
+    engine.call_fn::<()>(&mut Scope::new(), &ast, "main", ())
 }
 ```
 
 That's `examples/cart.rs`; `cargo run --example cart` prints `total: 27`.
 
-In the iced shell, this is iced's own counter example. Save it as
+With iced, this is iced's own counter example. Save it as
 `src/main.rawr` and `rawr check` accepts it unchanged. `rawr run` opens the
 app and reloads it when you save.
 
@@ -109,12 +121,12 @@ impl Counter {
 
 ## Why would I use it instead of plain Rust?
 
-- Code you change while the program runs doesn't need a rebuild. In the iced
-  shell, saving a `.rawr` file reloads the running app in about 0.2 s, and the
+- Code you change while the program runs doesn't need a rebuild. With iced,
+  saving a `.rawr` file reloads the running app in about 0.2 s, and the
   window stays open and keeps its state.
 - It's still Rust to read and to review. Errors look like rustc's: a code, a
   span, and what is missing.
-- In the iced shell, your own Rust crates are imported with no bindings to
+- With iced, your own Rust crates are imported with no bindings to
   write, and `#[preview]` plus `rawr snapshot` render views to PNG for review.
 
 If you later want plain Rust back, `rawr check --as-rust` copies the project
@@ -128,10 +140,10 @@ To embed the language, add the crate. It builds on stable Rust 1.91 or newer:
 cargo add --git https://github.com/airstrike/rawr rawr
 ```
 
-The iced shell and its `rawr` command are more demanding. They run on Apple
-Silicon Macs for now and need one pinned Rust nightly, `nightly-2026-07-11`,
-with the `rustc-dev` and `rust-src` components. Rawr builds iced and your own
-crates with that toolchain too.
+The `rawr` command is more demanding, even for scripts without iced: it
+carries rawr-iced, runs on Apple Silicon Macs for now, and needs one pinned
+Rust nightly, `nightly-2026-07-11`, with the `rustc-dev` and `rust-src`
+components. Rawr builds iced and your own crates with that toolchain too.
 
 ```sh
 rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
@@ -140,8 +152,10 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 ```
 
 `rawr-cli` installs `rawr`. `rawr-import` installs `rawr-import-driver` next
-to it, which reads your Rust crates for imports. The first `rawr run` compiles
-iced, so it takes a few minutes. Later launches reuse that build.
+to it, which reads your Rust crates for imports. The first `rawr run` of an
+iced app compiles iced, so it takes a few minutes. Later launches reuse that
+build. A script without iced runs once and exits, with no build and no hot
+reload.
 
 ## How do I start an iced project?
 
@@ -201,9 +215,9 @@ To add the bot to a server, use the
 
 ## How far along is it?
 
-Pre-alpha. The iced shell runs on Apple Silicon Macs, follows iced master, and
-pins one nightly. APIs, commands, file formats and error codes will change
-without notice.
+Pre-alpha. The `rawr` command runs on Apple Silicon Macs, rawr-iced follows
+iced master, and both pin one nightly. APIs, commands, file formats and error
+codes will change without notice.
 
 It covers a lot of Rust, not all of it. Known gaps include:
 

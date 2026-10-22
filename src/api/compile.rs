@@ -62,6 +62,29 @@ impl Engine {
         crate::package::compile::executable(self, target, None)
     }
 
+    /// Compile one loaded package graph to run as a program: its [`AST`]
+    /// (the top level), and the script name of the entry package's
+    /// `fn main`, when it has one, to call after it.
+    #[cfg(feature = "std")]
+    pub fn compile_package(
+        &self,
+        graph: crate::package::Graph,
+    ) -> Result<(AST, Option<crate::ImmutableString>), crate::package::Error> {
+        let (executable, ..) =
+            crate::package::compile::executable_from_graph(self, graph, None, false)?;
+        let main = executable
+            .items()
+            .find(|item| {
+                let key = item.key();
+                item.kind() == crate::item::Kind::Function
+                    && key.package() == executable.package()
+                    && key.modules().is_empty()
+                    && key.name() == "main"
+            })
+            .map(|item| crate::resolve::lower_nominal::private_function_name(item.key()));
+        Ok((executable.into_ast(), main))
+    }
+
     /// Compile one immutable reload candidate from a static package graph.
     ///
     /// The returned bundle retains the exact executable, canonical source

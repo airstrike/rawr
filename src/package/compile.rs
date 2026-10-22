@@ -202,6 +202,16 @@ fn executable_with_evidence(
     let graph = timing::observe_optional(session, timing::Phase::ParseItems, || {
         Graph::load(engine, target)
     })?;
+    executable_from_graph(engine, graph, session, retain_source)
+}
+
+/// [`executable_with_evidence`] of a graph already loaded.
+pub(crate) fn executable_from_graph(
+    engine: &Engine,
+    graph: Graph,
+    session: Option<&timing::Session>,
+    retain_source: bool,
+) -> Result<ExecutableEvidence, Error> {
     let sources = graph.diagnostic_sources();
     let entry = graph.entry_source().id();
     let source = retain_source.then(|| crate::reload::source::Graph::from_package(&graph));

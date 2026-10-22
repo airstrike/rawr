@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// Concise CLI help text.
-pub const HELP: &str = "Rawr iced application development\n\nUsage:\n  rawr [run] [path]\n  rawr preview [path] [name]\n  rawr snapshot --check [--verbose] [path]\n  rawr snapshot --update [--verbose] [path]\n  rawr check [path]\n  rawr check --as-rust [path]\n  rawr new <name-or-path>\n  rawr doctor [path]\n  rawr mcp\n  rawr init [--claude] [--codex] [path]\n  rawr cache clean [--all]\n\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the CLI version\n      --verbose    Show snapshot storage details";
+pub const HELP: &str = "Rawr: Rust-shaped scripts and apps\n\nA program runs on the base language; rawr-iced is brought in when it uses\n`iced`. A program without iced runs once (no window, no hot reload).\n\nUsage:\n  rawr [run] [path]\n  rawr preview [path] [name]\n  rawr snapshot --check [--verbose] [path]\n  rawr snapshot --update [--verbose] [path]\n  rawr check [path]\n  rawr check --as-rust [path]\n  rawr new <name-or-path>\n  rawr doctor [path]\n  rawr mcp\n  rawr init [--claude] [--codex] [path]\n  rawr cache clean [--all]\n\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the CLI version\n      --verbose    Show snapshot storage details";
 
 /// Deterministic snapshot operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

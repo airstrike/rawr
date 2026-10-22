@@ -248,6 +248,11 @@ impl Graph {
         self.entry_package().rust.is_some()
     }
 
+    /// Every source's parsed items, as loading parsed them.
+    pub(crate) fn parsed_items(&self) -> impl Iterator<Item = &crate::item::Parsed> {
+        self.units.iter().flat_map(|unit| unit.parsed.items())
+    }
+
     #[allow(dead_code)]
     pub(crate) fn into_parts(self) -> Parts {
         (
