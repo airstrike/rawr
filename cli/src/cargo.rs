@@ -10,6 +10,7 @@
 //! `cargo` on `PATH`. Without it Rawr says so once and goes on.
 
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
@@ -155,6 +156,30 @@ pub enum Status {
     Finished(Outcome),
 }
 
+/// Bring `Cargo.lock` up to date with `Cargo.toml` before `cargo check`
+/// starts, when it is missing or older. Rawr reads the same lock to build
+/// the crate's native part at the same time, and a lock that changes under
+/// it fails that build. `cargo update --workspace` adds what the manifest
+/// added and leaves every other locked version as it is. Best effort:
+/// `cargo check` reports any problem.
+fn settle_lock(program: &OsString, manifest: &Path) {
+    let lock = manifest.with_file_name("Cargo.lock");
+    let modified = |path: &Path| fs::metadata(path).and_then(|metadata| metadata.modified()).ok();
+    let current = match (modified(manifest), modified(&lock)) {
+        (Some(manifest), Some(lock)) => lock >= manifest,
+        _ => false,
+    };
+    if !current {
+        let _ = Command::new(program)
+            .args(["update", "--workspace", "--quiet", "--manifest-path"])
+            .arg(manifest)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 /// One `cargo check` running.
 struct Running {
     child: Child,
@@ -164,6 +189,7 @@ struct Running {
 
 impl Running {
     fn start(program: &OsString, manifest: &Path) -> Result<Self, String> {
+        settle_lock(program, manifest);
         let mut child = Command::new(program)
             .args(["check", "--message-format=json", "--manifest-path"])
             .arg(manifest)

@@ -2237,6 +2237,18 @@ impl Invocations {
                 stable_crate_id,
             };
             let authority = match authority {
+                // A proc-macro crate (a crate re-exporting derives, such as
+                // palette's) has no items Rawr can call: its macros expand
+                // in Rust. Its exports stay unavailable.
+                Some(authority)
+                    if authority.crate_name.as_ref() == key.crate_name.as_ref()
+                        && authority
+                            .target_kinds
+                            .iter()
+                            .any(|kind| kind.as_ref() == "proc-macro") =>
+                {
+                    ExternalAuthority::Unavailable { artifacts }
+                }
                 Some(authority) => {
                     if authority.crate_name.as_ref() != key.crate_name.as_ref() {
                         return Err(extraction(
