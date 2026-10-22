@@ -22,6 +22,151 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_wrappers(builder);
     super::media::bind(builder);
     bind_operations(builder);
+    bind_keyboard(builder);
+}
+
+/// `keyboard::Event`'s variants and fields, `Key`, `key::Named` and
+/// `Modifiers`.
+fn bind_keyboard(builder: &mut host::runtime::Builder) {
+    use iced::keyboard::{key::Named, Event, Key, Modifiers};
+
+    fn read<T: Clone + Send + Sync + 'static>(
+        builder: &mut host::runtime::Builder,
+        path: &'static str,
+        read: fn(&T) -> Dynamic,
+    ) {
+        builder
+            .bind(path, move |args| {
+                let [value] = args else {
+                    return Err(arity(path, 1, args.len()));
+                };
+                let value = value
+                    .read_lock::<T>()
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                Ok(read(&value))
+            })
+            .expect("the iced facade must retain every keyboard reader");
+    }
+    read::<Event>(builder, "iced::keyboard::Event::KeyPressed", |event| {
+        Dynamic::from(matches!(event, Event::KeyPressed { .. }))
+    });
+    read::<Event>(builder, "iced::keyboard::Event::KeyReleased", |event| {
+        Dynamic::from(matches!(event, Event::KeyReleased { .. }))
+    });
+    read::<Event>(builder, "iced::keyboard::Event::ModifiersChanged", |event| {
+        Dynamic::from(matches!(event, Event::ModifiersChanged(_)))
+    });
+    read::<Event>(builder, "iced::keyboard::Event::key", |event| match event {
+        Event::KeyPressed { key, .. } | Event::KeyReleased { key, .. } => Dynamic::from(key.clone()),
+        Event::ModifiersChanged(_) => Dynamic::from(<Key>::Unidentified),
+    });
+    read::<Event>(builder, "iced::keyboard::Event::modified_key", |event| match event {
+        Event::KeyPressed { modified_key, .. } | Event::KeyReleased { modified_key, .. } => {
+            Dynamic::from(modified_key.clone())
+        }
+        Event::ModifiersChanged(_) => Dynamic::from(<Key>::Unidentified),
+    });
+    read::<Event>(builder, "iced::keyboard::Event::modifiers", |event| match event {
+        Event::KeyPressed { modifiers, .. }
+        | Event::KeyReleased { modifiers, .. }
+        | Event::ModifiersChanged(modifiers) => Dynamic::from(*modifiers),
+    });
+    read::<Event>(builder, "iced::keyboard::Event::repeat", |event| {
+        Dynamic::from(matches!(event, Event::KeyPressed { repeat: true, .. }))
+    });
+    read::<Key>(builder, "iced::keyboard::Key::as_ref", |key| Dynamic::from(key.clone()));
+    for (name, read_modifier) in [
+        ("shift", Modifiers::shift as fn(Modifiers) -> bool),
+        ("control", Modifiers::control),
+        ("alt", Modifiers::alt),
+        ("logo", Modifiers::logo),
+        ("command", Modifiers::command),
+        ("macos_command", Modifiers::macos_command),
+        ("jump", Modifiers::jump),
+    ] {
+        let path = format!("iced::keyboard::Modifiers::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let [value] = args else {
+                    return Err(arity(&path, 1, args.len()));
+                };
+                let modifiers = value
+                    .read_lock::<Modifiers>()
+                    .map(|modifiers| *modifiers)
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                Ok(Dynamic::from(read_modifier(modifiers)))
+            })
+            .expect("the iced facade must retain every Modifiers reader");
+    }
+    builder
+        .bind("iced::keyboard::Key::Named", |args| {
+            let named = take::<Named>(
+                args.first_mut().ok_or_else(|| arity("Key::Named", 1, 0))?,
+                "iced::keyboard::key::Named",
+            )?;
+            Ok(Dynamic::from(<Key>::Named(named)))
+        })
+        .expect("the iced facade must retain Key::Named");
+    builder
+        .bind("iced::keyboard::Key::Character", |args| {
+            let character = super::builtin::exact_string(
+                args.first().ok_or_else(|| arity("Key::Character", 1, 0))?,
+                "Key::Character",
+            )?;
+            Ok(Dynamic::from(<Key>::Character(character.into())))
+        })
+        .expect("the iced facade must retain Key::Character");
+    builder
+        .bind("iced::keyboard::Key::Unidentified", |_| Ok(Dynamic::from(<Key>::Unidentified)))
+        .expect("the iced facade must retain Key::Unidentified");
+    for (name, named) in crate::KEY_NAMES.into_iter().zip([
+        Named::Alt,
+        Named::Control,
+        Named::Shift,
+        Named::Super,
+        Named::Meta,
+        Named::Enter,
+        Named::Tab,
+        Named::Space,
+        Named::ArrowDown,
+        Named::ArrowLeft,
+        Named::ArrowRight,
+        Named::ArrowUp,
+        Named::End,
+        Named::Home,
+        Named::PageDown,
+        Named::PageUp,
+        Named::Backspace,
+        Named::Delete,
+        Named::Insert,
+        Named::Escape,
+        Named::CapsLock,
+        Named::F1,
+        Named::F2,
+        Named::F3,
+        Named::F4,
+        Named::F5,
+        Named::F6,
+        Named::F7,
+        Named::F8,
+        Named::F9,
+        Named::F10,
+        Named::F11,
+        Named::F12,
+        Named::Copy,
+        Named::Cut,
+        Named::Paste,
+        Named::Undo,
+        Named::Redo,
+        Named::ContextMenu,
+        Named::PrintScreen,
+    ]) {
+        builder
+            .bind(format!("iced::keyboard::key::Named::{name}"), move |_| {
+                Ok(Dynamic::from(named))
+            })
+            .expect("the iced facade must retain every key::Named");
+    }
 }
 
 /// `widget::Id`, the `id` builders, `operation::Animation` and the
@@ -428,6 +573,59 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                 )))
             })
             .expect("the iced facade must retain every time unit");
+    }
+    use std::time::Duration;
+    for (name, unit) in [
+        ("from_secs", Duration::from_secs as fn(u64) -> Duration),
+        ("from_millis", Duration::from_millis),
+        ("from_micros", Duration::from_micros),
+        ("from_nanos", Duration::from_nanos),
+    ] {
+        builder
+            .bind(format!("iced::time::Duration::{name}"), move |args| {
+                let amount = args
+                    .first()
+                    .and_then(|value| value.as_int().ok())
+                    .and_then(|value| u64::try_from(value).ok())
+                    .ok_or_else(|| runtime_error(format!("Duration::{name} expects a `u64`")))?;
+                Ok(Dynamic::from(unit(amount)))
+            })
+            .expect("the iced facade must retain every Duration constructor");
+    }
+    for name in ["from_secs_f64", "from_secs_f32"] {
+        builder
+            .bind(format!("iced::time::Duration::{name}"), move |args| {
+                let seconds = args
+                    .first()
+                    .and_then(|value| value.as_float().ok())
+                    .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+                    .ok_or_else(|| {
+                        runtime_error(format!("Duration::{name} expects a finite, nonnegative float"))
+                    })?;
+                Ok(Dynamic::from(Duration::from_secs_f64(seconds)))
+            })
+            .expect("the iced facade must retain every Duration constructor");
+    }
+    for (name, read) in [
+        ("as_secs", (|d: &Duration| Dynamic::from(d.as_secs() as i64)) as fn(&Duration) -> Dynamic),
+        ("as_millis", |d| Dynamic::from(d.as_millis() as i64)),
+        ("as_micros", |d| Dynamic::from(d.as_micros() as i64)),
+        ("as_nanos", |d| Dynamic::from(d.as_nanos() as i64)),
+        ("as_secs_f64", |d| Dynamic::from(d.as_secs_f64())),
+        ("as_secs_f32", |d| Dynamic::from(d.as_secs_f64())),
+    ] {
+        let path = format!("iced::time::Duration::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let [value] = args else {
+                    return Err(arity(&path, 1, args.len()));
+                };
+                let duration = value
+                    .read_lock::<Duration>()
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                Ok(read(&duration))
+            })
+            .expect("the iced facade must retain every Duration reader");
     }
     builder
         .bind_macro("iced::color", |args| {

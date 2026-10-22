@@ -53,6 +53,22 @@ const OWNED_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Send,
     capability::Kind::Static,
 ];
+/// A `Clone` value that is not `Copy`, as iced's `Event`.
+const DEBUG_VALUE_CAPABILITIES: &[capability::Kind] = &[
+    capability::Kind::Debug,
+    capability::Kind::Clone,
+    capability::Kind::PartialEq,
+    capability::Kind::Send,
+    capability::Kind::Static,
+];
+const DEBUG_EQ_VALUE_CAPABILITIES: &[capability::Kind] = &[
+    capability::Kind::Debug,
+    capability::Kind::Clone,
+    capability::Kind::PartialEq,
+    capability::Kind::Eq,
+    capability::Kind::Send,
+    capability::Kind::Static,
+];
 const OWNED_EQ_VALUE_CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Debug,
     capability::Kind::Clone,
@@ -99,6 +115,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::operation")?;
     builder.module("widget::operation::scrollable")?;
     builder.module("window")?;
+    builder.module("event")?;
+    builder.module("keyboard")?;
+    builder.module("keyboard::key")?;
     builder.module("widget::scrollable")?;
     builder.module("widget::slider")?;
     builder.module("widget::text")?;
@@ -248,6 +267,19 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         "widget::scrollable::AbsoluteOffset",
         &[],
         OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.value_type::<iced::Event>("Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::keyboard::Event>("keyboard::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::keyboard::Key>("keyboard::Key", &[], DEBUG_EQ_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::keyboard::key::Named>(
+        "keyboard::key::Named",
+        &[],
+        OWNED_EQ_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::keyboard::Modifiers>(
+        "keyboard::Modifiers",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
     builder.value_type::<iced::window::Id>("window::Id", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
     builder.type_::<marker::Stack>("widget::Stack", &["Message"], &[])?;
@@ -805,6 +837,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_native_tasks(&mut builder)?;
     declare_wrappers(&mut builder)?;
     declare_media(&mut builder)?;
+    declare_events(&mut builder)?;
     declare_font(&mut builder)?;
 
     builder.finish()
@@ -1712,6 +1745,35 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
             integer_signature("time::Duration", 1)?,
         )?)?;
     }
+    // `Duration::from_millis(10)` and kin, and its readers.
+    for name in ["from_secs", "from_millis", "from_micros", "from_nanos"] {
+        builder.item(item::Definition::associated_function(
+            format!("time::Duration::{name}"),
+            integer_signature("time::Duration", 1)?,
+        )?)?;
+    }
+    for name in ["from_secs_f64", "from_secs_f32"] {
+        builder.item(item::Definition::associated_function(
+            format!("time::Duration::{name}"),
+            repeated_builtin_signature(type_ref::Builtin::F64, 1, "time::Duration")?,
+        )?)?;
+    }
+    for (name, output) in [
+        ("as_secs", type_ref::Builtin::I64),
+        ("as_millis", type_ref::Builtin::I64),
+        ("as_micros", type_ref::Builtin::I64),
+        ("as_nanos", type_ref::Builtin::I64),
+        ("as_secs_f64", type_ref::Builtin::F64),
+        ("as_secs_f32", type_ref::Builtin::F64),
+    ] {
+        let mut reader = signature::Builder::new();
+        reader.output(type_ref::Type::builtin(output));
+        builder.item(item::Definition::method(
+            format!("time::Duration::{name}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+    }
     // `size.width`, `point.x` and kin, read as fields.
     for (owner, fields) in [
         ("Size", &["width", "height"][..]),
@@ -1857,6 +1919,138 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
     pixels_builders(builder, "widget::QRCode", "total_size")?;
     Ok(())
 }
+
+/// iced's runtime events as subscriptions: `event::listen()`,
+/// `keyboard::listen()`, `window::frames()` and `time::every(duration)`,
+/// with `Subscription::filter_map`. `keyboard::Event` matches as in Rust
+/// (`keyboard::Event::KeyPressed { key, modifiers, .. }`); a `Key` is
+/// compared with `Key::Named(key::Named::Space)` or `Key::Character("r")`.
+fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let stream = |path: &str,
+                  inputs: &[type_ref::Type],
+                  output: type_ref::Type|
+     -> Result<item::Definition, host::Error> {
+        let mut signature = signature::Builder::new();
+        for input in inputs {
+            signature.parameter(input.clone());
+        }
+        signature.output(output);
+        item::Definition::stream_operation(path, signature.finish(), host::stream::Version::new(1))
+    };
+    builder.item(stream("event::listen", &[], type_ref::Type::registered("Event")?)?)?;
+    builder.item(stream(
+        "keyboard::listen",
+        &[],
+        type_ref::Type::registered("keyboard::Event")?,
+    )?)?;
+    builder.item(stream("window::frames", &[], type_ref::Type::registered("time::Instant")?)?)?;
+    builder.item(stream(
+        "time::every",
+        &[type_ref::Type::registered("time::Duration")?],
+        type_ref::Type::registered("time::Instant")?,
+    )?)?;
+
+    // iced's `Subscription::batch(..)` and `Task::batch(..)`: any `Vec` or
+    // array of them.
+    for owner in ["Subscription", "Task"] {
+        let mut batch = signature::Builder::new();
+        batch.type_parameter("Message", &[])?;
+        let plan = type_ref::Type::applied(owner, [type_ref::Type::parameter("Message")?])?;
+        batch.parameter(type_ref::Type::slice(plan.clone()));
+        batch.output(plan);
+        builder.item(item::Definition::associated_function(
+            format!("{owner}::batch"),
+            batch.finish(),
+        )?)?;
+    }
+    let mut filter_map = signature::Builder::new();
+    filter_map.type_parameter("Message", &[])?;
+    filter_map.type_parameter("Parent", &[])?;
+    filter_map.parameter(type_ref::Type::callable(
+        type_ref::Type::parameter("Message")?,
+        type_ref::Type::option(type_ref::Type::parameter("Parent")?),
+    ));
+    filter_map.output(type_ref::Type::applied(
+        "Subscription",
+        [type_ref::Type::parameter("Parent")?],
+    )?);
+    builder.item(item::Definition::method(
+        "Subscription::filter_map",
+        receiver::Mode::Owned,
+        filter_map.finish(),
+    )?)?;
+
+    // `keyboard::Event`'s variants, as a facade enum, and their fields.
+    let bool_reader = || -> Result<signature::Definition, host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.output(type_ref::Type::builtin(type_ref::Builtin::Bool));
+        Ok(signature.finish())
+    };
+    for variant in ["KeyPressed", "KeyReleased", "ModifiersChanged"] {
+        builder.item(item::Definition::method(
+            format!("keyboard::Event::{variant}"),
+            receiver::Mode::Shared,
+            bool_reader()?,
+        )?)?;
+    }
+    for (field, output) in [
+        ("key", type_ref::Type::registered("keyboard::Key")?),
+        ("modified_key", type_ref::Type::registered("keyboard::Key")?),
+        ("modifiers", type_ref::Type::registered("keyboard::Modifiers")?),
+        ("repeat", type_ref::Type::builtin(type_ref::Builtin::Bool)),
+    ] {
+        let mut reader = signature::Builder::new();
+        reader.output(output);
+        builder.item(item::Definition::method(
+            format!("keyboard::Event::{field}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+    }
+    let mut named = signature::Builder::new();
+    named.parameter(type_ref::Type::registered("keyboard::key::Named")?);
+    named.output(type_ref::Type::registered("keyboard::Key")?);
+    builder.item(item::Definition::associated_function("keyboard::Key::Named", named.finish())?)?;
+    let mut character = signature::Builder::new();
+    character.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    character.output(type_ref::Type::registered("keyboard::Key")?);
+    builder.item(item::Definition::associated_function(
+        "keyboard::Key::Character",
+        character.finish(),
+    )?)?;
+    builder.item(item::Definition::associated_value(
+        "keyboard::Key::Unidentified",
+        type_ref::Type::registered("keyboard::Key")?,
+    )?)?;
+    // `key.as_ref()`: iced's `Key<&str>`, the same key here.
+    builder.item(item::Definition::method(
+        "keyboard::Key::as_ref",
+        receiver::Mode::Shared,
+        output_signature("keyboard::Key")?,
+    )?)?;
+    for name in KEY_NAMES {
+        builder.item(item::Definition::associated_value(
+            format!("keyboard::key::Named::{name}"),
+            type_ref::Type::registered("keyboard::key::Named")?,
+        )?)?;
+    }
+    for name in ["shift", "control", "alt", "logo", "command", "macos_command", "jump"] {
+        builder.item(item::Definition::method(
+            format!("keyboard::Modifiers::{name}"),
+            receiver::Mode::Shared,
+            bool_reader()?,
+        )?)?;
+    }
+    Ok(())
+}
+
+/// The `keyboard::key::Named` keys the facade names.
+pub(crate) const KEY_NAMES: [&str; 40] = [
+    "Alt", "Control", "Shift", "Super", "Meta", "Enter", "Tab", "Space", "ArrowDown", "ArrowLeft",
+    "ArrowRight", "ArrowUp", "End", "Home", "PageDown", "PageUp", "Backspace", "Delete", "Insert",
+    "Escape", "CapsLock", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+    "Copy", "Cut", "Paste", "Undo", "Redo", "ContextMenu", "PrintScreen",
+];
 
 /// iced's `ContentFit` variants.
 pub(crate) const CONTENT_FITS: [&str; 5] = ["Contain", "Cover", "Fill", "None", "ScaleDown"];

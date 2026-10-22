@@ -20,9 +20,9 @@ type Native = Pin<Box<dyn Stream<Item = Dynamic> + Send + 'static>>;
 type Native = Pin<Box<dyn Stream<Item = Dynamic> + 'static>>;
 
 #[cfg(feature = "sync")]
-type Mapper = Box<dyn FnMut(Dynamic) -> Result<Dynamic, Error> + Send + 'static>;
+type Mapper = Box<dyn FnMut(Dynamic) -> Result<Option<Dynamic>, Error> + Send + 'static>;
 #[cfg(not(feature = "sync"))]
-type Mapper = Box<dyn FnMut(Dynamic) -> Result<Dynamic, Error> + 'static>;
+type Mapper = Box<dyn FnMut(Dynamic) -> Result<Option<Dynamic>, Error> + 'static>;
 
 #[cfg(feature = "sync")]
 type Starter = Box<dyn FnOnce() -> Issued + Send + 'static>;
@@ -69,6 +69,8 @@ pub struct Plan {
 pub(crate) struct Planned {
     call: Call,
     mappers: Box<[item::Value]>,
+    /// Whether each mapper is a `filter_map`, whose `None` drops the item.
+    filters: Box<[bool]>,
 }
 
 /// Stable canonical identity of one exact issued stream plan.
@@ -150,6 +152,7 @@ pub enum Error {
 pub(crate) struct Request {
     call: Call,
     mappers: Box<[item::Value]>,
+    filters: Box<[bool]>,
     message: host::runtime::type_ref::Type,
 }
 
@@ -242,6 +245,7 @@ impl Proof {
         &self,
         contributions: &[identity::Contribution],
         mappers: &[item::Value],
+        filters: &[bool],
     ) -> Result<Identity, crate::preview::digest::Error> {
         let mut writer = crate::preview::digest::Writer::with_version(IDENTITY_VERSION);
         writer.tag(0x3100);
@@ -263,6 +267,13 @@ impl Proof {
         writer.count(mappers.len());
         for mapper in mappers {
             mapper.write(&mut writer)?;
+        }
+        // A plan without `filter_map` keeps the identity it always had.
+        if filters.iter().any(|filter| *filter) {
+            writer.tag(0x3106);
+            for filter in filters {
+                writer.u32(u32::from(*filter));
+            }
         }
         Ok(Identity(writer.finish().bytes()))
     }
@@ -329,6 +340,7 @@ impl Plan {
             streams: vec![Planned {
                 call,
                 mappers: Box::default(),
+                filters: Box::default(),
             }]
             .into_boxed_slice(),
             witness,
@@ -352,8 +364,27 @@ impl Plan {
 
     /// Append one exact symbolic mapper to every stream in this plan.
     pub fn map(
+        self,
+        mapper: item::Value,
+        call: &host::runtime::Call<'_>,
+    ) -> Result<Self, host::runtime::WitnessError> {
+        self.push(mapper, false, call)
+    }
+
+    /// Append one exact symbolic mapper returning an `Option` to every
+    /// stream in this plan; an item it maps to `None` is dropped.
+    pub fn filter_map(
+        self,
+        mapper: item::Value,
+        call: &host::runtime::Call<'_>,
+    ) -> Result<Self, host::runtime::WitnessError> {
+        self.push(mapper, true, call)
+    }
+
+    fn push(
         mut self,
         mapper: item::Value,
+        filter: bool,
         call: &host::runtime::Call<'_>,
     ) -> Result<Self, host::runtime::WitnessError> {
         let witness = call.transform_witness(&self.witness)?;
@@ -361,6 +392,10 @@ impl Plan {
             let mut mappers = stream.mappers.to_vec();
             mappers.push(mapper.clone());
             stream.mappers = mappers.into_boxed_slice();
+            let mut filters = stream.filters.to_vec();
+            filters.resize(stream.mappers.len() - 1, false);
+            filters.push(filter);
+            stream.filters = filters.into_boxed_slice();
         }
         self.witness = witness;
         Ok(self)
@@ -385,9 +420,12 @@ impl Plan {
 
 impl Planned {
     pub(crate) fn into_request(self, message: host::runtime::type_ref::Type) -> Request {
+        let mut filters = self.filters.into_vec();
+        filters.resize(self.mappers.len(), false);
         Request {
             call: self.call,
             mappers: self.mappers,
+            filters: filters.into_boxed_slice(),
             message,
         }
     }
@@ -400,9 +438,11 @@ impl Request {
         mappers: Box<[item::Value]>,
         message: host::runtime::type_ref::Type,
     ) -> Self {
+        let filters = vec![false; mappers.len()].into_boxed_slice();
         Self {
             call,
             mappers,
+            filters,
             message,
         }
     }
@@ -413,10 +453,11 @@ impl Request {
         Proof,
         Arguments,
         Box<[item::Value]>,
+        Box<[bool]>,
         host::runtime::type_ref::Type,
     ) {
         let (proof, arguments) = self.call.into_parts();
-        (proof, arguments, self.mappers, self.message)
+        (proof, arguments, self.mappers, self.filters, self.message)
     }
 }
 
@@ -466,10 +507,16 @@ impl Stream for Issued {
     type Item = Result<Dynamic, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.stream.as_mut().poll_next(context) {
-            Poll::Ready(Some(value)) => Poll::Ready(Some((self.mapper)(value))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+        loop {
+            match self.stream.as_mut().poll_next(context) {
+                Poll::Ready(Some(value)) => match (self.mapper)(value) {
+                    Ok(Some(payload)) => return Poll::Ready(Some(Ok(payload))),
+                    Ok(None) => {}
+                    Err(error) => return Poll::Ready(Some(Err(error))),
+                },
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
         }
     }
 }

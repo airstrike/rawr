@@ -552,6 +552,25 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             .expect("the iced facade must retain every native task");
     }
     builder
+        .bind_with_context("iced::Task::batch", |call, args| {
+            let [plans] = args else {
+                return Err(arity("Task::batch", 1, args.len()));
+            };
+            let plans = plans.take().into_array().map_err(|actual| {
+                EvalAltResult::ErrorRuntime(
+                    format!("Task::batch expected a list, found `{actual}`").into(),
+                    Position::NONE,
+                )
+            })?;
+            let plans = plans
+                .into_iter()
+                .map(|mut plan| take(&mut plan, "Task::batch"))
+                .collect::<Result<Vec<_>, _>>()?;
+            let witness = call.output_witness().map_err(witness_error)?;
+            Ok(Dynamic::from(Plan::batch(plans, witness)))
+        })
+        .expect("the iced facade must retain Task::batch");
+    builder
         .bind_with_context("iced::widget::operation::focus", |call, args| {
             let [id] = args else {
                 return Err(arity("operation::focus", 1, args.len()));

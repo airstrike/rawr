@@ -55,6 +55,18 @@ where
     }
 }
 
+thread_local! {
+    /// iced's event input for the recipe starting on this thread.
+    static INPUT: std::cell::RefCell<Option<iced::advanced::subscription::EventStream>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The runtime events of the recipe starting now: `Some` once, inside
+/// a native stream factory.
+fn events() -> Option<iced::advanced::subscription::EventStream> {
+    INPUT.with(|slot| slot.borrow_mut().take())
+}
+
 struct Bound<F, Message> {
     instance: application::Instance,
     generation: program::GenerationId,
@@ -89,14 +101,19 @@ where
 
     fn stream(
         self: Box<Self>,
-        _input: iced::advanced::subscription::EventStream,
+        input: iced::advanced::subscription::EventStream,
     ) -> iced::futures::stream::BoxStream<'static, Self::Output> {
         use iced::futures::stream::StreamExt;
 
         let instance = self.instance;
         let generation = self.generation;
         let emit = self.emit;
-        Box::pin(self.recipe.start().map(move |result| match result {
+        // A stream of runtime events (`keyboard::listen()`) takes iced's
+        // event input as it starts.
+        INPUT.with(|slot| *slot.borrow_mut() = Some(input));
+        let issued = self.recipe.start();
+        INPUT.with(|slot| slot.borrow_mut().take());
+        Box::pin(issued.map(move |result| match result {
             Ok(payload) => emit(runtime::Message::subscription(
                 instance, generation, payload,
             )),
@@ -149,6 +166,51 @@ where
 
 pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Builder) {
     let builder = iced;
+    bind_events(builder);
+    builder
+        .bind_with_context("iced::Subscription::batch", |call, args| {
+            let [plans] = args else {
+                return Err(arity("Subscription::batch", 1, args.len()));
+            };
+            let plans = plans.take().into_array().map_err(|actual| {
+                EvalAltResult::ErrorRuntime(
+                    format!("Subscription::batch expected a list, found `{actual}`").into(),
+                    Position::NONE,
+                )
+            })?;
+            let plans = plans
+                .into_iter()
+                .map(|mut plan| take(&mut plan, "Subscription::batch"))
+                .collect::<Result<Vec<_>, _>>()?;
+            host::stream::Plan::batch(plans, call)
+                .map(Dynamic::from)
+                .map_err(witness_error)
+        })
+        .expect("the iced facade must retain Subscription::batch");
+    builder
+        .bind_with_context("iced::Subscription::filter_map", |call, args| {
+            if args.len() != 2 {
+                return Err(arity("Subscription::filter_map", 2, args.len()));
+            }
+            let plan = take(args[0], "Subscription::filter_map")?;
+            let mapper = args[1]
+                .take()
+                .try_cast_result::<item::Value>()
+                .map_err(|value| {
+                    EvalAltResult::ErrorRuntime(
+                        format!(
+                            "Subscription::filter_map received `{}`, expected an exact symbolic mapper",
+                            value.type_name()
+                        )
+                        .into(),
+                        Position::NONE,
+                    )
+                })?;
+            plan.filter_map(mapper, call)
+                .map(Dynamic::from)
+                .map_err(witness_error)
+        })
+        .expect("the iced facade must retain the exact Subscription::filter_map item");
     builder
         .bind_type_attestation("iced::Subscription", |value, expected| {
             let plan = value.read_lock::<host::stream::Plan>()?;
@@ -201,6 +263,118 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
                 .map_err(witness_error)
         })
         .expect("the iced facade must retain the exact Subscription::map item");
+}
+
+/// `event::listen()`, `keyboard::listen()`, `window::frames()` and
+/// `time::every(duration)`: native streams of iced's runtime events, as
+/// iced's own subscriptions filter them, and of timer ticks.
+fn bind_events(builder: &mut host::runtime::Builder) {
+    use iced::advanced::subscription::Event as Input;
+    use iced::futures::stream::{self, StreamExt};
+
+    type Native = iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>>;
+
+    fn input(filter: fn(Input) -> Option<Dynamic>) -> Native {
+        match events() {
+            Some(events) => events.filter_map(move |event| async move { filter(event).map(Ok) }).boxed(),
+            None => stream::empty().boxed(),
+        }
+    }
+
+    let facade = crate::facade().expect("the iced facade builds");
+    let definition = |path: &str| {
+        facade
+            .items()
+            .find(|item| item.path() == path)
+            .cloned()
+            .expect("the iced facade declares every event stream")
+    };
+    let no_arguments = |_: usize, _: &Dynamic, _: &mut host::stream::identity::Writer| {
+        Err(host::stream::identity::Error::new("the stream takes no arguments"))
+    };
+    let unit = |(): ()| Dynamic::UNIT;
+    for (path, filter) in [
+        (
+            "iced::event::listen",
+            (|event| match event {
+                Input::Interaction {
+                    event: iced::Event::Window(iced::window::Event::RedrawRequested(_)),
+                    ..
+                } => None,
+                Input::Interaction {
+                    event,
+                    status: iced::event::Status::Ignored,
+                    ..
+                } => Some(Dynamic::from(event)),
+                _ => None,
+            }) as fn(Input) -> Option<Dynamic>,
+        ),
+        ("iced::keyboard::listen", |event| match event {
+            Input::Interaction {
+                event: iced::Event::Keyboard(event),
+                status: iced::event::Status::Ignored,
+                ..
+            } => Some(Dynamic::from(event)),
+            _ => None,
+        }),
+        ("iced::window::frames", |event| match event {
+            Input::Interaction {
+                event: iced::Event::Window(iced::window::Event::RedrawRequested(_)),
+                ..
+            } => Some(Dynamic::from(crate::marker::Instant)),
+            _ => None,
+        }),
+    ] {
+        builder
+            .bind_stream_operation(&definition(path), no_arguments, move |_| input(filter), unit)
+            .expect("the iced facade must retain every event stream");
+    }
+    builder
+        .bind_stream_operation(
+            &definition("iced::time::every"),
+            |index, value, writer| {
+                let duration = value.read_lock::<std::time::Duration>().ok_or_else(|| {
+                    host::stream::identity::Error::new("expected a `time::Duration`")
+                })?;
+                if index != 0 {
+                    return Err(host::stream::identity::Error::new("unexpected argument"));
+                }
+                writer.u64(u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX));
+                Ok(())
+            },
+            |arguments| {
+                let duration = arguments
+                    .get(0)
+                    .and_then(|value| value.read_lock::<std::time::Duration>().map(|d| *d))
+                    .unwrap_or(std::time::Duration::from_secs(1))
+                    .max(std::time::Duration::from_millis(1));
+                ticks(duration)
+            },
+            unit,
+        )
+        .expect("the iced facade must retain time::every");
+}
+
+/// A tick every `duration`, from a timer thread that ends with the stream.
+fn ticks(
+    duration: std::time::Duration,
+) -> iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>> {
+    use iced::futures::StreamExt;
+
+    let (mut sender, receiver) = iced::futures::channel::mpsc::channel(1);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(duration);
+            match sender.try_send(()) {
+                Ok(()) => {}
+                Err(error) if error.is_full() => {}
+                Err(_) => break,
+            }
+        }
+    });
+    receiver
+        .map(|()| Ok(Dynamic::from(crate::marker::Instant)))
+        .boxed()
 }
 
 fn take(value: &mut Dynamic, operation: &str) -> Result<host::stream::Plan, Box<EvalAltResult>> {

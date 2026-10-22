@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [15, 180, 171, 63, 150, 10, 71, 70, 135, 155, 199, 110, 211, 232, 170, 107]
+        [189, 213, 86, 249, 206, 29, 71, 6, 194, 127, 198, 166, 185, 127, 173, 62]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
@@ -770,9 +770,13 @@ fn rawr_extension_inventory_is_separate_and_external_contract_is_exact() {
             rawr.items().any(|item| item.path() == moved),
             "missing `{moved}`"
         );
-        // iced's own `Theme::custom(name, Seed)` is in the iced facade; the
-        // hex-palette form stays Rawr's.
-        if old != "iced::Theme::custom" {
+        // iced's own `Theme::custom(name, Seed)` and `Task::batch(list)`/
+        // `Subscription::batch(list)` are in the iced facade; the hex-palette
+        // and `batch![..]` forms stay Rawr's.
+        if !matches!(
+            old,
+            "iced::Theme::custom" | "iced::Task::batch" | "iced::Subscription::batch"
+        ) {
             assert!(iced.items().all(|item| item.path() != old));
         }
     }

@@ -241,7 +241,7 @@ impl Authority {
         request: crate::host::stream::Request,
         runtime: Shared<crate::host::runtime::Registry>,
     ) -> Result<crate::host::stream::Recipe, crate::host::stream::Error> {
-        let (proof, arguments, mappers, message) = request.into_parts();
+        let (proof, arguments, mappers, filters, message) = request.into_parts();
         let selected = runtime
             .select_stream(&proof)
             .map_err(crate::host::stream::Error::Binding)?;
@@ -284,7 +284,7 @@ impl Authority {
             }
         })?;
         let identity = proof
-            .identity(&contributions, &mappers)
+            .identity(&contributions, &mappers, &filters)
             .map_err(crate::host::stream::Error::IdentityProof)?;
 
         let authority = self.clone();
@@ -309,11 +309,18 @@ impl Authority {
                                 source,
                             })?;
                         let mut payload = value;
-                        for mapper in &mut mappers {
+                        for (mapper, filter) in mappers.iter_mut().zip(filters.iter()) {
                             let mut arguments = [payload];
                             payload = authority
                                 .invoke_bound(mapper, &mut arguments, runtime.clone())
                                 .map_err(crate::host::stream::Error::Mapper)?;
+                            // `filter_map`: `None` drops the item, `Some` carries on.
+                            if *filter {
+                                match crate::option::take(&mut payload) {
+                                    Some(Some(inner)) => payload = inner,
+                                    _ => return Ok(None),
+                                }
+                            }
                         }
                         message
                             .validate(&payload, authority.executable.model(), &runtime)
@@ -321,7 +328,7 @@ impl Authority {
                                 mapper: mapper_key.clone(),
                                 source,
                             })?;
-                        Ok(payload)
+                        Ok(Some(payload))
                     }),
                 )
             }),
