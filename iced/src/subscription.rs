@@ -319,9 +319,9 @@ fn bind_events(builder: &mut host::runtime::Builder) {
         }),
         ("iced::window::frames", |event| match event {
             Input::Interaction {
-                event: iced::Event::Window(iced::window::Event::RedrawRequested(_)),
+                event: iced::Event::Window(iced::window::Event::RedrawRequested(now)),
                 ..
-            } => Some(Dynamic::from(crate::marker::Instant)),
+            } => Some(Dynamic::from(crate::marker::Instant(now))),
             _ => None,
         }),
     ] {
@@ -373,7 +373,7 @@ fn ticks(
         }
     });
     receiver
-        .map(|()| Ok(Dynamic::from(crate::marker::Instant)))
+        .map(|()| Ok(Dynamic::from(crate::marker::Instant::now())))
         .boxed()
 }
 

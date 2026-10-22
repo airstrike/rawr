@@ -105,7 +105,7 @@ fn bind_events(builder: &mut host::runtime::Builder) {
         _ => rawr::option::none(),
     });
     read::<window::Event>(builder, "iced::window::Event::RedrawRequested", |event| match event {
-        window::Event::RedrawRequested(_) => rawr::option::some(Dynamic::from(marker::Instant)),
+        window::Event::RedrawRequested(now) => rawr::option::some(Dynamic::from(marker::Instant(*now))),
         _ => rawr::option::none(),
     });
     read::<window::Event>(builder, "iced::window::Event::position", |event| match event {
@@ -790,6 +790,128 @@ fn bind_values(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Duration reader");
     }
+    // `Duration`'s operators and sub-second readers, and `Instant`'s.
+    fn pair<A: Clone + Send + Sync + 'static, B: Clone + Send + Sync + 'static>(
+        path: &str,
+        args: &mut [&mut Dynamic],
+    ) -> Result<Option<(A, B)>, Box<EvalAltResult>> {
+        let [lhs, rhs] = args else {
+            return Err(arity(path, 2, args.len()));
+        };
+        Ok(lhs
+            .read_lock::<A>()
+            .map(|lhs| lhs.clone())
+            .zip(rhs.read_lock::<B>().map(|rhs| rhs.clone())))
+    }
+    for (name, apply) in [
+        ("add", Duration::checked_add as fn(Duration, Duration) -> Option<Duration>),
+        ("sub", Duration::checked_sub),
+    ] {
+        let path = format!("iced::time::Duration::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let (lhs, rhs) = pair::<Duration, Duration>(&path, args)?
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                apply(lhs, rhs).map(Dynamic::from).ok_or_else(|| {
+                    runtime_error(format!("overflow when computing `Duration::{name}`"))
+                })
+            })
+            .expect("the iced facade must retain every Duration operator");
+    }
+    for (name, apply) in [
+        ("mul", Duration::checked_mul as fn(Duration, u32) -> Option<Duration>),
+        ("div", Duration::checked_div),
+    ] {
+        let path = format!("iced::time::Duration::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let [lhs, rhs] = args else {
+                    return Err(arity(&path, 2, args.len()));
+                };
+                let duration = lhs
+                    .read_lock::<Duration>()
+                    .map(|duration| *duration)
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                let factor = rhs
+                    .as_int()
+                    .ok()
+                    .and_then(|factor| u32::try_from(factor).ok())
+                    .ok_or_else(|| runtime_error(format!("`Duration::{name}` expects a `u32`")))?;
+                apply(duration, factor).map(Dynamic::from).ok_or_else(|| {
+                    runtime_error(format!("overflow or division by zero in `Duration::{name}`"))
+                })
+            })
+            .expect("the iced facade must retain every Duration operator");
+    }
+    for (name, read) in [
+        ("subsec_millis", (|d: &Duration| Dynamic::from(i64::from(d.subsec_millis()))) as fn(&Duration) -> Dynamic),
+        ("subsec_micros", |d| Dynamic::from(i64::from(d.subsec_micros()))),
+        ("subsec_nanos", |d| Dynamic::from(i64::from(d.subsec_nanos()))),
+        ("is_zero", |d| Dynamic::from(d.is_zero())),
+    ] {
+        let path = format!("iced::time::Duration::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let [value] = args else {
+                    return Err(arity(&path, 1, args.len()));
+                };
+                let duration = value
+                    .read_lock::<Duration>()
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                Ok(read(&duration))
+            })
+            .expect("the iced facade must retain every Duration reader");
+    }
+    builder
+        .bind("iced::time::Duration::ZERO", |_| Ok(Dynamic::from(Duration::ZERO)))
+        .expect("the iced facade must retain Duration::ZERO");
+    builder
+        .bind("iced::time::Instant::now", |_| Ok(Dynamic::from(marker::Instant::now())))
+        .expect("the iced facade must retain Instant::now");
+    builder
+        .bind("iced::time::Instant::elapsed", |args| {
+            let [value] = args else {
+                return Err(arity("Instant::elapsed", 1, args.len()));
+            };
+            let instant = value
+                .read_lock::<marker::Instant>()
+                .map(|instant| instant.0)
+                .ok_or_else(|| runtime_error("`Instant::elapsed` read a value of another type".to_string()))?;
+            Ok(Dynamic::from(instant.elapsed()))
+        })
+        .expect("the iced facade must retain Instant::elapsed");
+    builder
+        .bind("iced::time::Instant::duration_since", |args| {
+            let (lhs, rhs) = pair::<marker::Instant, marker::Instant>("Instant::duration_since", args)?
+                .ok_or_else(|| runtime_error("`Instant::duration_since` read a value of another type".to_string()))?;
+            Ok(Dynamic::from(lhs.0.saturating_duration_since(rhs.0)))
+        })
+        .expect("the iced facade must retain Instant::duration_since");
+    // `a - b` of two instants is a `Duration`; `instant ± duration` an
+    // `Instant`.
+    builder
+        .bind("iced::time::Instant::sub", |args| {
+            if let Some((lhs, rhs)) = pair::<marker::Instant, marker::Instant>("Instant::sub", args)? {
+                return Ok(Dynamic::from(lhs.0.saturating_duration_since(rhs.0)));
+            }
+            let (lhs, rhs) = pair::<marker::Instant, Duration>("Instant::sub", args)?
+                .ok_or_else(|| runtime_error("`Instant::sub` read a value of another type".to_string()))?;
+            lhs.0
+                .checked_sub(rhs)
+                .map(|instant| Dynamic::from(marker::Instant(instant)))
+                .ok_or_else(|| runtime_error("overflow when subtracting a duration from an instant".to_string()))
+        })
+        .expect("the iced facade must retain Instant::sub");
+    builder
+        .bind("iced::time::Instant::add", |args| {
+            let (lhs, rhs) = pair::<marker::Instant, Duration>("Instant::add", args)?
+                .ok_or_else(|| runtime_error("`Instant::add` read a value of another type".to_string()))?;
+            lhs.0
+                .checked_add(rhs)
+                .map(|instant| Dynamic::from(marker::Instant(instant)))
+                .ok_or_else(|| runtime_error("overflow when adding a duration to an instant".to_string()))
+        })
+        .expect("the iced facade must retain Instant::add");
     builder
         .bind_macro("iced::color", |args| {
             let channels = args

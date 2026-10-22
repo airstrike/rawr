@@ -248,7 +248,7 @@ impl widget::Descriptor for marker::Transition {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut arguments = [
             Dynamic::from(marker::Animation(self.value)),
-            Dynamic::from(marker::Instant),
+            Dynamic::from(marker::Instant::now()),
         ];
         match context.invoke(&self.view, &mut arguments) {
             None => iced::widget::space().boxed(),

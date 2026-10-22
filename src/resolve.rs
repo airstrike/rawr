@@ -1021,9 +1021,26 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
             rest.is_empty()
                 || rest.strip_prefix("::").is_some_and(|name| {
                     OPERATOR_TRAITS.iter().any(|(_, trait_name, _)| *trait_name == name)
-                        || matches!(name, "Index" | "IndexMut")
+                        || matches!(name, "Index" | "IndexMut" | "Range" | "RangeInclusive")
                 })
         })
+}
+
+/// `std::ops::RangeInclusive` and `std::ops::Range` as a type path is
+/// written: the name, or one of its `ops::`, `std::ops::` or `core::ops::`
+/// spellings. A `Range` is an iterator in Rawr; a `RangeInclusive` of
+/// numbers is its own type.
+pub(crate) fn std_range(path: &str) -> Option<&'static str> {
+    let name = path
+        .strip_prefix("std::ops::")
+        .or_else(|| path.strip_prefix("core::ops::"))
+        .or_else(|| path.strip_prefix("ops::"))
+        .unwrap_or(path);
+    match name {
+        "RangeInclusive" => Some("RangeInclusive"),
+        "Range" => Some(crate::item::type_ref::ITER_TYPE),
+        _ => None,
+    }
 }
 
 /// `std::cmp::Reverse` as a type path is written: `Reverse` (imported, or
@@ -2395,8 +2412,9 @@ fn trait_table(
 /// The std traits a crate may implement by hand: the derivable ones,
 /// `Display` for `{}`, the prelude's `From<T>` and `Into<T>`, and
 /// `PartialOrd` and `Ord`, which compare to a `std::cmp::Ordering`.
-pub(crate) const BUILTIN_TRAITS: [&str; 37] = [
+pub(crate) const BUILTIN_TRAITS: [&str; 38] = [
     "Clone",
+    "Hash",
     "Copy",
     "PartialEq",
     "Eq",
@@ -2475,6 +2493,7 @@ fn std_trait(segments: &[crate::item::type_ref::Segment]) -> Option<crate::item:
                 && matches!(
                     module.name.text.as_str(),
                     "std" | "core" | "fmt" | "clone" | "cmp" | "default" | "marker" | "iter" | "ops"
+                        | "hash"
                 )
         }))
     .then(|| last.name.clone())
@@ -2582,7 +2601,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
                 Some(output),
             )]
         }
-        "Copy" | "Eq" | "IntoFragment" => Vec::new(),
+        "Copy" | "Eq" | "Hash" | "IntoFragment" => Vec::new(),
         // `trait Index<Idx> { type Output; fn index(&self, index: Idx) ->
         // &Self::Output; }` and `IndexMut<Idx>`'s `index_mut(&mut self, ..)
         // -> &mut Self::Output`.

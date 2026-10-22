@@ -6743,3 +6743,72 @@ fn language_fn_traits_with_lifetimes_and_auto_traits() {
     assert_eq!(value, "2 18 3 15 12");
     rejected("fn f(g: impl Fn(i64) -> i64 + Clone) -> i64 { g(1) } pub fn run() -> i64 { f(|x| x) } run()");
 }
+
+#[test]
+fn language_ranges_as_types_and_hand_written_hash() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+use std::collections::HashSet;
+use std::hash::Hash;
+use std::ops::{Range, RangeInclusive};
+
+struct Bounds {
+    span: RangeInclusive<i64>,
+    half: Range<usize>,
+    unit: RangeInclusive<f64>,
+}
+
+fn width(range: &RangeInclusive<i64>) -> i64 {
+    range.end() - range.start()
+}
+
+fn make(n: i64) -> RangeInclusive<i64> {
+    0..=n
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct Tag {
+    name: String,
+}
+
+impl Hash for Tag {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct Pair(i64, i64);
+
+pub fn run() -> String {
+    let b = Bounds { span: 2..=9, half: 0..4, unit: 0.0..=1.0 };
+    let copy = b.span.clone();
+    let total: i64 = make(4).sum();
+    let mut tags = HashSet::new();
+    tags.insert(Tag { name: String::from("a") });
+    tags.insert(Tag { name: String::from("a") });
+    tags.insert(Tag { name: String::from("b") });
+    let mut pairs = HashSet::new();
+    pairs.insert(Pair(1, 2));
+    pairs.insert(Pair(1, 2));
+    format!(
+        "{} {} {} {} {} {} {} {} {}",
+        width(&b.span),
+        b.half.len(),
+        copy.contains(&5),
+        total,
+        *b.span.start(),
+        b.unit.contains(&0.5),
+        b.unit.end(),
+        tags.len(),
+        pairs.len()
+    )
+}
+run()
+"#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    // The same program built by rustc prints this.
+    assert_eq!(value, "7 4 true 10 2 true 1 2 1");
+}

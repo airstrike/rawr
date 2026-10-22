@@ -452,3 +452,52 @@ fn master_operations_take_widget_ids() {
         adapter.update(message).unwrap();
     }
 }
+
+/// `Duration`'s and `Instant`'s operators as stopwatch writes them, and
+/// `.clone()` of a library value that is `Clone`.
+const TIME: &str = r#"
+use iced::time::{Duration, Instant};
+use iced::widget::{self, column, text};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    total: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {}
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let mut total = self.total;
+        total += Duration::from_millis(1500) + Duration::from_millis(250) - Duration::from_millis(50);
+        let twice = total * 2;
+        let start = Instant::now();
+        let later = start + Duration::from_secs(1);
+        let gap = later - start;
+        let quick = start.elapsed().as_secs() < 5;
+        let id = widget::Id::new("field");
+        let same = id.clone() == id;
+        column![
+            text(format!("{} {} {}", twice.as_millis(), twice.subsec_millis(), gap.as_secs())),
+            text(format!("{quick} {same}")),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_duration_and_instant_operators_compute_as_rust() {
+    let adapter = boot(TIME);
+    find(&adapter, "3400 400 1");
+    find(&adapter, "true true");
+}

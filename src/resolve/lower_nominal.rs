@@ -2659,6 +2659,9 @@ enum PreludeOp {
     /// `{:e}`, `{:E}` of a number: `format_exp(x, precision, mode)`, `mode`
     /// `1` for upper case, `2` an `f32`, `4` an integer, `8` an unsigned one.
     FormatExp,
+    /// `RangeInclusive`'s methods: `range_method(range, code, value)`, `code`
+    /// `0` for `start`, `1` `end`, `2` `contains`, `3` `is_empty`.
+    RangeMethod,
     /// `{:#?}`: Rust's pretty `Debug` of a one-line `Debug` text.
     PrettyDebug,
     /// `collect()` into a `String`: the items' text, concatenated.
@@ -2771,6 +2774,7 @@ impl PreludeOp {
             Self::FormatRadix => "format.radix",
             Self::FormatBits => "format.bits",
             Self::FormatExp => "format.exp",
+            Self::RangeMethod => "range.method",
             Self::PrettyDebug => "format.pretty-debug",
             Self::CollectString => "iter.collect-string",
             Self::CollectVec => "iter.collect-vec",
@@ -2866,6 +2870,11 @@ impl PreludeOp {
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<crate::INT>(),
+            ],
+            Self::RangeMethod => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<Dynamic>(),
             ],
             Self::PrettyDebug | Self::StrLines | Self::StrSplitWhitespace => {
                 vec![TypeId::of::<ImmutableString>()]
@@ -3073,6 +3082,29 @@ impl PreludeOp {
                     return Err(invariant("`f64` needs float support"));
                 };
                 return Ok(Dynamic::from(ImmutableString::from(text)));
+            }
+            Self::RangeMethod => {
+                let code = args[1].as_int().unwrap_or_default();
+                if let Some(range) = args[0].read_lock::<std::ops::RangeInclusive<INT>>() {
+                    let value = args[2].as_int().unwrap_or_default();
+                    return Ok(match code {
+                        0 => Dynamic::from(*range.start()),
+                        1 => Dynamic::from(*range.end()),
+                        2 => Dynamic::from(range.contains(&value)),
+                        _ => Dynamic::from(range.is_empty()),
+                    });
+                }
+                #[cfg(not(feature = "no_float"))]
+                if let Some(range) = args[0].read_lock::<std::ops::RangeInclusive<crate::FLOAT>>() {
+                    let value = args[2].as_float().unwrap_or_default();
+                    return Ok(match code {
+                        0 => Dynamic::from_float(*range.start()),
+                        1 => Dynamic::from_float(*range.end()),
+                        2 => Dynamic::from(range.contains(&value)),
+                        _ => Dynamic::from(range.is_empty()),
+                    });
+                }
+                return Err(invariant("a range method read a value that is not a range"));
             }
             Self::PrettyDebug => {
                 let text = args[0].clone_cast::<ImmutableString>();
@@ -5273,6 +5305,15 @@ impl Ty {
                     "char" => Self::Char,
                     "String" => Self::String,
                     "Ordering" => Self::Ordering,
+                    // `RangeInclusive<f64>` and `RangeInclusive<i64>`.
+                    "RangeInclusive" => match path.arguments.first() {
+                        Some(type_ref::Argument::Type(element))
+                            if matches!(Self::from_resolved(element), Self::Float(_)) =>
+                        {
+                            Self::FloatRange
+                        }
+                        _ => Self::InclusiveRange,
+                    },
                     name => ParseError::named(name)
                         .map(Self::ParseError)
                         .or_else(|| numeric_type(name))
@@ -13199,6 +13240,22 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("host method receiver type"));
         };
         let path = format!("{}::{member}", definition.path());
+        // `value.clone()` of a library type that is `Clone`: the value, as
+        // Rawr's library values are copied where they are used.
+        if member.as_str() == "clone"
+            && self.models.host_items(&path).is_none()
+            && definition.capabilities().contains(capability::Kind::Clone)
+            && self.pending_arguments.is_none()
+            && matches!(self.peek(), Token::Unit)
+        {
+            let end = self.next().1;
+            let owned = match resolved {
+                Ty::Reference { target, .. } => *target,
+                ty => ty,
+            };
+            let source = receiver.rendered_source();
+            return Ok(self.operator_expr(source, owned, span(receiver.span.start(), end)));
+        }
         if self.models.host_items(&path).is_none()
             && let Some(erased) = self.erasure_with(&resolved, &member)
         {
@@ -18969,6 +19026,29 @@ impl<'a> Parser<'a> {
             }
             ty => ty,
         };
+        // A library type's operator: the facade method named for the
+        // trait's (`Duration::add`); `a += b` is `a = a.add(b)`.
+        let host = match &lhs_ty {
+            Ty::Reference { target, .. } => self.inference.resolve(target),
+            ty => ty.clone(),
+        };
+        if let Ty::Host { proof, .. } = &host
+            && let Some(rhs) = rhs.as_deref()
+        {
+            let method = member.trim_end_matches("_assign");
+            let path = format!("{}::{method}", proof.definition.path());
+            if self.models.host_items(&path).is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item.kind() == crate::host::item::Kind::Method)
+            }) {
+                let receiver = self.operator_expr(lhs.rendered_source(), host.clone(), lhs.span);
+                self.pending_arguments = Some((vec![rhs.clone()], expression.end()));
+                let mut value = self.parse_host_method(receiver, method.into(), expression)?;
+                value.span = expression;
+                return Ok(Some(value));
+            }
+        }
         // A generic bounded by the trait (`T: Add<Output = T>`): through
         // its dispatcher, whose fallback is the builtin operator.
         if matches!(lhs_ty, Ty::Param(_) | Ty::Projection(..))
@@ -20263,7 +20343,81 @@ impl<'a> Parser<'a> {
 
     /// `char`'s classification and case methods (`CHAR_METHODS`), through
     /// one native op; `to_digit` and `is_digit` take a radix.
-    fn parse_char_method(
+/// `RangeInclusive`'s `start()`, `end()`, `contains(&x)`, `is_empty()`
+    /// and `clone()`; any other method is an iterator's, on the range's items.
+    fn parse_range_method(
+        &mut self,
+        value: ParsedExpr,
+        range: Ty,
+        member: ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let element = if range == Ty::FloatRange {
+            Ty::Float(Float::F64)
+        } else {
+            Ty::Int(Int::I64)
+        };
+        let code = match member.as_str() {
+            "start" => 0,
+            "end" => 1,
+            "contains" => 2,
+            "is_empty" => 3,
+            "clone" => 4,
+            _ => {
+                if range == Ty::FloatRange {
+                    return Err(Error::UnknownMember {
+                        owner: "RangeInclusive<f64>".into(),
+                        member,
+                        reference: member_span,
+                    });
+                }
+                let Some(items) = self.into_iterator(&value) else {
+                    return Err(self.unsupported("this method of a range"));
+                };
+                return self.parse_iterator_method(items, member, member_span);
+            }
+        };
+        let (mut arguments, end) = self.parse_call_arguments("range method arguments")?;
+        let expected = if code == 2 { 1 } else { 0 };
+        if arguments.len() != expected {
+            return Err(Error::InvalidMethodCall {
+                owner: range.name(&self.models),
+                method: member,
+                reason: format!("expects {expected} argument(s), found {}", arguments.len())
+                    .into(),
+                call: span(value.span.start(), end),
+            });
+        }
+        let call = span(value.span.start(), end);
+        if code == 4 {
+            return Ok(self.operator_expr(value.rendered_source(), range, call));
+        }
+        let argument = match arguments.first_mut() {
+            Some(argument) => {
+                let reference = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(element.clone()),
+                };
+                self.coerce_expr(&reference, argument)?;
+                argument.rendered_source()
+            }
+            None => "()".into(),
+        };
+        let source = self.prelude_op(
+            PreludeOp::RangeMethod,
+            [value.rendered_source(), code.to_string().into(), argument],
+        );
+        let ty = match code {
+            0 | 1 => Ty::Reference {
+                mutable: false,
+                target: Box::new(element),
+            },
+            _ => Ty::Bool,
+        };
+        Ok(self.operator_expr(source, ty, call))
+    }
+
+        fn parse_char_method(
         &mut self,
         value: ParsedExpr,
         code: usize,
@@ -21178,6 +21332,10 @@ impl<'a> Parser<'a> {
                 && let Some(code) = CHAR_METHODS.iter().position(|(name, _)| *name == member)
             {
                 value = self.parse_char_method(value, code, member_span)?;
+                continue;
+            }
+            if matches!(number, Ty::InclusiveRange | Ty::FloatRange) {
+                value = self.parse_range_method(value, number, member, member_span)?;
                 continue;
             }
             if number == Ty::Bool
@@ -28234,6 +28392,21 @@ impl<'a> Parser<'a> {
 
     /// A local annotation: `_`, `()`, `&T`, or a type name with generic
     /// arguments (`Element<'_, Message>`, `Element<_>`); lifetimes are erased.
+    /// `RangeInclusive<T>` (a range of numbers) or `Range<T>` (an iterator
+    /// of `T` in Rawr), after its name.
+    fn parse_range_type(&mut self, range: &str) -> Result<Ty, Error> {
+        self.expect(Token::LessThan, "'<' after a range type")?;
+        let element = self.parse_local_type()?;
+        self.expect_close_angle("'>' after a range type's element")?;
+        if range != "RangeInclusive" {
+            return Ok(Ty::Iter(Box::new(element)));
+        }
+        Ok(match element {
+            Ty::Float(_) => Ty::FloatRange,
+            _ => Ty::InclusiveRange,
+        })
+    }
+
     fn parse_local_type(&mut self) -> Result<Ty, Error> {
         match self.peek() {
             Token::Underscore => {
@@ -28392,6 +28565,11 @@ impl<'a> Parser<'a> {
             if crate::resolve::std_reverse(&name) && self.models.get("Reverse").is_none() {
                 return self.parse_reverse_type();
             }
+            if let Some(range) = crate::resolve::std_range(&name)
+                && self.models.get(range).is_none()
+            {
+                return self.parse_range_type(range);
+            }
             // A host type named through an imported module or in full; a
             // path into a `.rs` module through the app crate.
             let rust = self
@@ -28465,6 +28643,13 @@ impl<'a> Parser<'a> {
             && self.models.get(&name).is_none()
         {
             return self.parse_reverse_type();
+        }
+        if let Some(range) = crate::resolve::std_range(&name)
+            && matches!(self.peek(), Token::LessThan)
+            && qualified.is_none()
+            && self.models.get(&name).is_none()
+        {
+            return self.parse_range_type(range);
         }
         if name.as_str() == "Vec" && matches!(self.peek(), Token::LessThan) && qualified.is_none() {
             self.next();

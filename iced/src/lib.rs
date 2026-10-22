@@ -1781,6 +1781,60 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
             reader.finish(),
         )?)?;
     }
+    // `a + b`, `a - b` of durations and `d * n`, `d / n`: their operators,
+    // the methods named for `std::ops`' traits.
+    let duration = || type_ref::Type::registered("time::Duration");
+    let instant = || type_ref::Type::registered("time::Instant");
+    for (owner, name, input, output) in [
+        ("time::Duration", "add", duration()?, duration()?),
+        ("time::Duration", "sub", duration()?, duration()?),
+        ("time::Duration", "mul", type_ref::Type::builtin(type_ref::Builtin::I64), duration()?),
+        ("time::Duration", "div", type_ref::Type::builtin(type_ref::Builtin::I64), duration()?),
+        ("time::Instant", "sub", instant()?, duration()?),
+        ("time::Instant", "sub", duration()?, instant()?),
+        ("time::Instant", "add", duration()?, instant()?),
+    ] {
+        let mut operator = signature::Builder::new();
+        operator.parameter(input);
+        operator.output(output);
+        builder.item(item::Definition::method(
+            format!("{owner}::{name}"),
+            receiver::Mode::Owned,
+            operator.finish(),
+        )?)?;
+    }
+    for (name, output) in [
+        ("subsec_millis", type_ref::Type::builtin(type_ref::Builtin::I64)),
+        ("subsec_micros", type_ref::Type::builtin(type_ref::Builtin::I64)),
+        ("subsec_nanos", type_ref::Type::builtin(type_ref::Builtin::I64)),
+        ("is_zero", type_ref::Type::builtin(type_ref::Builtin::Bool)),
+    ] {
+        let mut reader = signature::Builder::new();
+        reader.output(output);
+        builder.item(item::Definition::method(
+            format!("time::Duration::{name}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+    }
+    builder.item(item::Definition::associated_value("time::Duration::ZERO", duration()?)?)?;
+    builder.item(item::Definition::associated_function(
+        "time::Instant::now",
+        output_signature("time::Instant")?,
+    )?)?;
+    builder.item(item::Definition::method(
+        "time::Instant::elapsed",
+        receiver::Mode::Shared,
+        output_signature("time::Duration")?,
+    )?)?;
+    let mut since = signature::Builder::new();
+    since.parameter(instant()?);
+    since.output(duration()?);
+    builder.item(item::Definition::method(
+        "time::Instant::duration_since",
+        receiver::Mode::Shared,
+        since.finish(),
+    )?)?;
     // `size.width`, `point.x` and kin, read as fields.
     for (owner, fields) in [
         ("Size", &["width", "height"][..]),

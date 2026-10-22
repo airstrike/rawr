@@ -677,6 +677,8 @@ pub(crate) fn builtin_supports(name: &str, capability: Kind) -> bool {
         "bool" | "char" | "i64" => true,
         // `std::cmp::Ordering` derives all but `Default`.
         "Ordering" => capability != Kind::Default,
+        // `std::ops::RangeInclusive` is neither `Copy` nor ordered.
+        "RangeInclusive" => !matches!(capability, Kind::Copy | Kind::PartialOrd | Kind::Ord),
         _ => false,
     }
 }

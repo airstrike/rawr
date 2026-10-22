@@ -340,9 +340,15 @@ pub(crate) struct Animation(pub(crate) f64);
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Easing;
 
-/// `time::Instant`: the moment a transition's view is drawn.
+/// `time::Instant`: a moment, as `Instant::now()`, a frame or a tick reads it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Instant;
+pub(crate) struct Instant(pub(crate) iced::time::Instant);
+
+impl Instant {
+    pub(crate) fn now() -> Self {
+        Self(iced::time::Instant::now())
+    }
+}
 
 /// iced's `tooltip(content, tooltip, position)`.
 #[derive(Clone)]

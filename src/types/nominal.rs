@@ -219,6 +219,18 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                 "f64" => value.is_float(),
                 #[cfg(feature = "no_float")]
                 "f64" => false,
+                "RangeInclusive" => {
+                    value.is::<std::ops::RangeInclusive<crate::INT>>() || {
+                        #[cfg(not(feature = "no_float"))]
+                        {
+                            value.is::<std::ops::RangeInclusive<crate::FLOAT>>()
+                        }
+                        #[cfg(feature = "no_float")]
+                        false
+                    }
+                }
+                // A `Range<T>` is an iterator in Rawr.
+                name if name == crate::item::type_ref::ITER_TYPE => true,
                 _ => false,
             },
             type_ref::Target::Host { definition, .. } => {
