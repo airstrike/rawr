@@ -70,3 +70,8 @@ if ! git -C "$repo" diff --quiet -- play/deploy/cloudflare/wrangler.jsonc; then
   git -C "$repo" commit -q -m "Deploy the ?play image built from $want"
   echo "Committed the image bump."
 fi
+
+# What the bot runs is also what GitHub shows.
+if [ "$(git -C "$repo" rev-parse --abbrev-ref HEAD)" = main ]; then
+  git -C "$repo" push -q origin main:main && echo "Pushed main to origin."
+fi

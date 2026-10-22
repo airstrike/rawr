@@ -303,7 +303,7 @@ curl https://rawr.airstrike.fyi/bot/health   # restarts the bot onto the new ima
 After the first setup, one command releases the committed HEAD:
 
 ```sh
-npm run release            # image, tests, deploy, wait for the bot, smoke test, commit the bump
+npm run release            # image, tests, deploy, wait for the bot, smoke test, commit the bump, push main
 npm run release:worker     # Worker and site only, no new image
 ```
 
