@@ -26,6 +26,8 @@ mod generated_view_region;
 mod idioms;
 mod intrinsic_column;
 mod intrinsic_controls;
+mod master_events;
+mod master_helpers;
 mod master_style;
 mod native_adapter;
 mod native_extension;

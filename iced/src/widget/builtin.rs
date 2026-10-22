@@ -87,6 +87,9 @@ impl widget::Descriptor for marker::TextInput {
         if let Some(size) = self.size {
             input = input.size(size);
         }
+        if let Some(id) = &self.id {
+            input = input.id(id.clone());
+        }
         if let Some(width) = self.width {
             input = input.width(width);
         }
@@ -427,6 +430,9 @@ impl widget::Descriptor for marker::Tooltip {
 impl widget::Descriptor for marker::Scrollable {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut scrollable = iced::widget::scrollable(self.child.lower(context));
+        if let Some(id) = &self.id {
+            scrollable = scrollable.id(id.clone());
+        }
         if let Some(width) = self.width {
             scrollable = scrollable.width(width);
         }
@@ -875,6 +881,7 @@ fn bind_profile_attestations(builder: &mut host::runtime::Builder) {
 
 fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Builder) {
     let builder = iced;
+    super::helpers::bind(builder);
     bind_progress(builder);
     bind_tooltip(builder);
     bind_sensor(builder);
@@ -1105,6 +1112,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 width: None,
                 height: None,
                 style: None,
+                id: None,
             }))
         })
         .expect("the iced facade must retain the exact scrollable item");
@@ -1138,6 +1146,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 width: None,
                 secure: false,
                 style: None,
+                id: None,
             }))
         })
         .expect("the iced facade must retain the exact text_input item");
@@ -1452,7 +1461,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 return Err(arity("Text::align_x", 2, args.len()));
             }
             let mut text = take::<marker::Text>(args[0], "iced::widget::Text")?;
-            let alignment = take::<marker::Alignment>(args[1], "iced::Alignment")?.0;
+            let alignment = alignment(args[1])?;
             text.align_x = iced::alignment::Horizontal::from(alignment).into();
             Ok(Dynamic::from(text))
         })
@@ -1762,7 +1771,7 @@ fn bind_row_builders(builder: &mut host::runtime::Builder) {
     builder
         .bind("iced::widget::Row::align_y", |args| {
             let mut row = take_row(args, "Row::align_y")?;
-            row.align_y = take::<marker::Alignment>(args[1], "iced::Alignment")?.0;
+            row.align_y = alignment(args[1])?;
             Ok(Dynamic::from(row))
         })
         .expect("the iced facade must retain the exact Row::align_y item");
@@ -2238,7 +2247,7 @@ fn take_row(args: &mut [&mut Dynamic], item: &str) -> Result<marker::Row, Box<Ev
     take::<marker::Row>(args[0], "iced::widget::Row")
 }
 
-fn take_container(
+pub(super) fn take_container(
     args: &mut [&mut Dynamic],
     item: &str,
 ) -> Result<marker::Container, Box<EvalAltResult>> {
@@ -2292,7 +2301,7 @@ fn set_space_height(space: &mut marker::Space, value: iced::Length) {
 
 /// The children of `column(..)`, `Column::extend(..)` and their kin: an
 /// array of Elements.
-fn take_children(value: &mut Dynamic) -> Result<Vec<widget::Value>, Box<EvalAltResult>> {
+pub(super) fn take_children(value: &mut Dynamic) -> Result<Vec<widget::Value>, Box<EvalAltResult>> {
     let children = value.take().into_array().map_err(|actual| {
         runtime_error(format!("expected a list of widgets, found `{actual}`"))
     })?;
@@ -2340,14 +2349,14 @@ fn new_row(
     }))
 }
 
-fn positional_row() -> Box<EvalAltResult> {
+pub(super) fn positional_row() -> Box<EvalAltResult> {
     runtime_error(
         "built-in Row requires positional children; keyed reconciliation is owned by Column"
             .to_string(),
     )
 }
 
-fn project<T>(
+pub(super) fn project<T>(
     call: &host::runtime::Call<'_>,
     args: &mut [&mut Dynamic],
     expected: &str,
@@ -2364,7 +2373,7 @@ where
     Ok(Dynamic::from(value))
 }
 
-trait Witnessed {
+pub(super) trait Witnessed {
     fn witness(&self) -> &host::runtime::Witness;
 }
 
@@ -2832,7 +2841,7 @@ where
     })
 }
 
-fn display_content(value: &Dynamic) -> Result<String, Box<EvalAltResult>> {
+pub(super) fn display_content(value: &Dynamic) -> Result<String, Box<EvalAltResult>> {
     if let Ok(content) = value.as_immutable_string_ref() {
         return Ok(content.to_string());
     }
@@ -2854,7 +2863,7 @@ fn display_content(value: &Dynamic) -> Result<String, Box<EvalAltResult>> {
     )))
 }
 
-fn string_content(value: &Dynamic) -> Result<String, Box<EvalAltResult>> {
+pub(super) fn string_content(value: &Dynamic) -> Result<String, Box<EvalAltResult>> {
     value
         .as_immutable_string_ref()
         .map(|content| content.to_string())
@@ -2866,7 +2875,7 @@ fn string_content(value: &Dynamic) -> Result<String, Box<EvalAltResult>> {
         })
 }
 
-fn exact_string(value: &Dynamic, operation: &str) -> Result<String, Box<EvalAltResult>> {
+pub(super) fn exact_string(value: &Dynamic, operation: &str) -> Result<String, Box<EvalAltResult>> {
     value
         .as_immutable_string_ref()
         .map(|content| content.to_string())
@@ -2878,7 +2887,7 @@ fn exact_string(value: &Dynamic, operation: &str) -> Result<String, Box<EvalAltR
         })
 }
 
-fn exact_bool(value: &Dynamic, operation: &str) -> Result<bool, Box<EvalAltResult>> {
+pub(super) fn exact_bool(value: &Dynamic, operation: &str) -> Result<bool, Box<EvalAltResult>> {
     value.as_bool().map_err(|_| {
         runtime_error(format!(
             "{operation} expects `bool`, found `{}`",
@@ -2908,7 +2917,7 @@ pub(super) fn pixels(value: &Dynamic, operation: &str) -> Result<f32, Box<EvalAl
 }
 
 /// Spacing in pixels; iced lets it be negative, so children overlap.
-fn spacing(value: &Dynamic, operation: &str) -> Result<f32, Box<EvalAltResult>> {
+pub(super) fn spacing(value: &Dynamic, operation: &str) -> Result<f32, Box<EvalAltResult>> {
     match (value.as_int(), value.as_float()) {
         (Ok(value), _) => Ok(value as f32),
         (_, Ok(value)) if value.is_finite() => Ok(value as f32),
@@ -2920,15 +2929,18 @@ fn spacing(value: &Dynamic, operation: &str) -> Result<f32, Box<EvalAltResult>> 
 }
 
 /// An `Alignment`, or the `alignment::Horizontal` that converts into one.
-fn alignment(value: &mut Dynamic) -> Result<iced::Alignment, Box<EvalAltResult>> {
+pub(super) fn alignment(value: &mut Dynamic) -> Result<iced::Alignment, Box<EvalAltResult>> {
     if value.is::<marker::Horizontal>() {
         return Ok(take::<marker::Horizontal>(value, "iced::alignment::Horizontal")?.0);
+    }
+    if value.is::<marker::Vertical>() {
+        return Ok(take::<marker::Vertical>(value, "iced::alignment::Vertical")?.0);
     }
     Ok(take::<marker::Alignment>(value, "iced::Alignment")?.0)
 }
 
 /// A slider's number, `i64` or `f64`.
-fn number(value: &Dynamic, operation: &str) -> Result<f64, Box<EvalAltResult>> {
+pub(super) fn number(value: &Dynamic, operation: &str) -> Result<f64, Box<EvalAltResult>> {
     match (value.as_int(), value.as_float()) {
         (Ok(value), _) => Ok(value as f64),
         (_, Ok(value)) if value.is_finite() => Ok(value),
@@ -2961,7 +2973,7 @@ fn number_range(
 }
 
 /// iced's `impl Into<Length>`: a `Length`, or fixed pixels.
-fn length(value: &mut Dynamic) -> Result<iced::Length, Box<EvalAltResult>> {
+pub(super) fn length(value: &mut Dynamic) -> Result<iced::Length, Box<EvalAltResult>> {
     if value.is_int() || value.is_float() {
         return pixels(value, "Length").map(iced::Length::Fixed);
     }

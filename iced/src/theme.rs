@@ -77,6 +77,28 @@ fn bind_values(iced: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain every built-in Theme value");
     }
+    iced.bind("iced::Theme::to_string", |args| {
+        let [theme] = args else {
+            return Err(runtime_error(format!(
+                "native theme binding `iced::Theme::to_string` received {} operand(s), expected 1",
+                args.len()
+            )));
+        };
+        let theme = theme
+            .read_lock::<Value>()
+            .ok_or_else(|| runtime_error("Theme::to_string expects an `iced::Theme`".into()))?;
+        Ok(Dynamic::from(theme.native().to_string()))
+    })
+    .expect("the iced facade must retain Theme::to_string");
+    iced.bind("iced::Theme::ALL", |_| {
+        Ok(Dynamic::from_array(
+            built_in_themes()
+                .into_iter()
+                .map(|(_, theme)| Dynamic::from(Value::built_in(theme)))
+                .collect(),
+        ))
+    })
+    .expect("the iced facade must retain Theme::ALL");
 }
 
 fn bind_palette(iced: &mut host::runtime::Builder) {
