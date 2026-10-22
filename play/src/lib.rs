@@ -262,7 +262,9 @@ pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
             .map_err(|error| PlayError::Render(error.to_string()))?;
         let checked = compiler
             .check_named_source(SOURCE_NAME, &program)
-            .map_err(|error| PlayError::Compile(report(&error.report(diagnostic(&program)))))?;
+            .map_err(|error| {
+                PlayError::Compile(report(&error.report(diagnostic(&program)), &program, source))
+            })?;
         checked
             .render_png_with(canvas)
             .map_err(|error| classify(&error.to_string(), &options.limits))
@@ -285,7 +287,7 @@ fn render_application(
     let compiler = rawr_iced::application::Compiler::configured(sandbox(&options.limits, deadline))
         .map_err(|error| PlayError::Render(error.to_string()))?;
     let compile = |error: rawr_iced::application::Error| {
-        PlayError::Compile(report(&error.report(diagnostic(program))))
+        PlayError::Compile(report(&error.report(diagnostic(program)), program, source))
     };
     let mut adapter = compiler
         .check_named_source(SOURCE_NAME, program)
@@ -372,8 +374,106 @@ fn diagnostic(program: &str) -> Option<rawr::diagnostic::Source> {
     rawr::diagnostic::Source::new(SOURCE_NAME, program).ok()
 }
 
-fn report(report: &rawr::diagnostic::Report) -> String {
-    rawr::diagnostic::render(report)
+/// A report as the user's own source shows it: what [`wrap`] added to a
+/// line (the imports and `#[preview]` on the first) is cut from the quoted
+/// line, its marker and its columns.
+fn report(report: &rawr::diagnostic::Report, program: &str, source: &str) -> String {
+    let text = rawr::diagnostic::render(report);
+    let source = without_tests(source);
+    let added = program
+        .split('\n')
+        .zip(source.split('\n'))
+        .enumerate()
+        .filter_map(|(index, (wrapped, own))| {
+            added_span(wrapped, own).map(|span| (index + 1, span))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if added.is_empty() {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut quoted = None;
+    for line in text.lines() {
+        let rewritten = if let Some(location) = line
+            .strip_prefix(" --> ")
+            .or_else(|| line.strip_prefix(" ::: "))
+            .and_then(|rest| rest.strip_prefix(SOURCE_NAME))
+            .and_then(|rest| rest.strip_prefix(':'))
+        {
+            quoted = None;
+            let arrow = &line[..5];
+            format!("{arrow}{SOURCE_NAME}:{}", shift_location(location, &added))
+        } else if let Some((number, rest)) = quoted_line(line) {
+            quoted = added.get(&number).copied();
+            match quoted {
+                Some(span) => format!("{}{}", &line[..line.len() - rest.len()], cut(rest, span)),
+                None => line.to_owned(),
+            }
+        } else if let Some(span) = quoted.take()
+            && let Some(at) = line.find("| ")
+            && line[..at].trim().is_empty()
+        {
+            format!("{}{}", &line[..at + 2], cut(&line[at + 2..], span))
+        } else {
+            line.to_owned()
+        };
+        out.push_str(&rewritten);
+        out.push('\n');
+    }
+    out
+}
+
+/// Where `wrapped` adds text to `own`: the char column it starts at and its
+/// length in chars.
+fn added_span(wrapped: &str, own: &str) -> Option<(usize, usize)> {
+    let wrapped: Vec<char> = wrapped.chars().collect();
+    let own: Vec<char> = own.chars().collect();
+    if wrapped.len() <= own.len() {
+        return None;
+    }
+    let start = wrapped.iter().zip(&own).take_while(|(a, b)| a == b).count();
+    let length = wrapped.len() - own.len();
+    (wrapped[start + length..] == own[start..]).then_some((start, length))
+}
+
+/// ` 12 | text`: the quoted line's number and text.
+fn quoted_line(line: &str) -> Option<(usize, &str)> {
+    let (gutter, rest) = line.split_once(" | ")?;
+    let number = gutter.trim().parse().ok()?;
+    Some((number, rest))
+}
+
+fn cut(text: &str, (start, length): (usize, usize)) -> String {
+    text.chars()
+        .enumerate()
+        .filter(|(index, _)| *index < start || *index >= start + length)
+        .map(|(_, c)| c)
+        .collect()
+}
+
+/// `1:310-1:324` with the added columns taken out.
+fn shift_location(
+    location: &str,
+    added: &std::collections::BTreeMap<usize, (usize, usize)>,
+) -> String {
+    location
+        .split('-')
+        .map(|point| {
+            let Some((line, column)) = point.split_once(':') else {
+                return point.to_owned();
+            };
+            let (Ok(number), Ok(column)) = (line.parse::<usize>(), column.parse::<usize>()) else {
+                return point.to_owned();
+            };
+            let column = match added.get(&number) {
+                Some(&(start, length)) if column > start + length => column - length,
+                Some(&(start, _)) if column > start => start + 1,
+                _ => column,
+            };
+            format!("{number}:{column}")
+        })
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 fn classify(text: &str, limits: &Limits) -> PlayError {
@@ -801,6 +901,18 @@ impl State {
             panic!("expected a compile error, got {error:?}");
         };
         assert!(text.contains("play.rawr"), "{text}");
+    }
+
+    #[test]
+    fn compile_errors_quote_only_the_snippet() {
+        let error = render("text(\"hi\").bogus(1)", &Options::default()).unwrap_err();
+        let PlayError::Compile(text) = error else {
+            panic!("expected a compile error, got {error:?}");
+        };
+        assert!(text.contains(" --> play.rawr:1:12\n"), "{text}");
+        assert!(text.contains(" 1 | text(\"hi\").bogus(1)\n"), "{text}");
+        assert!(text.contains("   |            ^\n"), "{text}");
+        assert!(!text.contains("use iced"), "{text}");
     }
 
     #[test]
