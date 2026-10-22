@@ -6440,3 +6440,65 @@ fn language_debug_escapes_strings_and_chars() {
         r#""a\"b\n\t\\ é \u{7f} \u{301}x '"|'\'' '"' '\n' '\u{301}'|["x\"y", "__rawr_z"] Some("q\"")|S { name: "n\"m", c: '\'' }|("t\"", 'x')"#
     );
 }
+
+/// Every float method the checker accepts runs, and gives Rust's value.
+#[test]
+fn language_every_accepted_float_method_runs() {
+    let unary = |name: &str, x: f64| -> String {
+        match name {
+            "abs" => format!("{:?}", x.abs()),
+            "sqrt" => format!("{:?}", x.sqrt()),
+            "floor" => format!("{:?}", x.floor()),
+            "ceil" => format!("{:?}", x.ceil()),
+            "round" => format!("{:?}", x.round()),
+            "trunc" => format!("{:?}", x.trunc()),
+            "is_nan" => format!("{:?}", x.is_nan()),
+            other => panic!("`{other}` is accepted on floats but this test does not know it"),
+        }
+    };
+    let mut calls: Vec<(String, Box<dyn Fn(f64) -> String>)> = super::FLOAT_UNARY_METHODS
+        .iter()
+        .map(|(name, _)| {
+            let name = name.to_string();
+            let expected: Box<dyn Fn(f64) -> String> = Box::new({
+                let name = name.clone();
+                move |x| unary(&name, x)
+            });
+            (format!("{name}()"), expected)
+        })
+        .collect();
+    calls.push(("powi(3)".into(), Box::new(|x: f64| format!("{:?}", x.powi(3)))));
+    calls.push(("powf(0.5)".into(), Box::new(|x: f64| format!("{:?}", x.powf(0.5)))));
+    calls.push(("min(1.0)".into(), Box::new(|x: f64| format!("{:?}", x.min(1.0)))));
+    calls.push(("max(1.0)".into(), Box::new(|x: f64| format!("{:?}", x.max(1.0)))));
+    calls.push(("clamp(-1.0, 1.0)".into(), Box::new(|x: f64| format!("{:?}", x.clamp(-1.0, 1.0)))));
+    calls.push(("partial_cmp(&1.0)".into(), Box::new(|x: f64| format!("{:?}", x.partial_cmp(&1.0)))));
+    calls.push(("to_string()".into(), Box::new(|x: f64| format!("{:?}", x.to_string()))));
+    calls.push(("clone()".into(), Box::new(|x: f64| format!("{:?}", x))));
+    for (call, expected) in &calls {
+        for x in [2.25, -2.5, 0.5, -0.5, 3.0] {
+            for ty in ["f64", "f32"] {
+                let source = format!(
+                    "pub fn run() -> String {{ let x: {ty} = {x:?}; format!(\"{{:?}}\", x.{call}) }} run()"
+                );
+                let value = Engine::new()
+                    .eval::<String>(&source)
+                    .unwrap_or_else(|error| panic!("{ty}::{call} of {x}: {error}"));
+                // An `f32` result prints as an `f32`.
+                let mut expected = expected(x);
+                if ty == "f32" {
+                    if let Ok(number) = expected.parse::<f64>() {
+                        expected = format!("{:?}", number as f32);
+                    } else if let Some(number) = expected
+                        .strip_prefix('"')
+                        .and_then(|text| text.strip_suffix('"'))
+                        .and_then(|text| text.parse::<f64>().ok())
+                    {
+                        expected = format!("{:?}", (number as f32).to_string());
+                    }
+                }
+                assert_eq!(value, expected, "{ty}::{call} of {x}");
+            }
+        }
+    }
+}

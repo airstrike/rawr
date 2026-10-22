@@ -3343,16 +3343,28 @@ fn impl_self_ty(
     )
 }
 
+/// The float methods without arguments, each with the runtime's function
+/// that computes it as Rust does.
+const FLOAT_UNARY_METHODS: &[(&str, &str)] = &[
+    ("abs", "abs"),
+    ("sqrt", "sqrt"),
+    ("floor", "floor"),
+    ("ceil", "ceiling"),
+    ("round", "round"),
+    ("trunc", "int"),
+    ("is_nan", "is_nan"),
+];
+
 /// Whether a builtin type has an inherent method `member` of its own:
 /// Rust's method lookup finds it before any trait's function of
 /// that name, so `s.len()` stays `String::len` under a crate `len`.
 fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
     match ty {
         Ty::Int(_) => matches!(member, "pow" | "to_string" | "abs" | "signum"),
-        Ty::Float(_) => matches!(
-            member,
-            "powi" | "powf" | "abs" | "sqrt" | "floor" | "ceil" | "round" | "trunc" | "is_nan"
-        ),
+        Ty::Float(_) => {
+            matches!(member, "powi" | "powf")
+                || FLOAT_UNARY_METHODS.iter().any(|(name, _)| *name == member)
+        }
         Ty::Char => member == "to_string" || CHAR_METHODS.iter().any(|(name, _)| *name == member),
         Ty::Bool => member == "to_string",
         Ty::String => matches!(
@@ -19393,13 +19405,17 @@ impl<'a> Parser<'a> {
         // Rust's sign and rounding methods, through the runtime's math.
         let unary = match (&number, member.as_str()) {
             (Ty::Int(kind), "abs") if kind.signed() => Some(("abs", number.clone())),
-            (Ty::Float(_), "abs" | "sqrt" | "floor" | "round") => {
-                Some((member.as_str(), number.clone()))
+            (Ty::Float(_), member) if let Some((_, function)) =
+                FLOAT_UNARY_METHODS.iter().find(|(name, _)| *name == member) =>
+            {
+                let ty = if member.starts_with("is_") {
+                    Ty::Bool
+                } else {
+                    number.clone()
+                };
+                Some((*function, ty))
             }
-            (Ty::Float(_), "ceil") => Some(("ceiling", number.clone())),
-            (Ty::Float(_), "trunc") => Some(("int_part", number.clone())),
             (Ty::Int(kind), "signum") if kind.signed() => Some(("sign", number.clone())),
-            (Ty::Float(_), "is_nan") => Some(("is_nan", Ty::Bool)),
             _ => None,
         };
         if let Some((function, ty)) = unary {
