@@ -6294,3 +6294,37 @@ fn language_string_and_vec_methods() {
         assert!(error.contains(message), "{body}: {error}");
     }
 }
+
+#[test]
+fn language_std_mem_swap_replace_take() {
+    let value = run_string(
+        r#"
+        use std::mem::{replace, take};
+        use std::mem;
+        #[derive(Debug, Default)]
+        struct P { a: Vec<i64>, b: Vec<i64>, name: String }
+        fn rotate(x: &mut i64, y: &mut i64) { mem::swap(x, y); }
+        pub fn run() -> String {
+            let mut a = 1;
+            let mut b = 2;
+            std::mem::swap(&mut a, &mut b);
+            let old = std::mem::replace(&mut a, 0);
+            let mut v = vec![1];
+            let t = std::mem::take(&mut v);
+            let mut p = P { a: vec![1], b: vec![2, 3], name: String::from("n") };
+            mem::swap(&mut p.a, &mut p.b);
+            let n = take(&mut p.name);
+            let first = replace(&mut p.a[0], 9);
+            let (mut x, mut y) = (5, 6);
+            rotate(&mut x, &mut y);
+            format!("{} {} {} {:?} {:?} {:?} {} {} {} {}", a, b, old, t, v, p, n, first, x, y)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "0 1 2 [1] [] P { a: [9, 3], b: [1], name: \"\" } n 2 6 5");
+    // A crate's own `swap` is called as written.
+    let own = run("fn swap(a: i64, b: i64) -> i64 { a - b } pub fn run() -> i64 { swap(5, 2) } run()");
+    assert_eq!(own, 3);
+    rejected("pub fn run() -> i64 { let mut a = 1; std::mem::swap(&mut a, &mut a); a } run()");
+}

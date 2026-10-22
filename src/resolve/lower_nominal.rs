@@ -21182,6 +21182,13 @@ impl<'a> Parser<'a> {
             self.next();
             return self.parse_matches(name_span);
         }
+        // `std::mem::swap(&mut a, &mut b)`, `mem::replace`, `take`.
+        if let Some((function, skip)) = self.mem_path(&name) {
+            for _ in 0..skip {
+                self.next();
+            }
+            return self.parse_mem_call(function, name_span);
+        }
         // `Reverse(x)`, `std::cmp::Reverse(x)`.
         if self.reverse_path(&name) {
             return self.parse_reverse(name_span);
@@ -21456,6 +21463,126 @@ impl<'a> Parser<'a> {
         let mut value = self.parse_block_expr()?;
         value.span = span(name_span.start(), end);
         Ok(value)
+    }
+
+    /// A call of `std::mem`'s `swap`, `replace` or `take` at `name`, by
+    /// its path (`std::mem::swap`, `mem::swap`) or imported (`swap`): the
+    /// function and the tokens before its name.
+    fn mem_path(&mut self, name: &str) -> Option<(&'static str, usize)> {
+        let mut ahead = self.input.clone();
+        let tokens: Vec<Token> = (0..5)
+            .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
+            .collect();
+        let function = |token: &Token| match token {
+            Token::Identifier(name) => ["swap", "replace", "take"]
+                .into_iter()
+                .find(|function| *function == name.as_str()),
+            _ => None,
+        };
+        // Free, or imported from `std::mem` (`use std::mem::{self, swap}`).
+        let unbound = |this: &Self, name: &str| {
+            this.models.get(name).is_none()
+                && this.models.function(name).is_none()
+                && this.models.import(name).is_none_or(|binding| {
+                    let path = binding.qualified.as_str();
+                    let path = path.strip_suffix(name).unwrap_or(path);
+                    matches!(path, "std::" | "core::" | "std::mem::" | "core::mem::")
+                })
+                && !this.bindings.contains_key(name)
+        };
+        let mem = |token: &Token| matches!(token, Token::Identifier(name) if name.as_str() == "mem");
+        let (function, skip) = match name {
+            "std" | "core"
+                if tokens[0] == Token::DoubleColon
+                    && mem(&tokens[1])
+                    && tokens[2] == Token::DoubleColon =>
+            {
+                (function(&tokens[3])?, 4)
+            }
+            "mem" if tokens[0] == Token::DoubleColon && unbound(self, name) => {
+                (function(&tokens[1])?, 2)
+            }
+            name if unbound(self, name) => {
+                (function(&Token::Identifier(Box::new(name.into())))?, 0)
+            }
+            _ => return None,
+        };
+        matches!(tokens[skip], Token::LeftParen).then_some((function, skip))
+    }
+
+    /// `swap(&mut a, &mut b)`, `replace(&mut a, value)` (the old value) and
+    /// `take(&mut a)` (the old value, `a` left as its `Default`).
+    fn parse_mem_call(&mut self, function: &str, name_span: Span) -> Result<ParsedExpr, Error> {
+        let (mut arguments, end) = self.parse_borrowing_arguments("`std::mem` arguments")?;
+        let call = span(name_span.start(), end);
+        let count = if function == "take" { 1 } else { 2 };
+        if arguments.len() != count {
+            return Err(Error::InvalidMethodCall {
+                owner: "std::mem".into(),
+                method: function.into(),
+                reason: format!("expects {count} argument(s), found {}", arguments.len()).into(),
+                call,
+            });
+        }
+        let borrowed = if function == "swap" { 2 } else { 1 };
+        let places = self.mutable_arguments(&arguments, 0..borrowed)?;
+        let Ty::Reference { target, .. } = self.inference.resolve(&places[0].ty) else {
+            unreachable!("a `&mut` place has a reference type");
+        };
+        let target = *target;
+        if function == "swap" {
+            let expected = Ty::Reference {
+                mutable: true,
+                target: Box::new(target.clone()),
+            };
+            self.require_type(&expected, &places[1].ty, places[1].span)?;
+        } else if function == "replace" {
+            self.coerce_expr(&target, &mut arguments[1])?;
+        }
+        let old = self.temporary("old");
+        let mut source = origin::Fragment::plain(format!("{{ let {old} = "));
+        source.push(places[0].rendered_source());
+        source.push_text("; ");
+        let ty = match function {
+            "swap" => {
+                let other = self.temporary("other");
+                source.push_text(format!("let {other} = "));
+                source.push(places[1].rendered_source());
+                source.push_text("; ");
+                source.push(self.store_into(&places[0], &other)?);
+                source.push_text(" ");
+                source.push(self.store_into(&places[1], &old)?);
+                source.push_text(" }");
+                Ty::Unit
+            }
+            "replace" => {
+                let new = self.temporary("new");
+                source.push_text(format!("let {new} = "));
+                source.push(arguments[1].rendered_source());
+                source.push_text("; ");
+                source.push(self.store_into(&places[0], &new)?);
+                source.push_text(format!(" {old} }}"));
+                target
+            }
+            _ => {
+                if !self.type_provides(&target, capability::Kind::Default) {
+                    return Err(Error::MissingCapability {
+                        owner: target.name(&self.models),
+                        capability: "Default".into(),
+                        operation: call,
+                    });
+                }
+                let new = self.temporary("new");
+                let default = self.default_source(&target, call)?;
+                source.push_text(format!("let {new} = "));
+                source.push(default);
+                source.push_text("; ");
+                source.push(self.store_into(&places[0], &new)?);
+                source.push_text(format!(" {old} }}"));
+                target
+            }
+        };
+        Ok(self.operator_expr(source, ty, call))
     }
 
     /// `print!`, `println!`, `eprint!`, `eprintln!` after the name:
