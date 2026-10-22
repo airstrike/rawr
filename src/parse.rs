@@ -52,6 +52,11 @@ impl Unit {
         &self.items
     }
 
+    /// The items, the script and the script's masked source.
+    pub(crate) fn parts(&self) -> (&[item::Parsed], Option<&AST>, &str) {
+        (&self.items, self.script.as_ref(), &self.script_source)
+    }
+
     pub(crate) fn into_parts(self) -> (source::Map, Box<[item::Parsed]>, Option<AST>, String) {
         (self.source, self.items, self.script, self.script_source)
     }

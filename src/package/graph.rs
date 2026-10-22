@@ -45,7 +45,6 @@ pub struct Package {
     dependencies: Box<[Dependency]>,
     rust_modules: Vec<RustModule>,
     cargo: Option<manifest::cargo::Cargo>,
-    #[cfg(feature = "rust-import")]
     pub(crate) rust: Option<manifest::rust::Config>,
 }
 
@@ -207,6 +206,29 @@ impl Graph {
         Builder::new(engine).load(target)
     }
 
+    /// The root of the package `target` selects: the project's root, or for
+    /// one file, its directory (the crate's root for a `src/` file beside a
+    /// `Cargo.toml`).
+    #[must_use]
+    pub fn root_of(target: &project::Target) -> PathBuf {
+        match target {
+            project::Target::File(source) => file_root(source.path(), |manifest| manifest.is_file()),
+            project::Target::Project(project) => project.root().as_path().to_path_buf(),
+        }
+    }
+
+    /// [`Graph::load`], reading each source's parse from its cell in
+    /// `cells` when one holds exactly its text, and parsing the rest.
+    pub fn load_with_cells(
+        engine: &Engine,
+        target: &project::Target,
+        cells: &super::Cells,
+    ) -> Result<Self, Error> {
+        let mut builder = Builder::new(engine);
+        builder.cells = Some(cells);
+        builder.load(target)
+    }
+
     /// Parse one runner-owned immutable snapshot through the package graph loader.
     #[doc(hidden)]
     #[cfg(feature = "rust-import")]
@@ -242,10 +264,16 @@ impl Graph {
     }
 
     /// Return whether the application package declares native Rust imports.
-    #[cfg(feature = "rust-import")]
     #[must_use]
     pub fn declares_rust_import(&self) -> bool {
         self.entry_package().rust.is_some()
+    }
+
+    /// Every source with its parse.
+    pub(crate) fn parsed_units(&self) -> impl Iterator<Item = (&source::Source, &parse::Unit)> {
+        self.units
+            .iter()
+            .map(|unit| (&self.sources[unit.source.index()], &unit.parsed))
     }
 
     /// Every source with its items, as loading parsed them.
@@ -308,6 +336,7 @@ fn file_root(source: &Path, exists: impl Fn(&Path) -> bool) -> PathBuf {
 
 struct Builder<'a> {
     engine: &'a Engine,
+    cells: Option<&'a super::Cells>,
     #[cfg(feature = "rust-import")]
     snapshot: Option<&'a super::snapshot::Snapshot>,
     evidence: Vec<diagnostic::Source>,
@@ -333,6 +362,7 @@ impl<'a> Builder<'a> {
     fn new(engine: &'a Engine) -> Self {
         Self {
             engine,
+            cells: None,
             #[cfg(feature = "rust-import")]
             snapshot: None,
             evidence: Vec::new(),
@@ -504,7 +534,6 @@ impl<'a> Builder<'a> {
             dependencies: Box::default(),
             rust_modules: Vec::new(),
             cargo: None,
-            #[cfg(feature = "rust-import")]
             rust,
         });
 
@@ -679,10 +708,21 @@ impl<'a> Builder<'a> {
         )
         .map_err(Error::diagnostic)?;
         let evidence = self.push_evidence(source.diagnostic().clone());
-        let parsed = self
-            .engine
-            .parse_unit(source.text())
-            .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?;
+        let parsed = match self.cells {
+            Some(cells) => match cells.get(&canonical, source.text()) {
+                Some(parsed) => parsed,
+                None => {
+                    cells.parsed();
+                    self.engine
+                        .parse_unit(source.text())
+                        .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?
+                }
+            },
+            None => self
+                .engine
+                .parse_unit(source.text())
+                .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?,
+        };
         let declarations = parsed
             .items()
             .iter()
@@ -909,7 +949,6 @@ impl<'a> Builder<'a> {
         let Some(cargo) = cargo else {
             return Ok(());
         };
-        #[cfg(feature = "rust-import")]
         {
             let package = &mut self.packages[package.0];
             if package.rust.is_none()

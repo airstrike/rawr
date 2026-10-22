@@ -26,6 +26,41 @@ pub struct Layer {
     pub claims: fn(&Facts) -> bool,
 }
 
+/// What brings a layer in, as the layer declares it: a program naming one
+/// of `crates`, or whose package manifest declares one of `sections`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Claims {
+    /// Crates whose use brings the layer in: `iced` for rawr-iced.
+    pub crates: Vec<String>,
+    /// `rawr.toml` tables that bring the layer in: `rust` for rawr-iced.
+    pub sections: Vec<String>,
+}
+
+impl Claims {
+    /// Whether a program with these facts brings the layer in.
+    #[must_use]
+    pub fn claim(&self, facts: &Facts) -> bool {
+        self.crates.iter().any(|name| facts.names_crate(name))
+            || self.sections.iter().any(|section| facts.declares(section))
+    }
+
+    /// What in `facts` brings the layer in, as a user reads it: `` `iced` ``
+    /// or `` `[rust]` in rawr.toml ``.
+    #[must_use]
+    pub fn reason(&self, facts: &Facts) -> Option<String> {
+        self.crates
+            .iter()
+            .find(|name| facts.names_crate(name))
+            .map(|name| format!("`{name}`"))
+            .or_else(|| {
+                self.sections
+                    .iter()
+                    .find(|section| facts.declares(section))
+                    .map(|section| format!("`[{section}]` in rawr.toml"))
+            })
+    }
+}
+
 /// A program's [`Facts`] kept across reloads, spreadsheet style: one cell per
 /// source file, keyed by its path and computed again only when its text
 /// changed; the facts are recomputed from the cells only when a cell did.
@@ -64,6 +99,13 @@ impl Facts {
     #[must_use]
     pub const fn declares_rust_import(&self) -> bool {
         self.rust_import
+    }
+
+    /// Whether the package manifest declares the table `section`. Only
+    /// `rust` is a table a program can declare beyond its own package.
+    #[must_use]
+    pub fn declares(&self, section: &str) -> bool {
+        section == "rust" && self.rust_import
     }
 
     /// Whether an item names the crate `name`: `use name..`, or a path
@@ -106,10 +148,7 @@ impl Sheet {
         }
         let dropped = !self.cells.is_empty();
         self.cells = cells;
-        #[cfg(feature = "rust-import")]
         let rust_import = graph.declares_rust_import();
-        #[cfg(not(feature = "rust-import"))]
-        let rust_import = false;
         let mut changed = rust_import != self.facts.rust_import;
         self.facts.rust_import = rust_import;
         if recomputed > 0 || dropped {
