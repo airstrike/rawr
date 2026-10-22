@@ -1186,6 +1186,16 @@ impl Framed {
                     convert::Builtin::I64 => 3,
                     convert::Builtin::String => 4,
                     convert::Builtin::InclusiveRange => 5,
+                    convert::Builtin::I8 => 6,
+                    convert::Builtin::I16 => 7,
+                    convert::Builtin::I32 => 8,
+                    convert::Builtin::Isize => 9,
+                    convert::Builtin::U8 => 10,
+                    convert::Builtin::U16 => 11,
+                    convert::Builtin::U32 => 12,
+                    convert::Builtin::U64 => 13,
+                    convert::Builtin::Usize => 14,
+                    convert::Builtin::F32 => 15,
                 });
             }
             convert::Type::Nominal {

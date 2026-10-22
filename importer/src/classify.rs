@@ -3099,13 +3099,10 @@ impl<P: api::Phase> Context<'_, P> {
         use representability::convert::{Builtin, Type};
         Ok(match ty {
             model::Type::Tuple(members) if members.is_empty() => Type::Unit,
-            model::Type::Primitive(name) => Type::Builtin(match name.as_ref() {
-                "bool" => Builtin::Bool,
-                "char" => Builtin::Char,
-                "f64" => Builtin::F64,
-                "i64" => Builtin::I64,
-                _ => return Err(representability::reject::Kind::UnsupportedPrimitive.into()),
-            }),
+            model::Type::Primitive(name) => Type::Builtin(
+                Builtin::primitive(name)
+                    .ok_or(representability::reject::Kind::UnsupportedPrimitive)?,
+            ),
             model::Type::Definition { id, arguments } => {
                 let index = self
                     .graph
@@ -3387,7 +3384,7 @@ fn constant(value: &model::Const) -> Result<representability::convert::Constant,
     let model::Const::Literal { ty, value } = value else {
         return Err(representability::reject::Kind::UnevaluatedConstant.into());
     };
-    if !matches!(ty.as_ref(), "bool" | "char" | "f64" | "i64") {
+    if representability::convert::Builtin::primitive(ty).is_none() {
         return Err(representability::reject::Kind::UnsupportedConstant.into());
     }
     Ok(representability::convert::Constant::literal(
@@ -4011,7 +4008,7 @@ mod tests {
         );
         let unsupported_types = [
             (
-                model::Type::Primitive("u8".into()),
+                model::Type::Primitive("u128".into()),
                 Kind::UnsupportedPrimitive,
             ),
             (
@@ -4345,7 +4342,7 @@ mod tests {
         );
         assert_eq!(
             rejection(super::constant(&model::Const::Literal {
-                ty: "u8".into(),
+                ty: "u128".into(),
                 value: "1".into(),
             })),
             Kind::UnsupportedConstant

@@ -764,6 +764,16 @@ fn structural_path<'facade>(
                                             | host::type_ref::Builtin::Char
                                             | host::type_ref::Builtin::F64
                                             | host::type_ref::Builtin::I64
+                                            | host::type_ref::Builtin::I8
+                                            | host::type_ref::Builtin::I16
+                                            | host::type_ref::Builtin::I32
+                                            | host::type_ref::Builtin::Isize
+                                            | host::type_ref::Builtin::U8
+                                            | host::type_ref::Builtin::U16
+                                            | host::type_ref::Builtin::U32
+                                            | host::type_ref::Builtin::U64
+                                            | host::type_ref::Builtin::Usize
+                                            | host::type_ref::Builtin::F32
                                     )
                             ),
                         },
@@ -1102,6 +1112,9 @@ fn ty(
             host::type_ref::Type::builtin(host::type_ref::Builtin::InclusiveRange)
         }
         facade::Type::String => host::type_ref::Type::builtin(host::type_ref::Builtin::String),
+        facade::Type::Primitive(name) => host::type_ref::Type::builtin(
+            host::type_ref::Builtin::primitive(name).ok_or(Error::Shape)?,
+        ),
         facade::Type::Nominal {
             identity,
             arguments,

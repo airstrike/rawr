@@ -246,6 +246,8 @@ pub enum Type {
     InclusiveRange,
     /// Immutable string.
     String,
+    /// Another Rust numeric primitive by name (`u32`, `f32`, ...).
+    Primitive(Box<str>),
     /// Imported nominal type with exact semantic identity.
     Nominal {
         identity: [u8; 32],
@@ -1904,6 +1906,7 @@ fn ty(
         Source::Builtin(Builtin::I64) => Type::I64,
         Source::Builtin(Builtin::InclusiveRange) => Type::InclusiveRange,
         Source::Builtin(Builtin::String) => Type::String,
+        Source::Builtin(builtin) => Type::Primitive(builtin.rust_name().unwrap_or_default().into()),
         Source::Nominal {
             definition,
             arguments,

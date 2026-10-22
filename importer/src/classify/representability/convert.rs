@@ -10,6 +10,81 @@ pub enum Builtin {
     I64,
     InclusiveRange,
     String,
+    I8,
+    I16,
+    I32,
+    Isize,
+    U8,
+    U16,
+    U32,
+    U64,
+    Usize,
+    F32,
+}
+
+impl Builtin {
+    /// The Rust primitive a numeric builtin is: every Rust integer that
+    /// fits Rawr's `i64` at runtime, and both floats.
+    #[must_use]
+    pub fn primitive(name: &str) -> Option<Self> {
+        Some(match name {
+            "bool" => Self::Bool,
+            "char" => Self::Char,
+            "f64" => Self::F64,
+            "f32" => Self::F32,
+            "i64" => Self::I64,
+            "i8" => Self::I8,
+            "i16" => Self::I16,
+            "i32" => Self::I32,
+            "isize" => Self::Isize,
+            "u8" => Self::U8,
+            "u16" => Self::U16,
+            "u32" => Self::U32,
+            "u64" => Self::U64,
+            "usize" => Self::Usize,
+            _ => return None,
+        })
+    }
+
+    /// The Rust name of a primitive builtin.
+    #[must_use]
+    pub const fn rust_name(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Bool => "bool",
+            Self::Char => "char",
+            Self::F64 => "f64",
+            Self::F32 => "f32",
+            Self::I64 => "i64",
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::Isize => "isize",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::Usize => "usize",
+            Self::InclusiveRange | Self::String => return None,
+        })
+    }
+
+    /// An integer other than `i64`: an `i64` at runtime, converted with a
+    /// range check where it crosses into Rust.
+    #[must_use]
+    pub const fn is_narrow_integer(self) -> bool {
+        matches!(
+            self,
+            Self::I8
+                | Self::I16
+                | Self::I32
+                | Self::Isize
+                | Self::U8
+                | Self::U16
+                | Self::U32
+                | Self::U64
+                | Self::Usize
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]

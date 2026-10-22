@@ -1628,6 +1628,16 @@ impl Types {
                 Builtin::I64 => host::type_ref::Builtin::I64,
                 Builtin::InclusiveRange => host::type_ref::Builtin::InclusiveRange,
                 Builtin::String => host::type_ref::Builtin::String,
+                Builtin::I8 => host::type_ref::Builtin::I8,
+                Builtin::I16 => host::type_ref::Builtin::I16,
+                Builtin::I32 => host::type_ref::Builtin::I32,
+                Builtin::Isize => host::type_ref::Builtin::Isize,
+                Builtin::U8 => host::type_ref::Builtin::U8,
+                Builtin::U16 => host::type_ref::Builtin::U16,
+                Builtin::U32 => host::type_ref::Builtin::U32,
+                Builtin::U64 => host::type_ref::Builtin::U64,
+                Builtin::Usize => host::type_ref::Builtin::Usize,
+                Builtin::F32 => host::type_ref::Builtin::F32,
             }),
             Type::Parameter(index) => {
                 let parameter = parameters

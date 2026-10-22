@@ -1346,13 +1346,9 @@ fn model_type_matches(
     use crate::classify::representability::convert::{Builtin, Type};
     match (model, converted) {
         (Model::Tuple(members), Type::Unit) => members.is_empty(),
-        (Model::Primitive(name), Type::Builtin(expected)) => matches!(
-            (name.as_ref(), expected),
-            ("bool", Builtin::Bool)
-                | ("char", Builtin::Char)
-                | ("f64", Builtin::F64)
-                | ("i64", Builtin::I64)
-        ),
+        (Model::Primitive(name), Type::Builtin(expected)) => {
+            Builtin::primitive(name) == Some(*expected)
+        }
         (
             Model::Definition { id, arguments },
             Type::Nominal {

@@ -21,6 +21,51 @@ pub enum Builtin {
     FloatInclusiveRange,
     /// `String`.
     String,
+    /// `i8`.
+    I8,
+    /// `i16`.
+    I16,
+    /// `i32`.
+    I32,
+    /// `isize`.
+    Isize,
+    /// `u8`.
+    U8,
+    /// `u16`.
+    U16,
+    /// `u32`.
+    U32,
+    /// `u64`.
+    U64,
+    /// `usize`.
+    Usize,
+    /// `f32`.
+    F32,
+}
+
+impl Builtin {
+    /// The builtin a Rust primitive name is.
+    #[must_use]
+    pub fn primitive(name: &str) -> Option<Self> {
+        Some(match name {
+            "bool" => Self::Bool,
+            "char" => Self::Char,
+            "f64" => Self::F64,
+            "i64" => Self::I64,
+            "String" => Self::String,
+            "i8" => Self::I8,
+            "i16" => Self::I16,
+            "i32" => Self::I32,
+            "isize" => Self::Isize,
+            "u8" => Self::U8,
+            "u16" => Self::U16,
+            "u32" => Self::U32,
+            "u64" => Self::U64,
+            "usize" => Self::Usize,
+            "f32" => Self::F32,
+            _ => return None,
+        })
+    }
 }
 
 /// A validated structural type in a static host signature.
@@ -923,6 +968,16 @@ impl crate::preview::digest::Write for Type {
                 Builtin::String => 0x2325,
                 Builtin::InclusiveRange => 0x2326,
                 Builtin::FloatInclusiveRange => 0x2327,
+                Builtin::I8 => 0x2328,
+                Builtin::I16 => 0x2329,
+                Builtin::I32 => 0x232a,
+                Builtin::Isize => 0x232b,
+                Builtin::U8 => 0x232c,
+                Builtin::U16 => 0x232d,
+                Builtin::U32 => 0x232e,
+                Builtin::U64 => 0x232f,
+                Builtin::Usize => 0x2330,
+                Builtin::F32 => 0x2331,
             }),
             Shape::Registered { path, arguments } => {
                 writer.tag(0x2305);

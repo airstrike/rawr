@@ -52,7 +52,6 @@ thread_local! {
     static NATIVE_ARENA: RefCell<Option<Arena>> = const { RefCell::new(None) };
 }
 
-#[derive(Debug)]
 enum Error {
     MissingArgument,
     TypeMismatch,
@@ -63,6 +62,25 @@ enum Error {
     Cardinality,
     MissingAdapter,
     Stale,
+    /// A number that does not fit the Rust type it crosses into.
+    OutOfRange { value: String, ty: &'static str },
+}
+
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingArgument => f.write_str("MissingArgument"),
+            Self::TypeMismatch => f.write_str("TypeMismatch"),
+            Self::StaleHandle => f.write_str("StaleHandle"),
+            Self::ArenaFull => f.write_str("ArenaFull"),
+            Self::Allocation => f.write_str("Allocation"),
+            Self::Malformed => f.write_str("Malformed"),
+            Self::Cardinality => f.write_str("Cardinality"),
+            Self::MissingAdapter => f.write_str("MissingAdapter"),
+            Self::Stale => f.write_str("Stale"),
+            Self::OutOfRange { value, ty } => write!(f, "{value} is out of range for `{ty}`"),
+        }
+    }
 }
 
 impl Error {
@@ -77,8 +95,35 @@ impl Error {
             Self::Cardinality => 7,
             Self::MissingAdapter => 8,
             Self::Stale => 9,
+            Self::OutOfRange { .. } => 10,
         }
     }
+}
+
+/// Rawr's `i64` as the Rust integer `T`, checked as `T::try_from` checks.
+#[allow(dead_code)]
+fn int_from<T: TryFrom<i64>>(value: i64) -> Result<T, Error> {
+    T::try_from(value).map_err(|_| Error::OutOfRange {
+        value: value.to_string(),
+        ty: std::any::type_name::<T>(),
+    })
+}
+
+/// The Rust integer `value` as Rawr's `i64`. A `u64` above `i64::MAX` is
+/// an error.
+#[allow(dead_code)]
+fn int_into<T: TryInto<i64> + Copy + std::fmt::Display>(value: T) -> Result<i64, Error> {
+    value.try_into().map_err(|_| Error::OutOfRange {
+        value: value.to_string(),
+        ty: "i64",
+    })
+}
+
+/// Rawr's inclusive integer range with each end checked into `T`.
+#[allow(dead_code)]
+fn range_from<T: TryFrom<i64>>(range: std::ops::RangeInclusive<i64>) -> Result<std::ops::RangeInclusive<T>, Error> {
+    let (start, end) = range.into_inner();
+    Ok(int_from(start)?..=int_from(end)?)
 }
 
 impl Arena {
@@ -246,6 +291,22 @@ fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T,
 fn take_primitive<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
     (**value).take().try_cast_result::<T>().map_err(|_| Error::TypeMismatch)
+}
+
+#[allow(dead_code)]
+fn take_int<T: TryFrom<i64>>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
+    int_from(take_primitive::<i64>(arguments, index)?)
+}
+
+#[allow(dead_code)]
+fn take_f32(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<f32, Error> {
+    take_primitive::<f64>(arguments, index).map(|value| value as f32)
+}
+
+/// An inclusive range whose integer type Rust infers from the call.
+#[allow(dead_code)]
+fn take_range<T: TryFrom<i64>>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<std::ops::RangeInclusive<T>, Error> {
+    range_from(take_primitive::<std::ops::RangeInclusive<i64>>(arguments, index)?)
 }
 
 #[allow(dead_code)]
@@ -3076,16 +3137,11 @@ fn witness_mode(plan: &Plan) -> u8 {
 }
 
 fn copy_scalar(ty: &convert::Type) -> bool {
-    matches!(
-        ty,
-        convert::Type::Unit
-            | convert::Type::Builtin(
-                convert::Builtin::Bool
-                    | convert::Builtin::Char
-                    | convert::Builtin::F64
-                    | convert::Builtin::I64
-            )
-    )
+    match ty {
+        convert::Type::Unit => true,
+        convert::Type::Builtin(builtin) => builtin.rust_name().is_some(),
+        _ => false,
+    }
 }
 
 fn structural_kind(plan: &Plan) -> Option<String> {
@@ -4294,23 +4350,14 @@ fn render_rust_type(
         convert::Type::Unit => output
             .write_all(b"()")
             .map_err(|_| request::Error::Encoding),
-        convert::Type::Builtin(convert::Builtin::Bool) => output
-            .write_all(b"bool")
-            .map_err(|_| request::Error::Encoding),
-        convert::Type::Builtin(convert::Builtin::Char) => output
-            .write_all(b"char")
-            .map_err(|_| request::Error::Encoding),
-        convert::Type::Builtin(convert::Builtin::F64) => output
-            .write_all(b"f64")
-            .map_err(|_| request::Error::Encoding),
-        convert::Type::Builtin(convert::Builtin::I64) => output
-            .write_all(b"i64")
-            .map_err(|_| request::Error::Encoding),
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => output
             .write_all(b"std::ops::RangeInclusive<i64>")
             .map_err(|_| request::Error::Encoding),
         convert::Type::Builtin(convert::Builtin::String) => output
             .write_all(b"String")
+            .map_err(|_| request::Error::Encoding),
+        convert::Type::Builtin(builtin) => output
+            .write_all(builtin.rust_name().unwrap_or_default().as_bytes())
             .map_err(|_| request::Error::Encoding),
         convert::Type::Nominal {
             definition,
@@ -4569,16 +4616,7 @@ fn function_argument_list(
                 if profile.is_some_and(|proof| is_projection_target(ty, proof)) {
                     write!(output, "argument_{position}.lower(_context)")
                         .map_err(|_| request::Error::Encoding)?;
-                } else if profile.is_some()
-                    && !matches!(
-                        ty,
-                        convert::Type::Unit
-                            | convert::Type::Builtin(convert::Builtin::Bool)
-                            | convert::Type::Builtin(convert::Builtin::Char)
-                            | convert::Type::Builtin(convert::Builtin::F64)
-                            | convert::Type::Builtin(convert::Builtin::I64)
-                    )
-                {
+                } else if profile.is_some() && !copy_scalar(ty) {
                     write!(output, "argument_{position}.clone()")
                         .map_err(|_| request::Error::Encoding)?;
                 } else {
@@ -4720,14 +4758,7 @@ fn replay_argument_list(
         if is_projection_target(ty, profile) {
             write!(output, "argument_{index}.lower(_context)")
                 .map_err(|_| request::Error::Encoding)?;
-        } else if matches!(
-            ty,
-            convert::Type::Unit
-                | convert::Type::Builtin(convert::Builtin::Bool)
-                | convert::Type::Builtin(convert::Builtin::Char)
-                | convert::Type::Builtin(convert::Builtin::F64)
-                | convert::Type::Builtin(convert::Builtin::I64)
-        ) {
+        } else if copy_scalar(ty) {
             write!(output, "argument_{index}").map_err(|_| request::Error::Encoding)?;
         } else {
             write!(output, "argument_{index}.clone()").map_err(|_| request::Error::Encoding)?;
@@ -4772,7 +4803,9 @@ fn render_take(
 ) -> Result<(), request::Error> {
     let helper = match ty {
         convert::Type::Builtin(convert::Builtin::String) => "take_string",
-        convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_primitive",
+        convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_range",
+        convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => "take_int",
+        convert::Type::Builtin(convert::Builtin::F32) => "take_f32",
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         convert::Type::FunctionItem { .. } => {
             return Err(request::Error::Drift {
@@ -4813,6 +4846,12 @@ fn render_give(
                 output,
                 "    arguments.arena.insert({value}).map(Dynamic::from)"
             )
+        }
+        convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => {
+            writeln!(output, "    int_into({value}).map(Dynamic::from)")
+        }
+        convert::Type::Builtin(convert::Builtin::F32) => {
+            writeln!(output, "    Ok(Dynamic::from(f64::from({value})))")
         }
         convert::Type::Unit | convert::Type::Builtin(_) => {
             writeln!(output, "    Ok(Dynamic::from({value}))")
@@ -4855,9 +4894,29 @@ fn render_from_dynamic(
         convert::Type::Builtin(convert::Builtin::Char) => cast(output, "char"),
         convert::Type::Builtin(convert::Builtin::F64) => cast(output, "f64"),
         convert::Type::Builtin(convert::Builtin::I64) => cast(output, "i64"),
-        convert::Type::Builtin(convert::Builtin::InclusiveRange) => {
-            cast(output, "std::ops::RangeInclusive<i64>")
-        }
+        convert::Type::Builtin(
+            builtin @ (convert::Builtin::I8
+                | convert::Builtin::I16
+                | convert::Builtin::I32
+                | convert::Builtin::Isize
+                | convert::Builtin::U8
+                | convert::Builtin::U16
+                | convert::Builtin::U32
+                | convert::Builtin::U64
+                | convert::Builtin::Usize),
+        ) => write!(
+            output,
+            "{value}.try_cast_result::<i64>().map_err(|_| Error::TypeMismatch).and_then(int_from::<{}>)",
+            builtin.rust_name().unwrap_or_default()
+        ),
+        convert::Type::Builtin(convert::Builtin::F32) => write!(
+            output,
+            "{value}.try_cast_result::<f64>().map(|value| value as f32).map_err(|_| Error::TypeMismatch)"
+        ),
+        convert::Type::Builtin(convert::Builtin::InclusiveRange) => write!(
+            output,
+            "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from)"
+        ),
         convert::Type::Builtin(convert::Builtin::String) => write!(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
@@ -4912,6 +4971,12 @@ fn render_to_dynamic(
             output,
             "arguments.arena.insert({value}).map(Dynamic::from)"
         ),
+        convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => {
+            write!(output, "int_into({value}).map(Dynamic::from)")
+        }
+        convert::Type::Builtin(convert::Builtin::F32) => {
+            write!(output, "Ok::<Dynamic, Error>(Dynamic::from(f64::from({value})))")
+        }
         convert::Type::Unit | convert::Type::Builtin(_) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
@@ -5171,14 +5236,13 @@ fn render_generic_arguments(
                 output
                     .write_all(match ty {
                         convert::Type::Unit => b"()" as &[u8],
-                        convert::Type::Builtin(convert::Builtin::Bool) => b"bool",
-                        convert::Type::Builtin(convert::Builtin::Char) => b"char",
-                        convert::Type::Builtin(convert::Builtin::F64) => b"f64",
-                        convert::Type::Builtin(convert::Builtin::I64) => b"i64",
-                        convert::Type::Builtin(convert::Builtin::InclusiveRange) => {
-                            b"std::ops::RangeInclusive<i64>"
-                        }
+                        // Rust infers the range's integer type from the
+                        // call's bounds, as it does for `1..=6`.
+                        convert::Type::Builtin(convert::Builtin::InclusiveRange) => b"_",
                         convert::Type::Builtin(convert::Builtin::String) => b"String",
+                        convert::Type::Builtin(builtin) => {
+                            builtin.rust_name().unwrap_or_default().as_bytes()
+                        }
                         convert::Type::Nominal { .. }
                         | convert::Type::Option(_)
                         | convert::Type::Result(..) => b"_",
@@ -5189,10 +5253,9 @@ fn render_generic_arguments(
                         }
                         convert::Type::ProfileMessage { payload, .. } => match payload.as_ref() {
                             convert::Type::Unit => b"()",
-                            convert::Type::Builtin(convert::Builtin::Bool) => b"bool",
-                            convert::Type::Builtin(convert::Builtin::Char) => b"char",
-                            convert::Type::Builtin(convert::Builtin::F64) => b"f64",
-                            convert::Type::Builtin(convert::Builtin::I64) => b"i64",
+                            convert::Type::Builtin(builtin) if builtin.rust_name().is_some() => {
+                                builtin.rust_name().unwrap_or_default().as_bytes()
+                            }
                             convert::Type::Builtin(convert::Builtin::InclusiveRange) => {
                                 b"std::ops::RangeInclusive<i64>"
                             }
@@ -5539,6 +5602,18 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         convert::Type::Builtin(convert::Builtin::Char) => "Dynamic::from('\\0')",
         convert::Type::Builtin(convert::Builtin::F64) => "Dynamic::from(0.0_f64)",
         convert::Type::Builtin(convert::Builtin::I64) => "Dynamic::from(0_i64)",
+        convert::Type::Builtin(
+            convert::Builtin::I8
+            | convert::Builtin::I16
+            | convert::Builtin::I32
+            | convert::Builtin::Isize
+            | convert::Builtin::U8
+            | convert::Builtin::U16
+            | convert::Builtin::U32
+            | convert::Builtin::U64
+            | convert::Builtin::Usize,
+        ) => "Dynamic::from(0_i64)",
+        convert::Type::Builtin(convert::Builtin::F32) => "Dynamic::from(0.0_f64)",
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "Dynamic::from(0_i64..=0_i64)",
         convert::Type::Builtin(convert::Builtin::String) => "Dynamic::from(\"\")",
         convert::Type::Option(_) => "__rawr_internal::option::none()",
@@ -5637,9 +5712,15 @@ mod tests {
             Some(true)
         );
         assert_eq!(dev["package"]["*"]["opt-level"].as_integer(), Some(3));
-        assert_eq!(document["package"]["name"].as_str(), Some("rawr-generated-runner"));
+        assert_eq!(
+            document["package"]["name"].as_str(),
+            Some("rawr-generated-runner")
+        );
         assert!(document.get("lib").is_none());
-        assert!(super::runner_manifest(b"[workspace]\n[package]\nname = \"h\"\n[profile]\ndev = 1\n").is_err());
+        assert!(super::runner_manifest(
+            b"[workspace]\n[package]\nname = \"h\"\n[profile]\ndev = 1\n"
+        )
+        .is_err());
     }
 
     #[test]
