@@ -22,7 +22,8 @@ statements alone becomes the body of `fn main`. Its final expression is
 printed with `{:?}`, so `1 + 2` prints `3`. A `main` that returns `Err`
 prints `Error: ..` and exits with status 1. A runtime error or a limit also
 exits with status 1. Output is capped at 64 KiB. A program that writes more
-is stopped and its output ends with `… output truncated`.
+is stopped and its output ends with `… output truncated`. Messages drive an iced app. A plain program runs without them, and its
+output carries the note "messages are ignored for programs without iced".
 
 ## Snippet shapes for iced
 
@@ -56,7 +57,7 @@ object that starts with `{`, and no image does:
 Each entry is one run of text from one stream. `status` is 0, or 1 when
 `main` returned `Err`, the program failed or a limit stopped it. `limit`
 says whether a limit stopped it. `truncated` says whether the output passed
-64 KiB. `--time-ms N` sets the script time budget and `--memory-mb N` caps the
+64 KiB. `note`, when present, is a remark on the run, such as ignored messages. `--time-ms N` sets the script time budget and `--memory-mb N` caps the
 process's address space (`RLIMIT_AS`, Linux only). Errors go to stderr with
 exit status 1.
 

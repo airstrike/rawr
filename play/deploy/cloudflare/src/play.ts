@@ -267,6 +267,8 @@ export interface TextResult {
   output: Chunk[];
   truncated: boolean;
   limit: boolean;
+  /** A remark on the run, such as messages it ignored. */
+  note?: string;
 }
 
 /** A text result read from JSON, or null. */
@@ -282,7 +284,8 @@ export function parseTextResult(json: string): TextResult | null {
   const output = v.output.filter(
     (c): c is Chunk => !!c && (c.stream === "stdout" || c.stream === "stderr") && typeof c.text === "string",
   );
-  return { kind: "text", status: v.status, output, truncated: v.truncated === true, limit: v.limit === true };
+  const note = typeof v.note === "string" ? { note: v.note } : {};
+  return { kind: "text", status: v.status, output, truncated: v.truncated === true, limit: v.limit === true, ...note };
 }
 
 /** The first non-blank line a program wrote, at most 150 characters, for a link preview. */

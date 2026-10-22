@@ -235,7 +235,7 @@ pub fn output_text(output: &Output) -> String {
     let text = output.text().replace("```", "`\u{200b}``");
     let text = text.trim_end();
     let text = if text.is_empty() { "(no output)" } else { text };
-    let budget = MAX_REPLY - OPEN.len() - CLOSE.len() - CUT.len() - status.len();
+    let budget = MAX_REPLY - OPEN.len() - CLOSE.len() - CUT.len() - status.len() - 128;
     let body = if text.len() > budget {
         let mut end = budget;
         while !text.is_char_boundary(end) {
@@ -245,7 +245,11 @@ pub fn output_text(output: &Output) -> String {
     } else {
         text.to_owned()
     };
-    format!("{OPEN}{body}{CLOSE}{status}")
+    let note = output
+        .note
+        .as_ref()
+        .map_or_else(String::new, |note| format!("\n-# {note}"));
+    format!("{OPEN}{body}{CLOSE}{status}{note}")
 }
 
 /// Fence error text and keep the whole reply within Discord's limit.
@@ -381,6 +385,14 @@ mod tests {
             ..crate::Output::default()
         };
         assert_eq!(output_text(&failed), "```text\na\nError: \"no\"\n```\nexit status 1");
+        let noted = crate::Output {
+            note: Some(crate::plain::MESSAGES_IGNORED.into()),
+            ..output.clone()
+        };
+        assert_eq!(
+            output_text(&noted),
+            "```text\ntotal: 27\n```\n-# messages are ignored for programs without iced"
+        );
         let silent = output_text(&crate::Output::default());
         assert_eq!(silent, "```text\n(no output)\n```");
         let long = crate::Output {

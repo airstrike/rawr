@@ -215,6 +215,9 @@ test("text results are read back, and give a preview line", async () => {
   assert.equal(result.status, 1);
   assert.equal(result.output.length, 2);
   assert.equal(firstOutputLine(result), "total: 27");
+  assert.equal(result.note, undefined);
+  const noted = parseTextResult('{"kind":"text","status":0,"output":[],"note":"messages are ignored for programs without iced"}');
+  assert.equal(noted?.note, "messages are ignored for programs without iced");
   assert.equal(parseTextResult("\x89PNG"), null);
   assert.equal(parseTextResult('{"kind":"image"}'), null);
 });
@@ -231,4 +234,5 @@ test("the playground shows text results as a terminal", () => {
   const page = render({ snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG });
   assert.ok(page.includes('const terminal = (result)'));
   assert.ok(page.includes('type.startsWith("application/json")'));
+  assert.ok(page.includes("ignored for programs without iced"));
 });

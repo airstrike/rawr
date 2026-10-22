@@ -61,7 +61,12 @@ pub struct Output {
     pub truncated: bool,
     /// Whether a limit (time, operations, depth, size, output) stopped it.
     pub limit: bool,
+    /// A remark on the run itself, such as options it ignored.
+    pub note: Option<String>,
 }
+
+/// The note on a plain program run with messages.
+pub const MESSAGES_IGNORED: &str = "messages are ignored for programs without iced";
 
 impl Output {
     fn push(&mut self, stream: Stream, text: &str) {
@@ -108,6 +113,7 @@ impl Output {
                 .collect::<Vec<_>>(),
             "truncated": self.truncated,
             "limit": self.limit,
+            "note": self.note,
         })
         .to_string()
     }
@@ -140,6 +146,7 @@ impl Output {
                 .ok_or_else(bad)?,
             truncated: value["truncated"].as_bool().unwrap_or(false),
             limit: value["limit"].as_bool().unwrap_or(false),
+            note: value["note"].as_str().map(str::to_owned),
         })
     }
 }

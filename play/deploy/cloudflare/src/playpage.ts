@@ -88,7 +88,8 @@ textarea:focus { border-color: var(--dim); }
 .out pre.error { color: var(--text); border-left: 2px solid var(--pink); padding-left: 12px; }
 .out pre.term { color: var(--text); }
 .term .err { color: #ff8fc4; }
-.term .exit, .term .none { color: var(--dim); }
+.term .exit, .term .none, .term .note { color: var(--dim); }
+#messages.unused { opacity: 0.45; }
 .note { color: var(--dim); }
 .plain { text-transform: none; letter-spacing: 0; }
 #ts { margin-top: 12px; }
@@ -119,7 +120,7 @@ footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wr
 <section class="pane">
 <p class="cap"><span><span class="pink">//</span> Code</span></p>
 <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Code">${escape(snippet.code)}</textarea>
-<p class="cap msgcap">Messages <span class="plain">(sent before preview, separated by newline)</span></p>
+<p class="cap msgcap">Messages <span class="plain" id="msghint">(sent before preview, separated by newline)</span></p>
 <textarea id="messages" spellcheck="false" placeholder="Message::Foo" aria-label="Messages">${escape(snippet.messages.join("\n"))}</textarea>
 ${sitekey ? '<div id="ts"></div>' : ""}
 </section>
@@ -179,7 +180,14 @@ ${sitekey ? '<div id="ts"></div>' : ""}
     for (const chunk of result.output || []) add(chunk.text, chunk.stream === "stderr" ? "err" : "");
     if (!(result.output || []).some((chunk) => chunk.text !== "")) add("(no output)\\n", "none");
     if (result.status !== 0) add("exit status " + result.status + "\\n", "exit");
+    if (result.note) add("\\n" + result.note + "\\n", "note");
     return pre;
+  };
+  // Messages drive an iced app: after a plain program's output they are dimmed, not sent.
+  const HINT = $("msghint").textContent;
+  const markMessages = (plain) => {
+    messages.classList.toggle("unused", plain);
+    $("msghint").textContent = plain ? "(ignored for programs without iced)" : HINT;
   };
   const human = (token) => new Promise((resolve) => {
     if (!sitekey) return resolve(null);
@@ -201,8 +209,9 @@ ${sitekey ? '<div id="ts"></div>' : ""}
       const type = response.headers.get("content-type") || "";
       if (response.ok && type.startsWith("application/json")) {
         const result = await response.json();
-        show(terminal(result)); status.textContent = ms + " ms" + (result.status !== 0 ? " · exit " + result.status : "");
+        show(terminal(result)); markMessages(true); status.textContent = ms + " ms" + (result.status !== 0 ? " · exit " + result.status : "");
       } else if (response.ok && type.startsWith("image/")) {
+        markMessages(false);
         if (url) URL.revokeObjectURL(url);
         url = URL.createObjectURL(await response.blob());
         const img = new Image(); img.src = url; img.alt = "The first frame";

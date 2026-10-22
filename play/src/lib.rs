@@ -293,12 +293,12 @@ pub fn run_claimed(
         drop(parsed);
         return render(source, options).map(Outcome::Image);
     }
+    // Messages drive an iced app; a plain program runs without them.
+    let mut output = parsed.run(source, &options.limits)?;
     if !options.messages.is_empty() {
-        return Err(PlayError::Options(
-            "messages need an iced app with `fn view(&self)` and `fn update(&mut self, ..)`".into(),
-        ));
+        output.note = Some(plain::MESSAGES_IGNORED.to_owned());
     }
-    parsed.run(source, &options.limits).map(Outcome::Text)
+    Ok(Outcome::Text(output))
 }
 
 /// Check, evaluate, and render one iced snippet to a PNG.
@@ -1119,6 +1119,20 @@ impl State {
             };
             assert!(refused, "{body}");
         }
+    }
+
+    #[test]
+    fn run_plain_program_ignores_messages_with_a_note() {
+        let options = Options {
+            messages: vec!["Message::Increment".into(), "Message::Increment".into()],
+            ..Options::default()
+        };
+        let super::Outcome::Text(output) = super::run("println!(\"Foo\")", &options).unwrap() else {
+            panic!("a plain program runs as text");
+        };
+        assert_eq!((output.text().as_str(), output.status), ("Foo\n", 0));
+        assert_eq!(output.note.as_deref(), Some(super::plain::MESSAGES_IGNORED));
+        assert_eq!(super::Output::from_json(output.to_json().as_bytes()).unwrap(), output);
     }
 
     #[test]
