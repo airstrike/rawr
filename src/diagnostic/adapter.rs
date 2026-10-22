@@ -279,11 +279,15 @@ impl Report {
             ),
             ProjectError::UnsupportedInput { .. } => (
                 code::ENVIRONMENT_UNSUPPORTED_INPUT,
-                "pass a directory, `.rawr` source file, or `rawr.toml`",
+                "pass a directory, `.rawr` or `.rs` source file, or `rawr.toml`",
             ),
             ProjectError::MissingSource { .. } => (
                 code::ENVIRONMENT_MISSING_SOURCE,
                 "create the expected `src/main.rawr` or select an explicit source file",
+            ),
+            ProjectError::Unmarked { .. } => (
+                code::ENVIRONMENT_MISSING_SOURCE,
+                "add `// rawr` as the first line of the crate root to run it with Rawr",
             ),
             ProjectError::MissingConfig { .. } => (
                 code::ENVIRONMENT_MISSING_CONFIG,

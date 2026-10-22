@@ -26,6 +26,7 @@ enum LiveMessage {
     Host(Message),
     Reload(reload::Wake),
     ReloadControl(reload::status::Control),
+    Cargo(reload::cargo::Checked),
     Saved(crate::screenshot::Saved),
     Export(reload::export::Request),
     Agent(reload::agent::Call),
@@ -102,6 +103,10 @@ impl Application {
             }
             LiveMessage::Reload(wake) => state.reload(wake),
             LiveMessage::ReloadControl(control) => state.control(control),
+            LiveMessage::Cargo(checked) => {
+                state.status.cargo(checked);
+                iced::Task::none()
+            }
             LiveMessage::Export(request) => {
                 request.answer(state.host.export_state());
                 iced::Task::none()
@@ -135,6 +140,7 @@ impl Application {
             Host::shortcuts().map(LiveMessage::Host),
             state.service.subscription().map(LiveMessage::Reload),
             state.service.exports().map(LiveMessage::Export),
+            state.service.cargo().map(LiveMessage::Cargo),
             reload::status::subscription().map(LiveMessage::ReloadControl),
             reload::agent::subscription().map(LiveMessage::Agent),
         ])

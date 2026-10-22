@@ -34,6 +34,7 @@ enum Message {
     Settle(Owner),
     Reload(reload::Wake),
     ReloadControl(reload::status::Control),
+    Cargo(reload::cargo::Checked),
     Saved(crate::screenshot::Saved),
     Export(reload::export::Request),
     Agent(reload::agent::Call),
@@ -98,6 +99,10 @@ impl Application {
             Message::Settle(owner) => state.settle(owner),
             Message::Reload(wake) => state.reload(wake),
             Message::ReloadControl(control) => state.control(control),
+            Message::Cargo(checked) => {
+                state.status.cargo(checked);
+                iced::Task::none()
+            }
             Message::Saved(saved) => {
                 state.status.saved(saved);
                 iced::Task::none()
@@ -138,6 +143,7 @@ impl Application {
             state.host.subscription().map(Message::Script),
             state.service.subscription().map(Message::Reload),
             state.service.exports().map(Message::Export),
+            state.service.cargo().map(Message::Cargo),
             reload::status::subscription().map(Message::ReloadControl),
             reload::agent::subscription().map(Message::Agent),
         ])

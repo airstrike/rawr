@@ -615,3 +615,27 @@ fn an_iced_program_handed_from_rawr_to_rawr_iced_is_parsed_once() {
         "{stderr}"
     );
 }
+
+/// The iced counter as a Cargo crate of two `.rs` files marked `// rawr`:
+/// rawr-iced serves it as it serves the `.rawr` counter, from one parse
+/// of each file.
+#[test]
+fn a_marked_iced_crate_is_served_by_rawr_iced() {
+    let sandbox = Sandbox::new("marked-counter");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/tests/fixtures/rs-marker-counter");
+    let root = sandbox.path().join("counter");
+    fs::create_dir_all(root.join("src")).unwrap();
+    for file in ["Cargo.toml", "src/main.rs", "src/ui.rs"] {
+        fs::copy(fixture.join(file), root.join(file)).unwrap();
+    }
+
+    let loaded = rawr_cli::base::load(Some(&root)).unwrap();
+    assert!(rawr_iced_cli::layer::claims().claim(loaded.sheet.facts()));
+    assert_eq!(loaded.cells.counts().parsed, 2);
+    assert!(!loaded.graph.declares_rust_import());
+    drop(loaded);
+
+    let prepared = rawr_iced_cli::run::prepare(Some(root)).unwrap();
+    assert!(prepared.adapter().last_good_output().is_some());
+    assert!(prepared.adapter().diagnostics().is_empty());
+}

@@ -2852,6 +2852,7 @@ version = "0.1.0"
 dependencies = [
  "rawr",
  "rawr-location",
+ "serde_json",
  "toml_edit",
 ]
 

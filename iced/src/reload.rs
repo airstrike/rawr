@@ -6,6 +6,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 
 pub mod agent;
+pub mod cargo;
 pub mod export;
 mod mailbox;
 pub mod status;
@@ -55,6 +56,7 @@ pub struct Transport {
     feedback: mpsc::Receiver<Feedback>,
     retry: Retry,
     exporter: export::Exporter,
+    cargo: cargo::Sender,
 }
 
 /// One coalesced UI-to-supervisor retry request.
@@ -72,6 +74,7 @@ pub struct Service {
     timing: Option<rawr::timing::Session>,
     runtime: Provider,
     exports: export::Requests,
+    cargo: cargo::Inbox,
 }
 
 type Binder = fn(
@@ -146,12 +149,14 @@ fn channel_with_timing(
     let retry = Arc::new(AtomicBool::new(false));
     let exporter = export::Exporter::default();
     let exports = exporter.requests();
+    let (cargo, checks) = cargo::channel();
     (
         Transport {
             sender,
             feedback: returned,
             retry: Retry(Arc::clone(&retry)),
             exporter,
+            cargo,
         },
         Service {
             gate,
@@ -164,6 +169,7 @@ fn channel_with_timing(
             timing,
             runtime,
             exports,
+            cargo: checks,
         },
     )
 }
@@ -275,6 +281,12 @@ impl Transport {
         self.exporter.clone()
     }
 
+    /// Where `cargo check` results go to be shown in the window.
+    #[must_use]
+    pub fn cargo(&self) -> cargo::Sender {
+        self.cargo.clone()
+    }
+
     /// Split this session endpoint into candidate delivery and feedback.
     #[must_use]
     pub fn into_parts(self) -> (Sender, mpsc::Receiver<Feedback>, Retry) {
@@ -316,6 +328,11 @@ impl Service {
 
     pub(crate) fn subscription(&self) -> iced::Subscription<Wake> {
         iced::Subscription::run_with(self.inbox.clone(), mailbox::messages)
+    }
+
+    /// Each finished `cargo check`.
+    pub(crate) fn cargo(&self) -> iced::Subscription<cargo::Checked> {
+        iced::Subscription::run_with(self.cargo.clone(), cargo::messages)
     }
 
     /// Pending State export requests.

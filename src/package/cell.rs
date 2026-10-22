@@ -11,9 +11,13 @@
 //! Only a file whose items are all of it is kept: its script, the text left
 //! outside the items, is empty. A file with top-level statements is parsed
 //! by each process that loads it.
+//!
+//! A live session loads its program again on each save. Its cells also
+//! remember each parse in memory (see [`Cells::remember`]), so a reload
+//! parses only the files whose text changed and decodes nothing.
 
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -50,6 +54,8 @@ pub struct Cells {
     kept: RefCell<BTreeSet<PathBuf>>,
     parsed: Cell<usize>,
     stale: Cell<usize>,
+    /// Each source's latest parse by path, when remembering.
+    memory: Option<RefCell<BTreeMap<PathBuf, ([u8; 32], parse::Unit)>>>,
 }
 
 /// What loading a program through [`Cells`] did.
@@ -73,7 +79,17 @@ impl Cells {
             kept: RefCell::default(),
             parsed: Cell::new(0),
             stale: Cell::new(0),
+            memory: None,
         }
+    }
+
+    /// Also keep each parse these cells see in memory, for a process that
+    /// loads the same program again and again. A later load reads an
+    /// unchanged source from memory: no parse and no decode.
+    #[must_use]
+    pub fn remember(mut self) -> Self {
+        self.memory = Some(RefCell::default());
+        self
     }
 
     /// The directory holding the cells.
@@ -123,23 +139,42 @@ impl Cells {
     /// The unit parsed earlier from exactly `text` at `path`, if a cell of
     /// this build holds it.
     pub(crate) fn get(&self, path: &Path, text: &str) -> Option<parse::Unit> {
+        let text_digest = digest(text);
+        if let Some(memory) = &self.memory
+            && let Some((held, unit)) = memory.borrow().get(path)
+            && *held == text_digest
+        {
+            self.kept.borrow_mut().insert(path.to_path_buf());
+            return Some(unit.clone());
+        }
         let bytes = fs::read(self.path(path)).ok()?;
         let mut reader = Reader { bytes: &bytes };
         if reader.take(MAGIC.len())? != MAGIC || reader.text()? != self.stamp {
             self.stale.set(self.stale.get() + 1);
             return None;
         }
-        if reader.take(32)? != digest(text).as_slice() {
+        if reader.take(32)? != text_digest.as_slice() {
             return None;
         }
         let unit = decode(&mut reader, text)?;
         self.kept.borrow_mut().insert(path.to_path_buf());
+        self.hold(path, text_digest, &unit);
         Some(unit)
     }
 
-    /// Count one source parsed by a load through these cells.
-    pub(crate) fn parsed(&self) {
+    /// Count one source parsed by a load through these cells, and remember
+    /// its parse when these cells remember.
+    pub(crate) fn parsed(&self, path: &Path, text: &str, unit: &parse::Unit) {
         self.parsed.set(self.parsed.get() + 1);
+        self.hold(path, digest(text), unit);
+    }
+
+    fn hold(&self, path: &Path, text_digest: [u8; 32], unit: &parse::Unit) {
+        if let Some(memory) = &self.memory {
+            memory
+                .borrow_mut()
+                .insert(path.to_path_buf(), (text_digest, unit.clone()));
+        }
     }
 
     fn path(&self, source: &Path) -> PathBuf {

@@ -141,9 +141,11 @@ fn execute_command(
             })? {
                 Ok(loaded) => loaded,
                 Err(base) => {
+                    let cargo = rawr_cli::cargo::begin(&base.graph);
                     let failed = base::run(base)
-                        .map_err(|report| Error::Run(run::Error::Application { report }))?;
-                    return Ok(failed.map(|error| Report {
+                        .map_err(|report| Error::Run(run::Error::Application { report }));
+                    rawr_cli::cargo::after_run(cargo);
+                    return Ok(failed?.map(|error| Report {
                         message: String::new(),
                         warning: Some(error),
                         successful: false,
@@ -233,22 +235,38 @@ fn execute_command(
             }))
         }
         command::Command::Check { path } => {
-            let source = match layer(path.as_ref())
-                .map_err(|report| Error::Compile(compile::Error::from_report(report)))?
-            {
+            let program = layer(path.as_ref())
+                .map_err(|report| Error::Compile(compile::Error::from_report(report)))?;
+            let (Ok(loaded) | Err(loaded)) = &program;
+            // rustc checks a Cargo crate of marked files while Rawr works.
+            let cargo = rawr_cli::cargo::begin(&loaded.graph);
+            let checked = match program {
                 Ok(loaded) => check::execute_loaded(
                     loaded,
                     #[cfg(feature = "import-baseline")]
                     profile,
-                )
-                .map_err(Error::Compile)?,
-                Err(base) => base::check(base)
-                    .map_err(|report| Error::Compile(compile::Error::from_report(report)))?,
+                ),
+                Err(base) => base::check(base).map_err(compile::Error::from_report),
             };
+            if cargo.is_none() {
+                let source = checked.map_err(Error::Compile)?;
+                return Ok(Some(Report {
+                    message: format!("Checked {}", source.display()),
+                    warning: None,
+                    successful: true,
+                }));
+            }
+            let successful = rawr_cli::cargo::conclude(
+                checked
+                    .as_ref()
+                    .map(std::path::PathBuf::as_path)
+                    .map_err(compile::Error::report),
+                cargo,
+            );
             Ok(Some(Report {
-                message: format!("Checked {}", source.display()),
+                message: String::new(),
                 warning: None,
-                successful: true,
+                successful,
             }))
         }
         command::Command::CheckAsRust { path } => {

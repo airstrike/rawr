@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod marked;
+
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// A directory holding `bin/rawr`, a Rawr home and the programs of a test.
@@ -74,6 +76,7 @@ impl Sandbox {
             .env("RUSTUP_HOME", &missing)
             .env("RAWR_HOME", self.path.join("home"))
             .env_remove("CARGO_TARGET_DIR")
+            .env_remove("CARGO")
             .env_remove("RAWR_VERBOSE")
             .output()
             .unwrap()

@@ -236,7 +236,7 @@ fn unsupported_explicit_file_is_actionable() {
     let error = Target::discover(path).unwrap_err();
 
     assert!(matches!(error, project::Error::UnsupportedInput { .. }));
-    assert!(error.to_string().contains("`.rawr` source file"));
+    assert!(error.to_string().contains("`.rawr` or `.rs` source file"));
 }
 
 #[cfg(unix)]

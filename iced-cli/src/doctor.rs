@@ -679,7 +679,9 @@ fn project_failure(error: &project::Error) -> Failure {
             project::Resource::Config => Component::Manifest,
             project::Resource::Input | project::Resource::Boundary => Component::General,
         },
-        project::Error::MissingSource { .. } => Component::Source,
+        project::Error::MissingSource { .. } | project::Error::Unmarked { .. } => {
+            Component::Source
+        }
         project::Error::MissingConfig { .. } => Component::Manifest,
         project::Error::CurrentDirectory(..)
         | project::Error::InputNotFound { .. }
@@ -690,6 +692,7 @@ fn project_failure(error: &project::Error) -> Failure {
     let root = match error {
         project::Error::Unreadable { resource, path, .. } => resource_root(*resource, path),
         project::Error::MissingSource { root, .. }
+        | project::Error::Unmarked { root, .. }
         | project::Error::MissingConfig { root, .. }
         | project::Error::EscapesRoot { root, .. } => Some(root.clone()),
         project::Error::CurrentDirectory(..)

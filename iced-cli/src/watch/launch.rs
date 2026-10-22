@@ -26,9 +26,10 @@ impl Launch {
             target,
             graph,
             sheet,
+            cells,
             timing,
-            ..
         } = loaded;
+        let cargo = rawr_cli::cargo::manifest(&graph);
         let target_path = target_path(&target);
         let fallback = diagnostic::Source::new(
             target.source().path().to_string_lossy().into_owned(),
@@ -96,6 +97,7 @@ impl Launch {
             timing.clone(),
         );
         let layer = crate::base::session(sheet);
+        let cargo = cargo.map(|manifest| background(manifest, transport.cargo()));
         let session = Session::start(
             target_path,
             engine,
@@ -103,6 +105,8 @@ impl Launch {
             adapter,
             transport,
             timing.clone(),
+            cells,
+            cargo,
         )
         .map_err(|error| {
             report(
@@ -138,6 +142,36 @@ impl Launch {
             self.session,
         )
     }
+}
+
+/// `cargo check` in the background of a live Cargo crate. Its errors go to
+/// the window, and to stderr when they change.
+fn background(
+    manifest: PathBuf,
+    window: rawr_iced::reload::cargo::Sender,
+) -> rawr_cli::cargo::Background {
+    let mut shown: Option<rawr_cli::cargo::Outcome> = None;
+    rawr_cli::cargo::Background::start(manifest, move |status| match status {
+        rawr_cli::cargo::Status::Unavailable(reason) => eprintln!("{reason}"),
+        rawr_cli::cargo::Status::Finished(outcome) => {
+            let changed = shown.as_ref().map(|shown| &shown.errors) != Some(&outcome.errors)
+                || shown.as_ref().map(|shown| &shown.failure) != Some(&outcome.failure);
+            if changed {
+                if outcome.is_clean() {
+                    if shown.is_some() {
+                        eprintln!("{}", outcome.heading());
+                    }
+                } else {
+                    eprint!("\n{}", outcome.render());
+                }
+            }
+            window.send((!outcome.is_clean()).then(|| rawr_iced::reload::cargo::Report {
+                heading: outcome.heading(),
+                details: outcome.details(),
+            }));
+            shown = Some(outcome);
+        }
+    })
 }
 
 pub(crate) fn native_report(

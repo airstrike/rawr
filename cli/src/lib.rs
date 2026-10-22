@@ -7,6 +7,7 @@
 #![deny(unsafe_code)]
 
 pub mod base;
+pub mod cargo;
 pub mod cells;
 pub mod diagnostic;
 pub mod layer;
@@ -86,7 +87,9 @@ fn is_path(argument: &OsStr) -> bool {
     if argument == "." || argument == ".." || argument == "rawr.toml" {
         return true;
     }
-    Path::new(argument).extension() == Some(OsStr::new("rawr"))
+    let extension = Path::new(argument).extension();
+    extension == Some(OsStr::new("rawr"))
+        || extension == Some(OsStr::new("rs"))
         || argument
             .to_string_lossy()
             .contains(std::path::MAIN_SEPARATOR)
@@ -178,23 +181,26 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
         .finish();
         return failure(&report);
     }
+    // rustc checks a Cargo crate of marked files while Rawr works.
+    let cargo = cargo::begin(&loaded.graph);
     if check {
-        return match base::check(loaded) {
-            Ok(source) => {
-                println!("Checked {}", source.display());
-                ExitCode::SUCCESS
-            }
-            Err(report) => failure(&report),
+        let checked = base::check(loaded);
+        return if cargo::conclude(checked.as_deref(), cargo) {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
         };
     }
-    match base::run(loaded) {
+    let code = match base::run(loaded) {
         Ok(None) => ExitCode::SUCCESS,
         Ok(Some(error)) => {
             eprintln!("{error}");
             ExitCode::FAILURE
         }
         Err(report) => failure(&report),
-    }
+    };
+    cargo::after_run(cargo);
+    code
 }
 
 /// `rawr doctor`: what `rawr` knows, then each installed binary's own report.

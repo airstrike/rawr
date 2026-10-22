@@ -68,6 +68,8 @@ pub(crate) struct State {
     terminal: bool,
     reports: VecDeque<rawr::diagnostic::Report>,
     note: Option<String>,
+    /// The newest `cargo check` errors, shown whatever the phase.
+    cargo: Option<super::cargo::Report>,
     /// Agents waiting for the next reload to commit or fail.
     waiting: Vec<super::agent::Call>,
 }
@@ -79,6 +81,7 @@ impl State {
             terminal: false,
             reports: VecDeque::new(),
             note: None,
+            cargo: None,
             waiting: Vec::new(),
         }
     }
@@ -96,6 +99,11 @@ impl State {
 
     pub(crate) fn dismiss(&mut self) {
         self.note = None;
+    }
+
+    /// Show the newest `cargo check` result: its errors, or nothing.
+    pub(crate) fn cargo(&mut self, checked: super::cargo::Checked) {
+        self.cargo = checked.0;
     }
 
     #[cfg(test)]
@@ -200,6 +208,7 @@ impl State {
         map: impl Fn(Control) -> Message + Copy + 'a,
     ) -> iced::Element<'a, Message> {
         let content = self.note_view(content, map);
+        let content = self.cargo_view(content);
         if self.phase == Phase::Ready {
             return content;
         }
@@ -241,6 +250,48 @@ impl State {
             .padding(12)
             .align_x(iced::alignment::Horizontal::Right)
             .align_y(iced::alignment::Vertical::Bottom);
+        iced::widget::stack![
+            iced::widget::container(content)
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fill),
+            overlay
+        ]
+        .boxed()
+    }
+
+    /// The newest `cargo check` errors in a card across the top. The
+    /// reload card keeps the bottom right. It stays until a check passes.
+    fn cargo_view<'a, Message: Clone + 'static>(
+        &'a self,
+        content: iced::Element<'a, Message>,
+    ) -> iced::Element<'a, Message> {
+        let Some(cargo) = &self.cargo else {
+            return content;
+        };
+        let details = iced::widget::text(&cargo.details)
+            .size(11)
+            .font(iced::Font::MONOSPACE);
+        // Long output scrolls inside a bounded card.
+        let height = if cargo.details.lines().count() > 10 {
+            iced::Length::Fixed(160.0)
+        } else {
+            iced::Length::Shrink
+        };
+        let body = iced::widget::column![
+            iced::widget::text(&cargo.heading).size(12),
+            iced::widget::scrollable(details).height(height),
+        ]
+        .spacing(8);
+        let card = iced::widget::container(body)
+            .padding(10)
+            .width(iced::Length::Fill)
+            .style(crate::preview::chrome::card(true));
+        let card = iced::widget::themer(Some(crate::preview::chrome::theme()), card);
+        let overlay = iced::widget::container(card)
+            .width(iced::Length::Fill)
+            .height(iced::Length::Fill)
+            .padding(12)
+            .align_y(iced::alignment::Vertical::Top);
         iced::widget::stack![
             iced::widget::container(content)
                 .width(iced::Length::Fill)
@@ -518,6 +569,26 @@ pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
             Some("State reseeded · App: state shape changed")
         );
         assert_eq!(state.phase(), Phase::Ready);
+    }
+
+    #[test]
+    fn cargo_errors_show_while_ready_and_clear_when_a_check_passes() {
+        let mut state = State::new();
+        state.cargo(crate::reload::cargo::Checked(Some(crate::reload::cargo::Report {
+            heading: "cargo check found 1 error".into(),
+            details: "error[E0308]: mismatched types".into(),
+        })));
+        {
+            let content = iced::widget::Widget::boxed(iced::widget::text("application content"));
+            let mut simulator = iced_test::simulator(state.view(content, |_| ()));
+            simulator.find("application content").unwrap();
+            simulator.find("cargo check found 1 error").unwrap();
+            assert!(simulator.find("Rawr · Ready").is_err());
+        }
+        state.cargo(crate::reload::cargo::Checked(None));
+        let content = iced::widget::Widget::boxed(iced::widget::text("application content"));
+        let mut simulator = iced_test::simulator(state.view(content, |_| ()));
+        assert!(simulator.find("cargo check found 1 error").is_err());
     }
 
     #[test]

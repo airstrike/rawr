@@ -56,6 +56,9 @@ struct Compiler {
     timing: rawr::timing::Session,
     control: Arc<super::Control>,
     publication: Arc<rawr::reload::scheduler::publication::Slot>,
+    /// The program's parse cells, remembering: a reload parses only the
+    /// sources whose text changed.
+    cells: Option<Arc<Mutex<rawr::package::Cells>>>,
 }
 
 struct Supervisor<W> {
@@ -72,9 +75,12 @@ struct Supervisor<W> {
     next: u64,
     pool: Pool,
     panicked: bool,
+    /// The background `cargo check` of a Cargo crate, told of each save.
+    cargo: Option<rawr_cli::cargo::Background>,
 }
 
 impl Session {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
         target: PathBuf,
         engine: rawr::Shared<rawr::Engine>,
@@ -82,6 +88,8 @@ impl Session {
         adapter: Adapter,
         transport: rawr_iced::reload::Transport,
         timing: rawr::timing::Session,
+        cells: rawr::package::Cells,
+        cargo: Option<rawr_cli::cargo::Background>,
     ) -> Result<Self, Error> {
         let gate = adapter.gate();
         let publication = adapter.publication();
@@ -96,6 +104,7 @@ impl Session {
             timing,
             control: Arc::clone(&control),
             publication: Arc::clone(&publication),
+            cells: Some(Arc::new(Mutex::new(cells.remember()))),
         };
         let supervisor = Supervisor {
             work,
@@ -111,6 +120,7 @@ impl Session {
             next: 0,
             pool: Pool::new(),
             panicked: false,
+            cargo,
         };
         let handle = thread::Builder::new()
             .name("rawr-reload-supervisor".into())
@@ -184,6 +194,9 @@ impl<W: Work> Supervisor<W> {
             });
             match self.adapter.notices().recv_timeout(timeout.min(IDLE_POLL)) {
                 Ok(Notice::Changed(observed)) => {
+                    if let Some(cargo) = &self.cargo {
+                        cargo.saved();
+                    }
                     self.pool.revoke_queued();
                     self.delivery
                         .checking(self.adapter.gate().as_ref(), observed);
@@ -351,6 +364,7 @@ impl Work for Compiler {
             Arc::clone(&self.control),
             Arc::clone(&self.publication),
             Some(&self.timing),
+            self.cells.as_deref(),
             request,
         )
     }
@@ -397,6 +411,7 @@ fn compile(
     control: Arc<super::Control>,
     publication: Arc<rawr::reload::scheduler::publication::Slot>,
     timing: Option<&rawr::timing::Session>,
+    cells: Option<&Mutex<rawr::package::Cells>>,
     request: Request,
 ) -> rawr_iced::reload::Completion {
     let authority = request.complete(());
@@ -409,7 +424,14 @@ fn compile(
         )
         .map_err(environment_report)?;
         // One parse per reload: the layer's facts and the compile share it.
-        let load = || rawr::package::Graph::load(&engine, &target);
+        let load = || match cells {
+            Some(cells) => rawr::package::Graph::load_with_cells(
+                &engine,
+                &target,
+                &cells.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+            ),
+            None => rawr::package::Graph::load(&engine, &target),
+        };
         let graph = match timing {
             Some(timing) => timing.observe_result(rawr::timing::Phase::ParseItems, load),
             None => load(),
@@ -577,6 +599,7 @@ mod tests {
                 timing: timing.clone(),
                 control: Arc::clone(&control),
                 publication,
+                cells: None,
             };
             let releases = Arc::new((Mutex::new(BTreeSet::new()), Condvar::new()));
             let (started, starts) = mpsc::channel();
@@ -599,6 +622,7 @@ mod tests {
                 next: 0,
                 pool: Pool::new(),
                 panicked: false,
+                cargo: None,
             };
             Self {
                 root,
@@ -721,6 +745,7 @@ mod tests {
             Arc::clone(&control),
             Arc::clone(&publication),
             None,
+            None,
             request,
         );
         assert_eq!(
@@ -739,6 +764,7 @@ mod tests {
             &layer,
             control,
             publication,
+            None,
             None,
             request,
         );
@@ -904,6 +930,7 @@ mod tests {
                 &layer,
                 Arc::clone(&control),
                 Arc::clone(&publication),
+                None,
                 None,
                 request,
             );

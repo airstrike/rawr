@@ -2,6 +2,7 @@
 
 pub mod config;
 mod error;
+pub mod marker;
 pub mod root;
 pub mod source;
 
@@ -10,10 +11,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use error::{Error, Resource};
+pub use marker::is_marked;
 
 const CONFIG_NAME: &str = "rawr.toml";
 const SOURCE_DIRECTORY: &str = "src";
 const SOURCE_NAME: &str = "main.rawr";
+const CARGO_NAME: &str = "Cargo.toml";
+/// The crate roots a Cargo package's program starts from, in order.
+const RUST_ROOTS: [&str; 2] = ["main.rs", "lib.rs"];
 const VCS_BOUNDARY: &str = ".git";
 
 /// A canonical Rawr project with readable source and optional configuration.
@@ -27,7 +32,8 @@ pub struct Project {
 /// A validated explicit source file or canonical Rawr project.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Target {
-    /// One explicitly selected `.rawr` file; ancestor projects are ignored.
+    /// One explicitly selected `.rawr` or `.rs` file; ancestor projects are
+    /// ignored. An explicit `.rs` file runs whether or not it is marked.
     File(source::File),
     /// A project discovered from a directory or explicit `rawr.toml`.
     Project(Project),
@@ -40,7 +46,8 @@ impl Project {
         &self.root
     }
 
-    /// Return the validated canonical `src/main.rawr` source.
+    /// Return the validated entry source: `src/main.rawr`, or the marked
+    /// `src/main.rs` (or `src/lib.rs`) of a Cargo package.
     #[must_use]
     pub const fn source(&self) -> &source::File {
         &self.source
@@ -54,15 +61,22 @@ impl Project {
 
     fn load(path: PathBuf, require_config: bool) -> Result<Self, Error> {
         let root = root::Directory::from_canonical(path);
-        let source_path = root.as_path().join(SOURCE_DIRECTORY).join(SOURCE_NAME);
-
-        if !path_exists(&source_path, Resource::Source)? {
-            return Err(Error::MissingSource {
-                root: root.as_path().to_path_buf(),
-                expected: source_path,
-                config: require_config.then(|| root.as_path().join(CONFIG_NAME)),
-            });
-        }
+        let source_path = match entry(root.as_path())? {
+            Entry::Found(path) => path,
+            Entry::Unmarked(entry) => {
+                return Err(Error::Unmarked {
+                    root: root.as_path().to_path_buf(),
+                    entry,
+                });
+            }
+            Entry::None => {
+                return Err(Error::MissingSource {
+                    root: root.as_path().to_path_buf(),
+                    expected: root.as_path().join(SOURCE_DIRECTORY).join(SOURCE_NAME),
+                    config: require_config.then(|| root.as_path().join(CONFIG_NAME)),
+                });
+            }
+        };
 
         let source = source::File::load_project(source_path, &root)?;
         let config_path = root.as_path().join(CONFIG_NAME);
@@ -139,7 +153,7 @@ fn discover_file(path: PathBuf) -> Result<Target, Error> {
         return Project::load(parent.to_path_buf(), true).map(Target::Project);
     }
 
-    if path.extension() != Some(OsStr::new("rawr")) {
+    if path.extension() != Some(OsStr::new("rawr")) && path.extension() != Some(OsStr::new("rs")) {
         return Err(Error::UnsupportedInput { path });
     }
 
@@ -167,10 +181,7 @@ fn discover_directory(start: PathBuf) -> Result<Target, Error> {
             });
         }
 
-        if path_exists(
-            &current.join(SOURCE_DIRECTORY).join(SOURCE_NAME),
-            Resource::Source,
-        )? {
+        if matches!(entry(&current)?, Entry::Found(_)) {
             candidates.push(current.clone());
         }
 
@@ -189,13 +200,53 @@ fn load_exact_candidate(path: &Path) -> Result<Option<Project>, Error> {
     if path_exists(&path.join(CONFIG_NAME), Resource::Config)? {
         return Project::load(path.to_path_buf(), true).map(Some);
     }
-    if path_exists(
-        &path.join(SOURCE_DIRECTORY).join(SOURCE_NAME),
-        Resource::Source,
-    )? {
-        return Project::load(path.to_path_buf(), false).map(Some);
+    match entry(path)? {
+        Entry::Found(_) => Project::load(path.to_path_buf(), false).map(Some),
+        Entry::Unmarked(entry) => Err(Error::Unmarked {
+            root: path.to_path_buf(),
+            entry,
+        }),
+        Entry::None => Ok(None),
     }
-    Ok(None)
+}
+
+/// What a directory holds as a program's entry.
+enum Entry {
+    /// `src/main.rawr`, or a Cargo package's marked crate root.
+    Found(PathBuf),
+    /// A Cargo package's crate root without the `// rawr` marker.
+    Unmarked(PathBuf),
+    None,
+}
+
+/// The entry of the project at `root`: `src/main.rawr`, else for a Cargo
+/// package the first of `src/main.rs` and `src/lib.rs` that exists, when
+/// its first line is the `// rawr` marker. Only that first line is read.
+fn entry(root: &Path) -> Result<Entry, Error> {
+    let source = root.join(SOURCE_DIRECTORY);
+    let rawr = source.join(SOURCE_NAME);
+    if path_exists(&rawr, Resource::Source)? {
+        return Ok(Entry::Found(rawr));
+    }
+    if !path_exists(&root.join(CARGO_NAME), Resource::Config)? {
+        return Ok(Entry::None);
+    }
+    for name in RUST_ROOTS {
+        let path = source.join(name);
+        if !path_exists(&path, Resource::Source)? {
+            continue;
+        }
+        return match marker::file_is_marked(&path) {
+            Ok(true) => Ok(Entry::Found(path)),
+            Ok(false) => Ok(Entry::Unmarked(path)),
+            Err(source) => Err(Error::Unreadable {
+                resource: Resource::Source,
+                path,
+                source,
+            }),
+        };
+    }
+    Ok(Entry::None)
 }
 
 fn finish_search(

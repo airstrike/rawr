@@ -63,7 +63,7 @@ pub enum Error {
         /// Filesystem failure.
         source: io::Error,
     },
-    /// An explicit input is neither a directory, `.rawr` source, nor `rawr.toml`.
+    /// An explicit input is neither a directory, `.rawr` or `.rs` source, nor `rawr.toml`.
     UnsupportedInput {
         /// Canonical unsupported path.
         path: PathBuf,
@@ -76,6 +76,13 @@ pub enum Error {
         expected: PathBuf,
         /// Manifest that made the directory an authoritative project, if any.
         config: Option<PathBuf>,
+    },
+    /// A Cargo package's crate root does not start with the `// rawr` marker.
+    Unmarked {
+        /// Canonical project root.
+        root: PathBuf,
+        /// The unmarked `src/main.rs` or `src/lib.rs`.
+        entry: PathBuf,
     },
     /// Explicit manifest selection did not resolve to a project manifest.
     MissingConfig {
@@ -136,7 +143,7 @@ impl fmt::Display for Error {
             ),
             Self::UnsupportedInput { path } => write!(
                 formatter,
-                "unsupported Rawr input `{}`; pass a directory, `.rawr` source file, or `rawr.toml`",
+                "unsupported Rawr input `{}`; pass a directory, `.rawr` or `.rs` source file, or `rawr.toml`",
                 path.display()
             ),
             Self::MissingSource {
@@ -159,6 +166,11 @@ impl fmt::Display for Error {
                 }
                 Ok(())
             }
+            Self::Unmarked { entry, .. } => write!(
+                formatter,
+                "`{}` is not a Rawr file. Its first line is not `// rawr`.",
+                entry.display()
+            ),
             Self::MissingConfig { root, expected } => write!(
                 formatter,
                 "Rawr project `{}` is missing explicit manifest `{}`",
@@ -191,6 +203,7 @@ impl std::error::Error for Error {
             | Self::Ambiguous { .. }
             | Self::UnsupportedInput { .. }
             | Self::MissingSource { .. }
+            | Self::Unmarked { .. }
             | Self::MissingConfig { .. }
             | Self::EscapesRoot { .. } => None,
         }

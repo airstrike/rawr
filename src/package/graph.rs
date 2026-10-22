@@ -46,6 +46,7 @@ pub struct Package {
     rust_modules: Vec<RustModule>,
     cargo: Option<manifest::cargo::Cargo>,
     pub(crate) rust: Option<manifest::rust::Config>,
+    marked: bool,
 }
 
 /// One `.rs` module of a polyglot package: a module in the same tree as the
@@ -59,7 +60,11 @@ pub struct RustModule {
 
 /// The file a `mod name;` declaration resolves to under Rust's rules.
 enum ModuleFile {
+    /// A `.rawr` file, or the path reported missing.
     Rawr(PathBuf),
+    /// A `.rs` file marked `// rawr`, with the text read to see the marker.
+    Marked(PathBuf, String),
+    /// An unmarked `.rs` file.
     Rust(PathBuf),
 }
 
@@ -144,6 +149,14 @@ impl Package {
     #[must_use]
     pub fn dependencies(&self) -> &[Dependency] {
         &self.dependencies
+    }
+
+    /// Whether this package is a Cargo crate whose root is a `.rs` file:
+    /// its modules are `.rs` files marked `// rawr`, found as rustc finds
+    /// them.
+    #[must_use]
+    pub const fn is_marked(&self) -> bool {
+        self.marked
     }
 
     /// Return the `.rs` modules of this package's module tree, in discovery order.
@@ -535,6 +548,7 @@ impl<'a> Builder<'a> {
             rust_modules: Vec::new(),
             cargo: None,
             rust,
+            marked: false,
         });
 
         let source_path = if request.dependency {
@@ -542,6 +556,8 @@ impl<'a> Builder<'a> {
         } else {
             request.source
         };
+        let marked = source_path.extension() == Some(std::ffi::OsStr::new("rs"));
+        self.packages[package.0].marked = marked;
         let module_root = source_path
             .parent()
             .map(Path::to_path_buf)
@@ -554,9 +570,12 @@ impl<'a> Builder<'a> {
             Box::default(),
             source_path,
             None,
+            None,
         )?;
         self.packages[package.0].source = root_source;
-        if !request.dependency {
+        // A marked crate's Cargo dependencies are Cargo's to build; Rawr
+        // does not import them.
+        if !request.dependency && !marked {
             self.load_cargo(package, &root)?;
         }
 
@@ -655,6 +674,7 @@ impl<'a> Builder<'a> {
         modules: Box<[ImmutableString]>,
         path: PathBuf,
         declaration: Option<error::Label>,
+        read: Option<String>,
     ) -> Result<source::Id, Error> {
         let canonical = self.canonical_source(path, package_root, declaration)?;
         if let Some(position) = self
@@ -690,14 +710,17 @@ impl<'a> Builder<'a> {
             ));
         }
 
-        let text = self.read_to_string(&canonical).map_err(|source| {
-            Error::resource(
-                self.evidence.clone(),
-                error::resource_message("read Rawr source", canonical.clone(), &source),
-                source,
-                declaration,
-            )
-        })?;
+        let text = match read {
+            Some(text) => text,
+            None => self.read_to_string(&canonical).map_err(|source| {
+                Error::resource(
+                    self.evidence.clone(),
+                    error::resource_message("read Rawr source", canonical.clone(), &source),
+                    source,
+                    declaration,
+                )
+            })?,
+        };
         let id = source::Id::from_index(self.sources.len());
         let source = source::Source::new(
             id,
@@ -712,10 +735,12 @@ impl<'a> Builder<'a> {
             Some(cells) => match cells.get(&canonical, source.text()) {
                 Some(parsed) => parsed,
                 None => {
-                    cells.parsed();
-                    self.engine
+                    let parsed = self
+                        .engine
                         .parse_unit(source.text())
-                        .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?
+                        .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))?;
+                    cells.parsed(&canonical, source.text(), &parsed);
+                    parsed
                 }
             },
             None => self
@@ -748,6 +773,7 @@ impl<'a> Builder<'a> {
             }),
         );
 
+        let marked = self.packages[package.0].marked;
         for module in declarations {
             let mut child_modules = modules.to_vec();
             child_modules.push(module.name.text.clone());
@@ -755,7 +781,7 @@ impl<'a> Builder<'a> {
                 source: evidence,
                 span: module.span,
             };
-            match self.module_file(module_root, &child_modules, label)? {
+            match self.module_file(module_root, &child_modules, label, marked)? {
                 ModuleFile::Rawr(child_path) => {
                     self.load_module(
                         package,
@@ -765,7 +791,35 @@ impl<'a> Builder<'a> {
                         child_modules.into_boxed_slice(),
                         child_path,
                         Some(label),
+                        None,
                     )?;
+                }
+                ModuleFile::Marked(child_path, text) => {
+                    self.load_module(
+                        package,
+                        package_name,
+                        package_root,
+                        module_root,
+                        child_modules.into_boxed_slice(),
+                        child_path,
+                        Some(label),
+                        Some(text),
+                    )?;
+                }
+                ModuleFile::Rust(child_path) if marked => {
+                    return Err(Error::module(
+                        self.evidence.clone(),
+                        format!(
+                            "module `{}` is native Rust. `{}` does not start with `// rawr`. \
+                             Rawr does not run native modules yet. \
+                             Add `// rawr` as its first line to run it with Rawr.",
+                            child_modules.join("::"),
+                            child_path.display()
+                        )
+                        .into(),
+                        label,
+                        None,
+                    ));
                 }
                 ModuleFile::Rust(child_path) => self.load_rust_module(
                     package,
@@ -784,12 +838,15 @@ impl<'a> Builder<'a> {
 
     /// Rust's file rules for `mod name;` across both extensions: `name.rawr`,
     /// `name.rs`, `name/mod.rawr` or `name/mod.rs`, exactly one of them. With
-    /// none, the `.rawr` spelling is reported missing.
+    /// none, the `.rawr` spelling is reported missing. In a marked crate
+    /// only the `.rs` spellings count, as for rustc. A `.rs` file is Rawr
+    /// when its first line is `// rawr`.
     fn module_file(
         &self,
         module_root: &Path,
         modules: &[ImmutableString],
         declaration: error::Label,
+        marked: bool,
     ) -> Result<ModuleFile, Error> {
         let mut base = module_root.to_path_buf();
         for segment in modules {
@@ -803,12 +860,18 @@ impl<'a> Builder<'a> {
         ];
         let found = candidates
             .into_iter()
-            .filter(|(path, _)| self.is_file(path))
+            .filter(|(path, rust)| (*rust || !marked) && self.is_file(path))
             .collect::<Vec<_>>();
         match found.as_slice() {
+            [] if marked => Ok(ModuleFile::Rawr(base.with_extension("rs"))),
             [] => Ok(ModuleFile::Rawr(base.with_extension("rawr"))),
             [(path, false)] => Ok(ModuleFile::Rawr(path.clone())),
-            [(path, true)] => Ok(ModuleFile::Rust(path.clone())),
+            [(path, true)] => Ok(match self.read_to_string(path) {
+                Ok(text) if crate::project::is_marked(&text) => {
+                    ModuleFile::Marked(path.clone(), text)
+                }
+                _ => ModuleFile::Rust(path.clone()),
+            }),
             [(first, _), (second, _), ..] => Err(Error::module(
                 self.evidence.clone(),
                 format!(
@@ -885,7 +948,7 @@ impl<'a> Builder<'a> {
                 source: index,
                 span: manifest::byte_span(&text, child.range.clone()),
             };
-            match self.module_file(module_root, &child_modules, label)? {
+            match self.module_file(module_root, &child_modules, label, false)? {
                 ModuleFile::Rust(child_path) => self.load_rust_module(
                     package,
                     package_root,
@@ -894,6 +957,21 @@ impl<'a> Builder<'a> {
                     child_path,
                     label,
                 )?,
+                ModuleFile::Marked(child_path, _) => {
+                    return Err(Error::module(
+                        self.evidence.clone(),
+                        format!(
+                            "Rust module `crate::{}` declares `mod {};`, which is the Rawr file `{}`. \
+                             Native Rust cannot depend on a Rawr module.",
+                            modules.join("::"),
+                            child.path.last().map_or("", String::as_str),
+                            child_path.display()
+                        )
+                        .into(),
+                        label,
+                        None,
+                    ));
+                }
                 ModuleFile::Rawr(child_path) if self.is_file(&child_path) => {
                     return Err(Error::module(
                         self.evidence.clone(),
