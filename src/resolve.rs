@@ -1216,6 +1216,8 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "time"
                 | "time::Duration"
                 | "time::Instant"
+                | "marker"
+                | "marker::PhantomData"
         )
     ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
         || rest.is_some_and(|rest| {
@@ -1347,6 +1349,17 @@ pub(crate) fn std_time(path: &str) -> Option<&'static str> {
         .or_else(|| path.strip_prefix("time::"))
         .unwrap_or(path);
     ["Duration", "Instant"].into_iter().find(|time| *time == name)
+}
+
+/// `std::marker::PhantomData` as a path is written.
+pub(crate) fn std_phantom(path: &str) -> bool {
+    matches!(
+        path,
+        "PhantomData"
+            | "marker::PhantomData"
+            | "std::marker::PhantomData"
+            | "core::marker::PhantomData"
+    )
 }
 
 pub(crate) fn std_ordering(path: &str) -> bool {

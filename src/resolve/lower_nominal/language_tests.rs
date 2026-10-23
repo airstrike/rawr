@@ -7738,3 +7738,24 @@ fn language_cfg_on_statements_and_cfg_macro() {
     "#);
     assert_eq!(value, 31);
 }
+
+#[test]
+fn language_phantom_data_is_a_field_of_no_value() {
+    let value = run(r#"
+        use std::marker::PhantomData;
+        #[derive(Default, Clone, Copy)]
+        struct Picker<C> { space: PhantomData<C> }
+        #[derive(Clone, Copy)]
+        struct Rgb;
+        pub fn run() -> i64 {
+            let a: Picker<Rgb> = Picker::default();
+            let b: Picker<Rgb> = Picker { space: PhantomData };
+            let c: std::marker::PhantomData<i64> = PhantomData;
+            let _ = (a, b.space, c);
+            7
+        }
+        run()
+    "#);
+    assert_eq!(value, 7);
+}
+

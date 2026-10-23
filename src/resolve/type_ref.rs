@@ -152,6 +152,10 @@ pub(super) fn resolve(
                 .map(|segment| segment.name.text.as_str())
                 .collect::<Vec<_>>()
                 .join("::");
+            // `PhantomData<T>` holds nothing: the unit type.
+            if super::std_phantom(&written) && !types.contains_key("PhantomData") {
+                return Ok(Type::Unit(path.span));
+            }
             if let Some(Target::Alias(alias)) = types.get(written.as_str()) {
                 let span = path.span;
                 let mut arguments = Vec::new();

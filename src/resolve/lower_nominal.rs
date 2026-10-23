@@ -15696,6 +15696,55 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `PhantomData<T>`, which holds nothing: the unit type. Its arguments
+    /// are read and left out.
+    fn parse_phantom_type(&mut self) -> Result<Ty, Error> {
+        if matches!(self.peek(), Token::LessThan) {
+            self.next();
+            loop {
+                self.parse_local_type()?;
+                if matches!(self.peek(), Token::Comma) {
+                    self.next();
+                } else {
+                    break;
+                }
+            }
+            self.expect_close_angle("'>' after `PhantomData`'s argument")?;
+        }
+        Ok(Ty::Unit)
+    }
+
+    /// How many `::name` segments follow `name` to spell `PhantomData`:
+    /// `PhantomData`, `marker::PhantomData` or `std::marker::PhantomData`.
+    fn phantom_path(&mut self, name: &str) -> Option<usize> {
+        if self.models.get("PhantomData").is_some() {
+            return None;
+        }
+        let names = self.lookahead_path(name);
+        (1..=names.len())
+            .find(|count| crate::resolve::std_phantom(&names[..*count].join("::")))
+            .map(|count| (count - 1) * 2)
+    }
+
+    /// `name` and the names after it joined by `::`, as written ahead.
+    fn lookahead_path(&mut self, name: &str) -> Vec<String> {
+        let mut names = vec![name.to_owned()];
+        if self.split_angle.is_some() || self.bindings.contains_key(name) {
+            return names;
+        }
+        let mut ahead = self.input.clone();
+        loop {
+            if !matches!(ahead.next(), Some((Token::DoubleColon, _))) {
+                break;
+            }
+            let Some((Token::Identifier(next), _)) = ahead.next() else {
+                break;
+            };
+            names.push(next.to_string());
+        }
+        names
+    }
+
     /// One statement a false `#[cfg(..)]` leaves out: through its `;`, or
     /// through the `}` that ends a block, `if`, `match` or loop.
     fn skip_statement(&mut self) -> Result<(), Error> {
@@ -25113,6 +25162,20 @@ impl<'a> Parser<'a> {
             self.next();
             return self.parse_matches(name_span);
         }
+        // `PhantomData`, also `PhantomData::<T>` or in full: a value that is
+        // nothing at run time.
+        if let Some(skip) = self.phantom_path(&name) {
+            for _ in 0..skip {
+                self.next();
+            }
+            let mut end = name_span.end();
+            if matches!(self.peek(), Token::DoubleColon) && matches!(self.peek_second(), Token::LessThan) {
+                self.next();
+                self.parse_phantom_type()?;
+                end = self.position();
+            }
+            return Ok(self.literal("()", Ty::Unit, span(name_span.start(), end)));
+        }
         // `std::mem::swap(&mut a, &mut b)`, `mem::replace`, `take`.
         if let Some((function, skip)) = self.mem_path(&name) {
             for _ in 0..skip {
@@ -31707,11 +31770,18 @@ impl<'a> Parser<'a> {
                 self.expect(Token::LeftParen, "'(' after default")?;
                 self.expect(Token::RightParen, "')' after default")?
             };
-            let source = self.default_source(&model.ty(), member_span)?;
+            // A generic type's `default()` has fresh arguments, which its
+            // use settles, as `let w: W<i64> = W::default()` does.
+            let ty = if model.generics().is_empty() {
+                model.ty()
+            } else {
+                self.fresh_nominal(&model, member_span).0
+            };
+            let source = self.default_source(&ty, member_span)?;
             return Ok(ParsedExpr {
                 prelude: origin::Fragment::default(),
                 source,
-                ty: model.ty(),
+                ty,
                 span: span(owner_span.start(), end),
                 lvalue: None,
                 outcome: crate::host::usage::Outcome::Conservative,
@@ -32311,6 +32381,9 @@ impl<'a> Parser<'a> {
             if crate::resolve::std_reverse(&name) && self.models.get("Reverse").is_none() {
                 return self.parse_reverse_type();
             }
+            if crate::resolve::std_phantom(&name) && self.models.get("PhantomData").is_none() {
+                return self.parse_phantom_type();
+            }
             if let Some(range) = crate::resolve::std_range(&name)
                 && self.models.get(range).is_none()
             {
@@ -32389,6 +32462,10 @@ impl<'a> Parser<'a> {
             && self.models.get(&name).is_none()
         {
             return self.parse_reverse_type();
+        }
+        if name.as_str() == "PhantomData" && qualified.is_none() && self.models.get(&name).is_none()
+        {
+            return self.parse_phantom_type();
         }
         if let Some(range) = crate::resolve::std_range(&name)
             && matches!(self.peek(), Token::LessThan)
