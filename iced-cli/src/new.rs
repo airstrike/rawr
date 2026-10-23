@@ -10,13 +10,28 @@ use std::path::{Component, Path, PathBuf};
 /// The exact `src/main.rs` installed by [`create`].
 pub const COUNTER_SOURCE: &str = include_str!("../assets/counter/src/main.rs");
 
-/// The `Cargo.toml` [`create`] writes for the package `name`.
+/// The `Cargo.toml` [`create`] writes for the package `name`. Its iced
+/// names `advanced`, the one iced feature Rawr's runner adds, so the
+/// runner leaves the project's iced features as they are.
 #[must_use]
 pub fn manifest(name: &str) -> String {
     format!(
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
-         [dependencies]\niced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\" }}\n",
+         [dependencies]\niced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\", \
+         features = [\"advanced\"] }}\n",
         rawr_iced::native::ICED_REVISION
+    )
+}
+
+/// The `rust-toolchain.toml` [`create`] writes: the importer's pinned
+/// nightly, the compiler Rawr builds the project's runner and reads its
+/// dependencies with, so `cargo build` uses it too.
+#[cfg(feature = "native-runner")]
+#[must_use]
+pub fn toolchain() -> String {
+    format!(
+        "[toolchain]\nchannel = \"{}\"\n",
+        rawr_import::cargo::toolchain::CHANNEL
     )
 }
 
@@ -96,6 +111,7 @@ enum EntryKind {
 enum Operation {
     CreateDirectory,
     WriteManifest,
+    WriteToolchain,
     WriteSource,
 }
 
@@ -205,6 +221,12 @@ fn create_at(
             plan.root.join("Cargo.toml"),
             manifest(&plan.name),
             Operation::WriteManifest,
+        ),
+        #[cfg(feature = "native-runner")]
+        (
+            plan.root.join("rust-toolchain.toml"),
+            toolchain(),
+            Operation::WriteToolchain,
         ),
         (
             source_directory.join("main.rs"),
@@ -493,6 +515,7 @@ impl fmt::Display for Operation {
         match self {
             Self::CreateDirectory => formatter.write_str("create directory"),
             Self::WriteManifest => formatter.write_str("write Cargo.toml"),
+            Self::WriteToolchain => formatter.write_str("write rust-toolchain.toml"),
             Self::WriteSource => formatter.write_str("write starter source"),
         }
     }
@@ -728,9 +751,19 @@ mod tests {
         assert_eq!(manifest, super::manifest("my-counter"));
         assert!(manifest.starts_with("[package]\nname = \"my-counter\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"));
         assert!(manifest.contains(&format!(
-            "iced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\" }}",
+            "iced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\", features = [\"advanced\"] }}",
             rawr_iced::native::ICED_REVISION
         )));
+        #[cfg(feature = "native-runner")]
+        let toolchain = std::fs::read_to_string(target.join("rust-toolchain.toml")).unwrap();
+        #[cfg(feature = "native-runner")]
+        assert_eq!(
+            toolchain,
+            format!(
+                "[toolchain]\nchannel = \"{}\"\n",
+                rawr_import::cargo::toolchain::CHANNEL
+            )
+        );
         let source = std::fs::read_to_string(target.join("src/main.rs")).unwrap();
         assert_eq!(source, super::COUNTER_SOURCE);
         assert!(rawr::project::is_marked(&source));

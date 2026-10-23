@@ -16,7 +16,8 @@ pub(crate) mod host;
 
 pub use cached::{cached, Attestation};
 
-pub(crate) const CHANNEL: &str = "nightly-2026-07-11";
+/// The pinned nightly the importer's driver runs on.
+pub const CHANNEL: &str = "nightly-2026-07-11";
 const RUST_RELEASE: &str = "1.99.0-nightly";
 const RUST_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
 const CARGO_RELEASE: &str = "1.99.0-nightly";
