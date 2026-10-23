@@ -265,7 +265,7 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   assert.deepEqual(at("docs/index.html"), ["cart.rs"]);
   assert.deepEqual(at("docs/start.html"), ["cart.rs"]);
   assert.deepEqual(at("docs/language.html"), ["parse.rs", "generics.rs", "closures.rs"]);
-  assert.deepEqual(at("docs/play.html"), ["", "circle.rs"]);
+  assert.deepEqual(at("docs/play.html"), ["", "fill.rs", "circle.rs"]);
   // The docs' cart.rs is the landing page's, so it is one entry.
   assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
   assert.equal(hashes.length, blocks.length - 2);
