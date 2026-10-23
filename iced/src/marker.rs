@@ -343,6 +343,24 @@ pub(crate) struct ProgressBar {
     pub(crate) vertical: bool,
     pub(crate) length: Option<iced::Length>,
     pub(crate) girth: Option<iced::Length>,
+    pub(crate) style: Option<progress_bar::Source>,
+}
+
+pub(crate) mod progress_bar {
+    use iced::widget::progress_bar::Style;
+
+    /// A progress bar's style: a pinned iced function, or a Rawr function
+    /// of the theme.
+    #[derive(Clone)]
+    pub(crate) enum Source {
+        Builtin(fn(&iced::Theme) -> Style),
+        Function(rawr::item::Value),
+    }
+
+    /// The value of a pinned iced style function, as
+    /// `.style(progress_bar::success)`.
+    #[derive(Clone, Copy)]
+    pub(crate) struct Builtin(pub(crate) fn(&iced::Theme) -> Style);
 }
 
 /// iced's `transition(value, init, view)`: `view` drawn with the animation

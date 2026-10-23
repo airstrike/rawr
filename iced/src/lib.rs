@@ -160,6 +160,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::combo_box")?;
     builder.module("widget::component")?;
     builder.module("widget::container")?;
+    builder.module("widget::progress_bar")?;
     builder.module("widget::radio")?;
     builder.module("widget::rule")?;
     builder.module("widget::image")?;

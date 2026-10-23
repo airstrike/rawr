@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [130, 128, 55, 165, 96, 99, 235, 191, 72, 149, 231, 225, 199, 102, 125, 207]
+        [130, 86, 180, 196, 28, 21, 190, 246, 216, 29, 17, 63, 36, 88, 201, 240]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);

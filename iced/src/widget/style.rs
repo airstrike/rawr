@@ -17,7 +17,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use iced::widget::{
-    button, checkbox, container, radio, scrollable, slider, svg, text_input, toggler,
+    button, checkbox, container, progress_bar, radio, scrollable, slider, svg, text_input,
+    toggler,
 };
 use iced::{Background, Border, Color, Shadow, Vector};
 use rawr::host::{self, facade, item, signature, type_ref};
@@ -101,6 +102,120 @@ where
             .1
             .clone()
     })))
+}
+
+/// iced's style function for a progress bar: the pinned one, or a Rawr
+/// function of the theme evaluated once per theme.
+pub(crate) fn progress_bar_style(
+    source: &Option<crate::marker::progress_bar::Source>,
+    context: &widget::Context<'_>,
+) -> Result<
+    Option<Box<dyn Fn(&iced::Theme) -> progress_bar::Style>>,
+    iced::Element<'static, runtime::Message>,
+> {
+    use crate::marker::progress_bar::Source;
+
+    let function = match source {
+        None => return Ok(None),
+        Some(Source::Builtin(style)) => return Ok(Some(Box::new(*style))),
+        Some(Source::Function(function)) => function,
+    };
+    let style = cached(context, function).map(Ok).or_else(|| {
+        let theme = Dynamic::from(context.theme().clone());
+        context.invoke(function, &mut [theme]).map(|style| {
+            style.and_then(|mut style| {
+                take::<progress_bar::Style>(&mut style, "iced::widget::progress_bar::Style")
+                    .map(|style| remember(context, function, style))
+                    .map_err(|error| error.to_string())
+            })
+        })
+    });
+    match style {
+        Some(Ok(style)) => Ok(Some(Box::new(move |_: &iced::Theme| *style))),
+        Some(Err(error)) => {
+            Err(widget::diagnostic(format!("progress_bar style failed: {error}")).lower(context))
+        }
+        None => Ok(None),
+    }
+}
+
+/// iced's pinned progress bar styles.
+const PROGRESS_BAR_BUILTINS: [(&str, fn(&iced::Theme) -> progress_bar::Style); 5] = [
+    ("primary", progress_bar::primary),
+    ("secondary", progress_bar::secondary),
+    ("success", progress_bar::success),
+    ("warning", progress_bar::warning),
+    ("danger", progress_bar::danger),
+];
+
+fn declare_progress_bar(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let style = || type_ref::Type::registered("widget::progress_bar::Style");
+    let theme = || type_ref::Type::registered("Theme");
+    builder.private_type::<crate::marker::progress_bar::Builtin>(
+        "widget::progress_bar::Builtin",
+        &[],
+        &[],
+    )?;
+    for (name, _) in PROGRESS_BAR_BUILTINS {
+        let path = format!("widget::progress_bar::{name}");
+        builder.item(item::Definition::value(
+            path.clone(),
+            type_ref::Type::registered("widget::progress_bar::Builtin")?,
+        )?)?;
+        let mut function = signature::Builder::new();
+        function.parameter(theme()?).output(style()?);
+        builder.item(item::Definition::function(path, function.finish())?)?;
+    }
+    // iced's `impl Fn(&Theme) -> Style`: a pinned function, or a Rawr
+    // function or closure.
+    for input in [
+        type_ref::Type::registered("widget::progress_bar::Builtin")?,
+        type_ref::Type::callable(theme()?, style()?),
+    ] {
+        builder.item(item::Definition::method(
+            "widget::ProgressBar::style",
+            receiver::Mode::Owned,
+            crate::builder_signature("widget::ProgressBar", input)?,
+        )?)?;
+    }
+    Ok(())
+}
+
+fn bind_progress_bar(iced: &mut host::runtime::Builder) {
+    use crate::marker::progress_bar::{Builtin, Source};
+
+    for (name, style) in PROGRESS_BAR_BUILTINS {
+        let path = format!("iced::widget::progress_bar::{name}");
+        iced.bind(path.clone(), move |args| match args {
+            [] => Ok(Dynamic::from(Builtin(style))),
+            [theme] => {
+                let theme = take::<crate::theme::Value>(theme, "iced::Theme")?;
+                Ok(Dynamic::from(style(theme.native())))
+            }
+            _ => Err(arity(&path, 1, args.len())),
+        })
+        .expect("the iced facade must retain every pinned progress bar style");
+    }
+    iced.bind("iced::widget::ProgressBar::style", |args| {
+        let [bar, style] = args else {
+            return Err(arity("ProgressBar::style", 2, args.len()));
+        };
+        let mut bar = take::<crate::marker::ProgressBar>(bar, "iced::widget::ProgressBar")?;
+        bar.style = Some(if style.is::<Builtin>() {
+            Source::Builtin(take::<Builtin>(style, "style")?.0)
+        } else {
+            Source::Function(take(style, "style function")?)
+        });
+        Ok(Dynamic::from(bar))
+    })
+    .expect("the iced facade must retain ProgressBar::style");
+    iced.bind("iced::widget::progress_bar::Style::default", |args| {
+        if !args.is_empty() {
+            return Err(arity("progress_bar::Style::default", 0, args.len()));
+        }
+        Ok(Dynamic::from(progress_bar::primary(&iced::Theme::Light)))
+    })
+    .expect("the iced facade must retain progress_bar::Style::default");
 }
 
 /// The style tables of one owner's generation, computed under one theme.
@@ -346,6 +461,7 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
     }
     declare_fields(builder)?;
     declare_handle_shapes(builder)?;
+    declare_progress_bar(builder)?;
     let mut color = signature::Builder::new();
     color
         .parameter(type_ref::Type::registered("Color")?)
@@ -423,6 +539,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder) {
     bind_statuses(iced);
     bind_fields(iced);
     bind_handle_shapes(iced);
+    bind_progress_bar(iced);
     iced.bind("iced::Background::Color", |args| {
         if args.len() != 1 {
             return Err(arity("Background::Color", 1, args.len()));
@@ -568,6 +685,7 @@ const DEFAULTS: &[&str] = &[
     "widget::text_input::Style",
     "widget::toggler::Style",
     "widget::svg::Style",
+    "widget::progress_bar::Style",
 ];
 
 fn bind_defaults(iced: &mut host::runtime::Builder) {
@@ -957,6 +1075,11 @@ fields! {
         scroller: scrollable::Scroller,
     }
     "widget::scrollable::Scroller" => scrollable::Scroller { background: Background, border: Border }
+    "widget::progress_bar::Style" => progress_bar::Style {
+        background: Background,
+        bar: Background,
+        border: Border,
+    }
     "widget::text_input::Style" => text_input::Style {
         background: Background,
         border: Border,
@@ -1003,6 +1126,7 @@ fn declare_types(builder: &mut facade::Builder) -> Result<(), host::Error> {
     builder.type_::<scrollable::Scroller>("widget::scrollable::Scroller", &[], owned)?;
     builder.type_::<text_input::Style>("widget::text_input::Style", &[], owned)?;
     builder.type_::<toggler::Style>("widget::toggler::Style", &[], owned)?;
+    builder.type_::<progress_bar::Style>("widget::progress_bar::Style", &[], owned)?;
     builder.type_::<svg::Style>(
         "widget::svg::Style",
         &[],

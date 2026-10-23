@@ -234,13 +234,18 @@ impl widget::Descriptor for marker::Slider {
 }
 
 impl widget::Descriptor for marker::ProgressBar {
-    fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut bar = iced::widget::progress_bar(self.range.clone(), self.value).vertical(self.vertical);
         if let Some(length) = self.length {
             bar = bar.length(length);
         }
         if let Some(girth) = self.girth {
             bar = bar.girth(girth);
+        }
+        match style::progress_bar_style(&self.style, context) {
+            Ok(Some(style)) => bar = bar.style(style),
+            Ok(None) => {}
+            Err(diagnostic) => return diagnostic,
         }
         bar.boxed()
     }
@@ -2667,6 +2672,7 @@ fn bind_progress(builder: &mut host::runtime::Builder) {
                 vertical: false,
                 length: None,
                 girth: None,
+                style: None,
             }))
         })
         .expect("the iced facade must retain the exact progress_bar item");

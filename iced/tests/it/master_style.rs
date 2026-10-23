@@ -799,3 +799,53 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
     let message = click(&adapter, "go");
     assert!(format!("{message:?}").contains("Pressed"), "{message:?}");
 }
+
+const PROGRESS_BAR_STYLES: &str = r#"
+use iced::widget::{column, progress_bar, text};
+use iced::{Border, Color, Theme, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            text("bars"),
+            progress_bar(0.0..=1.0, 0.5).style(progress_bar_custom_style),
+            progress_bar(0.0..=1.0, 0.25).style(progress_bar::success),
+            progress_bar(0.0..=1.0, 0.75).style(|theme: &Theme| progress_bar::danger(theme)),
+        ]
+    }
+}
+
+fn progress_bar_custom_style(theme: &Theme) -> progress_bar::Style {
+    progress_bar::Style {
+        background: theme.palette().background.strong.color.into(),
+        bar: Color::from_rgb8(250, 85, 134).into(),
+        border: Border::default(),
+    }
+}
+"#;
+
+#[test]
+fn master_progress_bars_take_styles() {
+    let adapter = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check_source(PROGRESS_BAR_STYLES)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .prepare()
+        .unwrap()
+        .into_adapter();
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.find("bars").unwrap();
+    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+}
