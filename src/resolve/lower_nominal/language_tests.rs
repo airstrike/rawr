@@ -591,6 +591,39 @@ fn language_fixed_array_map() {
     rejected("pub fn run() -> i64 { let v = vec![1]; let w = v.map(|x| x); w[0] } run()");
 }
 
+#[test]
+fn language_float_trigonometry() {
+    // `f32` and `f64` have Rust's trig, exponential and log methods.
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let angle: f32 = std::f32::consts::PI / 2.0;
+            let x = 3.0_f64;
+            let total = angle.sin() * 1000.0
+                + (angle.cos().abs() < 0.001) as i64 as f32 * 100.0
+                + (1.0_f32).atan2(1.0).to_degrees();
+            (total as f64 + x.hypot(4.0) * 10000.0 + x.ln().exp() * 100000.0 + 100.0_f64.log10() * 1000000.0) as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 1000 + 100 + 45 + 50000 + 300000 + 2000000);
+}
+
+#[test]
+fn language_iter_once_and_empty() {
+    // `std::iter::once(x)` is an iterator of one item, `empty()` of none.
+    let value = run(r#"
+        use std::iter;
+        pub fn run() -> i64 {
+            let all: Vec<i64> = std::iter::once(1).chain(vec![2, 3]).collect();
+            let none: Vec<i64> = iter::empty().collect();
+            let one = iter::once(7).count() as i64;
+            all.iter().sum::<i64>() * 100 + none.len() as i64 * 10 + one
+        }
+        run()
+    "#);
+    assert_eq!(value, 600 + 1);
+}
+
 /// `Button::style` takes a two-parameter host callable, as iced's
 /// `fn(&Theme, Status) -> Style`.
 fn style_facade() -> crate::host::facade::Definition {

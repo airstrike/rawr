@@ -3525,8 +3525,32 @@ const FLOAT_UNARY_METHODS: &[(&str, &str)] = &[
     ("ceil", "ceiling"),
     ("round", "round"),
     ("trunc", "int"),
+    ("fract", "fraction"),
     ("is_nan", "is_nan"),
+    ("is_finite", "is_finite"),
+    ("is_infinite", "is_infinite"),
+    ("sin", "sin"),
+    ("cos", "cos"),
+    ("tan", "tan"),
+    ("asin", "asin"),
+    ("acos", "acos"),
+    ("atan", "atan"),
+    ("sinh", "sinh"),
+    ("cosh", "cosh"),
+    ("tanh", "tanh"),
+    ("asinh", "asinh"),
+    ("acosh", "acosh"),
+    ("atanh", "atanh"),
+    ("exp", "exp"),
+    ("ln", "ln"),
+    ("log10", "log"),
+    ("to_degrees", "to_degrees"),
+    ("to_radians", "to_radians"),
 ];
+
+/// The float methods of one argument of the same float, each with the
+/// runtime's function that computes `function(self, other)` as Rust does.
+const FLOAT_BINARY_METHODS: &[(&str, &str)] = &[("atan2", "atan"), ("hypot", "hypot"), ("log", "log")];
 
 /// Whether a builtin type has an inherent method `member` of its own:
 /// Rust's method lookup finds it before any trait's function of
@@ -3537,6 +3561,7 @@ fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
         Ty::Float(_) => {
             matches!(member, "powi" | "powf")
                 || FLOAT_UNARY_METHODS.iter().any(|(name, _)| *name == member)
+                || FLOAT_BINARY_METHODS.iter().any(|(name, _)| *name == member)
         }
         Ty::Char => member == "to_string" || CHAR_METHODS.iter().any(|(name, _)| *name == member),
         Ty::Bool => member == "to_string",
@@ -21079,6 +21104,22 @@ impl<'a> Parser<'a> {
             let ty = Ty::Result(Box::new(target), Box::new(Ty::Unit));
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }
+        if let Ty::Float(_) = number
+            && let Some((_, function)) = FLOAT_BINARY_METHODS.iter().find(|(name, _)| *name == member)
+        {
+            let (mut arguments, end) = self.parse_call_arguments("number method arguments")?;
+            let [argument] = arguments.as_mut_slice() else {
+                return Err(self.unsupported("a float method without exactly one argument"));
+            };
+            self.coerce_expr(&number, argument)?;
+            let mut source = origin::Fragment::plain(format!("{function}("));
+            source.push(value.rendered_source());
+            source.push_text(", ");
+            source.push(argument.rendered_source());
+            source.push_text(")");
+            let value = self.operator_expr(source, number, span(value.span.start(), end));
+            return Ok(self.checked_arithmetic(value, "neg"));
+        }
         let exponent = match (&number, member.as_str()) {
             (Ty::Int(_), "pow") => Ty::Int(Int::U32),
             (Ty::Float(_), "powi") => Ty::Int(Int::I32),
@@ -28861,6 +28902,43 @@ impl<'a> Parser<'a> {
                     single,
                     Span::new(first_span.start(), path_end),
                 ));
+            }
+            // `std::iter::once(x)` and `std::iter::empty()`: an iterator of
+            // one item, or of none.
+            let iterator = full
+                .strip_prefix("std::iter::")
+                .or_else(|| full.strip_prefix("core::iter::"));
+            if let Some(member @ ("once" | "empty")) = iterator
+                && matches!(self.peek(), Token::LeftParen | Token::Unit)
+            {
+                let (arguments, end) = self.parse_call_arguments("iterator arguments")?;
+                let call = span(first_span.start(), end);
+                let item = match (member, arguments.as_slice()) {
+                    ("once", [value]) => value.ty.clone(),
+                    ("empty", []) => self.inference.fresh(),
+                    _ => {
+                        return Err(Error::InvalidMethodCall {
+                            owner: "std::iter".into(),
+                            method: member.into(),
+                            reason: format!("found {} argument(s)", arguments.len()).into(),
+                            call,
+                        })
+                    }
+                };
+                let values = origin::Fragment::join(
+                    arguments.iter().map(ParsedExpr::rendered_source),
+                    ", ",
+                )
+                .surrounded("[", "]");
+                let values = self.operator_expr(
+                    values,
+                    Ty::Array {
+                        element: Box::new(item.clone()),
+                        length: Some(arguments.len()),
+                    },
+                    call,
+                );
+                return Ok(self.array_iterator(&values, item, end));
             }
         }
         if let Some(spelled) = self
