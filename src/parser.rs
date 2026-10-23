@@ -1554,6 +1554,16 @@ impl Engine {
                 Token::False => Expr::BoolConstant(false, settings.pos),
                 token => unreachable!("token is {:?}", token),
             },
+            Token::ByteStringConstant(..) => match state.input.next().unwrap().0 {
+                Token::ByteStringConstant(bytes) => Expr::Array(
+                    bytes
+                        .iter()
+                        .map(|byte| Expr::IntegerConstant(crate::INT::from(*byte), settings.pos))
+                        .collect(),
+                    settings.pos,
+                ),
+                token => unreachable!("token is {:?}", token),
+            },
             Token::ExclusiveRange | Token::InclusiveRange => Expr::IntegerConstant(0, settings.pos),
             #[cfg(not(feature = "no_float"))]
             Token::FloatConstant(x) => {
