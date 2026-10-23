@@ -28,7 +28,7 @@ const ICED_NAME: &str = "rawr.framework.iced/current";
 // Compiler and endpoint proof identity rotate independently of ICED_PROFILE.
 const ICED_VERSION: u32 = 3;
 const ICED_ENDPOINT_TABLE: u32 = 4;
-const ICED_TARGET: &str = "aarch64-apple-darwin";
+const ICED_TARGET: &str = super::toolchain::HOST;
 const ICED_CARGO_PROFILE: &str = "dev";
 const ICED_RUSTC_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
 const ICED_CARGO_COMMIT: &str = "59800466c5c41c444d264b1010b4d57e85a7117f";

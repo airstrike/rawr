@@ -467,8 +467,8 @@ fn validate_plan(plan: &Plan, budget: &mut compiler::Budget) -> Result<(), Strin
         || plan.canonical_items != CANONICAL_ITEMS
         || plan.canonical_bytes != CANONICAL_BYTES
         || plan.compiler_commit != COMPILER_COMMIT
-        || plan.host != "aarch64-apple-darwin"
-        || plan.selected_target != "aarch64-apple-darwin"
+        || plan.host != include_str!(concat!(env!("OUT_DIR"), "/toolchain-host"))
+        || plan.selected_target != plan.host
         || plan.entries.is_empty()
         || plan.entries.len() > MAX_ITEMS
         || plan.dependency_directories.len() > MAX_ITEMS

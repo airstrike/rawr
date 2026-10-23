@@ -549,7 +549,7 @@ fn candidate_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_none_or(|name| {
-            [".rlib", ".rmeta", ".dylib", ".rs"]
+            [".rlib", ".rmeta", ".dylib", ".so", ".rs"]
                 .iter()
                 .any(|suffix| name.ends_with(suffix))
         })

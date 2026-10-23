@@ -7,6 +7,10 @@ use std::process::Command;
 
 use sha2::{Digest as _, Sha256};
 
+#[path = "src/cargo/toolchain/host.rs"]
+#[allow(dead_code)]
+mod host;
+
 const RUSTC_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
 
 /// The Rawr packages a generated harness builds through `rawr-iced`.
@@ -27,21 +31,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Naming any path stops Cargo rerunning this script when it changes
     // itself, so it names itself too.
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/cargo/toolchain/host.rs");
     if env::var_os("CARGO_FEATURE_EMBEDDED_HOST").is_some() {
         embed_host()?;
     }
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_RUSTC_DRIVER");
     println!("cargo:rerun-if-env-changed=RUSTC");
+
+    // The importer builds for the host of the toolchain that builds it.
+    let rustc = env::var_os("RUSTC").ok_or("Cargo did not provide RUSTC")?;
+    let version = Command::new(&rustc).arg("-vV").output()?;
+    if !version.status.success() {
+        return Err("the rustc version query failed".into());
+    }
+    let version = String::from_utf8(version.stdout)?;
+    let host = host::parse(&version).ok_or("rustc -vV printed no host triple")?;
+    // A file rather than `cargo:rustc-env`, because Cargo also sets such a
+    // variable for test runs, where the importer reads the environment.
+    let output = PathBuf::from(env::var_os("OUT_DIR").ok_or("no OUT_DIR")?);
+    fs::write(output.join("toolchain-host"), host)?;
     if env::var_os("CARGO_FEATURE_RUSTC_DRIVER").is_none() {
         return Ok(());
     }
 
-    let rustc = env::var_os("RUSTC").ok_or("Cargo did not provide RUSTC")?;
-    let version = Command::new(&rustc).arg("-Vv").output()?;
-    if !version.status.success() {
-        return Err("the pinned rustc version query failed".into());
-    }
-    let version = String::from_utf8(version.stdout)?;
     let expected = format!("commit-hash: {RUSTC_COMMIT}");
     if !version.lines().any(|line| line == expected) {
         return Err(format!("rustc-driver requires pinned {expected}").into());
@@ -54,7 +66,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sysroot = PathBuf::from(String::from_utf8(sysroot.stdout)?.trim());
     let library = sysroot.join("lib").canonicalize()?;
     let target_library = sysroot
-        .join("lib/rustlib/aarch64-apple-darwin/lib")
+        .join("lib/rustlib")
+        .join(host)
+        .join("lib")
         .canonicalize()?;
     for path in [&library, &target_library] {
         let path = path

@@ -236,7 +236,7 @@ fn metadata_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_none_or(|name| {
-            [".rlib", ".rmeta", ".rs", ".dylib"]
+            [".rlib", ".rmeta", ".rs", ".dylib", ".so"]
                 .iter()
                 .any(|suffix| name.ends_with(suffix))
         })

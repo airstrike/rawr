@@ -384,13 +384,14 @@ fn metadata_candidate(path: &Path) -> bool {
     // rustc375b1431 compiler/rustc_metadata/src/locator.rs386–478:
     // rmeta/rlib/interface and target DLL candidates. Keep all prefixes and
     // filename groups, not only the historically selected/loaded artifacts.
-    // Darwin host/target are checked before constructing this scope. Search
+    // A proc macro is a `.dylib` on macOS and a `.so` on Linux. The host
+    // and target are checked before constructing this scope. Search
     // membership (including static-library diagnostic names) remains complete
     // in the physical inventory. Other roles can require any file's bytes.
     path.file_name()
         .and_then(|name| name.to_str())
         .is_none_or(|name| {
-            [".rmeta", ".rlib", ".rs", ".dylib"]
+            [".rmeta", ".rlib", ".rs", ".dylib", ".so"]
                 .iter()
                 .any(|suffix| name.ends_with(suffix))
         })
