@@ -813,7 +813,24 @@ fn resolve_imports(
         };
         let mut bindings = Vec::new();
 
+        let mut globbed = Vec::new();
         if let crate::item::UseTree::Glob { prefix, span } = &parsed.tree {
+            let module = parsed_path(prefix);
+            for name in std_glob(&module) {
+                if !occupied.contains_key(&name) {
+                    globbed.push((
+                        crate::item::Name {
+                            span: *span,
+                            text: name.clone(),
+                        },
+                        format!("{module}::{name}"),
+                    ));
+                }
+            }
+        }
+        if let crate::item::UseTree::Glob { prefix, span } = &parsed.tree
+            && globbed.is_empty()
+        {
             return Err(Error::InvalidImport {
                 path: parsed_path(prefix),
                 reason: "glob imports are supported for Rust modules in a package".into(),
@@ -845,6 +862,9 @@ fn resolve_imports(
         for (name, path) in parsed.bindings() {
             let qualified: ImmutableString = path.join("::").into();
             bindings.push(resolve_import_binding(name, qualified, host)?);
+        }
+        for (name, qualified) in globbed {
+            bindings.push(resolve_import_binding(name, qualified.into(), host)?);
         }
 
         for binding in &bindings {
@@ -1028,6 +1048,21 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                         || matches!(name, "Index" | "IndexMut" | "Range" | "RangeInclusive")
                 })
         })
+}
+
+/// The names `use std::collections::*;` and its kin bind: each name of
+/// that std module that `std_fmt_import` knows. None for another module.
+pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
+    const NAMES: &[&str] = &[
+        "HashMap", "HashSet", "BTreeMap", "BTreeSet", "Debug", "Display", "Formatter", "Write",
+        "Ordering", "PartialOrd", "Ord", "min", "max", "Reverse", "Hash", "TryFrom", "TryInto",
+        "FromStr", "swap", "replace", "take",
+    ];
+    NAMES
+        .iter()
+        .filter(|name| std_fmt_import(&format!("{module}::{name}")))
+        .map(|name| ImmutableString::from(*name))
+        .collect()
 }
 
 /// `std::ops::RangeInclusive` and `std::ops::Range` as a type path is

@@ -799,10 +799,17 @@ impl<'a> Resolver<'a> {
                 },
             });
         }
-        if !matches!(
+        // `use std::collections::*;`: the names of that std module Rawr
+        // knows.
+        let std_names = super::std_glob(&module);
+        let names = if !std_names.is_empty() {
+            std_names
+        } else if matches!(
             self.host.entry(&module),
             Some(host::Entry::Module | host::Entry::ModuleItem(_))
         ) {
+            self.host.children(&module)
+        } else {
             return Err(Failure {
                 primary: context.source,
                 secondary: None,
@@ -811,10 +818,8 @@ impl<'a> Resolver<'a> {
                     reference: *span,
                 },
             });
-        }
-        Ok(self
-            .host
-            .children(&module)
+        };
+        Ok(names
             .into_iter()
             .filter(|name| !occupied.contains_key(name))
             .map(|name| {

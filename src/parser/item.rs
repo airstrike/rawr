@@ -40,11 +40,22 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
         let mut all = items.into_vec();
         for item in nested {
             // One import written in several bodies is hoisted once.
+            // A glob binds no names here: its key is its module.
             let key = |used: &crate::item::Use| {
-                used.bindings()
+                let mut key = used
+                    .bindings()
                     .into_iter()
                     .map(|(name, path)| (name.text, path))
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                if let crate::item::UseTree::Glob { prefix, .. } = &used.tree {
+                    let path = prefix
+                        .segments
+                        .iter()
+                        .map(|segment| segment.name.text.clone())
+                        .collect();
+                    key.push(("*".into(), path));
+                }
+                key
             };
             if let crate::item::Parsed::Use(used) = &item
                 && all.iter().any(|existing| {
@@ -3909,6 +3920,36 @@ fn parse_use_members(
 ) -> ParseResult<(Vec<crate::item::UseMember>, Position)> {
     let mut members = Vec::new();
     while !matches!(input.peek(), Some((Token::RightBrace, _))) {
+        // `use a::{self, *}`: a glob of the group's prefix.
+        if let Some((Token::Multiply, position)) = input.peek() {
+            let star = token_span(*position, "*");
+            input.next();
+            let span = Span::new(
+                prefix.first().expect("a path segment").span.start(),
+                prefix.last().expect("a path segment").span.end(),
+            );
+            trees.push(crate::item::UseTree::Glob {
+                span: Span::new(span.start(), star.end()),
+                prefix: type_ref::Path {
+                    segments: prefix.to_vec().into_boxed_slice(),
+                    span,
+                },
+            });
+            match input.peek().expect("token streams always end with EOF") {
+                (Token::Comma, _) => {
+                    input.next();
+                    continue;
+                }
+                (Token::RightBrace, _) => break,
+                (_, position) => {
+                    return Err(PERR::MissingToken(
+                        Token::Comma.into(),
+                        "between grouped imports".into(),
+                    )
+                    .into_err(*position));
+                }
+            }
+        }
         let name = match input.peek() {
             Some((Token::SelfValue, position)) => {
                 let span = token_span(*position, "self");

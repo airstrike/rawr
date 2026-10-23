@@ -7096,3 +7096,22 @@ fn language_fn_pointer_casts_and_trait_function_values() {
     "#);
     assert_eq!(value, 17);
 }
+
+#[test]
+fn language_std_glob_imports_bind_the_module_names() {
+    let value = run(r#"
+        use std::collections::{self, *};
+        use std::cmp::{self, *};
+        pub fn run() -> i64 {
+            let mut set: HashSet<i64> = HashSet::new();
+            set.insert(3);
+            let mut map = BTreeMap::new();
+            map.insert(1, 2);
+            let order = if max(1, 2) == 2 { Ordering::Less } else { Ordering::Greater };
+            let less = if order == Ordering::Less { 10 } else { 0 };
+            set.len() as i64 + map[&1] + less + cmp::min(4, 5) + min(0, 1)
+        }
+        run()
+    "#);
+    assert_eq!(value, 17);
+}
