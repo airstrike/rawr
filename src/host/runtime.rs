@@ -2782,6 +2782,7 @@ mod tests {
                 path,
                 host::type_def::import::Identity::new(*identity),
                 false,
+                false,
                 parameters.clone(),
                 shape,
                 &mut allocation,

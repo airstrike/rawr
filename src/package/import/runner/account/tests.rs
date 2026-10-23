@@ -765,11 +765,11 @@ fn plan() -> rawr_import::surface::facade::Plan {
     let bytes = serde_json::to_vec(&serde_json::json!({
         "schema": 6, "aliases": [], "sources": [], "abis": [], "operations": [],
         "facades": [
-            {"root": "native", "types": [{"path": "Source", "identity": source, "parameters": [], "copy": false,
+            {"root": "native", "types": [{"path": "Source", "identity": source, "parameters": [], "copy": false, "default": false,
                 "shape": {"Struct": {"form": "Unit", "constructor": constructor, "fields": [], "constructible": true}}}],
              "items": [{"path": "produce", "kind": "Function", "selector": producer,
                 "signature": {"parameters": [], "inputs": [], "output": {"Nominal": {"identity": source, "arguments": []}}}}]},
-            {"root": "target", "types": [{"path": "Event", "identity": target, "parameters": ["Message"], "copy": false,
+            {"root": "target", "types": [{"path": "Event", "identity": target, "parameters": ["Message"], "copy": false, "default": false,
                 "shape": {"Struct": {"form": "Unit", "constructor": null, "fields": [], "constructible": false}}}], "items": []}
         ]
     })).unwrap();

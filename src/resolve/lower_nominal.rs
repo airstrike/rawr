@@ -142,7 +142,14 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
         {
             continue;
         }
-        let body_source = source_span(program.source.text_at(shell.source), definition.body.span);
+        let body_source = source_span(
+            definition
+                .body
+                .text
+                .as_deref()
+                .unwrap_or_else(|| program.source.text_at(shell.source)),
+            definition.body.span,
+        );
         let mut parser = Parser::for_function(
             engine,
             &body_source,
@@ -593,7 +600,14 @@ fn lower_with_context(
         {
             continue;
         }
-        let body_source = source_span(program.source.text_at(shell.source), definition.body.span);
+        let body_source = source_span(
+            definition
+                .body
+                .text
+                .as_deref()
+                .unwrap_or_else(|| program.source.text_at(shell.source)),
+            definition.body.span,
+        );
         let mut parser = Parser::for_function(
             engine,
             &body_source,
@@ -1430,6 +1444,8 @@ fn write_default_dispatcher(
         }
         let call = if let Some(definition) = models.std_impl(*id, "Default", "default") {
             format!("{}()", method_name(definition.id()))
+        } else if !models.default_folds(&model.ty(), &mut Vec::new()) {
+            continue;
         } else if let Some(value) = default_value(model, models, &mut Vec::new()) {
             let helper = format!("{SENTINEL}{}", ops.len());
             ops.push(ExecutableOp::Default {
@@ -2430,6 +2446,43 @@ impl Models {
                     .trait_name()
                     .is_some_and(|implemented| implemented == trait_name)
             })
+    }
+
+    /// Whether the model builds `ty`'s `Default` once, when the program is
+    /// compiled. A type with its own `impl Default` and an imported Rust
+    /// type run code for it, and so does a struct deriving `Default` with
+    /// such a field (`application::default_runs_code` reads the same).
+    fn default_folds(&self, ty: &Ty, visiting: &mut Vec<type_def::Id>) -> bool {
+        match ty {
+            Ty::Boxed(inner) | Ty::Reverse(inner) => self.default_folds(inner, visiting),
+            Ty::Array {
+                element,
+                length: Some(_),
+            } => self.default_folds(element, visiting),
+            Ty::Tuple(members) => members
+                .iter()
+                .all(|member| self.default_folds(member, visiting)),
+            Ty::Host { proof, .. } => proof.definition.native_identity().is_some(),
+            Ty::Script(id, _) => {
+                if visiting.contains(id) {
+                    return true;
+                }
+                if self.std_impl(*id, "Default", "default").is_some() {
+                    return false;
+                }
+                let Nominal::Struct { item, .. } = self.definition(*id) else {
+                    return true;
+                };
+                visiting.push(*id);
+                let folds = item
+                    .fields
+                    .iter()
+                    .all(|field| self.default_folds(&Ty::from_resolved(&field.ty), visiting));
+                visiting.pop();
+                folds
+            }
+            _ => true,
+        }
     }
 
     fn function(&self, name: &str) -> Option<&ScriptFunction> {
@@ -5880,9 +5933,12 @@ impl Ty {
         }
     }
 
+    /// The type of the value at runtime. An imported Rust value is a handle
+    /// the generated runner names, so a field or payload holding one takes
+    /// any value, as a generic one does.
     fn type_id(&self, models: &Models) -> TypeId {
         self.native_type_id(models)
-            .unwrap_or_else(|| unreachable!("symbolic imported types have no native TypeId"))
+            .unwrap_or_else(TypeId::of::<Dynamic>)
     }
 
     fn native_type_id(&self, models: &Models) -> Option<TypeId> {
@@ -10305,8 +10361,9 @@ impl<'a> Parser<'a> {
             // The type is the expected one, fixed by inference: the default
             // is written once it is known.
             let ty = self.inference.fresh();
+            // Wide enough for a struct built from its fields' defaults.
             let placeholder = format!(
-                "__rawr_nominal_default_value_{:036}",
+                "__rawr_nominal_default_value_{:0228}",
                 self.pending_defaults.len()
             );
             self.capture_witnesses();
@@ -26715,6 +26772,13 @@ impl<'a> Parser<'a> {
             Ty::Float(_) => "0.0".into(),
             Ty::String => "\"\"".into(),
             Ty::Array { length: None, .. } | Ty::Keyed(..) => "[]".into(),
+            Ty::Array {
+                element,
+                length: Some(length),
+            } => {
+                let element = self.default_source(element, span)?;
+                origin::Fragment::join(vec![element; *length], ", ").surrounded("[", "]")
+            }
             Ty::Option(_) => self.prelude_op(PreludeOp::None, []),
             Ty::Time(Time::Duration) => self.prelude_op(
                 PreludeOp::Time,
@@ -26735,6 +26799,28 @@ impl<'a> Parser<'a> {
             Ty::Script(id, ..) => {
                 let model = self.models.definition(*id).clone();
                 self.require_capability(&model, capability::Kind::Default, span)?;
+                // A hand-written `impl Default` runs.
+                if let Some(definition) = self.models.std_impl(*id, "Default", "default") {
+                    return Ok(origin::Fragment::call(method_name(definition.id()), []));
+                }
+                // A derived `Default` with a field whose `Default` runs code
+                // is the struct of each field's `Default`, built each time.
+                if let Nominal::Struct { definition, item } = &model
+                    && item.generics.is_empty()
+                    && !self.models.default_folds(&ty, &mut Vec::new())
+                {
+                    let fields = item
+                        .fields
+                        .iter()
+                        .map(|field| self.default_source(&Ty::from_resolved(&field.ty), span))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    self.used_nominal = true;
+                    let helper = self.push_op(Op::Struct {
+                        definition: definition.clone(),
+                        item: item.clone(),
+                    });
+                    return Ok(origin::Fragment::call(&helper, fields));
+                }
                 let value =
                     default_value(&model, &self.models, &mut Vec::new()).ok_or_else(|| {
                         Error::MissingCapability {
@@ -26748,6 +26834,36 @@ impl<'a> Parser<'a> {
                     definition: model.definition().clone(),
                 });
                 origin::Fragment::call(&helper, [])
+            }
+            // A library type's own `Default`: `T::default()`, which for an
+            // imported Rust type calls `<T as Default>::default()`.
+            Ty::Host { proof, arguments }
+                if arguments.is_empty()
+                    && proof
+                        .definition
+                        .capabilities()
+                        .contains(capability::Kind::Default) =>
+            {
+                let path = format!("{}::default", proof.definition.path());
+                let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+                    if proof.definition.native_identity().is_some() {
+                        return Err(Error::MissingCapability {
+                            owner: ty.name(&self.models),
+                            capability: "Default".into(),
+                            operation: span,
+                        });
+                    }
+                    // An imported type's `default` comes from its crate's
+                    // `impl Default`, demanded as `Type::default`.
+                    return Err(Error::UnknownMember {
+                        owner: proof.definition.path().into(),
+                        member: "default".into(),
+                        reference: span,
+                    });
+                };
+                let owner = self.models.item_owner(&path).cloned();
+                let value = self.call_host_function(&items, owner, Vec::new(), span)?;
+                value.rendered_source()
             }
             _ => {
                 return Err(Error::MissingCapability {
@@ -30253,21 +30369,10 @@ impl<'a> Parser<'a> {
                 self.expect(Token::LeftParen, "'(' after default")?;
                 self.expect(Token::RightParen, "')' after default")?
             };
-            self.require_capability(&model, capability::Kind::Default, member_span)?;
-            let value = default_value(&model, &self.models, &mut Vec::new()).ok_or_else(|| {
-                Error::MissingCapability {
-                    owner: model.name().into(),
-                    capability: "Default".into(),
-                    operation: member_span,
-                }
-            })?;
-            let helper = self.push_op(Op::Default {
-                value,
-                definition: model.definition().clone(),
-            });
+            let source = self.default_source(&model.ty(), member_span)?;
             return Ok(ParsedExpr {
                 prelude: origin::Fragment::default(),
-                source: origin::Fragment::call(&helper, []),
+                source,
                 ty: model.ty(),
                 span: span(owner_span.start(), end),
                 lvalue: None,
@@ -37215,6 +37320,7 @@ pub fn run() -> i64 {
                 "Pair",
                 pair_identity,
                 false,
+                false,
                 Box::default(),
                 pair_shape,
                 &mut allocation,
@@ -37224,6 +37330,7 @@ pub fn run() -> i64 {
             .imported_type(
                 "domain::State",
                 state_identity,
+                false,
                 false,
                 Box::default(),
                 host::type_def::Shape::Struct {
@@ -37264,6 +37371,7 @@ pub fn run() -> i64 {
                 "Holder",
                 host::type_def::import::Identity::new([0x34; 32]),
                 false,
+                false,
                 Box::default(),
                 host::type_def::Shape::Struct {
                     form: host::type_def::Form::Record,
@@ -37284,6 +37392,7 @@ pub fn run() -> i64 {
                 "CopyPair",
                 copy_identity,
                 true,
+                false,
                 Box::default(),
                 host::type_def::Shape::Struct {
                     form: host::type_def::Form::Record,
@@ -37303,6 +37412,7 @@ pub fn run() -> i64 {
             .imported_type(
                 "Choice",
                 host::type_def::import::Identity::new([0x32; 32]),
+                false,
                 false,
                 Box::default(),
                 host::type_def::Shape::Enum(Box::from([
@@ -37425,6 +37535,7 @@ pub fn run() -> i64 {
                 .imported_type(
                     alias,
                     identity,
+                    false,
                     false,
                     Box::default(),
                     shape.clone(),

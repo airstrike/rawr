@@ -1657,6 +1657,7 @@ fn resolve_item(
                     lowering: item::Lowering::Unavailable,
                     syntax: parsed.body_syntax,
                     constant: false,
+                    text: None,
                 },
             })
         }
@@ -1754,6 +1755,7 @@ fn resolve_function(
             lowering: item::Lowering::Unavailable,
             syntax: parsed.body_syntax,
             constant: parsed.constant,
+            text: None,
         },
     })
 }
@@ -2841,6 +2843,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             lowering: item::Lowering::Unavailable,
             syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: false,
+            text: None,
         },
     };
     let functions = match name {

@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 5;
-const CLASSIFIER_VERSION: u32 = 3;
+const CLASSIFIER_VERSION: u32 = 4;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -2958,7 +2958,8 @@ impl<P: api::Phase> Context<'_, P> {
             admitted.into_boxed_slice(),
             constructible,
             declaration_only,
-            self.copy(definition),
+            self.implements(definition, "Copy"),
+            self.implements(definition, "Default"),
         ))
     }
 
@@ -3027,7 +3028,8 @@ impl<P: api::Phase> Context<'_, P> {
             parameters,
             admitted.into_boxed_slice(),
             declaration_only,
-            self.copy(definition),
+            self.implements(definition, "Copy"),
+            self.implements(definition, "Default"),
         ))
     }
 
@@ -3253,7 +3255,9 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
-    fn copy(&self, definition: usize) -> bool {
+    /// Whether the crate implements the `core` trait `name` (`Copy`,
+    /// `Default`) for the definition itself, without generics.
+    fn implements(&self, definition: usize, name: &str) -> bool {
         let Some(definition) = self.graph.definitions().nth(definition) else {
             return false;
         };
@@ -3274,10 +3278,10 @@ impl<P: api::Phase> Context<'_, P> {
             else {
                 return false;
             };
-            let copy_trait = id.unit().authority().sysroot().is_some()
+            let core_trait = id.unit().authority().sysroot().is_some()
                 && id.unit().crate_name() == "core"
-                && trait_definition.display_path().last() == Some("Copy");
-            copy_trait && exact_definition(implementation.self_type(), definition.id())
+                && trait_definition.display_path().last() == Some(name);
+            core_trait && exact_definition(implementation.self_type(), definition.id())
         })
     }
 }

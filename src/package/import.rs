@@ -1441,9 +1441,17 @@ fn build(
     }
 
     for entry in &facade.entries {
-        let (parameters, copy) = match entry.outcome.representability() {
-            Representability::Struct(plan) => (names(plan.parameters(), allocation)?, plan.copy()),
-            Representability::Enum(plan) => (names(plan.parameters(), allocation)?, plan.copy()),
+        let (parameters, copy, default) = match entry.outcome.representability() {
+            Representability::Struct(plan) => (
+                names(plan.parameters(), allocation)?,
+                plan.copy(),
+                plan.default(),
+            ),
+            Representability::Enum(plan) => (
+                names(plan.parameters(), allocation)?,
+                plan.copy(),
+                plan.default(),
+            ),
             Representability::Value(_)
             | Representability::Function(_)
             | Representability::Method(_)
@@ -1539,6 +1547,7 @@ fn build(
             entry.relative.as_ref(),
             imported_identity(entry.definition),
             copy,
+            default,
             parameters,
             shape,
             allocation,

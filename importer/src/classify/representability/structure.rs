@@ -20,6 +20,7 @@ pub struct Plan {
     constructible: bool,
     declaration_only: bool,
     copy: bool,
+    default: bool,
 }
 
 impl Field {
@@ -74,6 +75,7 @@ impl Plan {
         constructible: bool,
         declaration_only: bool,
         copy: bool,
+        default: bool,
     ) -> Self {
         Self {
             constructor,
@@ -83,6 +85,7 @@ impl Plan {
             constructible,
             declaration_only,
             copy,
+            default,
         }
     }
 
@@ -119,5 +122,11 @@ impl Plan {
     #[must_use]
     pub const fn copy(&self) -> bool {
         self.copy
+    }
+
+    /// Whether the crate implements `Default` for the type.
+    #[must_use]
+    pub const fn default(&self) -> bool {
+        self.default
     }
 }

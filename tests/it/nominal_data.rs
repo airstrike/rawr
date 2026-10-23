@@ -48,6 +48,40 @@ fn recursively_proven_default_constructs_nested_nominal_fields() {
     assert_eq!(engine.eval_ast::<i64>(&ast).unwrap(), 0);
 }
 
+/// A hand-written `impl Default` runs wherever its type's `Default` is
+/// asked for: `Default::default()`, a derived `Default`'s field and
+/// `Type::default()` of the deriving type, as in Rust.
+#[test]
+fn a_derived_default_runs_a_field_hand_written_default() {
+    let engine = Engine::new();
+    let ast = engine
+        .compile(
+            r#"
+                struct Inner { value: i64 }
+                impl Default for Inner {
+                    fn default() -> Self { Inner { value: 5 } }
+                }
+                #[derive(Default)]
+                struct Outer { inner: Inner, count: i64, pair: (Inner, i64), list: [Inner; 2] }
+
+                let inner: Inner = Default::default();
+                let outer = Outer::default();
+                let other: Outer = Default::default();
+                [inner.value, outer.inner.value, other.inner.value, outer.count,
+                 outer.pair.0.value, outer.list[1].value]
+            "#,
+        )
+        .unwrap();
+
+    let values = engine
+        .eval_ast::<rawr::Array>(&ast)
+        .unwrap()
+        .into_iter()
+        .map(|value| value.as_int().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(values, [5, 5, 5, 0, 5, 5]);
+}
+
 #[test]
 fn stale_nested_values_are_rejected_at_construction_and_field_boundaries() {
     let engine = Engine::new();

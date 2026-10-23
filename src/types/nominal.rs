@@ -236,9 +236,13 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                 name if name == crate::item::type_ref::ITER_TYPE => true,
                 _ => false,
             },
-            type_ref::Target::Host { definition, .. } => {
-                definition.native_identity() == Some(value.type_id())
-            }
+            // An imported Rust value is a handle the generated runner
+            // names, whose type its bridge checks where the value is used.
+            type_ref::Target::Host { definition, .. } => definition
+                .native_identity()
+                .map_or(definition.identity().imported().is_some(), |native| {
+                    native == value.type_id()
+                }),
             // A generic parameter and its associated types are erased:
             // any value.
             type_ref::Target::Parameter | type_ref::Target::Projection(..) | type_ref::Target::Alias(_) => true,

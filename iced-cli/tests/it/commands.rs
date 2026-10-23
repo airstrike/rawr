@@ -761,3 +761,43 @@ fn writable(root: &Path) {
         }
     }
 }
+
+/// A struct deriving `Default` with a field of an imported Rust type: the
+/// field's default is `<Gauge as Default>::default()` through the bridge,
+/// as `Gauge::default()` and `Default::default()` are.
+#[test]
+#[ignore = "builds the path dependency and a runner with the import driver"]
+fn a_derived_default_calls_an_imported_type_default() {
+    let sandbox = Sandbox::new("imported-default");
+    let root = copy_fixture("rs-marker-path", sandbox.path());
+    fs::write(
+        root.join("app/src/main.rs"),
+        r#"// rawr
+use gauge::Gauge;
+
+#[derive(Default)]
+struct Panel {
+    gauge: Gauge,
+    count: u32,
+}
+
+fn main() {
+    let panel = Panel::default();
+    let other: Panel = Default::default();
+    let gauge: Gauge = Default::default();
+    println!("{} {} {} {}", panel.gauge.level(), other.gauge.level(), gauge.level(), panel.count);
+}
+"#,
+    )
+    .unwrap();
+
+    let output = rawr_command()
+        .arg("run")
+        .arg(root.join("app"))
+        .output()
+        .unwrap();
+
+    writable(&root);
+    assert_success(&output);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7 7 7 0\n");
+}

@@ -18,6 +18,7 @@ pub struct Plan {
     variants: Box<[Variant]>,
     declaration_only: bool,
     copy: bool,
+    default: bool,
 }
 
 impl Variant {
@@ -76,12 +77,14 @@ impl Plan {
         variants: Box<[Variant]>,
         declaration_only: bool,
         copy: bool,
+        default: bool,
     ) -> Self {
         Self {
             parameters,
             variants,
             declaration_only,
             copy,
+            default,
         }
     }
 
@@ -103,5 +106,11 @@ impl Plan {
     #[must_use]
     pub const fn copy(&self) -> bool {
         self.copy
+    }
+
+    /// Whether the crate implements `Default` for the type.
+    #[must_use]
+    pub const fn default(&self) -> bool {
+        self.default
     }
 }

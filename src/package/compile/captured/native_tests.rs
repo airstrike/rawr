@@ -103,6 +103,7 @@ fn structure(engine: &mut Engine) -> identity::Selector {
             "Cell",
             host::type_def::import::Identity::new([61; 32]),
             false,
+            false,
             Box::default(),
             Shared::new(host::type_def::Shape::Struct {
                 form: host::type_def::Form::Tuple,

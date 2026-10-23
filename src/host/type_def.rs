@@ -338,6 +338,7 @@ impl Definition {
         path: host::path::Path,
         identity: import::Identity,
         copy: bool,
+        default: bool,
         parameters: Box<[ImmutableString]>,
         shape: Shared<Shape>,
     ) -> Result<Self, host::Error> {
@@ -349,7 +350,8 @@ impl Definition {
             capabilities: capability::Set::from_explicit(
                 copy.then_some([capability::Kind::Clone, capability::Kind::Copy])
                     .into_iter()
-                    .flatten(),
+                    .flatten()
+                    .chain(default.then_some(capability::Kind::Default)),
             ),
             storage: Storage::Owned,
             role: Role::Ordinary,

@@ -516,6 +516,12 @@ fn resolve_main(
                 .ok(),
                 _ => None,
             };
+            let boot = boot.or_else(|| {
+                let shell = default_boot(attempt, &update, items, methods, boot_closure.len())?;
+                let key = shell.key.clone();
+                boot_closure.push(shell);
+                key
+            });
             Entry {
                 form: application::Form::Run,
                 facade: contracts.facade.clone(),
@@ -564,7 +570,13 @@ fn resolve_main(
                 None => match resolve_callback(&callbacks[0], "boot", items, methods, source) {
                 Ok(boot) => Some(boot),
                 Err(_) if matches!(callbacks[0].segments.as_ref(), [_, name] if name.as_str() == "default") => {
-                    None
+                    default_boot(attempt, &update, items, methods, boot_closure.len()).and_then(
+                        |shell| {
+                            let key = shell.key.clone();
+                            boot_closure.push(shell);
+                            key
+                        },
+                    )
                 }
                 Err(error) => return Err(error),
                 },
@@ -732,9 +744,154 @@ fn boot_function(
                 lowering: item::Lowering::NominalFunction,
                 syntax: crate::item::BodySyntax::new(Vec::new()),
                 constant: true,
+                text: None,
             },
         }),
     })
+}
+
+/// A boot from a derived `Default` the model cannot build when the program
+/// is compiled: a field's type is an imported Rust type, or has its own
+/// `impl Default`, so building the State runs code. It is the function of
+/// no parameters returning `State::default()`, beside `main`,
+/// written where the `iced::run` call starts.
+fn default_boot(
+    attempt: &Attempt<'_>,
+    update: &crate::item::Key,
+    items: &[item::Shell],
+    methods: &[method::Definition],
+    synthesized: usize,
+) -> Option<item::Shell> {
+    let main = items.iter().find(|shell| match &shell.kind {
+        item::Kind::Function(function) => function.name.span == attempt.name.span,
+        item::Kind::LegacyFunction(function) => function.name.span == attempt.name.span,
+        _ => false,
+    })?;
+    let state = update_state(update, items, methods)?;
+    if !default_runs_code(&state, items, methods, &mut Vec::new()) {
+        return None;
+    }
+    let super::type_ref::Type::Path(super::type_ref::Path {
+        target:
+            super::type_ref::Target::Script {
+                identity: crate::type_def::Identity::Script(key),
+                ..
+            },
+        ..
+    }) = &state
+    else {
+        return None;
+    };
+    // `main` is at the crate root, where a root State is named as it is.
+    let mut body = String::from(if key.modules().is_empty() { "" } else { "crate::" });
+    for module in key.modules() {
+        body.push_str(module);
+        body.push_str("::");
+    }
+    body.push_str(key.name());
+    body.push_str("::default()");
+    let start = attempt.span.start();
+    let (line, column) = (start.line()?, start.position()?);
+    let text = format!("{}{}{body}", "\n".repeat(line - 1), " ".repeat(column - 1));
+    let end = crate::Position::new(
+        u16::try_from(line).ok()?,
+        u16::try_from(column + body.len()).ok()?,
+    );
+    let body = Span::new(start, end);
+    let name = crate::item::Name {
+        text: "__rawr_default".into(),
+        span: body,
+    };
+    Some(item::Shell {
+        id: crate::item::Id::from_index(items.len() + synthesized),
+        source: main.source,
+        key: Some(crate::item::Key::new(
+            update.package().into(),
+            update.modules().into(),
+            name.text.clone(),
+            crate::item::Kind::Function,
+        )),
+        span: body,
+        kind: item::Kind::Function(item::Function {
+            header: crate::item::Header {
+                attributes: Box::default(),
+                visibility: None,
+                span: body,
+            },
+            name,
+            generics: Box::default(),
+            receiver: None,
+            parameters: Box::default(),
+            output: Some(state),
+            body: item::Body {
+                span: body,
+                lowering: item::Lowering::NominalFunction,
+                syntax: crate::item::BodySyntax::new(Vec::new()),
+                constant: true,
+                text: Some(text.into()),
+            },
+        }),
+    })
+}
+
+/// Whether building `ty`'s `Default` runs code: an imported Rust type, a
+/// type with its own `impl Default`, or a struct deriving `Default` with
+/// such a field. Rawr builds any other `Default` once, when it compiles the
+/// program.
+pub(crate) fn default_runs_code(
+    ty: &super::type_ref::Type,
+    items: &[item::Shell],
+    methods: &[method::Definition],
+    visiting: &mut Vec<crate::type_def::Id>,
+) -> bool {
+    use super::type_ref::{Target, Type};
+    match ty {
+        Type::Unit(_) | Type::Reference { .. } => false,
+        Type::Tuple { members, .. } => members
+            .iter()
+            .any(|member| default_runs_code(member, items, methods, visiting)),
+        Type::Path(_)
+            if ty.option_element().is_some()
+                || ty.vec_element().is_some()
+                || ty.keyed_arguments().is_some() =>
+        {
+            false
+        }
+        Type::Path(_) if let Some(inner) = ty.box_element().or_else(|| ty.reverse_element()) => {
+            default_runs_code(inner, items, methods, visiting)
+        }
+        Type::Path(_) if let Some((element, _)) = ty.array_element() => {
+            default_runs_code(element, items, methods, visiting)
+        }
+        Type::Path(path) => match &path.target {
+            Target::Host { definition, .. } => definition.native_identity().is_none(),
+            Target::Script { definition, .. } => {
+                let definition = *definition;
+                if visiting.contains(&definition) {
+                    return false;
+                }
+                if methods.iter().any(|method| {
+                    method.owner() == definition
+                        && method.trait_name().is_some_and(|name| name == "Default")
+                }) {
+                    return true;
+                }
+                visiting.push(definition);
+                let runs = items.iter().any(|shell| match &shell.kind {
+                    item::Kind::Struct(item) if item.definition == definition => item
+                        .fields
+                        .iter()
+                        .any(|field| default_runs_code(&field.ty, items, methods, visiting)),
+                    _ => false,
+                });
+                visiting.pop();
+                runs
+            }
+            Target::Builtin | Target::Parameter | Target::Projection(..) | Target::Alias(_) => {
+                false
+            }
+        },
+    }
 }
 
 /// The State an `update` callback changes: the `&mut` first parameter of a
@@ -841,6 +998,7 @@ fn theme_function(
                 lowering: item::Lowering::NominalFunction,
                 syntax: crate::item::BodySyntax::new(Vec::new()),
                 constant: true,
+                text: None,
             },
         }),
     })

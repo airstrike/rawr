@@ -891,6 +891,7 @@ fn build(
                 ty.path(),
                 host::type_def::import::Identity::new(identity),
                 ty.copy(),
+                ty.default(),
                 parameters,
                 shape,
                 allocation,

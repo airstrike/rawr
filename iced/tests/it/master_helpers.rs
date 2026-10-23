@@ -962,3 +962,48 @@ fn master_std_time_is_iced_time() {
     let adapter = boot(STD_TIME);
     find(&adapter, "1.5s true");
 }
+
+/// A derived `Default` runs a field's own `impl Default`, as Rust's does.
+/// `iced::run` then boots the State by running that code.
+#[test]
+fn master_derived_default_runs_a_field_hand_written_default() {
+    let adapter = boot(
+        r#"
+use iced::widget::text;
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct Level {
+    value: i32,
+}
+
+impl Default for Level {
+    fn default() -> Self {
+        Level { value: 5 }
+    }
+}
+
+#[derive(Default)]
+struct State {
+    level: Level,
+    count: u32,
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let level: Level = Default::default();
+        text(format!("level {} {} {}", self.level.value, level.value, self.count))
+    }
+}
+"#,
+    );
+    find(&adapter, "level 5 5 0");
+}

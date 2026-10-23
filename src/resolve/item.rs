@@ -224,6 +224,9 @@ pub(crate) struct Body {
     pub lowering: Lowering,
     pub syntax: crate::item::BodySyntax,
     pub constant: bool,
+    /// The text `span` selects when Rawr wrote the body itself; `None`
+    /// for a body in its source.
+    pub text: Option<crate::ImmutableString>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
