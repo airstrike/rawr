@@ -19579,6 +19579,11 @@ impl<'a> Parser<'a> {
         let field = read.rendered_source();
         let test = self.prelude_op(PreludeOp::IsSome, [field.clone()]);
         out.tests.push(test);
+        // `Variant { .. }` matches a tuple variant whatever its fields, as
+        // in Rust.
+        if matches!(&pattern.named, Some((names, true)) if names.is_empty()) {
+            return Ok(());
+        }
         if pattern.named.is_some() {
             return Err(Error::InvalidMatch {
                 owner: owner_path.as_str().into(),

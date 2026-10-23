@@ -1819,3 +1819,49 @@ impl State {
     );
     find(&adapter, "0.00");
 }
+
+/// iced master's delineate example matches a tuple variant with `{ .. }`.
+#[test]
+fn master_tuple_variants_match_with_braces() {
+    let adapter = boot(
+        r#"
+use iced::event::{self, Event};
+use iced::widget::text;
+use iced::{window, Subscription, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view)
+        .subscription(State::subscription)
+        .run()
+}
+
+#[derive(Default)]
+struct State {
+    resizes: i64,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Event(Event),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Event(Event::Window(window::Event::Resized { .. })) => self.resizes += 1,
+            Message::Event(_) => {}
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        text(format!("resizes {}", self.resizes))
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        event::listen().map(Message::Event)
+    }
+}
+"#,
+    );
+    find(&adapter, "resizes 0");
+}
