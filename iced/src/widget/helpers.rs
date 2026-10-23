@@ -22,6 +22,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_wrappers(builder);
     super::media::bind(builder);
     super::icon::bind(builder);
+    super::angle::bind(builder);
     super::rich::bind(builder);
     bind_operations(builder);
     bind_keyboard(builder);

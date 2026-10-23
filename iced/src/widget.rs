@@ -1,6 +1,7 @@
 //! Open durable widget descriptors lowered into transient iced elements.
 
 mod adapter;
+mod angle;
 pub(crate) mod builtin;
 mod canvas;
 pub mod children;

@@ -1161,3 +1161,44 @@ fn master_checkbox_takes_a_custom_icon() {
     }
     find(&adapter, "Custom");
 }
+
+const ANGLES: &str = r#"
+use iced::widget::{column, text};
+use iced::{Degrees, Radians, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Turned(Degrees),
+}
+
+const SPEED: Degrees = Degrees(360.0);
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let quarter = Radians::from(Degrees(90.0));
+        let turn = (quarter + SPEED * 0.5 + Radians(0.0)) % (Radians::PI * 2.0);
+        let half = turn / 2.0 - Radians::from(0.0);
+        column![
+            text(format!("{:?}", Radians::PI == Radians::from(Degrees(180.0)))),
+            text(format!("{:?}", half == Radians(1.0))),
+            text(format!("{:?}", Degrees(45.0))),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_angles_convert_and_combine() {
+    let adapter = boot(ANGLES);
+    find(&adapter, "true");
+    find(&adapter, "Degrees(45.0)");
+}

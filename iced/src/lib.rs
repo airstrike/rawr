@@ -95,6 +95,8 @@ fn register_debug() {
     register::<iced::Border>();
     register::<iced::Color>();
     register::<iced::ContentFit>();
+    register::<iced::Degrees>();
+    register::<iced::Radians>();
     register::<iced::widget::checkbox::Icon>();
     register::<iced::widget::text::LineHeight>();
     register::<iced::widget::text::Shaping>();
@@ -239,6 +241,20 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.default_value_type::<iced::Rectangle>("Rectangle", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::Size>("Size", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::Vector>("Vector", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
+    for path in ["Degrees", "Radians"] {
+        let capabilities = &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ];
+        match path {
+            "Degrees" => builder.value_type::<iced::Degrees>(path, &[], capabilities)?,
+            _ => builder.value_type::<iced::Radians>(path, &[], capabilities)?,
+        };
+    }
     builder.default_value_type::<iced::mouse::Interaction>(
         "mouse::Interaction",
         &[],
@@ -950,6 +966,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
     declare_checkbox_icon(&mut builder)?;
+    declare_angles(&mut builder)?;
 
     builder.finish()
 }
@@ -3243,6 +3260,46 @@ fn declare_font(builder: &mut facade::Builder) -> Result<(), host::Error> {
             format!("Font::{name}"),
             receiver::Mode::Owned,
             method.finish(),
+        )?)?;
+    }
+    Ok(())
+}
+
+/// iced's `Degrees` and `Radians`: `Degrees(90.0)`, `Radians::PI`,
+/// `Radians::from(degrees)` and their operators, the methods named for `std::ops`' traits.
+fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let f64 = || type_ref::Type::builtin(type_ref::Builtin::F64);
+    let degrees = || type_ref::Type::registered("Degrees");
+    let radians = || type_ref::Type::registered("Radians");
+    for (path, output) in [("Degrees", degrees()?), ("Radians", radians()?)] {
+        let mut from = signature::Builder::new();
+        from.parameter(f64()).output(output.clone());
+        builder.item(item::Definition::associated_function(
+            format!("{path}::from"),
+            from.finish(),
+        )?)?;
+    }
+    let mut from = signature::Builder::new();
+    from.parameter(degrees()?).output(radians()?);
+    builder.item(item::Definition::associated_function("Radians::from", from.finish())?)?;
+    builder.item(item::Definition::associated_value("Radians::PI", radians()?)?)?;
+    for (owner, name, input, output) in [
+        ("Degrees", "mul", f64(), degrees()?),
+        ("Radians", "add", radians()?, radians()?),
+        ("Radians", "add", degrees()?, radians()?),
+        ("Radians", "sub", radians()?, radians()?),
+        ("Radians", "mul", radians()?, radians()?),
+        ("Radians", "mul", f64(), radians()?),
+        ("Radians", "div", radians()?, radians()?),
+        ("Radians", "div", f64(), radians()?),
+        ("Radians", "rem", radians()?, radians()?),
+    ] {
+        let mut operator = signature::Builder::new();
+        operator.parameter(input).output(output);
+        builder.item(item::Definition::method(
+            format!("{owner}::{name}"),
+            receiver::Mode::Owned,
+            operator.finish(),
         )?)?;
     }
     Ok(())

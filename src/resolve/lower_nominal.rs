@@ -24704,6 +24704,22 @@ impl<'a> Parser<'a> {
                         .into_boxed_slice();
                     return self.parse_host_function(items, owner, name_span);
                 }
+                // `Degrees(90.0)`: a facade tuple struct's constructor, which
+                // the facade declares as the type's `from`.
+                if let item::Import::Type { definition, .. } = &binding.target
+                    && definition.identity().imported().is_none()
+                    && self
+                        .models
+                        .host_items(&format!("{}::from", definition.path()))
+                        .is_some()
+                {
+                    let at = name_span.start();
+                    self.splice_tokens(vec![
+                        (Token::DoubleColon, at),
+                        (Token::Identifier(Box::new("from".into())), at),
+                    ]);
+                    return self.parse_qualified(name, name_span);
+                }
             }
             let function = self.models.function(&name).cloned();
             return self.parse_script_call(name, function, name_span);
