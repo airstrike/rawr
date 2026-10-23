@@ -28668,6 +28668,27 @@ impl<'a> Parser<'a> {
                 && self.models.host_items(&format!("{full}::from")).is_none()
             {
                 let target = type_def::Id::foreign(&definition.path());
+                // `Element::from(widget)`: a widget has no `From` conversion
+                // into the type its facade trait erases to, as in rustc.
+                if !self.models.conversions.contains_key(&target)
+                    && self.erasure_types().iter().any(|erased| {
+                        matches!(erased, Ty::Host { proof, .. } if proof.definition.path() == definition.path())
+                    })
+                {
+                    let (arguments, end) = self.parse_call_arguments("`from` arguments")?;
+                    let call = span(owner_span.start(), end);
+                    if let [argument] = &arguments[..] {
+                        let source = self.inference.resolve(&argument.ty);
+                        if let Some(erased) = self.widget_erasure(&source) {
+                            return Err(self.no_widget_conversion(&source, &erased, "from", call));
+                        }
+                    }
+                    return Err(Error::UnknownMember {
+                        owner: full.into(),
+                        member,
+                        reference: member_span,
+                    });
+                }
                 if self.models.conversions.contains_key(&target) {
                     let (mut arguments, end) = self.parse_call_arguments("`from` arguments")?;
                     let call = span(owner_span.start(), end);
@@ -30944,27 +30965,38 @@ impl<'a> Parser<'a> {
     /// `.into()` is rejected as rustc rejects it (E0277).
     fn parse_into(&mut self, mut value: ParsedExpr, end: Position) -> Result<ParsedExpr, Error> {
         let source = self.inference.resolve(&value.ty);
-        let target = match self.projected_host_types(&source).into_iter().next() {
-            None if self.erased_widget(&source) => self.erasure_types().into_iter().next(),
-            target => target,
-        };
-        if let Some(target) = target {
-            return Err(Error::InvalidMethodCall {
-                owner: source.name(&self.models),
-                method: "into".into(),
-                reason: format!(
-                    "`{}` has no `From` conversion into `{}`; use `.boxed()`, or drop the \
-                     `.into()` where an `impl Widget` is expected",
-                    source.name(&self.models),
-                    target.name(&self.models)
-                )
-                .into(),
-                call: span(value.span.start(), end),
-            });
+        if let Some(target) = self.widget_erasure(&source) {
+            let call = span(value.span.start(), end);
+            return Err(self.no_widget_conversion(&source, &target, "into", call));
         }
         value.span = span(value.span.start(), end);
         value.lvalue = None;
         Ok(value.retain_origin())
+    }
+
+    /// The type a widget erases to (iced's `Element`), when `source` is a
+    /// widget.
+    fn widget_erasure(&mut self, source: &Ty) -> Option<Ty> {
+        match self.projected_host_types(source).into_iter().next() {
+            None if self.erased_widget(source) => self.erasure_types().into_iter().next(),
+            target => target,
+        }
+    }
+
+    /// A widget's `.into()` or `Element::from(widget)`, which rustc rejects
+    /// (E0277) and Rawr rejects with the `.boxed()` fix.
+    fn no_widget_conversion(&self, source: &Ty, target: &Ty, method: &str, call: Span) -> Error {
+        let (source, target) = (source.name(&self.models), target.name(&self.models));
+        Error::InvalidMethodCall {
+            owner: if method == "from" { target.clone() } else { source.clone() },
+            method: method.into(),
+            reason: format!(
+                "`{source}` has no `From` conversion into `{target}`. Call `.boxed()` on the \
+                 widget instead. Where an `impl Widget` is expected, pass the widget as it is"
+            )
+            .into(),
+            call,
+        }
     }
 
     /// The types facade traits erase to (iced's `Element`), each with fresh

@@ -633,7 +633,29 @@ impl State {
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 "#,
     );
-    assert!(error.contains("use `.boxed()`"), "{error}");
+    assert!(error.contains("Call `.boxed()` on the widget instead"), "{error}");
+    // A helper's `.into()` and `Element::from(widget)` carry the same fix.
+    for body in [
+        "fn card(label: &str) -> Element<'static, Message> { container(text(label.to_string())).into() }",
+        "fn card(label: &str) -> Element<'static, Message> { Element::from(text(label.to_string())) }",
+    ] {
+        let error = rejected(&format!(
+            r#"
+use iced::widget::{{column, container, text}};
+use iced::Element;
+#[derive(Default)] struct State;
+#[derive(Debug, Clone)] enum Message {{}}
+{body}
+impl State {{
+    fn update(&mut self, message: Message) {{}}
+    fn view(&self) -> Element<'_, Message> {{ column![card("a")].boxed() }}
+}}
+pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
+"#
+        ));
+        assert!(error.contains("has no `From` conversion"), "{error}");
+        assert!(error.contains("Call `.boxed()` on the widget instead"), "{error}");
+    }
     // Other conversions keep `.into()`.
     let adapter = boot(
         r#"
