@@ -896,3 +896,37 @@ fn master_root_shorthands_read_by_their_full_paths() {
     let adapter = boot(ROOT_SHORTHANDS);
     find(&adapter, "portion");
 }
+
+const THEME_VALUE: &str = r#"
+use iced::widget::{row, text};
+use iced::{Theme, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view)
+        .theme(Theme::Dark)
+        .run()
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        row![text("left"), text("right")]
+    }
+}
+"#;
+
+#[test]
+fn master_application_takes_a_theme_value() {
+    // iced master's `.theme(Theme::Dark)`: a theme is the function of the
+    // State that returns it.
+    let adapter = boot(THEME_VALUE);
+    find(&adapter, "right");
+}
+
