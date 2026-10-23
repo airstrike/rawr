@@ -275,6 +275,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         builder.trait_::<marker::Widget>(path, &["Message"])?;
         builder.project(path, "Element", &["Message"])?;
     }
+    builder.trait_::<marker::Function>("Function", &[])?;
     builder.type_::<marker::Column>("widget::Column", &["Message"], &[])?;
     builder.type_::<marker::Row>("widget::Row", &["Message"], &[])?;
     builder.type_::<marker::Container>("widget::Container", &["Message"], &[])?;

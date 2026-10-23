@@ -51,6 +51,10 @@ pub(crate) struct Application;
 /// iced's `Widget` trait, which source names only as `impl Widget<Message>`.
 pub(crate) struct Widget;
 
+/// iced's `Function` trait, whose `with` a `use iced::Function` brings to
+/// every function of two or more inputs.
+pub(crate) struct Function;
+
 /// iced's `component::Component` trait, which script types implement.
 pub(crate) struct ComponentTrait;
 

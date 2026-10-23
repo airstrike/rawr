@@ -10183,6 +10183,81 @@ impl<'a> Parser<'a> {
         self.parse_match(name_span)
     }
 
+    /// `f.with(x)`, at its `(`: the closure `move |b, ..| f(x, b, ..)` over
+    /// the rest of `f`'s inputs, with `f` and `x` evaluated once, first.
+    fn parse_function_with(
+        &mut self,
+        function: ParsedExpr,
+        inputs: &[Ty],
+    ) -> Result<ParsedExpr, Error> {
+        let open = self.next().1;
+        let argument = self.parse_expr()?;
+        let close = self.expect(Token::RightParen, "')' after the argument of `with`")?;
+        let whole = span(function.span.start(), close);
+        self.coerce_expr(&inputs[0], &mut { argument.clone() })?;
+        let callee = self.temporary("function");
+        let bound = self.temporary("argument");
+        let mut prelude = origin::Fragment::plain(format!("let {callee} = "));
+        prelude.push(function.rendered_source());
+        prelude.push_text(format!(";\nlet {bound} = "));
+        prelude.push(argument.rendered_source());
+        prelude.push_text(";\n");
+        let outer = self.bindings.clone();
+        for (name, ty, declaration) in [
+            (&callee, function.ty.clone(), function.span),
+            (&bound, argument.ty.clone(), argument.span),
+        ] {
+            self.bindings.insert(
+                name.as_str().into(),
+                Binding {
+                    ty,
+                    mutable: false,
+                    available: true,
+                    declaration,
+                    kind: BindingKind::Local,
+                },
+            );
+        }
+        let identifier = |name: &str| (Token::Identifier(Box::new(name.into())), open);
+        let rest = (1..inputs.len())
+            .map(|index| format!("__rawr_with{index}"))
+            .collect::<Vec<_>>();
+        let mut tokens = Vec::new();
+        for (index, name) in rest.iter().enumerate() {
+            if index > 0 {
+                tokens.push((Token::Comma, open));
+            }
+            tokens.push(identifier(name));
+        }
+        tokens.extend([
+            (Token::Pipe, open),
+            identifier(&callee),
+            (Token::LeftParen, open),
+            identifier(&bound),
+        ]);
+        for name in &rest {
+            tokens.push((Token::Comma, open));
+            tokens.push(identifier(name));
+        }
+        tokens.push((Token::RightParen, open));
+        self.splice_tokens(tokens);
+        self.closure_hint = Some(inputs[1..].to_vec().into_boxed_slice());
+        let closure = self.parse_closure(Token::Pipe, whole, true);
+        self.bindings = outer;
+        let closure = closure?;
+        prelude.push(closure.prelude.clone());
+        Ok(ParsedExpr {
+            prelude,
+            source: closure.source,
+            ty: closure.ty,
+            span: whole,
+            lvalue: None,
+            outcome: closure.outcome,
+            evaluation: closure.evaluation,
+        }
+        .retain_origin())
+    }
+
     /// A method named as a value (`Type::method`) is the closure
     /// `|receiver, ..| receiver.method(..)` over `inputs`, the receiver's
     /// type first.
@@ -22613,6 +22688,21 @@ impl<'a> Parser<'a> {
                 };
                 continue;
             }
+            // `Message::Changed.with(id)`: iced's `Function::with`, the
+            // closure that calls the function with `id` first.
+            if member == "with"
+                && matches!(self.peek(), Token::LeftParen)
+                && self
+                    .models
+                    .import("Function")
+                    .is_some_and(|binding| binding.qualified.as_str() == "iced::Function")
+                && let Ty::Fn { inputs, .. } | Ty::FnItem { inputs, .. } =
+                    self.inference.resolve(&value.ty)
+                && inputs.len() > 1
+            {
+                value = self.parse_function_with(value, &inputs)?;
+                continue;
+            }
             let builtin = self.inference.resolve(&value.ty);
             // `a.min(b)`, `a.max(b)`, `a.clamp(lo, hi)` through `Ord`, unless
             // the type has its own method of that name.
@@ -25076,7 +25166,11 @@ impl<'a> Parser<'a> {
         self.lifted[index].value = Some(item.clone());
         let symbolic = self.symbolic_expr(item, inputs, *output, value.span, captures);
         value.source = symbolic.source;
-        value.prelude = symbolic.prelude;
+        // The closure's own prelude binds what it captures, as `f.with(x)`
+        // binds `f` and `x`.
+        let mut prelude = std::mem::take(&mut value.prelude);
+        prelude.push(symbolic.prelude);
+        value.prelude = prelude;
         value.ty = symbolic.ty;
         Ok(())
     }

@@ -1323,3 +1323,64 @@ fn master_lengths_take_bounds() {
     find(&adapter, "bounded");
     find(&adapter, "floored");
 }
+
+const FUNCTION_WITH: &str = r#"
+use iced::widget::{button, column, text, text_input};
+use iced::{Function, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+
+#[derive(Default)]
+struct State {
+    title: String,
+    last: i64,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    TitleChanged(i64, String),
+    Pressed(i64, bool),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::TitleChanged(id, title) => {
+                self.last = id;
+                self.title = title;
+            }
+            Message::Pressed(id, _) => self.last = id,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let id = 7;
+        let pressed = Message::Pressed.with(id + 1);
+        column![
+            text(format!("{} {}", self.last, self.title)),
+            text_input("Title", &self.title).on_input(Message::TitleChanged.with(id)),
+            button("press").on_press(pressed(true)),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_function_with_binds_the_first_input() {
+    let mut adapter = boot(FUNCTION_WITH);
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("Title").unwrap();
+    simulator.typewrite("hi");
+    for message in simulator.into_messages() {
+        adapter.update(message).unwrap();
+    }
+    find(&adapter, "7 hi");
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("press").unwrap();
+    for message in simulator.into_messages() {
+        adapter.update(message).unwrap();
+    }
+    find(&adapter, "8 hi");
+}
