@@ -575,6 +575,22 @@ fn language_from_impls_for_sized_numbers() {
     assert_eq!(value, 70 + 30 * 1000 + 7 * 1000000);
 }
 
+#[test]
+fn language_fixed_array_map() {
+    // `[T; N]::map` is `[U; N]`; a `Vec` has no `map`.
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let a = [1, 2, 3];
+            let b: [i64; 3] = a.map(|x| x * 10);
+            let c = ["a", "bc"].map(|s| s.len());
+            b[2] + (c[1] * 100) as i64 + b.len() as i64 * 1000
+        }
+        run()
+    "#);
+    assert_eq!(value, 30 + 200 + 3000);
+    rejected("pub fn run() -> i64 { let v = vec![1]; let w = v.map(|x| x); w[0] } run()");
+}
+
 /// `Button::style` takes a two-parameter host callable, as iced's
 /// `fn(&Theme, Status) -> Style`.
 fn style_facade() -> crate::host::facade::Definition {

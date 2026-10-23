@@ -26410,6 +26410,39 @@ impl<'a> Parser<'a> {
             let ty = Ty::Iter(Box::new(element));
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }
+        // `[T; N]::map(f)`: `[U; N]`, each element passed by value.
+        if member.as_str() == "map"
+            && let Ty::Array {
+                length: Some(length),
+                ..
+            } = self.inference.resolve(&value.ty)
+        {
+            self.closure_hints = vec![Some(Box::new([element.clone()]) as Box<[Ty]>)];
+            let arguments = self.parse_call_arguments("array method arguments");
+            self.closure_hints = Vec::new();
+            let (mut arguments, end) = arguments?;
+            let [callable] = arguments.as_mut_slice() else {
+                return Err(Error::InvalidMethodCall {
+                    owner: self.inference.resolve(&value.ty).name(&self.models),
+                    method: member,
+                    reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
+                    call: span(value.span.start(), end),
+                });
+            };
+            let output = self.inference.fresh();
+            let (item, items) = (self.temporary("map"), self.temporary("map"));
+            let call = self.callable_call(callable, &[element], &output, vec![item.as_str().into()])?;
+            let mut source = origin::Fragment::plain(format!("{{ let {items} = []; for {item} in "));
+            source.push(value.rendered_source().surrounded("(", ")"));
+            source.push_text(format!(" {{ {items}.push("));
+            source.push(call);
+            source.push_text(format!("); }} {items} }}"));
+            let ty = Ty::Array {
+                element: Box::new(output),
+                length: Some(length),
+            };
+            return Ok(self.operator_expr(source.surrounded("(", ")"), ty, span(value.span.start(), end)));
+        }
         // A closure argument takes the parameter types Rust infers for it.
         let reference = Ty::Reference {
             mutable: false,
