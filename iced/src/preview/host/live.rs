@@ -33,6 +33,22 @@ enum LiveMessage {
     AgentShot(reload::agent::Call, crate::screenshot::Saved),
 }
 
+// iced's `debug` feature requires `Debug` of an application's message.
+impl std::fmt::Debug for LiveMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Host(..) => "Host",
+            Self::Reload(..) => "Reload",
+            Self::ReloadControl(..) => "ReloadControl",
+            Self::Cargo(..) => "Cargo",
+            Self::Saved(..) => "Saved",
+            Self::Export(..) => "Export",
+            Self::Agent(..) => "Agent",
+            Self::AgentShot(..) => "AgentShot",
+        })
+    }
+}
+
 const AGENT: reload::agent::Live<State, LiveMessage> = reload::agent::Live {
     session: |state| &mut state.agent,
     reset: |state| state.control(reload::status::Control::Reset),
@@ -291,6 +307,12 @@ mod tests {
 
     use super::{Application, Host, State};
     use crate::reload;
+
+    #[test]
+    fn the_message_is_debug_for_iceds_debug_feature() {
+        fn debug<T: std::fmt::Debug>() {}
+        debug::<super::LiveMessage>();
+    }
 
     #[test]
     fn retirement_ignores_refresh_and_retry_controls_queued_after_exit() {
