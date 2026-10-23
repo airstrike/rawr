@@ -1,4 +1,5 @@
-//! Conservative, transactional creation of a zero-config Rawr project.
+//! Conservative, transactional creation of a starter Cargo crate marked
+//! `// rawr`.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -6,10 +7,37 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
-/// The exact source installed by [`create`].
-pub const COUNTER_SOURCE: &str = include_str!("../assets/counter/src/main.rawr");
+/// The exact `src/main.rs` installed by [`create`].
+pub const COUNTER_SOURCE: &str = include_str!("../assets/counter/src/main.rs");
 
-/// A newly initialized Rawr project.
+/// The `Cargo.toml` [`create`] writes for the package `name`.
+#[must_use]
+pub fn manifest(name: &str) -> String {
+    format!(
+        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+         [dependencies]\niced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\" }}\n",
+        rawr_iced::native::ICED_REVISION
+    )
+}
+
+/// The Cargo package name for a crate in the directory `directory`, as
+/// `cargo new` would accept it: lowercase, with each character that is not
+/// an ASCII letter, digit, `-` or `_` replaced by `-`. `None` when the
+/// result is empty or does not start with a letter or `_`.
+#[must_use]
+pub fn package_name(directory: &str) -> Option<String> {
+    let name = directory
+        .chars()
+        .map(|character| match character.to_ascii_lowercase() {
+            kept @ ('a'..='z' | '0'..='9' | '-' | '_') => kept,
+            _ => '-',
+        })
+        .collect::<String>();
+    name.starts_with(|first: char| first.is_ascii_lowercase() || first == '_')
+        .then_some(name)
+}
+
+/// A newly initialized Rawr crate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Created {
     root: PathBuf,
@@ -36,6 +64,7 @@ enum ErrorKind {
         path: PathBuf,
         reason: &'static str,
     },
+    InvalidName(PathBuf),
     Inspect {
         path: PathBuf,
         source: io::Error,
@@ -66,6 +95,7 @@ enum EntryKind {
 #[derive(Clone, Copy, Debug)]
 enum Operation {
     CreateDirectory,
+    WriteManifest,
     WriteSource,
 }
 
@@ -87,6 +117,7 @@ enum Entry {
 #[derive(Clone, Debug)]
 struct Plan {
     root: PathBuf,
+    name: String,
     directories: Vec<PathBuf>,
 }
 
@@ -120,7 +151,7 @@ trait FileSystem {
 #[derive(Clone, Copy, Debug)]
 struct OsFileSystem;
 
-/// Create a project at `path`, resolving relative input against the current directory.
+/// Create a crate at `path`, resolving relative input against the current directory.
 pub fn create(path: PathBuf) -> Result<Created, Error> {
     let current = std::env::current_dir().map_err(|source| Error {
         kind: ErrorKind::CurrentDirectory(source),
@@ -169,22 +200,39 @@ fn create_at(
         kind: CreatedKind::Directory,
     });
 
-    let source_path = source_directory.join("main.rawr");
-    if let Err(failure) = file_system.write_new(&source_path, COUNTER_SOURCE.as_bytes()) {
-        if failure.created {
-            ledger.push(LedgerEntry {
-                path: source_path.clone(),
-                kind: CreatedKind::File,
-            });
-        }
-        return Err(initialization_failure(
-            file_system,
-            &plan.root,
-            &source_path,
+    let files = [
+        (
+            plan.root.join("Cargo.toml"),
+            manifest(&plan.name),
+            Operation::WriteManifest,
+        ),
+        (
+            source_directory.join("main.rs"),
+            COUNTER_SOURCE.to_owned(),
             Operation::WriteSource,
-            failure.source,
-            &ledger,
-        ));
+        ),
+    ];
+    for (path, contents, operation) in files {
+        if let Err(failure) = file_system.write_new(&path, contents.as_bytes()) {
+            if failure.created {
+                ledger.push(LedgerEntry {
+                    path: path.clone(),
+                    kind: CreatedKind::File,
+                });
+            }
+            return Err(initialization_failure(
+                file_system,
+                &plan.root,
+                &path,
+                operation,
+                failure.source,
+                &ledger,
+            ));
+        }
+        ledger.push(LedgerEntry {
+            path,
+            kind: CreatedKind::File,
+        });
     }
 
     Ok(Created { root: plan.root })
@@ -218,6 +266,12 @@ impl Plan {
                 "the filesystem root cannot be initialized as a project",
             ));
         }
+        let name = root
+            .file_name()
+            .and_then(|name| package_name(&name.to_string_lossy()))
+            .ok_or_else(|| Error {
+                kind: ErrorKind::InvalidName(root.clone()),
+            })?;
 
         let mut ancestors = root
             .ancestors()
@@ -281,7 +335,11 @@ impl Plan {
             }
         }
 
-        Ok(Self { root, directories })
+        Ok(Self {
+            root,
+            name,
+            directories,
+        })
     }
 }
 
@@ -434,6 +492,7 @@ impl fmt::Display for Operation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CreateDirectory => formatter.write_str("create directory"),
+            Self::WriteManifest => formatter.write_str("write Cargo.toml"),
             Self::WriteSource => formatter.write_str("write starter source"),
         }
     }
@@ -452,6 +511,13 @@ impl fmt::Display for Error {
                     path.display()
                 )
             }
+            ErrorKind::InvalidName(path) => write!(
+                formatter,
+                "`{}` cannot name a Cargo package. \
+                 A package name must start with a letter or `_`. \
+                 Pick a directory name that does.",
+                path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
+            ),
             ErrorKind::Inspect { path, source } => write!(
                 formatter,
                 "cannot inspect project target `{}`: {source}",
@@ -518,6 +584,7 @@ impl std::error::Error for Error {
             | ErrorKind::Inspect { source, .. }
             | ErrorKind::Initialize { source, .. } => Some(source),
             ErrorKind::UnsafeTarget { .. }
+            | ErrorKind::InvalidName(_)
             | ErrorKind::ExistingFile(_)
             | ErrorKind::ExistingSymlink(_)
             | ErrorKind::ExistingNonEmpty(_)
@@ -641,10 +708,65 @@ mod tests {
         let report = error.to_string();
 
         assert!(report.contains("rollback was incomplete"));
-        assert!(report.contains(&target.join("src/main.rawr").display().to_string()));
-        std::fs::remove_file(target.join("src/main.rawr")).unwrap();
-        std::fs::remove_dir(target.join("src")).unwrap();
+        assert!(report.contains(&target.join("Cargo.toml").display().to_string()));
+        std::fs::remove_file(target.join("Cargo.toml")).unwrap();
         std::fs::remove_dir(&target).unwrap();
+        std::fs::remove_dir(&sandbox).unwrap();
+    }
+
+    #[test]
+    fn a_new_crate_is_a_cargo_toml_and_a_marked_main_rs() {
+        let sandbox = temporary_path("crate");
+        std::fs::create_dir(&sandbox).unwrap();
+        let sandbox = std::fs::canonicalize(sandbox).unwrap();
+        let target = sandbox.join("My Counter");
+
+        let created = super::create_at(&OsFileSystem, &sandbox, &target).unwrap();
+
+        assert_eq!(created.root(), target);
+        let manifest = std::fs::read_to_string(target.join("Cargo.toml")).unwrap();
+        assert_eq!(manifest, super::manifest("my-counter"));
+        assert!(manifest.starts_with("[package]\nname = \"my-counter\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"));
+        assert!(manifest.contains(&format!(
+            "iced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\" }}",
+            rawr_iced::native::ICED_REVISION
+        )));
+        let source = std::fs::read_to_string(target.join("src/main.rs")).unwrap();
+        assert_eq!(source, super::COUNTER_SOURCE);
+        assert!(rawr::project::is_marked(&source));
+        assert!(matches!(
+            rawr::project::Target::discover(&target).unwrap(),
+            rawr::project::Target::Project(_)
+        ));
+        std::fs::remove_dir_all(&sandbox).unwrap();
+    }
+
+    #[test]
+    fn package_names_follow_what_cargo_new_accepts() {
+        assert_eq!(super::package_name("counter").as_deref(), Some("counter"));
+        assert_eq!(super::package_name("My App").as_deref(), Some("my-app"));
+        assert_eq!(super::package_name("snake_case-1").as_deref(), Some("snake_case-1"));
+        assert_eq!(super::package_name("_x.y").as_deref(), Some("_x-y"));
+        assert_eq!(super::package_name("café").as_deref(), Some("caf-"));
+        assert_eq!(super::package_name("1up"), None);
+        assert_eq!(super::package_name("-dash"), None);
+        assert_eq!(super::package_name(""), None);
+    }
+
+    #[test]
+    fn a_directory_that_names_no_package_is_refused_before_writing() {
+        let sandbox = temporary_path("bad-name");
+        std::fs::create_dir(&sandbox).unwrap();
+        let sandbox = std::fs::canonicalize(sandbox).unwrap();
+        let target = sandbox.join("2048");
+
+        let error = super::create_at(&OsFileSystem, &sandbox, &target).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "`2048` cannot name a Cargo package. A package name must start with a letter or `_`. Pick a directory name that does."
+        );
+        assert!(!target.exists());
         std::fs::remove_dir(&sandbox).unwrap();
     }
 

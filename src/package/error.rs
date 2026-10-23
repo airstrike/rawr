@@ -11,16 +11,12 @@ use crate::{diagnostic, ImmutableString, ParseError, Span};
 pub enum Category {
     /// A Rawr source failed to parse.
     Parse,
-    /// A `rawr.toml` manifest is malformed or incomplete.
+    /// The crate's `Cargo.toml` is malformed or incomplete.
     Manifest,
     /// A canonical package or source resource could not be loaded.
     Resource,
     /// A declared file-module graph is invalid.
     Module,
-    /// Local package dependencies contain a cycle.
-    DependencyCycle,
-    /// Two canonical roots claim the same stable package identity.
-    DuplicatePackage,
     /// Static names or item headers failed aggregate semantic resolution.
     Resolution,
     /// A resolved package graph failed body lowering or application checking.
@@ -58,16 +54,6 @@ enum Kind {
         primary: Label,
         secondary: Option<Label>,
     },
-    DependencyCycle {
-        message: ImmutableString,
-        primary: Label,
-        secondary: Option<Label>,
-    },
-    DuplicatePackage {
-        name: ImmutableString,
-        primary: Label,
-        secondary: Label,
-    },
     Resolution {
         primary: usize,
         secondary: Option<usize>,
@@ -91,18 +77,6 @@ pub(crate) struct Label {
 }
 
 impl Error {
-    pub(crate) fn authority(sources: Vec<diagnostic::Source>, message: ImmutableString) -> Self {
-        Self::resource(
-            sources,
-            message,
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "package graph source authority is absent",
-            ),
-            None,
-        )
-    }
-
     pub(crate) fn parse(
         sources: Vec<diagnostic::Source>,
         source: usize,
@@ -159,40 +133,6 @@ impl Error {
             sources: sources.into_boxed_slice(),
             kind: Kind::Module {
                 message,
-                primary,
-                secondary,
-            },
-            rust_demand: None,
-        }
-    }
-
-    pub(crate) fn dependency_cycle(
-        sources: Vec<diagnostic::Source>,
-        message: ImmutableString,
-        primary: Label,
-        secondary: Option<Label>,
-    ) -> Self {
-        Self {
-            sources: sources.into_boxed_slice(),
-            kind: Kind::DependencyCycle {
-                message,
-                primary,
-                secondary,
-            },
-            rust_demand: None,
-        }
-    }
-
-    pub(crate) fn duplicate_package(
-        sources: Vec<diagnostic::Source>,
-        name: ImmutableString,
-        primary: Label,
-        secondary: Label,
-    ) -> Self {
-        Self {
-            sources: sources.into_boxed_slice(),
-            kind: Kind::DuplicatePackage {
-                name,
                 primary,
                 secondary,
             },
@@ -288,8 +228,6 @@ impl Error {
             Kind::Manifest { .. } => Category::Manifest,
             Kind::Resource { .. } | Kind::Diagnostic(_) => Category::Resource,
             Kind::Module { .. } => Category::Module,
-            Kind::DependencyCycle { .. } => Category::DependencyCycle,
-            Kind::DuplicatePackage { .. } => Category::DuplicatePackage,
             Kind::Resolution { .. } => Category::Resolution,
             Kind::Compilation { .. } => Category::Compilation,
             #[cfg(feature = "rust-import")]
@@ -314,7 +252,6 @@ impl Error {
                 message.clone(),
             )
             .primary(self.sources[*source].clone(), *span, None)?
-            .help("use `[package] name = \"...\"` and `[dependencies] alias = { path = \"...\" }`")
             .finish()),
             Kind::Resource {
                 message, primary, ..
@@ -339,29 +276,6 @@ impl Error {
                 &self.sources,
                 *primary,
                 *secondary,
-            ),
-            Kind::DependencyCycle {
-                message,
-                primary,
-                secondary,
-            } => labels(
-                diagnostic::Report::error(diagnostic::code::RESOLVE_PACKAGE_CYCLE, message.clone()),
-                &self.sources,
-                *primary,
-                *secondary,
-            ),
-            Kind::DuplicatePackage {
-                name,
-                primary,
-                secondary,
-            } => labels(
-                diagnostic::Report::error(
-                    diagnostic::code::RESOLVE_PACKAGE_IDENTITY,
-                    format!("more than one package declares stable identity `{name}`"),
-                ),
-                &self.sources,
-                *primary,
-                Some(*secondary),
             ),
             Kind::Resolution {
                 primary,
@@ -423,11 +337,7 @@ impl fmt::Display for Error {
             Kind::Parse { error, .. } => error.fmt(formatter),
             Kind::Manifest { message, .. }
             | Kind::Resource { message, .. }
-            | Kind::Module { message, .. }
-            | Kind::DependencyCycle { message, .. } => message.fmt(formatter),
-            Kind::DuplicatePackage { name, .. } => {
-                write!(formatter, "duplicate stable package identity `{name}`")
-            }
+            | Kind::Module { message, .. } => message.fmt(formatter),
             Kind::Resolution { error, .. } => error.fmt(formatter),
             Kind::Compilation { error, .. } => error.fmt(formatter),
             #[cfg(feature = "rust-import")]
@@ -451,10 +361,7 @@ impl std::error::Error for Error {
             Kind::Import(error) => Some(error),
             #[cfg(feature = "rust-import")]
             Kind::ImportDiagnostic(_) => None,
-            Kind::Manifest { .. }
-            | Kind::Module { .. }
-            | Kind::DependencyCycle { .. }
-            | Kind::DuplicatePackage { .. } => None,
+            Kind::Manifest { .. } | Kind::Module { .. } => None,
         }
     }
 }
@@ -472,9 +379,9 @@ mod tests {
     #[test]
     fn unmapped_aggregate_failure_does_not_claim_the_entry_or_dependency_source() {
         let sources = vec![
-            Source::new("app/src/main.rawr", "fn main() {}\n")
+            Source::new("app/src/main.rs", "fn main() {}\n")
                 .expect("entry fixture has a stable identity"),
-            Source::new("dependency/src/lib.rawr", "fn view() {}\n")
+            Source::new("app/src/view.rs", "fn view() {}\n")
                 .expect("dependency fixture has a stable identity"),
         ]
         .into_boxed_slice();

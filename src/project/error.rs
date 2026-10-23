@@ -11,8 +11,8 @@ pub enum Resource {
     Input,
     /// A Rawr source file.
     Source,
-    /// A `rawr.toml` file.
-    Config,
+    /// A `Cargo.toml` file.
+    Manifest,
     /// A VCS marker used as an ancestor-search boundary.
     Boundary,
 }
@@ -22,7 +22,7 @@ impl fmt::Display for Resource {
         match self {
             Self::Input => formatter.write_str("input path"),
             Self::Source => formatter.write_str("Rawr source"),
-            Self::Config => formatter.write_str("Rawr config"),
+            Self::Manifest => formatter.write_str("Cargo manifest"),
             Self::Boundary => formatter.write_str("project boundary"),
         }
     }
@@ -46,6 +46,9 @@ pub enum Error {
         start: PathBuf,
         /// Inclusive VCS or filesystem boundary where discovery stopped.
         boundary: PathBuf,
+        /// A `rawr.toml` or `src/main.rawr` seen on the way, which Rawr no
+        /// longer reads.
+        legacy: Option<PathBuf>,
     },
     /// More than one project root was found before the search boundary.
     Ambiguous {
@@ -63,19 +66,22 @@ pub enum Error {
         /// Filesystem failure.
         source: io::Error,
     },
-    /// An explicit input is neither a directory, `.rawr` or `.rs` source, nor `rawr.toml`.
+    /// An explicit input is neither a directory, a `.rs` file nor a `Cargo.toml`.
     UnsupportedInput {
         /// Canonical unsupported path.
         path: PathBuf,
     },
-    /// A project root does not contain its canonical source file.
+    /// An explicit `.rawr` file or `rawr.toml`, which Rawr no longer reads.
+    Legacy {
+        /// Canonical path of the `.rawr` file or `rawr.toml`.
+        path: PathBuf,
+    },
+    /// A Cargo crate has neither `src/main.rs` nor `src/lib.rs`.
     MissingSource {
-        /// Canonical project root.
+        /// Canonical crate root.
         root: PathBuf,
-        /// Expected `src/main.rawr` path.
+        /// Expected `src/main.rs` path.
         expected: PathBuf,
-        /// Manifest that made the directory an authoritative project, if any.
-        config: Option<PathBuf>,
     },
     /// A Cargo package's crate root does not start with the `// rawr` marker.
     Unmarked {
@@ -83,13 +89,6 @@ pub enum Error {
         root: PathBuf,
         /// The unmarked `src/main.rs` or `src/lib.rs`.
         entry: PathBuf,
-    },
-    /// Explicit manifest selection did not resolve to a project manifest.
-    MissingConfig {
-        /// Canonical project root.
-        root: PathBuf,
-        /// Expected `rawr.toml` path.
-        expected: PathBuf,
     },
     /// A project-owned symlink resolves outside its canonical root.
     EscapesRoot {
@@ -115,16 +114,32 @@ impl fmt::Display for Error {
                 "cannot discover a Rawr target from `{}`: the path does not exist",
                 path.display()
             ),
-            Self::NotFound { start, boundary } => write!(
-                formatter,
-                "no Rawr project found from `{}` through `{}`; expected `src/main.rawr` or `rawr.toml`",
-                start.display(),
-                boundary.display()
-            ),
+            Self::NotFound {
+                start,
+                boundary,
+                legacy,
+            } => {
+                write!(
+                    formatter,
+                    "no Rawr project found from `{}` through `{}`. \
+                     A Rawr project is a Cargo crate whose `src/main.rs` starts with `// rawr`.",
+                    start.display(),
+                    boundary.display()
+                )?;
+                if let Some(legacy) = legacy {
+                    write!(
+                        formatter,
+                        " `{}` is no longer read. \
+                         Rawr does not read rawr.toml or `.rawr` files anymore.",
+                        legacy.display()
+                    )?;
+                }
+                Ok(())
+            }
             Self::Ambiguous { start, candidates } => {
                 write!(
                     formatter,
-                    "multiple Rawr projects found from `{}`; pass an exact project directory or `.rawr` file:",
+                    "multiple Rawr projects found from `{}`; pass an exact crate directory or `.rs` file:",
                     start.display()
                 )?;
                 for candidate in candidates {
@@ -143,39 +158,36 @@ impl fmt::Display for Error {
             ),
             Self::UnsupportedInput { path } => write!(
                 formatter,
-                "unsupported Rawr input `{}`; pass a directory, `.rawr` or `.rs` source file, or `rawr.toml`",
+                "unsupported Rawr input `{}`. Pass a directory, a `.rs` file or a `Cargo.toml`.",
                 path.display()
             ),
-            Self::MissingSource {
-                root,
-                expected,
-                config,
-            } => {
+            Self::Legacy { path } if path.extension() == Some(std::ffi::OsStr::new("rawr")) => {
                 write!(
                     formatter,
-                    "Rawr project `{}` is missing `{}`",
-                    root.display(),
-                    expected.display()
-                )?;
-                if let Some(config) = config {
-                    write!(
-                        formatter,
-                        "; `{}` marks this directory as a project boundary",
-                        config.display()
-                    )?;
-                }
-                Ok(())
+                    "`{}` is a `.rawr` file. Rawr reads `.rs` files now. \
+                     Rename the file to `.rs` and put `// rawr` on its first line. \
+                     A project goes in a Cargo crate whose `src/main.rs` starts with `// rawr`.",
+                    path.display()
+                )
             }
+            Self::Legacy { path } => write!(
+                formatter,
+                "`{}` is no longer read. Rawr reads `.rs` files in a Cargo crate now. \
+                 Put the project in a Cargo crate whose `src/main.rs` starts with `// rawr`. \
+                 Rename each `.rawr` file to `.rs` and put `// rawr` on its first line. \
+                 Move the dependencies to the `[dependencies]` of `Cargo.toml`.",
+                path.display()
+            ),
+            Self::MissingSource { root, expected } => write!(
+                formatter,
+                "Cargo crate `{}` is missing `{}`",
+                root.display(),
+                expected.display()
+            ),
             Self::Unmarked { entry, .. } => write!(
                 formatter,
                 "`{}` is not a Rawr file. Its first line is not `// rawr`.",
                 entry.display()
-            ),
-            Self::MissingConfig { root, expected } => write!(
-                formatter,
-                "Rawr project `{}` is missing explicit manifest `{}`",
-                root.display(),
-                expected.display()
             ),
             Self::EscapesRoot {
                 resource,
@@ -202,9 +214,9 @@ impl std::error::Error for Error {
             Self::NotFound { .. }
             | Self::Ambiguous { .. }
             | Self::UnsupportedInput { .. }
+            | Self::Legacy { .. }
             | Self::MissingSource { .. }
             | Self::Unmarked { .. }
-            | Self::MissingConfig { .. }
             | Self::EscapesRoot { .. } => None,
         }
     }

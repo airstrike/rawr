@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// Concise CLI help text.
-pub const HELP: &str = "rawr-iced: iced support for the rawr command\n\n`rawr` hands programs that use iced to rawr-iced, which opens them and\nreloads them when you save. rawr-iced also runs the commands below that\n`rawr` does not run itself.\n\nUsage:\n  rawr [run] [path]\n  rawr preview [path] [name]\n  rawr snapshot --check [--verbose] [path]\n  rawr snapshot --update [--verbose] [path]\n  rawr check [path]\n  rawr check --as-rust [path]\n  rawr new <name-or-path>\n  rawr doctor [path]\n  rawr mcp\n  rawr init [--claude] [--codex] [path]\n  rawr cache clean [--all]\n\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the CLI version\n      --verbose    Show snapshot storage details";
+pub const HELP: &str = "rawr-iced: iced support for the rawr command\n\n`rawr` hands programs that use iced to rawr-iced, which opens them and\nreloads them when you save. rawr-iced also runs the commands below that\n`rawr` does not run itself.\n\nUsage:\n  rawr [run] [path]\n  rawr preview [path] [name]\n  rawr snapshot --check [--verbose] [path]\n  rawr snapshot --update [--verbose] [path]\n  rawr check [path]\n  rawr new <path>\n  rawr doctor [path]\n  rawr mcp\n  rawr init [--claude] [--codex] [path]\n  rawr cache clean [--all]\n\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the CLI version\n      --verbose    Show snapshot storage details";
 
 /// Deterministic snapshot operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,15 +46,9 @@ pub enum Command {
         /// Explicit source or project path, or current-directory discovery.
         path: Option<PathBuf>,
     },
-    /// Check that each `.rawr` module would compile as `.rs`: `cargo check`
-    /// over a copy under `target/` with `.rawr` renamed to `.rs`.
-    CheckAsRust {
-        /// Explicit source or project path, or current-directory discovery.
-        path: Option<PathBuf>,
-    },
-    /// Create a conservative starter project.
+    /// Create a starter Cargo crate.
     New {
-        /// New project name or destination path.
+        /// Destination directory.
         path: PathBuf,
     },
     /// Serve Rawr's agent tools over MCP on stdio (`claude mcp add rawr -- rawr mcp`).
@@ -122,21 +116,11 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Request, E
         Some("run") => optional_path(&mut arguments, |path| Command::Run { path }),
         Some("preview") => preview(&mut arguments),
         Some("snapshot") => snapshot(&mut arguments),
-        Some("check") => {
-            let mut arguments = arguments.peekable();
-            if arguments
-                .next_if(|argument| argument == "--as-rust")
-                .is_some()
-            {
-                optional_path(&mut arguments, |path| Command::CheckAsRust { path })
-            } else {
-                optional_path(&mut arguments, |path| Command::Check { path })
-            }
-        }
+        Some("check") => optional_path(&mut arguments, |path| Command::Check { path }),
         Some("doctor") => optional_path(&mut arguments, |path| Command::Doctor { path }),
         Some("mcp") => terminal(Request::Execute(Command::Mcp), &mut arguments),
         Some("init") => init(&mut arguments),
-        Some("new") => required_path("new", "<name-or-path>", &mut arguments),
+        Some("new") => required_path("new", "<path>", &mut arguments),
         Some("cache") => match (arguments.next(), arguments.next()) {
             (Some(clean), all)
                 if clean == "clean" && all.as_ref().is_none_or(|all| all == "--all") =>
@@ -317,11 +301,18 @@ fn required_path(
 }
 
 fn is_implicit_run_path(argument: &OsStr) -> bool {
-    if argument == "." || argument == ".." || argument == "rawr.toml" {
+    // `rawr.toml` and `.rawr` count as paths only so discovery can say how
+    // to convert them.
+    if argument == "."
+        || argument == ".."
+        || argument == "Cargo.toml"
+        || argument == "rawr.toml"
+    {
         return true;
     }
     let path = Path::new(argument);
-    path.extension() == Some(OsStr::new("rawr"))
+    path.extension() == Some(OsStr::new("rs"))
+        || path.extension() == Some(OsStr::new("rawr"))
         || argument
             .to_string_lossy()
             .contains(std::path::MAIN_SEPARATOR)
@@ -391,7 +382,7 @@ mod tests {
 
     #[test]
     fn unambiguous_path_tokens_are_implicit_run_targets() {
-        for path in [".", "..", "./counter", "src/main.rawr", "rawr.toml"] {
+        for path in [".", "..", "./counter", "src/main.rs", "Cargo.toml", "rawr.toml"] {
             assert_eq!(
                 parse(&[path]).unwrap(),
                 Request::Execute(Command::Run {
@@ -408,16 +399,6 @@ mod tests {
             Request::Execute(Command::Check {
                 path: Some(PathBuf::from("counter"))
             })
-        );
-        assert_eq!(
-            parse(&["check", "--as-rust", "counter"]).unwrap(),
-            Request::Execute(Command::CheckAsRust {
-                path: Some(PathBuf::from("counter"))
-            })
-        );
-        assert_eq!(
-            parse(&["check", "--as-rust"]).unwrap(),
-            Request::Execute(Command::CheckAsRust { path: None })
         );
         assert_eq!(
             parse(&["preview", "counter"]).unwrap(),
@@ -548,7 +529,7 @@ mod tests {
             parse(&["new"]).unwrap_err(),
             Error::MissingArgument {
                 command: "new",
-                argument: "<name-or-path>"
+                argument: "<path>"
             }
         );
         assert_eq!(

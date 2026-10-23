@@ -8,25 +8,21 @@ use rawr_import::{process::resident, supervisor::snapshot::attempt::Scope};
 #[cfg(test)]
 mod tests;
 
-/// Exact consumed Rawr declarations of the admitted native owner. Comparing the
-/// whole manifest set conservatively routes any declaration edit to preparation.
+/// The exact `Cargo.toml` the admitted native owner consumed. Comparing it
+/// conservatively routes any declaration edit to preparation.
 #[derive(Clone, Eq, PartialEq)]
 pub(in crate::import) struct Manifests(Box<[(PathBuf, Box<str>)]>);
 
 impl Manifests {
     pub(in crate::import) fn from_graph(graph: &rawr::package::Graph) -> Self {
-        let mut files = graph
-            .packages()
-            .iter()
-            .filter_map(|package| {
-                package
-                    .manifest()
-                    .zip(package.manifest_text())
-                    .map(|(path, text)| (path.to_path_buf(), text.into()))
-            })
-            .collect::<Vec<_>>();
-        files.sort_by(|a, b| a.0.cmp(&b.0));
-        Self(files.into_boxed_slice())
+        Self(
+            graph
+                .entry_package()
+                .cargo_manifest()
+                .map(|(path, text)| (path.to_path_buf(), text.into()))
+                .into_iter()
+                .collect(),
+        )
     }
 }
 
@@ -56,7 +52,7 @@ pub(super) fn attempt(
     let capture = (|| {
         let graph = rawr::package::Graph::load(&rawr::Engine::new(), target)
             .map_err(|error| crate::watch::package_report(&error, diagnostic.clone()))?;
-        // The resident route uses the same captured `[rust.limits]` profile.
+        // The resident route uses the same limits profile.
         let limits = graph.rust_limits();
         let eligible =
             !refresh_required && native_current && Manifests::from_graph(&graph) == *baseline;

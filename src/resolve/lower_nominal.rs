@@ -28270,7 +28270,7 @@ impl<'a> Parser<'a> {
                     .ancestors()
                     .skip(1)
                     .find(|directory| {
-                        directory.join("Cargo.toml").is_file() || directory.join("rawr.toml").is_file()
+                        directory.join("Cargo.toml").is_file()
                     })
                     .or_else(|| {
                         file.ancestors()

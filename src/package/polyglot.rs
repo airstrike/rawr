@@ -1,10 +1,11 @@
-//! Polyglot `src/`: `.rs` modules beside `.rawr` modules in one module tree.
+//! Native modules of a marked crate: unmarked `.rs` modules beside the
+//! marked ones in one module tree.
 //!
-//! Rawr walks the tree from `src/main.rawr` (or `src/lib.rawr`) under Rust's
-//! `mod` rules across both extensions. A `.rs` module is recorded, never
-//! compiled by Rawr; its own `mod` declarations are scanned syntactically so a
-//! Rust module that declares a `.rawr` child is refused at load (Rust never
-//! depends on Rawr).
+//! Rawr walks the tree from the crate root under Rust's `mod` rules. A
+//! native module is recorded, never compiled by Rawr; its own `mod`
+//! declarations and paths are scanned syntactically so a native module that
+//! depends on a marked one is refused at load (native code never depends on
+//! marked code).
 
 use std::ops::Range;
 
@@ -270,11 +271,11 @@ pub(crate) fn references(text: &str) -> Vec<Reference> {
     references
 }
 
-/// A `.rs` module as the generated app crate compiles it. The `.rawr`
+/// A native module as the generated app crate compiles it. The marked
 /// modules are part of the same crate, so what Rust lets them see Rawr must
 /// see through the generated crate's public API: `pub(crate)`/`pub(in crate)`
 /// become `pub`, and so do `pub(super)`/`pub(in super)` at the top level of a
-/// module a `.rawr` module (or the crate root) declares. Private items and
+/// module a marked module (or the crate root) declares. Private items and
 /// other restrictions stay as written. The keyword is padded to its old width
 /// so lines and columns still match the original. The copy lives elsewhere,
 /// so relative `include!`/`include_str!`/`include_bytes!` and `#[path]`

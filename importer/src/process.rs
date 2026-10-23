@@ -660,7 +660,7 @@ impl Native {
     }
 
     /// The pinned toolchain's `cargo`, for a plain `cargo check` outside an
-    /// import (`rawr check --as-rust`).
+    /// import.
     #[must_use]
     pub fn cargo_executable(&self) -> &Path {
         &self.cargo

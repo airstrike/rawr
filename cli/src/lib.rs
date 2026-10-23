@@ -84,7 +84,13 @@ fn parse(arguments: &[OsString]) -> Result<Request, String> {
 
 /// A first argument that names a program rather than a command.
 fn is_path(argument: &OsStr) -> bool {
-    if argument == "." || argument == ".." || argument == "rawr.toml" {
+    // `rawr.toml` and `.rawr` count as paths only so discovery can say how
+    // to convert them.
+    if argument == "."
+        || argument == ".."
+        || argument == "Cargo.toml"
+        || argument == "rawr.toml"
+    {
         return true;
     }
     let extension = Path::new(argument).extension();
@@ -330,9 +336,11 @@ mod tests {
         assert_eq!(request(&[]), program(false, None));
         assert_eq!(request(&["run"]), program(false, None));
         assert_eq!(request(&["run", "app"]), program(false, Some("app")));
+        assert_eq!(request(&["cart.rs"]), program(false, Some("cart.rs")));
+        assert_eq!(request(&["Cargo.toml"]), program(false, Some("Cargo.toml")));
         assert_eq!(request(&["cart.rawr"]), program(false, Some("cart.rawr")));
         assert_eq!(request(&["check", "."]), program(true, Some(".")));
-        assert_eq!(request(&["check", "--as-rust"]), Ok(Request::Other));
+        assert_eq!(request(&["check", "--verbose"]), Ok(Request::Other));
         assert_eq!(request(&["preview", "x"]), Ok(Request::Other));
         assert_eq!(request(&["new", "hello"]), Ok(Request::Other));
         assert_eq!(request(&["run", "--help"]), Ok(Request::Help));

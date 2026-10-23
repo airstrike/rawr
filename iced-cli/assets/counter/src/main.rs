@@ -1,5 +1,6 @@
+// rawr
 use iced::Center;
-use iced::widget::{Column, button, column, text};
+use iced::widget::{Widget, button, column, text};
 
 #[derive(Default)]
 struct Counter {
@@ -20,7 +21,7 @@ impl Counter {
         }
     }
 
-    fn view(&self) -> Column<'_, Message> {
+    fn view(&self) -> impl Widget<Message> {
         column![
             button("Increment").on_press(Message::Increment),
             text(self.value).size(50),

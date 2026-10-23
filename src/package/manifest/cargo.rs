@@ -1,9 +1,8 @@
-//! The app's own Cargo package manifest in a polyglot `src/`.
+//! The crate's own Cargo package manifest.
 //!
-//! An app is one ordinary Cargo crate. When the project's `Cargo.toml` has a
-//! `[package]`, its `[dependencies]` are the app's Rust dependencies (no
-//! `[rust.dependencies]` duplicate), and its `.rs` modules are importable as
-//! that crate.
+//! A Rawr program is one ordinary Cargo crate. When its `Cargo.toml` has a
+//! `[package]`, its `[dependencies]` are the program's Rust dependencies,
+//! and its native modules are importable as that crate.
 
 use std::path::{Path, PathBuf};
 

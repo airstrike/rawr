@@ -68,7 +68,7 @@ fn failure(id: Value, code: i64, message: &str) -> Value {
 fn tools() -> Value {
     let path = json!({
         "type": "string",
-        "description": "Project directory or .rawr file; defaults to the working directory",
+        "description": "Crate directory or .rs file; defaults to the working directory",
     });
     let shot = json!({
         "type": "boolean",

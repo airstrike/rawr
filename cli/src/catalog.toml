@@ -7,7 +7,7 @@ format = 1
 name = "rawr-iced"
 crates = ["iced"]
 sections = ["rust"]
-commands = ["preview", "snapshot", "new", "mcp", "init", "doctor", "cache", "check --as-rust"]
+commands = ["preview", "snapshot", "new", "mcp", "init", "doctor", "cache"]
 install = [
     "rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src",
     "cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli",

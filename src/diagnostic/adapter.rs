@@ -259,7 +259,7 @@ impl Report {
         let (stable_code, help) = match error {
             ProjectError::CurrentDirectory(..) => (
                 code::ENVIRONMENT_CURRENT_DIRECTORY,
-                "pass an explicit Rawr source or project path",
+                "pass an explicit `.rs` file or crate directory",
             ),
             ProjectError::InputNotFound { .. } => (
                 code::ENVIRONMENT_INPUT_NOT_FOUND,
@@ -267,11 +267,11 @@ impl Report {
             ),
             ProjectError::NotFound { .. } => (
                 code::ENVIRONMENT_PROJECT_NOT_FOUND,
-                "pass a `.rawr` source or project directory, or run `rawr new <path>`",
+                "pass a `.rs` file or a marked crate directory, or run `rawr new <path>`",
             ),
             ProjectError::Ambiguous { .. } => (
                 code::ENVIRONMENT_PROJECT_AMBIGUOUS,
-                "pass one exact candidate directory or `.rawr` source file",
+                "pass one exact candidate directory or `.rs` file",
             ),
             ProjectError::Unreadable { .. } => (
                 code::ENVIRONMENT_UNREADABLE,
@@ -279,19 +279,19 @@ impl Report {
             ),
             ProjectError::UnsupportedInput { .. } => (
                 code::ENVIRONMENT_UNSUPPORTED_INPUT,
-                "pass a directory, `.rawr` or `.rs` source file, or `rawr.toml`",
+                "pass a directory, a `.rs` file or a `Cargo.toml`",
+            ),
+            ProjectError::Legacy { .. } => (
+                code::ENVIRONMENT_UNSUPPORTED_INPUT,
+                "run `rawr new <path>` to see the layout of a Rawr crate",
             ),
             ProjectError::MissingSource { .. } => (
                 code::ENVIRONMENT_MISSING_SOURCE,
-                "create the expected `src/main.rawr` or select an explicit source file",
+                "create `src/main.rs` with `// rawr` as its first line, or pass a `.rs` file",
             ),
             ProjectError::Unmarked { .. } => (
                 code::ENVIRONMENT_MISSING_SOURCE,
                 "add `// rawr` as the first line of the crate root to run it with Rawr",
-            ),
-            ProjectError::MissingConfig { .. } => (
-                code::ENVIRONMENT_MISSING_CONFIG,
-                "create the expected `rawr.toml` or select an explicit source file",
             ),
             ProjectError::EscapesRoot { .. } => (
                 code::ENVIRONMENT_ESCAPES_ROOT,

@@ -1,7 +1,7 @@
 //! The binaries that serve programs `rawr` hands off: executables named
 //! `rawr-<name>` next to `rawr` or on `PATH`, found as Cargo finds its
 //! subcommands. Each says what it serves when run with [`FLAG`]: a small TOML
-//! manifest of the crates and `rawr.toml` tables that bring a program to it,
+//! manifest of the crates and imports that bring a program to it,
 //! and the commands it adds to `rawr`. `rawr` keeps each binary's manifest,
 //! keyed by its path, size and modification time, so a binary is asked once
 //! per install.
@@ -42,8 +42,7 @@ pub struct Manifest {
 }
 
 /// A command a binary adds to `rawr`: a first word, and a flag that must
-/// follow it when the command shares its word with one `rawr` runs itself
-/// (`check --as-rust`).
+/// follow it when the command shares its word with one `rawr` runs itself.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Provided {
     /// The command's first word.

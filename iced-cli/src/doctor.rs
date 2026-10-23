@@ -304,8 +304,7 @@ impl Probe for System {
                 source: target.source().path().to_path_buf(),
                 manifest: target
                     .project()
-                    .and_then(project::Project::config)
-                    .map(|config| config.path().to_path_buf()),
+                    .map(|project| project.root().as_path().join("Cargo.toml")),
             }),
             Err(error) => Discovery::Failed(project_failure(&error)),
         }
@@ -577,11 +576,8 @@ fn check_manifest(probe: &impl Probe, discovery: &Discovery) -> Check {
         Discovery::Found(Target {
             manifest: Some(path),
             ..
-        }) => Check::ok(
-            "manifest",
-            format!("optional manifest is readable UTF-8 `{}`", path.display()),
-        ),
-        Discovery::Found(_) => Check::ok("manifest", "not present; zero-config projects are valid"),
+        }) => Check::ok("manifest", format!("Cargo manifest `{}`", path.display())),
+        Discovery::Found(_) => Check::ok("manifest", "not present; a single `.rs` file needs none"),
         Discovery::Failed(failure) if failure.component == Component::Manifest => {
             Check::failure("manifest", failure.report.clone())
         }
@@ -676,30 +672,30 @@ fn project_failure(error: &project::Error) -> Failure {
         project::Error::Unreadable { resource, .. }
         | project::Error::EscapesRoot { resource, .. } => match resource {
             project::Resource::Source => Component::Source,
-            project::Resource::Config => Component::Manifest,
+            project::Resource::Manifest => Component::Manifest,
             project::Resource::Input | project::Resource::Boundary => Component::General,
         },
         project::Error::MissingSource { .. } | project::Error::Unmarked { .. } => {
             Component::Source
         }
-        project::Error::MissingConfig { .. } => Component::Manifest,
         project::Error::CurrentDirectory(..)
         | project::Error::InputNotFound { .. }
         | project::Error::NotFound { .. }
         | project::Error::Ambiguous { .. }
-        | project::Error::UnsupportedInput { .. } => Component::General,
+        | project::Error::UnsupportedInput { .. }
+        | project::Error::Legacy { .. } => Component::General,
     };
     let root = match error {
         project::Error::Unreadable { resource, path, .. } => resource_root(*resource, path),
         project::Error::MissingSource { root, .. }
         | project::Error::Unmarked { root, .. }
-        | project::Error::MissingConfig { root, .. }
         | project::Error::EscapesRoot { root, .. } => Some(root.clone()),
         project::Error::CurrentDirectory(..)
         | project::Error::InputNotFound { .. }
         | project::Error::NotFound { .. }
         | project::Error::Ambiguous { .. }
-        | project::Error::UnsupportedInput { .. } => None,
+        | project::Error::UnsupportedInput { .. }
+        | project::Error::Legacy { .. } => None,
     };
     let source = match error {
         project::Error::Unreadable {
@@ -713,24 +709,20 @@ fn project_failure(error: &project::Error) -> Failure {
             ..
         } => Some(path.clone()),
         project::Error::MissingSource { expected, .. } => Some(expected.clone()),
-        _ => root.as_ref().map(|root| root.join("src/main.rawr")),
+        _ => root.as_ref().map(|root| root.join("src/main.rs")),
     };
     let manifest = match error {
         project::Error::Unreadable {
-            resource: project::Resource::Config,
+            resource: project::Resource::Manifest,
             path,
             ..
         }
         | project::Error::EscapesRoot {
-            resource: project::Resource::Config,
+            resource: project::Resource::Manifest,
             path,
             ..
         } => Some(path.clone()),
-        project::Error::MissingConfig { expected, .. } => Some(expected.clone()),
-        project::Error::MissingSource {
-            config: Some(path), ..
-        } => Some(path.clone()),
-        _ => root.as_ref().map(|root| root.join("rawr.toml")),
+        _ => root.as_ref().map(|root| root.join("Cargo.toml")),
     };
     Failure {
         report: diagnostic::Report::from_project(error),
@@ -745,7 +737,7 @@ fn project_failure(error: &project::Error) -> Failure {
 fn resource_root(resource: project::Resource, path: &Path) -> Option<PathBuf> {
     match resource {
         project::Resource::Source => path.parent()?.parent().map(Path::to_path_buf),
-        project::Resource::Config => path.parent().map(Path::to_path_buf),
+        project::Resource::Manifest => path.parent().map(Path::to_path_buf),
         project::Resource::Input | project::Resource::Boundary => None,
     }
 }
@@ -753,7 +745,7 @@ fn resource_root(resource: project::Resource, path: &Path) -> Option<PathBuf> {
 fn text_file_check(probe: &impl Probe, name: &'static str, path: &Path, optional: bool) -> Check {
     match probe.text_file(path) {
         TextFile::Missing if optional => {
-            Check::ok(name, "not present; zero-config projects are valid")
+            Check::ok(name, "not present; a single `.rs` file needs none")
         }
         TextFile::Missing => Check::failure(
             name,
@@ -761,7 +753,7 @@ fn text_file_check(probe: &impl Probe, name: &'static str, path: &Path, optional
                 diagnostic::code::ENVIRONMENT_MISSING_SOURCE,
                 format!("required Rawr source `{}` does not exist", path.display()),
             )
-            .help("create the expected source file or select an explicit `.rawr` file")
+            .help("create the expected source file or select an explicit `.rs` file")
             .finish(),
         ),
         TextFile::Readable => Check::ok(name, format!("readable UTF-8 `{}`", path.display())),
@@ -858,7 +850,7 @@ mod tests {
                 variables: BTreeMap::new(),
                 discovery: Discovery::Found(Target {
                     root: Some(PathBuf::from("/project")),
-                    source: PathBuf::from("/project/src/main.rawr"),
+                    source: PathBuf::from("/project/src/main.rs"),
                     manifest: None,
                 }),
                 directories: BTreeMap::new(),

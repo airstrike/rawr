@@ -34,7 +34,6 @@ pub(crate) enum Error {
     Bridge(rawr_import::bridge::request::Error),
     Compiler(rawr_iced::profile::runner::Error),
     Snapshot(rawr_import::supervisor::snapshot::Error),
-    MissingRust,
 }
 
 /// Discover one target and return it only when its application package owns a
@@ -210,7 +209,13 @@ fn prepare_transform(
             &request_demand,
             &limits,
         ) {
-            Ok(request) => request.ok_or(Error::MissingRust)?,
+            Ok(Some(request)) => request,
+            Ok(None) => {
+                return Err(Error::Import(rawr_import::Error::Request {
+                    field: "Rust imports",
+                    reason: "the crate has no Rust dependency or native module".into(),
+                }));
+            }
             // A remembered path the manifest no longer admits (a removed
             // dependency alias) is forgotten, never a failed launch.
             Err(_) if remembered => {
@@ -477,9 +482,6 @@ impl fmt::Display for Error {
             Self::Bridge(error) => error.fmt(formatter),
             Self::Compiler(error) => error.fmt(formatter),
             Self::Snapshot(error) => error.fmt(formatter),
-            Self::MissingRust => formatter.write_str(
-                "the generated iced owner requires a project `rawr.toml` with a `[rust]` table",
-            ),
         }
     }
 }
@@ -498,7 +500,7 @@ impl std::error::Error for Error {
             Self::Bridge(error) => Some(error),
             Self::Compiler(error) => Some(error),
             Self::Snapshot(error) => Some(error),
-            Self::CheckedPayload | Self::MissingRust => None,
+            Self::CheckedPayload => None,
         }
     }
 }

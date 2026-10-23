@@ -98,7 +98,7 @@ impl Session {
     }
 }
 
-/// What `claims` names, as a user reads it: `` `iced` or `[rust]` in rawr.toml ``.
+/// What `claims` names, as a user reads it: `` `iced` or Rust dependencies in Cargo.toml ``.
 #[must_use]
 pub fn uses(claims: &Claims) -> String {
     claims
@@ -109,7 +109,7 @@ pub fn uses(claims: &Claims) -> String {
             claims
                 .sections
                 .iter()
-                .map(|section| format!("`[{section}]` in rawr.toml")),
+                .map(|section| rawr::layer::section_reason(section)),
         )
         .collect::<Vec<_>>()
         .join(" or ")

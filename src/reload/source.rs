@@ -13,23 +13,13 @@ use crate::{diagnostic, package, ImmutableString};
 #[cfg(all(feature = "rust-import", unix))]
 pub mod observation;
 
-/// One resolved dependency edge between local packages.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Dependency {
-    alias: ImmutableString,
-    package: ImmutableString,
-}
-
 /// One canonical package in the resolved source graph.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Package {
     name: ImmutableString,
     root: PathBuf,
-    manifest: Option<PathBuf>,
-    manifest_text: Option<String>,
     source: PathBuf,
-    dependencies: Box<[Dependency]>,
-    /// `.rs` modules of a polyglot package: Rust inputs, never Rawr sources.
+    /// Native modules of a marked crate: Rust inputs, never Rawr sources.
     rust_modules: Box<[(PathBuf, String)]>,
     /// The root `Cargo.toml` of a package app: a Rust input.
     cargo: Option<(PathBuf, String)>,
@@ -111,19 +101,9 @@ impl Graph {
             .map(|package| Package {
                 name: package.name().into(),
                 root: package.root().to_path_buf(),
-                manifest: package.manifest().map(Path::to_path_buf),
-                manifest_text: package.manifest_text().map(str::to_owned),
                 source: graph.sources()[package.source().index()]
                     .path()
                     .to_path_buf(),
-                dependencies: package
-                    .dependencies()
-                    .iter()
-                    .map(|dependency| Dependency {
-                        alias: dependency.alias().into(),
-                        package: graph.packages()[dependency.package().index()].name().into(),
-                    })
-                    .collect(),
                 rust_modules: package
                     .rust_modules()
                     .iter()
@@ -183,20 +163,12 @@ impl Inputs {
     /// Derive the exact canonical source and manifest identities in a graph.
     #[must_use]
     pub fn from_graph(graph: &Graph) -> Self {
-        let mut sources = graph
+        let sources = graph
             .sources
             .iter()
             .map(|source| source.path.clone())
             .collect::<BTreeSet<_>>();
         let mut paths = sources.clone();
-        for manifest in graph
-            .packages
-            .iter()
-            .filter_map(|package| package.manifest.as_ref())
-        {
-            sources.remove(manifest);
-            paths.insert(manifest.clone());
-        }
         // A `.rs` module edit takes the Rust-change path, never hot reload.
         for (path, _) in graph
             .packages
@@ -360,16 +332,6 @@ impl Snapshot {
                 contents: source.text().as_bytes().into(),
             })
             .collect::<Vec<_>>();
-        files.extend(graph.packages.iter().filter_map(|package| {
-            package
-                .manifest
-                .as_ref()
-                .zip(package.manifest_text.as_ref())
-                .map(|(path, text)| File {
-                    path: path.clone(),
-                    contents: text.as_bytes().into(),
-                })
-        }));
         files.extend(graph.packages.iter().flat_map(|package| {
             package
                 .rust_modules
@@ -381,17 +343,13 @@ impl Snapshot {
                 })
         }));
         // The imported snapshot is keyed by path bytes, not path components:
-        // `src/theme.rawr` sorts after `src/theme/button.rawr`.
+        // `src/theme.rs` sorts after `src/theme/button.rs`.
         files.sort_unstable_by(|left, right| left.path.as_os_str().cmp(right.path.as_os_str()));
         Self {
             inputs: Arc::new(Inputs::from_graph(graph)),
             files: files.into_boxed_slice(),
             #[cfg(feature = "rust-import")]
-            entry: graph
-                .entry_package()
-                .manifest()
-                .unwrap_or_else(|| graph.entry_source().path())
-                .to_path_buf(),
+            entry: graph.entry_source().path().to_path_buf(),
         }
     }
 
@@ -510,20 +468,6 @@ impl std::error::Error for Error {
     }
 }
 
-impl Dependency {
-    /// Return the lexical alias visible from the depending package.
-    #[must_use]
-    pub fn alias(&self) -> &str {
-        &self.alias
-    }
-
-    /// Return the stable manifest name of the dependency package.
-    #[must_use]
-    pub fn package(&self) -> &str {
-        &self.package
-    }
-}
-
 impl Package {
     /// Return the stable manifest-declared package name.
     #[must_use]
@@ -537,22 +481,10 @@ impl Package {
         &self.root
     }
 
-    /// Return the canonical manifest path when this package has one.
-    #[must_use]
-    pub fn manifest(&self) -> Option<&Path> {
-        self.manifest.as_deref()
-    }
-
     /// Return the canonical package root source path.
     #[must_use]
     pub fn source(&self) -> &Path {
         &self.source
-    }
-
-    /// Return the resolved local dependency edges.
-    #[must_use]
-    pub const fn dependencies(&self) -> &[Dependency] {
-        &self.dependencies
     }
 }
 

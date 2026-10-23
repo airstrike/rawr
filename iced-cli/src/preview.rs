@@ -39,8 +39,8 @@ pub fn prepare(path: Option<PathBuf>) -> Result<rawr_iced::preview::Prepared, Er
 
 /// Resolve `rawr preview [path] [name]` and remember `name` for the host.
 ///
-/// A sole argument that is not an existing path (nor a `.rawr` file or
-/// `rawr.toml`) names a preview, `name` or `group/name`, in the current
+/// A sole argument that is not an existing path (nor a `.rs` file or
+/// `Cargo.toml`) names a preview, `name` or `group/name`, in the current
 /// project. Returns the project path to open.
 pub fn select(path: Option<PathBuf>, name: Option<String>) -> Result<Option<PathBuf>, Error> {
     let (path, name) = split(path, name);
@@ -66,8 +66,12 @@ fn split(path: Option<PathBuf>, name: Option<String>) -> (Option<PathBuf>, Optio
     match (path, name) {
         (Some(path), None)
             if !path.exists()
-                && path.extension().is_none_or(|extension| extension != "rawr")
-                && path.file_name().is_none_or(|name| name != "rawr.toml") =>
+                && path
+                    .extension()
+                    .is_none_or(|extension| extension != "rs" && extension != "rawr")
+                && path
+                    .file_name()
+                    .is_none_or(|name| name != "Cargo.toml" && name != "rawr.toml") =>
         {
             (None, Some(path.to_string_lossy().into_owned()))
         }

@@ -29,7 +29,7 @@ const POLL: Duration = Duration::from_millis(25);
 pub fn manifest(graph: &rawr::package::Graph) -> Option<PathBuf> {
     let package = graph.entry_package();
     let manifest = package.root().join("Cargo.toml");
-    (package.is_marked() && manifest.is_file()).then_some(manifest)
+    manifest.is_file().then_some(manifest)
 }
 
 /// The cargo command Rawr runs.

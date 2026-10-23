@@ -277,14 +277,6 @@ fn execute_command(
                 successful,
             }))
         }
-        command::Command::CheckAsRust { path } => {
-            let (message, successful) = check::as_rust(path).map_err(Error::Compile)?;
-            Ok(Some(Report {
-                message,
-                warning: None,
-                successful,
-            }))
-        }
         command::Command::New { path } => {
             let created = new::create(path).map_err(Error::New)?;
             Ok(Some(Report {

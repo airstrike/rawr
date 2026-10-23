@@ -1,8 +1,6 @@
 //! Canonical static source/package graph construction.
 
 use std::collections::BTreeMap;
-#[cfg(feature = "rust-import")]
-use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -11,8 +9,6 @@ use crate::item;
 use crate::package::{error, manifest, source, Error};
 use crate::{diagnostic, parse, project, Engine, ImmutableString, Position, Span};
 
-const CONFIG_NAME: &str = "rawr.toml";
-const LIB_SOURCE: &str = "src/lib.rawr";
 /// Crates a built-in facade serves. A marked crate whose only Cargo
 /// dependencies are these, and which has no native module, needs no
 /// native build.
@@ -30,31 +26,20 @@ type Parts = (
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Id(usize);
 
-/// One manifest-declared local dependency.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Dependency {
-    alias: ImmutableString,
-    package: Id,
-}
-
-/// One canonical package inside a static graph.
+/// One canonical package inside a static graph: the crate being run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Package {
     id: Id,
     name: ImmutableString,
     root: PathBuf,
-    manifest: Option<PathBuf>,
-    manifest_text: Option<String>,
     source: source::Id,
-    dependencies: Box<[Dependency]>,
     rust_modules: Vec<RustModule>,
     cargo: Option<manifest::cargo::Cargo>,
     pub(crate) rust: Option<manifest::rust::Config>,
-    marked: bool,
 }
 
-/// One `.rs` module of a polyglot package: a module in the same tree as the
-/// `.rawr` modules, compiled by Rust, never by Rawr.
+/// One native module of a marked crate: an unmarked `.rs` file in the
+/// crate's module tree, compiled by Rust, never by Rawr.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RustModule {
     modules: Box<[ImmutableString]>,
@@ -64,8 +49,8 @@ pub struct RustModule {
 
 /// The file a `mod name;` declaration resolves to under Rust's rules.
 enum ModuleFile {
-    /// A `.rawr` file, or the path reported missing.
-    Rawr(PathBuf),
+    /// No file: the path reported missing.
+    Missing(PathBuf),
     /// A `.rs` file marked `// rawr`, with the text read to see the marker.
     Marked(PathBuf, String),
     /// An unmarked `.rs` file.
@@ -101,25 +86,11 @@ impl Id {
     }
 }
 
-impl Dependency {
-    /// Return the lexical alias visible from the depending package.
-    #[must_use]
-    pub fn alias(&self) -> &str {
-        &self.alias
-    }
-
-    /// Return the graph-local target package identity.
-    #[must_use]
-    pub const fn package(&self) -> Id {
-        self.package
-    }
-}
-
 impl Package {
     pub(crate) const fn id(&self) -> Id {
         self.id
     }
-    /// Return the stable manifest-declared package name.
+    /// Return the name Rawr gives the crate's items (`main`).
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
@@ -131,46 +102,21 @@ impl Package {
         &self.root
     }
 
-    /// Return the canonical package manifest path when one was resolved.
-    #[must_use]
-    pub fn manifest(&self) -> Option<&Path> {
-        self.manifest.as_deref()
-    }
-
-    /// Borrow the manifest bytes consumed while resolving this exact graph.
-    #[doc(hidden)]
-    pub fn manifest_text(&self) -> Option<&str> {
-        self.manifest_text.as_deref()
-    }
-
-    /// Return the package root source (`main.rawr` or `lib.rawr`).
+    /// Return the crate root source (`src/main.rs`, `src/lib.rs` or the
+    /// explicit file).
     #[must_use]
     pub const fn source(&self) -> source::Id {
         self.source
     }
 
-    /// Return declared local path dependencies in manifest order.
-    #[must_use]
-    pub fn dependencies(&self) -> &[Dependency] {
-        &self.dependencies
-    }
-
-    /// Whether this package is a Cargo crate whose root is a `.rs` file:
-    /// its modules are `.rs` files marked `// rawr`, found as rustc finds
-    /// them.
-    #[must_use]
-    pub const fn is_marked(&self) -> bool {
-        self.marked
-    }
-
-    /// Return the `.rs` modules of this package's module tree, in discovery order.
+    /// Return the native `.rs` modules of this package's module tree, in discovery order.
     #[must_use]
     pub fn rust_modules(&self) -> &[RustModule] {
         &self.rust_modules
     }
 
-    /// The crate name the app's `.rs` modules are imported under, when
-    /// the package has `.rs` modules and its root `Cargo.toml` is a package.
+    /// The crate name the native modules are imported under, when the
+    /// crate has native modules and its root `Cargo.toml` is a package.
     #[must_use]
     pub fn rust_crate(&self) -> Option<&str> {
         self.cargo
@@ -216,9 +162,8 @@ impl RustModule {
 impl Graph {
     /// Load and parse one complete target graph through the supplied Engine.
     ///
-    /// Every source and manifest path is canonicalized before it enters this
-    /// proof bundle. Only declared `mod` edges and local path dependencies are
-    /// traversed.
+    /// Every source path is canonicalized before it enters this proof
+    /// bundle. Only declared `mod` edges are traversed.
     pub fn load(engine: &Engine, target: &project::Target) -> Result<Self, Error> {
         Builder::new(engine).load(target)
     }
@@ -337,7 +282,7 @@ impl Graph {
 }
 
 /// The package root of a source file target: its directory, or for
-/// `src/<file>.rawr` of a Cargo package, the directory holding
+/// `src/<file>.rs` of a Cargo package, the directory holding
 /// `Cargo.toml`, as project discovery chooses.
 fn file_root(source: &Path, exists: impl Fn(&Path) -> bool) -> PathBuf {
     let parent = source
@@ -362,9 +307,6 @@ struct Builder<'a> {
     sources: Vec<source::Source>,
     units: Vec<Unit>,
     packages: Vec<Package>,
-    package_roots: BTreeMap<PathBuf, Id>,
-    package_names: BTreeMap<ImmutableString, error::Label>,
-    active_packages: Vec<PathBuf>,
     module_targets: BTreeMap<PathBuf, error::Label>,
     active_modules: Vec<PathBuf>,
 }
@@ -372,9 +314,6 @@ struct Builder<'a> {
 struct Request {
     root: PathBuf,
     source: PathBuf,
-    config: Option<(PathBuf, String)>,
-    dependency: bool,
-    origin: Option<error::Label>,
 }
 
 impl<'a> Builder<'a> {
@@ -388,9 +327,6 @@ impl<'a> Builder<'a> {
             sources: Vec::new(),
             units: Vec::new(),
             packages: Vec::new(),
-            package_roots: BTreeMap::new(),
-            package_names: BTreeMap::new(),
-            active_packages: Vec::new(),
             module_targets: BTreeMap::new(),
             active_modules: Vec::new(),
         }
@@ -408,18 +344,10 @@ impl<'a> Builder<'a> {
             project::Target::File(source) => Request {
                 root: file_root(source.path(), |manifest| manifest.is_file()),
                 source: source.path().to_path_buf(),
-                config: None,
-                dependency: false,
-                origin: None,
             },
             project::Target::Project(project) => Request {
                 root: project.root().as_path().to_path_buf(),
                 source: project.source().path().to_path_buf(),
-                config: project
-                    .config()
-                    .map(|config| (config.path().to_path_buf(), config.text().to_owned())),
-                dependency: false,
-                origin: None,
             },
         };
         let entry_package = self.load_package(request)?;
@@ -439,33 +367,9 @@ impl<'a> Builder<'a> {
             .snapshot
             .expect("snapshot builder retains its immutable input");
         let entry = snapshot.entry().to_path_buf();
-        let request = if entry.file_name() == Some(OsStr::new(CONFIG_NAME)) {
-            let root = entry
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."));
-            let text = snapshot.read(&entry).ok_or_else(|| {
-                self.input_error(
-                    "read package manifest",
-                    entry.clone(),
-                    io::ErrorKind::NotFound,
-                )
-            })?;
-            Request {
-                root: root.clone(),
-                source: root.join("src/main.rawr"),
-                config: Some((entry, text.to_owned())),
-                dependency: false,
-                origin: None,
-            }
-        } else {
-            Request {
-                root: file_root(&entry, |manifest| snapshot.read(manifest).is_some()),
-                source: entry,
-                config: None,
-                dependency: false,
-                origin: None,
-            }
+        let request = Request {
+            root: file_root(&entry, |manifest| snapshot.read(manifest).is_some()),
+            source: entry,
         };
         let entry_package = self.load_package(request)?;
         let entry_source = self.packages[entry_package.0].source;
@@ -479,92 +383,21 @@ impl<'a> Builder<'a> {
     }
 
     fn load_package(&mut self, request: Request) -> Result<Id, Error> {
-        let root = self.canonical_directory(request.root, request.origin)?;
-        if self.active_packages.contains(&root) {
-            let primary = request.origin.unwrap_or_else(|| self.start_label());
-            let secondary = self
-                .package_roots
-                .get(&root)
-                .and_then(|id| self.package_names.get(&self.packages[id.0].name))
-                .copied();
-            return Err(Error::dependency_cycle(
-                self.evidence.clone(),
-                format!(
-                    "local package dependency cycle reaches `{}`",
-                    root.display()
-                )
-                .into(),
-                primary,
-                secondary,
-            ));
-        }
-        if let Some(id) = self.package_roots.get(&root).copied() {
-            return Ok(id);
-        }
-
-        let supplied_manifest = request.config.as_ref().map(|(path, _)| path.clone());
-        let (mut manifest, manifest_source) =
-            self.load_manifest(&root, request.config, request.dependency)?;
-        let manifest_path = manifest
-            .is_some()
-            .then(|| supplied_manifest.unwrap_or_else(|| root.join(CONFIG_NAME)));
-        let manifest_text = manifest_source.map(|source| self.evidence[source].text().to_owned());
-        let rust = manifest.as_mut().and_then(|manifest| manifest.rust.take());
-        if request.dependency && rust.is_some() {
-            let source = self.manifest_source(manifest_source)?;
-            let span = rust
-                .as_ref()
-                .map_or(Span::new(Position::START, Position::START), |config| {
-                    config.span
-                });
-            return Err(Error::manifest(
-                self.evidence.clone(),
-                source,
-                "only the entry Rawr package may declare `[rust]`".into(),
-                span,
-            ));
-        }
-        let name = match manifest
-            .as_ref()
-            .and_then(|manifest| manifest.name.as_ref())
-        {
-            Some(name) => name.value.clone(),
-            None if request.dependency => {
-                let source = self.manifest_source(manifest_source)?;
-                return Err(Error::manifest(
-                    self.evidence.clone(),
-                    source,
-                    "local dependency manifest requires `[package] name`".into(),
-                    Span::new(Position::START, Position::START),
-                ));
-            }
-            None => "main".into(),
-        };
+        let root = self.canonical_directory(request.root)?;
+        let name: ImmutableString = "main".into();
         let package = Id::from_index(self.packages.len());
-        self.active_packages.push(root.clone());
-        self.package_roots.insert(root.clone(), package);
         self.packages.push(Package {
             id: package,
             name: name.clone(),
             root: root.clone(),
-            manifest: manifest_path,
-            manifest_text,
             source: source::Id::from_index(0),
-            dependencies: Box::default(),
             rust_modules: Vec::new(),
             cargo: None,
-            rust,
-            marked: false,
+            rust: None,
         });
 
-        let source_path = if request.dependency {
-            root.join(LIB_SOURCE)
-        } else {
-            request.source
-        };
-        let marked = source_path.extension() == Some(std::ffi::OsStr::new("rs"));
-        self.packages[package.0].marked = marked;
-        let module_root = source_path
+        let module_root = request
+            .source
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| root.clone());
@@ -574,101 +407,14 @@ impl<'a> Builder<'a> {
             &root,
             &module_root,
             Box::default(),
-            source_path,
+            request.source,
             None,
             None,
         )?;
         self.packages[package.0].source = root_source;
-        if !request.dependency {
-            self.load_cargo(package, &root)?;
-        }
-        if marked {
-            self.check_native_direction(package)?;
-        }
-
-        let name_label = match manifest
-            .as_ref()
-            .and_then(|manifest| manifest.name.as_ref())
-        {
-            Some(name) => error::Label {
-                source: self.manifest_source(manifest_source)?,
-                span: name.span,
-            },
-            None => error::Label {
-                source: self.rawr_evidence(root_source)?,
-                span: Span::new(Position::START, Position::START),
-            },
-        };
-        if let Some(previous) = self.package_names.insert(name.clone(), name_label) {
-            return Err(Error::duplicate_package(
-                self.evidence.clone(),
-                name,
-                name_label,
-                previous,
-            ));
-        }
-
-        let mut dependencies = Vec::new();
-        if let Some(manifest) = manifest {
-            let source = self.manifest_source(manifest_source)?;
-            for dependency in manifest.dependencies.into_vec() {
-                let label = error::Label {
-                    source,
-                    span: dependency.span,
-                };
-                let dependency_root = dependency.path;
-                let dependency_id = self.load_package(Request {
-                    root: dependency_root.clone(),
-                    source: dependency_root.join(LIB_SOURCE),
-                    config: None,
-                    dependency: true,
-                    origin: Some(label),
-                })?;
-                dependencies.push(Dependency {
-                    alias: dependency.alias,
-                    package: dependency_id,
-                });
-            }
-        }
-        self.packages[package.0].dependencies = dependencies.into_boxed_slice();
-        self.active_packages.pop();
+        self.load_cargo(package, &root)?;
+        self.check_native_direction(package)?;
         Ok(package)
-    }
-
-    fn load_manifest(
-        &mut self,
-        root: &Path,
-        supplied: Option<(PathBuf, String)>,
-        required: bool,
-    ) -> Result<(Option<manifest::Manifest>, Option<usize>), Error> {
-        let (path, text) = match supplied {
-            Some(manifest) => manifest,
-            None => {
-                let path = root.join(CONFIG_NAME);
-                match self.read_to_string(&path) {
-                    Ok(text) => (path, text),
-                    Err(source) if !required && source.kind() == std::io::ErrorKind::NotFound => {
-                        return Ok((None, None));
-                    }
-                    Err(source) => {
-                        return Err(Error::resource(
-                            self.evidence.clone(),
-                            error::resource_message("read package manifest", path, &source),
-                            source,
-                            None,
-                        ));
-                    }
-                }
-            }
-        };
-        let diagnostic = diagnostic::Source::new(path.to_string_lossy().into_owned(), text.clone())
-            .map_err(Error::diagnostic)?;
-        let source = self.push_evidence(diagnostic);
-        manifest::Manifest::parse(&text, root)
-            .map(|manifest| (Some(manifest), Some(source)))
-            .map_err(|error| {
-                Error::manifest(self.evidence.clone(), source, error.message, error.span)
-            })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -810,7 +556,6 @@ impl<'a> Builder<'a> {
             }),
         );
 
-        let marked = self.packages[package.0].marked;
         for module in declarations {
             let mut child_modules = modules.to_vec();
             child_modules.push(module.name.text.clone());
@@ -835,8 +580,8 @@ impl<'a> Builder<'a> {
                 )?;
                 continue;
             }
-            match self.module_file(module_root, &child_modules, label, marked)? {
-                ModuleFile::Rawr(child_path) => {
+            match self.module_file(module_root, &child_modules, label)? {
+                ModuleFile::Missing(child_path) => {
                     self.load_module(
                         package,
                         package_name,
@@ -983,43 +728,32 @@ impl<'a> Builder<'a> {
         ))
     }
 
-    /// Rust's file rules for `mod name;` across both extensions: `name.rawr`,
-    /// `name.rs`, `name/mod.rawr` or `name/mod.rs`, exactly one of them. With
-    /// none, the `.rawr` spelling is reported missing. In a marked crate
-    /// only the `.rs` spellings count, as for rustc. A `.rs` file is Rawr
-    /// when its first line is `// rawr`.
+    /// Rust's file rules for `mod name;`: `name.rs` or `name/mod.rs`,
+    /// exactly one of them. With none, `name.rs` is reported missing. A
+    /// `.rs` file is Rawr when its first line is `// rawr`.
     fn module_file(
         &self,
         module_root: &Path,
         modules: &[ImmutableString],
         declaration: error::Label,
-        marked: bool,
     ) -> Result<ModuleFile, Error> {
         let mut base = module_root.to_path_buf();
         for segment in modules {
             base.push(segment.as_str());
         }
-        let candidates = [
-            (base.with_extension("rawr"), false),
-            (base.with_extension("rs"), true),
-            (base.join("mod.rawr"), false),
-            (base.join("mod.rs"), true),
-        ];
-        let found = candidates
+        let found = [base.with_extension("rs"), base.join("mod.rs")]
             .into_iter()
-            .filter(|(path, rust)| (*rust || !marked) && self.is_file(path))
+            .filter(|path| self.is_file(path))
             .collect::<Vec<_>>();
         match found.as_slice() {
-            [] if marked => Ok(ModuleFile::Rawr(base.with_extension("rs"))),
-            [] => Ok(ModuleFile::Rawr(base.with_extension("rawr"))),
-            [(path, false)] => Ok(ModuleFile::Rawr(path.clone())),
-            [(path, true)] => Ok(match self.read_to_string(path) {
+            [] => Ok(ModuleFile::Missing(base.with_extension("rs"))),
+            [path] => Ok(match self.read_to_string(path) {
                 Ok(text) if crate::project::is_marked(&text) => {
                     ModuleFile::Marked(path.clone(), text)
                 }
                 _ => ModuleFile::Rust(path.clone()),
             }),
-            [(first, _), (second, _), ..] => Err(Error::module(
+            [first, second, ..] => Err(Error::module(
                 self.evidence.clone(),
                 format!(
                     "file for module `{}` found at both `{}` and `{}`; delete or rename one of them",
@@ -1034,9 +768,9 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Record one `.rs` module and, under Rust's rules, the `.rs` modules it
-    /// declares. Rust never depends on Rawr: a Rust `mod` that resolves to a
-    /// `.rawr` file is an error at load.
+    /// Record one native module and, under Rust's rules, the modules it
+    /// declares. Native code never depends on marked code: a native `mod`
+    /// that resolves to a marked file is an error at load.
     fn load_rust_module(
         &mut self,
         package: Id,
@@ -1095,8 +829,7 @@ impl<'a> Builder<'a> {
                 source: index,
                 span: manifest::byte_span(&text, child.range.clone()),
             };
-            let marked = self.packages[package.0].marked;
-            match self.module_file(module_root, &child_modules, label, marked)? {
+            match self.module_file(module_root, &child_modules, label)? {
                 ModuleFile::Rust(child_path) => self.load_rust_module(
                     package,
                     package_root,
@@ -1121,24 +854,8 @@ impl<'a> Builder<'a> {
                         None,
                     ));
                 }
-                ModuleFile::Rawr(child_path) if self.is_file(&child_path) => {
-                    return Err(Error::module(
-                        self.evidence.clone(),
-                        format!(
-                            "Rust module `crate::{}` declares `mod {};`, which is the Rawr file `{}`; \
-                             Rust never depends on a `.rawr` module (declare it from a `.rawr` module, \
-                             or rename it to `.rs`)",
-                            modules.join("::"),
-                            child.path.last().map_or("", String::as_str),
-                            child_path.display()
-                        )
-                        .into(),
-                        label,
-                        None,
-                    ));
-                }
                 // A missing file is Rust's own error to report when it builds.
-                ModuleFile::Rawr(_) => {}
+                ModuleFile::Missing(_) => {}
             }
         }
         self.packages[package.0].rust_modules.push(RustModule {
@@ -1149,9 +866,9 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    /// An application whose root `Cargo.toml` is a package is one Cargo
-    /// crate. Its `[dependencies]` are the Rust dependencies when `rawr.toml`
-    /// has no `[rust]`, and its `.rs` modules import under its crate name.
+    /// The crate's root `Cargo.toml`, when it is a package. Its
+    /// `[dependencies]` are the Rust dependencies, and its native modules
+    /// import under its crate name.
     fn load_cargo(&mut self, package: Id, root: &Path) -> Result<(), Error> {
         let path = root.join("Cargo.toml");
         let text = match self.read_to_string(&path) {
@@ -1185,16 +902,12 @@ impl<'a> Builder<'a> {
             let package = &mut self.packages[package.0];
             // A marked crate that uses only crates a built-in facade
             // serves runs without a native build.
-            let imports = if package.marked {
-                !package.rust_modules.is_empty()
-                    || cargo
-                        .dependencies
-                        .iter()
-                        .any(|dependency| !FACADE_CRATES.contains(&dependency.alias.as_str()))
-            } else {
-                !cargo.dependencies.is_empty() || !package.rust_modules.is_empty()
-            };
-            if package.rust.is_none() && imports {
+            let imports = !package.rust_modules.is_empty()
+                || cargo
+                    .dependencies
+                    .iter()
+                    .any(|dependency| !FACADE_CRATES.contains(&dependency.alias.as_str()));
+            if imports {
                 package.rust = Some(manifest::rust::Config::from_cargo(
                     &cargo.path,
                     cargo.dependencies.clone(),
@@ -1213,23 +926,20 @@ impl<'a> Builder<'a> {
         path.is_file()
     }
 
-    fn canonical_directory(
-        &self,
-        path: PathBuf,
-        primary: Option<error::Label>,
-    ) -> Result<PathBuf, Error> {
+    fn canonical_directory(&self, path: PathBuf) -> Result<PathBuf, Error> {
+        let primary = None;
         #[cfg(feature = "rust-import")]
         if let Some(snapshot) = self.snapshot {
             let canonical = super::snapshot::normalize(path.clone()).map_err(|_| {
                 self.input_error(
-                    "open local package",
+                    "open crate directory",
                     path.clone(),
                     io::ErrorKind::InvalidInput,
                 )
             })?;
             if !snapshot.contains_directory(&canonical) {
                 return Err(self.input_error(
-                    "open local package",
+                    "open crate directory",
                     canonical,
                     io::ErrorKind::NotFound,
                 ));
@@ -1239,7 +949,7 @@ impl<'a> Builder<'a> {
         let canonical = fs::canonicalize(&path).map_err(|source| {
             Error::resource(
                 self.evidence.clone(),
-                error::resource_message("open local package", path.clone(), &source),
+                error::resource_message("open crate directory", path.clone(), &source),
                 source,
                 primary,
             )
@@ -1247,7 +957,7 @@ impl<'a> Builder<'a> {
         let metadata = fs::metadata(&canonical).map_err(|source| {
             Error::resource(
                 self.evidence.clone(),
-                error::resource_message("inspect local package", canonical.clone(), &source),
+                error::resource_message("inspect crate directory", canonical.clone(), &source),
                 source,
                 primary,
             )
@@ -1255,11 +965,11 @@ impl<'a> Builder<'a> {
         if !metadata.is_dir() {
             let source = std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "local package path is not a directory",
+                "crate path is not a directory",
             );
             return Err(Error::resource(
                 self.evidence.clone(),
-                error::resource_message("open local package", canonical, &source),
+                error::resource_message("open crate directory", canonical, &source),
                 source,
                 primary,
             ));
@@ -1352,28 +1062,6 @@ impl<'a> Builder<'a> {
         let index = self.evidence.len();
         self.evidence.push(source);
         index
-    }
-
-    fn rawr_evidence(&self, id: source::Id) -> Result<usize, Error> {
-        let diagnostic = self.sources[id.index()].diagnostic();
-        self.evidence
-            .iter()
-            .position(|source| source == diagnostic)
-            .ok_or_else(|| {
-                Error::authority(
-                    self.evidence.clone(),
-                    "parsed source lacks matching diagnostic evidence".into(),
-                )
-            })
-    }
-
-    fn manifest_source(&self, source: Option<usize>) -> Result<usize, Error> {
-        source.ok_or_else(|| {
-            Error::authority(
-                self.evidence.clone(),
-                "parsed manifest lacks source identity evidence".into(),
-            )
-        })
     }
 
     fn start_label(&self) -> error::Label {

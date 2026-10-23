@@ -24,7 +24,9 @@ pub struct Facts {
 pub struct Claims {
     /// Crates whose use brings the layer in: `iced` for rawr-iced.
     pub crates: Vec<String>,
-    /// `rawr.toml` tables that bring the layer in: `rust` for rawr-iced.
+    /// Kinds of import that bring the layer in: `rust` for rawr-iced, which
+    /// a crate declares with Rust dependencies in its `Cargo.toml` or with
+    /// native modules.
     pub sections: Vec<String>,
     /// Paths a host may import for a snippet that writes no `use` of its
     /// own, such as `iced::widget::column`. Only such a host (`?play`)
@@ -62,7 +64,7 @@ impl Claims {
     }
 
     /// What in `facts` brings the layer in, as a user reads it: `` `iced` ``
-    /// or `` `[rust]` in rawr.toml ``.
+    /// or `Rust dependencies in Cargo.toml`.
     #[must_use]
     pub fn reason(&self, facts: &Facts) -> Option<String> {
         self.crates
@@ -73,8 +75,18 @@ impl Claims {
                 self.sections
                     .iter()
                     .find(|section| facts.declares(section))
-                    .map(|section| format!("`[{section}]` in rawr.toml"))
+                    .map(|section| section_reason(section))
             })
+    }
+}
+
+/// A section that brings a layer in, as a user reads it.
+#[must_use]
+pub fn section_reason(section: &str) -> String {
+    if section == "rust" {
+        "Rust dependencies in Cargo.toml".to_owned()
+    } else {
+        format!("`{section}` in Cargo.toml")
     }
 }
 
@@ -146,14 +158,14 @@ impl Facts {
         }
     }
 
-    /// Whether the package declares `[rust]` imports.
+    /// Whether the crate imports Rust: Cargo dependencies or native modules.
     #[must_use]
     pub const fn declares_rust_import(&self) -> bool {
         self.rust_import
     }
 
-    /// Whether the package manifest declares the table `section`. Only
-    /// `rust` is a table a program can declare beyond its own package.
+    /// Whether the crate declares the imports `section` names. Only `rust`
+    /// exists: Rust dependencies or native modules.
     #[must_use]
     pub fn declares(&self, section: &str) -> bool {
         section == "rust" && self.rust_import

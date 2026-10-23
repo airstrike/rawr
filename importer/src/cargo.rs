@@ -658,7 +658,7 @@ impl Limits {
     }
 
     /// The configurable accounting-target keys of a `[rust.limits]` table, in
-    /// `rawr.toml` spelling. Physical limits (child capture, store payload
+    /// kebab-case spelling. Physical limits (child capture, store payload
     /// ceilings, recursion depth, RSS, disk, process and IPC bounds) are absent.
     pub const TARGET_FIELDS: &'static [&'static str] = &[
         "json-bytes",

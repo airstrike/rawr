@@ -110,7 +110,6 @@ struct Resolver<'a> {
     /// Private `use` bindings, so a path may start with an imported module.
     aliases: BTreeMap<Address, Export>,
     type_declarations: Vec<type_def::Declaration>,
-    dependency_aliases: BTreeMap<(graph::Id, ImmutableString), graph::Id>,
 }
 
 pub(crate) fn resolve(graph: Graph, host: &host::Registry) -> Result<Program, Failure> {
@@ -139,15 +138,6 @@ impl<'a> Resolver<'a> {
         let mut package_by_name = BTreeMap::new();
         for package in &packages {
             package_by_name.insert(package.name().to_owned(), package.id());
-        }
-        let mut dependency_aliases = BTreeMap::new();
-        for package in &packages {
-            for dependency in package.dependencies() {
-                dependency_aliases.insert(
-                    (package.id(), dependency.alias().into()),
-                    dependency.package(),
-                );
-            }
         }
 
         let units = parsed
@@ -184,7 +174,6 @@ impl<'a> Resolver<'a> {
             exports: BTreeMap::new(),
             aliases: BTreeMap::new(),
             type_declarations: Vec::new(),
-            dependency_aliases,
         };
         resolver.predeclare()?;
         Ok(resolver)
@@ -1082,12 +1071,7 @@ impl<'a> Resolver<'a> {
 
     fn is_direct_script_path(&self, context: &Context, path: &[ImmutableString]) -> bool {
         path.first().is_some_and(|first| {
-            first == "crate"
-                || first == "super"
-                || self
-                    .dependency_aliases
-                    .contains_key(&(context.package, first.clone()))
-                || self.is_child_module(context, first)
+            first == "crate" || first == "super" || self.is_child_module(context, first)
         })
     }
 
@@ -1255,12 +1239,6 @@ impl<'a> Resolver<'a> {
             (context.package, &modules[..parent], &path[supers..])
         } else if first == "crate" {
             (context.package, &[][..], &path[1..])
-        } else if let Some(package) = self
-            .dependency_aliases
-            .get(&(context.package, first.clone()))
-            .copied()
-        {
-            (package, &[][..], &path[1..])
         } else if self.is_child_module(context, first) {
             (context.package, context.namespace.modules.as_ref(), path)
         } else if let Some(alias) = self.module_alias(context, first).filter(|_| path.len() > 1) {
