@@ -303,6 +303,12 @@ impl Application<'_> {
         self.0.boot()
     }
 
+    /// Return `main`'s statements before the entry, when present.
+    #[must_use]
+    pub fn prelude(&self) -> Option<&application::Prelude> {
+        self.0.prelude()
+    }
+
     /// Return the normalized update callback.
     #[must_use]
     pub fn update(&self) -> &application::Update {
@@ -357,6 +363,11 @@ impl Application<'_> {
     /// Materialize the default application State.
     pub fn boot_default(&self) -> Result<Dynamic, application::RuntimeError> {
         self.0.boot_default()
+    }
+
+    /// Run `main`'s statements before the entry, when there are any.
+    pub fn invoke_prelude(&self) -> Result<(), application::RuntimeError> {
+        self.0.invoke_prelude()
     }
 
     /// Invoke and validate the explicit application boot callback.

@@ -14,7 +14,7 @@ mod type_ref;
 pub use bound::{BoundLaunch, RuntimeError};
 pub use candidate::Candidate;
 pub use descriptor::{
-    Boot, Callback, CheckedContract, Descriptor, Fingerprint, SemanticFingerprint, Subscription,
+    Boot, Callback, CheckedContract, Prelude, Descriptor, Fingerprint, SemanticFingerprint, Subscription,
     Task, Theme, Title, Update, View,
 };
 pub use entry::{Entry, Form};

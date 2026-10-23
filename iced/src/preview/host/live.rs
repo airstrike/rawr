@@ -235,7 +235,7 @@ impl State {
                     return iced::Task::none();
                 };
                 self.service.installed(inputs);
-                self.status.installed(&evidence);
+                self.status.installed(&evidence, self.host.prelude_note());
                 task.map(LiveMessage::Host)
             }
             Ok(Admission::Obsolete(())) => {

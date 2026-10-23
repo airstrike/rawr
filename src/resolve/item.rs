@@ -230,6 +230,9 @@ pub(crate) struct Body {
     /// The text `span` selects when Rawr wrote the body itself; `None`
     /// for a body in its source.
     pub text: Option<crate::ImmutableString>,
+    /// Source within `span` the body leaves out, as blanks: the application
+    /// entry at the end of `main`, whose statements before it run once.
+    pub elide: Option<Span>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

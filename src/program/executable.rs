@@ -222,7 +222,7 @@ impl Executable {
         let mut callables = collect_callables(&program);
         let application = program
             .application()
-            .map(|entry| collect_application(entry, &callables));
+            .map(|entry| collect_application(entry, &callables, &program));
         let previews = program.previews().to_vec().into_boxed_slice();
         let widgets = program.widgets().to_vec().into_boxed_slice();
         let preview_fingerprint = crate::preview::Fingerprint::from_definitions(&previews);
@@ -445,7 +445,7 @@ impl ContractEvidence {
         let callables = collect_callables(program);
         let application = program
             .application()
-            .map(|entry| collect_application(entry, &callables));
+            .map(|entry| collect_application(entry, &callables, &program));
         Self {
             source: program.source().entry(),
             callables,
@@ -922,7 +922,29 @@ fn resolved_type_span(ty: &crate::resolve::type_ref::Type) -> crate::Span {
 fn collect_application(
     entry: &resolve::application::Entry,
     callables: &BTreeMap<item::Key, Callable>,
+    program: &resolve::Program,
 ) -> crate::application::Entry {
+    // The statements before the entry, as written, so a runner can tell
+    // an edit to them.
+    let prelude = entry.prelude().map(|key| {
+        let text = entry
+            .prelude_span(program.items())
+            .zip(
+                program
+                    .items()
+                    .iter()
+                    .find(|shell| shell.key.as_ref() == Some(key)),
+            )
+            .map(|(span, shell)| span_text(program.source().text_at(shell.source), span))
+            .unwrap_or_default();
+        (
+            callables
+                .get(key)
+                .map(|callable| callable.value.clone())
+                .expect("the statements before the entry retain their executable item"),
+            text,
+        )
+    });
     let value = |key: &item::Key| {
         callables
             .get(key)
@@ -940,6 +962,7 @@ fn collect_application(
         entry.centered_intrinsic().cloned(),
         entry.run_intrinsic().cloned(),
         entry.boot().map(value),
+        prelude,
         value(entry.update()),
         value(entry.view()),
         entry.title().map(value),
@@ -952,6 +975,25 @@ fn collect_application(
         entry.widget().cloned(),
         entry.span(),
     )
+}
+
+/// The text of `source` within `span`.
+fn span_text(source: &str, span: crate::Span) -> Box<str> {
+    let mut text = String::new();
+    let (mut line, mut column) = (1_u16, 0_u16);
+    for character in source.chars() {
+        if character == '\n' {
+            line = line.saturating_add(1);
+            column = 0;
+        } else {
+            column = column.saturating_add(1);
+        }
+        let position = crate::Position::new(line, column);
+        if position >= span.start() && position < span.end() {
+            text.push(character);
+        }
+    }
+    text.into()
 }
 
 fn insert_callable(

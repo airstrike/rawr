@@ -327,6 +327,31 @@ pub fn main() -> iced::Result {
 }
 "#;
 
+    /// `main` writes statements before its app, as iced's examples set up
+    /// tracing. `PRELUDE` is those statements.
+    const PRELUDED: &str = r#"
+use iced::widget::{button, column, text};
+use iced::Element;
+#[derive(Default)]
+struct State { count: i64 }
+#[derive(Debug, Clone)]
+enum Message { Bump }
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Bump => self.count += 1,
+        }
+    }
+    fn view(&self) -> Element<'_, Message> {
+        column![button(text("Bump")).on_press(Message::Bump), text(format!("TAG {}", self.count))]
+    }
+}
+pub fn main() -> iced::Result {
+    PRELUDE
+    iced::application(State::default, State::update, State::view).run()
+}
+"#;
+
     struct Runner {
         root: std::path::PathBuf,
         engine: rawr::Shared<rawr::Engine>,
@@ -338,12 +363,23 @@ pub fn main() -> iced::Result {
 
     impl Runner {
         fn start(name: &str, source: &str) -> Self {
+            Self::try_start(name, source).unwrap()
+        }
+
+        fn try_start(name: &str, source: &str) -> Result<Self, crate::program::install::Error> {
             let root = std::env::temp_dir().join(format!(
                 "rawr-carry-{name}-{}-{:?}",
                 std::process::id(),
                 std::thread::current().id()
             ));
             fs::create_dir_all(root.join("src")).unwrap();
+            // Each runner is its own package, as `main` runs once per
+            // package in a process.
+            fs::write(
+                root.join("Cargo.toml"),
+                format!("[package]\nname = \"carry-{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"),
+            )
+            .unwrap();
             crate::write_marked(&root, "src/main.rs", source.replace("TAG", "old"));
             let mut engine = rawr::Engine::new();
             crate::install(&mut engine).unwrap();
@@ -359,8 +395,15 @@ pub fn main() -> iced::Result {
             ));
             let diagnostic = first.source().entry_source().diagnostic().clone();
             let bootstrap = first.bind(&engine, registry.next_generation()).unwrap();
-            let host = crate::program::Host::bootstrap(bootstrap, Some(diagnostic)).unwrap();
-            Self { root, engine, target, registry, publication, host }
+            let host = crate::program::Host::bootstrap(bootstrap, Some(diagnostic));
+            let host = match host {
+                Ok(host) => host,
+                Err(error) => {
+                    fs::remove_dir_all(&root).ok();
+                    return Err(error);
+                }
+            };
+            Ok(Self { root, engine, target, registry, publication, host })
         }
 
         /// Install `source` as a script edit; whether the edit applied.
@@ -431,6 +474,36 @@ pub fn main() -> iced::Result {
         assert!(runner.shows("old"));
         assert!(!runner.edit(&COMBO.replace("TAG", "new")));
         assert!(runner.shows("old"));
+    }
+
+    #[test]
+    fn mains_statements_run_before_the_first_boot() {
+        let source = PRELUDED.replace("PRELUDE", r#"panic!("main ran");"#);
+        let error = Runner::try_start("prelude-runs", &source).err().unwrap();
+        assert!(format!("{error:?}").contains("main ran"), "{error:?}");
+    }
+
+    #[test]
+    fn an_edit_to_mains_statements_waits_for_a_restart() {
+        let first = PRELUDED.replace("PRELUDE", "let ready = true;");
+        let mut runner = Runner::start("prelude-once", &first);
+        runner.click("Bump");
+        assert!(runner.shows("old 1"));
+        assert_eq!(runner.host.prelude_note(), None);
+
+        // The edit applies and keeps the State. The new statements do not
+        // run, here or on a reset.
+        let edited = PRELUDED
+            .replace("PRELUDE", r#"panic!("main ran again");"#)
+            .replace("TAG", "new");
+        assert!(runner.edit(&edited));
+        assert!(runner.shows("new 1"));
+        assert_eq!(
+            runner.host.prelude_note().as_deref(),
+            Some("This edit to `main` takes effect when `rawr run` restarts.")
+        );
+        drop(runner.host.reset().unwrap());
+        assert!(runner.shows("new 0"));
     }
 
     #[test]

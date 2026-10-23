@@ -1710,6 +1710,7 @@ fn resolve_item(
                     syntax: parsed.body_syntax,
                     constant: false,
                     text: None,
+                    elide: None,
                 },
             })
         }
@@ -1808,6 +1809,7 @@ fn resolve_function(
             syntax: parsed.body_syntax,
             constant: parsed.constant,
             text: None,
+            elide: None,
         },
     })
 }
@@ -2896,6 +2898,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: false,
             text: None,
+            elide: None,
         },
     };
     let functions = match name {

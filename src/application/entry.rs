@@ -1,6 +1,8 @@
 //! Stable metadata selected by restricted application-root resolution.
 
 use crate::{host, item, Span};
+#[cfg(feature = "no_std")]
+use std::prelude::v1::*;
 
 /// Supported restricted application-root form.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -28,6 +30,7 @@ pub struct Entry {
     centered_intrinsic: Option<host::item::Fingerprint>,
     run_intrinsic: Option<host::item::Fingerprint>,
     boot: Option<item::Value>,
+    prelude: Option<(item::Value, Box<str>)>,
     update: item::Value,
     view: item::Value,
     title: Option<item::Value>,
@@ -52,6 +55,7 @@ impl Entry {
         centered_intrinsic: Option<host::item::Fingerprint>,
         run_intrinsic: Option<host::item::Fingerprint>,
         boot: Option<item::Value>,
+        prelude: Option<(item::Value, Box<str>)>,
         update: item::Value,
         view: item::Value,
         title: Option<item::Value>,
@@ -74,6 +78,7 @@ impl Entry {
             centered_intrinsic,
             run_intrinsic,
             boot,
+            prelude,
             update,
             view,
             title,
@@ -144,6 +149,13 @@ impl Entry {
     #[must_use]
     pub const fn boot(&self) -> Option<&item::Value> {
         self.boot.as_ref()
+    }
+
+    /// Return `main`'s statements before the entry and their text, when
+    /// present.
+    #[must_use]
+    pub fn prelude(&self) -> Option<(&item::Value, &str)> {
+        self.prelude.as_ref().map(|(value, text)| (value, &**text))
     }
 
     /// Return the stable symbolic update candidate.

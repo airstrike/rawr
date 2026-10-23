@@ -343,6 +343,15 @@ impl Host {
         })
     }
 
+    /// The note for an edit to `main`'s statements before the entry.
+    pub(crate) fn prelude_note(&self) -> Option<String> {
+        let Storage::Reload(slot) = &self.storage else {
+            return None;
+        };
+        let launch = slot.context().application()?;
+        crate::program::prelude_note(&launch.borrow())
+    }
+
     /// The running application's State as bytes a new runner process can
     /// seed from.
     pub(crate) fn export_state(&self) -> Option<Vec<u8>> {

@@ -142,13 +142,13 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
         {
             continue;
         }
-        let body_source = source_span(
+        let body_source = body_source(
             definition
                 .body
                 .text
                 .as_deref()
                 .unwrap_or_else(|| program.source.text_at(shell.source)),
-            definition.body.span,
+            &definition.body,
         );
         let mut parser = Parser::for_function(
             engine,
@@ -600,13 +600,13 @@ fn lower_with_context(
         {
             continue;
         }
-        let body_source = source_span(
+        let body_source = body_source(
             definition
                 .body
                 .text
                 .as_deref()
                 .unwrap_or_else(|| program.source.text_at(shell.source)),
-            definition.body.span,
+            &definition.body,
         );
         let mut parser = Parser::for_function(
             engine,
@@ -1814,6 +1814,34 @@ fn source_span(source: &str, selected: Span) -> String {
         );
     }
 
+    output
+}
+
+/// A function's body as `source_span` selects it, with its elided source
+/// blank.
+fn body_source(source: &str, body: &item::Body) -> String {
+    let selected = source_span(source, body.span);
+    let Some(elide) = body.elide else {
+        return selected;
+    };
+    let mut output = String::with_capacity(selected.len());
+    let mut line = 1_u16;
+    let mut column = 0_u16;
+    for character in selected.chars() {
+        if character == '\n' {
+            output.push(character);
+            line = line.saturating_add(1);
+            column = 0;
+            continue;
+        }
+        column = column.saturating_add(1);
+        let position = Position::new(line, column);
+        output.push(if position >= elide.start() && position < elide.end() {
+            ' '
+        } else {
+            character
+        });
+    }
     output
 }
 

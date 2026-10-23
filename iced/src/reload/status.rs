@@ -168,9 +168,18 @@ impl State {
 
     /// Mark a committed reload ready and note any owner whose state was
     /// reseeded from boot instead of carried across.
-    pub(crate) fn installed(&mut self, evidence: &[rawr::reload::compatibility::Evidence]) {
+    /// `extra` is one more note, such as for an edit that takes effect
+    /// only when `rawr run` restarts.
+    pub(crate) fn installed(
+        &mut self,
+        evidence: &[rawr::reload::compatibility::Evidence],
+        extra: Option<String>,
+    ) {
         self.ready();
-        let note = reseeded(evidence);
+        let note = match (reseeded(evidence), extra) {
+            (Some(note), Some(extra)) => Some(format!("{note} · {extra}")),
+            (note, extra) => note.or(extra),
+        };
         for call in self.waiting.drain(..) {
             call.answer(format!(
                 "ok\nreloaded{}",
@@ -554,12 +563,12 @@ pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
         let (_, same) = compile("same", "struct State;");
         let kept = Plan::compare(current.clone(), same, Owners::one(Owner::Application));
         let mut state = State::new();
-        state.installed(kept.evidence_set());
+        state.installed(kept.evidence_set(), None);
         assert_eq!(state.current_note(), None);
 
         let (_, wider) = compile("wider", "struct State { count: i64 }");
         let reseeded = Plan::compare(current, wider, Owners::one(Owner::Application));
-        state.installed(reseeded.evidence_set());
+        state.installed(reseeded.evidence_set(), None);
         assert_eq!(
             state.current_note(),
             Some("State reseeded · App: state shape changed")

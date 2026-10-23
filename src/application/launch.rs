@@ -110,6 +110,12 @@ impl Launch {
         &self.contract.proof.boot
     }
 
+    /// Return `main`'s statements before the entry, when present.
+    #[must_use]
+    pub fn prelude(&self) -> Option<&application::Prelude> {
+        self.contract.proof.prelude.as_ref()
+    }
+
     /// Return the normalized update callback.
     #[must_use]
     pub fn update(&self) -> &application::Update {
