@@ -786,3 +786,95 @@ impl Counter {{
 "#
     )
 }
+
+/// download_progress's shape: a `Vec` of downloads whose State holds a
+/// native task handle, and `if let .. = &mut self.state { *progress = .. }`
+/// through a nested `match`. The binding writes back into the element.
+const DOWNLOADS: &str = r#"
+use iced::task;
+use iced::widget::{button, column, text};
+use iced::{Task, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(Example::default, Example::update, Example::view).run()
+}
+
+#[derive(Default)]
+struct Example { downloads: Vec<Download> }
+
+#[derive(Debug, Clone)]
+enum Message { Start, Step, Finish }
+
+#[derive(Debug, Clone)]
+pub enum Update { Downloading(f32), Finished(bool) }
+
+struct Download { id: usize, state: State }
+
+enum State { Idle, Downloading { progress: f32, _task: task::Handle }, Finished, Errored }
+
+impl Example {
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Start => {
+                let none: Task<Message> = Task::none();
+                let (_, handle) = none.abortable();
+                self.downloads.push(Download {
+                    id: 0,
+                    state: State::Downloading { progress: 0.0, _task: handle.abort_on_drop() },
+                });
+            }
+            Message::Step => {
+                self.downloads[0].update(Update::Downloading(42.0));
+            }
+            Message::Finish => {
+                self.downloads[0].update(Update::Finished(true));
+            }
+        }
+        Task::none()
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let label = match self.downloads.first().map(|download| &download.state) {
+            Some(State::Downloading { progress, .. }) => format!("at {progress}"),
+            Some(State::Finished) => "finished".to_string(),
+            Some(_) => "other".to_string(),
+            None => "none".to_string(),
+        };
+        column![
+            text(label),
+            button("Start").on_press(Message::Start),
+            button("Step").on_press(Message::Step),
+            button("Finish").on_press(Message::Finish),
+        ]
+    }
+}
+
+impl Download {
+    pub fn update(&mut self, update: Update) {
+        if let State::Downloading { progress, .. } = &mut self.state {
+            match update {
+                Update::Downloading(new_progress) => {
+                    *progress = new_progress;
+                }
+                Update::Finished(result) => {
+                    self.state = if result { State::Finished } else { State::Errored };
+                }
+            }
+        }
+    }
+}
+"#;
+
+#[test]
+fn a_mut_pattern_binding_writes_back_through_a_held_handle() {
+    let mut adapter = boot(DOWNLOADS);
+    assert_text(&adapter, "none");
+    for label in ["Start", "Step"] {
+        let message = click(&adapter, label);
+        adapter.update(message).unwrap();
+    }
+    assert_text(&adapter, "at 42");
+    let message = click(&adapter, "Finish");
+    adapter.update(message).unwrap();
+    assert_text(&adapter, "finished");
+}

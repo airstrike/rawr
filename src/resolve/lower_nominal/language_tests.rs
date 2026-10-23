@@ -7273,6 +7273,29 @@ fn language_patterns_on_mut_places_write_their_bindings_back() {
 }
 
 #[test]
+fn language_mut_pattern_write_back_keeps_a_nan_neighbour() {
+    // The place is unchanged when the body leaves it alone, even though a
+    // NaN field is never `==` to itself.
+    let value = run(r#"
+        enum State { Idle, Running { progress: f32, rate: f32 } }
+        struct App { state: State }
+        impl App {
+            fn step(&mut self) {
+                if let State::Running { progress, .. } = &mut self.state { *progress = 42.0; }
+            }
+        }
+        pub fn run() -> i64 {
+            let zero: f32 = 0.0;
+            let mut app = App { state: State::Running { progress: 0.0, rate: zero / zero } };
+            app.step();
+            match app.state { State::Running { progress, .. } => progress as i64, State::Idle => -1 }
+        }
+        run()
+    "#);
+    assert_eq!(value, 42);
+}
+
+#[test]
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(error.contains("nknown function") && error.contains("centre"), "{error}");
@@ -7859,4 +7882,3 @@ fn language_ref_cell_panics_on_a_conflicting_borrow() {
     "#);
     assert_eq!(value, 2);
 }
-

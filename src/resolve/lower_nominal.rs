@@ -5146,7 +5146,7 @@ impl ExecutableOp {
                 // `[restored, place]`: the place with the bindings written
                 // back, unless it changed since it was matched (it was
                 // assigned another value, which the bindings no longer name).
-                let unchanged = equal_value(args[0], args[1]);
+                let unchanged = same_value(args[0], args[1]);
                 let mut place = args[0].clone();
                 let values = args[2].as_array_ref().map(|values| values.to_vec());
                 let restored = unchanged
@@ -36593,6 +36593,19 @@ fn facade_output(item: &crate::host::item::Definition, output: &Ty) -> Ty {
 }
 
 pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
+    value_matches(lhs, rhs, false)
+}
+
+/// Whether `lhs` is still `rhs`, the value it was copied from: `==` that
+/// is reflexive. A float equals itself bit for bit, NaN too, and a host
+/// value with no `PartialEq` is the same while its type is. A `&mut`
+/// pattern's write-back asks this to tell an untouched place from one the
+/// body assigned.
+pub(crate) fn same_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
+    value_matches(lhs, rhs, true)
+}
+
+fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::time::Duration>(),
         rhs.read_lock::<std::time::Duration>(),
@@ -36609,17 +36622,17 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
         lhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
         rhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
     ) {
-        return equal_value(&lhs.0, &rhs.0);
+        return value_matches(&lhs.0, &rhs.0, same);
     }
     if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
         return match (lhs, rhs) {
-            (Some(lhs), Some(rhs)) => equal_value(&lhs, &rhs),
+            (Some(lhs), Some(rhs)) => value_matches(&lhs, &rhs, same),
             (lhs, rhs) => lhs.is_none() && rhs.is_none(),
         };
     }
     if let (Some(lhs), Some(rhs)) = (crate::result::read(lhs), crate::result::read(rhs)) {
         return match (lhs, rhs) {
-            (Ok(lhs), Ok(rhs)) | (Err(lhs), Err(rhs)) => equal_value(&lhs, &rhs),
+            (Ok(lhs), Ok(rhs)) | (Err(lhs), Err(rhs)) => value_matches(&lhs, &rhs, same),
             _ => false,
         };
     }
@@ -36630,6 +36643,8 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
         (Union::Int(lhs, ..), Union::Int(rhs, ..)) => lhs == rhs,
         (Union::Str(lhs, ..), Union::Str(rhs, ..)) => lhs == rhs,
         #[cfg(not(feature = "no_float"))]
+        (Union::Float(lhs, ..), Union::Float(rhs, ..)) if same => lhs.to_bits() == rhs.to_bits(),
+        #[cfg(not(feature = "no_float"))]
         (Union::Float(lhs, ..), Union::Float(rhs, ..)) => lhs == rhs,
         (Union::Struct(lhs, ..), Union::Struct(rhs, ..)) => {
             lhs.identity() == rhs.identity()
@@ -36639,7 +36654,7 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
                     .fields()
                     .iter()
                     .zip(rhs.fields())
-                    .all(|(lhs, rhs)| equal_value(lhs, rhs))
+                    .all(|(lhs, rhs)| value_matches(lhs, rhs, same))
         }
         (Union::Enum(lhs, ..), Union::Enum(rhs, ..)) => {
             lhs.identity() == rhs.identity()
@@ -36650,7 +36665,7 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
                     .payload()
                     .iter()
                     .zip(rhs.payload())
-                    .all(|(lhs, rhs)| equal_value(lhs, rhs))
+                    .all(|(lhs, rhs)| value_matches(lhs, rhs, same))
         }
         // Vectors, arrays and tuples compare element by element.
         #[cfg(not(feature = "no_index"))]
@@ -36659,10 +36674,15 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
                 && lhs
                     .iter()
                     .zip(rhs.iter())
-                    .all(|(lhs, rhs)| equal_value(lhs, rhs))
+                    .all(|(lhs, rhs)| value_matches(lhs, rhs, same))
         }
-        (Union::Variant(..), Union::Variant(..)) => {
-            crate::host::value::host_equal(lhs, rhs).unwrap_or(false)
+        (Union::Variant(..), Union::Variant(..)) => match crate::host::value::host_equal(lhs, rhs) {
+            Some(equal) => equal,
+            None => same && lhs.type_id() == rhs.type_id(),
+        },
+        #[cfg(not(feature = "no_closure"))]
+        (Union::Shared(..), _) | (_, Union::Shared(..)) if same => {
+            value_matches(&lhs.flatten_clone(), &rhs.flatten_clone(), same)
         }
         _ => false,
     }
