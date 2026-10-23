@@ -45,7 +45,7 @@ struct Arguments<'slice, 'value, 'arena> { values: &'slice mut [&'value mut Dyna
 
 #[derive(Clone, Copy)]
 struct NativeHandle { epoch: [u8; 32], slot: u32, generation: u64 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, debug: Option<DebugText>, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, debug: Option<DebugText>, clone: Option<CloneValue>, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
 
 /// Rust's `Debug` text of a stored value, for a type that implements it.
 type DebugText = fn(&dyn Any) -> Option<String>;
@@ -85,16 +85,46 @@ impl<T> WithoutDebug for &DebugProbe<T> {
     }
 }
 
-/// Store `value` in the arena, remembering its `Debug` text when its type
-/// has one.
+/// A copy of a stored value, for a type that implements `Clone`.
+type CloneValue = fn(&dyn Any) -> Option<Box<dyn Any>>;
+
+fn clone_value<T: Clone + 'static>(value: &dyn Any) -> Option<Box<dyn Any>> {
+    value.downcast_ref::<T>().map(|value| Box::new(value.clone()) as Box<dyn Any>)
+}
+
+#[allow(dead_code)]
+trait ViaClone {
+    fn native_clone(&self) -> Option<CloneValue>;
+}
+
+impl<T: Clone + 'static> ViaClone for DebugProbe<T> {
+    fn native_clone(&self) -> Option<CloneValue> {
+        Some(clone_value::<T>)
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutClone {
+    fn native_clone(&self) -> Option<CloneValue>;
+}
+
+impl<T> WithoutClone for &DebugProbe<T> {
+    fn native_clone(&self) -> Option<CloneValue> {
+        None
+    }
+}
+
+/// Store `value` in the arena, remembering its `Debug` text and its
+/// `Clone` when its type has them.
 #[allow(unused_macros)]
 macro_rules! insert_native {
     ($arena:expr, $value:expr) => {{
         #[allow(unused_imports)]
-        use $crate::{ViaDebug as _, WithoutDebug as _};
+        use $crate::{ViaClone as _, ViaDebug as _, WithoutClone as _, WithoutDebug as _};
         let value = $value;
         let debug = (&$crate::debug_probe(&value)).native_debug();
-        $arena.insert_debug(value, debug)
+        let clone = (&$crate::debug_probe(&value)).native_clone();
+        $arena.insert_debug(value, debug, clone)
     }};
 }
 
@@ -203,7 +233,7 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, debug: None, witness: None, project: None, mapper: None });
+                self.slots.push(NativeSlot { generation: 1, value: None, debug: None, clone: None, witness: None, project: None, mapper: None });
                 slot
             }
         };
@@ -211,16 +241,18 @@ impl Arena {
         if entry.value.is_some() { return Err(Error::StaleHandle); }
         entry.value = Some(Box::new(value));
         entry.debug = None;
+        entry.clone = None;
         entry.witness = None;
         entry.project = None;
         entry.mapper = None;
         Ok(NativeHandle { epoch: self.epoch, slot, generation: entry.generation })
     }
 
-    fn insert_debug<T: 'static>(&mut self, value: T, debug: Option<DebugText>) -> Result<NativeHandle, Error> {
+    fn insert_debug<T: 'static>(&mut self, value: T, debug: Option<DebugText>, clone: Option<CloneValue>) -> Result<NativeHandle, Error> {
         let handle = self.insert(value)?;
         if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
             entry.debug = debug;
+            entry.clone = clone;
         }
         Ok(handle)
     }
@@ -256,6 +288,13 @@ impl Arena {
 
     fn take<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
         let index = self.index::<T>(handle)?;
+        // A script copies a handle where it copies the value, so a `Clone`
+        // value is cloned out and its slot stays valid for every copy.
+        if let Some(clone) = self.slots[index].clone {
+            let value = self.slots[index].value.as_deref().ok_or(Error::StaleHandle)?;
+            let value = clone(value).ok_or(Error::TypeMismatch)?;
+            return value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch);
+        }
         let reusable = self.slots[index].generation.checked_add(1);
         if reusable.is_some() {
             self.free.try_reserve_exact(1).map_err(|_| Error::Allocation)?;

@@ -105,6 +105,7 @@ fn structure(engine: &mut Engine) -> identity::Selector {
             false,
             false,
             false,
+            false,
             Box::default(),
             Shared::new(host::type_def::Shape::Struct {
                 form: host::type_def::Form::Tuple,

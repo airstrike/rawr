@@ -22,6 +22,7 @@ pub struct Plan {
     copy: bool,
     default: bool,
     debug: bool,
+    clone: bool,
 }
 
 impl Field {
@@ -78,6 +79,7 @@ impl Plan {
         copy: bool,
         default: bool,
         debug: bool,
+        clone: bool,
     ) -> Self {
         Self {
             constructor,
@@ -89,6 +91,7 @@ impl Plan {
             copy,
             default,
             debug,
+            clone,
         }
     }
 
@@ -137,6 +140,12 @@ impl Plan {
     #[must_use]
     pub const fn debug(&self) -> bool {
         self.debug
+    }
+
+    /// Whether the crate implements `Clone` for the type.
+    #[must_use]
+    pub const fn cloneable(&self) -> bool {
+        self.clone
     }
 
     /// Drop the public fields `keep` refuses. A struct that lost one has no

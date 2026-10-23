@@ -848,3 +848,66 @@ fn main() {
         "Panel { gauge: Gauge { level: 7 }, reading: Level(Gauge { level: 7 }) }\nGauge { level: 7 } Missing\n"
     );
 }
+
+/// A script enum deriving `Clone` over an imported `Clone` type copies the
+/// value: each copy can be moved into a Rust function.
+#[test]
+#[ignore = "builds the path dependency and a runner with the import driver"]
+fn a_derived_clone_copies_an_imported_field() {
+    let sandbox = Sandbox::new("imported-clone");
+    let root = copy_fixture("rs-marker-path", sandbox.path());
+    let library = root.join("gauge/src/lib.rs");
+    let mut gauge = fs::read_to_string(&library).unwrap();
+    gauge.push_str(
+        r#"
+#[derive(Debug, Clone, PartialEq)]
+pub struct Label {
+    pub text: String,
+}
+
+pub fn shout(label: Label) -> String {
+    label.text.to_uppercase()
+}
+"#,
+    );
+    fs::write(&library, gauge).unwrap();
+    fs::write(
+        root.join("app/src/main.rs"),
+        r#"// rawr
+use gauge::{shout, Label};
+
+#[derive(Debug, Clone)]
+enum Message {
+    Named(Label),
+}
+
+fn unwrap(message: Message) -> Label {
+    match message {
+        Message::Named(label) => label,
+    }
+}
+
+fn main() {
+    let first = Message::Named(Label { text: String::from("hi") });
+    let second = first.clone();
+    let label = unwrap(first);
+    let again = unwrap(second);
+    println!("{} {} {again:?}", shout(label), shout(again.clone()));
+}
+"#,
+    )
+    .unwrap();
+
+    let output = rawr_command()
+        .arg("run")
+        .arg(root.join("app"))
+        .output()
+        .unwrap();
+
+    writable(&root);
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "HI HI Label { text: \"hi\" }\n"
+    );
+}

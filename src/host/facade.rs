@@ -368,6 +368,7 @@ impl Builder {
         copy: bool,
         default: bool,
         debug: bool,
+        clone: bool,
         parameters: Box<[ImmutableString]>,
         shape: crate::Shared<host::type_def::Shape>,
         allocation: &mut impl host::ImportAllocation,
@@ -376,7 +377,9 @@ impl Builder {
         let path = host::path::Path::qualify_imported(&self.root, relative, allocation)?;
         self.ensure_vacant(&path, "type")?;
         let definition =
-            host::type_def::Definition::imported(path, identity, copy, default, debug, parameters, shape)?;
+            host::type_def::Definition::imported(
+                path, identity, copy, default, debug, clone, parameters, shape,
+            )?;
         self.insert_type(definition)?;
         Ok(self)
     }
@@ -2444,6 +2447,7 @@ mod imported_allocation_tests {
                     false,
                     false,
                     false,
+                    false,
                     Box::default(),
                     host::type_def::Shape::Struct {
                         form,
@@ -2650,6 +2654,7 @@ mod imported_allocation_tests {
                 .imported_type(
                     "Opaque",
                     host::type_def::import::Identity::new(identity),
+                    false,
                     false,
                     false,
                     false,

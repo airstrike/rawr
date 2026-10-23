@@ -20,6 +20,7 @@ pub struct Plan {
     copy: bool,
     default: bool,
     debug: bool,
+    clone: bool,
 }
 
 impl Variant {
@@ -80,6 +81,7 @@ impl Plan {
         copy: bool,
         default: bool,
         debug: bool,
+        clone: bool,
     ) -> Self {
         Self {
             parameters,
@@ -88,6 +90,7 @@ impl Plan {
             copy,
             default,
             debug,
+            clone,
         }
     }
 
@@ -121,6 +124,12 @@ impl Plan {
     #[must_use]
     pub const fn debug(&self) -> bool {
         self.debug
+    }
+
+    /// Whether the crate implements `Clone` for the type.
+    #[must_use]
+    pub const fn cloneable(&self) -> bool {
+        self.clone
     }
 
     /// Drop the variant fields `keep` refuses. A variant that lost one cannot

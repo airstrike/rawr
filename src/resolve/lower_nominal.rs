@@ -37544,6 +37544,38 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
         );
     }
 
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn derived_clone_takes_an_imported_field_whose_type_implements_clone() {
+        let mut engine = Engine::new();
+        engine
+            .register_host_facade(imported_facade())
+            .expect("symbolic imported facade installs");
+        resolve::resolve(
+            engine
+                .parse_unit(
+                    "use imported::Choice; #[derive(Clone)] enum Message { Picked(Choice) } \
+                     fn again(message: &Message) -> Message { message.clone() } 0",
+                )
+                .expect("imported fixture parses"),
+            &engine.host_registry,
+        )
+        .unwrap_or_else(|error| panic!("imported Clone field: {error:?}"));
+
+        let Err(error) = resolve::resolve(
+            engine
+                .parse_unit("use imported::Pair; #[derive(Clone)] struct Panel { pair: Pair } 0")
+                .expect("imported fixture parses"),
+            &engine.host_registry,
+        ) else {
+            panic!("an imported type without Clone");
+        };
+        assert!(
+            matches!(&error, resolve::Error::InvalidDerive { capability, .. } if capability.as_str() == "Clone"),
+            "{error:?}"
+        );
+    }
+
     mod stress {
         pub(super) struct Element;
         pub(super) struct Container;
@@ -38203,6 +38235,7 @@ pub fn run() -> i64 {
                 false,
                 false,
                 false,
+                false,
                 Box::default(),
                 pair_shape,
                 &mut allocation,
@@ -38212,6 +38245,7 @@ pub fn run() -> i64 {
             .imported_type(
                 "domain::State",
                 state_identity,
+                false,
                 false,
                 false,
                 false,
@@ -38256,6 +38290,7 @@ pub fn run() -> i64 {
                 false,
                 false,
                 false,
+                false,
                 Box::default(),
                 host::type_def::Shape::Struct {
                     form: host::type_def::Form::Record,
@@ -38277,6 +38312,7 @@ pub fn run() -> i64 {
                 copy_identity,
                 true,
                 false,
+                true,
                 true,
                 Box::default(),
                 host::type_def::Shape::Struct {
@@ -38300,6 +38336,7 @@ pub fn run() -> i64 {
                 false,
                 false,
                 false,
+                true,
                 Box::default(),
                 host::type_def::Shape::Enum(Box::from([
                     host::type_def::Variant::new(
@@ -38421,6 +38458,7 @@ pub fn run() -> i64 {
                 .imported_type(
                     alias,
                     identity,
+                    false,
                     false,
                     false,
                     false,

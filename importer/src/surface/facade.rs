@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 9;
+const SCHEMA: u32 = 10;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -154,6 +154,7 @@ pub struct TypeDefinition {
     copy: bool,
     default: bool,
     debug: bool,
+    clone: bool,
     shape: Shape,
 }
 
@@ -704,6 +705,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         copy: false,
         default: false,
         debug: false,
+        clone: false,
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -764,6 +766,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 copy: false,
                 default: false,
                 debug: false,
+                clone: false,
                 shape: Shape::Struct {
                     form: Form::Unit,
                     constructor: None,
@@ -799,6 +802,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         copy: false,
         default: false,
         debug: false,
+        clone: false,
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -1693,6 +1697,10 @@ impl TypeDefinition {
     pub const fn debug(&self) -> bool {
         self.debug
     }
+    /// Return whether the native type implements `Clone`.
+    pub const fn cloneable(&self) -> bool {
+        self.clone
+    }
     /// Return the exact nominal shape.
     pub const fn shape(&self) -> &Shape {
         &self.shape
@@ -1799,12 +1807,13 @@ fn type_definition(
         .identity()
         .definition()
         .ok_or(super::Error::ForeignIdentity)?;
-    let (parameters, copyable, default, debug, shape) = match outcome.representability() {
+    let (parameters, copyable, default, debug, clone, shape) = match outcome.representability() {
         Representability::Struct(plan) => (
             parameters(plan.parameters())?,
             plan.copy(),
             plan.default(),
             plan.debug(),
+            plan.cloneable(),
             Shape::Struct {
                 form: form(plan.form()),
                 constructor: plan
@@ -1833,6 +1842,7 @@ fn type_definition(
                 plan.copy(),
                 plan.default(),
                 plan.debug(),
+                plan.cloneable(),
                 Shape::Enum {
                     variants: variants.into_boxed_slice(),
                 },
@@ -1854,6 +1864,7 @@ fn type_definition(
         copy: copyable,
         default,
         debug,
+        clone,
         shape,
     }))
 }

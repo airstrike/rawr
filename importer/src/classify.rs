@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 5;
-const CLASSIFIER_VERSION: u32 = 5;
+const CLASSIFIER_VERSION: u32 = 6;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3026,6 +3026,7 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements(definition, "Copy"),
             self.implements(definition, "Default"),
             self.implements_for_any(definition, "Debug"),
+            self.implements_for_any(definition, "Clone"),
         ))
     }
 
@@ -3108,6 +3109,7 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements(definition, "Copy"),
             self.implements(definition, "Default"),
             self.implements_for_any(definition, "Debug"),
+            self.implements_for_any(definition, "Clone"),
         ))
     }
 

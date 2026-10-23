@@ -2820,6 +2820,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
                 parameters.clone(),
                 shape,
                 &mut allocation,

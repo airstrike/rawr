@@ -1442,18 +1442,20 @@ fn build(
     }
 
     for entry in &facade.entries {
-        let (parameters, copy, default, debug) = match entry.outcome.representability() {
+        let (parameters, copy, default, debug, clone) = match entry.outcome.representability() {
             Representability::Struct(plan) => (
                 names(plan.parameters(), allocation)?,
                 plan.copy(),
                 plan.default(),
                 plan.debug(),
+                plan.cloneable(),
             ),
             Representability::Enum(plan) => (
                 names(plan.parameters(), allocation)?,
                 plan.copy(),
                 plan.default(),
                 plan.debug(),
+                plan.cloneable(),
             ),
             Representability::Value(_)
             | Representability::Function(_)
@@ -1552,6 +1554,7 @@ fn build(
             copy,
             default,
             debug,
+            clone,
             parameters,
             shape,
             allocation,

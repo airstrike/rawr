@@ -907,6 +907,7 @@ fn build(
                 ty.copy(),
                 ty.default(),
                 ty.debug(),
+                ty.cloneable(),
                 parameters,
                 shape,
                 allocation,
