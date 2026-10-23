@@ -297,7 +297,7 @@ fn main() {
       </div>
       <figcaption>
         Both sides show the same file. <code>cargo run</code> builds it as Rust. <code>rawr run</code> runs it on the interpreter. Both print <code>total: 27</code>.
-        <small>The file is <code>examples/scripts/cart.rs</code> in the repository. Stable <code>rustc</code> (edition 2024) compiles it without warnings.</small>
+        <small>Stable <code>rustc</code> (edition 2024) compiles it without warnings.</small>
       </figcaption>
     </figure>
   </div>
@@ -325,10 +325,10 @@ use rawr::{Engine, Scope};
 
 fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
     let engine = Engine::new();
-    let ast = engine.compile(include_str!("scripts/cart.rs"))?;
+    let ast = engine.compile(include_str!("scripts/cart.rawr"))?;
     engine.call_fn::&lt;()&gt;(&amp;mut Scope::new(), &amp;ast, "main", ())
 }</code></pre>
-        <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-host" aria-label="Run cart.rs, the file this host runs" hidden></button><b>cargo run --example cart</b><span id="out-host" aria-live="polite">total: 27</span></div>
+        <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-host" aria-label="Run the cart script this host loads" hidden></button><b>cargo run --example cart</b><span id="out-host" aria-live="polite">total: 27</span></div>
       </div>
     </div>
   </div>

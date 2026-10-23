@@ -55,14 +55,14 @@
 <div class="block"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre></div>
 
 <h2 id="example">A complete example</h2>
-<p>This is <code>examples/cart.rs</code> in the repository. It compiles <code>examples/scripts/cart.rs</code> and calls its <code>main</code>. That script is the cart program from the <a href="/docs/start#first-program">getting started page</a>.</p>
+<p>This is <code>examples/cart.rs</code> in the repository. It compiles <code>examples/scripts/cart.rawr</code> and calls its <code>main</code>. That script is the cart program from the <a href="/docs/start#first-program">getting started page</a> without its <code>// rawr</code> line. A <code>.rawr</code> file is a script that an app loads. A program that <code>rawr run</code> runs is a <code>.rs</code> file.</p>
 <div class="block">
   <div class="file"><b>examples/cart.rs</b></div>
   <pre><code data-lang="rust">use rawr::{Engine, Scope};
 
 fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
     let engine = Engine::new();
-    let ast = engine.compile(include_str!("scripts/cart.rs"))?;
+    let ast = engine.compile(include_str!("scripts/cart.rawr"))?;
     engine.call_fn::&lt;()&gt;(&amp;mut Scope::new(), &amp;ast, "main", ())
 }</code></pre>
   <div class="run"><b>cargo run --example cart</b><span>total: 27</span></div>

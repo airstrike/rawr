@@ -132,7 +132,7 @@ fn rawr_runs_the_cart_with_no_build_and_leaves_its_directory_as_it_was() {
     let sandbox = Sandbox::new("cart");
     fs::write(
         sandbox.work().join("cart.rs"),
-        include_str!("../../../examples/scripts/cart.rs"),
+        include_str!("../../../examples/scripts/cart.rawr"),
     )
     .unwrap();
     let before = tree(&sandbox.work());

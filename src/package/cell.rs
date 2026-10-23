@@ -876,10 +876,8 @@ mod tests {
             );
         }
         // A program loaded from its cells compiles as the parsed one does.
-        let cart = crate::project::Target::discover(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/scripts/cart.rs"),
-        )
-        .unwrap();
+        std::fs::write(root.join("cart.rs"), include_str!("../../examples/scripts/cart.rawr")).unwrap();
+        let cart = crate::project::Target::discover(root.join("cart.rs")).unwrap();
         let cells = Cells::new(root.join("cart"));
         let parsed = crate::package::Graph::load_with_cells(&engine, &cart, &cells).unwrap();
         cells.save(&parsed).unwrap();
