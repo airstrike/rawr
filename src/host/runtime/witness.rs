@@ -17,20 +17,47 @@ pub struct Witness {
     ty: Shared<Type>,
 }
 
+/// The authority of one runtime registry: the runner that built its bindings
+/// and the script generation it serves.
+///
+/// Every generation of one runner shares the runner part. A witness matches
+/// only its own generation, except through the native checks below, which
+/// accept a value from an earlier generation of the same runner.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(super) struct Authority(usize);
+pub(super) struct Authority {
+    runner: usize,
+    generation: usize,
+}
+
+fn next() -> usize {
+    static NEXT: AtomicUsize = AtomicUsize::new(1);
+
+    #[allow(deprecated)] // MSRV 1.91 predates `AtomicUsize::try_update`.
+    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        value.checked_add(1)
+    })
+    .expect("Rawr runtime witness authorities cannot be exhausted")
+}
 
 impl Authority {
     pub(super) fn issue() -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(1);
+        let issued = next();
+        Self {
+            runner: issued,
+            generation: issued,
+        }
+    }
 
-        #[allow(deprecated)] // MSRV 1.91 predates `AtomicUsize::try_update`.
-        let issued = NEXT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .expect("Rawr runtime witness authorities cannot be exhausted");
-        Self(issued)
+    /// The same runner's authority for its next script generation.
+    pub(super) fn next_generation(self) -> Self {
+        Self {
+            runner: self.runner,
+            generation: next(),
+        }
+    }
+
+    pub(super) const fn same_runner(self, other: Self) -> bool {
+        self.runner == other.runner
     }
 }
 
@@ -44,6 +71,14 @@ impl Witness {
 
     pub(super) fn matches(&self, authority: Authority, ty: &Type) -> bool {
         self.authority == authority && *self.ty == *ty
+    }
+
+    /// Match a native Rust value's witness from any generation of this runner.
+    ///
+    /// A native value holds no script code, and its Rust code cannot change
+    /// inside one runner, so only the runner and the exact type must agree.
+    pub(super) fn matches_native(&self, authority: Authority, ty: &Type) -> bool {
+        self.authority.same_runner(authority) && *self.ty == *ty
     }
 
     pub(super) fn arguments_match(&self, authority: Authority, ty: &Type) -> bool {

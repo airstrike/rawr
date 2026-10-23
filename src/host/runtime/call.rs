@@ -158,6 +158,21 @@ impl<'a> Call<'a> {
     /// receiver and every operand have already passed their exact runtime proofs;
     /// this final check ties the carried witness to the proven owned receiver.
     pub fn transform_witness(&self, source: &Witness) -> Result<Witness, Error> {
+        self.transform(source, Witness::matches)
+    }
+
+    /// [`Call::transform_witness`] for a native Rust receiver, whose witness
+    /// may come from an earlier script generation of this runner.
+    #[doc(hidden)]
+    pub fn transform_native_witness(&self, source: &Witness) -> Result<Witness, Error> {
+        self.transform(source, Witness::matches_native)
+    }
+
+    fn transform(
+        &self,
+        source: &Witness,
+        matches: fn(&Witness, witness::Authority, &Type) -> bool,
+    ) -> Result<Witness, Error> {
         let (operands, output) = match &self.operation {
             Operation::Item {
                 operands,
@@ -176,7 +191,7 @@ impl<'a> Call<'a> {
         let Some(receiver) = operands.first() else {
             return Err(Error::TransformRequiresOwnedItem);
         };
-        if !source.matches(self.authority, receiver) {
+        if !matches(source, self.authority, receiver) {
             return Err(Error::TransformSourceMismatch);
         }
         Ok(Witness::issue(self.authority, output.clone()))

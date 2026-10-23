@@ -199,3 +199,248 @@ fn collections_and_tuples_in_state_boot_and_carry() {
     assert!(seed(&mut new, &bytes));
     assert!(shows(&new, &format!("new {shown}")));
 }
+
+/// State kept by one runner across script edits. Each edit binds its
+/// program to the next generation of the runner's one registry.
+mod in_one_runner {
+    use std::fs;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use rawr::host::{self, facade, item, signature, type_ref};
+    use rawr::reload::scheduler::{publication, Admission, Gate};
+    use rawr::{Dynamic, EvalAltResult, Position};
+
+    /// A Rust value the way the bridge holds an imported one: its witness
+    /// attests in any generation of the runner that made it.
+    #[derive(Clone)]
+    struct Gauge {
+        witness: host::runtime::Witness,
+        level: i64,
+    }
+
+    fn gauge_facade() -> host::facade::Definition {
+        let mut builder =
+            facade::Builder::new("gauge", facade::Abi::new(1).unwrap()).unwrap();
+        builder.type_::<Gauge>("Gauge", &["T"], &[]).unwrap();
+        let gauge = || type_ref::Type::applied("Gauge", [type_ref::Type::parameter("T").unwrap()]).unwrap();
+        let mut new = signature::Builder::new();
+        new.type_parameter("T", &[]).unwrap();
+        new.parameter(type_ref::Type::builtin(type_ref::Builtin::I64));
+        new.output(gauge());
+        builder
+            .item(item::Definition::associated_function("Gauge::new", new.finish()).unwrap())
+            .unwrap();
+        let mut level = signature::Builder::new();
+        level.type_parameter("T", &[]).unwrap();
+        level.output(type_ref::Type::builtin(type_ref::Builtin::I64));
+        builder
+            .item(
+                item::Definition::method(
+                    "Gauge::level",
+                    rawr::receiver::Mode::Shared,
+                    level.finish(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        builder.finish().unwrap()
+    }
+
+    fn gauge_runtime() -> host::runtime::Facade {
+        let mut builder = host::runtime::Builder::new(gauge_facade());
+        builder
+            .bind_with_context("gauge::Gauge::new", |call, args| {
+                let level = args[0].as_int().map_err(|_| error("Gauge::new takes an i64"))?;
+                let witness = call.output_witness().map_err(|_| error("Gauge::new witness"))?;
+                Ok(Dynamic::from(Gauge { witness, level }))
+            })
+            .unwrap();
+        builder
+            .bind("gauge::Gauge::level", |args| {
+                let gauge = args[0].read_lock::<Gauge>().ok_or_else(|| error("not a Gauge"))?;
+                Ok(Dynamic::from(gauge.level))
+            })
+            .unwrap();
+        builder
+            .bind_type_attestation("gauge::Gauge", |value, expected| {
+                let gauge = value.read_lock::<Gauge>()?;
+                expected.attest_native_witness(Some(&gauge.witness))
+            })
+            .unwrap();
+        builder.finish()
+    }
+
+    fn error(message: &str) -> Box<EvalAltResult> {
+        EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into()
+    }
+
+    const GAUGE: &str = r#"
+use iced::widget::{button, column, text};
+use iced::Element;
+struct State { gauge: gauge::Gauge<i64> }
+#[derive(Debug, Clone)]
+enum Message { Bump }
+impl State {
+    fn new() -> State { State { gauge: gauge::Gauge::new(0) } }
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Bump => self.gauge = gauge::Gauge::new(self.gauge.level() + 1),
+        }
+    }
+    fn view(&self) -> Element<'_, Message> {
+        column![
+            button(text("Bump")).on_press(Message::Bump),
+            text(format!("TAG {}", self.gauge.level())),
+        ]
+    }
+}
+pub fn main() -> iced::Result {
+    iced::application(State::new, State::update, State::view).run()
+}
+"#;
+
+    const COMBO: &str = r#"
+use iced::widget::{column, combo_box, text};
+use iced::Element;
+struct State { names: combo_box::State<String>, chosen: Option<String> }
+#[derive(Debug, Clone)]
+enum Message { Chosen(String) }
+impl State {
+    fn new() -> State {
+        State { names: combo_box::State::new(vec!["a".to_string(), "b".to_string()]), chosen: None }
+    }
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Chosen(name) => self.chosen = Some(name),
+        }
+    }
+    fn view(&self) -> Element<'_, Message> {
+        column![
+            text("TAG"),
+            combo_box(&self.names, "Pick", self.chosen.as_ref(), Message::Chosen),
+        ]
+    }
+}
+pub fn main() -> iced::Result {
+    iced::application(State::new, State::update, State::view).run()
+}
+"#;
+
+    struct Runner {
+        root: std::path::PathBuf,
+        engine: rawr::Shared<rawr::Engine>,
+        target: rawr::project::Target,
+        registry: host::runtime::Registry,
+        publication: Arc<publication::Slot>,
+        host: crate::program::Host,
+    }
+
+    impl Runner {
+        fn start(name: &str, source: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "rawr-carry-{name}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            fs::create_dir_all(root.join("src")).unwrap();
+            crate::write_marked(&root, "src/main.rs", source.replace("TAG", "old"));
+            let mut engine = rawr::Engine::new();
+            crate::install(&mut engine).unwrap();
+            engine.register_host_facade(gauge_facade()).unwrap();
+            let engine = rawr::Shared::new(engine);
+            let mut registry = host::runtime::Registry::new();
+            crate::install_test_runtime(&mut registry);
+            registry.install(gauge_runtime()).unwrap();
+            let target = rawr::project::Target::discover(&root).unwrap();
+            let first = engine.compile_package_generation(&target).unwrap();
+            let publication = Arc::new(publication::Slot::new(
+                rawr::reload::source::Inputs::from_graph(first.source()),
+            ));
+            let diagnostic = first.source().entry_source().diagnostic().clone();
+            let bootstrap = first.bind(&engine, registry.next_generation()).unwrap();
+            let host = crate::program::Host::bootstrap(bootstrap, Some(diagnostic)).unwrap();
+            Self { root, engine, target, registry, publication, host }
+        }
+
+        /// Install `source` as a script edit; whether the edit applied.
+        fn edit(&mut self, source: &str) -> bool {
+            crate::write_marked(&self.root, "src/main.rs", source);
+            let next = self.engine.compile_package_generation(&self.target).unwrap();
+            let now = Instant::now();
+            let gate = Gate::new(Duration::ZERO);
+            gate.observe(now).unwrap();
+            let snapshot = rawr::reload::source::Snapshot::from_graph(next.source());
+            let candidate = gate
+                .start(now)
+                .unwrap()
+                .complete((next, snapshot))
+                .stage_inputs(&self.publication);
+            match self.host.install(
+                &gate,
+                &self.publication,
+                candidate,
+                &self.engine,
+                self.registry.next_generation(),
+            ) {
+                Ok(Admission::Current(outcome)) => {
+                    let _task = outcome.into_task();
+                    true
+                }
+                Ok(Admission::Obsolete(())) => panic!("a fresh edit must stay current"),
+                Err(_) => false,
+            }
+        }
+
+        fn click(&mut self, label: &str) {
+            let mut simulator = iced_test::simulator(self.host.view());
+            simulator.click(label).unwrap();
+            let message = simulator.into_messages().next().unwrap();
+            drop(self.host.update(message).unwrap());
+        }
+
+        fn shows(&self, line: &str) -> bool {
+            iced_test::simulator(self.host.view()).find(line).is_ok()
+        }
+    }
+
+    impl Drop for Runner {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.root).ok();
+        }
+    }
+
+    #[test]
+    fn a_script_edit_keeps_an_imported_value_and_its_state() {
+        let mut runner = Runner::start("native", GAUGE);
+        runner.click("Bump");
+        runner.click("Bump");
+        assert!(runner.shows("old 2"));
+
+        assert!(runner.edit(&GAUGE.replace("TAG", "new")));
+        assert!(runner.shows("new 2"));
+        runner.click("Bump");
+        assert!(runner.shows("new 3"));
+        assert!(runner.edit(&GAUGE.replace("TAG", "newer")));
+        assert!(runner.shows("newer 3"));
+    }
+
+    #[test]
+    fn a_combo_box_state_from_an_earlier_generation_is_still_refused() {
+        let mut runner = Runner::start("combo", COMBO);
+        assert!(runner.shows("old"));
+        assert!(!runner.edit(&COMBO.replace("TAG", "new")));
+        assert!(runner.shows("old"));
+    }
+
+    #[test]
+    fn a_rust_change_reseeds_and_names_the_imported_type() {
+        let mut runner = Runner::start("reseed", GAUGE);
+        assert!(!runner.host.seed_state(&[]));
+        assert_eq!(
+            runner.host.take_reseeded().as_deref(),
+            Some("State reseeded · App: Rust code changed · gauge::Gauge does not carry over")
+        );
+        assert!(runner.shows("old 0"));
+    }
+}

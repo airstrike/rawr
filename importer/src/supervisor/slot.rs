@@ -31,6 +31,8 @@ impl<B> Slot<B> {
     /// Start `candidate`, admitted and not yet started, from the current
     /// runner's State. Whether it was seeded: anything but plain script
     /// data, a changed script type or a lost runner leaves its booted State.
+    /// A State that holds anything but plain script data is sent as no State,
+    /// so the candidate can say which of its types did not carry over.
     pub fn carry_state(
         &mut self,
         candidate: &mut crate::process::Candidate<crate::process::Admitted, B>,
@@ -40,7 +42,7 @@ impl<B> Slot<B> {
         };
         let state = match current.export_state() {
             Ok(Some(state)) => state,
-            Ok(None) => return false,
+            Ok(None) => Vec::new(),
             Err(error) => {
                 if error.is_owner_lost() {
                     drop(self.current.take());

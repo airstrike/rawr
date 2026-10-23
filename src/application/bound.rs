@@ -378,6 +378,12 @@ impl BoundLaunch {
         crate::program::model::carry::encode(value)
     }
 
+    /// The declared type of the first field in State `value` that a new
+    /// runner process cannot be seeded with, such as an imported Rust type.
+    pub fn uncarried_state_field(&self, value: &Dynamic) -> Option<String> {
+        self.launch.authority().uncarried_field(value)
+    }
+
     /// The State exported `bytes` carry, rebuilt in this program; `None` when
     /// a script type in it changed or the result is not this program's State.
     pub fn import_state(&self, bytes: &[u8]) -> Option<Dynamic> {

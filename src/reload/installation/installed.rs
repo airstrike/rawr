@@ -342,6 +342,12 @@ impl Application {
         self.0.import_state(bytes)
     }
 
+    /// The declared type of the first field in State `value` that a new
+    /// runner process cannot be seeded with, such as an imported Rust type.
+    pub fn uncarried_state_field(&self, value: &crate::Dynamic) -> Option<String> {
+        self.0.uncarried_state_field(value)
+    }
+
     /// Validate one exact application Message value.
     pub fn validate_message(
         &self,

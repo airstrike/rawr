@@ -67,13 +67,18 @@ const AGENT: reload::agent::Live<State, Message> = reload::agent::Live {
 };
 
 impl Application {
-    pub(super) fn new(host: Host, service: reload::Service) -> Self {
+    pub(super) fn new(mut host: Host, service: reload::Service) -> Self {
         let centered = host.centered();
+        let mut status = reload::status::State::new();
+        if let Some(note) = host.take_reseeded() {
+            eprintln!("rawr: {note}");
+            status.note(note);
+        }
         Self {
             initial: Mutex::new(Some(State {
                 host,
                 service,
-                status: reload::status::State::new(),
+                status,
                 pending_settle: None,
                 agent: reload::agent::Session::default(),
             })),
