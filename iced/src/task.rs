@@ -51,6 +51,7 @@ pub(crate) enum Native {
     FocusPrevious,
     FontList,
     Focus(iced::widget::Id),
+    #[cfg(feature = "selector")]
     Find(iced::widget::Id),
     SnapTo(
         iced::widget::Id,
@@ -92,6 +93,7 @@ impl Native {
             }),
             Self::FocusPrevious => iced::widget::operation::focus_previous(),
             Self::Focus(id) => iced::widget::operation::focus(id),
+            #[cfg(feature = "selector")]
             Self::Find(id) => {
                 iced::widget::selector::find(id).map(|target| Ok(rawr::option::from(target)))
             }
@@ -596,35 +598,38 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             native_task(call, Native::Focus(take_id(id)?))
         })
         .expect("the iced facade must retain operation::focus");
-    builder
-        .bind_with_context("iced::widget::selector::find", |call, args| {
-            let [id] = args else {
-                return Err(arity("selector::find", 1, args.len()));
-            };
-            native_task(call, Native::Find(take_id(id)?))
-        })
-        .expect("the iced facade must retain selector::find");
-    for name in ["bounds", "visible_bounds"] {
-        let path = format!("iced::widget::selector::Target::{name}");
+    #[cfg(feature = "selector")]
+    if crate::features::on(crate::features::Feature::Selector) {
         builder
-            .bind(path.clone(), move |args| {
-                let [target] = args else {
-                    return Err(arity(&path, 1, args.len()));
+            .bind_with_context("iced::widget::selector::find", |call, args| {
+                let [id] = args else {
+                    return Err(arity("selector::find", 1, args.len()));
                 };
-                let target = target
-                    .read_lock::<iced::widget::selector::Target>()
-                    .ok_or_else(|| {
-                        EvalAltResult::ErrorRuntime(
-                            format!("{path} expects a `widget::selector::Target`").into(),
-                            Position::NONE,
-                        )
-                    })?;
-                Ok(match name {
-                    "bounds" => Dynamic::from(target.bounds()),
-                    _ => rawr::option::from(target.visible_bounds()),
-                })
+                native_task(call, Native::Find(take_id(id)?))
             })
-            .expect("the iced facade must retain every selector::Target reader");
+            .expect("the iced facade must retain selector::find");
+        for name in ["bounds", "visible_bounds"] {
+            let path = format!("iced::widget::selector::Target::{name}");
+            builder
+                .bind(path.clone(), move |args| {
+                    let [target] = args else {
+                        return Err(arity(&path, 1, args.len()));
+                    };
+                    let target = target
+                        .read_lock::<iced::widget::selector::Target>()
+                        .ok_or_else(|| {
+                            EvalAltResult::ErrorRuntime(
+                                format!("{path} expects a `widget::selector::Target`").into(),
+                                Position::NONE,
+                            )
+                        })?;
+                    Ok(match name {
+                        "bounds" => Dynamic::from(target.bounds()),
+                        _ => rawr::option::from(target.visible_bounds()),
+                    })
+                })
+                .expect("the iced facade must retain every selector::Target reader");
+        }
     }
     for name in ["snap_to", "snap_to_end", "scroll_to", "scroll_by"] {
         let path = format!("iced::widget::operation::scrollable::{name}");

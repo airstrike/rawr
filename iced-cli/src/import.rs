@@ -58,6 +58,29 @@ pub(crate) fn declared(
     Ok(graph.declares_rust_import().then_some(target))
 }
 
+/// The rawr-iced widget features a project's runner builds with.
+///
+/// The aim is the ones the project's iced has, as its Cargo.toml names them
+/// (`image-without-codecs` counts as `image`), so the runner adds no iced
+/// feature. Until the profile's compatibility pin (`COMPATIBILITY_DIGEST`
+/// and `COMPATIBILITY_PROJECTIONS` in rawr-iced's `profile/runner.rs`)
+/// holds for a facade without some widgets, every project gets them all.
+fn widgets(graph: &rawr::package::Graph) -> Vec<rawr_iced::features::Feature> {
+    const FOLLOW_PROJECT: bool = false;
+    if !FOLLOW_PROJECT {
+        return rawr_iced::features::Feature::ALL.to_vec();
+    }
+    let named = graph.dependency_features(rawr_iced::profile::Definition::FRAMEWORK);
+    rawr_iced::features::Feature::ALL
+        .into_iter()
+        .filter(|feature| {
+            named
+                .iter()
+                .any(|name| rawr_iced::features::Feature::of_iced(name) == Some(*feature))
+        })
+        .collect()
+}
+
 impl Prepared {
     /// The limits profile this preparation captured; later routes reuse it.
     pub(crate) const fn limits(&self) -> rawr_import::cargo::Limits {
@@ -186,6 +209,10 @@ fn prepare_transform(
     // paths the iced profile selects), so the first launch needs one probe.
     // A path the pass misses below such a dependency is demanded as above.
     let framework = rawr_iced::profile::Definition::FRAMEWORK;
+    // The runner's rawr-iced has the widgets the project's iced has, and
+    // this process declares the same facade to check against.
+    let widgets = widgets(&graph);
+    rawr_iced::features::select(widgets.iter().copied());
     let seed = graph.rust_demand_seed(rawr_iced::profile::Definition::DEMAND, Some(framework));
     #[cfg(feature = "import-baseline")]
     let (mut observed_toolchain, mut observed_resolution);
@@ -197,8 +224,8 @@ fn prepare_transform(
         request_demand.sort_unstable();
         request_demand.dedup();
         let environment = Environment::capture().map_err(Error::Import)?;
-        let dependency =
-            rawr_iced::profile::Definition::cargo_dependency(&limits).map_err(Error::Import)?;
+        let dependency = rawr_iced::profile::Definition::cargo_dependency(&widgets, &limits)
+            .map_err(Error::Import)?;
         let framework_dependency =
             rawr_iced::profile::Definition::framework_dependency(&limits).map_err(Error::Import)?;
         let request = match graph.rust_import_with_profile(
@@ -592,7 +619,7 @@ mod tests {
         let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target)
             .expect("fixture package graph");
         let environment = Environment::capture().expect("fixture Cargo environment");
-        let dependency = rawr_iced::profile::Definition::cargo_dependency(&limits)
+        let dependency = rawr_iced::profile::Definition::cargo_dependency(&super::widgets(&graph), &limits)
             .expect("fixture profile dependency");
         let universe = rawr_iced::profile::Definition::new(&limits)
             .expect("fixture profile definition")
@@ -623,7 +650,7 @@ mod tests {
         let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target)
             .expect("fixture package graph");
         let environment = Environment::capture().expect("fixture Cargo environment");
-        let dependency = rawr_iced::profile::Definition::cargo_dependency(&limits)
+        let dependency = rawr_iced::profile::Definition::cargo_dependency(&super::widgets(&graph), &limits)
             .expect("fixture profile dependency");
         let universe = rawr_iced::profile::Definition::new(&limits)
             .expect("fixture profile definition")

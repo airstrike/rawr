@@ -13,6 +13,9 @@ pub mod control;
 
 pub mod diagnostic;
 mod effect;
+pub mod features;
+
+use features::Feature;
 mod marker;
 pub mod native;
 pub mod preview;
@@ -109,8 +112,11 @@ fn register_debug() {
     register::<iced::widget::checkbox::Icon>();
     register::<iced::widget::text::LineHeight>();
     register::<iced::widget::text::Shaping>();
+    #[cfg(feature = "image")]
     register::<iced::widget::image::FilterMethod>();
+    #[cfg(feature = "image")]
     register::<iced::widget::image::Handle>();
+    #[cfg(feature = "svg")]
     register::<iced::widget::svg::Handle>();
     register::<iced::Event>();
     register::<iced::Font>();
@@ -132,16 +138,21 @@ fn register_debug() {
     register::<iced::window::Id>();
     register::<std::time::Duration>();
     register::<iced::mouse::Cursor>();
-    register::<iced::widget::canvas::Path>();
-    register::<iced::widget::canvas::Stroke<'static>>();
-    register::<iced::widget::canvas::Fill>();
-    register::<iced::widget::canvas::Style>();
-    register::<iced::widget::canvas::fill::Rule>();
-    register::<iced::widget::canvas::LineCap>();
-    register::<iced::widget::canvas::LineJoin>();
-    register::<iced::widget::canvas::Text>();
+    #[cfg(feature = "canvas")]
+    {
+        register::<iced::widget::canvas::Path>();
+        register::<iced::widget::canvas::Stroke<'static>>();
+        register::<iced::widget::canvas::Fill>();
+        register::<iced::widget::canvas::Style>();
+        register::<iced::widget::canvas::fill::Rule>();
+        register::<iced::widget::canvas::LineCap>();
+        register::<iced::widget::canvas::LineJoin>();
+        register::<iced::widget::canvas::Text>();
+    }
     register::<iced::widget::text::Alignment>();
+    #[cfg(feature = "canvas")]
     register::<marker::Cache>();
+    #[cfg(feature = "canvas")]
     register::<marker::Geometry>();
 }
 
@@ -167,11 +178,19 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::progress_bar")?;
     builder.module("widget::radio")?;
     builder.module("widget::rule")?;
-    builder.module("widget::image")?;
+    // `widget::svg` holds `svg::Status` and `svg::Style`, which Rawr's style
+    // values declare with or without the widget.
     builder.module("widget::svg")?;
-    builder.module("widget::qr_code")?;
+    for (feature, module) in [
+        (Feature::Image, "widget::image"),
+        (Feature::QrCode, "widget::qr_code"),
+        (Feature::Selector, "widget::selector"),
+    ] {
+        if features::on(feature) {
+            builder.module(module)?;
+        }
+    }
     builder.module("widget::operation")?;
-    builder.module("widget::selector")?;
     builder.module("widget::operation::scrollable")?;
     builder.module("window")?;
     builder.module("event")?;
@@ -322,16 +341,19 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     )?;
     builder.value_type::<marker::Horizontal>("alignment::Horizontal", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.value_type::<marker::Vertical>("alignment::Vertical", &[], OWNED_VALUE_CAPABILITIES)?;
-    builder.value_type::<iced::widget::selector::Target>(
-        "widget::selector::Target",
-        &[],
-        &[
-            capability::Kind::Debug,
-            capability::Kind::Clone,
-            capability::Kind::Send,
-            capability::Kind::Static,
-        ],
-    )?;
+    #[cfg(feature = "selector")]
+    if features::on(Feature::Selector) {
+        builder.value_type::<iced::widget::selector::Target>(
+            "widget::selector::Target",
+            &[],
+            &[
+                capability::Kind::Debug,
+                capability::Kind::Clone,
+                capability::Kind::Send,
+                capability::Kind::Static,
+            ],
+        )?;
+    }
     builder.value_type::<iced::widget::Id>(
         "widget::Id",
         &[],
@@ -421,28 +443,43 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.value_type::<iced::event::Status>("event::Status", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
     builder.type_::<marker::Stack>("widget::Stack", &["Message"], &[])?;
     builder.project("widget::Stack", "Element", &["Message"])?;
-    builder.value_type::<iced::widget::image::Handle>(
-        "widget::image::Handle",
-        &[],
-        &[
-            capability::Kind::Debug,
-            capability::Kind::Clone,
-            capability::Kind::PartialEq,
-            capability::Kind::Send,
-            capability::Kind::Static,
-        ],
-    )?;
-    builder.value_type::<iced::widget::svg::Handle>(
-        "widget::svg::Handle",
-        &[],
-        &[
-            capability::Kind::Debug,
-            capability::Kind::Clone,
-            capability::Kind::PartialEq,
-            capability::Kind::Send,
-            capability::Kind::Static,
-        ],
-    )?;
+    #[cfg(feature = "image")]
+    if features::on(Feature::Image) {
+        builder.value_type::<iced::widget::image::Handle>(
+            "widget::image::Handle",
+            &[],
+            &[
+                capability::Kind::Debug,
+                capability::Kind::Clone,
+                capability::Kind::PartialEq,
+                capability::Kind::Send,
+                capability::Kind::Static,
+            ],
+        )?;
+        builder.default_value_type::<iced::widget::image::FilterMethod>(
+            "widget::image::FilterMethod",
+            &[],
+            OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+        )?;
+        builder.type_::<marker::Image>("widget::Image", &[], &[])?;
+        builder.project_with("widget::Image", "Element", &[host::type_def::Argument::fresh()])?;
+    }
+    #[cfg(feature = "svg")]
+    if features::on(Feature::Svg) {
+        builder.value_type::<iced::widget::svg::Handle>(
+            "widget::svg::Handle",
+            &[],
+            &[
+                capability::Kind::Debug,
+                capability::Kind::Clone,
+                capability::Kind::PartialEq,
+                capability::Kind::Send,
+                capability::Kind::Static,
+            ],
+        )?;
+        builder.type_::<marker::Svg>("widget::Svg", &[], &[])?;
+        builder.project_with("widget::Svg", "Element", &[host::type_def::Argument::fresh()])?;
+    }
     builder.default_value_type::<iced::ContentFit>("ContentFit", &[], OWNED_EQ_DEFAULT_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::widget::text::Shaping>(
         "widget::text::Shaping",
@@ -465,33 +502,27 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             capability::Kind::Static,
         ],
     )?;
-    builder.default_value_type::<iced::widget::image::FilterMethod>(
-        "widget::image::FilterMethod",
-        &[],
-        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
-    )?;
-    builder.value_type::<marker::QrData>(
-        "widget::qr_code::Data",
-        &[],
-        &[capability::Kind::Debug, capability::Kind::Clone, capability::Kind::PartialEq, capability::Kind::Send, capability::Kind::Static],
-    )?;
-    builder.value_type::<iced::widget::qr_code::Error>(
-        "widget::qr_code::Error",
-        &[],
-        OWNED_EQ_VALUE_CAPABILITIES,
-    )?;
-    builder.type_::<marker::Image>("widget::Image", &[], &[])?;
-    builder.project_with("widget::Image", "Element", &[host::type_def::Argument::fresh()])?;
-    builder.type_::<marker::Svg>("widget::Svg", &[], &[])?;
-    builder.project_with("widget::Svg", "Element", &[host::type_def::Argument::fresh()])?;
-    builder.type_::<marker::QrCode>("widget::QRCode", &[], &[])?;
+    #[cfg(feature = "qr_code")]
+    if features::on(Feature::QrCode) {
+        builder.value_type::<marker::QrData>(
+            "widget::qr_code::Data",
+            &[],
+            &[capability::Kind::Debug, capability::Kind::Clone, capability::Kind::PartialEq, capability::Kind::Send, capability::Kind::Static],
+        )?;
+        builder.value_type::<iced::widget::qr_code::Error>(
+            "widget::qr_code::Error",
+            &[],
+            OWNED_EQ_VALUE_CAPABILITIES,
+        )?;
+        builder.type_::<marker::QrCode>("widget::QRCode", &[], &[])?;
+        builder.project_with("widget::QRCode", "Element", &[host::type_def::Argument::fresh()])?;
+    }
     builder.type_::<marker::Span>("widget::text::Span", &["Link"], &[])?;
     builder.type_::<marker::Rich>("widget::text::Rich", &["Link", "Message"], &[])?;
     builder.type_::<marker::TableColumn>("widget::table::Column", &["T", "Message"], &[])?;
     builder.type_::<marker::Table>("widget::Table", &["Message"], &[])?;
     builder.project("widget::Table", "Element", &["Message"])?;
     builder.project("widget::text::Rich", "Element", &["Message"])?;
-    builder.project_with("widget::QRCode", "Element", &[host::type_def::Argument::fresh()])?;
     builder.type_::<marker::Pin>("widget::Pin", &["Message"], &[])?;
     builder.project("widget::Pin", "Element", &["Message"])?;
     builder.type_::<marker::MouseArea>("widget::MouseArea", &["Message"], &[])?;
@@ -1026,7 +1057,10 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_wrappers(&mut builder)?;
     declare_media(&mut builder)?;
     declare_rich_text(&mut builder)?;
-    declare_canvas(&mut builder)?;
+    #[cfg(feature = "canvas")]
+    if features::on(Feature::Canvas) {
+        declare_canvas(&mut builder)?;
+    }
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
@@ -2207,10 +2241,13 @@ fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
 /// and `ContentFit`.
 fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let string = || type_ref::Type::builtin(type_ref::Builtin::String);
-    for (module, handle, function, widget) in [
-        ("widget::image", "widget::image::Handle", "widget::image", "widget::Image"),
-        ("widget::svg", "widget::svg::Handle", "widget::svg", "widget::Svg"),
+    for (feature, module, handle, function, widget) in [
+        (Feature::Image, "widget::image", "widget::image::Handle", "widget::image", "widget::Image"),
+        (Feature::Svg, "widget::svg", "widget::svg::Handle", "widget::svg", "widget::Svg"),
     ] {
+        if !features::on(feature) {
+            continue;
+        }
         // `from_path`, and `impl Into<Bytes>` for the rest: a `Vec<u8>`, a
         // `&[u8]` or a byte string.
         let bytes = || type_ref::Type::slice(type_ref::Type::builtin(type_ref::Builtin::U8));
@@ -2247,18 +2284,20 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
         builders(builder, widget, "content_fit", [type_ref::Type::registered("ContentFit")?])?;
         builders(builder, widget, "opacity", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
     }
-    builders(builder, "widget::Image", "scale", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
-    builders(
-        builder,
-        "widget::Image",
-        "filter_method",
-        [type_ref::Type::registered("widget::image::FilterMethod")?],
-    )?;
-    for name in IMAGE_FILTER_METHODS {
-        builder.item(item::Definition::associated_value(
-            format!("widget::image::FilterMethod::{name}"),
-            type_ref::Type::registered("widget::image::FilterMethod")?,
-        )?)?;
+    if features::on(Feature::Image) {
+        builders(builder, "widget::Image", "scale", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
+        builders(
+            builder,
+            "widget::Image",
+            "filter_method",
+            [type_ref::Type::registered("widget::image::FilterMethod")?],
+        )?;
+        for name in IMAGE_FILTER_METHODS {
+            builder.item(item::Definition::associated_value(
+                format!("widget::image::FilterMethod::{name}"),
+                type_ref::Type::registered("widget::image::FilterMethod")?,
+            )?)?;
+        }
     }
     for name in CONTENT_FITS {
         builder.item(item::Definition::associated_value(
@@ -2267,6 +2306,9 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
         )?)?;
     }
 
+    if !features::on(Feature::QrCode) {
+        return Ok(());
+    }
     let mut data = signature::Builder::new();
     data.parameter(string());
     data.output(type_ref::Type::result(
@@ -2370,6 +2412,7 @@ fn declare_rich_text(builder: &mut facade::Builder) -> Result<(), host::Error> {
     Ok(())
 }
 
+#[cfg(feature = "canvas")]
 /// iced's `canvas::Program`, as script types implement it: its `Theme`
 /// and `Renderer` are iced's, and `update` and `mouse_interaction` have
 /// iced's defaults.
@@ -2383,6 +2426,7 @@ const CANVAS_PROGRAM: &str = "pub trait Program<Message> {
 /// iced's `canvas`: a script `canvas::Program` drawn with `Frame`, `Path`,
 /// `Stroke`, `Fill`, `Text` and `Cache`, and the same names under
 /// `advanced::graphics::geometry`.
+#[cfg(feature = "canvas")]
 fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let ty = type_ref::Type::registered;
     let f64_ = || type_ref::Type::builtin(type_ref::Builtin::F64);
@@ -3290,24 +3334,26 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
         builder.item(item::Definition::function("widget::operation::focus", focus.finish())?)?;
     }
     // `selector::find(id)`: the widget with that id, once iced lays it out.
-    let target = || type_ref::Type::registered("widget::selector::Target");
-    for input in ids()? {
-        let mut find = signature::Builder::new();
-        find.parameter(input);
-        find.output(type_ref::Type::applied("Task", [type_ref::Type::option(target()?)])?);
-        builder.item(item::Definition::function("widget::selector::find", find.finish())?)?;
-    }
-    for (name, output) in [
-        ("bounds", type_ref::Type::registered("Rectangle")?),
-        ("visible_bounds", type_ref::Type::option(type_ref::Type::registered("Rectangle")?)),
-    ] {
-        let mut reader = signature::Builder::new();
-        reader.output(output);
-        builder.item(item::Definition::method(
-            format!("widget::selector::Target::{name}"),
-            receiver::Mode::Shared,
-            reader.finish(),
-        )?)?;
+    if features::on(Feature::Selector) {
+        let target = || type_ref::Type::registered("widget::selector::Target");
+        for input in ids()? {
+            let mut find = signature::Builder::new();
+            find.parameter(input);
+            find.output(type_ref::Type::applied("Task", [type_ref::Type::option(target()?)])?);
+            builder.item(item::Definition::function("widget::selector::find", find.finish())?)?;
+        }
+        for (name, output) in [
+            ("bounds", type_ref::Type::registered("Rectangle")?),
+            ("visible_bounds", type_ref::Type::option(type_ref::Type::registered("Rectangle")?)),
+        ] {
+            let mut reader = signature::Builder::new();
+            reader.output(output);
+            builder.item(item::Definition::method(
+                format!("widget::selector::Target::{name}"),
+                receiver::Mode::Shared,
+                reader.finish(),
+            )?)?;
+        }
     }
     for (name, offset) in [
         ("snap_to", Some("widget::scrollable::RelativeOffset")),
@@ -3614,8 +3660,10 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
             output_signature(output)?,
         )?)?;
     }
-    for input in [rotation()?, radians()?, degrees()?] {
-        builders(builder, "widget::Image", "rotation", [input])?;
+    if features::on(Feature::Image) {
+        for input in [rotation()?, radians()?, degrees()?] {
+            builders(builder, "widget::Image", "rotation", [input])?;
+        }
     }
     builder.item(item::Definition::associated_value("Radians::PI", radians()?)?)?;
     for (owner, name, input, output) in [

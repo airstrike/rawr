@@ -16,10 +16,28 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[cfg(feature = "svg")]
+use iced::widget::svg;
 use iced::widget::{
-    button, checkbox, container, progress_bar, radio, scrollable, slider, svg, text_input,
-    toggler,
+    button, checkbox, container, progress_bar, radio, scrollable, slider, text_input, toggler,
 };
+
+/// iced's `svg::Status` and `svg::Style`, for an iced without the `svg`
+/// widget: Rawr's style values declare them either way, so the `rawr-iced`
+/// command and a project's runner declare the same facade.
+#[cfg(not(feature = "svg"))]
+mod svg {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum Status {
+        Idle,
+        Hovered,
+    }
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct Style {
+        pub color: Option<iced::Color>,
+    }
+}
 use iced::{Background, Border, Color, Shadow, Vector};
 use rawr::host::{self, facade, item, signature, type_ref};
 use rawr::{receiver, Dynamic, EvalAltResult};
@@ -286,6 +304,7 @@ pub(crate) const RADIO: [radio::Status; 4] = [
     radio::Status::Hovered { is_selected: true },
 ];
 
+#[cfg(feature = "svg")]
 pub(crate) const SVG: [svg::Status; 2] = [svg::Status::Idle, svg::Status::Hovered];
 
 pub(crate) const SLIDER: [slider::Status; 3] = [
@@ -517,20 +536,22 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
         }
     }
     // iced's svg has no pinned style function: only a Rawr one.
-    builder.item(item::Definition::method(
-        "widget::Svg::style",
-        receiver::Mode::Owned,
-        crate::builder_signature(
-            "widget::Svg",
-            type_ref::Type::callable(
-                type_ref::Type::tuple([
-                    type_ref::Type::registered("Theme")?,
-                    type_ref::Type::registered("widget::svg::Status")?,
-                ])?,
-                type_ref::Type::registered("widget::svg::Style")?,
-            ),
-        )?,
-    )?)?;
+    if crate::features::on(crate::features::Feature::Svg) {
+        builder.item(item::Definition::method(
+            "widget::Svg::style",
+            receiver::Mode::Owned,
+            crate::builder_signature(
+                "widget::Svg",
+                type_ref::Type::callable(
+                    type_ref::Type::tuple([
+                        type_ref::Type::registered("Theme")?,
+                        type_ref::Type::registered("widget::svg::Status")?,
+                    ])?,
+                    type_ref::Type::registered("widget::svg::Style")?,
+                ),
+            )?,
+        )?)?;
+    }
     Ok(())
 }
 
@@ -573,7 +594,10 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder) {
     bind_style::<crate::marker::Toggler, _, _>(iced, "Toggler", |toggler, style| {
         toggler.style = Some(style)
     });
-    bind_style::<crate::marker::Svg, _, _>(iced, "Svg", |svg, style| svg.style = Some(style));
+    #[cfg(feature = "svg")]
+    if crate::features::on(crate::features::Feature::Svg) {
+        bind_style::<crate::marker::Svg, _, _>(iced, "Svg", |svg, style| svg.style = Some(style));
+    }
 }
 
 fn bind_style<W: Clone + Send + Sync + 'static, S: Clone + 'static, T: Clone + 'static>(
