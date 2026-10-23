@@ -9,6 +9,12 @@ use super::unit;
 use super::{canonical_directory, read_bounded_budgeted, RequestAllocation, Selection};
 use crate::{Error, Result};
 
+/// The `opt-level` of the `rawr` crate in a project's runner. `Some(3)`
+/// makes the compiler and interpreter inside the runner fast, and costs
+/// about 30 s more on a project's first `rawr run`. `None` builds it with
+/// the project's own profile, like any other dependency.
+pub(crate) const RAWR_OPT_LEVEL: Option<i64> = Some(3);
+
 const SCHEMA: u32 = 1;
 const PACKAGE: &str = "rawr";
 const FEATURE: &str = "std";
@@ -312,9 +318,12 @@ impl Recipe {
         // The embedded compiler runs on every Rawr edit; optimize it like the
         // released CLI so an edit recompiles in milliseconds. User crates keep
         // the selected profile's own semantics.
+        let Some(level) = RAWR_OPT_LEVEL else {
+            return Ok(());
+        };
         let mut override_table = Table::new();
         override_table.insert("debug", value(0));
-        override_table.insert("opt-level", value(3));
+        override_table.insert("opt-level", value(level));
         packages.insert(self.package_id.as_ref(), Item::Table(override_table));
         Ok(())
     }
