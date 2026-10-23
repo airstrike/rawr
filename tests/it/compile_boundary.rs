@@ -88,3 +88,15 @@ fn enum_switch_and_new_function_behavior_remain_available() {
 
     assert_eq!(engine.eval_with_scope::<i64>(&mut scope, "fn new() { 42 } switch message { Message::Tick => new(), _ => 0 }",).unwrap(), 42);
 }
+
+/// `use rawr::preview;` is for rustc: it is no item, and the legacy script
+/// does not see it.
+#[test]
+fn an_import_of_rawr_attributes_is_neither_item_nor_script() {
+    let engine = Engine::new();
+    let unit = engine.parse_unit("use rawr::{preview, widget};\n40 + 2").unwrap();
+
+    assert!(unit.items().is_empty());
+    let ast = engine.compile("use rawr::preview;\n40 + 2").unwrap();
+    assert_eq!(engine.eval_ast::<i64>(&ast).unwrap(), 42);
+}

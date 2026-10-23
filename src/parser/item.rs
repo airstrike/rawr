@@ -58,13 +58,13 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
         items = all.into_boxed_slice();
     }
     // `use rawr::preview;` names the attribute for rustc. Rawr knows the
-    // attribute already, so the import binds nothing.
+    // attribute already, so the import binds nothing, and the legacy script
+    // does not see it either.
     if items.iter().any(is_attribute_import) {
-        items = items
-            .into_vec()
-            .into_iter()
-            .filter(|item| !is_attribute_import(item))
-            .collect();
+        let (dropped, kept): (Vec<_>, Vec<_>) =
+            items.into_vec().into_iter().partition(is_attribute_import);
+        inner.extend(dropped.iter().map(crate::item::Parsed::span));
+        items = kept.into_boxed_slice();
     }
     Ok((items, inner))
 }
