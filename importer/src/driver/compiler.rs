@@ -55,7 +55,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // the invocation-bound completion record after successful compiler return.
 // Schema 19 adds the separate complete query-candidate observation population.
 // Schema 20 adds the selected crate's name index for demanded units.
-const PROTOCOL_SCHEMA: u32 = 20;
+const PROTOCOL_SCHEMA: u32 = 21;
 
 pub(super) struct Invocation {
     pub(super) package: Package,
@@ -3616,8 +3616,21 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     match obligation.kind {
                         // A demanded nominal admits a trait implementation header as
                         // applicability evidence. It does not make every trait member
-                        // a selected source surface.
-                        AssociatedDemandKind::NominalSurface => {}
+                        // a selected source surface. A Rust future's `Output` is the
+                        // one exception: Rawr types the future as `Task<Output>`.
+                        AssociatedDemandKind::NominalSurface => {
+                            if Some(trait_id) == self.tcx.lang_items().future_trait()
+                                && let Some(output) = self.tcx.lang_items().future_output()
+                            {
+                                self.select_trait_item_for_impl(
+                                    impl_id,
+                                    trait_id,
+                                    output,
+                                    implementors,
+                                    &mut selected,
+                                )?;
+                            }
+                        }
                         AssociatedDemandKind::SelectedMember => {
                             let trait_item = obligation.trait_item.ok_or_else(|| {
                                 "selected associated obligation lost its trait item".to_owned()
