@@ -6593,6 +6593,26 @@ fn language_every_accepted_float_method_runs() {
             "round" => format!("{:?}", x.round()),
             "trunc" => format!("{:?}", x.trunc()),
             "is_nan" => format!("{:?}", x.is_nan()),
+            "fract" => format!("{:?}", x.fract()),
+            "is_finite" => format!("{:?}", x.is_finite()),
+            "is_infinite" => format!("{:?}", x.is_infinite()),
+            "sin" => format!("{:?}", x.sin()),
+            "cos" => format!("{:?}", x.cos()),
+            "tan" => format!("{:?}", x.tan()),
+            "asin" => format!("{:?}", x.asin()),
+            "acos" => format!("{:?}", x.acos()),
+            "atan" => format!("{:?}", x.atan()),
+            "sinh" => format!("{:?}", x.sinh()),
+            "cosh" => format!("{:?}", x.cosh()),
+            "tanh" => format!("{:?}", x.tanh()),
+            "asinh" => format!("{:?}", x.asinh()),
+            "acosh" => format!("{:?}", x.acosh()),
+            "atanh" => format!("{:?}", x.atanh()),
+            "exp" => format!("{:?}", x.exp()),
+            "ln" => format!("{:?}", x.ln()),
+            "log10" => format!("{:?}", x.log10()),
+            "to_degrees" => format!("{:?}", x.to_degrees()),
+            "to_radians" => format!("{:?}", x.to_radians()),
             other => panic!("`{other}` is accepted on floats but this test does not know it"),
         }
     };
@@ -6608,6 +6628,9 @@ fn language_every_accepted_float_method_runs() {
         })
         .collect();
     calls.push(("powi(3)".into(), Box::new(|x: f64| format!("{:?}", x.powi(3)))));
+    calls.push(("atan2(1.5)".into(), Box::new(|x: f64| format!("{:?}", x.atan2(1.5)))));
+    calls.push(("hypot(1.5)".into(), Box::new(|x: f64| format!("{:?}", x.hypot(1.5)))));
+    calls.push(("log(2.0)".into(), Box::new(|x: f64| format!("{:?}", x.log(2.0)))));
     calls.push(("powf(0.5)".into(), Box::new(|x: f64| format!("{:?}", x.powf(0.5)))));
     calls.push(("min(1.0)".into(), Box::new(|x: f64| format!("{:?}", x.min(1.0)))));
     calls.push(("max(1.0)".into(), Box::new(|x: f64| format!("{:?}", x.max(1.0)))));
