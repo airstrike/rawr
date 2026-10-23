@@ -644,3 +644,49 @@ fn master_selector_finds_a_container_by_id() {
     find(&adapter, "outer");
     find(&adapter, "false");
 }
+
+const SVG_STYLE: &str = r#"
+use iced::widget::{column, svg, text};
+use iced::{Fill, Widget, color};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+
+#[derive(Default)]
+struct State {
+    tinted: bool,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Toggle(bool),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Toggle(tinted) => self.tinted = tinted,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let icon = svg("missing.svg")
+            .width(Fill)
+            .style(|_theme, status| svg::Style {
+                color: match status {
+                    svg::Status::Hovered => Some(color!(0x0000ff)),
+                    svg::Status::Idle if self.tinted => Some(color!(0x00ff00)),
+                    svg::Status::Idle => None,
+                },
+            });
+        column![icon, text("tiger")]
+    }
+}
+"#;
+
+#[test]
+fn master_svg_takes_a_style_function() {
+    let adapter = boot(SVG_STYLE);
+    find(&adapter, "tiger");
+}

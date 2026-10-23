@@ -16,7 +16,9 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use iced::widget::{button, checkbox, container, radio, scrollable, slider, text_input, toggler};
+use iced::widget::{
+    button, checkbox, container, radio, scrollable, slider, svg, text_input, toggler,
+};
 use iced::{Background, Border, Color, Shadow, Vector};
 use rawr::host::{self, facade, item, signature, type_ref};
 use rawr::{receiver, Dynamic, EvalAltResult};
@@ -169,6 +171,8 @@ pub(crate) const RADIO: [radio::Status; 4] = [
     radio::Status::Hovered { is_selected: true },
 ];
 
+pub(crate) const SVG: [svg::Status; 2] = [svg::Status::Idle, svg::Status::Hovered];
+
 pub(crate) const SLIDER: [slider::Status; 3] = [
     slider::Status::Active,
     slider::Status::Hovered,
@@ -285,6 +289,7 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
         &[],
         crate::OWNED_VALUE_CAPABILITIES,
     )?;
+    builder.type_::<svg::Status>("widget::svg::Status", &[], crate::OWNED_VALUE_CAPABILITIES)?;
     declare_types(builder)?;
     builder.private_type::<Builtin<button::Status, button::Style>>(
         "widget::button::Builtin",
@@ -395,6 +400,21 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
             )?)?;
         }
     }
+    // iced's svg has no pinned style function: only a Rawr one.
+    builder.item(item::Definition::method(
+        "widget::Svg::style",
+        receiver::Mode::Owned,
+        crate::builder_signature(
+            "widget::Svg",
+            type_ref::Type::callable(
+                type_ref::Type::tuple([
+                    type_ref::Type::registered("Theme")?,
+                    type_ref::Type::registered("widget::svg::Status")?,
+                ])?,
+                type_ref::Type::registered("widget::svg::Style")?,
+            ),
+        )?,
+    )?)?;
     Ok(())
 }
 
@@ -436,6 +456,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder) {
     bind_style::<crate::marker::Toggler, _, _>(iced, "Toggler", |toggler, style| {
         toggler.style = Some(style)
     });
+    bind_style::<crate::marker::Svg, _, _>(iced, "Svg", |svg, style| svg.style = Some(style));
 }
 
 fn bind_style<W: Clone + Send + Sync + 'static, S: Clone + 'static, T: Clone + 'static>(
@@ -546,6 +567,7 @@ const DEFAULTS: &[&str] = &[
     "widget::scrollable::Scroller",
     "widget::text_input::Style",
     "widget::toggler::Style",
+    "widget::svg::Style",
 ];
 
 fn bind_defaults(iced: &mut host::runtime::Builder) {
@@ -563,6 +585,7 @@ fn bind_defaults(iced: &mut host::runtime::Builder) {
         .expect("the iced facade must retain every style default");
     }
     default(iced, "iced::Shadow::default", Shadow::default);
+    default(iced, "iced::widget::svg::Style::default", svg::Style::default);
     default(
         iced,
         "iced::widget::button::Style::default",
@@ -881,6 +904,7 @@ fields! {
         bottom_right: f32,
         bottom_left: f32,
     }
+    "widget::svg::Style" => svg::Style { color: Option<Color> }
     "widget::container::Style" => container::Style {
         background: Option<Background>,
         text_color: Option<Color>,
@@ -979,6 +1003,11 @@ fn declare_types(builder: &mut facade::Builder) -> Result<(), host::Error> {
     builder.type_::<scrollable::Scroller>("widget::scrollable::Scroller", &[], owned)?;
     builder.type_::<text_input::Style>("widget::text_input::Style", &[], owned)?;
     builder.type_::<toggler::Style>("widget::toggler::Style", &[], owned)?;
+    builder.type_::<svg::Style>(
+        "widget::svg::Style",
+        &[],
+        crate::OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
     Ok(())
 }
 
@@ -1007,6 +1036,10 @@ macro_rules! statuses {
 }
 
 statuses! {
+    "widget::svg::Status" => svg {
+        Idle: |status| status == Idle,
+        Hovered: |status| status == Hovered,
+    }
     "widget::button::Status" => button {
         Active: |status| status == Active,
         Hovered: |status| status == Hovered,

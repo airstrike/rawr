@@ -469,6 +469,7 @@ pub(crate) struct Svg {
     pub(crate) height: Option<iced::Length>,
     pub(crate) content_fit: Option<iced::ContentFit>,
     pub(crate) opacity: Option<f32>,
+    pub(crate) style: Option<Source<iced::widget::svg::Status, iced::widget::svg::Style>>,
 }
 
 /// iced's `qr_code::Data`, as the text it encodes: iced's holds a drawing
