@@ -12,7 +12,15 @@ fn seeded() -> String {
     String::from("seeded")
 }
 
-#[preview(name = "seeded", seed = seeded)]
+fn plain() -> u8 {
+    0
+}
+
+fn styled(_: &str) -> u8 {
+    1
+}
+
+#[preview(name = "seeded", seed = seeded, themes = [plain, styled])]
 fn shown(text: String) -> String {
     text
 }

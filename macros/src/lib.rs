@@ -27,8 +27,8 @@ use proc_macro::{Delimiter, Group, Punct, Spacing, TokenStream, TokenTree};
 ///
 /// Under cargo the function keeps its signature and its body. It may be
 /// called only by previews, so it is allowed to be dead code. The functions
-/// named by `seed` and `themes` are used by its body, so cargo does not warn
-/// that they are never used.
+/// named by `seed`, `update`, `theme` and `themes` are used by its body, so
+/// cargo does not warn that they are never used.
 #[proc_macro_attribute]
 pub fn preview(arguments: TokenStream, item: TokenStream) -> TokenStream {
     let used = named_values(arguments);
@@ -66,7 +66,8 @@ pub fn widget(_arguments: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
-/// The values of the `seed` and `themes` arguments, as written.
+/// The values of the `seed`, `update`, `theme` and `themes` arguments, as
+/// written. Each element of a `themes` list is its own value.
 fn named_values(arguments: TokenStream) -> Vec<TokenStream> {
     let tokens: Vec<TokenTree> = arguments.into_iter().collect();
     let mut values = Vec::new();
@@ -74,7 +75,7 @@ fn named_values(arguments: TokenStream) -> Vec<TokenStream> {
 
     while index < tokens.len() {
         let named = matches!(&tokens[index], TokenTree::Ident(ident)
-            if ["seed", "themes"].contains(&ident.to_string().as_str()));
+            if ["seed", "update", "theme", "themes"].contains(&ident.to_string().as_str()));
         let assigned = matches!(tokens.get(index + 1), Some(TokenTree::Punct(punct)) if punct.as_char() == '=');
 
         if named && assigned {
@@ -84,12 +85,37 @@ fn named_values(arguments: TokenStream) -> Vec<TokenStream> {
                 value.extend([tokens[index].clone()]);
                 index += 1;
             }
-            values.push(value);
+            values.extend(elements(value));
         }
         index += 1;
     }
 
     values
+}
+
+/// The elements of a `[a, b]` list one by one, since functions of
+/// different types cannot share an array. Any other value is one element.
+fn elements(value: TokenStream) -> Vec<TokenStream> {
+    let tokens: Vec<TokenTree> = value.clone().into_iter().collect();
+    let [TokenTree::Group(group)] = tokens.as_slice() else {
+        return vec![value];
+    };
+    if group.delimiter() != Delimiter::Bracket {
+        return vec![value];
+    }
+
+    let mut elements = Vec::new();
+    let mut element = TokenStream::new();
+    for token in group.stream() {
+        if is_comma(&token) {
+            elements.push(std::mem::take(&mut element));
+        } else {
+            element.extend([token]);
+        }
+    }
+    elements.push(element);
+    elements.retain(|element| !element.is_empty());
+    elements
 }
 
 fn is_comma(token: &TokenTree) -> bool {
