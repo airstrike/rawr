@@ -3330,6 +3330,12 @@ fn declare_font(builder: &mut facade::Builder) -> Result<(), host::Error> {
             receiver::Mode::Owned,
             method.finish(),
         )?)?;
+        // `font.family`, read as a field.
+        builder.item(item::Definition::method(
+            format!("Font::{name}"),
+            receiver::Mode::Shared,
+            output_signature(input)?,
+        )?)?;
     }
     Ok(())
 }

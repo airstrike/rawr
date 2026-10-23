@@ -1150,29 +1150,51 @@ fn bind_font(builder: &mut host::runtime::Builder) {
         .expect("the iced facade must retain Font::with_family");
     builder
         .bind("iced::Font::weight", |args| {
+            if let [font] = args {
+                return read_font(font, |font| Dynamic::from(font.weight));
+            }
             let (font, value) = font_and::<Weight>(args, "Font::weight", "iced::font::Weight")?;
             Ok(Dynamic::from(font.weight(value)))
         })
         .expect("the iced facade must retain Font::weight");
     builder
         .bind("iced::Font::stretch", |args| {
+            if let [font] = args {
+                return read_font(font, |font| Dynamic::from(font.stretch));
+            }
             let (font, value) = font_and::<Stretch>(args, "Font::stretch", "iced::font::Stretch")?;
             Ok(Dynamic::from(font.stretch(value)))
         })
         .expect("the iced facade must retain Font::stretch");
     builder
         .bind("iced::Font::style", |args| {
+            if let [font] = args {
+                return read_font(font, |font| Dynamic::from(font.style));
+            }
             let (font, value) = font_and::<Style>(args, "Font::style", "iced::font::Style")?;
             Ok(Dynamic::from(font.style(value)))
         })
         .expect("the iced facade must retain Font::style");
     builder
         .bind("iced::Font::family", |args| {
+            if let [font] = args {
+                return read_font(font, |font| Dynamic::from(font.family));
+            }
             let (mut font, value) = font_and::<Family>(args, "Font::family", "iced::font::Family")?;
             font.family = value;
             Ok(Dynamic::from(font))
         })
         .expect("the iced facade must retain Font::family");
+}
+
+/// `font.weight` and kin, read as fields.
+fn read_font(
+    font: &Dynamic,
+    read: fn(&iced::Font) -> Dynamic,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    font.read_lock::<iced::Font>()
+        .map(|font| read(&font))
+        .ok_or_else(|| runtime_error("expected an `iced::Font`".into()))
 }
 
 fn font_and<T: Clone + 'static>(

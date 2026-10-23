@@ -1384,3 +1384,44 @@ fn master_function_with_binds_the_first_input() {
     }
     find(&adapter, "8 hi");
 }
+
+const FONT_FIELDS: &str = r#"
+use iced::font;
+use iced::widget::{column, text};
+use iced::{Font, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let font = Font {
+            weight: font::Weight::Bold,
+            ..Font::MONOSPACE
+        };
+        column![
+            text(format!(
+                "{} {}",
+                font.weight == font::Weight::Bold,
+                font.family == font::Family::Monospace
+            )),
+            text("fields"),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_font_fields_read_as_fields() {
+    let adapter = boot(FONT_FIELDS);
+    find(&adapter, "true true");
+}
