@@ -7296,6 +7296,40 @@ fn language_mut_pattern_write_back_keeps_a_nan_neighbour() {
 }
 
 #[test]
+fn language_let_patterns_on_mut_places_write_their_bindings_back() {
+    let value = run(r#"
+        struct P { x: i64, y: i64 }
+        struct T { o: Option<i64>, p: P }
+        impl T {
+            fn set(&mut self) {
+                let Some(x) = &mut self.o else { return; };
+                *x = 5;
+                let P { x, .. } = &mut self.p;
+                *x += 10;
+            }
+        }
+        pub fn run() -> i64 {
+            let mut t = T { o: Some(1), p: P { x: 1, y: 2 } };
+            t.set();
+            let mut o = Some(1);
+            let Some(n) = &mut o else { return 0; };
+            *n = 6;
+            let mut pair = (1, 2);
+            let (a, b) = &mut pair;
+            *a += 1;
+            *b += 1;
+            t.o.unwrap() * 1000 + t.p.x * 10 + o.unwrap() + pair.0 * 100000 + pair.1 * 1000000
+        }
+        run()
+    "#);
+    assert_eq!(value, 5 * 1000 + 11 * 10 + 6 + 2 * 100000 + 3 * 1000000);
+    let error = rejected(
+        "pub fn run() -> i64 { let mut o = Some(1); let Some(x) = &mut o; *x = 2; 0 } run()",
+    );
+    assert!(error.contains("refutable"), "{error}");
+}
+
+#[test]
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(error.contains("nknown function") && error.contains("centre"), "{error}");

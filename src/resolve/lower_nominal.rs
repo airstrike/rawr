@@ -8989,6 +8989,7 @@ impl<'a> Parser<'a> {
         }
 
         self.expect(Token::RightBrace, "'}' to close a function body")?;
+        self.write_backs.clear();
         Ok(())
     }
 
@@ -16369,10 +16370,7 @@ impl<'a> Parser<'a> {
     fn parse_let_else(&mut self, start: Position) -> Result<(), Error> {
         let syntax = self.parse_pattern_syntax()?;
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
-        let outer = std::mem::replace(&mut self.no_struct, true);
-        let subject = self.parse_expr();
-        self.no_struct = outer;
-        let subject = subject?;
+        let subject = self.parse_subject()?;
         self.expect(Token::Else, "`else` after a `let` value")?;
         if !matches!(self.peek(), Token::LeftBrace) {
             return Err(self.unsupported("`let ... else` without a block"));
@@ -16390,13 +16388,48 @@ impl<'a> Parser<'a> {
         }
         let end = otherwise.syntax.end();
         self.consume_terminator(start)?;
+        self.bind_let_pattern(start, &syntax, subject, Some(otherwise), end)
+    }
+
+    /// The bindings of `let pattern = subject`, after the statement. Without
+    /// `otherwise` the pattern must be irrefutable. A pattern matched on a
+    /// `&mut` place writes its `&mut` bindings back into the place after
+    /// each statement that uses them, until the block ends (`WriteBack`).
+    fn bind_let_pattern(
+        &mut self,
+        start: Position,
+        syntax: &PatternSyntax,
+        subject: ParsedExpr,
+        otherwise: Option<Branch>,
+        end: Position,
+    ) -> Result<(), Error> {
         let written_ty = self.inference.resolve(&subject.ty);
         let subject_ty = match written_ty.clone() {
             Ty::Reference { target, .. } => *target,
             ty => ty,
         };
+        let resolved = self.resolve_root_pattern(syntax, &written_ty)?;
+        if otherwise.is_none() {
+            let rows = resolved
+                .coverage
+                .alternatives()
+                .into_iter()
+                .map(|alternative| vec![alternative])
+                .collect::<Vec<_>>();
+            if self
+                .missing_coverage_witness(std::slice::from_ref(&written_ty), &rows)
+                .is_some()
+            {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "a refutable pattern in a binding; use `if let` or `match`".into(),
+                    source: resolved.span,
+                });
+            }
+        }
+        let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
+        let write_back =
+            self.pattern_write_back(&subject, &resolved.proof, &resolved.bindings, &scrutinee)?;
         let subject = self.pattern_subject(subject, &subject_ty)?;
-        let resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
         let host = self.take_host_checks()?;
         let label = self.push_root_pattern(resolved.proof, &resolved.bindings);
         // The bindings a facade pattern makes follow the script pattern's.
@@ -16406,7 +16439,6 @@ impl<'a> Parser<'a> {
             .chain(&host.binds)
             .map(|binding| binding.name.to_string())
             .collect::<Vec<_>>();
-        let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
         let mut rendered = origin::Fragment::plain(format!("let {scrutinee} = "));
         rendered.push(subject);
         rendered.push_text(format!(";\nlet {values} = switch {scrutinee} {{\n{label}"));
@@ -16416,24 +16448,35 @@ impl<'a> Parser<'a> {
         }
         rendered.push_text(" => { ");
         rendered.push(host.rendered_binds());
-        rendered.push_text(format!("[{}] }},\n_ => ", names.join(", ")));
-        rendered.push(otherwise.value.rendered_block());
+        rendered.push_text(format!("[{}] }}", names.join(", ")));
+        if let Some(otherwise) = otherwise {
+            rendered.push_text(",\n_ => ");
+            rendered.push(otherwise.value.rendered_block());
+        }
         rendered.push_text("\n};");
         bindings.extend(host.binds);
         for (index, binding) in bindings.iter().enumerate() {
-            let keyword = if binding.mutable { "let" } else { "const" };
+            let written = write_back.as_ref().is_some_and(|write_back| {
+                write_back
+                    .bindings
+                    .iter()
+                    .any(|(name, at)| *name == binding.name && *at == binding.span)
+            });
+            let mutable = binding.mutable || written;
+            let keyword = if mutable { "let" } else { "const" };
             rendered.push_text(format!("\n{keyword} {} = {values}[{index}];", binding.name));
             self.bindings.insert(
                 binding.name.clone(),
                 Binding {
                     ty: binding.ty.clone(),
-                    mutable: binding.mutable,
+                    mutable,
                     available: true,
                     declaration: binding.span,
                     kind: BindingKind::Local,
                 },
             );
         }
+        self.write_backs.extend(write_back);
         self.write_output(rendered, span(start, end));
         self.last_type = Ty::Unit;
         self.last_expression = None;
@@ -16450,7 +16493,29 @@ impl<'a> Parser<'a> {
             None
         };
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
-        let mut value = self.parse_expr()?;
+        let borrowing =
+            matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut);
+        let outer = self.mutable_borrow;
+        if borrowing {
+            self.mutable_borrow = Some(self.expression_stack.len() + 1);
+        }
+        let value = self.parse_expr();
+        self.mutable_borrow = outer;
+        let mut value = value?;
+        // `let (a, b) = &mut pair;`: the bindings are the place's parts.
+        if annotation.is_none()
+            && !syntax.has_ref_mut()
+            && value.lvalue.is_some()
+            && matches!(
+                self.inference.resolve(&value.ty),
+                Ty::Reference { mutable: true, .. }
+            )
+        {
+            let end = value.span.end();
+            self.field_entries.truncate(pending);
+            self.consume_terminator(start)?;
+            return self.bind_let_pattern(start, &syntax, value, None, end);
+        }
         self.reject_invocation(&value.ty, value.span, "retained in a local binding")?;
         self.reject_signature_support(&value.ty, value.span, "retained in a local binding")?;
         if let Some(expected) = &annotation {
@@ -20955,6 +21020,8 @@ impl<'a> Parser<'a> {
     fn parse_match_action(&mut self) -> Result<Branch, Error> {
         if matches!(self.peek(), Token::LeftBrace) {
             let start = self.next().1;
+            // A `let` in the block writes back until the block ends.
+            let write_backs = self.write_backs.len();
             let outer_output = std::mem::take(&mut self.output);
             let outer_last_type = self.last_type.clone();
             let outer_last_expression = self.last_expression.take();
@@ -20971,6 +21038,7 @@ impl<'a> Parser<'a> {
                 }
             }
             let end = self.expect(Token::RightBrace, "'}' after a match arm block")?;
+            self.write_backs.truncate(write_backs);
             let mut block_output = std::mem::replace(&mut self.output, outer_output);
             let ty = std::mem::replace(&mut self.last_type, outer_last_type);
             let inner_last_expression =
