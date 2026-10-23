@@ -8,10 +8,12 @@ pub mod operation;
 pub mod stream;
 pub(crate) mod type_ref;
 pub(crate) mod widget;
+mod unwitnessed;
 mod witness;
 
 pub use call::{Call, Error as WitnessError};
 pub use type_ref::Error as ValueError;
+pub use unwitnessed::Unwitnessed;
 pub use witness::Witness;
 
 use crate::func::SendSync;

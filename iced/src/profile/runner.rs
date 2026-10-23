@@ -35,7 +35,7 @@ const TEXT_ENDPOINT_DISPOSITION: &[u8] =
 const COMPATIBILITY_PROJECTIONS: usize = 32;
 const COMPATIBILITY_ABI: u32 = 16;
 const COMPATIBILITY_DIGEST: [u8; 16] = [
-    61, 237, 120, 160, 162, 80, 97, 89, 215, 66, 151, 74, 194, 69, 37, 231,
+    211, 30, 87, 178, 171, 249, 93, 47, 175, 254, 120, 83, 24, 204, 55, 152,
 ];
 
 /// One exact target-argument substitution sealed into a generated projection table.
@@ -3841,3 +3841,18 @@ mod hot_outcome_tests;
 
 #[cfg(all(test, unix))]
 mod observation_tests;
+
+#[cfg(test)]
+mod digest_tests {
+    /// The pinned compatibility digest is the semantic facade's own. A
+    /// facade change moves it; the failure prints the new value.
+    #[test]
+    fn compatibility_digest_is_the_semantic_facade_digest() {
+        let semantic = crate::facade().expect("the iced facade builds");
+        assert_eq!(
+            semantic.fingerprint().compatibility_digest(),
+            super::COMPATIBILITY_DIGEST,
+            "update COMPATIBILITY_DIGEST to the left value"
+        );
+    }
+}

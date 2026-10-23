@@ -85,6 +85,16 @@ impl Witness {
         self.authority == authority && self.ty.arguments() == ty.arguments()
     }
 
+    /// The witness of this type's argument at `index`, under the same
+    /// authority: a `Task<T>` witness gives the witness of each `T` its
+    /// native task yields.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn argument_witness(&self, index: usize) -> Option<Self> {
+        let ty = self.ty.arguments().get(index)?.clone();
+        Some(Self::issue(self.authority, ty))
+    }
+
     #[cfg(not(feature = "no_function"))]
     pub(crate) fn argument(&self, index: usize) -> Option<&Type> {
         self.ty.arguments().get(index)

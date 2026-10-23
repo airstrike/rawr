@@ -14117,6 +14117,9 @@ impl<'a> Parser<'a> {
             });
         };
         self.expect(Token::LeftParen, "'(' after Task::perform")?;
+        if !self.operation_selector_ahead() {
+            return self.parse_task_perform_future(name_span);
+        }
         let (selected_items, selected_owner, selector) = self.parse_operation_selector()?;
         let (mut arguments, _) = self.parse_call_arguments("host operation arguments")?;
         self.expect(Token::Comma, "',' after the host operation call")?;
@@ -14214,6 +14217,73 @@ impl<'a> Parser<'a> {
             evaluation: item.evaluation(),
         }
         .retain_origin())
+    }
+
+    /// Whether the tokens ahead name an imported symbolic host operation,
+    /// which `Task::perform` seals itself. Anything else is a future.
+    fn operation_selector_ahead(&mut self) -> bool {
+        let mut ahead = self.input.clone();
+        let Some((Token::Identifier(first), _)) = ahead.next() else {
+            return false;
+        };
+        let Some(binding) = self.models.import(first.as_str()) else {
+            return false;
+        };
+        let module = matches!(ahead.peek(), Some((Token::DoubleColon, _)));
+        let items = match &binding.target {
+            item::Import::Item { definitions, .. } | item::Import::ModuleItem { definitions, .. }
+                if !module =>
+            {
+                definitions.to_vec()
+            }
+            item::Import::Module | item::Import::ModuleItem { .. } if module => {
+                let mut path = binding.qualified.to_string();
+                while matches!(ahead.peek(), Some((Token::DoubleColon, _))) {
+                    ahead.next();
+                    let Some((Token::Identifier(member), _)) = ahead.next() else {
+                        return false;
+                    };
+                    path.push_str("::");
+                    path.push_str(member.as_str());
+                }
+                match self.models.host_items(&path) {
+                    Some(items) => items.to_vec(),
+                    None => return false,
+                }
+            }
+            _ => return false,
+        };
+        !items.is_empty()
+            && items
+                .iter()
+                .all(|item| item.kind() == crate::host::item::Kind::Operation)
+    }
+
+    /// `Task::perform(future, f)` over a Rust future, which crosses as a
+    /// `Task`: iced's own definition, `Task::future(future).map(f)`.
+    fn parse_task_perform_future(&mut self, name_span: Span) -> Result<ParsedExpr, Error> {
+        let future = self.parse_expr()?;
+        self.expect(Token::Comma, "',' after the future")?;
+        let mapper = self.parse_expr()?;
+        if matches!(self.peek(), Token::Comma) {
+            self.next();
+        }
+        let end = self.expect(Token::RightParen, "')' after Task::perform arguments")?;
+        let call = span(name_span.start(), end);
+        const TASK_FUTURE: &str = "iced::Task::future";
+        let items = self
+            .models
+            .host_items(TASK_FUTURE)
+            .map(<[_]>::to_vec)
+            .ok_or_else(|| Error::InvalidHostOperation {
+                item: TASK_FUTURE.into(),
+                reason: "the facade lacks this item".into(),
+                operation: call,
+            })?;
+        let owner = self.models.item_owner(TASK_FUTURE).cloned();
+        let task = self.call_host_function(&items, owner, vec![future], call)?;
+        self.pending_arguments = Some((vec![mapper], end));
+        self.parse_host_method(task, "map".into(), call)
     }
 
     fn parse_operation_selector(&mut self) -> Result<OperationSelector, Error> {

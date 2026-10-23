@@ -620,6 +620,15 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         "Task::perform",
         task_perform_signature()?,
     )?)?;
+    builder.item(item::Definition::associated_function(
+        "Task::future",
+        task_future_signature()?,
+    )?)?;
+    builder.item(item::Definition::method(
+        "Task::discard",
+        receiver::Mode::Owned,
+        task_discard_signature()?,
+    )?)?;
     builder.item(item::Definition::method(
         "Task::chain",
         receiver::Mode::Owned,
@@ -1556,6 +1565,28 @@ fn task_perform_signature() -> Result<signature::Definition, host::Error> {
     signature.output(type_ref::Type::applied(
         "Task",
         [type_ref::Type::parameter("Message")?],
+    )?);
+    Ok(signature.finish())
+}
+
+/// `Task::future(future)`. A Rust future crosses into Rawr as a `Task` of
+/// its output, so this takes that task.
+fn task_future_signature() -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Output", &[])?;
+    let task = type_ref::Type::applied("Task", [type_ref::Type::parameter("Output")?])?;
+    signature.parameter(task.clone());
+    signature.output(task);
+    Ok(signature.finish())
+}
+
+fn task_discard_signature() -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Message", &[])?;
+    signature.type_parameter("Other", &[])?;
+    signature.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::parameter("Other")?],
     )?);
     Ok(signature.finish())
 }

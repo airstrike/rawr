@@ -2,7 +2,7 @@
 
 use rawr::{application, host, item, preview, program, Dynamic, EvalAltResult, Position};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::{dispatch, effect, runtime};
 
@@ -49,6 +49,97 @@ enum PreparedKind {
         plan: Box<Prepared>,
         mapper: item::Value,
     },
+    Imported(Imported),
+    Discard(Box<Prepared>),
+}
+
+/// One value a Rust task yields, turned into a Rawr value on the UI thread.
+/// The witness is the one for the task's output type.
+#[doc(hidden)]
+pub type Materialize =
+    Box<dyn FnOnce(Option<&host::runtime::Witness>) -> Result<Dynamic, String> + Send + 'static>;
+
+/// An iced `Task` a Rust function returned. It runs once: Rust's `Task` is
+/// not `Clone`, and a copy of the plan shares the one native task.
+#[derive(Clone)]
+pub(crate) struct Imported(Arc<Mutex<Option<iced::Task<Materialize>>>>);
+
+impl Imported {
+    fn new(task: iced::Task<Materialize>) -> Self {
+        Self(Arc::new(Mutex::new(Some(task))))
+    }
+
+    fn take(&self) -> Option<iced::Task<Materialize>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
+
+impl fmt::Debug for Imported {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Imported(<native task>)")
+    }
+}
+
+/// A Rust function's output on its way into the facade's `Task`: either an
+/// iced `Task<T>` or a `Future<Output = T>`. Generated bridge code calls
+/// `(&Project::new(output)).into_task()` with [`ViaTask`] and [`ViaFuture`]
+/// in scope; method resolution picks the task impl first.
+#[doc(hidden)]
+pub struct Project<T>(std::cell::Cell<Option<T>>);
+
+impl<T> Project<T> {
+    #[must_use]
+    pub fn new(value: T) -> Self {
+        Self(std::cell::Cell::new(Some(value)))
+    }
+
+    fn take(&self) -> T {
+        self.0
+            .take()
+            .expect("a projected Rust output is taken once")
+    }
+}
+
+/// An iced `Task` crosses as it is, actions and all.
+#[doc(hidden)]
+pub trait ViaTask<T> {
+    fn into_task(&self) -> iced::Task<T>;
+}
+
+impl<T> ViaTask<T> for Project<iced::Task<T>> {
+    fn into_task(&self) -> iced::Task<T> {
+        self.take()
+    }
+}
+
+/// A Rust future crosses as iced's `Task::future`.
+#[doc(hidden)]
+pub trait ViaFuture<T> {
+    fn into_task(&self) -> iced::Task<T>;
+}
+
+impl<F> ViaFuture<F::Output> for &Project<F>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn into_task(&self) -> iced::Task<F::Output> {
+        iced::Task::future(self.take())
+    }
+}
+
+/// Project an iced `Task` from a Rust function into the facade's `Task`.
+/// The bridge stamps it with the call's output witness.
+#[doc(hidden)]
+#[must_use]
+pub fn imported(task: iced::Task<Materialize>) -> Dynamic {
+    let task = Imported::new(task);
+    Dynamic::from(host::runtime::Unwitnessed::new(move |witness| {
+        Dynamic::from(Plan {
+            kind: Kind::Imported(task),
+            witness: Some(witness),
+        })
+    }))
 }
 
 /// iced's own tasks: `exit`, `window::latest`/`close` and the focus
@@ -146,6 +237,10 @@ enum Kind {
         plan: Box<Plan>,
         mapper: item::Value,
     },
+    /// An iced `Task` a Rust function returned, actions and all.
+    Imported(Imported),
+    /// iced's `Task::discard`: the plan runs, and its outputs go nowhere.
+    Discard(Box<Plan>),
 }
 
 /// Current executable authority used only while a symbolic plan is lowered.
@@ -178,6 +273,10 @@ pub enum Error {
     Message(application::RuntimeError),
     /// A completed task plan did not produce the selected preview's exact Message.
     PreviewMessage(preview::RuntimeError),
+    /// A Rust task's output could not become a Rawr value.
+    Imported(String),
+    /// A task from Rust was already run. Rust's `Task` is not `Clone`.
+    Spent,
 }
 
 impl Plan {
@@ -256,7 +355,9 @@ impl Plan {
             | Kind::Chain { .. }
             | Kind::Map { .. }
             | Kind::Native(_)
-            | Kind::AndThen { .. } => None,
+            | Kind::AndThen { .. }
+            | Kind::Imported(_)
+            | Kind::Discard(_) => None,
             Kind::Done(payload) => Some(payload),
         }
     }
@@ -316,6 +417,8 @@ impl Plan {
                 plan: Box::new(plan.prepare_application(authority)?),
                 mapper,
             },
+            Kind::Imported(task) => PreparedKind::Imported(task),
+            Kind::Discard(plan) => PreparedKind::Discard(Box::new(plan.prepare_application(authority)?)),
         };
         Ok(Prepared { kind, witness })
     }
@@ -324,6 +427,7 @@ impl Plan {
     /// Only native work runs in the returned task's stream.
     fn lower_with(self, lowering: &Lowering, next: Next) -> Result<iced::Task<runtime::Message>, Error> {
         let Self { kind, witness } = self;
+        let output = witness.as_ref().and_then(|witness| witness.argument_witness(0));
         let next = lowering.validated(witness, next);
         Ok(match kind {
             Kind::None => iced::Task::none(),
@@ -354,8 +458,15 @@ impl Plan {
                 let next = Arc::new(move |payload| lowering_inner.and_then(payload, &mapper, next.clone()));
                 plan.lower_with(lowering, next)?
             }
+            Kind::Imported(task) => lowering.imported(&task, output, next),
+            Kind::Discard(plan) => plan.lower_with(lowering, discard())?,
         })
     }
+}
+
+/// The continuation of a discarded task: nothing.
+fn discard() -> Next {
+    Arc::new(|_| iced::Task::none())
 }
 
 impl Lowering {
@@ -436,6 +547,31 @@ impl Lowering {
         })
     }
 
+    /// Run a Rust task's stream natively, actions and all. Each value it
+    /// yields becomes a Rawr value, under the output's witness, on the UI
+    /// thread before `next`.
+    fn imported(
+        &self,
+        task: &Imported,
+        output: Option<host::runtime::Witness>,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
+        let Some(task) = task.take() else {
+            return self.fail(Error::Spent);
+        };
+        let lowering = self.clone();
+        let output = Arc::new(output);
+        task.then(move |materialize| {
+            let next = next.clone();
+            let failed = lowering.clone();
+            let output = output.clone();
+            dispatch::on_ui(lowering.owner, move || match materialize(output.as_ref().as_ref()) {
+                Ok(payload) => next(payload),
+                Err(error) => failed.fail(Error::Imported(error)),
+            })
+        })
+    }
+
     /// Await an issued operation natively, then validate its output and run
     /// its mapper on the UI thread.
     fn operation(&self, pending: host::operation::Pending, next: Next) -> iced::Task<runtime::Message> {
@@ -480,6 +616,7 @@ impl Prepared {
         next: Next,
     ) -> iced::Task<runtime::Message> {
         let Self { kind, witness } = self;
+        let output = witness.as_ref().and_then(|witness| witness.argument_witness(0));
         let next = lowering.validated(witness, next);
         match kind {
             PreparedKind::None => iced::Task::none(),
@@ -503,6 +640,8 @@ impl Prepared {
                 let next = Arc::new(move |payload| lowering_inner.and_then(payload, &mapper, next.clone()));
                 plan.lower_with(context, lowering, next)
             }
+            PreparedKind::Imported(task) => lowering.imported(&task, output, next),
+            PreparedKind::Discard(plan) => plan.lower_with(context, lowering, discard()),
         }
     }
 }
@@ -594,6 +733,10 @@ impl fmt::Display for Error {
                     "preview task plan produced invalid Message: {error}"
                 )
             }
+            Self::Imported(error) => {
+                write!(formatter, "a Rust task's output could not cross into Rawr: {error}")
+            }
+            Self::Spent => formatter.write_str("this task from Rust already ran, and a Task runs once"),
         }
     }
 }
@@ -608,6 +751,7 @@ impl std::error::Error for Error {
             Self::Output(error) => Some(error),
             Self::Message(error) => Some(error),
             Self::PreviewMessage(error) => Some(error),
+            Self::Imported(_) | Self::Spent => None,
         }
     }
 }
@@ -889,6 +1033,34 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             Ok(Dynamic::from(first.chain(second, witness)))
         })
         .expect("the iced facade must retain the exact Task::chain item");
+    builder
+        .bind_with_context("iced::Task::future", |_call, args| {
+            // A Rust future already crossed as a `Task` of its output.
+            let [future] = args else {
+                return Err(arity("Task::future", 1, args.len()));
+            };
+            Ok(Dynamic::from(take(future, "Task::future")?))
+        })
+        .expect("the iced facade must retain Task::future");
+    builder
+        .bind_with_context("iced::Task::discard", |call, args| {
+            let [plan] = args else {
+                return Err(arity("Task::discard", 1, args.len()));
+            };
+            let plan = take(plan, "Task::discard")?;
+            let witness = plan.witness.as_ref().ok_or_else(|| {
+                EvalAltResult::ErrorRuntime(
+                    "Task::discard received an unattested plan".into(),
+                    Position::NONE,
+                )
+            })?;
+            let witness = call.transform_witness(witness).map_err(witness_error)?;
+            Ok(Dynamic::from(Plan {
+                kind: Kind::Discard(Box::new(plan)),
+                witness: Some(witness),
+            }))
+        })
+        .expect("the iced facade must retain Task::discard");
     builder
         .bind_with_context("iced::Task::map", |call, args| {
             if args.len() != 2 {

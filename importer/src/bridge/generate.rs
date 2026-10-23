@@ -410,6 +410,26 @@ fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T,
     })
 }
 
+/// Turn one value a Rust task or future yielded into a Rawr value, on the
+/// thread that owns the arena. An imported value takes the witness of the
+/// task's output type.
+#[allow(dead_code)]
+fn materialize(
+    witness: Option<&__rawr_internal::host::runtime::Witness>,
+    convert: impl FnOnce(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>,
+) -> Result<Dynamic, String> {
+    with_arena(|arena| {
+        let mut values: [&mut Dynamic; 0] = [];
+        let mut arguments = Arguments { values: &mut values, arena };
+        let output = convert(&mut arguments)?;
+        if let (Some(handle), Some(witness)) = (output.read_lock::<NativeHandle>().map(|value| *value), witness) {
+            arguments.arena.attest(handle, witness.clone())?;
+        }
+        Ok(output)
+    })
+    .map_err(|error| format!("{error:?}"))
+}
+
 fn take_primitive<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
     (**value).take().try_cast_result::<T>().map_err(|_| Error::TypeMismatch)
@@ -608,6 +628,14 @@ fn runtime_invoke(
             .and_then(|handle| arena.witness(handle).cloned());
         let mut arguments = Arguments { values, arena };
         let output = (adapter.invoke)(&mut arguments)?;
+        // A projected iced Task takes this call's output witness.
+        let output = match output.try_cast_result::<__rawr_internal::host::runtime::Unwitnessed>() {
+            Ok(pending) => {
+                let witness = call.output_witness().map_err(|_| Error::Stale)?;
+                pending.witness(witness).ok_or(Error::Stale)?
+            }
+            Err(output) => output,
+        };
         if let Some(handle) = output.read_lock::<NativeHandle>().map(|value| *value) {
             let witness = match adapter.witness {
                 1 => call.output_witness().ok(),
@@ -3508,7 +3536,11 @@ fn render_adapter(
                 output
                     .write_all(b");\n")
                     .map_err(|_| request::Error::Encoding)?;
-                render_give_with(signature, substitutions, "output", output)?;
+                let returned = substitute(signature.output(), signature, substitutions)?;
+                match facade_task_output(returned, facade) {
+                    Some(element) => render_give_task(element, "output", output)?,
+                    None => render_give_with(signature, substitutions, "output", output)?,
+                }
             }
         }
         Operation::Method {
@@ -5170,6 +5202,46 @@ fn render_to_dynamic(
             });
         }
     }
+    .map_err(|_| request::Error::Encoding)
+}
+
+/// The `T` of an output that is the iced facade's `Task<T>`.
+fn facade_task_output<'a>(
+    ty: &'a convert::Type,
+    facade: Option<&crate::surface::facade::Plan>,
+) -> Option<&'a convert::Type> {
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = ty
+    else {
+        return None;
+    };
+    let [element] = arguments.as_ref() else {
+        return None;
+    };
+    facade?
+        .facades()
+        .filter(|facade| facade.root() == "iced")
+        .flat_map(crate::surface::facade::Facade::types)
+        .any(|ty| ty.identity() == definition.as_bytes() && ty.path() == "Task")
+        .then_some(element)
+}
+
+/// Project an iced `Task<T>`, or a Rust future of `T`, into the facade's
+/// `Task`. Each `T` it yields becomes a Rawr value on the UI thread, never
+/// in the stream.
+fn render_give_task(
+    element: &convert::Type,
+    value: &str,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let mut converted = String::new();
+    render_to_dynamic(element, "value", 0, &mut converted)?;
+    writeln!(
+        output,
+        "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::imported(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| materialize(witness, move |arguments| {converted}))\n    }})))"
+    )
     .map_err(|_| request::Error::Encoding)
 }
 

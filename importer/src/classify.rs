@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 5;
-const CLASSIFIER_VERSION: u32 = 7;
+const CLASSIFIER_VERSION: u32 = 8;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3152,7 +3152,9 @@ impl<P: api::Phase> Context<'_, P> {
         if signature.safety() != model::Safety::Safe {
             return Err(representability::reject::Kind::UnsafeFunction.into());
         }
-        if signature.async_function() {
+        // An `async fn` method borrows its receiver across the await, so
+        // only a free or associated `async fn` crosses, as a `Task`.
+        if signature.async_function() && !matches!(signature.receiver(), model::Receiver::None) {
             return Err(representability::reject::Kind::AsyncFunction.into());
         }
         if signature.variadic() {
@@ -3178,10 +3180,15 @@ impl<P: api::Phase> Context<'_, P> {
         for input in signature.inputs() {
             inputs.push(self.convert_input(input)?);
         }
+        // A free function's Rust future crosses as iced's `Task<T>`.
+        let output = match signature.receiver() {
+            model::Receiver::None => self.convert_output(signature.output())?,
+            _ => self.convert(signature.output())?,
+        };
         let signature_plan = representability::signature::Signature::new(
             parameters,
             inputs.into_boxed_slice(),
-            self.convert(signature.output())?,
+            output,
         );
         let receiver = match signature.receiver() {
             model::Receiver::None => None,
@@ -3308,6 +3315,99 @@ impl<P: api::Phase> Context<'_, P> {
                 return Err(representability::reject::Kind::ArrayType.into())
             }
             model::Type::Never => return Err(representability::reject::Kind::NeverType.into()),
+        })
+    }
+
+    /// A function's output. A Rust future, an `impl Future<Output = T>` or
+    /// a type that implements `Future`, is iced's `Task<T>`: the bridge
+    /// runs it natively and the facade's `Task` carries it.
+    fn convert_output(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        let output = match ty {
+            model::Type::ImplTrait { bounds, .. } => self.future_bound_output(bounds),
+            model::Type::Definition { id, arguments } if arguments.is_empty() => {
+                self.future_impl_output(id)
+            }
+            _ => None,
+        };
+        let Some(output) = output else {
+            return self.convert(ty);
+        };
+        let task = self
+            .iced_task()
+            .ok_or(representability::reject::Kind::OpaqueType)?;
+        Ok(representability::convert::Type::Nominal {
+            definition: crate::surface::identity::Definition::of(&task),
+            arguments: Box::from([self.convert(output)?]),
+        })
+    }
+
+    /// `T` of an `impl Future<Output = T>` bound list.
+    fn future_bound_output<'a>(&self, bounds: &'a [model::Predicate]) -> Option<&'a model::Type> {
+        let future = bounds.iter().any(|predicate| {
+            matches!(predicate, model::Predicate::Bound {
+                bound: model::Bound::Trait { trait_id, polarity: model::Polarity::Positive, .. },
+                ..
+            } if self.is_core_trait(trait_id, "Future"))
+        });
+        if !future {
+            return None;
+        }
+        bounds.iter().find_map(|predicate| match predicate {
+            model::Predicate::ProjectionEquality {
+                projection: model::Type::Projection { trait_id, .. },
+                ty,
+            } if self.is_core_trait(trait_id, "Future") => Some(ty),
+            _ => None,
+        })
+    }
+
+    /// `T` of a type's own `impl Future<Output = T>`, such as tokio's `Sleep`.
+    fn future_impl_output(&self, id: &api::identity::Definition) -> Option<&model::Type> {
+        self.graph.implementations().find_map(|implementation| {
+            if implementation.polarity() != model::Polarity::Positive
+                || !exact_definition(implementation.self_type(), id)
+            {
+                return None;
+            }
+            let model::Trait::Trait { id: trait_id, .. } = implementation.trait_ref() else {
+                return None;
+            };
+            if !self.is_core_trait(trait_id, "Future") {
+                return None;
+            }
+            implementation.associated().find_map(|associated| {
+                let definition = self
+                    .graph
+                    .definition_index(associated)
+                    .and_then(|index| self.graph.definitions().nth(index))?;
+                match definition.kind() {
+                    model::Kind::AssociatedType {
+                        default: model::Default::Present(ty),
+                        ..
+                    } if definition.display_path().last() == Some("Output") => Some(ty),
+                    _ => None,
+                }
+            })
+        })
+    }
+
+    fn is_core_trait(&self, id: &api::identity::Definition, name: &str) -> bool {
+        id.unit().authority().sysroot().is_some()
+            && id.unit().crate_name() == "core"
+            && self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .is_some_and(|definition| definition.display_path().last() == Some(name))
+    }
+
+    /// iced's `Task`, when the crate's graph holds it.
+    fn iced_task(&self) -> Option<api::identity::Definition> {
+        self.graph.definitions().find_map(|definition| {
+            (definition.id().unit().crate_name() == "iced_runtime"
+                && matches!(definition.kind(), model::Kind::Struct { .. })
+                && definition.display_path().last() == Some("Task"))
+            .then(|| definition.id().clone())
         })
     }
 
