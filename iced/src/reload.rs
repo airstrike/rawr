@@ -77,17 +77,10 @@ pub struct Service {
     cargo: cargo::Inbox,
 }
 
-type Binder = fn(
-    &rawr::Engine,
-    &[rawr::host::facade::Definition],
-) -> Result<rawr::host::runtime::Registry, rawr::host::runtime::Error>;
-
 enum Provider {
     Static,
-    Generated {
-        definitions: Box<[rawr::host::facade::Definition]>,
-        bind: Binder,
-    },
+    /// The runner's one registry, built when it started.
+    Generated(rawr::host::runtime::Registry),
 }
 
 pub(crate) enum Runtime {
@@ -117,24 +110,17 @@ pub fn channel_observed(
     channel_with_timing(gate, publication, engine, Some(timing), Provider::Static)
 }
 
-/// Create a live generated-owner transport whose every hot registry derives
-/// from the exact cold-admitted imported facade/profile proof.
+/// Create a live generated-owner transport whose every hot registry is the
+/// next generation of the runner's one registry, built when it started.
 #[doc(hidden)]
 #[must_use]
 pub fn channel_generated(
     gate: Arc<rawr::reload::scheduler::Gate>,
     publication: Arc<rawr::reload::scheduler::publication::Slot>,
     engine: rawr::Shared<rawr::Engine>,
-    definitions: Box<[rawr::host::facade::Definition]>,
-    bind: Binder,
+    runtime: rawr::host::runtime::Registry,
 ) -> (Transport, Service) {
-    channel_with_timing(
-        gate,
-        publication,
-        engine,
-        None,
-        Provider::Generated { definitions, bind },
-    )
+    channel_with_timing(gate, publication, engine, None, Provider::Generated(runtime))
 }
 
 fn channel_with_timing(
@@ -320,9 +306,7 @@ impl Service {
                 }
                 Ok(runtime)
             }
-            Provider::Generated { definitions, bind } => {
-                bind(&self.engine, definitions).map_err(Runtime::Registry)
-            }
+            Provider::Generated(runtime) => Ok(runtime.next_generation()),
         }
     }
 

@@ -593,12 +593,8 @@ pub(super) fn source<'a>(
              \x20               Stage::Admitted => {\n\
              \x20                   let program = program.ok_or(\"iced generation program unavailable\")?;\n\
              \x20                   let host = self.host.take().ok_or(\"iced generation host unavailable\")?;\n\
-             \x20                   let definitions = program._facades.to_vec().into_boxed_slice();\n\
-             \x20                   host.start(\n\
-             \x20                       program.engine.clone(),\n\
-             \x20                       definitions,\n\
-             \x20                       super::imported_runtime,\n\
-             \x20                   ).map_err(|_| \"iced generation lifecycle failed\")\n\
+             \x20                   host.start(program.engine.clone())\n\
+             \x20                       .map_err(|_| \"iced generation lifecycle failed\")\n\
              \x20               }\n\
              \x20               Stage::New | Stage::Prepared | Stage::Activated | Stage::Retired => Err(\"iced start is not admitted\"),\n\
              \x20           }\n\

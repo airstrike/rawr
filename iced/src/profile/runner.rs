@@ -225,6 +225,9 @@ pub(crate) struct ElementReplacement(());
 pub struct BoundGeneration {
     profile: [u8; 32],
     host: Generation,
+    /// The runner's one registry. Each later script generation takes its
+    /// next generation, so native values stay valid across edits.
+    runtime: host::runtime::Registry,
     snapshot: rawr::reload::source::Snapshot,
     observation: Option<Startup>,
 }
@@ -416,11 +419,6 @@ fn admit_startup<T>(
         }
     }
 }
-
-type RuntimeBinder = fn(
-    &rawr::Engine,
-    &[host::facade::Definition],
-) -> Result<host::runtime::Registry, host::runtime::Error>;
 
 const FEEDBACK_TIMEOUT: Duration = Duration::from_secs(10);
 /// The iced owner answers a State export between two messages.
@@ -979,12 +977,7 @@ impl BoundGeneration {
 
     /// Split one live generation into the child-main native owner and its sole
     /// authenticated protocol-side reload transport.
-    pub fn start(
-        self,
-        engine: rawr::Shared<rawr::Engine>,
-        definitions: Box<[host::facade::Definition]>,
-        bind: RuntimeBinder,
-    ) -> Result<(Running, Transport), Error> {
+    pub fn start(self, engine: rawr::Shared<rawr::Engine>) -> Result<(Running, Transport), Error> {
         if !matches!(
             &self.host,
             Generation::Application(_) | Generation::Preview(_) | Generation::Main(_)
@@ -1018,8 +1011,7 @@ impl BoundGeneration {
             Arc::clone(&gate),
             Arc::clone(&publication),
             engine,
-            definitions,
-            bind,
+            self.runtime,
         );
         let exporter = transport.exporter();
         let (sender, feedback, retry) = transport.into_parts();
@@ -2076,7 +2068,7 @@ pub fn bind_generation(
     }
     let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());
     let source = candidate.source().entry_source().diagnostic().clone();
-    let bootstrap = candidate.bind(engine, runtime)?;
+    let bootstrap = candidate.bind(engine, runtime.next_generation())?;
     let (plain, previews) = {
         let preparation = bootstrap.preparation();
         let catalog = preparation.catalog();
@@ -2119,6 +2111,7 @@ pub fn bind_generation(
     Ok(BoundGeneration {
         profile,
         host,
+        runtime,
         snapshot,
         observation: None,
     })

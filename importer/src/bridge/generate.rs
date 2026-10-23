@@ -491,7 +491,7 @@ fn runtime_invoke(
                 1 => call.output_witness().ok(),
                 2 => receiver
                     .as_ref()
-                    .and_then(|witness| call.transform_witness(witness).ok()),
+                    .and_then(|witness| call.transform_native_witness(witness).ok()),
                 _ => None,
             };
             if let Some(witness) = witness {
@@ -535,7 +535,7 @@ fn native_attestation(
     let handle = value.read_lock::<NativeHandle>().map(|value| *value)?;
     NATIVE_ARENA.with(|arena| {
         let arena = arena.try_borrow().ok()?;
-        expected.attest_witness(arena.as_ref()?.witness(handle))
+        expected.attest_native_witness(arena.as_ref()?.witness(handle))
     })
 }
 
@@ -2074,8 +2074,9 @@ fn run_protocol() -> std::io::Result<()> {
                     }
                 }
             }
-            48 if admitted && payload.len() > 32 && payload[..32] == key => {
-                // Start from the State the previous runner exported.
+            48 if admitted && payload.len() >= 32 && payload[..32] == key => {
+                // Start from the State the previous runner exported. No State
+                // means it could not carry over, and the window says why.
                 let mut response = [0_u8; 33];
                 response[..32].copy_from_slice(&key);
                 response[32] = u8::from(profile.seed_state(&payload[32..]));

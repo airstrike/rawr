@@ -392,6 +392,11 @@ impl Authority {
             .materialize_default(identity, schema)
     }
 
+    /// The declared type of the first field in `value` that cannot be carried.
+    pub(crate) fn uncarried_field(&self, value: &Dynamic) -> Option<String> {
+        self.executable.model().uncarried_field(value)
+    }
+
     /// A carried value rebuilt in this executable's model.
     pub(crate) fn decode_carried(&self, bytes: &[u8]) -> Option<Dynamic> {
         self.executable.model().decode_carried(bytes)

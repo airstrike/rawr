@@ -164,11 +164,15 @@ pub struct Facade {
 }
 
 /// Runtime facade implementations available to one application launch.
+///
+/// A runner builds its registry once. Each script generation then takes
+/// [`Registry::next_generation`], which shares these bindings and this
+/// runner's witness authority.
 pub struct Registry {
-    facades: BTreeMap<ImmutableString, Facade>,
+    facades: Shared<BTreeMap<ImmutableString, Facade>>,
     witness: witness::Authority,
     #[cfg(feature = "rust-import")]
-    imported_receipt: Option<crate::package::import::runner::account::Receipt>,
+    imported_receipt: Option<Shared<crate::package::import::runner::account::Receipt>>,
 }
 
 /// One exact static operation required by an executable's private lowering.
@@ -188,7 +192,8 @@ pub(crate) struct Requirement {
 
 /// The binding a registry resolved for one requirement, remembered so repeat
 /// calls skip the facade lookup. Registries only add facade roots and never
-/// replace them, so a binding found under one witness authority stays exact.
+/// replace them, and every generation of one runner shares them, so a binding
+/// found under one runner's authority stays exact.
 /// A clone starts empty and the cache never takes part in comparisons.
 #[derive(Default)]
 pub(crate) struct Bound(OnceCell<(witness::Authority, Shared<dyn Callback>)>);
@@ -206,7 +211,7 @@ impl Bound {
     fn get(&self, authority: witness::Authority) -> Option<&Shared<dyn Callback>> {
         self.0
             .get()
-            .filter(|(owner, _)| *owner == authority)
+            .filter(|(owner, _)| owner.same_runner(authority))
             .map(|(_, binding)| binding)
     }
 
@@ -1135,7 +1140,7 @@ impl Registry {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            facades: BTreeMap::new(),
+            facades: Shared::new(BTreeMap::new()),
             witness: witness::Authority::issue(),
             #[cfg(feature = "rust-import")]
             imported_receipt: None,
@@ -1152,18 +1157,36 @@ impl Registry {
                 "runtime already retains an imported allocation",
             ));
         }
-        self.imported_receipt = Some(receipt);
+        self.imported_receipt = Some(Shared::new(receipt));
         Ok(self)
+    }
+
+    /// A registry for this runner's next script generation.
+    ///
+    /// It shares these bindings, their imported allocation and this runner's
+    /// witness authority, so nothing is bound again. Its witnesses carry a new
+    /// generation: a value that holds script code from an earlier generation
+    /// fails its exact attestation, while a native Rust value still attests.
+    #[must_use]
+    pub fn next_generation(&self) -> Self {
+        Self {
+            facades: self.facades.clone(),
+            witness: self.witness.next_generation(),
+            #[cfg(feature = "rust-import")]
+            imported_receipt: self.imported_receipt.clone(),
+        }
     }
 
     /// Install one finished runtime facade without replacing an existing root.
     pub fn install(&mut self, facade: Facade) -> Result<&mut Self, Error> {
         let root: ImmutableString = facade.dependency.root().into();
-        if self.facades.contains_key(&root) {
+        let facades = Shared::get_mut(&mut self.facades)
+            .ok_or_else(|| Error::profile("runtime registry is already shared by a generation"))?;
+        if facades.contains_key(&root) {
             return Err(Error::DuplicateFacade { facade: root });
         }
         for dependency in &facade.dependencies {
-            let Some(installed) = self.facades.get(dependency.root()) else {
+            let Some(installed) = facades.get(dependency.root()) else {
                 return Err(Error::MissingFacade {
                     facade: dependency.root().into(),
                 });
@@ -1174,7 +1197,7 @@ impl Registry {
                 });
             }
         }
-        self.facades.insert(root, facade);
+        facades.insert(root, facade);
         Ok(self)
     }
 
@@ -1639,6 +1662,19 @@ impl Instantiation<'_> {
     #[must_use]
     pub fn attest_witness(&self, witness: Option<&Witness>) -> Option<Attested> {
         self.attest(witness.is_some_and(|witness| witness.matches(self.registry.witness, self.ty)))
+    }
+
+    /// Mint evidence when a native Rust value's witness comes from this runner
+    /// and names this exact type, in any of the runner's script generations.
+    ///
+    /// Only an imported Rust value may use this. It holds no script code, and
+    /// its Rust code cannot change while one runner lives.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn attest_native_witness(&self, witness: Option<&Witness>) -> Option<Attested> {
+        self.attest(
+            witness.is_some_and(|witness| witness.matches_native(self.registry.witness, self.ty)),
+        )
     }
 
     /// Check that another attested carrier has these exact logical arguments.

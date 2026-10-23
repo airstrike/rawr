@@ -48,7 +48,11 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
         let bound = bind_generation(
             candidate,
             &self.engine,
-            runtime(&self.engine, &[]).unwrap(),
+            {
+                let mut registry = host::runtime::Registry::new();
+                crate::install_test_runtime(&mut registry);
+                registry
+            },
             [7; 32],
             Mode::Run,
             self.root.clone(),
@@ -62,15 +66,6 @@ impl Drop for Fixture {
         fs::remove_dir_all(&self.root).unwrap();
     }
 }
-fn runtime(
-    _: &rawr::Engine,
-    _: &[host::facade::Definition],
-) -> Result<host::runtime::Registry, host::runtime::Error> {
-    let mut registry = host::runtime::Registry::new();
-    crate::install_test_runtime(&mut registry);
-    Ok(registry)
-}
-
 #[test]
 fn child_startup_rejects_events_or_suspension_during_parent_validation() {
     for suspend in [false, true] {
@@ -91,7 +86,7 @@ fn child_startup_rejects_events_or_suspension_during_parent_validation() {
             observed.gate.observe(Instant::now()).unwrap();
         }
         assert!(bound
-            .start(fixture.engine.clone(), Box::default(), runtime)
+            .start(fixture.engine.clone())
             .is_err());
     }
 }
@@ -113,7 +108,7 @@ fn child_startup_revalidates_rawr_bytes_and_requires_exact_coverage() {
         .is_err());
     crate::write_marked(&fixture.root, "src/main.rs", "changed");
     assert!(bound
-        .start(fixture.engine.clone(), Box::default(), runtime)
+        .start(fixture.engine.clone())
         .is_err());
 }
 
@@ -125,7 +120,7 @@ fn running_owner_keeps_child_observation_alive_after_protocol_transport_drops() 
         .observe(&inputs.encode_observation().unwrap())
         .unwrap();
     let (running, transport) = bound
-        .start(fixture.engine.clone(), Box::default(), runtime)
+        .start(fixture.engine.clone())
         .unwrap();
     let control = Arc::downgrade(running._observer.as_ref().unwrap());
     assert!(Arc::ptr_eq(
@@ -146,7 +141,7 @@ fn generated_transport_retains_and_drains_healthy_refresh_intent() {
         .observe(&inputs.encode_observation().unwrap())
         .unwrap();
     let (running, transport) = bound
-        .start(fixture.engine.clone(), Box::default(), runtime)
+        .start(fixture.engine.clone())
         .unwrap();
     let service = match &running.live {
         LiveGeneration::Application(_, service) | LiveGeneration::Preview(_, service) => service,
@@ -174,7 +169,7 @@ fn generated_retirement_waits_for_ui_exit_and_transfers_refresh_once() {
         .observe(&inputs.encode_observation().unwrap())
         .unwrap();
     let (mut running, transport) = bound
-        .start(fixture.engine.clone(), Box::default(), runtime)
+        .start(fixture.engine.clone())
         .unwrap();
     let service = match &mut running.live {
         LiveGeneration::Application(_, service) | LiveGeneration::Preview(_, service) => service,
@@ -220,7 +215,7 @@ fn resident_current_check_requires_observation_and_never_refreshes_original_work
         .observe(&inputs.encode_observation().unwrap())
         .unwrap();
     let (running, transport) = bound
-        .start(fixture.engine.clone(), Box::default(), runtime)
+        .start(fixture.engine.clone())
         .unwrap();
     let mut pending = transport.begin_install().unwrap();
     assert!(transport.request_is_current(&pending).is_err());
@@ -247,7 +242,7 @@ fn observed_child_requires_hot_inputs_and_native_callbacks_revoke_during_prepara
         .observe(&inputs.encode_observation().unwrap())
         .unwrap();
     let (running, transport) = bound
-        .start(fixture.engine.clone(), Box::default(), runtime)
+        .start(fixture.engine.clone())
         .unwrap();
     let pending = transport.begin_install().unwrap();
     assert!(matches!(

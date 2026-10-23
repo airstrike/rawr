@@ -132,6 +132,9 @@ pub struct Application {
 pub struct Host {
     pub(crate) slot: rawr::reload::installation::current::Slot<Adapter>,
     timing: Option<timing::Session>,
+    /// Why this runner's State booted instead of continuing the previous
+    /// runner's, shown once the window opens.
+    reseeded: Option<String>,
 }
 
 impl Host {
@@ -142,7 +145,10 @@ impl Host {
     }
 
     /// Continue from the State a previous runner process exported;
-    /// `false` keeps the booted State.
+    /// `false` keeps the booted State. No `bytes` means the previous
+    /// runner's State could not be carried over. The reason is then noted
+    /// when it is a field type of the booted State, such as an imported
+    /// Rust type whose code changed.
     pub(crate) fn seed_state(&mut self, bytes: &[u8]) -> bool {
         let timing = self.timing.clone();
         let mut mutation = self.slot.mutation();
@@ -150,7 +156,19 @@ impl Host {
         let Some(launch) = context.application() else {
             return false;
         };
+        if bytes.is_empty() {
+            self.reseeded = launch
+                .uncarried_state_field(&adapter.state)
+                .map(|ty| format!("State reseeded · App: Rust code changed · {ty} does not carry over"));
+            return false;
+        }
         adapter.seed_state_authority(&launch, bytes, timing.as_ref())
+    }
+
+    /// The note for a State that booted instead of continuing the previous
+    /// runner's.
+    pub(crate) fn take_reseeded(&mut self) -> Option<String> {
+        self.reseeded.take()
     }
 
     /// Bootstrap one reloadable host without exposing candidate authority.
@@ -194,6 +212,7 @@ impl Host {
         Ok(Self {
             slot: bootstrap.install(state),
             timing,
+            reseeded: None,
         })
     }
 

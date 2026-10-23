@@ -213,6 +213,50 @@ impl Reader<'_> {
 }
 
 impl Model {
+    /// The declared type of the first field in `value` whose value cannot be
+    /// carried, such as an imported Rust value. It looks inside script structs
+    /// and enums, and `None` means every field carries.
+    pub(crate) fn uncarried_field(&self, value: &Dynamic) -> Option<String> {
+        self.uncarried(value, 0)
+    }
+
+    fn uncarried(&self, value: &Dynamic, depth: usize) -> Option<String> {
+        if depth > DEPTH {
+            return None;
+        }
+        let value = value.flatten_clone();
+        let (identity, schema, variant, members) = match &value.0 {
+            Union::Struct(nominal, ..) => (nominal.identity(), nominal.schema(), None, nominal.fields()),
+            Union::Enum(nominal, ..) => (
+                nominal.identity(),
+                nominal.schema(),
+                Some(nominal.variant()),
+                nominal.payload(),
+            ),
+            _ => return None,
+        };
+        let definition = self.definition(identity, schema).ok()?;
+        let types = match (&definition.shape, variant) {
+            (Shape::Struct(fields), None) => fields.as_ref(),
+            (Shape::Enum(variants), Some(variant)) => variants.get(variant)?.as_ref(),
+            _ => return None,
+        };
+        members.iter().zip(types).find_map(|(member, ty)| {
+            use crate::resolve::type_ref::{Target, Type};
+            if encode(member).is_some() {
+                return None;
+            }
+            match ty {
+                Type::Path(path) => match &path.target {
+                    Target::Script { .. } => self.uncarried(member, depth + 1),
+                    Target::Host { definition, .. } => Some(definition.path()),
+                    _ => Some(path.name.to_string()),
+                },
+                _ => None,
+            }
+        })
+    }
+
     /// The value `bytes` encode, rebuilt in this model; `None` when they are
     /// malformed or name a script type whose schema changed.
     pub(crate) fn decode_carried(&self, bytes: &[u8]) -> Option<Dynamic> {
