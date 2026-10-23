@@ -3510,8 +3510,19 @@ fn render_adapter(
                     .map_err(|_| request::Error::Encoding)?;
                 render_replay_insert(replay, facade, output)?;
             } else {
+                // A Rust future is made when its task first runs, on
+                // iced's executor, as tokio's `sleep` needs.
+                let lazy = matches!(
+                    substitute(signature.output(), signature, substitutions)?,
+                    convert::Type::Nominal { definition, .. }
+                        if *definition == crate::surface::identity::Definition::future()
+                );
                 output
-                    .write_all(b"    let output = ")
+                    .write_all(if lazy {
+                        b"    let output = __rawr_profile_host::task::lazy(move || ".as_slice()
+                    } else {
+                        b"    let output = ".as_slice()
+                    })
                     .map_err(|_| request::Error::Encoding)?;
                 render_function_path(
                     plan,
@@ -3534,7 +3545,7 @@ fn render_adapter(
                     .map_err(|_| request::Error::Encoding)?;
                 function_argument_list(signature, substitutions, functions, mappers, None, output)?;
                 output
-                    .write_all(b");\n")
+                    .write_all(if lazy { b"));\n".as_slice() } else { b");\n".as_slice() })
                     .map_err(|_| request::Error::Encoding)?;
                 let returned = substitute(signature.output(), signature, substitutions)?;
                 if let Some((sipped, progress)) = sipper_output(returned) {

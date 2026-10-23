@@ -16828,6 +16828,23 @@ impl<'a> Parser<'a> {
             self.next();
             segments.push(self.expect_qualified_name()?);
         }
+        // A path into a `.rs` module, `echo::Event::Connected`, is spelled
+        // through the app crate, as the same path is in an expression.
+        if segments.len() >= 2 {
+            let first_span = segments[0].1;
+            let last_end = segments[segments.len() - 1].1.end();
+            if let Some(spelled) = self
+                .models
+                .qualified_rust(Span::new(first_span.start(), last_end))
+            {
+                let variant = segments.pop().expect("a qualified pattern keeps its variant");
+                segments = spelled[..spelled.len() - 1]
+                    .iter()
+                    .map(|name| (name.clone(), first_span))
+                    .collect();
+                segments.push(variant);
+            }
+        }
         if mutable && segments.len() > 1 {
             return Err(self.unsupported("`mut` before a path pattern"));
         }

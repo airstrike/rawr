@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 5;
-const CLASSIFIER_VERSION: u32 = 9;
+const CLASSIFIER_VERSION: u32 = 10;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -707,14 +707,19 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         &self,
         generics: &model::Generics,
     ) -> Result<Box<[representability::signature::Parameter]>, Failure> {
-        self.declared_parameters(generics)
+        self.declared_parameters(generics, &[])
     }
 
+    /// The generic parameters, but those in `strings`, which take a `String`.
     fn declared_parameters(
         &self,
         generics: &model::Generics,
+        strings: &[u32],
     ) -> Result<Box<[representability::signature::Parameter]>, Failure> {
-        for parameter in generics.parameters() {
+        for parameter in generics
+            .parameters()
+            .filter(|parameter| !strings.contains(&parameter.index()))
+        {
             if matches!(parameter.kind(), model::ParameterKind::Lifetime { .. }) {
                 return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
             }
@@ -730,7 +735,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         parameters
             .try_reserve_exact(generics.parameters().len())
             .map_err(|_| Error::Allocation)?;
-        for parameter in generics.parameters() {
+        for parameter in generics
+            .parameters()
+            .filter(|parameter| !strings.contains(&parameter.index()))
+        {
             let kind = match parameter.kind() {
                 model::ParameterKind::Type { .. } => representability::signature::Kind::Type,
                 model::ParameterKind::Const { .. } => representability::signature::Kind::Constant,
@@ -747,11 +755,65 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         Ok(parameters.into_boxed_slice())
     }
 
+    /// The synthetic parameters of `impl AsRef<str>` or `impl Into<String>`
+    /// arguments. Rawr passes a `String`, which is both.
+    fn string_parameters(&self, generics: &model::Generics) -> Vec<u32> {
+        generics
+            .parameters()
+            .filter(|parameter| parameter.name().starts_with("impl "))
+            .filter(|parameter| {
+                let declared = match parameter.kind() {
+                    model::ParameterKind::Type { bounds, .. } => bounds.iter().collect::<Vec<_>>(),
+                    _ => return false,
+                };
+                let predicated = generics.predicates().filter_map(|predicate| match predicate {
+                    model::Predicate::Bound {
+                        ty: model::Type::Parameter { index, .. },
+                        bound,
+                    } if *index == parameter.index() => Some(bound),
+                    _ => None,
+                });
+                let traits = declared
+                    .into_iter()
+                    .chain(predicated)
+                    .filter_map(|bound| match bound {
+                        model::Bound::Trait {
+                            trait_id,
+                            arguments,
+                            polarity: model::Polarity::Positive,
+                            ..
+                        } => Some((trait_id, arguments)),
+                        _ => None,
+                    })
+                    .filter(|(trait_id, _)| self.definition_name(trait_id) != Some("Sized"))
+                    .collect::<Vec<_>>();
+                !traits.is_empty()
+                    && traits.iter().all(|(trait_id, arguments)| {
+                        let target = arguments.iter().rev().find_map(|argument| match argument {
+                            model::Argument::Type(ty) => Some(ty),
+                            _ => None,
+                        });
+                        match (self.definition_name(trait_id), target) {
+                            (Some("AsRef"), Some(model::Type::Primitive(name))) => &**name == "str",
+                            (Some("Into"), Some(model::Type::Definition { id, .. })) => self
+                                .graph
+                                .definition_index(id)
+                                .and_then(|index| self.graph.definitions().nth(index))
+                                .is_some_and(is_string),
+                            _ => false,
+                        }
+                    })
+            })
+            .map(model::Parameter::index)
+            .collect()
+    }
+
     fn function_parameters(
         &self,
         generics: &model::Generics,
+        strings: &[u32],
     ) -> Result<FunctionParameters, Failure> {
-        let mut parameters = self.declared_parameters(generics)?;
+        let mut parameters = self.declared_parameters(generics, strings)?;
         if generics.predicates().len() == 0 {
             return Ok(FunctionParameters {
                 parameters,
@@ -3170,19 +3232,27 @@ impl<P: api::Phase> Context<'_, P> {
         if !receiver_binder_is_exact(signature) {
             return Err(representability::reject::Kind::HigherRankedBinder.into());
         }
+        let strings = self.string_parameters(generics);
         let FunctionParameters {
             parameters,
             callable: callable_class,
             binders,
             predicates,
-        } = self.function_parameters(generics)?;
+        } = self.function_parameters(generics, &strings)?;
         let mut inputs = Vec::new();
         self.retain_array::<representability::convert::Type>(signature.inputs().len())?;
         inputs
             .try_reserve_exact(signature.inputs().len())
             .map_err(|_| Error::Allocation)?;
         for input in signature.inputs() {
-            inputs.push(self.convert_input(input)?);
+            inputs.push(match input {
+                model::Type::Parameter { index, .. } if strings.contains(index) => {
+                    representability::convert::Type::Builtin(
+                        representability::convert::Builtin::String,
+                    )
+                }
+                input => self.convert_input(input)?,
+            });
         }
         // A free function's Rust future crosses as iced's `Task<T>`.
         let output = match signature.receiver() {

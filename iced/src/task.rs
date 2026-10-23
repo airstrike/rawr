@@ -288,6 +288,18 @@ impl fmt::Debug for Abort {
     }
 }
 
+/// A task that calls a Rust function returning a future when it first
+/// runs, and then awaits the future. The call happens on iced's executor,
+/// so a future that needs its runtime, as tokio's `sleep` does, finds it.
+#[doc(hidden)]
+pub fn lazy<F>(make: impl FnOnce() -> F + Send + 'static) -> iced::Task<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    iced::Task::future(async move { make().await })
+}
+
 /// Project an iced `Task` from a Rust function into the facade's `Task`.
 /// The bridge stamps it with the call's output witness.
 #[doc(hidden)]
