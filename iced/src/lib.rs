@@ -1024,6 +1024,17 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_angles(&mut builder)?;
     declare_scrollable(&mut builder)?;
     declare_table(&mut builder)?;
+    // `font::Family::to_string` and `ContentFit::to_string`: their
+    // `Display`, as a pick list's labels.
+    for owner in ["font::Family", "ContentFit"] {
+        let mut name = signature::Builder::new();
+        name.output(type_ref::Type::builtin(type_ref::Builtin::String));
+        builder.item(item::Definition::method(
+            format!("{owner}::to_string"),
+            receiver::Mode::Shared,
+            name.finish(),
+        )?)?;
+    }
 
     builder.finish()
 }

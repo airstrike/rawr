@@ -1585,3 +1585,50 @@ fn master_text_takes_the_default_style() {
     find(&adapter, "95 min");
     find(&adapter, "inherited");
 }
+
+const DISPLAY_LABELS: &str = r#"
+use iced::font;
+use iced::widget::{column, pick_list, text};
+use iced::{ContentFit, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {
+    Family(font::Family),
+    Fit(ContentFit),
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            pick_list(
+                Some(font::Family::Monospace),
+                [font::Family::Serif, font::Family::Monospace],
+                font::Family::to_string,
+            )
+            .on_select(Message::Family),
+            pick_list(
+                Some(ContentFit::Contain),
+                [ContentFit::Contain, ContentFit::Cover],
+                ContentFit::to_string,
+            )
+            .on_select(Message::Fit),
+            text(ContentFit::ScaleDown.to_string()),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_families_and_fits_label_themselves() {
+    let adapter = boot(DISPLAY_LABELS);
+    find(&adapter, "Scale Down");
+}

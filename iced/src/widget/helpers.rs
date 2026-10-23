@@ -18,6 +18,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_stack(builder);
     bind_values(builder);
     bind_font(builder);
+    bind_displays(builder);
     bind_fields(builder);
     bind_wrappers(builder);
     super::media::bind(builder);
@@ -1186,6 +1187,27 @@ fn bind_font(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(font))
         })
         .expect("the iced facade must retain Font::family");
+}
+
+fn bind_displays(builder: &mut host::runtime::Builder) {
+    fn display<T: std::fmt::Display + Clone + Send + Sync + 'static>(
+        builder: &mut host::runtime::Builder,
+        path: &'static str,
+    ) {
+        builder
+            .bind(path, move |args| {
+                let [value] = args else {
+                    return Err(arity(path, 1, args.len()));
+                };
+                value
+                    .read_lock::<T>()
+                    .map(|value| Dynamic::from(value.to_string()))
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))
+            })
+            .expect("the iced facade must retain every to_string");
+    }
+    display::<iced::font::Family>(builder, "iced::font::Family::to_string");
+    display::<iced::ContentFit>(builder, "iced::ContentFit::to_string");
 }
 
 /// `font.weight` and kin, read as fields.
