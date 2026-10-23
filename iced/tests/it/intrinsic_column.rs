@@ -24,10 +24,8 @@ fn exact_counter_view_lowers_registered_intrinsics() {
 
     assert_eq!(descriptor.state().display_name(), "main::Counter");
     assert_eq!(descriptor.message().display_name(), "main::Message");
-    assert_eq!(
-        descriptor.view().projection().unwrap().target(),
-        "iced::Element"
-    );
+    // `impl Widget<Message>` is the erased Element itself: nothing projects.
+    assert!(descriptor.view().projection().is_none());
 }
 
 #[test]
