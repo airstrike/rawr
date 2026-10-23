@@ -15529,6 +15529,12 @@ impl<'a> Parser<'a> {
             };
             self.place_root = Some(root);
             (place, origin::Fragment::default())
+        } else if let PatternSyntax::Discard { .. } = syntax
+            && let Some(mut discarded) = self.discarded(&value)
+        {
+            // `let _ = v.iter().map(f);` runs no stage, as Rust's.
+            discarded.push_text(";");
+            (String::new(), discarded)
         } else {
             let whole = self.temporary("pattern");
             let mut rendered = origin::Fragment::plain(format!("const {whole} = "));
@@ -16185,7 +16191,9 @@ impl<'a> Parser<'a> {
                 // As in Rust, a block ending in a diverging statement
                 // (`return x;`, `break;`) diverges.
                 let diverges = matches!(self.inference.resolve(&value.ty), Ty::Never);
-                let mut rendered = value.rendered_source();
+                let mut rendered = self
+                    .discarded(&value)
+                    .unwrap_or_else(|| value.rendered_source());
                 rendered.push_text(";");
                 let rendered = self.with_field_entries(pending, rendered);
                 self.write_output(rendered, value.span);

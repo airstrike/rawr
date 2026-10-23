@@ -1,5 +1,6 @@
 //! iced's `image`, `svg` and `qr_code` widgets.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use iced::advanced::widget::{tree, Tree};
@@ -12,6 +13,44 @@ use super::builtin::{
     arity, exact_string, length, pixels, project, runtime_error, take, witness_error, Witnessed,
 };
 use crate::{marker, runtime, widget};
+
+/// Whether scripts in this process may read the files that image and svg
+/// paths name.
+static FILES: AtomicBool = AtomicBool::new(true);
+
+/// Stop scripts in this process from reading files: every image or svg
+/// path is missing, and draws as a missing file does. `?play` calls it,
+/// since its scripts run on a server whose files are not theirs.
+pub fn deny_files() {
+    FILES.store(false, Ordering::Relaxed);
+}
+
+/// `image::Handle::from_path`, unless files are denied.
+fn image_from_path(path: &str) -> iced::widget::image::Handle {
+    if FILES.load(Ordering::Relaxed) {
+        iced::widget::image::Handle::from_path(path)
+    } else {
+        blank()
+    }
+}
+
+/// `svg::Handle::from_path`, unless files are denied: then no bytes,
+/// which draw as a missing file does.
+fn svg_from_path(path: &str) -> iced::widget::svg::Handle {
+    if FILES.load(Ordering::Relaxed) {
+        iced::widget::svg::Handle::from_path(path)
+    } else {
+        iced::widget::svg::Handle::from_memory(Vec::<u8>::new())
+    }
+}
+
+/// A transparent pixel, one handle for the process.
+fn blank() -> iced::widget::image::Handle {
+    static BLANK: std::sync::OnceLock<iced::widget::image::Handle> = std::sync::OnceLock::new();
+    BLANK
+        .get_or_init(|| iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]))
+        .clone()
+}
 
 pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_image(builder);
@@ -53,7 +92,7 @@ where
 
 impl widget::Descriptor for marker::Image {
     fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
-        let mut image = iced::widget::image(self.handle.clone());
+        let mut image = iced::widget::image(drawable(&self.handle));
         if let Some(width) = self.width {
             image = image.width(width);
         }
@@ -80,6 +119,19 @@ impl widget::Descriptor for marker::Image {
 
     fn identity(&self) -> widget::Identity {
         self.identity.clone()
+    }
+}
+
+/// `handle`, or a blank pixel when it names a file that does not exist.
+///
+/// iced's wgpu renderer draws an image it cannot load as nothing, 1 pixel
+/// square. iced's tiny-skia renderer panics instead: it measures the image
+/// first, remembers the failed load, and expects an image when it draws.
+/// A blank pixel draws the same in both.
+fn drawable(handle: &iced::widget::image::Handle) -> iced::widget::image::Handle {
+    match handle {
+        iced::widget::image::Handle::Path(_, path) if !path.is_file() => blank(),
+        _ => handle.clone(),
     }
 }
 
@@ -139,7 +191,7 @@ fn bind_image(builder: &mut host::runtime::Builder) {
                 args.first().ok_or_else(|| arity("image::Handle::from_path", 1, 0))?,
                 "image::Handle::from_path",
             )?;
-            Ok(Dynamic::from(iced::widget::image::Handle::from_path(path)))
+            Ok(Dynamic::from(image_from_path(&path)))
         })
         .expect("the iced facade must retain image::Handle::from_path");
     builder
@@ -148,7 +200,7 @@ fn bind_image(builder: &mut host::runtime::Builder) {
                 return Err(arity("image", 1, args.len()));
             };
             let handle = if handle.is_string() {
-                iced::widget::image::Handle::from_path(exact_string(handle, "image")?)
+                image_from_path(&exact_string(handle, "image")?)
             } else {
                 take::<iced::widget::image::Handle>(handle, "iced::widget::image::Handle")?
             };
@@ -210,7 +262,7 @@ fn bind_svg(builder: &mut host::runtime::Builder) {
                 args.first().ok_or_else(|| arity("svg::Handle::from_path", 1, 0))?,
                 "svg::Handle::from_path",
             )?;
-            Ok(Dynamic::from(iced::widget::svg::Handle::from_path(path)))
+            Ok(Dynamic::from(svg_from_path(&path)))
         })
         .expect("the iced facade must retain svg::Handle::from_path");
     builder
@@ -219,7 +271,7 @@ fn bind_svg(builder: &mut host::runtime::Builder) {
                 return Err(arity("svg", 1, args.len()));
             };
             let handle = if handle.is_string() {
-                iced::widget::svg::Handle::from_path(exact_string(handle, "svg")?)
+                svg_from_path(&exact_string(handle, "svg")?)
             } else {
                 take::<iced::widget::svg::Handle>(handle, "iced::widget::svg::Handle")?
             };

@@ -296,7 +296,8 @@ pub fn run_claimed(
     // Messages drive an iced app; a plain program runs without them.
     let mut output = parsed.run(source, &options.limits)?;
     if !options.messages.is_empty() {
-        output.note = Some(plain::MESSAGES_IGNORED.to_owned());
+        let note = output.note.take().map(|note| format!("{note}\n")).unwrap_or_default();
+        output.note = Some(format!("{note}{}", plain::MESSAGES_IGNORED));
     }
     Ok(Outcome::Text(output))
 }
@@ -304,6 +305,9 @@ pub fn run_claimed(
 /// Check, evaluate, and render one iced snippet to a PNG.
 pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
     validate(options)?;
+    // A snippet reads no file on the server: each image or svg path is
+    // missing.
+    rawr_iced::widget::deny_files();
     let program = wrap(source, options)?;
     let deadline = Instant::now() + options.limits.time;
     let canvas = rawr_iced::snapshot::Canvas {
@@ -435,10 +439,15 @@ fn diagnostic(program: &str) -> Option<rawr::diagnostic::Source> {
 
 /// A report as the user's own source shows it: what [`wrap`] added to a
 /// line (the imports and `#[preview]` on the first) is cut from the quoted
-/// line, its marker and its columns.
+/// line, its marker and its columns. A position on a line the wrapping
+/// added after the source moves to the end of the source's last line.
 fn report(report: &rawr::diagnostic::Report, program: &str, source: &str) -> String {
     let text = rawr::diagnostic::render(report);
     let source = without_tests(source);
+    let own: Vec<&str> = source.split('\n').collect();
+    // The last line with text: a source ending in a newline ends on it.
+    let last = own.iter().rposition(|line| !line.trim().is_empty()).map_or(1, |at| at + 1);
+    let end = own[last - 1].chars().count();
     let added = program
         .split('\n')
         .zip(source.split('\n'))
@@ -447,11 +456,10 @@ fn report(report: &rawr::diagnostic::Report, program: &str, source: &str) -> Str
             added_span(wrapped, own).map(|span| (index + 1, span))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    if added.is_empty() {
-        return text;
-    }
     let mut out = String::with_capacity(text.len());
+    // The quoted line's added span, and whether it was moved to `last`.
     let mut quoted = None;
+    let mut moved = false;
     for line in text.lines() {
         let rewritten = if let Some(location) = line
             .strip_prefix(" --> ")
@@ -460,24 +468,60 @@ fn report(report: &rawr::diagnostic::Report, program: &str, source: &str) -> Str
             .and_then(|rest| rest.strip_prefix(':'))
         {
             quoted = None;
+            moved = false;
             let arrow = &line[..5];
-            format!("{arrow}{SOURCE_NAME}:{}", shift_location(location, &added))
+            let location = shift_location(location, &added, last, end);
+            format!("{arrow}{SOURCE_NAME}:{location}")
         } else if let Some((number, rest)) = quoted_line(line) {
-            quoted = added.get(&number).copied();
-            match quoted {
-                Some(span) => format!("{}{}", &line[..line.len() - rest.len()], cut(rest, span)),
-                None => line.to_owned(),
+            let gutter = &line[..line.len() - rest.len()];
+            moved = number > last;
+            quoted = if moved { None } else { added.get(&number).copied() };
+            if moved {
+                let width = gutter.len() - 3;
+                format!("{last:>width$} | {}", own[last - 1])
+            } else {
+                match quoted {
+                    Some(span) => format!("{gutter}{}", cut(rest, span)),
+                    None => line.to_owned(),
+                }
             }
-        } else if let Some(span) = quoted.take()
-            && let Some(at) = line.find("| ")
+        } else if let Some(at) = line.find('|')
             && line[..at].trim().is_empty()
+            && (moved || quoted.is_some())
         {
-            format!("{}{}", &line[..at + 2], cut(&line[at + 2..], span))
+            let marker = line.get(at + 2..).unwrap_or_default();
+            let rest = if std::mem::take(&mut moved) {
+                format!("{}^", " ".repeat(end))
+            } else {
+                cut(marker, quoted.take().expect("a quoted span"))
+            };
+            format!("{}{rest}", &line[..at + 2])
         } else {
-            line.to_owned()
+            without_positions(line)
         };
         out.push_str(&rewritten);
         out.push('\n');
+    }
+    out
+}
+
+/// `line` without a runtime error's ` (line 2, position 1)`: it counts in
+/// the wrapped program, and the ` --> ` line shows where it is.
+fn without_positions(line: &str) -> String {
+    let mut out = line.to_owned();
+    while let Some(at) = out.find(" (line ") {
+        let rest = &out[at + " (line ".len()..];
+        let digits = |text: &str| text.len() - text.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let line_digits = digits(rest);
+        let Some(after) = rest[line_digits..].strip_prefix(", position ") else {
+            break;
+        };
+        let position_digits = digits(after);
+        if line_digits == 0 || position_digits == 0 || !after[position_digits..].starts_with(')') {
+            break;
+        }
+        let end = out.len() - after.len() + position_digits + 1;
+        out.replace_range(at..end, "");
     }
     out
 }
@@ -510,10 +554,13 @@ fn cut(text: &str, (start, length): (usize, usize)) -> String {
         .collect()
 }
 
-/// `1:310-1:324` with the added columns taken out.
+/// `1:310-1:324` with the added columns taken out, and a line past `last`
+/// moved to its end, column `end + 1`.
 fn shift_location(
     location: &str,
     added: &std::collections::BTreeMap<usize, (usize, usize)>,
+    last: usize,
+    end: usize,
 ) -> String {
     location
         .split('-')
@@ -524,6 +571,9 @@ fn shift_location(
             let (Ok(number), Ok(column)) = (line.parse::<usize>(), column.parse::<usize>()) else {
                 return point.to_owned();
             };
+            if number > last {
+                return format!("{last}:{}", end + 1);
+            }
             let column = match added.get(&number) {
                 Some(&(start, length)) if column > start + length => column - length,
                 Some(&(start, _)) if column > start => start + 1,
@@ -1302,7 +1352,13 @@ fn view() -> impl Widget<()> {
         };
         let options = Options::default();
         // rawr-iced's prelude name, unclaimed here: plain, so `text` is unknown.
-        assert!(super::run_claimed("text(\"x\")", &options, &claims).is_err());
+        let unknown = super::run_claimed("text(\"x\")", &options, &claims).unwrap();
+        let super::Outcome::Text(unknown) = unknown else {
+            panic!("a plain program gives text");
+        };
+        assert_eq!(unknown.status, super::plain::PANIC_STATUS);
+        assert!(unknown.text().contains("Function not found: text"), "{unknown:?}");
+        assert!(!unknown.text().contains("(line "), "{unknown:?}");
         let plain = super::run_claimed("1 + 2", &options, &claims).unwrap();
         assert!(matches!(plain, super::Outcome::Text(ref output) if output.text() == "3\n"));
         // Claimed by the fake prelude, so handed to the renderer, which
@@ -1320,5 +1376,79 @@ fn view() -> impl Widget<()> {
         let png = render(source, &Options::default()).unwrap();
         assert!(is_png(&png.bytes));
         assert!(png.width < 600 && png.height < 600, "{}x{}", png.width, png.height);
+    }
+
+    // Discord feedback: snippets as users posted them, with no `fn main`.
+
+    #[test]
+    fn play_final_iterator_is_not_printed_and_runs_no_stage() {
+        for source in [
+            r#"[0, 1, 2, 3].iter().map(|idx| println!("It's me! {idx}"))"#,
+            r#"[0, 1, 2, 3].into_iter().map(|idx| println!("It's me! {idx}"))"#,
+        ] {
+            let output = text(source);
+            assert_eq!(output.text(), "", "{source}: {output:?}");
+            assert_eq!(output.status, 0);
+            assert_eq!(output.note.as_deref(), Some(super::plain::UNUSED_ITERATOR));
+        }
+    }
+
+    #[test]
+    fn play_final_value_without_debug_is_not_printed() {
+        let output = text("let f = |x: i64| x + 1; f");
+        assert_eq!((output.text().as_str(), output.status, output.note), ("", 0, None));
+    }
+
+    #[test]
+    fn play_endless_loop_runs_to_a_limit() {
+        let source = r#"let mut iteration = 0; loop { iteration += 1; println!("Iteration No{iteration}"); }"#;
+        let output = text(source);
+        assert!(output.limit && output.truncated, "{output:?}");
+        assert!(output.text().starts_with("Iteration No1\nIteration No2\n"));
+        assert!(output.text().ends_with(&format!("\n{}\n", super::plain::TRUNCATED)));
+        assert!(!output.text().contains("Debug"));
+    }
+
+    #[test]
+    fn play_errors_never_show_the_wrapper() {
+        for source in ["let x = 1; x +", "let x = (1 + 2;", "[1, 2].iter().map(|x| x.nope())"] {
+            let error = super::run(source, &Options::default()).unwrap_err();
+            let text = error.to_string();
+            for wrapper in ["__v", "__d", "fn main", "play.rawr"] {
+                assert!(!text.contains(wrapper), "{source}: {text}");
+            }
+            assert!(text.contains(" --> play.rs:1:"), "{source}: {text}");
+            assert!(text.contains(&format!(" 1 | {source}\n")), "{source}: {text}");
+        }
+    }
+
+    #[test]
+    fn play_missing_image_and_svg_render() {
+        let missing = image(r#"image("67.png")"#);
+        assert!(is_png(&missing.bytes));
+        let svg = image(r#"svg("Ivan the Terrible.svg")"#);
+        assert!(is_png(&svg.bytes));
+    }
+
+    #[test]
+    fn play_reads_no_file() {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../site/public/img/counter.png")
+            .canonicalize()
+            .unwrap();
+        assert!(file.is_absolute() && file.is_file());
+        let path = file.display().to_string().replace('\\', "/");
+        let missing = image(r#"image("67.png")"#);
+        for source in [
+            format!("image({path:?})"),
+            format!("image(image::Handle::from_path({path:?}))"),
+        ] {
+            assert_eq!(image(&source).bytes, missing.bytes, "{source} draws blank");
+        }
+        let svg = image(r#"svg("Ivan the Terrible.svg")"#);
+        let favicon = file.parent().unwrap().with_file_name("favicon.svg");
+        assert!(favicon.is_file());
+        let favicon = favicon.display().to_string();
+        assert_eq!(image(&format!("svg({favicon:?})")).bytes, svg.bytes);
     }
 }

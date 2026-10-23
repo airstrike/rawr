@@ -201,18 +201,39 @@ impl Parsed {
         let Self {
             engine,
             sink,
-            program,
+            mut program,
             unit,
             ..
         } = self;
-        let evidence = diagnostic(&program)
-            .ok_or_else(|| PlayError::Compile("the snippet cannot be read".to_owned()))?;
-        let ast = engine
-            .compile_unit(unit, evidence.clone())
-            .map_err(|error| match rawr::diagnostic::Report::from_parse(evidence.clone(), &error) {
-                Ok(report) => PlayError::Compile(crate::report(&report, &program, source)),
-                Err(_) => PlayError::Compile(error.to_string()),
-            })?;
+        let unreadable = || PlayError::Compile("the snippet cannot be read".to_owned());
+        let mut evidence = diagnostic(&program).ok_or_else(unreadable)?;
+        let mut note = None;
+        let ast = match engine.compile_unit(unit, evidence.clone()) {
+            Ok(ast) => ast,
+            Err(error) => {
+                let report = rawr::diagnostic::Report::from_parse(evidence.clone(), &error);
+                let owner = report.as_ref().ok().and_then(|report| unprintable(report, source));
+                let Some(owner) = owner else {
+                    return Err(match report {
+                        Ok(report) => PlayError::Compile(crate::report(&report, &program, source)),
+                        Err(_) => PlayError::Compile(error.to_string()),
+                    });
+                };
+                // The final value has no `Debug`: run it without printing it.
+                note = unused_note(&owner);
+                program = quiet_program(source);
+                evidence = diagnostic(&program).ok_or_else(unreadable)?;
+                let compiled = engine
+                    .parse_unit(&program)
+                    .and_then(|unit| engine.compile_unit(unit, evidence.clone()));
+                compiled.map_err(|error| {
+                    match rawr::diagnostic::Report::from_parse(evidence.clone(), &error) {
+                        Ok(report) => PlayError::Compile(crate::report(&report, &program, source)),
+                        Err(_) => PlayError::Compile(error.to_string()),
+                    }
+                })?
+            }
+        };
         let mut scope = Scope::new();
         let ran = engine
             .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
@@ -243,6 +264,7 @@ impl Parsed {
         let mut output = Arc::try_unwrap(sink)
             .map(|sink| sink.into_inner().unwrap())
             .unwrap_or_else(|sink| sink.lock().unwrap().clone());
+        output.note = note.map(str::to_owned);
         match ran {
             Ok(None) => {}
             Ok(Some(error)) => {
@@ -342,15 +364,57 @@ fn engine(limits: &Limits, deadline: Instant, sink: &Arc<Mutex<Output>>) -> Engi
 /// the snippet, so its lines and columns keep their numbers.
 #[must_use]
 pub fn program(source: &str) -> String {
+    wrapped(source, true)
+}
+
+/// [`program`], with a final value that is evaluated and never printed:
+/// the program for a value whose type has no `Debug`, or never ends.
+fn quiet_program(source: &str) -> String {
+    wrapped(source, false)
+}
+
+fn wrapped(source: &str, show: bool) -> String {
     let source = crate::without_tests(source);
     if has_item(&source) {
         return source;
     }
-    format!(
-        "fn main() {{ let __v = {{ {source}\n}};\n\
-         let __d = format!(\"{{:?}}\", __v); if __d != \"()\" {{ println!(\"{{}}\", __d); }} }}\n"
-    )
+    if show {
+        format!(
+            "fn main() {{ let __v = {{ {source}\n}};\n\
+             let __d = format!(\"{{:?}}\", __v); if __d != \"()\" {{ println!(\"{{}}\", __d); }} }}\n"
+        )
+    } else {
+        // The final value is a statement: an iterator there runs no stage.
+        format!("fn main() {{ {source}\n; }}\n")
+    }
 }
+
+/// The type of a statements-only snippet's final value when [`program`]
+/// cannot print it: the report says it has no `Debug`, at a line after the
+/// snippet's own.
+fn unprintable(report: &rawr::diagnostic::Report, source: &str) -> Option<String> {
+    let lines = crate::without_tests(source).split('\n').count();
+    let after = report.labels().iter().any(|label| {
+        label.kind() == rawr::diagnostic::LabelKind::Primary
+            && label.span().start().line().is_some_and(|line| line > lines)
+    });
+    let owner = report
+        .message()
+        .strip_suffix(" does not provide `Debug`")?
+        .strip_prefix('`')?
+        .strip_suffix('`')?;
+    (report.code() == rawr::diagnostic::code::RESOLVE_CAPABILITY && after).then(|| owner.to_owned())
+}
+
+/// The note on a final value of type `owner` that is not printed, where
+/// rustc would warn.
+fn unused_note(owner: &str) -> Option<&'static str> {
+    owner.starts_with("impl Iterator").then_some(UNUSED_ITERATOR)
+}
+
+/// The note on a final iterator, as rustc's warning on an unused one.
+pub const UNUSED_ITERATOR: &str =
+    "This iterator is never used. Iterators are lazy and do nothing unless consumed.";
 
 /// Whether a top-level item starts a statement, outside strings, chars and
 /// comments: statements end at `;`, and at a `}` closing a block that the
@@ -443,5 +507,6 @@ mod tests {
         assert_eq!(program(items), items);
         let item_later = "let s = \"a;b\";\nfn f() {}";
         assert_eq!(program(item_later), item_later);
+        assert_eq!(super::quiet_program("1 + 2"), "fn main() { 1 + 2\n; }\n");
     }
 }

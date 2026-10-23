@@ -4500,6 +4500,28 @@ fn language_lazy_iterators() {
 }
 
 #[test]
+fn language_discarded_iterators_run_no_stage() {
+    // As in Rust, a discarded iterator evaluates its source and closures
+    // and runs none of its stages.
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let mut made = 0;
+            let mut source = || { made += 1; vec![1, 2] };
+            source().into_iter().map(|x| x * 2);
+            let mut ran = 0;
+            [3, 4].iter().map(|x| { ran += 1; x + 1 });
+            let _ = [3, 4].iter().map(|x| { ran += 1; x + 1 });
+            let total: i64 = [5, 6].iter().map(|x| { ran += 1; x * 1 }).sum();
+            format!("{} {} {}", made, ran, total)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "1 2 11");
+}
+
+#[test]
 fn language_std_reverse() {
     // `std::cmp::Reverse`: Rust's tuple struct ordering its value backwards,
     // as a sort key, alone, in tuples, as a map key and in a derived `Ord`.
