@@ -123,8 +123,8 @@ fn code_block(content: &str) -> Option<String> {
 /// What the bot sends back.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Reply {
-    /// Attach this PNG.
-    Image(Vec<u8>),
+    /// Attach this PNG, with a note to send beside it.
+    Image(Vec<u8>, Option<&'static str>),
     /// Send this text (already fenced and within [`MAX_REPLY`]).
     Text(String),
 }
@@ -146,7 +146,7 @@ pub enum Done {
 #[must_use]
 pub fn reply(success: bool, stdout: Vec<u8>, stderr: &str) -> Reply {
     match outcome(success, stdout, stderr) {
-        Ok(Done::Image(image)) => Reply::Image(image),
+        Ok(Done::Image(image)) => Reply::Image(image, None),
         Ok(Done::Text(output)) => Reply::Text(output_text(&output)),
         Err(text) => Reply::Text(error_text(&text)),
     }
@@ -169,7 +169,55 @@ pub fn outcome(success: bool, stdout: Vec<u8>, stderr: &str) -> Result<Done, Str
     if success || stderr.is_empty() || stderr.contains("memory allocation") {
         return Err("render stopped: out of memory or crashed".to_owned());
     }
-    Err(stderr.to_owned())
+    Err(sanitize(stderr))
+}
+
+/// The note on an image whose snippet loads `image` or `svg` from a path.
+pub const NO_FILES: &str = "?play has no files. Paths given to image and svg do not exist here.";
+
+/// [`NO_FILES`] when `code` loads an image or an svg from a path: it calls
+/// `image("..")`, `svg("..")` or a `from_path`.
+#[must_use]
+pub fn image_note(code: &str) -> Option<&'static str> {
+    let path = |name: &str| {
+        code.match_indices(name).any(|(at, _)| {
+            let before = code[..at].chars().next_back();
+            let after = code[at + name.len()..].trim_start();
+            !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                && after
+                    .strip_prefix('(')
+                    .is_some_and(|rest| name == "from_path" || rest.trim_start().starts_with('"'))
+        })
+    };
+    ["image", "svg", "from_path"].into_iter().any(path).then_some(NO_FILES)
+}
+
+/// `text` without the server's file paths: a crash's `thread 'main'
+/// panicked at /path/file.rs:1:2:` line becomes a plain one, and Rust's
+/// note on backtraces goes.
+#[must_use]
+pub fn sanitize(text: &str) -> String {
+    if !text.contains("panicked at ") {
+        return text.to_owned();
+    }
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("thread '") && line.contains(" panicked at ") {
+            out.push("?play crashed. This is a bug in ?play, not in your code.".to_owned());
+        } else if !line.starts_with("note: run with `RUST_BACKTRACE") && !line.trim().is_empty() {
+            let words: Vec<String> = line
+                .split(' ')
+                .map(|word| match word.strip_prefix('/') {
+                    Some(rest) if rest.contains('/') => {
+                        word.rsplit('/').next().unwrap_or_default().to_owned()
+                    }
+                    _ => word.to_owned(),
+                })
+                .collect();
+            out.push(words.join(" "));
+        }
+    }
+    out.join("\n")
 }
 
 /// At most `max` requests per key in each `window` (fixed windows).
@@ -248,7 +296,9 @@ pub fn output_text(output: &Output) -> String {
     let note = output
         .note
         .as_ref()
-        .map_or_else(String::new, |note| format!("\n-# {note}"));
+        .map_or_else(String::new, |note| {
+            note.lines().map(|line| format!("\n-# {line}")).collect()
+        });
     format!("{OPEN}{body}{CLOSE}{status}{note}")
 }
 
@@ -345,7 +395,7 @@ mod tests {
 
     #[test]
     fn message_reply_decision() {
-        assert_eq!(reply(true, vec![1, 2, 3], ""), Reply::Image(vec![1, 2, 3]));
+        assert_eq!(reply(true, vec![1, 2, 3], ""), Reply::Image(vec![1, 2, 3], None));
         let Reply::Text(text) = reply(false, Vec::new(), "error: ```oops```\n") else {
             panic!("errors reply with text");
         };
@@ -427,5 +477,42 @@ mod tests {
         assert_eq!(list.len(), 3);
         assert!(list.contains(&22));
         assert!(channels("1,general").is_err());
+    }
+
+    #[test]
+    fn image_note_names_paths() {
+        use super::{image_note, NO_FILES};
+        assert_eq!(image_note(r#"image("67.png")"#), Some(NO_FILES));
+        assert_eq!(image_note(r#"svg("Ivan the Terrible.svg")"#), Some(NO_FILES));
+        assert_eq!(image_note(r#"image(image::Handle::from_path(p))"#), Some(NO_FILES));
+        assert_eq!(image_note(r#"column![text("an image"), my_image("x")]"#), None);
+        assert_eq!(image_note(r#"image(handle)"#), None);
+    }
+
+    #[test]
+    fn crash_text_has_no_server_paths() {
+        let stderr = "\nthread 'main' (17) panicked at /usr/local/cargo/git/checkouts/iced-3e930cb38a75fe30/be88873/tiny_skia/src/raster.rs:138:14:\n\
+                      Image should be allocated\n\
+                      note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+        let Reply::Text(text) = reply(false, Vec::new(), stderr) else {
+            panic!("a crash is text");
+        };
+        assert_eq!(
+            text,
+            "```text\n?play crashed. This is a bug in ?play, not in your code.\nImage should be allocated\n```"
+        );
+        let other = super::sanitize("thread 'main' panicked at src/x.rs:1:2:\nopened /srv/app/data.png\n");
+        assert!(!other.contains("/srv"), "{other}");
+        let plain = "error: `/a/b` is not a path\n";
+        assert_eq!(super::sanitize(plain), plain, "only a crash is rewritten");
+    }
+
+    #[test]
+    fn output_note_lines_are_each_small() {
+        let output = crate::Output {
+            note: Some("one\ntwo".into()),
+            ..crate::Output::default()
+        };
+        assert!(output_text(&output).ends_with("\n-# one\n-# two"));
     }
 }

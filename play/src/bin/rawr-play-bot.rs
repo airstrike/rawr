@@ -313,7 +313,13 @@ impl EventHandler for Handler {
         let reply = self.reply(request, msg.guild_id).await;
         let builder = CreateMessage::new().reference_message(&msg);
         let builder = match reply {
-            Reply::Image(image) => builder.add_file(self.attachment(image)),
+            Reply::Image(image, note) => {
+                let builder = builder.add_file(self.attachment(image));
+                match note {
+                    Some(note) => builder.content(format!("-# {note}")),
+                    None => builder,
+                }
+            }
             Reply::Text(text) => builder.content(text),
         };
         match msg.channel_id.send_message(&context.http, builder).await {
@@ -355,8 +361,8 @@ impl EventHandler for Handler {
             return;
         }
         let builder = match self.reply(request, event.guild_id).await {
-            Reply::Image(image) => EditMessage::new()
-                .content("")
+            Reply::Image(image, note) => EditMessage::new()
+                .content(note.map_or_else(String::new, |note| format!("-# {note}")))
                 .remove_all_attachments()
                 .new_attachment(self.attachment(image)),
             Reply::Text(text) => EditMessage::new().content(text).remove_all_attachments(),
@@ -660,7 +666,7 @@ impl Handler {
         };
         self.shared.record(rendered.outcome, rendered.millis, guild);
         match rendered.result {
-            Ok(Done::Image(image)) => Reply::Image(image),
+            Ok(Done::Image(image)) => Reply::Image(image, message::image_note(&request.code)),
             Ok(Done::Text(output)) => Reply::Text(message::output_text(&output)),
             Err(text) => Reply::Text(message::error_text(&text)),
         }
