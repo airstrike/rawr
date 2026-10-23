@@ -95,6 +95,7 @@ fn register_debug() {
     register::<iced::Border>();
     register::<iced::Color>();
     register::<iced::ContentFit>();
+    register::<iced::widget::image::FilterMethod>();
     register::<iced::Event>();
     register::<iced::Font>();
     register::<iced::keyboard::Event>();
@@ -362,6 +363,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         ],
     )?;
     builder.default_value_type::<iced::ContentFit>("ContentFit", &[], OWNED_EQ_DEFAULT_VALUE_CAPABILITIES)?;
+    builder.default_value_type::<iced::widget::image::FilterMethod>(
+        "widget::image::FilterMethod",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
     builder.value_type::<marker::QrData>(
         "widget::qr_code::Data",
         &[],
@@ -2105,6 +2111,18 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
         builders(builder, widget, "opacity", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
     }
     builders(builder, "widget::Image", "scale", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
+    builders(
+        builder,
+        "widget::Image",
+        "filter_method",
+        [type_ref::Type::registered("widget::image::FilterMethod")?],
+    )?;
+    for name in IMAGE_FILTER_METHODS {
+        builder.item(item::Definition::associated_value(
+            format!("widget::image::FilterMethod::{name}"),
+            type_ref::Type::registered("widget::image::FilterMethod")?,
+        )?)?;
+    }
     for name in CONTENT_FITS {
         builder.item(item::Definition::associated_value(
             format!("ContentFit::{name}"),
@@ -2961,6 +2979,9 @@ pub(crate) const KEY_NAMES: [&str; 40] = [
     "Escape", "CapsLock", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
     "Copy", "Cut", "Paste", "Undo", "Redo", "ContextMenu", "PrintScreen",
 ];
+
+/// iced's `image::FilterMethod` variants.
+pub(crate) const IMAGE_FILTER_METHODS: [&str; 2] = ["Linear", "Nearest"];
 
 /// iced's `ContentFit` variants.
 pub(crate) const CONTENT_FITS: [&str; 5] = ["Contain", "Cover", "Fill", "None", "ScaleDown"];

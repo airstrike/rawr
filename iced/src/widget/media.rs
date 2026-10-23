@@ -28,6 +28,16 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             .bind(format!("iced::ContentFit::{name}"), move |_| Ok(Dynamic::from(fit)))
             .expect("the iced facade must retain every ContentFit");
     }
+    for (name, method) in crate::IMAGE_FILTER_METHODS.into_iter().zip([
+        iced::widget::image::FilterMethod::Linear,
+        iced::widget::image::FilterMethod::Nearest,
+    ]) {
+        builder
+            .bind(format!("iced::widget::image::FilterMethod::{name}"), move |_| {
+                Ok(Dynamic::from(method))
+            })
+            .expect("the iced facade must retain every image::FilterMethod");
+    }
 }
 
 fn attest<T>(builder: &mut host::runtime::Builder, path: &'static str)
@@ -58,6 +68,9 @@ impl widget::Descriptor for marker::Image {
         }
         if let Some(scale) = self.scale {
             image = image.scale(scale);
+        }
+        if let Some(method) = self.filter_method {
+            image = image.filter_method(method);
         }
         image.boxed()
     }
@@ -145,10 +158,11 @@ fn bind_image(builder: &mut host::runtime::Builder) {
                 content_fit: None,
                 opacity: None,
                 scale: None,
+                filter_method: None,
             }))
         })
         .expect("the iced facade must retain image");
-    for name in ["width", "height", "content_fit", "opacity", "scale"] {
+    for name in ["width", "height", "content_fit", "opacity", "scale", "filter_method"] {
         let path = format!("iced::widget::Image::{name}");
         builder
             .bind(path.clone(), move |args| {
@@ -161,6 +175,10 @@ fn bind_image(builder: &mut host::runtime::Builder) {
                     "height" => image.height = Some(length(args[1])?),
                     "content_fit" => {
                         image.content_fit = Some(take(args[1], "iced::ContentFit")?);
+                    }
+                    "filter_method" => {
+                        image.filter_method =
+                            Some(take(args[1], "iced::widget::image::FilterMethod")?);
                     }
                     "opacity" => image.opacity = Some(number(args[1], &path)?),
                     _ => image.scale = Some(number(args[1], &path)?),

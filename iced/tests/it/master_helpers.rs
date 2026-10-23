@@ -1043,3 +1043,63 @@ fn master_text_centers_and_takes_an_optional_color() {
     find(&adapter, "centered");
     find(&adapter, "plain");
 }
+
+const FILTER_METHOD: &str = r#"
+use iced::widget::{checkbox, column, image, text};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+
+struct State {
+    filter_method: image::FilterMethod,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self { filter_method: image::FilterMethod::Linear }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Nearest(bool),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Nearest(nearest) => {
+                self.filter_method = if nearest {
+                    image::FilterMethod::Nearest
+                } else {
+                    image::FilterMethod::Linear
+                };
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            text(format!("{:?}", self.filter_method)),
+            image("ferris.png").filter_method(self.filter_method).width(100),
+            checkbox(self.filter_method == image::FilterMethod::Nearest)
+                .label("nearest")
+                .on_toggle(Message::Nearest),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_image_takes_a_filter_method() {
+    let mut adapter = boot(FILTER_METHOD);
+    find(&adapter, "Linear");
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("nearest").unwrap();
+    for message in simulator.into_messages() {
+        adapter.update(message).unwrap();
+    }
+    find(&adapter, "Nearest");
+}

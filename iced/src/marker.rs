@@ -430,6 +430,7 @@ pub(crate) struct Image {
     pub(crate) content_fit: Option<iced::ContentFit>,
     pub(crate) opacity: Option<f32>,
     pub(crate) scale: Option<f32>,
+    pub(crate) filter_method: Option<iced::widget::image::FilterMethod>,
 }
 
 /// iced's `span(text)`: a fragment of rich text, its link a Message-like
