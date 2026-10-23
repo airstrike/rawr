@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [98, 215, 177, 224, 229, 235, 238, 64, 55, 36, 228, 190, 129, 17, 184, 102]
+        [12, 235, 101, 102, 76, 118, 198, 126, 253, 170, 25, 155, 205, 135, 234, 223]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
@@ -810,7 +810,6 @@ fn moved_iced_paths_fail_at_the_exact_source_import() {
     rawr_iced::install(&mut engine).unwrap();
 
     for path in [
-        "iced::Renderer",
         "iced::theme::Token",
         "iced::widget::children::List",
         "iced::widget::layout::Input",

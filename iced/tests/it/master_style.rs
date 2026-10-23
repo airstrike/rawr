@@ -729,3 +729,19 @@ fn master_component_keeps_its_state_and_consumes_its_events() {
     assert_eq!(simulator.into_messages().count(), 0);
     assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
 }
+
+/// iced's re-exports: `iced::widget::Component` and `iced::Renderer`.
+#[test]
+fn master_component_is_named_from_widget() {
+    let source = COMPONENT
+        .replace(
+            "use iced::widget::{Renderer, Widget, button, column, component, sensor, space, text};",
+            "use iced::widget::{Component, Widget, button, column, component, sensor, space, text};\nuse iced::Renderer;",
+        )
+        .replace("struct Component;", "struct Shower;")
+        .replace("component(Component)", "component(Shower)")
+        .replace("component::Component<'a, ()> for Component", "Component<'a, ()> for Shower");
+    assert!(source.contains("for Shower"), "{source}");
+    let adapter = boot(&source);
+    find(&adapter, "show");
+}

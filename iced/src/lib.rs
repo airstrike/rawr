@@ -264,6 +264,10 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         COMPONENT,
     )?;
     builder.project("widget::component::Component", "widget::component::Instance", &["Message"])?;
+    // iced's `pub use component::Component` in `widget`, and its
+    // `iced::Renderer`.
+    builder.alias("widget::Component", "widget::component::Component")?;
+    builder.alias("Renderer", "widget::Renderer")?;
     builder.default_value_type::<iced::widget::tooltip::Position>(
         "widget::tooltip::Position",
         &[],

@@ -35,7 +35,7 @@ const TEXT_ENDPOINT_DISPOSITION: &[u8] =
 const COMPATIBILITY_PROJECTIONS: usize = 29;
 const COMPATIBILITY_ABI: u32 = 16;
 const COMPATIBILITY_DIGEST: [u8; 16] = [
-    98, 215, 177, 224, 229, 235, 238, 64, 55, 36, 228, 190, 129, 17, 184, 102,
+    12, 235, 101, 102, 76, 118, 198, 126, 253, 170, 25, 155, 205, 135, 234, 223,
 ];
 
 /// One exact target-argument substitution sealed into a generated projection table.
