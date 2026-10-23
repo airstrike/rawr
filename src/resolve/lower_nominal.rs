@@ -1845,6 +1845,70 @@ fn body_source(source: &str, body: &item::Body) -> String {
     output
 }
 
+/// Whether `cfg(name = "value")` holds on the target Rawr runs on.
+fn cfg_value(name: &str, value: &str) -> bool {
+    let actual = match name {
+        "target_arch" => {
+            if cfg!(target_arch = "aarch64") {
+                "aarch64"
+            } else if cfg!(target_arch = "x86_64") {
+                "x86_64"
+            } else if cfg!(target_arch = "wasm32") {
+                "wasm32"
+            } else if cfg!(target_arch = "x86") {
+                "x86"
+            } else {
+                "unknown"
+            }
+        }
+        "target_os" => {
+            if cfg!(target_os = "macos") {
+                "macos"
+            } else if cfg!(target_os = "linux") {
+                "linux"
+            } else if cfg!(target_os = "windows") {
+                "windows"
+            } else if cfg!(target_os = "ios") {
+                "ios"
+            } else if cfg!(target_os = "android") {
+                "android"
+            } else {
+                "unknown"
+            }
+        }
+        "target_family" => {
+            if cfg!(target_family = "unix") {
+                "unix"
+            } else if cfg!(target_family = "windows") {
+                "windows"
+            } else if cfg!(target_family = "wasm") {
+                "wasm"
+            } else {
+                "unknown"
+            }
+        }
+        "target_pointer_width" => {
+            if cfg!(target_pointer_width = "64") {
+                "64"
+            } else {
+                "32"
+            }
+        }
+        _ => return false,
+    };
+    actual == value
+}
+
+/// Whether the `cfg` flag `name` is set on the target Rawr runs on.
+fn cfg_flag(name: &str) -> bool {
+    match name {
+        "unix" => cfg!(unix),
+        "windows" => cfg!(windows),
+        "debug_assertions" => true,
+        _ => false,
+    }
+}
+
 fn source_full_span(source: &str) -> Span {
     let mut line = 1_u16;
     let mut column = 0_u16;
@@ -15390,15 +15454,28 @@ impl<'a> Parser<'a> {
     /// A `struct`, `enum`, `impl`, `trait` or `type` item inside a body,
     /// with its attributes: the item parser hoisted it to the file's items,
     /// so its tokens are passed over here. A statement's attributes have no
-    /// effect and are passed over too.
+    /// effect and are passed over too, except a `#[cfg(..)]` that is false,
+    /// which leaves the statement out.
     fn skip_nested_item(&mut self) -> Result<(), Error> {
         let start = self.position();
         let unclosed = |position| Error::UnsupportedNominalSyntax {
             construct: "an item inside a body without its end".into(),
             source: span(start, position),
         };
+        let mut configured = true;
         while self.attribute_ahead() {
             self.next();
+            if matches!(self.peek(), Token::LeftBracket)
+                && matches!(self.peek_second(), Token::Identifier(name) if name.as_str() == "cfg")
+            {
+                self.next();
+                self.next();
+                self.expect(Token::LeftParen, "`(` after `cfg`")?;
+                configured &= self.cfg_predicate()?;
+                self.expect(Token::RightParen, "`)` to close `cfg`")?;
+                self.expect(Token::RightBracket, "`]` to close an attribute")?;
+                continue;
+            }
             let mut depth = 0usize;
             loop {
                 match self.next() {
@@ -15409,6 +15486,9 @@ impl<'a> Parser<'a> {
                     _ => {}
                 }
             }
+        }
+        if !configured && !self.nested_item_ahead() {
+            return self.skip_statement();
         }
         if !self.nested_item_ahead() {
             return Ok(());
@@ -15430,6 +15510,90 @@ impl<'a> Parser<'a> {
                 (Token::EOF, position) => return Err(unclosed(position)),
                 _ => {}
             }
+        }
+    }
+
+    /// One statement a false `#[cfg(..)]` leaves out: through its `;`, or
+    /// through the `}` that ends a block, `if`, `match` or loop.
+    fn skip_statement(&mut self) -> Result<(), Error> {
+        let start = self.position();
+        let braced = match self.peek() {
+            Token::LeftBrace | Token::If | Token::For | Token::While | Token::Loop => true,
+            Token::Reserved(keyword) => matches!(keyword.as_str(), "match" | "unsafe"),
+            _ => false,
+        };
+        let mut depth = 0usize;
+        loop {
+            match self.next() {
+                (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
+                    depth += 1;
+                }
+                (Token::RightParen | Token::RightBracket, _) => depth = depth.saturating_sub(1),
+                (Token::RightBrace, _) => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 && braced && !matches!(self.peek(), Token::Else) {
+                        return Ok(());
+                    }
+                }
+                (Token::SemiColon, _) if depth == 0 => return Ok(()),
+                (Token::EOF, position) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a statement under `#[cfg(..)]` without its end".into(),
+                        source: span(start, position),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The predicate of `cfg(..)` or `cfg!(..)` for the target Rawr runs
+    /// on. No feature is on.
+    fn cfg_predicate(&mut self) -> Result<bool, Error> {
+        let (name, at) = match self.next() {
+            (Token::Identifier(name), position) => (name.to_string(), position),
+            (_, position) => {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "a `cfg` predicate that is not a name".into(),
+                    source: point_span(position),
+                })
+            }
+        };
+        match name.as_str() {
+            "not" | "all" | "any" => {
+                self.expect(Token::LeftParen, "`(` after a `cfg` operator")?;
+                let mut values = Vec::new();
+                while !matches!(self.peek(), Token::RightParen) {
+                    values.push(self.cfg_predicate()?);
+                    if matches!(self.peek(), Token::Comma) {
+                        self.next();
+                    }
+                }
+                self.next();
+                match name.as_str() {
+                    "not" if values.len() == 1 => Ok(!values[0]),
+                    "not" => Err(Error::UnsupportedNominalSyntax {
+                        construct: "`not` in `cfg` takes one predicate".into(),
+                        source: point_span(at),
+                    }),
+                    "all" => Ok(values.iter().all(|value| *value)),
+                    _ => Ok(values.iter().any(|value| *value)),
+                }
+            }
+            _ if matches!(self.peek(), Token::Equals) => {
+                self.next();
+                let value = match self.next() {
+                    (Token::StringConstant(value), _) => value.to_string(),
+                    (_, position) => {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "a `cfg` value that is not a string".into(),
+                            source: point_span(position),
+                        })
+                    }
+                };
+                Ok(cfg_value(&name, &value))
+            }
+            _ => Ok(cfg_flag(&name)),
         }
     }
 
@@ -24688,6 +24852,21 @@ impl<'a> Parser<'a> {
         {
             self.next();
             return self.parse_compile_time_macro(&name, name_span);
+        }
+        if matches!(self.peek(), Token::Bang)
+            && name.as_str() == "cfg"
+            && self.models.import(&name).is_none()
+        {
+            self.next();
+            let open = self.expect(Token::LeftParen, "`(` after `cfg!`")?;
+            let value = self.cfg_predicate()?;
+            let close = self.expect(Token::RightParen, "`)` to close `cfg!`")?;
+            let _ = open;
+            return Ok(self.literal(
+                if value { "true" } else { "false" },
+                Ty::Bool,
+                span(name_span.start(), close),
+            ));
         }
         if matches!(self.peek(), Token::Bang)
             && name.as_str() == "matches"

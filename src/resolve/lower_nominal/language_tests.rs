@@ -7714,3 +7714,27 @@ fn language_eq_and_ne_methods_on_builtins() {
     "#);
     assert_eq!(value, 111);
 }
+
+#[test]
+fn language_cfg_on_statements_and_cfg_macro() {
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let mut n = 0;
+            #[cfg(target_arch = "wasm32")]
+            {
+                n += 100;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            n += 1;
+            #[cfg(all(unix, not(windows)))]
+            n += 10;
+            #[cfg(feature = "anything")]
+            if n > 0 { n += 1000; }
+            if cfg!(target_arch = "wasm32") { n += 10000; }
+            if cfg!(any(unix, windows)) { n += 20; }
+            n
+        }
+        run()
+    "#);
+    assert_eq!(value, 31);
+}
