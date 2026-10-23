@@ -1685,6 +1685,40 @@ fn master_rotations_match_and_turn_images() {
     find(&adapter, "true");
 }
 
+/// iced master's layout example sizes a square by `impl Into<Length> + Copy`.
+#[test]
+fn master_impl_into_length_takes_a_number() {
+    let adapter = boot(
+        r#"
+use iced::widget::{column, container, text};
+use iced::{Length, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+fn square(size: impl Into<Length> + Copy) -> impl Widget<Message> {
+    container(text("square")).width(size).height(size)
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        column![square(50), square(40.5), square(Length::Fill)]
+    }
+}
+"#,
+    );
+    find(&adapter, "square");
+}
+
 /// iced master's gallery example fades with an `Animation<bool>`.
 #[test]
 fn master_bool_animations_go_and_interpolate() {

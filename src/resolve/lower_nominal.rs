@@ -1909,6 +1909,17 @@ fn cfg_flag(name: &str) -> bool {
     }
 }
 
+/// Whether a library function's numeric `parameter` takes a `source`
+/// number: an integer or a float, as Rust's literal settles.
+fn host_number_accepts(parameter: &crate::host::type_ref::Type, source: &Ty) -> bool {
+    use crate::host::type_ref::{Builtin, Shape};
+    match parameter.shape() {
+        Shape::Builtin(Builtin::I64) => matches!(source, Ty::Int(_)),
+        Shape::Builtin(Builtin::F64 | Builtin::F32) => matches!(source, Ty::Float(_)),
+        _ => false,
+    }
+}
+
 fn source_full_span(source: &str) -> Span {
     let mut line = 1_u16;
     let mut column = 0_u16;
@@ -9646,6 +9657,23 @@ impl<'a> Parser<'a> {
             if self.prelude_from(&target, &source) {
                 return true;
             }
+            // `impl Into<Length>` of a number: a library type's own
+            // `from` of it.
+            if let Ty::Host { proof, .. } = &target
+                && let Some(items) = self
+                    .models
+                    .host_items(&format!("{}::from", proof.definition.path()))
+            {
+                let source = source.clone();
+                let converts = items.iter().any(|item| {
+                    item.kind() == crate::host::item::Kind::AssociatedFunction
+                        && matches!(item.signature().parameters(), [parameter]
+                            if host_number_accepts(parameter, &source))
+                });
+                if converts {
+                    return true;
+                }
+            }
             if trait_name != "From" {
                 return self.type_implements_with(&target, "From", &[source]);
             }
@@ -12483,6 +12511,24 @@ impl<'a> Parser<'a> {
             }
             self.host_callable(argument)?;
             self.option_host_callable(argument)?;
+            // A `T: Into<Length>` passed where the library takes a `Length`:
+            // the caller converted it (`convert_into_host`), so it is one.
+            if facade
+                && let ty @ (Ty::Param(_) | Ty::Projection(..)) =
+                    self.inference.resolve(&argument.ty)
+                && let Some(target) = self
+                    .bound_trait_arguments(&ty, "Into")
+                    .first()
+                    .and_then(|arguments| arguments.first())
+                    .map(|target| self.inference.resolve(target))
+                && let Ty::Host { proof, .. } = &target
+                && self
+                    .models
+                    .host_items(&format!("{}::__into", proof.definition.path()))
+                    .is_some()
+            {
+                argument.ty = target;
+            }
             if facade
                 && let Ty::Callable {
                     inputs,
@@ -15694,6 +15740,59 @@ impl<'a> Parser<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// An argument for a parameter of type `T: Into<Length>`, where the
+    /// library converts into `Length`: the converted value, so the function
+    /// passes it on as a `Length`.
+    fn convert_into_host(
+        &mut self,
+        generics: &[item::Generic],
+        parameter: &type_ref::Type,
+        argument: &mut ParsedExpr,
+    ) -> Result<(), Error> {
+        let type_ref::Type::Path(type_ref::Path {
+            name,
+            target: type_ref::Target::Parameter,
+            ..
+        }) = parameter
+        else {
+            return Ok(());
+        };
+        let Some(target) = generics
+            .iter()
+            .find(|generic| generic.name.text == *name)
+            .and_then(|generic| {
+                generic
+                    .trait_arguments
+                    .iter()
+                    .find(|(trait_name, _)| trait_name.as_str() == "Into")
+            })
+            .and_then(|(_, arguments)| arguments.first())
+        else {
+            return Ok(());
+        };
+        let Ty::Host { proof, .. } = self.inference.resolve(&Ty::from_resolved(target)) else {
+            return Ok(());
+        };
+        let path = format!("{}::__into", proof.definition.path());
+        let Some(into) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+            return Ok(());
+        };
+        if matches!(
+            self.inference.resolve(&argument.ty),
+            Ty::Param(_) | Ty::Projection(..) | Ty::Infer(_) | Ty::Unknown
+        ) {
+            return Ok(());
+        }
+        let owner = self.models.item_owner(&path).cloned();
+        let span = argument.span;
+        let ty = argument.ty.clone();
+        let mut converted = self.call_host_function(&into, owner, vec![argument.clone()], span)?;
+        // The call's own type stays the caller's, which the bound checks.
+        converted.ty = ty;
+        *argument = converted;
+        Ok(())
     }
 
     /// `PhantomData<T>`, which holds nothing: the unit type. Its arguments
@@ -29585,6 +29684,7 @@ impl<'a> Parser<'a> {
             {
                 let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
+                self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
             }
             // The boot returns its sealed startup envelope: script code
             // that calls it gets the tuple back.

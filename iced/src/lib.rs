@@ -4528,6 +4528,21 @@ fn declare_canonical_values(builder: &mut facade::Builder) -> Result<(), host::E
         "Length::FillPortion",
         integer_signature("Length", 1)?,
     )?)?;
+    // iced's `impl From<f32> for Length` and its kin: a fixed length, as
+    // `impl Into<Length>` takes a number.
+    for input in PIXELS {
+        let mut from = signature::Builder::new();
+        from.parameter(type_ref::Type::builtin(input));
+        from.output(type_ref::Type::registered("Length")?);
+        builder.item(item::Definition::associated_function("Length::from", from.finish())?)?;
+    }
+    // A `T: Into<Length>` as the `Length` it converts to: the value, a
+    // `Length` or a number, settled when it runs.
+    let mut into = signature::Builder::new();
+    into.type_parameter("T", &[])?;
+    into.parameter(type_ref::Type::parameter("T")?);
+    into.output(type_ref::Type::registered("Length")?);
+    builder.item(item::Definition::associated_function("Length::__into", into.finish())?)?;
     // `Fit.max(600)`: a length with a bound, as iced's `Length::min` and
     // `Length::max`.
     for name in ["min", "max"] {
