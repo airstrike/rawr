@@ -288,10 +288,12 @@ both the image and `vars.PLAY_VERSION`; the Durable Object records the
 version it started, and the cron or `GET /bot/health` restarts a container
 started from any other.
 
-The image is `play/Dockerfile`: a `rust:1-slim-bookworm` stage that
-cross-compiles from the build host's architecture to linux/amd64 (or arm64),
-and a `gcr.io/distroless/cc-debian12:nonroot` runtime with the two stripped
-binaries. `push-image.sh` builds it with Apple's `container` (no Docker
+The image is `play/Dockerfile`. Its Rust stages run on the build host's
+architecture. They cross-compile to linux/amd64 (or arm64) when the host
+differs, and build natively when it matches. The dependencies compile in a
+layer of their own (cargo-chef), so a cached build recompiles only the
+workspace crates. The runtime is `gcr.io/distroless/cc-debian12:nonroot`
+with the two stripped binaries. `push-image.sh` builds it with Apple's `container` (no Docker
 needed), pushes it to `registry.cloudflare.com` and writes its address into
 `wrangler.jsonc`; since `image` is then a registry address, `wrangler
 deploy` never calls Docker.
@@ -314,7 +316,50 @@ npm run release:worker     # Worker and site only, no new image
 ```
 
 It refuses to run while the Worker or site sources have uncommitted changes.
-It retries the deploy when Cloudflare answers 100146.
+`deploy.sh` does the part after the image: the tests, the deploy, the wait
+for the bot and the smoke test. It retries the deploy when Cloudflare
+answers 100146 or a 500.
+
+### Release from GitHub Actions
+
+`.github/workflows/release.yml` releases from GitHub instead of a Mac. Once
+it is switched on, it is the main path. For now it runs only by hand, from
+the Actions tab (Run workflow). After the first good run, uncomment its
+`push` trigger to release every push to main that touches the bot's sources
+or the site.
+
+The job runs on `ubuntu-latest`, which is x86-64, so the image builds
+natively with Docker Buildx. Buildx keeps its layers in the GitHub Actions
+cache, so a later run recompiles only the workspace crates. The job frees
+disk space and adds 24 GB of swap first. It builds with one rustc job,
+because rawr's thin-LTO compile needs most of the runner's 16 GB.
+
+The job pushes the image as `rawr-play:<commit>`. It writes that image and
+`PLAY_VERSION` into its own copy of `wrangler.jsonc` and runs `deploy.sh`.
+It never commits, so the committed `wrangler.jsonc` keeps the last image
+`release.sh` pushed. A local `npm run release:worker` would deploy that older
+image, so release from one place at a time. The job never sees the Discord
+token, which stays among the Worker's secrets.
+
+The repository needs one secret and one variable, under Settings → Secrets
+and variables → Actions:
+
+- The secret `CLOUDFLARE_API_TOKEN` holds a Cloudflare API token.
+- The variable `CLOUDFLARE_ACCOUNT_ID` is `fce80b8101fbb2f85548560babc6c7bc`.
+  It is not a secret.
+
+Make the token in the Cloudflare dashboard from the "Edit Cloudflare Workers"
+template. Scope it to this account and to the `airstrike.fyi` zone. Then add
+the account permission Containers: Edit. That gives these permissions:
+
+- Account: Workers Scripts: Edit (the Worker, its Durable Object and cron).
+- Account: Containers: Edit (the registry push and the container rollout).
+- Account: Account Settings: Read.
+- Zone: Workers Routes: Edit (the two custom domains).
+- Zone: Zone: Read.
+
+The template's other permissions (Workers KV, R2, Tail and Memberships) are
+harmless but unused.
 
 `instance_type` is `lite` (1/16 vCPU, 256 MiB): a render's peak RSS was
 27 MB for a 640x400 app, 41 MB for 100k widgets stopped at the time limit

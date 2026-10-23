@@ -1,0 +1,159 @@
+# Release the ?play bot: build the image, push it to Cloudflare's registry,
+# deploy the Worker and site, then wait for the bot and run the site's snippets.
+# It needs the CLOUDFLARE_API_TOKEN secret and the CLOUDFLARE_ACCOUNT_ID
+# variable (see "Release from GitHub Actions" in play/README.md). The image tag is the commit;
+# the committed wrangler.jsonc is rewritten in the job only, never pushed.
+name: Release ?play
+
+on:
+  workflow_dispatch:
+  # Switch this on after the first good manual run.
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "play/**"
+  #     - "site/**"
+  #     - "src/**"
+  #     - "iced/**"
+  #     - "cli/**"
+  #     - "canonical/**"
+  #     - "codegen/**"
+  #     - "directory/**"
+  #     - "importer/**"
+  #     - "location/**"
+  #     - "macros/**"
+  #     - "toml/**"
+  #     - "watch/**"
+  #     - "build.rs"
+  #     - "build.template"
+  #     - "Cargo.toml"
+  #     - "Cargo.lock"
+  #     - ".dockerignore"
+  #     - ".github/workflows/release.yml"
+
+# One release at a time. A queued one waits rather than cancelling a deploy.
+concurrency:
+  group: release-play
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # The runner starts with about 14 GB free. The Rust build and its cache
+      # need more, so drop toolchains this job never uses.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell
+          docker image prune --all --force >/dev/null
+          df -h /
+
+      # 16 GB of RAM is tight for rawr's thin-LTO compile (a 26 GB local
+      # builder ran out), so the build gets 24 GB of swap on the runner's
+      # second disk as a cushion.
+      - name: Add swap
+        run: |
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile
+          sudo fallocate -l 24G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile >/dev/null
+          sudo swapon /mnt/swapfile
+          free -h
+
+      - name: Name the image
+        id: image
+        run: |
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "set the CLOUDFLARE_ACCOUNT_ID repository variable" >&2; exit 1; }
+          sha="$(git rev-parse --short=12 HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "ref=registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/rawr-play:$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built before logging in, since the registry's credentials last only
+      # 15 minutes and a cold build takes far longer. The cooked dependencies
+      # live in the GitHub Actions cache, so later runs rebuild only the
+      # workspace crates.
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: play/Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            PLAY_VERSION=${{ steps.image.outputs.sha }}
+            CARGO_BUILD_JOBS=1
+          tags: ${{ steps.image.outputs.ref }}
+          cache-from: type=gha,scope=play
+          cache-to: type=gha,scope=play,mode=max
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      # The lock file is not committed yet, so this is `npm install`, not `npm ci`.
+      - name: Install the Worker's dependencies
+        working-directory: play/deploy/cloudflare
+        run: npm install --no-audit --no-fund
+
+      - name: Log in to Cloudflare's registry
+        working-directory: play/deploy/cloudflare
+        run: |
+          credentials="$(npx wrangler containers registries credentials registry.cloudflare.com --push --json)"
+          field() { printf '%s' "$credentials" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s)[process.argv[1]]))" "$1"; }
+          password="$(field password)"
+          echo "::add-mask::$password"
+          printf '%s' "$password" | docker login registry.cloudflare.com -u "$(field username)" --password-stdin
+
+      # Every layer is in the builder already, so this step only pushes.
+      - name: Push the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: play/Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            PLAY_VERSION=${{ steps.image.outputs.sha }}
+            CARGO_BUILD_JOBS=1
+          tags: ${{ steps.image.outputs.ref }}
+          cache-from: type=gha,scope=play
+          push: true
+
+      # wrangler has no flag for the container image, so the job's own copy
+      # of wrangler.jsonc names it. PLAY_VERSION tells the bot to restart.
+      - name: Point wrangler.jsonc at the image
+        working-directory: play/deploy/cloudflare
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+          SHA: ${{ steps.image.outputs.sha }}
+        run: |
+          sed -i -E "s|\"image\": \"[^\"]*\"|\"image\": \"$IMAGE\"|" wrangler.jsonc
+          sed -i -E "s|\"PLAY_VERSION\": \"[^\"]*\"|\"PLAY_VERSION\": \"$SHA\"|" wrangler.jsonc
+          grep -F -e "$IMAGE" wrangler.jsonc
+          grep -F -e "\"PLAY_VERSION\": \"$SHA\"" wrangler.jsonc
+
+      - name: Test, deploy and check the site
+        working-directory: play/deploy/cloudflare
+        run: ./deploy.sh
+
+      - name: Show the logs
+        if: failure()
+        run: |
+          for log in target/logs/*.log; do
+            [ -f "$log" ] || continue
+            echo "::group::$log"
+            cat "$log"
+            echo "::endgroup::"
+          done
