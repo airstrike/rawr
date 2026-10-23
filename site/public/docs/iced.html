@@ -334,7 +334,7 @@ impl App {
 <p>A module of your crate whose first line is not <code>// rawr</code> is native Rust too. <code>rawr run</code> builds it with cargo and rebuilds it when you save it. Native code must not use code from marked files. Rawr reports an error if it does.</p>
 <p>Rawr reads only the items your code uses. A custom iced widget written in Rust is imported like any other item. The crates compile with the pinned nightly on the first run, so that run takes longer.</p>
 <p>A Rawr struct can hold a value of an imported type. It can <code>#[derive(Default)]</code> when the crate implements <code>Default</code> for that type. The field then takes the crate&rsquo;s <code>default()</code>, as in Rust. An imported type provides no other derive to Rawr types yet.</p>
-<p>An edit to a running app whose State holds a value of an imported type doesn&rsquo;t apply yet. The window keeps the last good version and shows the error. Restart <code>rawr run</code> to see the edit.</p>
+<p>An edit to your Rawr code applies to a running app whose State holds a value of an imported type. The value keeps its state across the edit. An edit to the dependency&rsquo;s Rust code starts a new app, and its State starts again from its default. The window then names the imported type that did not carry over.</p>
 
 <h2 id="diagnostics">Diagnostics</h2>
 <p><code>rawr check</code> checks an app without opening a window. Errors look like rustc&rsquo;s. Delete the <code>Decrement</code> arm from the counter and it reports the missing arm:</p>
