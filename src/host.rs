@@ -625,7 +625,9 @@ impl Registry {
 
     pub(crate) fn overloads(&self, path: &str) -> Option<&[item::Definition]> {
         let path = path::Path::parse(path).ok()?;
+        // `canvas::stroke::Style::Solid` through the re-export of `Style`.
         self.item_slice(&path)
+            .or_else(|| self.item_slice(&self.canonical(&path)?))
     }
 
     /// Return the exact facade owner of a registered type.
@@ -994,7 +996,10 @@ impl Registry {
             || self
                 .type_by_path(path)
                 .is_some_and(type_def::Definition::exact_arity)
-            || self.item_slice(path).is_some();
+            || self.item_slice(path).is_some()
+            || self
+                .canonical(path)
+                .is_some_and(|canonical| self.item_slice(&canonical).is_some());
         if !exact_facade_entry {
             return None;
         }

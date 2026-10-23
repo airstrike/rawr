@@ -972,6 +972,47 @@ fn main() -> iced::Result {
     }
 
     #[test]
+    fn render_a_canvas_drawing() {
+        // A view of a canvas program fills its frame: the center pixel is
+        // the circle's color.
+        let source = r#"
+use iced::mouse;
+use iced::widget::canvas::{self, Geometry, Path};
+use iced::{Color, Rectangle, Renderer, Theme, Widget};
+
+struct Dot;
+
+impl<Message> canvas::Program<Message> for Dot {
+    type State = ();
+
+    fn draw(&self, _state: &(), renderer: &Renderer, _theme: &Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        frame.fill(&Path::circle(frame.center(), 40.0), Color::from_rgb8(0xff, 0x2e, 0x93));
+        vec![frame.into_geometry()]
+    }
+}
+
+fn view() -> impl Widget<()> {
+    iced::widget::canvas(Dot).width(100).height(100)
+}
+"#;
+        let options = Options {
+            size: Some((100, 100)),
+            scale: 1,
+            ..Options::default()
+        };
+        let png = render(source, &options).unwrap();
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&png.bytes))
+            .read_info()
+            .unwrap();
+        let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut rgba).unwrap();
+        let channels = info.color_type.samples();
+        let center = ((50 * info.width + 50) as usize) * channels;
+        assert_eq!(&rgba[center..center + 3], &[0xff, 0x2e, 0x93], "the circle is drawn");
+    }
+
+    #[test]
     fn render_runaway_loop_hits_a_limit() {
         let source = "fn view() -> impl Widget<()> {\n    let mut n = 0;\n    loop { n += 1; }\n    text(n)\n}\n";
         let error = render(source, &Options::default()).unwrap_err();

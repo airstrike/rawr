@@ -1622,6 +1622,7 @@ fn resolve_item(
                 supertraits: (supertrait_bounds, supertrait_names),
                 supertrait_arguments,
                 generics: trait_generics,
+                declaration: None,
             })
         }
         crate::item::Parsed::Function(parsed) => item::Kind::Function(resolve_function(
@@ -2060,6 +2061,9 @@ fn resolve_methods(
                     .with_trait_arguments(arguments.clone());
                 if from_trait {
                     definition = definition.as_trait_default();
+                    if let Some(text) = &declared.declaration {
+                        definition = definition.with_body_text(text.clone());
+                    }
                 }
                 if builtin.is_some() {
                     definition = definition.for_builtin(item.owner.clone());
@@ -2634,6 +2638,10 @@ fn declare_facade_traits(
                 None,
             )
             .map_err(|error| LocatedError::primary(program::source::Id::ROOT, error))?;
+            let mut shell = shell;
+            if let item::Kind::Trait(declared) = &mut shell.kind {
+                declared.declaration = Some(declaration.clone());
+            }
             items.push(shell);
         }
     }
@@ -3052,6 +3060,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
         },
         supertrait_arguments: Box::default(),
         generics,
+        declaration: None,
     })
 }
 

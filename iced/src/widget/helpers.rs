@@ -1446,7 +1446,7 @@ fn bind_wrappers(builder: &mut host::runtime::Builder) {
 }
 
 /// A generic widget type's attestation and its projection into Element.
-fn bind_widget_type<T>(builder: &mut host::runtime::Builder, path: &'static str)
+pub(super) fn bind_widget_type<T>(builder: &mut host::runtime::Builder, path: &'static str)
 where
     T: widget::Descriptor + Witnessed + Clone,
 {

@@ -63,6 +63,13 @@ const TASK_PERFORM_PATH: &str = "iced::Task::perform";
 const WIDGET_TEXT_PATH: &str = "iced::widget::text";
 const WIDGET_SPAN_PATH: &str = "iced::widget::span";
 const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
+/// The library calls that run their closure where they are written, which
+/// Rawr calls there itself (`immediate_callback`).
+const IMMEDIATE_CALLBACKS: [&str; 3] = [
+    "iced::widget::canvas::Path::new",
+    "iced::widget::canvas::Frame::with_save",
+    "iced::widget::canvas::Cache::draw",
+];
 /// The iced types whose first parameter is a Link that defaults to `()`.
 const LINK_DEFAULT_TYPES: [&str; 2] = [WIDGET_SPAN_TYPE, "iced::widget::text::Rich"];
 const WIDGET_VOID_PATH: &str = "iced::widget::void";
@@ -169,7 +176,9 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
 
     for definition in &program.methods {
         let body_source = source_span(
-            program.source.text_at(definition.source()),
+            definition
+                .body_text()
+                .unwrap_or_else(|| program.source.text_at(definition.source())),
             definition.body(),
         );
         let mut parser = Parser::for_method(
@@ -595,7 +604,9 @@ fn lower_with_context(
         }
 
         let body_source = source_span(
-            program.source.text_at(definition.source()),
+            definition
+                .body_text()
+                .unwrap_or_else(|| program.source.text_at(definition.source())),
             definition.body(),
         );
         let mut parser = Parser::for_method(
@@ -12848,6 +12859,173 @@ impl<'a> Parser<'a> {
         self.call_host_function(&items, owner, arguments, call)
     }
 
+    /// A library call that runs its closure where it is written, which
+    /// Rawr calls there itself around the library's own steps: iced's
+    /// `Path::new(|b| ..)` builds on a `path::Builder`, `frame.with_save(|f|
+    /// ..)` pushes and pops a transform, and `cache.draw(renderer, size, |f|
+    /// ..)` draws on a new `Frame` unless the cache has that size's geometry.
+    fn immediate_callback(
+        &mut self,
+        path: &str,
+        receiver: Option<&ParsedExpr>,
+        arguments: &mut Vec<ParsedExpr>,
+        call: Span,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        let Some(index) = IMMEDIATE_CALLBACKS.iter().position(|immediate| *immediate == path) else {
+            return Ok(None);
+        };
+        let expected = if index == 2 { 3 } else { 1 };
+        if arguments.len() != expected {
+            return Err(Error::InvalidHostOperation {
+                item: path.into(),
+                reason: format!("expects {expected} argument(s), found {}", arguments.len()).into(),
+                operation: call,
+            });
+        }
+        let mut closure = arguments.pop().expect("the closure argument is present");
+        // A host call through `items` of `path`, with `arguments` parsed.
+        let host = |this: &mut Self, path: &str, arguments: Vec<ParsedExpr>| -> Result<ParsedExpr, Error> {
+            let items = this.models.host_items(path).map(<[_]>::to_vec).ok_or_else(|| {
+                Error::InvalidHostOperation {
+                    item: path.into(),
+                    reason: "the facade lacks this item".into(),
+                    operation: call,
+                }
+            })?;
+            let owner = this.models.item_owner(path).cloned();
+            this.call_host_function(&items, owner, arguments, call)
+        };
+        let method = |this: &mut Self,
+                      receiver: ParsedExpr,
+                      member: &str,
+                      arguments: Vec<ParsedExpr>|
+         -> Result<ParsedExpr, Error> {
+            this.pending_arguments = Some((arguments, call.end()));
+            this.parse_host_method(receiver, member.into(), call)
+        };
+        let local = |this: &mut Self, name: &str, ty: Ty| this.operator_expr(name.into(), ty, call);
+        let mut source = origin::Fragment::plain("{ ");
+        let ty = match index {
+            0 => {
+                let created = host(self, "iced::widget::canvas::path::Builder::new", Vec::new())?;
+                let builder = self.temporary("builder");
+                let builder_ty = created.ty.clone();
+                source.push_text(format!("let {builder} = "));
+                source.push(created.rendered_source());
+                source.push_text("; ");
+                let invoked = self.immediate_call(&mut closure, &builder_ty, &Ty::Unit, &builder)?;
+                source.push(invoked);
+                source.push_text("; ");
+                let operand = local(self, &builder, builder_ty);
+                let built = method(self, operand, "build", Vec::new())?;
+                source.push(built.rendered_source());
+                built.ty
+            }
+            1 => {
+                let receiver = receiver.expect("with_save has its frame").clone();
+                let frame = self.temporary("frame");
+                let frame_ty = match self.inference.resolve(&receiver.ty) {
+                    Ty::Reference { target, .. } => *target,
+                    ty => ty,
+                };
+                source.push_text(format!("let {frame} = "));
+                source.push(receiver.rendered_source());
+                source.push_text("; ");
+                let operand = local(self, &frame, frame_ty.clone());
+                let pushed = method(self, operand.clone(), "push_transform", Vec::new())?;
+                source.push(pushed.rendered_source());
+                let output = self.inference.fresh();
+                let result = self.temporary("saved");
+                let invoked = self.immediate_call(&mut closure, &frame_ty, &output, &frame)?;
+                source.push_text(format!("; let {result} = "));
+                source.push(invoked);
+                source.push_text("; ");
+                let popped = method(self, operand, "pop_transform", Vec::new())?;
+                source.push(popped.rendered_source());
+                source.push_text(format!("; {result}"));
+                output
+            }
+            _ => {
+                let receiver = receiver.expect("draw has its cache").clone();
+                let mut extent = arguments.pop().expect("draw has its size");
+                let renderer = arguments.pop().expect("draw has its renderer");
+                let (cache, size, cached, frame) = (
+                    self.temporary("cache"),
+                    self.temporary("size"),
+                    self.temporary("cached"),
+                    self.temporary("frame"),
+                );
+                let cache_ty = match self.inference.resolve(&receiver.ty) {
+                    Ty::Reference { target, .. } => *target,
+                    ty => ty,
+                };
+                source.push_text(format!("let {cache} = "));
+                source.push(receiver.rendered_source());
+                source.push_text(format!("; let {size} = "));
+                if let Some(size_ty) = self.models.host.type_("iced::Size").cloned() {
+                    let owner = self.models.host.type_owner("iced::Size").cloned();
+                    let expected = Ty::Host {
+                        proof: HostTyProof::new(size_ty, None, owner),
+                        arguments: Box::default(),
+                    };
+                    self.coerce_expr(&expected, &mut extent)?;
+                }
+                let size_ty = extent.ty.clone();
+                source.push(extent.rendered_source());
+                source.push_text("; ");
+                let operand = local(self, &cache, cache_ty);
+                let sized = local(self, &size, size_ty.clone());
+                let read = method(self, operand.clone(), "__rawr_cached", vec![sized])?;
+                let geometry_ty = match self.inference.resolve(&read.ty) {
+                    Ty::Option(inner) => *inner,
+                    ty => ty,
+                };
+                source.push_text(format!("let {cached} = "));
+                source.push(read.rendered_source());
+                source.push_text("; if ");
+                source.push(self.prelude_op(PreludeOp::IsSome, [cached.as_str().into()]));
+                source.push_text(" { ");
+                source.push(self.prelude_op(PreludeOp::Unwrap, [cached.as_str().into()]));
+                source.push_text(" } else { ");
+                let sized = local(self, &size, size_ty);
+                let created = host(self, "iced::widget::canvas::Frame::new", vec![renderer, sized])?;
+                let frame_ty = created.ty.clone();
+                source.push_text(format!("let {frame} = "));
+                source.push(created.rendered_source());
+                source.push_text("; ");
+                let invoked = self.immediate_call(&mut closure, &frame_ty, &Ty::Unit, &frame)?;
+                source.push(invoked);
+                source.push_text("; ");
+                let drawn = local(self, &frame, frame_ty);
+                let finished = method(self, drawn, "into_geometry", Vec::new())?;
+                let stored = method(self, operand, "__rawr_store", vec![finished])?;
+                source.push(stored.rendered_source());
+                source.push_text(" }");
+                geometry_ty
+            }
+        };
+        source.push_text(" }");
+        Ok(Some(self.operator_expr(source.surrounded("(", ")"), ty, call)))
+    }
+
+    /// `closure(&mut value)` of a closure the library runs where it is
+    /// written: its value, as a closure with a `&mut` parameter returns
+    /// `[value, ..parameters]`.
+    fn immediate_call(
+        &mut self,
+        closure: &mut ParsedExpr,
+        input: &Ty,
+        output: &Ty,
+        operand: &str,
+    ) -> Result<origin::Fragment, Error> {
+        let input = Ty::Reference {
+            mutable: true,
+            target: Box::new(input.clone()),
+        };
+        let call = self.callable_call(closure, &[input], output, vec![operand.into()])?;
+        Ok(call.surrounded("(", ")[0]"))
+    }
+
     /// A facade function's call with its parsed `arguments`.
     fn call_host_function(
         &mut self,
@@ -12856,6 +13034,11 @@ impl<'a> Parser<'a> {
         mut arguments: Vec<ParsedExpr>,
         call: Span,
     ) -> Result<ParsedExpr, Error> {
+        if let Some(item) = items.first()
+            && let Some(value) = self.immediate_callback(&item.path(), None, &mut arguments, call)?
+        {
+            return Ok(value);
+        }
         self.supply_display_labeller(items, &mut arguments, call)?;
         self.deref_facade_strings(items, &mut arguments)?;
         let (item, signature) =
@@ -14034,6 +14217,12 @@ impl<'a> Parser<'a> {
         mut arguments: Vec<ParsedExpr>,
         call: Span,
     ) -> Result<ParsedExpr, Error> {
+        if let Some(item) = items.first()
+            && let Some(value) =
+                self.immediate_callback(&item.path(), Some(&receiver), &mut arguments, call)?
+        {
+            return Ok(value);
+        }
         self.deref_facade_strings(items, &mut arguments)?;
         let (item, signature) =
             self.select_host_signature(items, Some(&receiver.ty), &mut arguments, false, call)?;
@@ -24363,9 +24552,25 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|hint| hint.as_ref().and_then(|(_, output)| output.clone()))
             .collect();
+        // A closure the library runs where it is written takes its value as
+        // `&mut`, as iced's `Path::new(|b: &mut Builder| ..)` does.
+        let immediate = matches!(items, [item] if IMMEDIATE_CALLBACKS.contains(&item.path().as_str()));
         self.closure_hints = hints
             .into_iter()
-            .map(|hint| hint.map(|(inputs, _)| inputs))
+            .map(|hint| {
+                hint.map(|(inputs, _)| {
+                    if !immediate {
+                        return inputs;
+                    }
+                    inputs
+                        .iter()
+                        .map(|input| Ty::Reference {
+                            mutable: true,
+                            target: Box::new(input.clone()),
+                        })
+                        .collect()
+                })
+            })
             .collect();
     }
 
@@ -31430,6 +31635,11 @@ impl<'a> Parser<'a> {
         target: &Ty,
         value: &mut ParsedExpr,
     ) -> Result<bool, Error> {
+        // `canvas(self)` with `self: &Clock`: the program's value.
+        let source = &match self.inference.resolve(source) {
+            Ty::Reference { target, .. } if matches!(*target, Ty::Script(..)) => *target,
+            source => source,
+        };
         if let Ty::Script(id, _) = source
             && let Ty::Host { proof, .. } = target
             && let Some((trait_name, path)) = self.implemented_trait(*id, &proof.definition.path())
@@ -31439,6 +31649,9 @@ impl<'a> Parser<'a> {
             let owner = self.models.definition(*id).definition().clone();
             let (_, declared) = self.models.traits[&trait_name].clone();
             let mut arguments = Vec::new();
+            // `impl<Message> canvas::Program<Message> for C`: the impl's
+            // parameters are fresh, shared by its methods.
+            let mut substitution = None::<BTreeMap<ImmutableString, Ty>>;
             for function in declared.functions.iter() {
                 let Some(method) = self
                     .models
@@ -31465,15 +31678,26 @@ impl<'a> Parser<'a> {
                     method.fingerprint().clone(),
                     owner.capabilities().fingerprint(),
                 );
+                let substitution = match &substitution {
+                    Some(substitution) => substitution.clone(),
+                    None => {
+                        let fresh = self.method_substitution(&method, None, call)?;
+                        substitution = Some(fresh.clone());
+                        fresh
+                    }
+                };
                 let inputs = std::iter::once(source.clone())
                     .chain(method.parameters().iter().map(|parameter| {
-                        match self.inference.resolve(&Ty::from_resolved(&parameter.ty)) {
+                        let ty = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
+                        match self.inference.resolve(&ty) {
                             Ty::Reference { target, .. } => *target,
                             ty => ty,
                         }
                     }))
                     .collect();
-                let output = self.inference.resolve(&Ty::from_resolved(method.output()));
+                let output = self
+                    .inference
+                    .resolve(&instantiate(&Ty::from_resolved(method.output()), &substitution));
                 arguments.push(self.symbolic_expr(item, inputs, output, call, Vec::new()));
             }
             for (name, (bounds, _)) in declared.associated.iter().zip(declared.associated_bounds.iter()) {
@@ -31489,7 +31713,10 @@ impl<'a> Parser<'a> {
                 arguments.push(self.operator_expr(default, ty, call));
             }
             let placeholder = self.operator_expr(origin::Fragment::default(), Ty::Unit, call);
-            arguments.insert(0, std::mem::replace(value, placeholder));
+            let mut program = std::mem::replace(value, placeholder);
+            // A reference is its value at runtime.
+            program.ty = source.clone();
+            arguments.insert(0, program);
             let owner = self.models.item_owner(&path).cloned();
             *value = self.call_host_function(&items, owner, arguments, call)?;
             return Ok(true);

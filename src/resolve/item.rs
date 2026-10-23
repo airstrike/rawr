@@ -129,6 +129,9 @@ pub(crate) struct Trait {
     pub supertrait_arguments: Box<[(crate::ImmutableString, Box<[type_ref::Type]>)]>,
     /// The trait's own type parameters: `T` of `trait Convert<T>`.
     pub generics: Box<[Generic]>,
+    /// The declaration of a facade trait (iced's `canvas::Program`), whose
+    /// text its default bodies span.
+    pub declaration: Option<crate::ImmutableString>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -66,6 +66,9 @@ pub(crate) struct Definition {
     /// The owner type of an impl for a builtin type (`i64`, `Vec<T>`);
     /// `owner` is then `type_def::Id::builtin`.
     builtin_owner: Option<type_ref::Type>,
+    /// The text `body` spans when it is not its source's: the declaration
+    /// of a facade trait (iced's `canvas::Program`) whose default body this is.
+    body_text: Option<ImmutableString>,
 }
 
 #[allow(dead_code)]
@@ -131,7 +134,19 @@ impl Definition {
             generics: function.generics.clone(),
             owner_arguments: Box::default(),
             builtin_owner: None,
+            body_text: None,
         }
+    }
+
+    /// This default body read from its facade trait's `declaration`.
+    pub(crate) fn with_body_text(mut self, declaration: ImmutableString) -> Self {
+        self.body_text = Some(declaration);
+        self
+    }
+
+    /// The text `body` spans when it is not its source's.
+    pub(crate) fn body_text(&self) -> Option<&str> {
+        self.body_text.as_deref()
     }
 
     /// This function in an impl for the builtin type `owner`.

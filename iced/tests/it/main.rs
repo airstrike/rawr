@@ -4,6 +4,7 @@
 mod application_contract;
 mod application_entry;
 mod builtin_styles;
+mod canvas;
 mod canonical_values;
 mod components;
 mod control;

@@ -898,7 +898,7 @@ fn master_root_shorthands_read_by_their_full_paths() {
 }
 
 const THEME_VALUE: &str = r#"
-use iced::widget::{row, text};
+use iced::widget::{row, space, text};
 use iced::{Theme, Widget};
 
 pub fn main() -> iced::Result {
@@ -917,19 +917,18 @@ impl State {
     fn update(&mut self, _message: Message) {}
 
     fn view(&self) -> impl Widget<Message> {
-        row![text("left"), text("right")]
+        row![text("left"), space::horizontal(), text("right"), space::vertical()]
     }
 }
 "#;
 
 #[test]
-fn master_application_takes_a_theme_value() {
-    // iced master's `.theme(Theme::Dark)`: a theme is the function of the
-    // State that returns it.
+fn master_application_takes_a_theme_value_and_space_helpers() {
+    // iced master's `.theme(Theme::Dark)` (a theme is the function of the
+    // State that returns it), and `space::horizontal()`.
     let adapter = boot(THEME_VALUE);
     find(&adapter, "right");
 }
-
 
 const STD_TIME: &str = r#"
 use std::time::{Duration, Instant};

@@ -517,6 +517,22 @@ fn resolve_path(
             });
         }
         content_messages(definition, &mut arguments, host);
+        // iced's defaulted `Theme` and `Renderer` parameters after the
+        // declared ones (`canvas::Geometry<Renderer>`) name the facade's own.
+        while arguments
+            .iter()
+            .filter(|argument| matches!(argument, Argument::Type(_)))
+            .count()
+            > definition.parameters().len()
+            && let Some(position) = arguments.iter().rposition(|argument| matches!(argument, Argument::Type(_)))
+            && matches!(
+                &arguments[position],
+                Argument::Type(Type::Path(Path { target: Target::Host { definition, .. }, .. }))
+                    if matches!(definition.path().as_str(), "iced::widget::Renderer" | "iced::Theme")
+            )
+        {
+            arguments.remove(position);
+        }
         let actual = arguments
             .iter()
             .filter(|argument| matches!(argument, Argument::Type(_)))

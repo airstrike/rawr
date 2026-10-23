@@ -2,6 +2,7 @@
 
 mod adapter;
 pub(crate) mod builtin;
+mod canvas;
 pub mod children;
 mod column;
 mod component;
@@ -39,6 +40,7 @@ pub(crate) fn bind(
     rawr: &mut rawr::host::runtime::Builder,
 ) {
     builtin::bind(iced, rawr);
+    canvas::bind(iced);
     component::bind(iced);
     protocol::bind(iced, rawr);
     script::bind(iced);
@@ -50,6 +52,7 @@ pub(crate) fn bind_profile(
     _element: crate::profile::runner::ElementReplacement,
 ) {
     builtin::bind_profile(iced, rawr);
+    canvas::bind(iced);
     component::bind(iced);
     protocol::bind_profile(iced, rawr);
     script::bind(iced);
