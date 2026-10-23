@@ -606,6 +606,22 @@ pub(crate) fn type_supports(
         type_ref::Type::Tuple { members, .. } => members
             .iter()
             .all(|member| type_supports(member, capability, resolved)),
+        // A shared `&T` is `Copy` and `Clone`, and derives the comparison
+        // and `Debug` traits from `T`.
+        type_ref::Type::Reference {
+            mutable: false,
+            target,
+            ..
+        } => match capability {
+            Kind::Clone | Kind::Copy => true,
+            Kind::Debug
+            | Kind::PartialEq
+            | Kind::Eq
+            | Kind::PartialOrd
+            | Kind::Ord
+            | Kind::Hash => type_supports(target, capability, resolved),
+            _ => false,
+        },
         type_ref::Type::Reference { .. } => false,
         // `Option<T>` is `Default`, and otherwise derives from `T`.
         type_ref::Type::Path(_) if let Some(element) = ty.option_element() => {
@@ -644,10 +660,10 @@ pub(crate) fn type_supports(
         type_ref::Type::Path(_) if let Some(element) = ty.box_element() => {
             capability != Kind::Copy && type_supports(element, capability, resolved)
         }
-        // A function type is `Copy` and `Clone`; Rawr does not compare,
-        // print or default function values.
+        // A function type is `Copy`, `Clone`, `Debug` and the marker `Eq`;
+        // Rawr does not compare, hash or default function values.
         type_ref::Type::Path(_) if ty.fn_signature().is_some() => {
-            matches!(capability, Kind::Clone | Kind::Copy)
+            matches!(capability, Kind::Clone | Kind::Copy | Kind::Debug | Kind::Eq)
         }
         // `Result<T, E>` is never `Default`, and otherwise derives from both.
         type_ref::Type::Path(_) if let Some((ok, err)) = ty.result_elements() => {

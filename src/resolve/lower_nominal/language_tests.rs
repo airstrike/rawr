@@ -7593,3 +7593,25 @@ fn language_matches_inside_an_if_inside_some() {
     "#);
     assert_eq!(value, 3012);
 }
+
+#[test]
+fn language_derives_over_function_pointer_fields() {
+    let value = run(r#"
+        fn seven() -> i64 { 7 }
+        #[derive(Debug, Clone, Eq)]
+        struct Example { title: &'static str, view: fn() -> i64 }
+        impl PartialEq for Example {
+            fn eq(&self, other: &Self) -> bool { self.title == other.title }
+        }
+        #[derive(Debug)]
+        struct Layout { example: Example }
+        pub fn run() -> i64 {
+            let layout = Layout { example: Example { title: "a", view: seven } };
+            let text = format!("{:?}", layout);
+            let same = if layout.example == layout.example { 100 } else { 0 };
+            (layout.example.view)() + same + if text.starts_with("Layout") { 1000 } else { 0 }
+        }
+        run()
+    "#);
+    assert_eq!(value, 1107);
+}
