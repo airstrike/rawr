@@ -68,6 +68,44 @@ export async function hmac(key: string, text: string): Promise<string> {
   return [...mac].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** The cookie that lets a browser past Turnstile after one Siteverify. */
+export const PASS_COOKIE = "rawr_play_pass";
+/** How long a pass lasts: 30 days, in seconds. */
+export const PASS_SECONDS = 30 * 24 * 60 * 60;
+
+/**
+ * A pass: its expiry in Unix seconds, a dot, and the HMAC of the expiry.
+ * It names no one; the key is derived from the Turnstile secret.
+ */
+export async function makePass(key: string, nowMs: number): Promise<string> {
+  const expires = Math.floor(nowMs / 1000) + PASS_SECONDS;
+  return `${expires}.${await hmac(key, `pass ${expires}`)}`;
+}
+
+/** True when `value` is a pass made under `key` that has not expired. */
+export async function checkPass(key: string, value: string | null, nowMs: number): Promise<boolean> {
+  if (!value) return false;
+  const match = /^(\d{1,12})\.([0-9a-f]{64})$/.exec(value);
+  if (!match) return false;
+  const expires = Number(match[1]);
+  if (expires * 1000 <= nowMs || expires > Math.floor(nowMs / 1000) + PASS_SECONDS) return false;
+  return same(match[2], await hmac(key, `pass ${expires}`));
+}
+
+/** The named cookie's value in a Cookie header, or null. */
+export function cookie(header: string | null, name: string): string | null {
+  for (const part of (header ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0 && part.slice(0, at).trim() === name) return part.slice(at + 1).trim();
+  }
+  return null;
+}
+
+/** The Set-Cookie header that stores a pass for /play. */
+export function passCookie(value: string): string {
+  return `${PASS_COOKIE}=${value}; Max-Age=${PASS_SECONDS}; Path=/play; HttpOnly; Secure; SameSite=Lax`;
+}
+
 /** Equal strings, compared in time that depends only on the length. */
 export function same(a: string, b: string): boolean {
   if (a.length !== b.length) return false;

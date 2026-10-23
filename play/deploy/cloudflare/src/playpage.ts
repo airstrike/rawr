@@ -18,11 +18,15 @@ export interface Page {
   examples: Example[];
   /** Turnstile site key; no widget without one. */
   sitekey: string | null;
+  /** The browser holds a valid pass: no widget unless the server refuses it. */
+  pass?: boolean;
   /** The share this page was opened from. */
   shared: string | null;
   /** The link preview. */
   og: Og;
 }
+
+const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
 /** JSON safe inside a <script> element. */
 function scriptJson(value: unknown): string {
@@ -31,6 +35,7 @@ function scriptJson(value: unknown): string {
 
 export function render(page: Page): string {
   const { snippet, examples, sitekey, shared } = page;
+  const pass = Boolean(sitekey && page.pass);
   const options = examples
     .map((e, i) => `<option value="${i}">${escape(e.name)}</option>`)
     .join("");
@@ -45,7 +50,7 @@ export function render(page: Page): string {
 <link rel="icon" href="/play.svg" type="image/svg+xml">
 ${ogTags(page.og, escape)}
 <meta name="theme-color" content="#ff2e93">
-${sitekey ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>' : ""}
+${sitekey && !pass ? `<script src="${TURNSTILE_JS}" async defer></script>` : ""}
 <style>
 :root { --bg: #141416; --raised: #1b1b1e; --inset: #101012; --text: #e4e4e8; --dim: #9a9aa3; --line: #2e2e33; --pink: #ff2e93; }
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -141,6 +146,8 @@ ${sitekey ? '<div id="ts"></div>' : ""}
   const examples = JSON.parse($("example-data").textContent);
   const sitekey = ${scriptJson(sitekey)};
   const shared = ${scriptJson(shared)};
+  // A valid pass cookie skips Turnstile; the widget mounts only without one.
+  let pass = ${scriptJson(pass)};
   // The latest snippet stays in this browser, as on the Rust Playground:
   // bare /play restores it; a share shows the share until it is edited.
   const DRAFT = "rawr-play-draft";
@@ -153,14 +160,19 @@ ${sitekey ? '<div id="ts"></div>' : ""}
   let saving = null;
   const edited = () => { clearTimeout(saving); saving = setTimeout(save, 400); };
   let widget = null, token = null, busy = false, url = null;
-  if (sitekey) {
-    const mount = () => {
-      if (!window.turnstile) return setTimeout(mount, 200);
-      widget = turnstile.render("#ts", { sitekey, appearance: "interaction-only", theme: "dark",
-        callback: (t) => { token = t; }, "expired-callback": () => { token = null; }, "refresh-expired": "auto" });
-    };
-    mount();
-  }
+  const mount = () => {
+    if (widget !== null) return;
+    if (!window.turnstile) {
+      if (!document.querySelector("script[data-turnstile]")) {
+        const js = document.createElement("script"); js.src = ${scriptJson(sitekey ? TURNSTILE_JS : "")}; js.async = true; js.dataset.turnstile = "";
+        document.head.append(js);
+      }
+      return setTimeout(mount, 200);
+    }
+    widget = turnstile.render("#ts", { sitekey, appearance: "interaction-only", theme: "dark",
+      callback: (t) => { token = t; }, "expired-callback": () => { token = null; }, "refresh-expired": "auto" });
+  };
+  if (sitekey && !pass) mount();
   const snippet = () => ({
     code: code.value,
     theme: document.querySelector('input[name=theme]:checked').value,
@@ -194,21 +206,29 @@ ${sitekey ? '<div id="ts"></div>' : ""}
     $("msghint").textContent = plain ? "(ignored for programs without iced)" : HINT;
   };
   const human = (token) => new Promise((resolve) => {
-    if (!sitekey) return resolve(null);
+    if (!sitekey || pass) return resolve(null);
     const start = Date.now();
     const wait = () => token() ? resolve(token()) : Date.now() - start > 15000 ? resolve(null) : setTimeout(wait, 150);
     wait();
   });
-  async function run() {
+  async function run(retry = true) {
     if (busy) return;
     save();
     busy = true; $("run").disabled = true; status.textContent = "running…";
     const started = performance.now();
     try {
       const check = await human(() => token);
-      if (sitekey && !check) { show(text("Waiting for the browser check; try again in a moment.", "error")); return; }
+      if (sitekey && !pass && !check) { show(text("Waiting for the browser check; try again in a moment.", "error")); return; }
+      const sentPass = pass;
       const response = await fetch("/play/render", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ ...snippet(), turnstile: check }) });
+      if (response.status === 403 && sentPass && retry) {
+        // The pass expired or was refused: fall back to Turnstile and run again.
+        pass = false; mount(); busy = false;
+        return await run(false);
+      }
+      // The server set a pass cookie: later runs skip the browser check.
+      if (response.headers.get("x-play-pass")) pass = true;
       const ms = Math.round(performance.now() - started);
       const type = response.headers.get("content-type") || "";
       if (response.ok && type.startsWith("application/json")) {
@@ -228,7 +248,10 @@ ${sitekey ? '<div id="ts"></div>' : ""}
       show(text("Could not reach the playground: " + error.message, "error")); status.textContent = "failed";
     } finally {
       busy = false; $("run").disabled = false;
-      if (widget !== null) { token = null; turnstile.reset(widget); }
+      if (widget !== null) {
+        token = null;
+        if (pass) { turnstile.remove(widget); widget = null; } else turnstile.reset(widget);
+      }
     }
   }
   async function share() {
