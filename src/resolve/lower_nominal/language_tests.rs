@@ -7759,3 +7759,35 @@ fn language_phantom_data_is_a_field_of_no_value() {
     assert_eq!(value, 7);
 }
 
+
+#[test]
+fn language_a_map_entry_held_in_a_local_writes_the_map() {
+    let value = run(r#"
+        use std::collections::HashMap;
+        struct Grid { sand: HashMap<i64, u32> }
+        impl Grid {
+            fn add(&mut self, cell: i64, amount: u32) {
+                let grains = self.sand.entry(cell).or_default();
+                *grains += amount;
+            }
+            fn topple(&mut self, cell: i64) -> u32 {
+                let grains = self.sand.entry(cell).or_default();
+                let amount = *grains / 4;
+                *grains %= 4;
+                amount
+            }
+        }
+        pub fn run() -> i64 {
+            let mut grid = Grid { sand: HashMap::new() };
+            grid.add(1, 9);
+            grid.add(1, 2);
+            let moved = grid.topple(1);
+            let mut local: HashMap<i64, i64> = HashMap::new();
+            let slot = local.entry(5).or_insert(10);
+            *slot += 1;
+            (grid.sand[&1] as i64) * 1000 + (moved as i64) * 100 + local[&5]
+        }
+        run()
+    "#);
+    assert_eq!(value, 3211);
+}

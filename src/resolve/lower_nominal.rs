@@ -8130,6 +8130,10 @@ struct Parser<'a> {
     /// The chains bound to immutable locals, by name: each use of the
     /// local runs its chain.
     bound_iterators: BTreeMap<ImmutableString, BoundIterator>,
+    /// The locals holding a map entry's `&mut`, as `let grains =
+    /// map.entry(k).or_default();`, by name: their declaration and the
+    /// tokens of the entry, which each use reads again.
+    entry_aliases: BTreeMap<ImmutableString, (Span, Vec<(Token, Position)>)>,
     /// The second field of `t.0.1`, read with the first.
     pending_member: Option<(ImmutableString, Span)>,
     /// The elements of mutable loops by name: their declaration, their
@@ -8384,6 +8388,7 @@ impl<'a> Parser<'a> {
             lend_self: false,
             mutable_borrow: None,
             bound_iterators: BTreeMap::new(),
+            entry_aliases: BTreeMap::new(),
             pending_member: None,
             aliases: BTreeMap::new(),
             borrows: BTreeMap::new(),
@@ -15520,6 +15525,17 @@ impl<'a> Parser<'a> {
             None
         };
         self.expect(Token::Equals, "'=' after binding name")?;
+        // `let grains = map.entry(k).or_default();`: each use of `grains`
+        // is the entry again, so `*grains += n` changes the map. Rust's
+        // borrow keeps the map and the entry as they are meanwhile.
+        if !mutable
+            && annotation.is_none()
+            && let Some(tokens) = self.entry_alias_tokens()
+        {
+            self.entry_aliases.insert(name.clone(), (name_span, tokens));
+        } else {
+            self.entry_aliases.remove(&name);
+        }
         // `let r = &mut place;` keeps the borrow: `r` is the place.
         let borrowing =
             matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut);
@@ -15793,6 +15809,45 @@ impl<'a> Parser<'a> {
         converted.ty = ty;
         *argument = converted;
         Ok(())
+    }
+
+    /// The tokens up to the `;` ahead when they are a map entry's `&mut`:
+    /// `map.entry(k)` ended by `or_default()`, `or_insert(v)` or
+    /// `or_insert_with(f)`.
+    fn entry_alias_tokens(&mut self) -> Option<Vec<(Token, Position)>> {
+        if self.split_angle.is_some() {
+            return None;
+        }
+        let mut ahead = self.input.clone();
+        let mut tokens = Vec::new();
+        let mut depth = 0usize;
+        loop {
+            let (token, position) = ahead.next()?;
+            match token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.checked_sub(1)?;
+                }
+                Token::SemiColon if depth == 0 => break,
+                Token::EOF => return None,
+                _ => {}
+            }
+            tokens.push((token, position));
+        }
+        let entry = tokens.windows(2).position(|pair| {
+            matches!(&pair[0].0, Token::Period)
+                && matches!(&pair[1].0, Token::Identifier(name) if name.as_str() == "entry")
+        })?;
+        // The last call of the chain is the entry's value.
+        let last = tokens.iter().rposition(|(token, _)| matches!(token, Token::Period))?;
+        let ends = matches!(
+            tokens.get(last + 1),
+            Some((Token::Identifier(name), _))
+                if matches!(name.as_str(), "or_default" | "or_insert" | "or_insert_with")
+        );
+        (ends && last > entry).then_some(tokens)
     }
 
     /// `PhantomData<T>`, which holds nothing: the unit type. Its arguments
@@ -26177,6 +26232,25 @@ impl<'a> Parser<'a> {
         let Some(binding) = self.bindings.get(name.as_str()) else {
             return Err(self.unsupported("unknown variable in nominal expression"));
         };
+        // A local holding a map entry's `&mut`: the entry, read again.
+        if let Some((_, tokens)) = self
+            .entry_aliases
+            .get(&name)
+            .filter(|(declaration, _)| *declaration == binding.declaration)
+            .cloned()
+            && self.closures.is_empty()
+        {
+            let at = name_span.start();
+            self.splice_tokens(
+                tokens
+                    .into_iter()
+                    .map(|(token, _)| (token, at))
+                    .collect(),
+            );
+            let mut value = self.parse_operand()?;
+            value.span = span(name_span.start(), name_span.end());
+            return Ok(value);
+        }
         // A local iterator's chain, run where it is used; a closure using
         // it captures what its binding evaluated.
         if let Some(bound) = self
