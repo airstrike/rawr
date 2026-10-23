@@ -242,6 +242,24 @@ impl Type {
         }
     }
 
+    /// The `Default` value of a builtin State (`u32`, `String`, `()`), as
+    /// `iced::run` boots one: `None` for any other type.
+    pub(crate) fn builtin_default(&self) -> Option<crate::Dynamic> {
+        match &self.0 {
+            Shape::Unit => Some(crate::Dynamic::UNIT),
+            Shape::Builtin(name) => match crate::host::runtime_builtin(name) {
+                "i64" => Some(crate::Dynamic::from_int(0)),
+                #[cfg(not(feature = "no_float"))]
+                "f64" => Some(crate::Dynamic::from_float(0.0)),
+                "bool" => Some(crate::Dynamic::FALSE),
+                "char" => Some(crate::Dynamic::from_char('\0')),
+                "String" => Some(crate::Dynamic::from(crate::ImmutableString::new())),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Return the exact script schema proof, when this is a script nominal type.
     #[must_use]
     pub const fn schema(&self) -> Option<&program::schema::Fingerprint> {

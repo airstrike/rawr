@@ -579,6 +579,10 @@ pub enum Shape {
 pub fn shape(source: &str) -> Shape {
     if source.contains("#[preview") {
         Shape::Preview
+    } else if runs_itself(source) {
+        // `iced::run(|state: &mut u32, message: Message| .., |state: &u32| ..)`
+        // has no `fn view` of its own.
+        Shape::App
     } else if let Some(at) = find_view(source) {
         let parameters = source[at..]
             .split_once('(')
@@ -645,9 +649,9 @@ pub fn wrap(source: &str, options: &Options) -> Result<String, PlayError> {
         // A full app runs as itself: given a `main` when it has none, and
         // each message as a function of its Message type.
         Shape::App => {
-            let at = find_view(source).expect("app shape has a view fn");
             let mut program = source.to_owned();
-            if !source.contains("iced::run(") && !source.contains("iced::application(") {
+            if !runs_itself(source) {
+                let at = find_view(source).expect("app shape has a view fn");
                 let state = app_state(source, at).ok_or_else(|| {
                     PlayError::Options("cannot find the State type that owns `fn view`".into())
                 })?;
@@ -675,6 +679,12 @@ pub fn wrap(source: &str, options: &Options) -> Result<String, PlayError> {
     })
 }
 
+/// Whether `source` starts its own app with `iced::run` or
+/// `iced::application`.
+fn runs_itself(source: &str) -> bool {
+    source.contains("iced::run(") || source.contains("iced::application(")
+}
+
 /// Whether a line of `source` outside every brace starts with `use `.
 fn has_top_level_use(source: &str) -> bool {
     let mut depth = 0usize;
@@ -700,9 +710,12 @@ fn view_signature(view: &str) -> &str {
         .map_or("", |(parameters, _)| parameters)
 }
 
-/// The type of `fn update`'s last parameter: the app's Message.
+/// The type of `fn update`'s last parameter, or of the update closure's
+/// that `iced::run` takes: the app's Message.
 fn message_type(source: &str) -> Option<String> {
-    let (_, rest) = source.split_once("fn update(")?;
+    let Some((_, rest)) = source.split_once("fn update(") else {
+        return closure_message_type(source);
+    };
     let mut depth = 0usize;
     let end = rest.char_indices().find_map(|(at, c)| match c {
         '(' | '<' | '[' => {
@@ -716,7 +729,31 @@ fn message_type(source: &str) -> Option<String> {
         }
         _ => None,
     })?;
-    let parameters = &rest[..end];
+    last_parameter_type(&rest[..end])
+}
+
+/// The last parameter type of the first closure after `iced::run(` or
+/// `iced::application(` that takes `&mut` state: its update's Message.
+fn closure_message_type(source: &str) -> Option<String> {
+    let start = source
+        .find("iced::run(")
+        .or_else(|| source.find("iced::application("))?;
+    let rest = &source[start..];
+    let mut from = 0;
+    while let Some(open) = rest[from..].find('|') {
+        let open = from + open + 1;
+        let close = open + rest[open..].find('|')?;
+        let parameters = &rest[open..close];
+        if parameters.contains("&mut") {
+            return last_parameter_type(parameters);
+        }
+        from = close + 1;
+    }
+    None
+}
+
+/// The type of the last of `parameters`, as `name: Type` or `_: Type`.
+fn last_parameter_type(parameters: &str) -> Option<String> {
     let mut depth = 0usize;
     let last = parameters
         .char_indices()
@@ -905,6 +942,32 @@ impl State {
         };
         let stepped = render(source, &options).unwrap();
         assert!(is_png(&stepped.bytes));
+        assert_ne!(plain.bytes, stepped.bytes, "messages must change the view");
+    }
+
+    #[test]
+    fn render_app_of_iced_run_closures() {
+        // No `fn view`: `iced::run` takes closures, as `rawr run` does.
+        let source = r#"
+use iced::widget::{button, column, text};
+
+#[derive(Debug, Clone)]
+enum Message { Roar }
+
+fn main() -> iced::Result {
+    iced::run(
+        |roars: &mut u32, _: Message| *roars += 1,
+        |roars: &u32| column![text(roars.to_string()), button("roar").on_press(Message::Roar)],
+    )
+}
+"#;
+        assert_eq!(shape(source), Shape::App);
+        let plain = render(source, &Options::default()).unwrap();
+        let options = Options {
+            messages: vec!["Message::Roar".into()],
+            ..Options::default()
+        };
+        let stepped = render(source, &options).unwrap();
         assert_ne!(plain.bytes, stepped.bytes, "messages must change the view");
     }
 
