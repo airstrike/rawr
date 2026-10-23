@@ -7460,3 +7460,22 @@ fn language_block_like_statement_as_a_method_receiver() {
     );
     assert_eq!(value, "Basic Pro 3 \"a\"");
 }
+
+#[test]
+fn language_boxed_closure_field_as_a_function_value() {
+    let value = run(r#"
+        struct Input { on_change: Box<dyn Fn(Option<i64>) -> i64> }
+        impl Input {
+            fn parse(&self, text: &str) -> Option<i64> {
+                text.parse().ok().map(Some).map(self.on_change.as_ref())
+            }
+        }
+        pub fn run() -> i64 {
+            let input = Input { on_change: Box::new(|value: Option<i64>| value.unwrap_or(0) * 2) };
+            let f: &dyn Fn(Option<i64>) -> i64 = input.on_change.as_ref();
+            input.parse("21").unwrap() + f(Some(100))
+        }
+        run()
+    "#);
+    assert_eq!(value, 242);
+}

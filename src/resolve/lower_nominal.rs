@@ -22715,6 +22715,24 @@ impl<'a> Parser<'a> {
             };
             // `Box<T>` auto-derefs for method calls and fields, as in Rust.
             if let Some((unboxed, boxed)) = self.unbox(&value.ty) {
+                // `boxed.as_ref()` is a reference to the boxed value, as
+                // `self.on_change.as_ref()` lends a boxed closure.
+                if matches!(member.as_str(), "as_ref" | "as_mut")
+                    && matches!(self.peek(), Token::Unit)
+                {
+                    let end = self.next().1;
+                    let target = match unboxed {
+                        Ty::Reference { target, .. } => *target,
+                        unboxed => unboxed,
+                    };
+                    value.ty = Ty::Reference {
+                        mutable: member.as_str() == "as_mut",
+                        target: Box::new(target),
+                    };
+                    value.span = span(value.span.start(), end);
+                    value.lvalue = None;
+                    continue;
+                }
                 if member.as_str() == "clone" {
                     rebox = Some(boxed);
                 }
@@ -31790,6 +31808,18 @@ impl<'a> Parser<'a> {
         {
             self.option_host_callable(value)?;
             source = self.inference.resolve(&value.ty);
+        }
+        // `&F` where `F: Fn` is itself `Fn`: a borrowed closure passed as a
+        // function, as `.map(self.on_change.as_ref())`.
+        if matches!(target, Ty::Fn { .. })
+            && let Ty::Reference { target: function, .. } = &source
+            && matches!(
+                self.inference.resolve(function),
+                Ty::Fn { .. } | Ty::FnItem { .. }
+            )
+        {
+            value.ty = self.inference.resolve(function);
+            source = value.ty.clone();
         }
         // A crate type where a facade type is expected, through the crate's
         // `impl From<T> for` it: a facade's `impl Into<Color>` parameter.
