@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 5;
-const CLASSIFIER_VERSION: u32 = 7;
+const CLASSIFIER_VERSION: u32 = 8;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3161,7 +3161,7 @@ impl<P: api::Phase> Context<'_, P> {
         if signature.abi() != "\"Rust\"" {
             return Err(representability::reject::Kind::ForeignAbi.into());
         }
-        if !receiver_binder_is_exact(signature) {
+        if !receiver_binder_is_exact(signature) && !late_binders_lend_strings(signature) {
             return Err(representability::reject::Kind::HigherRankedBinder.into());
         }
         let FunctionParameters {
@@ -3178,10 +3178,16 @@ impl<P: api::Phase> Context<'_, P> {
         for input in signature.inputs() {
             inputs.push(self.convert_input(input)?);
         }
+        let output = match self.convert(signature.output()) {
+            Ok(output) => output,
+            // An output Rawr cannot hold whose type implements `Display`,
+            // as `DelayedFormat<StrftimeItems<'a>>`, is its text.
+            Err(error) => self.display_output(signature.output()).ok_or(error)?,
+        };
         let signature_plan = representability::signature::Signature::new(
             parameters,
             inputs.into_boxed_slice(),
-            self.convert(signature.output())?,
+            output,
         );
         let receiver = match signature.receiver() {
             model::Receiver::None => None,
@@ -3311,7 +3317,24 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
+    /// `Text` for an output of a crate type that implements `Display`.
+    fn display_output(&self, ty: &model::Type) -> Option<representability::convert::Type> {
+        let model::Type::Definition { id, .. } = ty else {
+            return None;
+        };
+        let index = self.graph.definition_index(id)?;
+        self.implements_for_any(index, "Display").then_some(
+            representability::convert::Type::Builtin(representability::convert::Builtin::Text),
+        )
+    }
+
     fn convert_input(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        // `&str`: Rawr's string, lent to the call.
+        if is_str_reference(ty) {
+            return Ok(representability::convert::Type::Builtin(
+                representability::convert::Builtin::Str,
+            ));
+        }
         let model::Type::FunctionPointer(signature) = ty else {
             return self.convert(ty);
         };
@@ -3401,6 +3424,32 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
         | model::Receiver::Reference { .. }
         | model::Receiver::Explicit { .. } => binders.next().is_none(),
     }
+}
+
+/// `&str` or `&'a str`.
+fn is_str_reference(ty: &model::Type) -> bool {
+    matches!(ty, model::Type::Reference { mutability: model::Mutability::Shared, ty, .. }
+        if matches!(&**ty, model::Type::Primitive(name) if &**name == "str"))
+}
+
+/// A method whose own lifetimes only lend its `&str` inputs, as chrono's
+/// `format<'a>(&self, fmt: &'a str)`: each input that borrows is a `&str`,
+/// and the output does not borrow, or is a `Display` value Rawr keeps as
+/// its text.
+fn late_binders_lend_strings(signature: &model::Signature) -> bool {
+    let receiver_binders = usize::from(matches!(
+        signature.receiver(),
+        model::Receiver::Reference {
+            lifetime: model::Lifetime::Late { .. },
+            ..
+        }
+    ));
+    signature.binders().len() > receiver_binders
+        && signature.inputs().all(|input| match input {
+            model::Type::Reference { .. } => is_str_reference(input),
+            _ => true,
+        })
+        && !matches!(signature.output(), model::Type::Reference { .. })
 }
 
 fn exact_definition(ty: &model::Type, id: &api::identity::Definition) -> bool {

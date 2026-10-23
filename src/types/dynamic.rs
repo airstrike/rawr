@@ -582,6 +582,12 @@ impl fmt::Display for Dynamic {
                     };
                 }
 
+                // An imported value its type prints with Rust's `Display`.
+                #[cfg(not(feature = "no_std"))]
+                if let Some(text) = crate::host::display::text(_value_any) {
+                    return f.write_str(&text);
+                }
+
                 f.write_str((***v).type_name())
             }
 

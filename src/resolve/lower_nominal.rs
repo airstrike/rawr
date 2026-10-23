@@ -2984,6 +2984,8 @@ enum PreludeOp {
     /// `RefCell::new(value)`, a borrow of a cell (`1` mutable), a cell's or
     /// a borrow's value, a borrow's store, a borrow's release, and
     /// `into_inner`, `replace` and `clone` (`cell.rs`).
+    /// An imported value's Rust `Display` text, kept by the bridge.
+    DisplayText,
     CellNew,
     CellBorrow,
     CellGet,
@@ -3095,6 +3097,7 @@ impl PreludeOp {
             Self::MapFrom => "map.from",
             Self::SetFrom => "set.from",
             Self::ReverseWrap => "reverse.new",
+            Self::DisplayText => "format.display",
             Self::CellNew => "cell.new",
             Self::CellBorrow => "cell.borrow",
             Self::CellGet => "cell.get",
@@ -3165,6 +3168,7 @@ impl PreludeOp {
             | Self::TypeIndex
             | Self::Discriminant
             | Self::ReverseWrap
+            | Self::DisplayText
             | Self::CellNew
             | Self::CellGet
             | Self::CellRelease
@@ -3521,6 +3525,7 @@ impl PreludeOp {
                 });
             }
             Self::ReverseWrap => return Ok(Dynamic::from(std::cmp::Reverse(args[0].take()))),
+            Self::DisplayText => return Ok(args[0].to_string().into()),
             Self::CellNew
             | Self::CellBorrow
             | Self::CellGet
@@ -9867,6 +9872,17 @@ impl<'a> Parser<'a> {
         if let Some(text) = self.display_text(ty, value.clone()) {
             return Some(text);
         }
+        // An imported value: its Rust `Display`, which `cargo check` holds
+        // the type to.
+        let target = match ty {
+            Ty::Reference { target, .. } => self.inference.resolve(target),
+            ty => ty.clone(),
+        };
+        if let Ty::Host { proof, .. } = &target
+            && proof.definition.identity().imported().is_some()
+        {
+            return Some(self.prelude_op(PreludeOp::DisplayText, [value]));
+        }
         match ty {
             Ty::Int(kind @ (Int::U64 | Int::Usize)) => Some(self.prelude_op(
                 PreludeOp::FormatBits,
@@ -14802,6 +14818,24 @@ impl<'a> Parser<'a> {
         }
 
         let resolved = self.inference.resolve(&receiver.ty);
+        // `value.to_string()` of an imported type: Rust's blanket
+        // `ToString` through its `Display`, which `cargo check` holds the
+        // type to.
+        #[cfg(feature = "rust-import")]
+        if member.as_str() == "to_string"
+            && self.pending_arguments.is_none()
+            && matches!(self.peek(), Token::Unit)
+            && let Ty::Host { proof, .. } = match &resolved {
+                Ty::Reference { target, .. } => self.inference.resolve(target),
+                ty => ty.clone(),
+            }
+            && proof.definition.identity().imported().is_some()
+            && self.imported_member_owner(&resolved, &member).is_none()
+        {
+            let end = self.next().1;
+            let source = self.prelude_op(PreludeOp::DisplayText, [receiver.rendered_source()]);
+            return Ok(self.operator_expr(source, Ty::String, span(receiver.span.start(), end)));
+        }
         #[cfg(feature = "rust-import")]
         let alias = resolved
             .host_alias()
@@ -15296,6 +15330,11 @@ impl<'a> Parser<'a> {
     ) -> Option<Error> {
         let (identity, owner, alias) = ty.imported_alias_context()?;
         if alias.is_some() {
+            return None;
+        }
+        // `to_string()` is Rust's blanket `ToString`, through `Display`
+        // (`parse_host_method`).
+        if method && member == "to_string" && self.imported_member_owner(ty, member).is_none() {
             return None;
         }
         // Every alias names the same Rust type: a method any alias has is

@@ -1785,7 +1785,7 @@ impl Types {
                 Builtin::F64 => host::type_ref::Builtin::F64,
                 Builtin::I64 => host::type_ref::Builtin::I64,
                 Builtin::InclusiveRange => host::type_ref::Builtin::InclusiveRange,
-                Builtin::String => host::type_ref::Builtin::String,
+                Builtin::String | Builtin::Str | Builtin::Text => host::type_ref::Builtin::String,
                 Builtin::I8 => host::type_ref::Builtin::I8,
                 Builtin::I16 => host::type_ref::Builtin::I16,
                 Builtin::I32 => host::type_ref::Builtin::I32,

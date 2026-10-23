@@ -2018,7 +2018,7 @@ fn ty(
         Source::Builtin(Builtin::F64) => Type::F64,
         Source::Builtin(Builtin::I64) => Type::I64,
         Source::Builtin(Builtin::InclusiveRange) => Type::InclusiveRange,
-        Source::Builtin(Builtin::String) => Type::String,
+        Source::Builtin(Builtin::String | Builtin::Str | Builtin::Text) => Type::String,
         Source::Builtin(builtin) => Type::Primitive(builtin.rust_name().unwrap_or_default().into()),
         Source::Nominal {
             definition,
