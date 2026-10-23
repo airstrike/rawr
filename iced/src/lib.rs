@@ -1089,8 +1089,8 @@ pub fn runtime_facades() -> Result<[host::runtime::Facade; 2], host::Error> {
     Ok([iced_builder.finish(), rawr_builder.finish()])
 }
 
-/// Writes `relative` in the Cargo crate at `root`, marked `// rawr`, and
-/// the crate's `Cargo.toml` when it has none.
+/// Writes `relative` in the Cargo crate at `root`, marked `// rawr` unless
+/// `source` already is, and the crate's `Cargo.toml` when it has none.
 #[cfg(test)]
 pub(crate) fn write_marked(root: &std::path::Path, relative: &str, source: impl AsRef<str>) {
     let manifest = root.join("Cargo.toml");
@@ -1103,7 +1103,12 @@ pub(crate) fn write_marked(root: &std::path::Path, relative: &str, source: impl 
     }
     let path = root.join(relative);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, format!("// rawr\n{}", source.as_ref())).unwrap();
+    let source = source.as_ref();
+    if source.starts_with("// rawr\n") {
+        std::fs::write(path, source).unwrap();
+    } else {
+        std::fs::write(path, format!("// rawr\n{source}")).unwrap();
+    }
 }
 
 #[cfg(test)]

@@ -168,7 +168,7 @@ mod tests {
         ));
         fs::create_dir(&root).unwrap();
         let root = fs::canonicalize(root).unwrap();
-        let path = root.join("main.rawr");
+        let path = root.join("main.rs");
         fs::write(&path, b"before").unwrap();
         let limits = crate::cargo::Limits::standard();
         let path = path.to_str().unwrap();
@@ -189,16 +189,16 @@ mod tests {
             .freshness(&GraphBudget::new(), &crate::cargo::Limits::standard())
             .unwrap();
         freshness.revalidate(&GraphBudget::new()).unwrap();
-        fs::write(root.join("main.rawr"), b"after!").unwrap();
+        fs::write(root.join("main.rs"), b"after!").unwrap();
         assert!(matches!(
             freshness.revalidate(&GraphBudget::new()),
             Err(Error::Corrupt { .. })
         ));
-        fs::remove_file(root.join("main.rawr")).unwrap();
-        fs::write(root.join("other.rawr"), b"before").unwrap();
+        fs::remove_file(root.join("main.rs")).unwrap();
+        fs::write(root.join("other.rs"), b"before").unwrap();
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(root.join("other.rawr"), root.join("main.rawr")).unwrap();
+            std::os::unix::fs::symlink(root.join("other.rs"), root.join("main.rs")).unwrap();
             assert!(matches!(
                 freshness.revalidate(&GraphBudget::new()),
                 Err(Error::Shape(_))

@@ -1281,7 +1281,7 @@ fn explicit_exclusion_is_positioned_and_does_not_import_target() {
         Policy::excluding(
             key.clone(),
             "not part of the contract",
-            api::model::Span::new("rawr.toml".into(), 3, 9, 2, 1, 2, 7)
+            api::model::Span::new("Cargo.toml".into(), 3, 9, 2, 1, 2, 7)
         )
         .cache_identity(&budget)
         .unwrap()
@@ -1301,7 +1301,7 @@ fn explicit_exclusion_is_positioned_and_does_not_import_target() {
     let changed_policy = Policy::excluding(
         key,
         "excluded for a different Rawr policy reason",
-        api::model::Span::new("rawr.toml".into(), 3, 9, 2, 1, 2, 7),
+        api::model::Span::new("Cargo.toml".into(), 3, 9, 2, 1, 2, 7),
     );
     assert_ne!(
         policy_identity,
@@ -3528,7 +3528,7 @@ fn span_value() -> Value {
 }
 
 fn test_span() -> model::Span {
-    model::Span::new("rawr.toml".into(), 4, 12, 2, 0, 2, 8)
+    model::Span::new("Cargo.toml".into(), 4, 12, 2, 0, 2, 8)
 }
 
 fn assert_code<T>(result: Result<T>, expected: &'static str) {

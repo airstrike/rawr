@@ -43,7 +43,7 @@ fn consuming_builder_generates_one_ordered_single_invocation_replay() {
         }
     ));
     let origin = |start| {
-        Origin::checked("application.rawr", start, start + 1, &limits)
+        Origin::checked("application.rs", start, start + 1, &limits)
             .expect("the builder origin is bounded")
     };
     let plan = Plan::new(

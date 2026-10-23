@@ -6959,7 +6959,7 @@ mod authority_boundary_tests {
         let manifest = fs::canonicalize(manifest).expect("combined authority canonicalizes");
 
         let exercise = |limits: &super::Limits| {
-            let span = ManifestSpan::new("rawr.toml", 1, 2, 1, 1, 1, 2, limits)?;
+            let span = ManifestSpan::new("Cargo.toml", 1, 2, 1, 1, 1, 2, limits)?;
             let policy = Policy::manifest(limits)
                 .exclusion("catalog", ["api", "Thing"], "not public", span)?
                 .seal();

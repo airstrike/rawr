@@ -3,12 +3,11 @@
   "current": [
     { "scenario": "clean-cold", "mutation": "base fixture after an empty project cache" },
     { "scenario": "identical-warm", "mutation": "base fixture after the matching cold owner" },
-    { "scenario": "rawr-occurrence", "mutation": "mutations/rawr-occurrence.rawr" },
+    { "scenario": "rawr-occurrence", "mutation": "mutations/rawr-occurrence.rs" },
     { "scenario": "rust-body-equal-api", "mutation": "mutations/rust-body.rs" },
     { "scenario": "rust-public-api", "mutation": "mutations/rust-public-api.rs" },
     { "scenario": "profile-rule", "mutation": "private phase9-baseline Definition::new-equivalent baseline followed by the semantic variant" },
-    { "scenario": "classifier-facade", "mutation": "mutations/classifier-facade.toml after rust-public-api.rs" },
-    { "scenario": "demand-only", "mutation": "mutations/demand-only.rawr" }
+    { "scenario": "demand-only", "mutation": "mutations/demand-only.rs" }
   ],
   "after_cutover": [
     { "scenario": "corrupt-runner", "node_evidence": { "status": "not-applicable", "reason": "the P9-07 runner DAG node does not exist before cutover" } },

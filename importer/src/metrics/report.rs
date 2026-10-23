@@ -24,7 +24,6 @@ pub enum Scenario {
     RustBodyEqualApi,
     RustPublicApi,
     ProfileRule,
-    ClassifierFacade,
     DemandOnly,
     CorruptRunner,
     CorruptResolution,
@@ -33,14 +32,13 @@ pub enum Scenario {
 
 impl Scenario {
     /// Scenarios executable against the current whole-owner pipeline.
-    pub const CURRENT: [Self; 8] = [
+    pub const CURRENT: [Self; 7] = [
         Self::CleanCold,
         Self::IdenticalWarm,
         Self::RawrOccurrence,
         Self::RustBodyEqualApi,
         Self::RustPublicApi,
         Self::ProfileRule,
-        Self::ClassifierFacade,
         Self::DemandOnly,
     ];
 
@@ -224,7 +222,7 @@ pub struct Cell {
     pub sample: Sample,
 }
 
-/// The exact forty-cell current-pipeline corpus.
+/// The exact thirty-five-cell current-pipeline corpus.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Corpus {
     schema: Box<str>,
@@ -254,7 +252,7 @@ pub enum Error {
     #[cfg(feature = "import-baseline")]
     #[error("a cell has incomplete or inconsistent parent/capsule evidence")]
     CellEvidence,
-    #[error("the current baseline corpus must contain every one of eight scenarios by five owners exactly once")]
+    #[error("the current baseline corpus must contain every one of seven scenarios by five owners exactly once")]
     CorpusCells,
     #[error("the warm-run series must contain ordered warmup 1..=3 then measured 1..=5 trials")]
     SeriesTrials,
@@ -887,7 +885,7 @@ mod tests {
 
     #[test]
     fn all_eleven_scenario_rows_remain_closed_and_partitioned() {
-        assert_eq!(super::Scenario::CURRENT.len(), 8);
+        assert_eq!(super::Scenario::CURRENT.len(), 7);
         assert_eq!(super::Scenario::AFTER_CUTOVER.len(), 3);
         assert!(super::Scenario::CURRENT
             .iter()

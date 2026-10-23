@@ -23,8 +23,8 @@ impl Fixture {
         ));
         fs::create_dir(&root).unwrap();
         let root = fs::canonicalize(root).unwrap();
-        fs::write(root.join("main.rawr"), SOURCE).unwrap();
-        fs::write(root.join("rawr.toml"), MANIFEST).unwrap();
+        fs::write(root.join("main.rs"), SOURCE).unwrap();
+        fs::write(root.join("Cargo.toml"), MANIFEST).unwrap();
         let bytes = snapshot(&root, SOURCE);
         Self { root, bytes }
     }
@@ -37,17 +37,17 @@ impl Drop for Fixture {
 }
 
 fn snapshot(root: &std::path::Path, source: &[u8]) -> Bytes {
-    let entry = root.join("main.rawr");
-    let manifest = root.join("rawr.toml");
+    let entry = root.join("main.rs");
+    let manifest = root.join("Cargo.toml");
     let limits = cargo::Limits::standard();
     let mut snapshot = crate::surface::Snapshot::builder(&limits);
     snapshot.entry(entry.to_str().unwrap()).unwrap();
-    snapshot.file(entry.to_str().unwrap(), source).unwrap();
     snapshot.file(manifest.to_str().unwrap(), MANIFEST).unwrap();
+    snapshot.file(entry.to_str().unwrap(), source).unwrap();
     let mut framed = Bytes::capture(&limits);
     framed.entry(entry.to_str().unwrap()).unwrap();
-    framed.file(entry.to_str().unwrap(), source).unwrap();
     framed.file(manifest.to_str().unwrap(), MANIFEST).unwrap();
+    framed.file(entry.to_str().unwrap(), source).unwrap();
     framed.bind(snapshot.seal().unwrap(), &limits).unwrap()
 }
 
@@ -87,7 +87,7 @@ fn freshness_keeps_its_original_scope_and_rejects_manifest_drift() {
     proof.revalidate().unwrap();
     assert!(budget.census_usage().unwrap().2 > (SOURCE.len() + MANIFEST.len()) as u64 * 2);
     fs::write(
-        fixture.root.join("rawr.toml"),
+        fixture.root.join("Cargo.toml"),
         b"[package]\nname = 'next'\n",
     )
     .unwrap();
@@ -197,7 +197,7 @@ fn full_preparation_context_and_resident_proof_share_one_cumulative_account() {
     // clones share. A deleted source distinguishes that charge, recorded past
     // the exhausted target before the path is touched, from a fresh account:
     // the revalidation fails for its own I/O reason, never for accounting.
-    fs::remove_file(fixture.root.join("main.rawr")).unwrap();
+    fs::remove_file(fixture.root.join("main.rs")).unwrap();
     assert!(matches!(
         proof.revalidate(),
         Err(node::Error::Io {

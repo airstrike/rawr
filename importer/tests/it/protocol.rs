@@ -67,21 +67,21 @@ fn oversized_and_partial_frames_fail_before_partial_authority() {
 fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
     let limits = rawr_import::cargo::Limits::standard();
     let mut expected = rawr_import::surface::Snapshot::builder(&limits);
-    expected.entry("application.rawr").expect("entry");
-    expected.file("application.rawr", b"exact").expect("file");
+    expected.entry("application.rs").expect("entry");
+    expected.file("application.rs", b"exact").expect("file");
     let expected = expected.seal().expect("snapshot");
 
     let mut capture = rawr_import::supervisor::snapshot::Bytes::capture(&limits);
-    capture.entry("application.rawr").expect("entry frame");
+    capture.entry("application.rs").expect("entry frame");
     capture
-        .file("application.rawr", b"exact")
+        .file("application.rs", b"exact")
         .expect("file frame");
     capture.bind(expected, &limits).expect("exact digest binds");
 
     let mut drifted = rawr_import::supervisor::snapshot::Bytes::capture(&limits);
-    drifted.entry("application.rawr").expect("entry frame");
+    drifted.entry("application.rs").expect("entry frame");
     drifted
-        .file("application.rawr", b"drifted")
+        .file("application.rs", b"drifted")
         .expect("file frame");
     assert!(matches!(
         drifted.bind(expected, &limits),
@@ -89,9 +89,9 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
     ));
 
     let mut entry_drift = rawr_import::supervisor::snapshot::Bytes::capture(&limits);
-    entry_drift.entry("other.rawr").expect("other entry frame");
+    entry_drift.entry("other.rs").expect("other entry frame");
     entry_drift
-        .file("application.rawr", b"exact")
+        .file("application.rs", b"exact")
         .expect("exact file frame");
     assert!(matches!(
         entry_drift.bind(expected, &limits),
@@ -100,10 +100,10 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
 
     let mut path_drift = rawr_import::supervisor::snapshot::Bytes::capture(&limits);
     path_drift
-        .entry("application.rawr")
+        .entry("application.rs")
         .expect("exact entry frame");
     path_drift
-        .file("other.rawr", b"exact")
+        .file("other.rs", b"exact")
         .expect("other file frame");
     assert!(matches!(
         path_drift.bind(expected, &limits),
@@ -111,14 +111,14 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
     ));
 
     let mut unordered = rawr_import::supervisor::snapshot::Bytes::capture(&limits);
-    unordered.entry("application.rawr").expect("entry frame");
-    unordered.file("b.rawr", b"b").expect("first file");
+    unordered.entry("application.rs").expect("entry frame");
+    unordered.file("b.rs", b"b").expect("first file");
     assert!(matches!(
-        unordered.file("a.rawr", b"a"),
+        unordered.file("a.rs", b"a"),
         Err(rawr_import::supervisor::snapshot::Error::Order)
     ));
 
-    let duplicate = snapshot_frames(&[("a.rawr", b"a"), ("a.rawr", b"b")]);
+    let duplicate = snapshot_frames(&[("a.rs", b"a"), ("a.rs", b"b")]);
     let digest: [u8; 32] = Sha256::digest(&duplicate).into();
     assert!(matches!(
         rawr_import::supervisor::snapshot::Bytes::decode(
@@ -139,17 +139,17 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
 
     let mut oversized = rawr_import::supervisor::snapshot::Bytes::capture(&limits);
     oversized
-        .entry("application.rawr")
+        .entry("application.rs")
         .expect("the bounded entry fits");
     assert!(matches!(
-        oversized.file("application.rawr", &vec![0; protocol::FRAME_BYTES]),
+        oversized.file("application.rs", &vec![0; protocol::FRAME_BYTES]),
         Err(rawr_import::supervisor::snapshot::Error::Oversized { .. })
     ));
 }
 
 fn snapshot_frames(files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut bytes = Vec::from(b"rawr.snapshot.entry/v1".as_slice());
-    push(&mut bytes, b"application.rawr");
+    push(&mut bytes, b"application.rs");
     for (path, contents) in files {
         push(&mut bytes, path.as_bytes());
         push(&mut bytes, contents);

@@ -10,7 +10,7 @@ use rawr_import::extract;
 use rawr_import::process::Native;
 use rawr_import::surface::{Origin, Snapshot};
 
-const SNAPSHOT_ENTRY: &str = "application.rawr";
+const SNAPSHOT_ENTRY: &str = "application.rs";
 const SNAPSHOT_SOURCE: &[u8] = b"exact p3 surface";
 
 pub fn generated() -> rawr_import::runner::Manifest<rawr_import::runner::Generated, ()> {

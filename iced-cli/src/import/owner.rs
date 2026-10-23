@@ -697,7 +697,7 @@ mod tests {
     fn production_run_and_watch_preserve_one_real_generated_last_good_owner() {
         let project = crate::import::tests::real_iced_fixture();
         let root = project.path().to_path_buf();
-        let source = root.join("src/main.rawr");
+        let source = root.join("src/main.rs");
         let original = fs::read_to_string(&source).expect("fixture source reads");
         let target = rawr::project::Target::discover(&root).expect("run target discovers");
         let (mut lane, _) = super::initial(

@@ -155,6 +155,6 @@ mod tests {
 
     fn temporary_source() -> PathBuf {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("rawr-cli-run-{}-{id}.rawr", std::process::id()))
+        std::env::temp_dir().join(format!("rawr-cli-run-{}-{id}.rs", std::process::id()))
     }
 }

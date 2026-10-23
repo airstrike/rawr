@@ -6981,7 +6981,7 @@ mod policy_bounds {
     use crate::exceedance::Axis;
 
     fn span(limits: &Limits) -> ManifestSpan<'static> {
-        ManifestSpan::new("rawr.toml", 0, 1, 1, 0, 1, 1, limits).expect("fixture span seals")
+        ManifestSpan::new("Cargo.toml", 0, 1, 1, 0, 1, 1, limits).expect("fixture span seals")
     }
 
     fn ownerships() -> usize {
@@ -7236,7 +7236,7 @@ mod policy_bounds {
         let file = axis(&policy, "manifest span file bytes");
         assert_eq!(
             (file.target, file.first_requested),
-            (1, "rawr.toml".len() as u64)
+            (1, "Cargo.toml".len() as u64)
         );
         let alias = axis(&policy, "exclusion alias");
         assert_eq!((alias.target, alias.first_requested), (1, 3));

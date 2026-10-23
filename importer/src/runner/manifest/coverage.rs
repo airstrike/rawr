@@ -753,8 +753,8 @@ mod tests {
     fn snapshot() -> surface::Snapshot {
         let limits = crate::cargo::Limits::standard();
         let mut snapshot = surface::Snapshot::builder(&limits);
-        snapshot.entry("/fixture/main.rawr").unwrap();
-        snapshot.file("/fixture/main.rawr", b"fixture").unwrap();
+        snapshot.entry("/fixture/main.rs").unwrap();
+        snapshot.file("/fixture/main.rs", b"fixture").unwrap();
         snapshot.seal().unwrap()
     }
 
@@ -894,7 +894,7 @@ mod tests {
             .require_selected(
                 structure.identity(),
                 identity::Selector::Declaration,
-                "/fixture/main.rawr",
+                "/fixture/main.rs",
                 0,
                 1,
             )
@@ -965,7 +965,7 @@ mod tests {
                     consumer.identity(),
                     consumer.identity().selector().clone(),
                     arguments,
-                    "/fixture/main.rawr",
+                    "/fixture/main.rs",
                     start,
                     start + 4,
                 )
@@ -1053,7 +1053,7 @@ mod tests {
                     selected.identity(),
                     selected.identity().selector().clone(),
                     arguments,
-                    "/fixture/main.rawr",
+                    "/fixture/main.rs",
                     start,
                     start + 1,
                 )

@@ -343,10 +343,9 @@ impl Assets {
         }
         for relative in [
             "Cargo.toml",
-            "rawr.toml",
             "native/Cargo.toml",
             "native/src/lib.rs",
-            "src/main.rawr",
+            "src/main.rs",
         ] {
             copy(&self.root.join(relative), &root.join(relative))?;
         }
@@ -359,22 +358,22 @@ impl Assets {
 
     fn apply(&self, scenario: Scenario, project: &Project) -> Result<(), Error> {
         copy(
-            &self.root.join("rawr.toml"),
-            &project.root.join("rawr.toml"),
+            &self.root.join("Cargo.toml"),
+            &project.root.join("Cargo.toml"),
         )?;
         copy(
             &self.root.join("native/src/lib.rs"),
             &project.root.join("native/src/lib.rs"),
         )?;
         copy(
-            &self.root.join("src/main.rawr"),
-            &project.root.join("src/main.rawr"),
+            &self.root.join("src/main.rs"),
+            &project.root.join("src/main.rs"),
         )?;
         match scenario {
             Scenario::CleanCold | Scenario::IdenticalWarm => Ok(()),
             Scenario::RawrOccurrence => copy(
-                &self.root.join("mutations/rawr-occurrence.rawr"),
-                &project.root.join("src/main.rawr"),
+                &self.root.join("mutations/rawr-occurrence.rs"),
+                &project.root.join("src/main.rs"),
             ),
             Scenario::RustBodyEqualApi => copy(
                 &self.root.join("mutations/rust-body.rs"),
@@ -385,19 +384,9 @@ impl Assets {
                 &project.root.join("native/src/lib.rs"),
             ),
             Scenario::ProfileRule => Ok(()),
-            Scenario::ClassifierFacade => {
-                copy(
-                    &self.root.join("mutations/rust-public-api.rs"),
-                    &project.root.join("native/src/lib.rs"),
-                )?;
-                copy(
-                    &self.root.join("mutations/classifier-facade.toml"),
-                    &project.root.join("rawr.toml"),
-                )
-            }
             Scenario::DemandOnly => copy(
-                &self.root.join("mutations/demand-only.rawr"),
-                &project.root.join("src/main.rawr"),
+                &self.root.join("mutations/demand-only.rs"),
+                &project.root.join("src/main.rs"),
             ),
             Scenario::CorruptRunner | Scenario::CorruptResolution | Scenario::ConcurrentCold => {
                 Err(Error::Scenarios)
@@ -690,7 +679,6 @@ fn prepare_cell(
         | Scenario::RustPublicApi
         | Scenario::ProfileRule
         | Scenario::DemandOnly => Scenario::IdenticalWarm,
-        Scenario::ClassifierFacade => Scenario::RustPublicApi,
         Scenario::CorruptRunner | Scenario::CorruptResolution | Scenario::ConcurrentCold => {
             return Err(Error::Scenarios);
         }
@@ -2505,7 +2493,6 @@ fn preparation(scenario: Scenario) -> &'static str {
         Scenario::ProfileRule => {
             "warm matching private baseline profile then select the semantic profile variant"
         }
-        Scenario::ClassifierFacade => "warm public-API cache then exact exclusion-policy mutation",
         Scenario::DemandOnly => "warm base cache then demanded imported-item mutation",
         Scenario::CorruptRunner => "one exact runner artifact byte changed under its owned bundle lease after isolated cold setup",
         Scenario::CorruptResolution => "one exact resolution record byte changed under its owned bundle lease after isolated cold setup",
@@ -3104,17 +3091,17 @@ mod tests {
 
     #[cfg(feature = "import-baseline")]
     #[test]
-    fn feature_dispatch_has_all_forty_executable_cells() {
+    fn feature_dispatch_has_all_thirty_five_executable_cells() {
         let assets = Assets::transform().expect("bounded immutable assets validate");
         let plans = assets.plans();
-        assert_eq!(plans.len(), 40);
+        assert_eq!(plans.len(), 35);
         let executed = plans
             .iter()
             .map(|plan| match plan {
                 Plan::Execute { scenario, command } => (*scenario, *command),
             })
             .collect::<BTreeSet<_>>();
-        assert_eq!(executed.len(), 40);
+        assert_eq!(executed.len(), 35);
         assert!(plans
             .iter()
             .all(|plan| matches!(plan, Plan::Execute { .. })));
@@ -3535,7 +3522,7 @@ mod tests {
 
     #[cfg(feature = "import-baseline")]
     #[test]
-    #[ignore = "complete forty-cell current-state corpus"]
+    #[ignore = "complete thirty-five-cell current-state corpus"]
     fn record_complete_current_state_corpus() {
         let assets = Assets::transform().expect("bounded immutable assets validate");
         let environment = super::environment().expect("machine identity captures");

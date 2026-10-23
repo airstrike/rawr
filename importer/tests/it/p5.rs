@@ -11,7 +11,7 @@ use rawr_import::process::Native;
 use rawr_import::profile;
 use rawr_import::surface::{Origin, Snapshot};
 
-const ENTRY: &str = "application.rawr";
+const ENTRY: &str = "application.rs";
 
 /// A P5 project. A DAG project carries the shared node context the product
 /// always has, which hot admission requires, and keeps its snapshot on disk.

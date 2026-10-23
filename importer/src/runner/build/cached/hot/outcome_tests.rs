@@ -8,7 +8,7 @@ fn consumed_hot_rejection_restores_pins_and_never_sends_duplicate_abort() {
         let (cold, _) = fixture.generation(b"before");
         let live = fixture.build(cold);
         live.pin_live_last_good().unwrap();
-        fs::write(fixture.root.join("main.rawr"), b"after!").unwrap();
+        fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
         let prepared = fixture.prepare(&live, b"after!");
         let store = fixture.context.open_store().unwrap();
         let before = pins(&store);

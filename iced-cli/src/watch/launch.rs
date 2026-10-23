@@ -227,9 +227,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(
-            root.join("src/main.rawr"),
-            r#"
+        crate::write_marked(&root, "src/main.rs", r#"
 use iced::Element;
 use iced::widget::text;
 
@@ -240,9 +238,7 @@ impl State {
     fn view(&self) -> Element<Message> { text("live") }
 }
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
-"#,
-        )
-        .unwrap();
+"#);
 
         let launch = Launch::open(crate::base::load(Some(&root)).unwrap()).unwrap();
         let (bootstrap, source, service, timing, session) = launch.into_parts();

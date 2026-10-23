@@ -1,3 +1,13 @@
+[package]
+name = "phase9-baseline"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+baseline_native = { package = "baseline-native", path = "native" }
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced"] }
+
 [workspace]
 members = ["native"]
 resolver = "3"

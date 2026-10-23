@@ -174,8 +174,8 @@ pub(super) fn graph_with_change(
 
 pub(super) fn snapshot(limits: &crate::cargo::Limits) -> crate::surface::Snapshot {
     let mut builder = crate::surface::Snapshot::builder(limits);
-    builder.entry("/fixture/rawr.toml").expect("entry");
-    builder.file("/fixture/main.rawr", b"Pair").expect("source");
+    builder.entry("/fixture/Cargo.toml").expect("entry");
+    builder.file("/fixture/main.rs", b"Pair").expect("source");
     builder.seal().expect("snapshot")
 }
 
@@ -194,7 +194,7 @@ pub(super) fn demand(
     compiler
         .require(
             identity,
-            crate::surface::Origin::checked("/fixture/main.rawr", 0, 4, limits).expect("origin"),
+            crate::surface::Origin::checked("/fixture/main.rs", 0, 4, limits).expect("origin"),
         )
         .expect("require");
     compiler.seal().expect("demand")
@@ -296,8 +296,8 @@ fn connected_prefix_reuses_warm_receipts_without_mutable_union_or_source_work() 
             .replay_demand((), &warm.contract, source, &limits)
             .expect("warm symbolic demand replays");
         let mut edit = crate::surface::Snapshot::builder(&limits);
-        edit.entry("/fixture/rawr.toml").expect("edited entry");
-        edit.file("/fixture/main.rawr", b"Pair // edited")
+        edit.entry("/fixture/Cargo.toml").expect("edited entry");
+        edit.file("/fixture/main.rs", b"Pair // edited")
             .expect("edited source");
         let edited_source = edit.seal().expect("edited snapshot");
         let fresh = graph(&root.0, &witnesses, &limits);

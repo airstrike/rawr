@@ -1,5 +1,5 @@
 error[RAWR-FRAMEWORK-UNKNOWN-CALLBACK]: unknown application update callback `Counter::missing`
- --> $SOURCE:26:15-26:31
- 26 |     iced::run(Counter::missing, Counter::view)
+ --> $SOURCE:27:15-27:31
+ 27 |     iced::run(Counter::missing, Counter::view)
     |               ^^^^^^^^^^^^^^^^
   = help: define `Counter::missing` or pass an existing symbolic callback

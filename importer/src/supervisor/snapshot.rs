@@ -337,7 +337,7 @@ pub enum Error {
 mod tests {
     use super::Bytes;
 
-    const PATH: &str = "/fixture/main.rawr";
+    const PATH: &str = "/fixture/main.rs";
     const CONTENTS: &[u8] = b"fn main() {}\n";
 
     fn snapshot(limits: &crate::cargo::Limits) -> crate::surface::Snapshot {

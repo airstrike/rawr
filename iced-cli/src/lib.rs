@@ -477,3 +477,25 @@ impl std::error::Error for Error {
         }
     }
 }
+
+/// Writes `relative` in the Cargo crate at `root`, marked `// rawr` unless
+/// `source` already is, and the crate's `Cargo.toml` when it has none.
+#[cfg(test)]
+pub(crate) fn write_marked(root: &std::path::Path, relative: &str, source: impl AsRef<str>) {
+    let manifest = root.join("Cargo.toml");
+    if !manifest.exists() {
+        std::fs::write(
+            manifest,
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+    }
+    let path = root.join(relative);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let source = source.as_ref();
+    if source.starts_with("// rawr\n") {
+        std::fs::write(path, source).unwrap();
+    } else {
+        std::fs::write(path, format!("// rawr\n{source}")).unwrap();
+    }
+}

@@ -17,12 +17,11 @@ const SOURCE_MEMBER_BYTES: u64 = 4 * 1024 * 1024;
 const CACHE_MEMBER_BYTES: u64 = 1_207_959_552;
 const CACHE_MEMBERS: usize = 200_000;
 const CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-const SOURCE_FILES: [&str; 5] = [
+const SOURCE_FILES: [&str; 4] = [
     "Cargo.toml",
-    "rawr.toml",
     "native/Cargo.toml",
     "native/src/lib.rs",
-    "src/main.rawr",
+    "src/main.rs",
 ];
 
 /// Content byte total and versioned file/directory/permission aggregate.

@@ -44,7 +44,7 @@ fn real_input_only_late_bound_fn_is_classified_as_borrowed() {
                 &_limits,
             )
             .expect("the borrowed instance seals"),
-            "application.rawr",
+            "application.rs",
             0,
             1,
         )

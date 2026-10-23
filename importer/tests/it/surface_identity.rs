@@ -30,7 +30,7 @@ fn equal_instances_dedupe_but_distinct_types_remain_distinct() {
                 &base,
                 selector.try_clone().expect("the selector duplicates"),
                 arguments(convert::Builtin::I64, &limits),
-                "application.rawr",
+                "application.rs",
                 position,
                 position + 1,
             )
@@ -41,7 +41,7 @@ fn equal_instances_dedupe_but_distinct_types_remain_distinct() {
             &base,
             selector,
             arguments(convert::Builtin::String, &limits),
-            "application.rawr",
+            "application.rs",
             2,
             3,
         )

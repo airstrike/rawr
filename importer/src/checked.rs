@@ -504,10 +504,10 @@ mod tests {
     fn snapshot(limits: &crate::cargo::Limits) -> crate::surface::Snapshot {
         let mut builder = crate::surface::Snapshot::builder(limits);
         builder
-            .entry("/fixture/rawr.toml")
+            .entry("/fixture/Cargo.toml")
             .expect("the checked snapshot entry is bounded");
         builder
-            .file("/fixture/main.rawr", b"Pair")
+            .file("/fixture/main.rs", b"Pair")
             .expect("the checked snapshot source is bounded");
         builder.seal().expect("the checked snapshot seals")
     }
@@ -529,7 +529,7 @@ mod tests {
         compiler
             .require(
                 identity,
-                crate::surface::Origin::checked("/fixture/main.rawr", 0, 4, limits)
+                crate::surface::Origin::checked("/fixture/main.rs", 0, 4, limits)
                     .expect("the checked fixture origin is bounded"),
             )
             .expect("the checked fixture demand is admitted");

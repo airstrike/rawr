@@ -47,10 +47,10 @@ pub fn contract() -> (
 pub fn snapshot(limits: &Limits) -> Snapshot {
     let mut snapshot = Snapshot::builder(limits);
     snapshot
-        .entry("application.rawr")
+        .entry("application.rs")
         .expect("the entry path is bounded");
     snapshot
-        .file("application.rawr", b"generic::identity(1)")
+        .file("application.rs", b"generic::identity(1)")
         .expect("the source is bounded");
     snapshot.seal().expect("the P4 snapshot seals")
 }

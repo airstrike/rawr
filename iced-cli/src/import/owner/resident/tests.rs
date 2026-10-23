@@ -12,67 +12,37 @@ use super::{Attempt, Manifests};
 fn resident_manifests_ignore_source_body_edits() {
     let fixture = Fixture::new();
     let before = Manifests::from_graph(&fixture.graph());
-    fixture.write("src/main.rawr", "pub fn main() -> i64 { 2 }\n");
+    fixture.write("src/main.rs", "pub fn main() -> i64 { 2 }\n");
     assert!(before == Manifests::from_graph(&fixture.graph()));
 }
 
 #[test]
-fn resident_manifests_detect_exact_rust_declarations() {
+fn resident_manifests_detect_exact_cargo_declarations() {
     let fixture = Fixture::new();
     let manifest = concat!(
         "[package]\nname = \"resident-fixture\"\n",
-        "[rust]\ncargo-authority = \"Cargo.toml\"\n",
-        "[rust.dependencies]\nnative = { version = \"1\" }\n",
+        "[dependencies]\nnative = { version = \"1\" }\n",
     );
-    fixture.write("rawr.toml", manifest);
+    fixture.write("Cargo.toml", manifest);
     let before = Manifests::from_graph(&fixture.graph());
     fixture.write(
-        "rawr.toml",
+        "Cargo.toml",
         &manifest.replace("version = \"1\"", "version = \"2\""),
     );
     assert!(before != Manifests::from_graph(&fixture.graph()));
     fixture.write(
-        "rawr.toml",
+        "Cargo.toml",
         &format!("{manifest}# declaration bytes changed\n"),
     );
     assert!(before != Manifests::from_graph(&fixture.graph()));
-    fixture.write("rawr.toml", manifest);
+    fixture.write("Cargo.toml", manifest);
     assert!(before == Manifests::from_graph(&fixture.graph()));
 }
 
 #[test]
-fn resident_manifests_bind_dependency_manifests_and_canonical_paths() {
+fn resident_manifests_bind_canonical_paths() {
     let fixture = Fixture::new();
-    let manifest = concat!(
-        "[package]\nname = \"resident-fixture\"\n",
-        "[dependencies]\nlocal = { path = \"dependency\" }\n",
-    );
-    fixture.write("rawr.toml", manifest);
-    fixture.write("dependency/rawr.toml", "[package]\nname = \"dependency\"\n");
-    fixture.write("dependency/src/lib.rawr", "pub fn value() -> i64 { 7 }\n");
-    let before = Manifests::from_graph(&fixture.graph());
-    fixture.write("dependency/src/lib.rawr", "pub fn value() -> i64 { 8 }\n");
-    assert!(before == Manifests::from_graph(&fixture.graph()));
-    fixture.write(
-        "dependency/rawr.toml",
-        "[package]\nname = \"dependency\"\n# changed dependency declaration\n",
-    );
-    assert!(before != Manifests::from_graph(&fixture.graph()));
-
-    fixture.write("dependency/rawr.toml", "[package]\nname = \"dependency\"\n");
-    fs::rename(
-        fixture.root.join("dependency"),
-        fixture.root.join("relocated"),
-    )
-    .unwrap();
-    fixture.write(
-        "rawr.toml",
-        &manifest.replace("path = \"dependency\"", "path = \"relocated\""),
-    );
-    assert!(before != Manifests::from_graph(&fixture.graph()));
-
     let other = Fixture::new();
-    fixture.write("rawr.toml", Fixture::MANIFEST);
     assert!(Manifests::from_graph(&fixture.graph()) != Manifests::from_graph(&other.graph()));
 }
 
@@ -81,7 +51,7 @@ fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
     let current = Fixture::new();
     let incoming = Fixture::new();
     let adapter = rawr_watch::Adapter::manual_inputs(current.inputs(), Duration::ZERO).unwrap();
-    let incoming_source = incoming.root.join("src/main.rawr");
+    let incoming_source = incoming.root.join("src/main.rs");
     adapter.inject_modify(&incoming_source);
     assert!(adapter.start(Instant::now()).is_none());
 
@@ -137,9 +107,9 @@ fn resident_dropped_prepare_continuation_retires_candidate_inputs() {
     let adapter = rawr_watch::Adapter::manual_inputs(current.inputs(), Duration::ZERO).unwrap();
     let continuation = Attempt::Prepare(Some(adapter.prepare_inputs(incoming.inputs()).unwrap()));
     drop(continuation);
-    adapter.inject_modify(&incoming.root.join("src/main.rawr"));
+    adapter.inject_modify(&incoming.root.join("src/main.rs"));
     assert!(adapter.start(Instant::now()).is_none());
-    adapter.inject_modify(&current.root.join("src/main.rawr"));
+    adapter.inject_modify(&current.root.join("src/main.rs"));
     assert!(adapter.start(Instant::now()).is_some());
 }
 
@@ -157,8 +127,8 @@ fn resident_cold_retry_observes_fresh_sources_without_a_hot_begin() {
     let mut lane = super::super::Lane::new(&fixture.root).unwrap();
     let revision = lane.revision().unwrap();
     let target = rawr::project::Target::discover(&fixture.root).unwrap();
-    fixture.write("src/main.rawr", "pub fn main( {");
-    let source = rawr::diagnostic::Source::new("main.rawr", "pub fn main( {").unwrap();
+    fixture.write("src/main.rs", "pub fn main( {");
+    let source = rawr::diagnostic::Source::new("main.rs", "pub fn main( {").unwrap();
     let result = super::attempt(
         &mut lane,
         &adapter,
@@ -185,8 +155,8 @@ fn resident_cold_retry_observes_fresh_sources_without_a_hot_begin() {
 #[test]
 fn resident_parent_only_native_event_invalidates_parent_baseline() {
     let fixture = Fixture::new();
-    fixture.write("native.rs", "pub fn value() -> i64 { 1 }\n");
     let native = fixture.root.join("native.rs");
+    fs::write(&native, "pub fn value() -> i64 { 1 }\n").unwrap();
     let inputs = fixture
         .inputs()
         .with_imported([Watch::Exact(native.clone())]);
@@ -226,14 +196,14 @@ fn resident_obsolete_completed_failures_do_not_publish_fresh_diagnostics() {
         .observe_and_start(Instant::now())
         .unwrap()
         .unwrap();
-    let source = rawr::diagnostic::Source::new("main.rawr", "pub fn main() {}").unwrap();
+    let source = rawr::diagnostic::Source::new("main.rs", "pub fn main() {}").unwrap();
     let drift = || {
         Error::Process(RunnerError::Snapshot(
             rawr_import::supervisor::snapshot::Error::Mismatch,
         ))
     };
     assert!(super::failed(drift(), &adapter, &request, &source).is_err());
-    adapter.inject_modify(&fixture.root.join("src/main.rawr"));
+    adapter.inject_modify(&fixture.root.join("src/main.rs"));
     for error in [
         drift(),
         Error::Process(RunnerError::HotConsumedRejected("obsolete".into())),
@@ -262,13 +232,13 @@ fn resident_obsolete_completed_failures_do_not_publish_fresh_diagnostics() {
 #[test]
 fn resident_runner_late_event_cannot_drop_the_newest_write() {
     let fixture = Fixture::new();
-    let main = fixture.root.join("src/main.rawr");
+    let main = fixture.root.join("src/main.rs");
     let adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
     let runner = scheduler::Gate::new(Duration::ZERO);
-    let source = rawr::diagnostic::Source::new("main.rawr", "pub fn main() {}").unwrap();
+    let source = rawr::diagnostic::Source::new("main.rs", "pub fn main() {}").unwrap();
     // The CLI watcher sees the final write first; its request captures those
     // bytes and HotBegin opens the runner's request on the runner's own gate.
-    fixture.write("src/main.rawr", "pub fn main() -> i64 { 2 }\n");
+    fixture.write("src/main.rs", "pub fn main() -> i64 { 2 }\n");
     adapter.inject_modify(&main);
     let request = adapter.start(Instant::now()).unwrap();
     let begun = runner.observe_and_start(Instant::now()).unwrap().unwrap();
@@ -301,11 +271,11 @@ fn resident_runner_late_event_at_install_retries_but_real_failures_report() {
     use crate::watch::native::Error;
     use rawr_import::process::RunnerError;
     let fixture = Fixture::new();
-    let main = fixture.root.join("src/main.rawr");
+    let main = fixture.root.join("src/main.rs");
     let adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
     let runner = scheduler::Gate::new(Duration::ZERO);
-    let source = rawr::diagnostic::Source::new("main.rawr", "pub fn main() {}").unwrap();
-    fixture.write("src/main.rawr", "pub fn main() -> i64 { 2 }\n");
+    let source = rawr::diagnostic::Source::new("main.rs", "pub fn main() {}").unwrap();
+    fixture.write("src/main.rs", "pub fn main() -> i64 { 2 }\n");
     adapter.inject_modify(&main);
     let request = adapter.start(Instant::now()).unwrap();
     let begun = runner.observe_and_start(Instant::now()).unwrap().unwrap();
@@ -353,7 +323,7 @@ fn superseded_attempt_failure_is_not_reported() {
     // No live runner: reporting a current attempt's failure reaches the lane.
     assert!(super::super::settle_failure(&mut lane, &adapter, failure()).is_err());
     // A newer edit arrived mid-preparation: the stale failure stays silent.
-    adapter.inject_modify(&fixture.root.join("src/main.rawr"));
+    adapter.inject_modify(&fixture.root.join("src/main.rs"));
     assert!(super::super::settle_failure(&mut lane, &adapter, failure()).is_ok());
     assert!(adapter.start(Instant::now()).is_some());
 }
@@ -372,15 +342,20 @@ impl Fixture {
         let fixture = Self {
             root: fs::canonicalize(root).unwrap(),
         };
-        fixture.write("rawr.toml", Self::MANIFEST);
-        fixture.write("src/main.rawr", "pub fn main() -> i64 { 1 }\n");
+        fixture.write("Cargo.toml", Self::MANIFEST);
+        fixture.write("src/main.rs", "pub fn main() -> i64 { 1 }\n");
         fixture
     }
 
+    /// Writes `relative`; a `.rs` file is marked `// rawr`.
     fn write(&self, relative: &str, text: &str) {
         let path = self.root.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
+        if path.extension().is_some_and(|extension| extension == "rs") {
+            fs::write(path, format!("// rawr\n{text}")).unwrap();
+        } else {
+            fs::write(path, text).unwrap();
+        }
     }
 
     fn graph(&self) -> rawr::package::Graph {

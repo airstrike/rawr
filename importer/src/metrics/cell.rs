@@ -1134,13 +1134,12 @@ mod tests {
                 "Cargo.toml",
                 b"[package]\nname='cell'\nversion='0.0.0'\n".as_slice(),
             ),
-            ("rawr.toml", b"[application]\nsource='src/main.rawr'\n"),
             (
                 "native/Cargo.toml",
                 b"[package]\nname='native'\nversion='0.0.0'\n",
             ),
             ("native/src/lib.rs", b"pub fn value() -> u8 { 1 }\n"),
-            ("src/main.rawr", b"fn main() {}\n"),
+            ("src/main.rs", b"// rawr\nfn main() {}\n"),
         ] {
             fs::write(root.join(relative), bytes).expect("fixture member writes");
         }

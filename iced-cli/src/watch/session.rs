@@ -571,7 +571,7 @@ mod tests {
                 std::thread::current().id()
             ));
             fs::create_dir_all(root.join("src")).unwrap();
-            fs::write(root.join("src/main.rawr"), source(label)).unwrap();
+            crate::write_marked(&root, "src/main.rs", source(label));
 
             let mut compiler = rawr::Engine::new();
             rawr_iced::install(&mut compiler).unwrap();
@@ -716,7 +716,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rawr"), source("Initial")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Initial"));
 
         let mut compiler = rawr::Engine::new();
         rawr_iced::install(&mut compiler).unwrap();
@@ -732,7 +732,7 @@ mod tests {
         let (delivery, _feedback, _retry) = transport.into_parts();
         let now = Instant::now();
 
-        fs::write(root.join("src/main.rawr"), "pub fn main( {").unwrap();
+        crate::write_marked(&root, "src/main.rs", "pub fn main( {");
         let observed = gate.observe(now).unwrap();
         assert!(delivery.checking(&gate, observed));
         let request = gate.start(now).unwrap();
@@ -753,7 +753,7 @@ mod tests {
             Some(rawr::diagnostic::Category::Parse)
         );
 
-        fs::write(root.join("src/main.rawr"), source("Newest")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Newest"));
         let observed = gate.observe(now).unwrap();
         assert!(delivery.checking(&gate, observed));
         let request = gate.start(now).unwrap();
@@ -900,7 +900,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rawr"), source("Initial")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Initial"));
 
         let loaded = crate::base::load(Some(&root)).unwrap();
         let mut compiler = rawr::Engine::new();
@@ -918,7 +918,7 @@ mod tests {
             rawr_iced::reload::channel(Arc::clone(&gate), Arc::clone(&publication), engine.clone());
         let (delivery, _feedback, _retry) = transport.into_parts();
         let reload = |text: &str| {
-            fs::write(root.join("src/main.rawr"), text).unwrap();
+            crate::write_marked(&root, "src/main.rs", text);
             let now = Instant::now();
             let observed = gate.observe(now).unwrap();
             assert!(delivery.checking(&gate, observed));

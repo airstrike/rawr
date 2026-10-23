@@ -1637,9 +1637,9 @@ fn api_adapter(limits: &Limits) -> crate::profile::trusted::Adapter<ApiProfile> 
 }
 fn api_source(limits: &Limits) -> crate::surface::Snapshot {
     let mut source = crate::surface::Snapshot::builder(limits);
-    source.entry("/fixture/rawr.toml").unwrap();
+    source.entry("/fixture/Cargo.toml").unwrap();
     source
-        .file("/fixture/main.rawr", b"let value = 1;")
+        .file("/fixture/main.rs", b"let value = 1;")
         .unwrap();
     source.seal().unwrap()
 }
@@ -1851,8 +1851,8 @@ fn resolved_warm_launch_equals_cold_without_the_api_graph() {
         );
         // A changed Rawr source (a new demand) misses and keeps the full path.
         let mut edit = crate::surface::Snapshot::builder(&limits);
-        edit.entry("/fixture/rawr.toml").unwrap();
-        edit.file("/fixture/main.rawr", b"let value = 2;").unwrap();
+        edit.entry("/fixture/Cargo.toml").unwrap();
+        edit.file("/fixture/main.rs", b"let value = 2;").unwrap();
         assert!(resolve(retain(request(), no_cold), edit.seal().unwrap()).is_err());
     })
     .unwrap();

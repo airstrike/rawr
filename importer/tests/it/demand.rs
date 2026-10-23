@@ -13,13 +13,13 @@ fn demand_is_snapshot_bound_but_surface_is_position_and_multiplicity_neutral() {
     let identity = p2::outcome(&contract, "facade_a", &["integer_only"])
         .identity()
         .clone();
-    let first_snapshot = snapshot("/app/rawr.toml", b"integer_only()", &limits);
-    let second_snapshot = snapshot("/app/rawr.toml", b"integer_only();", &limits);
+    let first_snapshot = snapshot("/app/Cargo.toml", b"integer_only()", &limits);
+    let second_snapshot = snapshot("/app/Cargo.toml", b"integer_only();", &limits);
     assert_ne!(first_snapshot, second_snapshot);
 
-    let first_origin = Origin::checked("/app/main.rawr", 0, 12, &limits)
+    let first_origin = Origin::checked("/app/main.rs", 0, 12, &limits)
         .expect("the first use position is bounded");
-    let moved_origin = Origin::checked("/app/main.rawr", 1, 13, &limits)
+    let moved_origin = Origin::checked("/app/main.rs", 1, 13, &limits)
         .expect("the moved use position is bounded");
     let first = demand(
         &contract,
@@ -69,8 +69,8 @@ fn snapshot_identity_includes_the_exact_entry_target() {
     let _turn = rawr_import::store::test_turn();
     let limits = rawr_import::cargo::Limits::standard();
     assert_ne!(
-        snapshot("/app/first.rawr", b"same", &limits),
-        snapshot("/app/second.rawr", b"same", &limits)
+        snapshot("/app/first.rs", b"same", &limits),
+        snapshot("/app/second.rs", b"same", &limits)
     );
 }
 
@@ -78,7 +78,7 @@ fn snapshot(entry: &str, body: &[u8], limits: &rawr_import::cargo::Limits) -> Sn
     let mut builder = Snapshot::builder(limits);
     builder.entry(entry).expect("the entry target is bounded");
     builder
-        .file("/app/main.rawr", body)
+        .file("/app/main.rs", body)
         .expect("the exact path bytes and contents are bounded");
     builder.seal().expect("the nonempty snapshot seals")
 }

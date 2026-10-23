@@ -48,7 +48,7 @@ impl Fixture {
         let root = project.path().to_path_buf();
         fs::create_dir(root.join("cargo-home")).unwrap();
         fs::write(root.join("native.rs"), b"native").unwrap();
-        fs::write(root.join("main.rawr"), b"before").unwrap();
+        fs::write(root.join("main.rs"), b"before").unwrap();
         fs::create_dir(root.join("runner-harness")).unwrap();
         fs::write(root.join("runner-harness/Cargo.lock"), b"version = 4\n\n[[package]]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\n").unwrap();
         let context = context(&root);
@@ -150,7 +150,7 @@ impl Fixture {
             .unwrap(),
             None => checked.child(&profile),
         };
-        let path = self.root.join("main.rawr");
+        let path = self.root.join("main.rs");
         let path = path.to_str().unwrap();
         let limits = crate::cargo::Limits::standard();
         let mut digest = crate::surface::Snapshot::builder(&limits);
@@ -513,7 +513,7 @@ fn startup_post_bind_failure_restores_predecessors_without_minting_a_marker() {
     live.bind_snapshot(&snapshot).unwrap();
     live.pin_prepared().unwrap();
     live.pin_live_last_good().unwrap();
-    fs::write(fixture.root.join("main.rawr"), b"after!").unwrap();
+    fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
     let (next, snapshot) = fixture.generation(b"after!");
     let mut built = fixture.build(next);
     let store = built
@@ -619,7 +619,7 @@ fn retained_pin_transactions_validate_once_and_preserve_rollback() {
     live.pin_live_last_good().unwrap();
     assert_eq!(fixture.validations.load(Ordering::Relaxed), 1);
 
-    fs::write(fixture.root.join("main.rawr"), b"after!").unwrap();
+    fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
     let prepared = fixture.prepare(&live, b"after!");
     let store = fixture.context.open_store().unwrap();
     let before = pins(&store);
@@ -794,7 +794,7 @@ fn retained_post_bind_drift_rolls_back_before_hot_commit() {
     let (cold, _) = fixture.generation(b"before");
     let live = fixture.build(cold);
     live.pin_live_last_good().unwrap();
-    fs::write(fixture.root.join("main.rawr"), b"after!").unwrap();
+    fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
     let prepared = fixture.prepare(&live, b"after!");
     prepared.revalidate_prepared().unwrap();
     let store = fixture.context.open_store().unwrap();
@@ -872,7 +872,7 @@ fn hot_union_replays_the_same_runner_with_only_current_application_and_overlay()
     let old_overlay = live.overlay.as_ref().unwrap().action();
     let old_profile = live.profile.node_chain().unwrap().parent().action();
     let runner = live.chain.as_ref().unwrap().parent().action();
-    fs::write(fixture.root.join("main.rawr"), b"after!").unwrap();
+    fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
     let prepared = fixture.prepare(&live, b"after!");
     assert_eq!(
         prepared.manifest.chain.as_ref().unwrap().parent().action(),
@@ -914,7 +914,7 @@ fn hot_union_rejects_silent_rawr_and_native_drift_at_both_admission_checks() {
             fs::write(
                 fixture
                     .root
-                    .join(if native { "native.rs" } else { "main.rawr" }),
+                    .join(if native { "native.rs" } else { "main.rs" }),
                 b"drift!",
             )
             .unwrap();
@@ -945,7 +945,7 @@ fn hot_profile_rejection_restores_exact_pins_and_success_replaces_the_current_pr
     let (cold, _) = fixture.generation(b"before");
     let live = fixture.build(cold);
     live.pin_live_last_good().unwrap();
-    fs::write(fixture.root.join("main.rawr"), b"after!").unwrap();
+    fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
     let prepared = fixture.prepare(&live, b"after!");
     let store = fixture.context.open_store().unwrap();
     let before = pins(&store);
@@ -1033,7 +1033,7 @@ fn hot_transition_aborts_validation_and_profile_failures_and_preserves_abort_err
             let live = fixture.build(cold);
             let prepared = fixture.prepare(&live, b"before");
             if drift {
-                fs::write(fixture.root.join("main.rawr"), b"drift!").unwrap();
+                fs::write(fixture.root.join("main.rs"), b"drift!").unwrap();
             }
             let mut transitions = Vec::new();
             let error = prepared
@@ -1085,7 +1085,7 @@ fn hot_post_bind_drift_rolls_back_before_any_commit_callback() {
     let (cold, _) = fixture.generation(b"before");
     let live = fixture.build(cold);
     live.pin_live_last_good().unwrap();
-    fs::write(fixture.root.join("main.rawr"), b"after!").unwrap();
+    fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
     let prepared = fixture.prepare(&live, b"after!");
     let store = fixture.context.open_store().unwrap();
     let before = pins(&store);
@@ -1169,7 +1169,7 @@ fn cold_final_gate_rejects_drift_after_activation_before_admit() {
         fs::write(
             fixture
                 .root
-                .join(if native { "native.rs" } else { "main.rawr" }),
+                .join(if native { "native.rs" } else { "main.rs" }),
             b"drift!",
         )
         .unwrap();

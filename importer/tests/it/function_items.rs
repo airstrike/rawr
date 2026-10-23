@@ -39,7 +39,7 @@ fn concrete_function_item_generates_one_exact_rooted_thunk() {
                 &limits,
             )
             .expect("the concrete arguments seal"),
-            "application.rawr",
+            "application.rs",
             0,
             1,
         )
@@ -73,7 +73,7 @@ fn concrete_function_item_generates_one_exact_rooted_thunk() {
                 &limits,
             )
             .expect("the const substitution matches"),
-            "application.rawr",
+            "application.rs",
             1,
             2,
         )

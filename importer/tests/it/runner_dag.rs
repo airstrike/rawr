@@ -400,7 +400,7 @@ fn lifecycle_snapshot(
 
 /// The supervisor revalidates snapshot sources on disk, as the CLI's are.
 fn snapshot_file(project: &std::path::Path, source: &[u8]) -> String {
-    let path = project.join("application.rawr");
+    let path = project.join("application.rs");
     fs::write(&path, source).expect("the snapshot source writes");
     path.to_str()
         .expect("the snapshot path is Unicode")

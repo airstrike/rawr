@@ -2875,7 +2875,7 @@ fn legacy_project_local_entry_is_ignored_and_never_upgraded() {
 fn deleting_the_shared_store_preserves_project_sources_and_causes_one_cold_miss() {
     let root = temporary("source-safe-store-deletion");
     let context = prepare_fixture(&root);
-    fs::write(root.join("project/main.rawr"), b"window source").expect("the project source exists");
+    fs::write(root.join("project/main.rs"), b"window source").expect("the project source exists");
     let project_before = project_snapshot(&root.join("project"));
     let recipe = context
         .direct::<Artifact>(b"source-safe-store-deletion", 4_096)

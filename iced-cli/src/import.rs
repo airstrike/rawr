@@ -568,7 +568,7 @@ mod tests {
                 rawr_import::extract::canonical_selector_diagnostic(),
             )
         });
-        assert_eq!(checked, root.join("src/main.rawr"));
+        assert_eq!(checked, root.join("src/main.rs"));
 
         let updated = crate::snapshot::execute(crate::command::Mode::Update, Some(root.clone()))
             .unwrap_or_else(|error| panic!("production imported snapshot update rejects: {error}"));
@@ -779,26 +779,25 @@ mod tests {
     fn write_real_iced_fixture(root: &Path) -> std::io::Result<()> {
         fs::create_dir_all(root.join("src"))?;
         fs::write(
-            root.join("rawr.toml"),
+            root.join("Cargo.toml"),
             r#"[package]
 name = "generated-owner"
+version = "0.1.0"
+edition = "2024"
 
-[rust]
-cargo-authority = "Cargo.toml"
-
-[rust.dependencies]
+[dependencies]
 iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced"] }
-"#,
-        )?;
-        fs::write(
-            root.join("Cargo.toml"),
-            r#"[workspace]
+
+[workspace]
 resolver = "3"
 "#,
         )?;
         fs::write(
-            root.join("src/main.rawr"),
-            r#"use iced::Element;
+            root.join("src/main.rs"),
+            r#"// rawr
+mod native;
+
+use iced::Element;
 use iced::widget::text;
 
 #[derive(Default)] struct State;
@@ -812,6 +811,11 @@ impl State {
 
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 "#,
+        )?;
+        // An unmarked module: the crate builds natively, iced with it.
+        fs::write(
+            root.join("src/native.rs"),
+            "pub fn label() -> &'static str {\n    \"generated\"\n}\n",
         )?;
         Ok(())
     }

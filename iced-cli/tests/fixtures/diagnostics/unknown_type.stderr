@@ -1,5 +1,5 @@
 error[RAWR-RESOLVE-UNKNOWN-TYPE]: unknown type `Missing`
- --> $SOURCE:2:12-2:19
- 2 |     value: Missing,
+ --> $SOURCE:3:12-3:19
+ 3 |     value: Missing,
    |            ^^^^^^^
   = help: declare `Missing`, or import it with `use`

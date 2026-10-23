@@ -267,9 +267,9 @@ fn downstream_cold_mixed_and_warm_reuse_exact_owned_outputs() {
         );
 
         let mut edited = crate::surface::Snapshot::builder(&limits);
-        edited.entry("/fixture/rawr.toml").expect("entry");
+        edited.entry("/fixture/Cargo.toml").expect("entry");
         edited
-            .file("/fixture/main.rawr", b"Pair // edited")
+            .file("/fixture/main.rs", b"Pair // edited")
             .expect("edited source");
         let edited = edited.seal().expect("edited snapshot");
         let prefix = crate::composition::evaluate(

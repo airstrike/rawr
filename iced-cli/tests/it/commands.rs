@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[test]
-fn check_accepts_a_one_file_zero_config_counter() {
+fn check_accepts_a_one_file_counter() {
     let source = temporary_source("counter");
     fs::write(
         &source,
@@ -62,7 +62,7 @@ fn help_version_and_unknown_command_have_concise_exits() {
 }
 
 #[test]
-fn new_creates_the_exact_zero_config_counter_in_a_missing_target() {
+fn new_creates_the_exact_marked_crate_in_a_missing_target() {
     let sandbox = Sandbox::new("new-missing");
     let target = sandbox.path().join("counter");
 
@@ -73,10 +73,15 @@ fn new_creates_the_exact_zero_config_counter_in_a_missing_target() {
 
     assert_success(&output);
     assert_eq!(
-        fs::read_to_string(target.join("src/main.rawr")).unwrap(),
+        fs::read_to_string(target.join("src/main.rs")).unwrap(),
         rawr_iced_cli::new::COUNTER_SOURCE
     );
-    assert!(!target.join("Cargo.toml").exists());
+    assert_eq!(
+        fs::read_to_string(target.join("Cargo.toml")).unwrap(),
+        "[package]\nname = \"counter\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+         [dependencies]\niced = { git = \"https://github.com/iced-rs/iced\", \
+         rev = \"be88873d38544455e26c7a104eb757da2cbbac6b\" }\n"
+    );
     assert!(!target.join("rawr.toml").exists());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains(&target.display().to_string()));
@@ -94,7 +99,7 @@ fn new_accepts_a_verified_empty_existing_directory() {
 
     assert_eq!(created.root(), target);
     assert_eq!(
-        fs::read_to_string(target.join("src/main.rawr")).unwrap(),
+        fs::read_to_string(target.join("src/main.rs")).unwrap(),
         rawr_iced_cli::new::COUNTER_SOURCE
     );
 }
@@ -128,11 +133,11 @@ fn new_refuses_existing_files_and_repeated_initialization() {
 
     let project_target = sandbox.path().join("counter-project");
     rawr_iced_cli::new::create(project_target.clone()).unwrap();
-    let starter = fs::read(project_target.join("src/main.rawr")).unwrap();
+    let starter = fs::read(project_target.join("src/main.rs")).unwrap();
     let repeated = rawr_iced_cli::new::create(project_target.clone()).unwrap_err();
     assert!(repeated.to_string().contains("non-empty"));
     assert_eq!(
-        fs::read(project_target.join("src/main.rawr")).unwrap(),
+        fs::read(project_target.join("src/main.rs")).unwrap(),
         starter
     );
 }
@@ -210,13 +215,13 @@ fn snapshot_update_check_and_missing_baseline_are_end_to_end() {
     let project = sandbox.path().join("counter");
     fs::create_dir_all(project.join("src")).unwrap();
     fs::write(
-        project.join("src/main.rawr"),
+        project.join("src/main.rs"),
         include_str!("../../../iced/examples/package_snapshots/src/main.rs"),
     )
     .unwrap();
     fs::write(
-        project.join("rawr.toml"),
-        include_str!("../../../iced/examples/package_snapshots/rawr.toml"),
+        project.join("Cargo.toml"),
+        include_str!("../../../iced/examples/package_snapshots/Cargo.toml"),
     )
     .unwrap();
 
@@ -270,7 +275,7 @@ fn snapshot_update_check_and_missing_baseline_are_end_to_end() {
     assert!(drift.stderr.is_empty());
     let drift_stdout = String::from_utf8_lossy(&drift.stdout);
     assert!(drift_stdout.contains("[missing baseline]"));
-    assert!(drift_stdout.contains("snapshot-counter::Counter::view#default"));
+    assert!(drift_stdout.contains("main::Counter::view#default"));
     assert!(drift_stdout.contains("expected:"));
     assert!(drift_stdout.contains("actual:"));
     assert!(drift_stdout.contains("expected: snapshots/"));
@@ -311,7 +316,7 @@ fn check_and_run_share_byte_identical_golden_source_diagnostics() {
         "unknown_type",
         "unknown_callback",
     ] {
-        let source = fixture_path(fixture, "rawr");
+        let source = fixture_path(fixture, "rs");
         let expected = fs::read_to_string(fixture_path(fixture, "stderr")).unwrap();
         let checked = rawr_command()
             .args(["check", source.to_str().unwrap()])
@@ -338,10 +343,11 @@ fn check_and_run_share_exact_child_module_diagnostics() {
     let sandbox = Sandbox::new("child-module-diagnostic");
     let project = sandbox.path().join("counter");
     fs::create_dir_all(project.join("src")).unwrap();
-    fs::write(project.join("src/main.rawr"), "pub mod broken;\n").unwrap();
+    write_crate(&project);
+    fs::write(project.join("src/main.rs"), "// rawr\npub mod broken;\n").unwrap();
     fs::write(
-        project.join("src/broken.rawr"),
-        "pub fn wrong(value: i64) -> bool { value }\n",
+        project.join("src/broken.rs"),
+        "// rawr\npub fn wrong(value: i64) -> bool { value }\n",
     )
     .unwrap();
 
@@ -356,14 +362,18 @@ fn check_and_run_share_exact_child_module_diagnostics() {
 
     assert!(!checked.status.success());
     assert!(!run.status.success());
-    assert_eq!(checked.stderr, run.stderr);
-    assert!(String::from_utf8_lossy(&checked.stderr).contains("src/broken.rawr"));
+    // Rawr's diagnostic is the same; cargo's errors follow it in `check`
+    // and come from the background check in `run`.
+    let checked = String::from_utf8_lossy(&checked.stderr);
+    let rawr = checked.split("\ncargo check").next().unwrap();
+    assert!(rawr.contains("src/broken.rs"), "{checked}");
+    assert!(String::from_utf8_lossy(&run.stderr).contains(rawr));
 }
 
 #[test]
 fn project_discovery_failure_uses_the_environment_golden() {
     let sandbox = Sandbox::new("diagnostic-not-found");
-    let input = sandbox.path().join("missing.rawr");
+    let input = sandbox.path().join("missing.rs");
     let output = rawr_command()
         .args(["check", input.to_str().unwrap()])
         .output()
@@ -381,9 +391,10 @@ fn doctor_reads_broken_source_without_compiling_it() {
     let sandbox = Sandbox::new("doctor-no-compile");
     let project = sandbox.path().join("counter");
     fs::create_dir_all(project.join("src")).unwrap();
+    write_crate(&project);
     fs::write(
-        project.join("src/main.rawr"),
-        "this is deliberately not a valid Rawr application",
+        project.join("src/main.rs"),
+        "// rawr\nthis is deliberately not a valid Rawr application",
     )
     .unwrap();
 
@@ -420,7 +431,7 @@ fn doctor_warnings_do_not_fail_when_no_project_is_present() {
 #[test]
 fn doctor_explicit_failure_reports_every_check_before_exit_one() {
     let sandbox = Sandbox::new("doctor-explicit-failure");
-    let missing = sandbox.path().join("missing.rawr");
+    let missing = sandbox.path().join("missing.rs");
 
     let output = rawr_command()
         .args(["doctor", missing.to_str().unwrap()])
@@ -434,28 +445,6 @@ fn doctor_explicit_failure_reports_every_check_before_exit_one() {
     assert!(stdout.contains("[FAIL] project:"));
     assert!(stdout.contains("[WARN] source:"));
     assert!(stdout.contains("[OK] extensions:"));
-}
-
-#[test]
-fn doctor_attributes_a_malformed_manifest_boundary_without_hiding_source() {
-    let sandbox = Sandbox::new("doctor-manifest");
-    let project = sandbox.path().join("counter");
-    fs::create_dir_all(project.join("src")).unwrap();
-    fs::write(project.join("src/main.rawr"), "not compiled by doctor").unwrap();
-    fs::write(project.join("rawr.toml"), b"name = \xff").unwrap();
-
-    let output = rawr_command()
-        .args(["doctor", project.to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    assert_eq!(output.status.code(), Some(1));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("[FAIL] project:"));
-    assert!(stdout.contains("[OK] source: readable UTF-8"));
-    assert!(stdout.contains("[FAIL] manifest:"));
-    assert!(stdout.contains("RAWR-ENVIRONMENT-UNREADABLE-RESOURCE"));
-    assert!(!stdout.contains("RAWR-PARSE"));
 }
 
 #[test]
@@ -562,7 +551,17 @@ impl Drop for Sandbox {
 
 fn temporary_source(label: &str) -> std::path::PathBuf {
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("rawr-cli-{label}-{}-{id}.rawr", std::process::id()))
+    std::env::temp_dir().join(format!("rawr-cli-{label}-{}-{id}.rs", std::process::id()))
+}
+
+/// A Cargo manifest for the crate at `root`, with its `src` directory.
+fn write_crate(root: &Path) {
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
 }
 
 fn temporary_path(label: &str) -> PathBuf {
@@ -578,18 +577,22 @@ fn temporary_path(label: &str) -> PathBuf {
 fn an_iced_program_handed_from_rawr_to_rawr_iced_is_parsed_once() {
     let sandbox = Sandbox::new("parse-once");
     let root = sandbox.path().to_path_buf();
-    fs::create_dir_all(root.join("src")).unwrap();
+    write_crate(&root);
+    // `rawr check` runs `cargo check` too, which needs iced.
     fs::write(
-        root.join("src/main.rawr"),
-        format!(
-            "mod parts;\n{}",
-            include_str!("../../../iced/examples/scripts/application_counter.rs")
-        ),
+        root.join("Cargo.toml"),
+        rawr_iced_cli::new::manifest("parse-once"),
     )
     .unwrap();
     fs::write(
-        root.join("src/parts.rawr"),
-        "pub fn label() -> String {\n    String::from(\"count\")\n}\n",
+        root.join("src/main.rs"),
+        include_str!("../../../iced/examples/scripts/application_counter.rs")
+            .replacen("// rawr\n", "// rawr\nmod parts;\n", 1),
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/parts.rs"),
+        "// rawr\npub fn label() -> String {\n    String::from(\"count\")\n}\n",
     )
     .unwrap();
 
@@ -617,8 +620,8 @@ fn an_iced_program_handed_from_rawr_to_rawr_iced_is_parsed_once() {
 }
 
 /// The iced counter as a Cargo crate of two `.rs` files marked `// rawr`,
-/// without its native module: rawr-iced serves it as it serves the `.rawr`
-/// counter, from one parse of each file.
+/// without its native module: rawr-iced serves it from one parse of each
+/// file.
 #[test]
 fn a_marked_iced_crate_is_served_by_rawr_iced() {
     let sandbox = Sandbox::new("marked-counter");

@@ -1188,7 +1188,7 @@ mod tests {
     fn runner_snapshot(
         limits: &super::super::Limits,
     ) -> (crate::surface::Snapshot, crate::supervisor::snapshot::Bytes) {
-        const ENTRY: &str = "application.rawr";
+        const ENTRY: &str = "application.rs";
         const SOURCE: &[u8] = b"full cached owner DAG";
         let mut snapshot = crate::surface::Snapshot::builder(limits);
         snapshot

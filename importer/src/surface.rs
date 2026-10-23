@@ -1779,10 +1779,10 @@ mod tests {
     fn snapshot(contents: &[u8], limits: &crate::cargo::Limits) -> Snapshot {
         let mut builder = Snapshot::builder(limits);
         builder
-            .entry("/fixture/rawr.toml")
+            .entry("/fixture/Cargo.toml")
             .expect("snapshot entry is bounded");
         builder
-            .file("/fixture/main.rawr", contents)
+            .file("/fixture/main.rs", contents)
             .expect("snapshot input is bounded");
         builder.seal().expect("snapshot has one exact input")
     }
@@ -1810,7 +1810,7 @@ mod tests {
             .identity()
             .clone();
         let origin =
-            Origin::checked("/fixture/main.rawr", 0, 4, &limits).expect("origin is bounded");
+            Origin::checked("/fixture/main.rs", 0, 4, &limits).expect("origin is bounded");
         let mut first = contract
             .compiler((), snapshot(b"Pair", &limits), &limits)
             .expect("compiler binds first snapshot");
@@ -1843,7 +1843,7 @@ mod tests {
             .clone();
         let source = snapshot(b"Pair", &limits);
         let origin =
-            Origin::checked("/fixture/main.rawr", 0, 4, &limits).expect("origin is bounded");
+            Origin::checked("/fixture/main.rs", 0, 4, &limits).expect("origin is bounded");
         let mut compiler = contract
             .compiler((), source, &limits)
             .expect("the fixture compiler starts");
@@ -1907,30 +1907,30 @@ mod tests {
         compiler
             .require(
                 structure.identity().clone(),
-                Origin::checked("/fixture/main.rawr", 0, 1, &limits).unwrap(),
+                Origin::checked("/fixture/main.rs", 0, 1, &limits).unwrap(),
             )
             .unwrap();
         compiler
             .require_selected(
                 structure.identity(),
                 constructor,
-                "/fixture/main.rawr",
+                "/fixture/main.rs",
                 2,
                 3,
             )
             .unwrap();
         compiler
-            .require_selected(structure.identity(), field, "/fixture/main.rawr", 4, 5)
+            .require_selected(structure.identity(), field, "/fixture/main.rs", 4, 5)
             .unwrap();
         compiler
-            .require_selected(enumeration.identity(), variant, "/fixture/main.rawr", 6, 7)
+            .require_selected(enumeration.identity(), variant, "/fixture/main.rs", 6, 7)
             .unwrap();
         for (index, outcome) in [constant, function].into_iter().enumerate() {
             compiler
                 .require(
                     outcome.identity().clone(),
                     Origin::checked(
-                        "/fixture/main.rawr",
+                        "/fixture/main.rs",
                         8 + index as u32,
                         9 + index as u32,
                         &limits,
@@ -1942,7 +1942,7 @@ mod tests {
         compiler
             .require(
                 function.identity().clone(),
-                Origin::checked("/fixture/main.rawr", 20, 21, &limits).unwrap(),
+                Origin::checked("/fixture/main.rs", 20, 21, &limits).unwrap(),
             )
             .unwrap();
         let demand = compiler.seal().expect("adapter plans seal");
@@ -2038,7 +2038,7 @@ mod tests {
         assert!(matches!(
             compiler.require(
                 outcome.identity().clone(),
-                Origin::checked("/fixture/main.rawr", 0, 1, &limits).unwrap(),
+                Origin::checked("/fixture/main.rs", 0, 1, &limits).unwrap(),
             ),
             Err(Error::UnconstrainedGeneric)
         ));
@@ -2046,7 +2046,7 @@ mod tests {
             compiler.require_selected(
                 outcome.identity(),
                 field.try_clone().unwrap(),
-                "/fixture/main.rawr",
+                "/fixture/main.rs",
                 2,
                 3,
             ),
@@ -2065,7 +2065,7 @@ mod tests {
                 outcome.identity(),
                 field.try_clone().unwrap(),
                 empty,
-                "/fixture/main.rawr",
+                "/fixture/main.rs",
                 4,
                 5,
             ),
@@ -2093,7 +2093,7 @@ mod tests {
             compiler
                 .require(
                     method.identity().clone(),
-                    Origin::checked("/fixture/main.rawr", range.start, range.end, &limits).unwrap(),
+                    Origin::checked("/fixture/main.rs", range.start, range.end, &limits).unwrap(),
                 )
                 .unwrap();
             compiler.seal().expect("receiver demand seals")
@@ -2130,7 +2130,7 @@ mod tests {
             compiler
                 .require(
                     identity.clone(),
-                    Origin::checked("/fixture/main.rawr", 0, 1, limits).unwrap(),
+                    Origin::checked("/fixture/main.rs", 0, 1, limits).unwrap(),
                 )
                 .expect("one function use is retained");
             compiler.seal()
@@ -2171,8 +2171,8 @@ mod tests {
             .take(2)
             .map(|outcome| outcome.identity().clone())
             .collect::<Vec<_>>();
-        let late = Origin::checked("/fixture/main.rawr", 8, 12, &limits).unwrap();
-        let early = Origin::checked("/fixture/main.rawr", 0, 4, &limits).unwrap();
+        let late = Origin::checked("/fixture/main.rs", 8, 12, &limits).unwrap();
+        let early = Origin::checked("/fixture/main.rs", 0, 4, &limits).unwrap();
         let mut compiler = contract
             .compiler((), snapshot(b"Pair Choice", &limits), &limits)
             .unwrap();
@@ -2203,7 +2203,7 @@ mod tests {
         compiler
             .require(
                 identities[0].clone(),
-                Origin::checked("/fixture/main.rawr", 0, 1, &one).unwrap(),
+                Origin::checked("/fixture/main.rs", 0, 1, &one).unwrap(),
             )
             .expect("the exact cumulative item boundary accepts");
         assert!(!compiler.allocation.exceedances().is_exceeded());
@@ -2211,7 +2211,7 @@ mod tests {
         compiler
             .require(
                 identities[1].clone(),
-                Origin::checked("/fixture/main.rawr", 2, 3, &one).unwrap(),
+                Origin::checked("/fixture/main.rs", 2, 3, &one).unwrap(),
             )
             .expect("the item target records and admits");
         let axis = *compiler
@@ -2255,7 +2255,7 @@ mod tests {
         assert_eq!(axis.target as usize, exact_facade_bytes - 1);
         assert_eq!(axis.high_water as usize, exact_facade_bytes);
 
-        let exact_origin = Origin::checked("/fixture/main.rawr", 0, 1, &standard).unwrap();
+        let exact_origin = Origin::checked("/fixture/main.rs", 0, 1, &standard).unwrap();
         let entry_bytes = super::entry_retained_bytes(
             identities[0].checked_retained_bytes(),
             exact_origin.source.len(),
@@ -2418,7 +2418,7 @@ mod tests {
                     .require_selected(
                         identity,
                         identity.selector().try_clone().expect("selector clones"),
-                        "/fixture/main.rawr",
+                        "/fixture/main.rs",
                         index as u32,
                         index as u32 + 1,
                     )
@@ -2451,7 +2451,7 @@ mod tests {
             .expect("the origin string target records its axis");
         assert_eq!(
             (axis.target, axis.high_water),
-            (4, "/fixture/main.rawr".len() as u64)
+            (4, "/fixture/main.rs".len() as u64)
         );
 
         // The canonical byte target is only measurable at sealing, so it is
@@ -2482,7 +2482,7 @@ mod tests {
         compiler
             .require(
                 identity,
-                Origin::checked("/fixture/main.rawr", 0, 4, &standard).unwrap(),
+                Origin::checked("/fixture/main.rs", 0, 4, &standard).unwrap(),
             )
             .expect("the fixture demand is retained");
         let demand = compiler.seal().expect("the fixture demand seals");
