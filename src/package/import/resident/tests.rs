@@ -646,8 +646,9 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
     let mut demand = contract
         .compiler((), inputs.seal().unwrap(), &limits)
         .unwrap();
+    // An unsuffixed literal is an `i32`, as in Rust.
     let arguments = instance::Arguments::new(
-        Box::from([convert::Type::Builtin(convert::Builtin::I64)]),
+        Box::from([convert::Type::Builtin(convert::Builtin::I32)]),
         Box::default(),
         Box::default(),
         None,
@@ -692,7 +693,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
             .compile_package_snapshot_resident(&snapshot(&text), &unused_cycle)
             .unwrap()
         else {
-            panic!("the checked I64 native instance covers both actual snapshots");
+            panic!("the checked I32 native instance covers both actual snapshots");
         };
         let (candidate, semantic, carrier, coverage) = compiled.into_parts();
         assert!(semantic.is_none());

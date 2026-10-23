@@ -32,7 +32,7 @@ pub(crate) fn carrier_bytes(entries: &[([u8; 32], [u8; 32], u32)]) -> Vec<u8> {
     bytes.extend_from_slice(&0_u64.to_le_bytes());
     bytes.extend_from_slice(&0_u64.to_le_bytes());
     // Exact current manifest, wire, generator, runtime and profile versions.
-    for version in [7_u32, 2, 21, 5, 15] {
+    for version in rawr_import::runner::manifest::carrier_versions() {
         bytes.extend_from_slice(&version.to_le_bytes());
     }
     bytes

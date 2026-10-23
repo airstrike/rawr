@@ -290,6 +290,20 @@ impl GeneratedManifest {
     }
 }
 
+/// The schema, wire, generator, runtime and profile versions that end a
+/// carrier, in that order.
+#[doc(hidden)]
+#[must_use]
+pub const fn carrier_versions() -> [u32; 5] {
+    [
+        SCHEMA,
+        WIRE_VERSION,
+        crate::bridge::generator_version(),
+        RUNTIME_VERSION,
+        crate::profile::version(),
+    ]
+}
+
 pub(crate) fn carrier_identity(bytes: &[u8]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"rawr.import.generated-carrier/v2");
