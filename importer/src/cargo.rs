@@ -5690,10 +5690,15 @@ mod universe_placement_tests {
         .expect("fixture receipt writes");
     }
 
+    /// Every entry below `root` but the tool digest table. The first import
+    /// context of a process opens that table in the project's
+    /// `target/rawr`, or under `CARGO_TARGET_DIR` when it is set, so its
+    /// presence depends on the environment, not on the work under test.
     fn filesystem_entries(root: &Path) -> usize {
         fs::read_dir(root)
             .expect("fixture tree reads")
             .map(|entry| entry.expect("fixture entry reads").path())
+            .filter(|path| !path.ends_with("target/rawr/digests"))
             .map(|path| {
                 if path.is_dir() {
                     1 + filesystem_entries(&path)
