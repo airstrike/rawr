@@ -7427,3 +7427,36 @@ fn language_builtin_default_calls() {
     "#);
     assert_eq!(value, 57);
 }
+
+#[test]
+fn language_block_like_statement_as_a_method_receiver() {
+    let value = run_string(
+        r#"
+        use std::fmt;
+        enum Plan { Basic, Pro }
+        impl fmt::Display for Plan {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    Plan::Basic => "Basic",
+                    Plan::Pro => "Pro",
+                }
+                .fmt(f)
+            }
+        }
+        struct Name(String);
+        impl fmt::Debug for Name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+        fn size(plan: Plan) -> usize {
+            if true { plan.to_string() } else { String::new() }.len()
+        }
+        pub fn run() -> String {
+            format!("{} {} {} {:?}", Plan::Basic, Plan::Pro, size(Plan::Pro), Name("a".into()))
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "Basic Pro 3 \"a\"");
+}

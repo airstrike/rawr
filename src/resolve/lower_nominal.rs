@@ -19790,7 +19790,23 @@ impl<'a> Parser<'a> {
         self.expression_stack.push(path.clone());
         self.expression_child_indexes.push(0);
         let expression = if block {
-            self.parse_primary()
+            // As in Rust, `match self { .. }.fmt(f)` and `{ .. }?` go on
+            // after the block. A `(` or `[` there starts a new statement.
+            self.parse_primary().and_then(|value| {
+                let continues = match self.peek() {
+                    Token::Period
+                    | Token::DoubleQuestion
+                    | Token::QuestionBracket
+                    | Token::Elvis => true,
+                    Token::Reserved(keyword) => keyword.as_str() == "?",
+                    _ => false,
+                };
+                if continues {
+                    self.parse_postfix_of(value)
+                } else {
+                    Ok(value)
+                }
+            })
         } else {
             self.parse_range()
         };
@@ -22566,6 +22582,63 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// `value.fmt(f)` after its `fmt`: `write!(f, "{}", value)`, or
+    /// `{:?}` in a `Debug` impl.
+    fn parse_value_fmt(
+        &mut self,
+        value: ParsedExpr,
+        formatter: ImmutableString,
+    ) -> Result<ParsedExpr, Error> {
+        let open = self.expect(Token::LeftParen, "'(' after `fmt`")?;
+        self.expect_name("the formatter of `fmt`")?;
+        let close = self.expect(Token::RightParen, "')' after the formatter")?;
+        let template = if self.impl_trait.as_deref() == Some("Debug") {
+            "{:?}"
+        } else {
+            "{}"
+        };
+        let temporary = self.temporary("fmt");
+        let identifier = |name: &str| Token::Identifier(Box::new(name.into()));
+        self.splice_tokens(vec![
+            (identifier("write"), open),
+            (Token::Bang, open),
+            (Token::LeftParen, open),
+            (identifier(&formatter), open),
+            (Token::Comma, open),
+            (Token::StringConstant(Box::new(template.into())), open),
+            (Token::Comma, open),
+            (identifier(&temporary), open),
+            (Token::RightParen, close),
+        ]);
+        let previous = self.bindings.insert(
+            temporary.as_str().into(),
+            Binding {
+                ty: value.ty.clone(),
+                mutable: false,
+                available: true,
+                declaration: value.span,
+                kind: BindingKind::Local,
+            },
+        );
+        let written = self.parse_primary();
+        match previous {
+            Some(previous) => {
+                self.bindings.insert(temporary.as_str().into(), previous);
+            }
+            None => {
+                self.bindings.remove(temporary.as_str());
+            }
+        }
+        let written = written?;
+        let mut source = origin::Fragment::plain(format!("{{ let {temporary} = "));
+        source.push(value.rendered_source());
+        source.push_text("; ");
+        source.push(written.rendered_source());
+        source.push_text(" }");
+        let expression = span(value.span.start(), close);
+        Ok(self.operator_expr(source, written.ty, expression))
+    }
+
     fn parse_postfix(&mut self) -> Result<ParsedExpr, Error> {
         let value = self.parse_primary()?;
         self.parse_postfix_of(value)
@@ -22701,6 +22774,16 @@ impl<'a> Parser<'a> {
                 && inputs.len() > 1
             {
                 value = self.parse_function_with(value, &inputs)?;
+                continue;
+            }
+            // `value.fmt(f)` in a `Display` or `Debug` `fmt` body writes the
+            // value into its formatter, through the impl's own trait.
+            if member == "fmt"
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(formatter) = self.formatter.clone()
+                && matches!(self.peek_second(), Token::Identifier(name) if *name == *formatter)
+            {
+                value = self.parse_value_fmt(value, formatter)?;
                 continue;
             }
             let builtin = self.inference.resolve(&value.ty);
