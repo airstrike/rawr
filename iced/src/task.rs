@@ -764,15 +764,12 @@ impl Lowering {
             return self.fail(Error::Spent);
         };
         let lowering = self.clone();
-        let output = Arc::new(output);
-        task.then(move |materialize| {
-            let next = next.clone();
-            let failed = lowering.clone();
-            let output = output.clone();
-            dispatch::on_ui(lowering.owner, move || match materialize(output.as_ref().as_ref()) {
+        let owner = self.owner;
+        dispatch::each_on_ui(owner, task, move |materialize: Materialize| {
+            match materialize(output.as_ref()) {
                 Ok(payload) => next(payload),
-                Err(error) => failed.fail(Error::Imported(error)),
-            })
+                Err(error) => lowering.fail(Error::Imported(error)),
+            }
         })
     }
 
@@ -789,27 +786,22 @@ impl Lowering {
         let Some(task) = sipper.take() else {
             return self.fail(Error::Spent);
         };
-        let witnesses = Arc::new((sipper.witness(1), sipper.witness(0)));
-        let mappers = Arc::new((on_progress, on_output));
+        let witnesses = (sipper.witness(1), sipper.witness(0));
+        let mappers = (on_progress, on_output);
         let lowering = self.clone();
-        task.then(move |step| {
-            let next = next.clone();
-            let lowering = lowering.clone();
-            let witnesses = witnesses.clone();
-            let mappers = mappers.clone();
-            dispatch::on_ui(lowering.owner, move || {
-                let (materialize, witness, mapper) = match step {
-                    Step::Progress(materialize) => (materialize, &witnesses.0, &mappers.0),
-                    Step::Output(materialize) => (materialize, &witnesses.1, &mappers.1),
-                };
-                let payload = materialize(witness.as_ref())
-                    .map_err(Error::Imported)
-                    .and_then(|payload| lowering.authority.map(payload, mapper));
-                match payload {
-                    Ok(payload) => next(payload),
-                    Err(error) => lowering.fail(error),
-                }
-            })
+        let owner = self.owner;
+        dispatch::each_on_ui(owner, task, move |step: Step| {
+            let (materialize, witness, mapper) = match step {
+                Step::Progress(materialize) => (materialize, &witnesses.0, &mappers.0),
+                Step::Output(materialize) => (materialize, &witnesses.1, &mappers.1),
+            };
+            let payload = materialize(witness.as_ref())
+                .map_err(Error::Imported)
+                .and_then(|payload| lowering.authority.map(payload, mapper));
+            match payload {
+                Ok(payload) => next(payload),
+                Err(error) => lowering.fail(error),
+            }
         })
     }
 
