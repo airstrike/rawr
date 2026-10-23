@@ -85,6 +85,8 @@ pub enum Token {
     CharConstant(char),
     /// A string constant.
     StringConstant(Box<SmartString>),
+    /// A byte string constant: Rust's `b"…"`, `br"…"` or `br#"…"#`.
+    ByteStringConstant(Box<[u8]>),
     /// An interpolated string.
     InterpolatedString(Box<SmartString>),
     /// `{`
@@ -322,6 +324,7 @@ impl fmt::Display for Token {
             #[cfg(feature = "decimal")]
             DecimalConstant(d) => write!(f, "{}", d.0),
             StringConstant(s) => write!(f, r#""{s}""#),
+            ByteStringConstant(s) => write!(f, r#"b"{}""#, s.escape_ascii()),
             InterpolatedString(..) => f.write_str("string"),
             CharConstant(c) => write!(f, "{c}"),
             Identifier(s) => f.write_str(s),
@@ -742,6 +745,7 @@ impl Token {
             #[cfg(feature = "decimal")]
             DecimalConstant(..) => false,
             StringConstant(..)
+            | ByteStringConstant(..)
             | InterpolatedString(..)
             | CharConstant(..)
             | Identifier(..)
@@ -2498,6 +2502,14 @@ fn get_next_token_inner(
             }
             ('?', ..) => return (Token::Reserved(Box::new("?".into())), start_pos),
 
+            // Rust's raw strings and byte strings: r"…", r#"…"#, b"…", br#"…"#.
+            ('r', '"' | '#') | ('b', '"' | 'r') => {
+                if let Some(token) = parse_rust_string(stream, pos, c) {
+                    return (token, start_pos);
+                }
+                return parse_identifier_token(stream, state, pos, start_pos, c);
+            }
+
             // letter or underscore ...
             _ if is_id_first_alphabetic(c) || c == '_' => {
                 return parse_identifier_token(stream, state, pos, start_pos, c);
@@ -2521,6 +2533,129 @@ fn get_next_token_inner(
     pos.advance();
 
     (Token::EOF, *pos)
+}
+
+/// Rust's raw strings (`r"…"`, `r#"…"#`) and byte strings (`b"…"`,
+/// `br"…"`, `br#"…"#`), after their first letter `first`. `None` when the
+/// letter starts a name instead, with the stream as it was.
+fn parse_rust_string(
+    stream: &mut (impl InputStream + ?Sized),
+    pos: &mut Position,
+    first: char,
+) -> Option<Token> {
+    let bytes = first == 'b';
+    let raw = !bytes || stream.peek_next() == Some('r');
+    if bytes && raw {
+        stream.get_next();
+        if !matches!(stream.peek_next(), Some('"' | '#')) {
+            stream.unget('r');
+            return None;
+        }
+        pos.advance();
+    }
+    let mut hashes = 0;
+    if raw && stream.peek_next() == Some('#') {
+        stream.get_next();
+        if stream.peek_next() != Some('#') && stream.peek_next() != Some('"') {
+            if bytes {
+                return Some(Token::LexError(LERR::UnexpectedInput("#".into()).into()));
+            }
+            stream.unget('#');
+            return None;
+        }
+        pos.advance();
+        hashes = 1;
+        while stream.peek_next() == Some('#') {
+            stream.eat_next_and_advance(pos);
+            hashes += 1;
+        }
+    }
+    match stream.eat_next_and_advance(pos) {
+        Some('"') => (),
+        Some(c) => return Some(Token::LexError(LERR::UnexpectedInput(c.to_string()).into())),
+        None => return Some(Token::LexError(LERR::UnterminatedString.into())),
+    }
+    let mut text = String::new();
+    let mut out = Vec::new();
+    loop {
+        let Some(c) = stream.get_next() else {
+            return Some(Token::LexError(LERR::UnterminatedString.into()));
+        };
+        if c == '\n' {
+            pos.new_line();
+        } else {
+            pos.advance();
+        }
+        match c {
+            '"' if raw => {
+                let mut seen = 0;
+                while seen < hashes && stream.peek_next() == Some('#') {
+                    stream.eat_next_and_advance(pos);
+                    seen += 1;
+                }
+                if seen == hashes {
+                    break;
+                }
+                text.push('"');
+                text.extend(std::iter::repeat_n('#', seen));
+            }
+            '"' => break,
+            '\\' if !raw => {
+                let escape = stream.eat_next_and_advance(pos);
+                let byte = match escape {
+                    Some('n') => b'\n',
+                    Some('r') => b'\r',
+                    Some('t') => b'\t',
+                    Some('0') => 0,
+                    Some(c @ ('\\' | '\'' | '"')) => c as u8,
+                    Some('x') => {
+                        let digits: String = (0..2)
+                            .filter_map(|_| stream.eat_next_and_advance(pos))
+                            .collect();
+                        match u8::from_str_radix(&digits, 16) {
+                            Ok(byte) if digits.len() == 2 => byte,
+                            _ => {
+                                return Some(Token::LexError(
+                                    LERR::MalformedEscapeSequence(format!("\\x{digits}")).into(),
+                                ))
+                            }
+                        }
+                    }
+                    // A line continuation: the line break and the next line's indentation.
+                    Some('\n') => {
+                        pos.new_line();
+                        while stream.peek_next().is_some_and(char::is_whitespace) {
+                            if stream.get_next() == Some('\n') {
+                                pos.new_line();
+                            } else {
+                                pos.advance();
+                            }
+                        }
+                        continue;
+                    }
+                    other => {
+                        let text = other.map_or_else(String::new, String::from);
+                        return Some(Token::LexError(
+                            LERR::MalformedEscapeSequence(format!("\\{text}")).into(),
+                        ));
+                    }
+                };
+                out.push(byte);
+            }
+            c if bytes && !c.is_ascii() => {
+                return Some(Token::LexError(LERR::UnexpectedInput(c.to_string()).into()));
+            }
+            c if bytes && !raw => out.push(c as u8),
+            c => text.push(c),
+        }
+    }
+    Some(if !bytes {
+        Token::StringConstant(Box::new(text.into()))
+    } else if raw {
+        Token::ByteStringConstant(text.into_bytes().into())
+    } else {
+        Token::ByteStringConstant(out.into())
+    })
 }
 
 /// Get the next token, parsing it as an identifier.

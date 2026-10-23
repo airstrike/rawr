@@ -3723,6 +3723,7 @@ fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
                 | "split_off"
                 | "bytes"
                 | "as_bytes"
+                | "into_bytes"
                 | "char_indices"
                 | "splitn"
         ),
@@ -12574,6 +12575,16 @@ impl<'a> Parser<'a> {
                     })
             })
         };
+        let slice = |index: usize| {
+            items.iter().any(|item| {
+                item.signature().parameters().get(index).is_some_and(|parameter| {
+                    matches!(
+                        parameter.shape(),
+                        crate::host::type_ref::Shape::Array { length: None, .. }
+                    )
+                })
+            })
+        };
         // A facade takes `&str`, slices and borrowed facade values, such as
         // iced's `&Theme`, as their owned types. Its `f64` and `i64` inputs stand
         // for iced's `f32` and `u16`/`u32` (`impl Into<Pixels>`, `Padding`):
@@ -12585,7 +12596,17 @@ impl<'a> Parser<'a> {
                     mutable: false,
                     target,
                 } if matches!(*target, Ty::String | Ty::Host { .. } | Ty::Array { .. }) => {
-                    argument.ty = *target;
+                    argument.ty = match *target {
+                        // `&[T; N]`, as `b"…"`, where the facade takes a slice.
+                        Ty::Array {
+                            element,
+                            length: Some(_),
+                        } if slice(index) => Ty::Array {
+                            element,
+                            length: None,
+                        },
+                        target => target,
+                    };
                 }
                 ty @ (Ty::Int(Int::I64) | Ty::Float(Float::F64)) if narrow(index) => {
                     let (found, expected) = if ty == Ty::Int(Int::I64) {
@@ -22793,8 +22814,9 @@ impl<'a> Parser<'a> {
                 (source, ty)
             }
             // `bytes()`, `char_indices()` and `splitn(n, pattern)`: iterators
-            // over the string's pieces; `as_bytes()` a `&[u8]`.
-            ("bytes" | "char_indices" | "as_bytes", []) | ("splitn", [_, _]) => {
+            // over the string's pieces; `as_bytes()` a `&[u8]` and
+            // `into_bytes()` a `Vec<u8>`.
+            ("bytes" | "char_indices" | "as_bytes" | "into_bytes", []) | ("splitn", [_, _]) => {
                 let code = STR_PIECES
                     .iter()
                     .position(|name| *name == member.as_str())
@@ -22813,7 +22835,7 @@ impl<'a> Parser<'a> {
                 operands.resize(4, "()".into());
                 let pieces = self.prelude_op(PreludeOp::StrPieces, operands);
                 let item = match member.as_str() {
-                    "bytes" | "as_bytes" => Ty::Int(Int::U8),
+                    "bytes" | "as_bytes" | "into_bytes" => Ty::Int(Int::U8),
                     "char_indices" => Ty::Tuple(Box::new([Ty::Int(Int::Usize), Ty::Char])),
                     _ => Ty::String,
                 };
@@ -22821,6 +22843,9 @@ impl<'a> Parser<'a> {
                     element: Box::new(item.clone()),
                     length: None,
                 };
+                if member.as_str() == "into_bytes" {
+                    return Ok(self.operator_expr(pieces, array, expression));
+                }
                 if member.as_str() == "as_bytes" {
                     let slice = Ty::Reference {
                         mutable: false,
@@ -24276,6 +24301,8 @@ impl<'a> Parser<'a> {
             Token::StringConstant(value) => {
                 Ok(self.literal(format!("{value:?}"), Ty::String, token_span))
             }
+            // `b"…"`: a `&[u8; N]`, an array of its bytes at runtime.
+            Token::ByteStringConstant(bytes) => Ok(self.byte_literal(&bytes, token_span)),
             #[cfg(not(feature = "no_float"))]
             Token::FloatConstant(value) => {
                 let ty = self.literal_kind(0, false, token_span)?.0;
@@ -29994,21 +30021,25 @@ impl<'a> Parser<'a> {
         let at = span(name_span.start(), end);
         if name == "include_bytes" {
             let bytes = self.include(name, &text, at)?;
-            let length = bytes.len();
-            let source = format!(
-                "[{}]",
-                bytes.iter().map(u8::to_string).collect::<Vec<_>>().join(", ")
-            );
-            let ty = Ty::Reference {
-                mutable: false,
-                target: Box::new(Ty::Array {
-                    element: Box::new(Ty::Int(Int::U8)),
-                    length: Some(length),
-                }),
-            };
-            return Ok(self.literal(source, ty, at));
+            return Ok(self.byte_literal(&bytes, at));
         }
         Ok(self.literal(format!("{text:?}"), Ty::String, at))
+    }
+
+    /// `bytes` as a `&[u8; N]` literal: an array of integers at runtime.
+    fn byte_literal(&self, bytes: &[u8], at: Span) -> ParsedExpr {
+        let source = format!(
+            "[{}]",
+            bytes.iter().map(u8::to_string).collect::<Vec<_>>().join(", ")
+        );
+        let ty = Ty::Reference {
+            mutable: false,
+            target: Box::new(Ty::Array {
+                element: Box::new(Ty::Int(Int::U8)),
+                length: Some(bytes.len()),
+            }),
+        };
+        self.literal(source, ty, at)
     }
 
     /// The text of the compile-time macro `name`, after its `!`, and where
@@ -30203,6 +30234,9 @@ impl<'a> Parser<'a> {
             reason: reason.into(),
             operation: at,
         };
+        if let Some(reason) = crate::resolve::files_denied() {
+            return Err(error(reason.into()));
+        }
         #[cfg(not(feature = "no_std"))]
         {
             let Some(file) = self.source_file() else {
@@ -36984,6 +37018,7 @@ fn ends_operand(token: &Token) -> bool {
         Token::Identifier(_)
         | Token::IntegerConstant(_)
         | Token::StringConstant(_)
+        | Token::ByteStringConstant(_)
         | Token::CharConstant(_)
         | Token::True
         | Token::False

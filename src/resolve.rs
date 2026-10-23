@@ -243,6 +243,24 @@ pub(crate) fn lower_imported(
     lower_nominal::imported(engine, program, host, allocation)
 }
 
+/// Why programs in this process may read no file, once denied.
+static NO_FILES: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Stop programs in this process from reading files. `include_str!` and
+/// `include_bytes!` then fail with `reason`, and the iced facade draws
+/// each image or svg path as a missing file. `?play` calls it, since its
+/// snippets run on a server whose files are not theirs.
+pub fn deny_files(reason: &'static str) {
+    let _ = NO_FILES.set(reason);
+}
+
+/// Why programs in this process may read no file, when [`deny_files`] was
+/// called.
+#[must_use]
+pub fn files_denied() -> Option<&'static str> {
+    NO_FILES.get().copied()
+}
+
 /// Resolve all item declarations and header types in a parsed unit.
 ///
 /// This is the only transformation that can construct a [`Program`].

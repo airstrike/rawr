@@ -127,6 +127,46 @@ fn cli_renders_a_column_built_from_a_vec() {
     assert_eq!(from_vec, function);
 }
 
+/// The RGBA pixel at `(x, y)` of a PNG, and its width and height.
+fn pixel(png: &[u8], x: u32, y: u32) -> ([u8; 4], u32, u32) {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+    let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut rgba).unwrap();
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    let at = ((y * info.width + x) * 4) as usize;
+    (rgba[at..at + 4].try_into().unwrap(), info.width, info.height)
+}
+
+fn near(actual: [u8; 4], expected: [u8; 4]) -> bool {
+    actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 8)
+}
+
+#[test]
+fn cli_renders_an_inline_svg() {
+    // ?play has no files: the svg is text in the snippet.
+    let png = render_fixture_with("inline_svg", "inline_svg", &["--size", "160x160"]);
+    let (_, width, height) = pixel(&png, 0, 0);
+    let (center, ..) = pixel(&png, width / 2, height / 2);
+    assert!(near(center, [255, 105, 180, 255]), "hotpink at the center, not {center:?}");
+    let (corner, ..) = pixel(&png, 2, 2);
+    assert!(!near(corner, center), "the background at a corner");
+}
+
+#[test]
+fn cli_renders_rgba_pixels_built_in_the_snippet() {
+    let png = render_fixture_with("rgba_gradient", "rgba_gradient", &["--size", "64x64"]);
+    let (_, width, height) = pixel(&png, 0, 0);
+    let at = |x: u32, y: u32| pixel(&png, x * width / 64, y * height / 64).0;
+    for ((x, y), expected) in [
+        ((1, 1), [4, 4, 160, 255]),
+        ((62, 1), [248, 4, 160, 255]),
+        ((1, 62), [4, 248, 160, 255]),
+        ((62, 62), [248, 248, 160, 255]),
+    ] {
+        assert!(near(at(x, y), expected), "({x}, {y}) is {:?}", at(x, y));
+    }
+}
+
 /// Run `source` through the CLI with `args`, the result on stdout.
 fn run_stdin(source: &str, args: &[&str]) -> std::process::Output {
     use std::io::Write as _;

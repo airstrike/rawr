@@ -160,7 +160,8 @@ impl Default for Limits {
             operations: 1_000_000,
             call_depth: 32,
             string_size: 64 * 1024,
-            array_size: 10_000,
+            // A 128 by 128 RGBA pixel buffer.
+            array_size: 64 * 1024,
             map_size: 10_000,
             time: Duration::from_secs(2),
         }
@@ -274,6 +275,11 @@ pub fn iced_claims() -> &'static rawr::layer::Claims {
     })
 }
 
+/// Why a snippet reads no file: it runs on a server whose files are not
+/// its own. Each image or svg path is missing, and `include_str!` and
+/// `include_bytes!` fail with this.
+const NO_FILES: &str = "?play has no files";
+
 /// Run one snippet: render it when rawr-iced claims it, else run it as a
 /// plain program.
 pub fn run(source: &str, options: &Options) -> Result<Outcome, PlayError> {
@@ -287,6 +293,7 @@ pub fn run_claimed(
     claims: &rawr::layer::Claims,
 ) -> Result<Outcome, PlayError> {
     validate(options)?;
+    rawr::resolve::deny_files(NO_FILES);
     let deadline = Instant::now() + options.limits.time;
     let parsed = plain::Parsed::new(source, &options.limits, deadline)?;
     if parsed.claimed(claims) {
@@ -305,9 +312,7 @@ pub fn run_claimed(
 /// Check, evaluate, and render one iced snippet to a PNG.
 pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
     validate(options)?;
-    // A snippet reads no file on the server: each image or svg path is
-    // missing.
-    rawr_iced::widget::deny_files();
+    rawr::resolve::deny_files(NO_FILES);
     let program = wrap(source, options)?;
     let deadline = Instant::now() + options.limits.time;
     let canvas = rawr_iced::snapshot::Canvas {
@@ -1428,6 +1433,16 @@ fn view() -> impl Widget<()> {
         assert!(is_png(&missing.bytes));
         let svg = image(r#"svg("Ivan the Terrible.svg")"#);
         assert!(is_png(&svg.bytes));
+    }
+
+    #[test]
+    fn play_includes_no_file() {
+        for source in [r#"text(include_str!("Cargo.toml"))"#, r#"text(include_bytes!("Cargo.toml").len())"#] {
+            let Err(PlayError::Compile(error)) = render(source, &Options::default()) else {
+                panic!("{source} reads no file");
+            };
+            assert!(error.contains("?play has no files"), "{error}");
+        }
     }
 
     #[test]

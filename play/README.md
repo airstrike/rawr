@@ -163,7 +163,7 @@ A plain program runs under the same process limits. Its Engine has the same
 limits as a render. Its output is capped at 64 KiB.
 
 Inside, a fresh Engine has: 1,000,000 operations per evaluation, call depth
-of at most 32, 64 KiB strings, 10,000-element arrays and maps, and a
+of at most 32, 64 KiB strings, 65,536-element arrays, 10,000-element maps, and a
 wall-clock deadline checked from the progress callback. Canvas sides are at
 most 2048. Each limit gets a plain reply such as `operation limit exceeded:
 more than 1000000 operations (an endless loop?)`.

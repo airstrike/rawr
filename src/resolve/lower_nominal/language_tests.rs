@@ -6491,6 +6491,34 @@ fn language_string_and_vec_methods() {
 }
 
 #[test]
+fn language_byte_and_raw_strings() {
+    let value = run_string(
+        r##"
+        pub fn run() -> String {
+            let a = b"hi\n\x00\xff";
+            let s: &[u8] = b"ok";
+            let raw = r#"say "hi" #now"#;
+            let plain = r"back\slash";
+            let svg = br#"<a "b">"#;
+            let owned = String::from("yo").into_bytes();
+            let mut pixels = vec![0u8; 4];
+            pixels[3] = 255;
+            let r = 1;
+            let b = 2;
+            format!("{a:?} {s:?}|{raw}|{plain}|{svg:?}|{owned:?}|{pixels:?}|{}", r + b)
+        }
+        run()
+    "##,
+    );
+    assert_eq!(
+        value,
+        "[104, 105, 10, 0, 255] [111, 107]|say \"hi\" #now|back\\slash|\
+         [60, 97, 32, 34, 98, 34, 62]|[121, 111]|[0, 0, 0, 255]|3"
+    );
+    rejected("pub fn run() -> i64 { let a = b\"é\"; 0 } run()");
+}
+
+#[test]
 fn language_std_mem_swap_replace_take() {
     let value = run_string(
         r#"
