@@ -1330,21 +1330,22 @@ fn install(
     shapes
         .try_reserve_exact(shape_count)
         .map_err(|_| Error::Allocation)?;
-    // An item whose signature names a type no facade declares (one the
-    // importer could not model) is unavailable by itself, as in the facade
-    // plan the runner builds.
-    let declared = facades
-        .iter()
-        .flat_map(|facade| &facade.entries)
-        .filter(|entry| {
-            matches!(
-                entry.outcome.representability(),
-                Representability::Struct(_) | Representability::Enum(_)
-            )
-        })
-        .map(|entry| entry.definition)
-        .collect::<std::collections::BTreeSet<_>>();
+    // An item whose signature names a type its own facade does not declare
+    // (one the importer could not model, or one only another crate exports)
+    // is unavailable by itself, as in the facade plan the runner builds. A
+    // facade resolves only the types it declares.
     for facade in facades {
+        let declared = facade
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.outcome.representability(),
+                    Representability::Struct(_) | Representability::Enum(_)
+                )
+            })
+            .map(|entry| entry.definition)
+            .collect::<std::collections::BTreeSet<_>>();
         let definition = build(contract, facade, &declared, &mut shapes, allocation)?;
         let (items, bytes) = definition.registry_usage();
         allocation.retain_checked(items, bytes)?;

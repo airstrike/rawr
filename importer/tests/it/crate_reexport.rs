@@ -149,6 +149,36 @@ fn a_path_named_through_the_alias_selects_that_item() {
     );
 }
 
+/// A facade resolves only the types it declares. A function whose output
+/// only another selected crate exports is left out of its own facade, and
+/// the rest of both facades stays.
+#[test]
+fn an_item_naming_another_facades_type_is_unavailable_by_itself() {
+    let _turn = rawr_import::store::test_turn();
+    let project = Project::new();
+    let limits = Limits::standard();
+    let graph = extract(&project, &[("split", "split-api"), ("leaf", "leaf-api")]);
+    let contract = graph
+        .classify(&rawr_import::classify::Policy::standard(), &limits)
+        .expect("the split fixture classifies");
+    let plan = rawr_import::surface::facade::Plan::encode(&contract, &limits)
+        .and_then(|bytes| rawr_import::surface::facade::Plan::decode(&bytes, &limits))
+        .expect("the split facade plan round-trips");
+    let facade = |root: &str| {
+        plan.facades()
+            .find(|facade| facade.root() == root)
+            .unwrap_or_else(|| panic!("`{root}` has a facade"))
+    };
+    let split = facade("split");
+    let items = split.items().map(|item| item.path()).collect::<Vec<_>>();
+    assert!(items.contains(&"own"), "{items:?}");
+    assert!(!items.contains(&"leaf"), "{items:?}");
+    assert!(
+        facade("leaf").types().any(|ty| ty.path() == "Leaf"),
+        "the other crate still declares its own type"
+    );
+}
+
 fn extract(project: &Project, dependencies: &[(&str, &str)]) -> Graph {
     extract_demanding(project, dependencies, &[])
 }

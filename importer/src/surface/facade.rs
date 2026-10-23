@@ -391,14 +391,16 @@ impl Plan {
                 }
             }
         }
-        // An item whose signature names a type no facade declares (one
-        // the importer could not model) is unavailable by itself; the rest
-        // of its facade stays.
-        let declared = facades
-            .iter()
-            .flat_map(|facade| facade.types.iter().map(|ty| ty.identity))
-            .collect::<std::collections::BTreeSet<_>>();
+        // An item whose signature names a type its own facade does not
+        // declare (one the importer could not model, or one only another
+        // crate exports) is unavailable by itself; the rest of its facade
+        // stays. A facade resolves only the types it declares.
         for facade in &mut facades {
+            let declared = facade
+                .types
+                .iter()
+                .map(|ty| ty.identity)
+                .collect::<std::collections::BTreeSet<_>>();
             facade
                 .types
                 .sort_by(|left, right| left.path.cmp(&right.path));
