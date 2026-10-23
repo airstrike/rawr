@@ -956,8 +956,8 @@ mod tests {
                 item,
                 reason,
                 ..
-            }) if item == "rawr_iced::widget::key" && reason.contains("no exact overload")
-        ));
+            }) if item == "rawr_iced::widget::key" && reason.contains("no form of it takes")
+        ), "{error:?}");
         assert!(!error.primary_span().is_none());
     }
 

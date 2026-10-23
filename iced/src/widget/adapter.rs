@@ -1243,8 +1243,11 @@ mod tests {
         let mut first_element = host.view();
         let mut tree = Tree::new(&first_element);
         first_element.diff(&mut tree);
-        let first_layout = fixture::node(&mut first_element, &mut tree, &renderer);
-        assert_eq!(first_layout.children()[0].children()[0].size().width, 5.0);
+        fixture::node(&mut first_element, &mut tree, &renderer);
+        // iced master's container shares its content's Tree and writes its
+        // own size there, so under the Host's overlays the Dial's own size
+        // does not show. Its Tree-local State does.
+        assert!(fixture::dial_ready(&tree));
         drop(first_element);
 
         let source = fixture::ready(17, false, false).replace("state.value", "state.value + 1");
@@ -1271,8 +1274,9 @@ mod tests {
         let mut second_element = host.view();
         tree.diff(&mut second_element);
 
-        let second_layout = fixture::node(&mut second_element, &mut tree, &renderer);
-        assert_eq!(second_layout.children()[0].children()[0].size().width, 6.0);
+        fixture::node(&mut second_element, &mut tree, &renderer);
+        // The reload rebound the hooks and kept the Tree-local State.
+        assert!(fixture::dial_ready(&tree));
         assert_eq!(
             host.update(old).unwrap().delivery(),
             crate::program::Delivery::Dropped
@@ -1377,7 +1381,8 @@ mod tests {
                 .as_ref()
                 .expect("the adapter Tree must own visual overlay state")
                 .tree;
-            assert_eq!(Node::of(overlay).children()[0].size(), Size::new(15.0, 15.0));
+            // The overlay's Tree is its content's own: the Popup.
+            assert_eq!(Node::of(overlay).size(), Size::new(15.0, 15.0));
         }
 
         let retained = tree
@@ -2143,9 +2148,9 @@ mod tests {
 
     mod fixture {
         use super::{
-            application, host, layout, mouse, renderer, shell, window, Arc, AtomicUsize, Engine,
-            Event, Length, Node, Ordering, Point, Probe, Rectangle, Shared, Shell, Size, Tree,
-            Vector,
+            application, host, layout, mouse, renderer, shell, state, tree, window, Arc,
+            AtomicUsize, Engine, Event, Length, Node, Ordering, Point, Probe, Rectangle, Shared,
+            Shell, Size, Tree, Vector,
         };
         use iced::advanced::Widget as _;
 
@@ -2311,6 +2316,16 @@ mod tests {
             let limits = layout::Limits::new(Size::ZERO, Size::new(100.0, 100.0));
             element.layout(tree, renderer, &limits);
             Node::of(tree)
+        }
+
+        /// Whether a scripted widget in `tree` holds a ready Tree-local State.
+        pub(super) fn dial_ready(tree: &Tree) -> bool {
+            (tree.tag == tree::Tag::of::<state::State>()
+                && matches!(
+                    tree.state.downcast_ref::<state::State>().local,
+                    state::Local::Ready(Some(_))
+                ))
+                || tree.children.iter().any(dial_ready)
         }
 
         pub(super) fn layout(

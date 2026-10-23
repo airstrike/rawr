@@ -4199,17 +4199,24 @@ mod tests {
 
     #[test]
     fn positional_column_keeps_native_tree_while_keyed_column_owns_reconciliation() {
+        // iced master's own column keeps a layout cache in its tree.
+        use iced::widget::Widget as _;
+        let native: iced::Element<'static, crate::runtime::Message> =
+            iced::widget::column(Vec::<iced::Element<'static, crate::runtime::Message>>::new())
+                .boxed();
+        let native = Tree::new(&native).tag;
+
         let positional = boot(column_application());
         let context = positional.context();
         let positional = positional.display().lower(&context);
         let positional = Tree::new(&positional);
-        assert_eq!(positional.tag, tree::Tag::stateless());
+        assert_eq!(positional.tag, native);
 
         let keyed = boot(keyed_column_application());
         let context = keyed.context();
         let keyed = keyed.display().lower(&context);
         let keyed = Tree::new(&keyed);
-        assert_ne!(keyed.tag, tree::Tag::stateless());
+        assert_ne!(keyed.tag, native);
     }
 
     #[test]

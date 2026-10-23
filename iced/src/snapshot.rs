@@ -434,7 +434,7 @@ mod tests {
             names,
             [("snapshot", "Default", true), ("snapshot", "Ignored", false)]
         );
-        assert_eq!(listed[0].subject, "main::State::view");
+        assert_eq!(listed[0].subject, "snapshot_fixture::State::view");
         assert_eq!(listed[0].themes, ["State::dark"]);
         assert_eq!(listed[0].size, (96, 64));
 

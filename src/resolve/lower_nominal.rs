@@ -1515,7 +1515,7 @@ fn write_method(
         output.declaration(source, declaration, &witness_variable(&generic.name.text));
     }
     output.declaration(source, declaration, ") {\n");
-    let copied = method_copied(definition)
+    let copied = method_copied(definition, models)
         .into_iter()
         .map(|index| definition.parameters()[index].name.text.as_str())
         .collect::<Vec<_>>();
@@ -1565,11 +1565,13 @@ fn copied_parameters(parameters: &[item::Parameter], receiver: Option<usize>) ->
 
 /// `copied_parameters` of a method, a trait's too (every impl of a trait
 /// function copies the same parameters, so a dispatcher passes the copies
-/// through); not the formatter of a `Debug` or `Display` `fmt`.
-fn method_copied(definition: &method::Definition) -> Vec<usize> {
+/// through); not the formatter of a `Debug` or `Display` `fmt`, and not a
+/// widget hook's State, whose sealed change carries it back.
+fn method_copied(definition: &method::Definition, models: &Models) -> Vec<usize> {
     if definition
         .trait_name()
         .is_some_and(|name| matches!(name.as_str(), "Debug" | "Display"))
+        || models.widget_hook(definition).is_some()
     {
         return Vec::new();
     }
@@ -8315,7 +8317,7 @@ impl<'a> Parser<'a> {
                 .collect();
         }
         parser.inference.equalities = generic_equalities(definition.generics());
-        parser.copy_out = method_copied(definition)
+        parser.copy_out = method_copied(definition, &parser.models)
             .into_iter()
             .map(|index| definition.parameters()[index].name.text.clone())
             .collect();
@@ -23230,7 +23232,7 @@ impl<'a> Parser<'a> {
                 ", ",
             );
             let method = method_name(definition.id());
-            let places = self.mutable_arguments(&args, method_copied(&definition))?;
+            let places = self.mutable_arguments(&args, method_copied(&definition, &self.models))?;
             let source = match writeback {
                 Some(Writeback::Field(field)) => {
                     let FieldLvalue {
@@ -30302,7 +30304,7 @@ impl<'a> Parser<'a> {
                 (Vec::new(), text_end(member_span.start(), &member))
             } else if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
                 let expression = span(owner_span.start(), member_span.end());
-                if definition.generics().is_empty() && method_copied(&definition).is_empty() {
+                if definition.generics().is_empty() && method_copied(&definition, &self.models).is_empty() {
                     return self.associated_value(&definition, expression);
                 }
                 return self.symbolic_associated(&definition, expression);
@@ -30328,7 +30330,7 @@ impl<'a> Parser<'a> {
                 &substitution,
                 span(owner_span.start(), end),
             );
-            let places = self.mutable_arguments(&arguments, method_copied(&definition))?;
+            let places = self.mutable_arguments(&arguments, method_copied(&definition, &self.models))?;
             let source = origin::Fragment::call(
                 method_name(definition.id()),
                 arguments
