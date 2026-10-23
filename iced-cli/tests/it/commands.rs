@@ -667,7 +667,7 @@ fn a_marked_iced_crate_writes_previews_through_the_rawr_crate() {
             .replace("    fn update(", "    pub fn update(")
             .replace(
                 "[dependencies]\n",
-                "[dependencies]\nrawr-attributes = { path = \"../attributes\" }\n",
+                "[dependencies]\nrawr-macros = { path = \"../macros\" }\n",
             )
             .replace(
                 "pub fn view(",

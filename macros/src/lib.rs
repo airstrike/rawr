@@ -8,7 +8,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! rawr-attributes = "0.1"
+//! rawr-macros = "0.1"
 //! ```
 //!
 //! ```ignore

@@ -3005,10 +3005,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rawr-attributes"
-version = "0.1.0"
-
-[[package]]
 name = "rawr-canonical"
 version = "0.1.0"
 dependencies = [
@@ -3108,6 +3104,10 @@ version = "0.1.0"
 dependencies = [
  "toml_edit",
 ]
+
+[[package]]
+name = "rawr-macros"
+version = "0.1.0"
 
 [[package]]
 name = "rawr-notify"

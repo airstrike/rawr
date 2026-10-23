@@ -1,5 +1,5 @@
 [package]
-name = "rawr-attributes"
+name = "rawr-macros"
 version = "0.1.0"
 rust-version = "1.95.0"
 edition = "2024"

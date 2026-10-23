@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-rawr-attributes = { path = "../../../../attributes" }
+rawr-macros = { path = "../../../../macros" }
 
 # Its own workspace: it is not a member of Rawr's.
 [workspace]

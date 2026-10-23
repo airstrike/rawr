@@ -228,11 +228,11 @@ A module whose file doesn't start with `// rawr` is native Rust. `rawr run`
 builds it with cargo and calls it from Rawr. Saving a native module or a
 dependency triggers a native rebuild. Saving a marked file does not.
 
-`#[preview]` and `#[widget]` come from the `rawr-attributes` crate. Its library
+`#[preview]` and `#[widget]` come from the `rawr-macros` crate. Its library
 name is `rawr`. Add it to `[dependencies]`:
 
 ```toml
-rawr-attributes = { git = "https://github.com/airstrike/rawr" }
+rawr-macros = { git = "https://github.com/airstrike/rawr" }
 ```
 
 Then write `#[rawr::preview(..)]`, or `use rawr::preview;` and `#[preview(..)]`.

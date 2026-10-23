@@ -436,13 +436,13 @@ fn the_rawr_attribute_crate_builds_under_cargo_and_means_nothing_to_rawr() {
     };
     let sandbox = Sandbox::new("marked-attributes");
     let root = copy("rs-marker-attributes", &sandbox.work());
-    let attributes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../attributes");
+    let attributes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../macros");
     let manifest = root.join("Cargo.toml");
     let text = fs::read_to_string(&manifest).unwrap();
     fs::write(
         &manifest,
         text.replace(
-            "\"../../../../attributes\"",
+            "\"../../../../macros\"",
             &format!("{:?}", attributes.display().to_string()),
         ),
     )

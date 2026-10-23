@@ -83,7 +83,7 @@
 
 <h2 id="ship">Can I ship a Rawr app?</h2>
 <p>Yes. A Rawr project is an ordinary Cargo crate. <code>cargo build --release</code> builds it natively. No interpreter ships with it.</p>
-<p>Rawr runs the files marked <code>// rawr</code> while you develop. Cargo ignores the marker, because it is a comment. If you use <code>#[preview]</code> or <code>#[widget]</code>, add the <code>rawr-attributes</code> crate to <code>[dependencies]</code>. Under cargo those attributes leave the item as written.</p>
+<p>Rawr runs the files marked <code>// rawr</code> while you develop. Cargo ignores the marker, because it is a comment. If you use <code>#[preview]</code> or <code>#[widget]</code>, add the <code>rawr-macros</code> crate to <code>[dependencies]</code>. Under cargo those attributes leave the item as written.</p>
 
 <h2 id="snippets">Is it safe to run snippets on the bot?</h2>
 <p>The <code>?play</code> bot runs each snippet in a separate process. That process has <a href="/docs/play#limits">time and memory limits</a>. It writes nothing to disk. Rawr code has no access to files, processes, the network or the environment. The playground runs snippets the same way.</p>

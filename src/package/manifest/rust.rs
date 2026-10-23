@@ -84,7 +84,7 @@ impl<'a> Specification<'a> {
 }
 
 /// The package of the `rawr` attribute crate (`#[rawr::preview]`).
-const ATTRIBUTE_CRATE: &str = "rawr-attributes";
+const ATTRIBUTE_CRATE: &str = "rawr-macros";
 
 /// A Cargo `[dependencies]` table in Rawr's Rust dependency form. A
 /// version string is `{ version = "..." }`; a `-` in a key becomes `_` in the

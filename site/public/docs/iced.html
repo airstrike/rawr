@@ -145,7 +145,7 @@ impl Todos {
   <img src="/img/docs-todos.png" width="360" height="180" alt="The Todos app with an empty text input and two items, Write the docs and Ship them, each with an x button">
   <figcaption>The <code>two items</code> preview as <code>rawr snapshot</code> renders it.</figcaption>
 </figure>
-<p>The line <code>use rawr::preview;</code> is there for cargo. The <code>rawr-attributes</code> dependency provides it, as <a href="#previews">Previews and snapshots</a> describes.</p>
+<p>The line <code>use rawr::preview;</code> is there for cargo. The <code>rawr-macros</code> dependency provides it, as <a href="#previews">Previews and snapshots</a> describes.</p>
 
 <h2 id="views">Views and elements</h2>
 <p>A view returns <code>impl Widget&lt;Message&gt;</code> as views do in iced master. It can also return <code>Element&lt;'_, Message&gt;</code>.</p>
@@ -176,10 +176,10 @@ fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
 <p>Press Cmd+Shift+S in the window to save a PNG of it.</p>
 
 <h2 id="previews">Previews and snapshots</h2>
-<p><code>#[preview]</code> marks a view function to render on its own. A view can have several. The attribute comes from the <code>rawr-attributes</code> crate, whose library name is <code>rawr</code>. Add it to <code>[dependencies]</code> in <code>Cargo.toml</code>:</p>
+<p><code>#[preview]</code> marks a view function to render on its own. A view can have several. The attribute comes from the <code>rawr-macros</code> crate, whose library name is <code>rawr</code>. Add it to <code>[dependencies]</code> in <code>Cargo.toml</code>:</p>
 <div class="block">
   <div class="file"><b>Cargo.toml</b></div>
-  <pre><code data-lang="toml">rawr-attributes = { git = "https://github.com/airstrike/rawr" }</code></pre>
+  <pre><code data-lang="toml">rawr-macros = { git = "https://github.com/airstrike/rawr" }</code></pre>
 </div>
 <p>Then write <code>#[rawr::preview(..)]</code>, or write <code>use rawr::preview;</code> and then <code>#[preview(..)]</code>. Under cargo the attribute leaves the item as written. Rawr reads it itself. Cargo doesn&rsquo;t warn about a function that only previews use. The crate is not on crates.io yet.</p>
 <table>
