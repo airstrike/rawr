@@ -863,13 +863,27 @@ fn build(
         .filter(|ty| profile.owns_type(facade, ty))
         .map(|ty| *ty.identity())
         .collect::<Vec<_>>();
+    // A path the compatibility seed re-exports (iced's `Renderer` and
+    // `canvas::Event`) keeps the seed's meaning, whatever the importer made of
+    // the Rust item there.
+    let prefix = format!("{}::", facade.root());
+    let seed_aliases = compatibility
+        .map(|seed| {
+            seed.aliases()
+                .iter()
+                .filter_map(|(alias, _)| alias.to_string().strip_prefix(&prefix).map(Box::<str>::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let aliased = |path: &str| seed_aliases.iter().any(|alias| alias.as_ref() == path);
     let owned_path = |path: &str| {
-        facade
-            .types()
-            .any(|ty| ty.path() == path && owned.contains(ty.identity()))
+        aliased(path)
+            || facade
+                .types()
+                .any(|ty| ty.path() == path && owned.contains(ty.identity()))
     };
     for ty in facade.types() {
-        if profile.owns_type(facade, ty) {
+        if profile.owns_type(facade, ty) || aliased(ty.path()) {
             continue;
         }
         let identity = *ty.identity();
@@ -906,6 +920,11 @@ fn build(
             builder
                 .compatibility_type(definition, allocation)
                 .map_err(|source| entry_error(facade.root(), &definition.path(), source.into()))?;
+        }
+        for (alias, target) in seed.aliases() {
+            builder
+                .compatibility_alias(alias, target)
+                .map_err(|source| entry_error(facade.root(), &alias.to_string(), source.into()))?;
         }
     }
     for item in facade.items() {

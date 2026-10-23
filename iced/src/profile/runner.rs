@@ -3812,6 +3812,35 @@ pub fn view() -> Element<Message> { label("generated") }
             "the ordinary overload set remains exact"
         );
     }
+
+    #[test]
+    fn imported_facade_keeps_the_compatibility_seed_re_exports() {
+        let limits = rawr_import::cargo::Limits::standard();
+        let definition = crate::profile::Definition::new(&limits).unwrap();
+        let graph = rawr_import::test_fixture::iced_profile();
+        let contract = rawr_import::profile::classify(&definition, &graph, &limits).unwrap();
+        let classified = graph
+            .classify(&rawr_import::classify::Policy::standard(), &limits)
+            .unwrap();
+        let bytes = rawr_import::surface::facade::Plan::encode(&classified, &limits).unwrap();
+        let bytes = rawr_import::test_fixture::iced_text_module_facade_plan(&bytes);
+        let mut engine = rawr::Engine::new();
+        super::install_compiler_contract(&mut engine, &bytes, [0xd2; 32], &contract)
+            .expect("the imported iced facade installs");
+
+        engine
+            .compile_executable(
+                r#"
+use iced::Renderer;
+use iced::widget::canvas::Event;
+use iced::widget::canvas::stroke::Stroke;
+pub fn renderer(_renderer: &Renderer) {}
+pub fn event(_event: Event) {}
+pub fn stroke() -> Stroke<'static> { Stroke::default() }
+"#,
+            )
+            .expect("the facade's re-exports resolve beside imported iced");
+    }
 }
 
 #[cfg(test)]

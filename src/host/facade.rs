@@ -221,6 +221,31 @@ impl Builder {
         Ok(self)
     }
 
+    /// Carry one of the compatibility seed's re-exports into an imported
+    /// facade. Both paths are already qualified. The seed's own type stays the
+    /// meaning of the re-export, so an iced path the facade declares as an
+    /// alias resolves even when the importer rejects the Rust item there.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn compatibility_alias(
+        &mut self,
+        path: &host::path::Path,
+        target: &host::path::Path,
+    ) -> Result<&mut Self, host::Error> {
+        self.ensure_vacant(path, "re-export")?;
+        if self.aliases.iter().any(|(alias, _)| alias == path) {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export",
+                incoming: "re-export",
+            });
+        }
+        self.aliases
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.aliases.push((path.clone(), target.clone()));
+        Ok(self)
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn imported_module<A: host::ImportAllocation + ?Sized>(
         &mut self,
@@ -1296,11 +1321,35 @@ impl Builder {
             .retain_checked(Some(fingerprint_items), Some(fingerprint_bytes))
             .map_err(|_| host::Error::Allocation)?;
         let items = items.into_boxed_slice();
+        // A carried re-export names one of this facade's types at another path.
+        for (alias, target) in &self.aliases {
+            if self
+                .types
+                .binary_search_by(|definition| definition.path_ref().cmp(target))
+                .is_err()
+            {
+                return Err(host::Error::DuplicateFacadeEntry {
+                    path: alias.to_string().into(),
+                    existing: "re-export of an unknown type",
+                    incoming: "re-export",
+                });
+            }
+        }
+        self.aliases.sort();
+        let mut modules = Vec::new();
+        modules
+            .try_reserve_exact(self.modules.len() + self.aliases.len())
+            .map_err(|_| host::Error::Allocation)?;
+        modules.extend(self.modules.iter().cloned());
+        for (alias, target) in &self.aliases {
+            // Re-exports join the proof under a spelling no module has.
+            modules.push(host::path::Path::parse(format!("{alias}::{target}"))?);
+        }
         let fingerprint = fingerprint(
             &self.root,
             self.abi,
             self.compatibility,
-            &self.modules,
+            &modules,
             &self.types,
             &self.supports,
             &self.endpoints,
@@ -1314,7 +1363,7 @@ impl Builder {
             supports: self.supports.into_boxed_slice(),
             endpoints: self.endpoints.into_boxed_slice(),
             items,
-            aliases: Box::default(),
+            aliases: self.aliases.into_boxed_slice(),
             fingerprint,
         })
     }
@@ -1501,6 +1550,12 @@ impl Definition {
     /// Iterate over the facade's registered types in canonical path order.
     pub fn types(&self) -> impl ExactSizeIterator<Item = &host::type_def::Definition> {
         self.types.iter()
+    }
+
+    /// The facade's re-exports, each a qualified path and the type it names.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn aliases(&self) -> &[(host::path::Path, host::path::Path)] {
+        &self.aliases
     }
 
     /// Iterate over the facade's registered items in canonical path order.
