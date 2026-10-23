@@ -7401,6 +7401,28 @@ struct ResolvedEnumPattern {
 }
 
 /// A `.into()` whose `From` impl is chosen when its target is known.
+/// A `format!` piece whose value's type was not known yet where it was
+/// written: a closure parameter typed by a call later in the body. It is
+/// written over its placeholder once the callable's types are settled.
+struct PendingFormat {
+    placeholder: String,
+    ty: Ty,
+    name: String,
+    debug: bool,
+    alternate: bool,
+    precision: Option<String>,
+    span: Span,
+}
+
+/// The width of a pending `format!` piece's placeholder: room for the
+/// piece once its type is known.
+const PENDING_FORMAT_WIDTH: usize = 160;
+
+fn format_placeholder(index: usize) -> String {
+    let head = format!("__rawr_nominal_format_{index:010}");
+    format!("{head:_<PENDING_FORMAT_WIDTH$}")
+}
+
 struct PendingConversion {
     placeholder: String,
     source: Ty,
@@ -7987,6 +8009,7 @@ struct Parser<'a> {
     temporaries: usize,
     /// `.into()` conversions, chosen once their target types are known.
     pending_conversions: Vec<PendingConversion>,
+    pending_formats: Vec<PendingFormat>,
     /// Each `s.parse()`'s target and error type, the error settled by the
     /// target (`settle_parse`).
     pending_parses: Vec<(Ty, Ty, Span)>,
@@ -8227,6 +8250,7 @@ impl<'a> Parser<'a> {
             pending_arguments: None,
             temporaries: 0,
             pending_conversions: Vec::new(),
+            pending_formats: Vec::new(),
             pending_parses: Vec::new(),
             generics: BTreeMap::new(),
             pending_turbofish: None,
@@ -9604,6 +9628,90 @@ impl<'a> Parser<'a> {
 
     /// The `{}` text of `value`, a script type with a hand-written `Display`
     /// or a generic value bounded by `Display`.
+    /// `value` of type `ty` as `{}` writes it, except a float's.
+    fn display_piece(&mut self, ty: &Ty, value: origin::Fragment) -> Option<origin::Fragment> {
+        if let Some(text) = self.display_text(ty, value.clone()) {
+            return Some(text);
+        }
+        match ty {
+            Ty::Int(kind @ (Int::U64 | Int::Usize)) => Some(self.prelude_op(
+                PreludeOp::FormatBits,
+                [value, "10".into(), kind.bits().to_string().into()],
+            )),
+            Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Char | Ty::Bool => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Write each pending `format!` piece over its placeholder, now that
+    /// its value's type is known.
+    fn finish_formats(&mut self) -> Result<(), Error> {
+        for pending in std::mem::take(&mut self.pending_formats) {
+            let mut ty = self.inference.resolve(&pending.ty);
+            while let Ty::Reference { target, .. } | Ty::Boxed(target) = ty {
+                ty = self.inference.resolve(&target);
+            }
+            let name = origin::Fragment::plain(pending.name.as_str());
+            let actual = ty.name(&self.models);
+            let mismatch = |expected: &str| Error::TypeMismatch {
+                expected: expected.into(),
+                actual: actual.clone(),
+                expression: pending.span,
+            };
+            let expected = if pending.debug {
+                "a type with `Debug` in `format!`"
+            } else {
+                "a type with `Display` in `format!`"
+            };
+            let rendered = match &ty {
+                Ty::Infer(_) => return Err(mismatch(expected)),
+                Ty::Float(kind) => {
+                    let mode = i64::from(pending.debug)
+                        + if *kind == Float::F32 { 2 } else { 0 };
+                    let precision = pending.precision.clone().unwrap_or_else(|| "-1".into());
+                    self.prelude_op(
+                        PreludeOp::FormatFloat,
+                        [name, precision.into(), mode.to_string().into()],
+                    )
+                }
+                _ if pending.precision.is_some() && !matches!(ty, Ty::Int(_)) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a `format!` precision on a value whose type is written later; write the closure parameter's type".into(),
+                        source: pending.span,
+                    });
+                }
+                _ if pending.debug => {
+                    let rendered = self.debug_source(&ty, name, pending.span)?;
+                    if pending.alternate {
+                        self.prelude_op(PreludeOp::PrettyDebug, [rendered])
+                    } else {
+                        rendered
+                    }
+                }
+                _ => match self.display_piece(&ty, name) {
+                    Some(text) => text,
+                    None => return Err(mismatch(expected)),
+                },
+            };
+            let rendered = rendered.as_str().to_string();
+            if rendered.len() > pending.placeholder.len() {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "a long `format!` piece of a value whose type is written later; write the closure parameter's type".into(),
+                    source: pending.span,
+                });
+            }
+            let replacement = format!("{rendered:<width$}", width = pending.placeholder.len());
+            self.output
+                .replace_same_length(&pending.placeholder, &replacement);
+            for closure in &mut self.lifted {
+                closure
+                    .body
+                    .replace_same_length(&pending.placeholder, &replacement);
+            }
+        }
+        Ok(())
+    }
+
     fn display_text(&self, ty: &Ty, value: origin::Fragment) -> Option<origin::Fragment> {
         match ty {
             Ty::Script(id, _) => self
@@ -11202,6 +11310,7 @@ impl<'a> Parser<'a> {
     /// known, and write it over the placeholder (same length, so source
     /// locations stay exact).
     fn finish_conversions(&mut self) -> Result<(), Error> {
+        self.finish_formats()?;
         for (target, error, span) in std::mem::take(&mut self.pending_parses) {
             self.settle_parse(&target, &error, span, true)?;
         }
@@ -21248,6 +21357,26 @@ impl<'a> Parser<'a> {
                 actual: ty.name(&self.models),
                 expression: at,
             };
+            // A value whose type a later call settles, as a closure
+            // parameter: its piece is written once the types are known.
+            if matches!(ty, Ty::Infer(_))
+                && matches!(spec.kind, FormatKind::Display | FormatKind::Debug)
+                && spec.width.is_none()
+                && !spec.sign
+            {
+                let placeholder = format_placeholder(self.pending_formats.len());
+                self.pending_formats.push(PendingFormat {
+                    placeholder: placeholder.clone(),
+                    ty: types[index].0.clone(),
+                    name: names[index].clone(),
+                    debug: spec.kind == FormatKind::Debug,
+                    alternate: spec.alternate,
+                    precision: precision.clone(),
+                    span: at,
+                });
+                text.push_text(format!(" + {placeholder}"));
+                continue;
+            }
             let f32_mode = if matches!(ty, Ty::Float(Float::F32)) { 2 } else { 0 };
             let value = match spec.kind {
                 FormatKind::Exp { upper } => {
@@ -21299,23 +21428,16 @@ impl<'a> Parser<'a> {
                         rendered
                     }
                 }
-                FormatKind::Display => {
-                    if let Some(text) = self.display_text(&ty, name.clone()) {
-                        text
-                    } else if !matches!(
-                        ty,
-                        Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Char | Ty::Bool
-                    ) {
-                        return Err(mismatch("a type with `Display` in `format!`"));
-                    } else if let Some(kind @ (Int::U64 | Int::Usize)) = int {
-                        self.prelude_op(
-                            PreludeOp::FormatBits,
-                            [name, "10".into(), kind.bits().to_string().into()],
-                        )
-                    } else {
-                        name
+                FormatKind::Display => match self.display_piece(&ty, name) {
+                    Some(text) => text,
+                    None => {
+                        return Err(Error::TypeMismatch {
+                            expected: "a type with `Display` in `format!`".into(),
+                            actual: ty.name(&self.models),
+                            expression: at,
+                        });
                     }
-                }
+                },
             };
             let prefixed = spec.alternate
                 && matches!(spec.kind, FormatKind::Radix(_) | FormatKind::HexDebug(_));

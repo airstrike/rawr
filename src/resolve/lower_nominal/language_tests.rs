@@ -7479,3 +7479,36 @@ fn language_boxed_closure_field_as_a_function_value() {
     "#);
     assert_eq!(value, 242);
 }
+
+#[test]
+fn language_closure_parameter_typed_by_a_later_call() {
+    let value = run_string(
+        r#"
+        fn scaled(value: f32, by: f32) -> f32 { value * by }
+        fn count(n: u64) -> u64 { n + 1 }
+        pub fn run() -> String {
+            let label = |name, value, n| {
+                let text = format!("{name}: {:.2} {} {:?}", value, n, value);
+                scaled(value, 2.0);
+                count(n);
+                text
+            };
+            let name: &str = "size";
+            label(name, 1.5, 7)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "size: 1.50 7 1.5");
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let show = |v| format!("<{}>", v);
+            show(5u8)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "<5>");
+    rejected("pub fn run() -> i64 { let show = |v| format!(\"{}\", v); 0 } run()");
+}
