@@ -7411,3 +7411,19 @@ fn language_use_with_a_leading_path_separator() {
     "#);
     assert_eq!(value, 21);
 }
+
+#[test]
+fn language_builtin_default_calls() {
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let mut text = String::default();
+            text.push_str("abc");
+            let n = u32::default() + 4;
+            let on = if bool::default() { 0 } else { 50 };
+            let x = f32::default();
+            text.len() as i64 + n as i64 + on + x as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 57);
+}

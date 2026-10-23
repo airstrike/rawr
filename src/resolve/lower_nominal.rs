@@ -29720,6 +29720,11 @@ impl<'a> Parser<'a> {
         if builtin == Ty::String && member.as_str() == "new" && arguments.is_empty() {
             return Ok(self.literal("\"\"", Ty::String, expression));
         }
+        // `String::default()`, `u32::default()`, `bool::default()`.
+        if member.as_str() == "default" && arguments.is_empty() {
+            let source = self.default_source(&builtin, expression)?;
+            return Ok(self.operator_expr(source, builtin, expression));
+        }
         if builtin == Ty::String
             && member.as_str() == "with_capacity"
             && let [capacity] = arguments.as_mut_slice()
