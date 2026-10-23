@@ -1218,6 +1218,8 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "time::Instant"
                 | "marker"
                 | "marker::PhantomData"
+                | "cell"
+                | "cell::RefCell"
         )
     ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
         || rest.is_some_and(|rest| {
@@ -1349,6 +1351,14 @@ pub(crate) fn std_time(path: &str) -> Option<&'static str> {
         .or_else(|| path.strip_prefix("time::"))
         .unwrap_or(path);
     ["Duration", "Instant"].into_iter().find(|time| *time == name)
+}
+
+/// `std::cell::RefCell` as a path is written.
+pub(crate) fn std_cell(path: &str) -> bool {
+    matches!(
+        path,
+        "RefCell" | "cell::RefCell" | "std::cell::RefCell" | "core::cell::RefCell"
+    )
 }
 
 /// `std::marker::PhantomData` as a path is written.

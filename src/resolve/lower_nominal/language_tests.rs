@@ -7791,3 +7791,72 @@ fn language_a_map_entry_held_in_a_local_writes_the_map() {
     "#);
     assert_eq!(value, 3211);
 }
+
+#[test]
+fn language_ref_cell_borrows_and_changes_through_a_shared_reference() {
+    let value = run(r#"
+        use std::cell::RefCell;
+        struct Counter { hits: RefCell<Vec<i64>> }
+        impl Counter {
+            fn hit(&self, n: i64) {
+                let mut hits = self.hits.borrow_mut();
+                hits.push(n);
+                if hits.len() > 2 {
+                    hits.remove(0);
+                }
+            }
+            fn total(&self) -> i64 {
+                self.hits.borrow().iter().sum()
+            }
+        }
+        pub fn run() -> i64 {
+            let counter = Counter { hits: RefCell::new(Vec::new()) };
+            counter.hit(1);
+            counter.hit(20);
+            counter.hit(300);
+            counter.hits.borrow_mut().push(4000);
+            let cell = RefCell::new(5);
+            *cell.borrow_mut() += 1;
+            let old = cell.replace(7);
+            counter.total() * 100 + old * 10 + cell.into_inner()
+        }
+        run()
+    "#);
+    assert_eq!(value, 432000 + 60 + 7);
+}
+
+#[test]
+fn language_ref_cell_panics_on_a_conflicting_borrow() {
+    let error = Engine::new()
+        .eval::<i64>(
+            r#"
+            use std::cell::RefCell;
+            pub fn run() -> i64 {
+                let cell = RefCell::new(1);
+                let first = cell.borrow_mut();
+                let second = cell.borrow();
+                *second
+            }
+            run()
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("already mutably borrowed"), "{error}");
+    // A borrow ends with its block, as Rust's does.
+    let value = run(r#"
+        use std::cell::RefCell;
+        pub fn run() -> i64 {
+            let cell = RefCell::new(1);
+            {
+                let mut first = cell.borrow_mut();
+                *first += 1;
+            }
+            let second = cell.borrow();
+            *second
+        }
+        run()
+    "#);
+    assert_eq!(value, 2);
+}
+
