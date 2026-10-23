@@ -7983,6 +7983,11 @@ struct Parser<'a> {
     unresolved_calls: Vec<(ImmutableString, Span)>,
     /// Patterns matched on `&mut` places whose bindings are in scope.
     write_backs: Vec<WriteBack>,
+    /// A closure being read changes `self`.
+    self_changed: std::cell::Cell<bool>,
+    /// The statement being read makes a closure that changes `self`: it
+    /// binds the closure's `self` before it and writes it back after it.
+    lend_self: bool,
     /// The expression depth at which `&mut place` is read: a direct
     /// argument for a function's `&mut` parameter (`this_parameter`).
     mutable_borrow: Option<usize>,
@@ -8239,6 +8244,8 @@ impl<'a> Parser<'a> {
             native_modules: engine.global_modules.clone(),
             unresolved_calls: Vec::new(),
             write_backs: Vec::new(),
+            self_changed: std::cell::Cell::new(false),
+            lend_self: false,
             mutable_borrow: None,
             bound_iterators: BTreeMap::new(),
             pending_member: None,
@@ -14989,9 +14996,12 @@ impl<'a> Parser<'a> {
     fn parse_binding(&mut self, let_keyword: bool) -> Result<(), Error> {
         let pending = self.field_entries.len();
         let touched = self.begin_write_backs();
+        let outer_lend = std::mem::take(&mut self.lend_self);
+        let start = self.output.len();
         let bound = self.parse_binding_statement(let_keyword);
         self.field_entries.truncate(pending);
         bound?;
+        self.end_lend_self(outer_lend, start);
         self.end_write_backs(touched);
         self.settle_parses()
     }
@@ -15073,6 +15083,16 @@ impl<'a> Parser<'a> {
         let value = self.parse_expr_expecting(annotation.as_ref());
         self.mutable_borrow = outer;
         let mut value = value?;
+        // A closure that changes `self` writes it back after its statement,
+        // so it cannot outlive that statement in a local.
+        if self.lend_self
+            && matches!(
+                self.inference.resolve(&value.ty),
+                Ty::Fn { .. } | Ty::FnItem { .. } | Ty::Boxed(_)
+            )
+        {
+            return Err(self.unsupported("a closure that changes `self` kept in a local"));
+        }
         if let Ty::Reference {
             mutable: true,
             target,
@@ -15707,11 +15727,41 @@ impl<'a> Parser<'a> {
     fn parse_statement(&mut self) -> Result<(), Error> {
         let pending = self.field_entries.len();
         let touched = self.begin_write_backs();
+        let outer_lend = std::mem::take(&mut self.lend_self);
+        let start = self.output.len();
         let parsed = self.parse_expression_statement(pending);
         self.field_entries.truncate(pending);
         parsed?;
+        self.end_lend_self(outer_lend, start);
         self.end_write_backs(touched);
         self.settle_parses()
+    }
+
+    /// End a statement that made a closure changing `self`: bind the
+    /// closure's `self` before the statement and write it back after it.
+    fn end_lend_self(&mut self, outer: bool, start: usize) {
+        if !std::mem::replace(&mut self.lend_self, outer) {
+            return;
+        }
+        let mut statement = self.output.split_off(start);
+        statement.trim_end();
+        match self.last_expression {
+            Some((tail, endpoint)) if tail >= start => {
+                let value = self.temporary("tail");
+                let mut source =
+                    origin::Fragment::plain(format!("{{ let {SELF_CAPTURE} = this; let {value} = "));
+                source.push(statement);
+                source.push_text(format!("; this = {SELF_CAPTURE}; {value} }}"));
+                let tail = self.write_output(source, endpoint);
+                self.last_expression = Some((tail, endpoint));
+            }
+            _ => {
+                self.output
+                    .push_text(format!("let {SELF_CAPTURE} = this;\n"));
+                self.output.push(statement);
+                self.output.push_text(format!("\nthis = {SELF_CAPTURE};\n"));
+            }
+        }
     }
 
     /// Start a statement: no `&mut` pattern binding is used in it yet. The
@@ -15984,10 +16034,7 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("assignment target"));
         };
         let binding_name = lvalue.binding().clone();
-        if binding_name == SELF_CAPTURE {
-            return Err(self.unsupported("a closure that changes `self`"));
-        }
-        let Some(binding) = self.bindings.get(&binding_name) else {
+        let Some(binding) = self.mutation_binding(&binding_name) else {
             return Err(self.unsupported("assignment through an unknown binding"));
         };
         if !binding.mutable {
@@ -19744,10 +19791,7 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("assignment target in match arm"));
         };
         let binding_name = lvalue.binding().clone();
-        if binding_name == SELF_CAPTURE {
-            return Err(self.unsupported("a closure that changes `self`"));
-        }
-        let Some(binding) = self.bindings.get(&binding_name) else {
+        let Some(binding) = self.mutation_binding(&binding_name) else {
             return Err(self.unsupported("assignment through an unknown binding"));
         };
         if !binding.mutable {
@@ -27084,10 +27128,7 @@ impl<'a> Parser<'a> {
         mutation: Span,
     ) -> Result<origin::Fragment, Error> {
         let binding_name = lvalue.binding().clone();
-        if binding_name == SELF_CAPTURE {
-            return Err(self.unsupported("a closure that changes `self`"));
-        }
-        let Some(binding) = self.bindings.get(&binding_name) else {
+        let Some(binding) = self.mutation_binding(&binding_name) else {
             return Err(self.unsupported("assignment through an unknown binding"));
         };
         if !binding.mutable {
@@ -28243,6 +28284,7 @@ impl<'a> Parser<'a> {
             }
         }
         let output_hint = self.closure_output.take();
+        let outer_changed = self.self_changed.replace(false);
         let mut parameters = Vec::<(ImmutableString, Ty, Span)>::new();
         let mut patterns = Vec::<(usize, PatternSyntax)>::new();
         if token == Token::Pipe {
@@ -28501,7 +28543,15 @@ impl<'a> Parser<'a> {
             copied.push_text(" }");
             source = copied;
         }
-        if scope.captures.contains("this") && self.closures.is_empty() {
+        let changed = self.self_changed.replace(outer_changed);
+        if changed && self.closures.is_empty() {
+            // The closure changes `self`: the statement binds its `self`
+            // and writes it back after it.
+            self.lend_self = true;
+        } else if changed {
+            self.self_changed.set(true);
+        }
+        if scope.captures.contains("this") && self.closures.is_empty() && !changed {
             let mut bound = origin::Fragment::plain(format!("{{ let {SELF_CAPTURE} = this; "));
             bound.push(source);
             bound.push_text(" }");
@@ -29457,6 +29507,20 @@ impl<'a> Parser<'a> {
         Ok(substitution)
     }
 
+    /// The binding a change through `name` changes. A closure's `self` is
+    /// the method's own: the statement making the closure writes it back
+    /// (`lend_self`).
+    fn mutation_binding(&self, name: &str) -> Option<&Binding> {
+        if name == SELF_CAPTURE {
+            self.self_changed.set(true);
+            return self
+                .bindings
+                .get("this")
+                .filter(|binding| matches!(binding.kind, BindingKind::Receiver { .. }));
+        }
+        self.bindings.get(name)
+    }
+
     fn require_mutable_receiver(
         &self,
         value: &ParsedExpr,
@@ -29481,7 +29545,7 @@ impl<'a> Parser<'a> {
             };
             (name, Writeback::Direct)
         };
-        let Some(binding) = self.bindings.get(name.as_str()) else {
+        let Some(binding) = self.mutation_binding(name.as_str()) else {
             return Err(Error::InvalidMethodCall {
                 owner: definition.owner_name().into(),
                 method: definition.name().into(),

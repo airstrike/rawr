@@ -7512,3 +7512,32 @@ fn language_closure_parameter_typed_by_a_later_call() {
     assert_eq!(value, "<5>");
     rejected("pub fn run() -> i64 { let show = |v| format!(\"{}\", v); 0 } run()");
 }
+
+#[test]
+fn language_closure_mutates_through_self() {
+    let value = run(r#"
+        struct Grid { level: i64 }
+        impl Grid {
+            fn topple(&mut self) -> bool { self.level -= 1; self.level > 0 }
+        }
+        struct App { grid: Grid, speed: i64, ticks: i64 }
+        impl App {
+            fn tick(&mut self) -> Option<i64> {
+                let topples = (0..self.speed).find(|_| !self.grid.topple());
+                (0..2).for_each(|_| self.ticks += 1);
+                topples
+            }
+            fn count(&mut self) -> i64 {
+                (0..3).filter(|_| { self.ticks += 10; true }).count() as i64
+            }
+        }
+        pub fn run() -> i64 {
+            let mut app = App { grid: Grid { level: 3 }, speed: 10, ticks: 0 };
+            let found = app.tick().unwrap();
+            let counted = app.count();
+            found * 1000 + app.grid.level * 100 + app.ticks + counted * 10000
+        }
+        run()
+    "#);
+    assert_eq!(value, 30000 + 2000 + 32);
+}
