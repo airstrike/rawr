@@ -7352,6 +7352,21 @@ fn language_patterns_on_a_mut_receiver_write_back() {
 }
 
 #[test]
+fn language_slice_patterns_on_mut_places_write_back() {
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let mut v = vec![1, 2, 3, 4];
+            if let [first, .., last] = &mut v[..] { *first = 5; *last = 9; }
+            if let [a, b] = &mut v[1..3] { *a += 10; *b += 20; }
+            match v.as_mut_slice() { [.., z] => *z += 100, [] => {} }
+            v[0] * 1000000 + v[1] * 10000 + v[2] * 100 + v[3] - 100
+        }
+        run()
+    "#);
+    assert_eq!(value, 5 * 1000000 + 12 * 10000 + 23 * 100 + 9);
+}
+
+#[test]
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(error.contains("nknown function") && error.contains("centre"), "{error}");

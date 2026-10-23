@@ -17084,7 +17084,24 @@ impl<'a> Parser<'a> {
                 let nested = (**nested).clone();
                 self.nested_parts(&nested)
             }
-            Some(Lvalue::Slice(_)) | None => {
+            // `&mut v[a..b]`: the range is read again and stored back.
+            Some(Lvalue::Slice(slice)) => {
+                let slice = (**slice).clone();
+                (
+                    origin::Fragment::default(),
+                    self.prelude_op(
+                        PreludeOp::Slice,
+                        [
+                            slice.base.clone(),
+                            slice.low.clone(),
+                            slice.high.clone(),
+                            slice.inclusive.to_string().into(),
+                        ],
+                    ),
+                    origin::Fragment::default(),
+                )
+            }
+            None => {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: "binding parts of a `&mut` value that is not a local, a field \
                                 or an element"
@@ -17118,9 +17135,17 @@ impl<'a> Parser<'a> {
         hook.push_text(format!(
             ", {scrutinee}, [{values}]); if {written}[0] {{ "
         ));
-        hook.push(place);
+        if let Some(Lvalue::Slice(_)) = &lvalue {
+            let stored = format!("{written}[1]");
+            let mut place = subject.clone();
+            place.lvalue = lvalue.clone();
+            hook.push(self.store_into(&place, &stored)?);
+        } else {
+            hook.push(place);
+            hook.push_text(format!(" = {written}[1];"));
+        }
         hook.push_text(format!(
-            " = {written}[1]; {scrutinee} = {written}[1]; }} else {{ {scrutinee} = (); }} "
+            " {scrutinee} = {written}[1]; }} else {{ {scrutinee} = (); }} "
         ));
         hook.push(store);
         hook.push_text("}");
@@ -29157,6 +29182,10 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // `v.as_mut_slice()` is the place `v`, which a pattern writes back.
+        let whole = (member.as_str() == "as_mut_slice")
+            .then(|| value.lvalue.clone())
+            .flatten();
         // A sort or a mutable walk of `v[a..b]` changes a copy of the
         // range, stored back over it.
         if let Some(Lvalue::Slice(_)) = &value.lvalue
@@ -29612,7 +29641,11 @@ impl<'a> Parser<'a> {
                 })
             }
         };
-        Ok(self.operator_expr(source, ty, expression))
+        let mut parsed = self.operator_expr(source, ty, expression);
+        if whole.is_some() {
+            parsed.lvalue = whole;
+        }
+        Ok(parsed)
     }
 
     /// `v.sort()`, `sort_by(f)` and `sort_by_key(f)` (and their
