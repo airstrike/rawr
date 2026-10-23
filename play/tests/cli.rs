@@ -8,7 +8,7 @@ use std::process::Command;
 fn cli_writes_a_png() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/play/cli-test");
     std::fs::create_dir_all(&root).unwrap();
-    let input = root.join("hello.rawr");
+    let input = root.join("hello.rs");
     let output = root.join("hello.png");
     let _ = std::fs::remove_file(&output);
     std::fs::write(
@@ -178,7 +178,7 @@ fn cli_reports_a_plain_compile_error_on_stderr() {
     let result = run_stdin("fn main() {\n    let x: i64 = \"s\";\n}\n", &[]);
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("play.rawr:2:"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("play.rs:2:"));
 }
 
 #[test]

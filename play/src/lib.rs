@@ -251,7 +251,7 @@ impl fmt::Display for PlayError {
 impl std::error::Error for PlayError {}
 
 /// Identity used for the wrapped source in diagnostics.
-pub const SOURCE_NAME: &str = "play.rawr";
+pub const SOURCE_NAME: &str = "play.rs";
 
 /// What a snippet gave: the first frame of an iced snippet, or a plain
 /// program's output.
@@ -956,7 +956,7 @@ impl State {
         let PlayError::Compile(text) = error else {
             panic!("expected a compile error, got {error:?}");
         };
-        assert!(text.contains("play.rawr"), "{text}");
+        assert!(text.contains("play.rs"), "{text}");
     }
 
     #[test]
@@ -965,7 +965,7 @@ impl State {
         let PlayError::Compile(text) = error else {
             panic!("expected a compile error, got {error:?}");
         };
-        assert!(text.contains(" --> play.rawr:1:12\n"), "{text}");
+        assert!(text.contains(" --> play.rs:1:12\n"), "{text}");
         assert!(text.contains(" 1 | text(\"hi\").bogus(1)\n"), "{text}");
         assert!(text.contains("   |            ^\n"), "{text}");
         assert!(!text.contains("use iced"), "{text}");
@@ -1071,13 +1071,13 @@ impl State {
         let PlayError::Compile(text) = error else {
             panic!("expected a compile error, got {error:?}");
         };
-        assert!(text.contains("play.rawr:1:14"), "{text}");
+        assert!(text.contains("play.rs:1:14"), "{text}");
         assert!(text.contains(" 1 | let x: i64 = \"s\";"), "{text}");
         let error = super::run("let a = 1;\na + true", &Options::default()).unwrap_err();
         let PlayError::Compile(text) = error else {
             panic!("expected a compile error, got {error:?}");
         };
-        assert!(text.contains("play.rawr:2:"), "{text}");
+        assert!(text.contains("play.rs:2:"), "{text}");
     }
 
     #[test]
@@ -1126,7 +1126,7 @@ impl State {
         let PlayError::Compile(text) = error else {
             panic!("expected a compile error, got {error:?}");
         };
-        assert!(text.contains("play.rawr:2:"), "{text}");
+        assert!(text.contains("play.rs:2:"), "{text}");
     }
 
     #[test]

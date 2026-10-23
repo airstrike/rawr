@@ -1,4 +1,4 @@
-//! `rawr-play <file.rawr|-> [--size WxH] [--theme dark|light] [--message M]...
+//! `rawr-play <file.rs|-> [--size WxH] [--theme dark|light] [--message M]...
 //! [--format png|jpg|webp] [--time-ms N] [--memory-mb N] [--fonts DIR] -o <out|->`
 //!
 //! `--fonts DIR` draws with iced's embedded faces and the fonts in `DIR`
@@ -22,7 +22,7 @@
 use std::io::{Read, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rawr-play <file.rawr|-> [--size WxH] [--theme dark|light] \
+const USAGE: &str = "usage: rawr-play <file.rs|-> [--size WxH] [--theme dark|light] \
 [--message EXPR]... [--format png|jpg|webp] [--time-ms N] [--memory-mb N] [--fonts DIR] -o <out|->";
 
 /// Print the guild ID behind each token, or the token for each guild ID.

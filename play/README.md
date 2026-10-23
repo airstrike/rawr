@@ -41,8 +41,8 @@ bypass the 2048 cap); use `size=WxH` instead.
 ## CLI
 
 ```sh
-cargo run -p rawr-play -- hello.rawr --size 400x300 --theme dark -o target/play/hello.png
-cargo run -p rawr-play -- counter.rawr --message Message::Increment -o target/play/counter.webp
+cargo run -p rawr-play -- hello.rs --size 400x300 --theme dark -o target/play/hello.png
+cargo run -p rawr-play -- counter.rs --message Message::Increment -o target/play/counter.webp
 echo 'text("hi")' | cargo run -p rawr-play -- - --format webp -o - > target/play/hi.webp
 ```
 
