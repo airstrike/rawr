@@ -1242,6 +1242,11 @@ fn parse_use(
     start: Position,
 ) -> ParseResult<crate::item::Use> {
     expect(input, Token::Use, "to start an import")?;
+    // `use ::image as img;`: a leading `::` names an outside crate. Rawr's
+    // first import segment already does.
+    if matches!(input.peek(), Some((Token::DoubleColon, _))) {
+        input.next();
+    }
     let first = parse_use_segment(input, "as the first import path segment")?;
     let mut segments = vec![type_ref::Segment {
         span: first.span,

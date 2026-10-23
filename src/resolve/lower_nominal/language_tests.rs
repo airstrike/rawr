@@ -7397,3 +7397,17 @@ fn language_field_and_variant_attributes_are_inert() {
     "#);
     assert_eq!(value, 654321);
 }
+
+#[test]
+fn language_use_with_a_leading_path_separator() {
+    let value = run(r#"
+        use ::std::cmp::Ordering;
+        use ::std::time::{Duration};
+        pub fn run() -> i64 {
+            let a = match 1.cmp(&2) { Ordering::Less => 1, _ => 0 };
+            a + Duration::from_millis(20).as_millis() as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 21);
+}
