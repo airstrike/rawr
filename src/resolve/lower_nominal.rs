@@ -2730,6 +2730,9 @@ enum Op {
         state: Ty,
         task: Ty,
     },
+    /// The boot's startup envelope as the `(State, Task)` tuple it is in
+    /// Rust, where script code calls the boot.
+    OpenStartup,
     Struct {
         definition: type_def::Definition,
         item: item::Struct,
@@ -3996,6 +3999,7 @@ enum ExecutableOp {
         state: TypeId,
         task: TypeId,
     },
+    OpenStartup,
     Struct {
         definition: type_def::Definition,
         item: item::Struct,
@@ -4331,6 +4335,7 @@ impl ExecutableOp {
                 dependencies
             }
             Self::Startup { .. }
+            | Self::OpenStartup
             | Self::Struct { .. }
             | Self::Enum { .. }
             | Self::Field { .. }
@@ -4359,6 +4364,7 @@ impl ExecutableOp {
             | Self::Perform { .. }
             | Self::Stream { .. }
             | Self::Startup { .. }
+            | Self::OpenStartup
             | Self::Widget { .. }
             | Self::Change { .. }
             | Self::Struct { .. }
@@ -4391,6 +4397,7 @@ impl ExecutableOp {
             | Self::Projection { .. }
             | Self::Stream { .. }
             | Self::Startup { .. }
+            | Self::OpenStartup
             | Self::Widget { .. }
             | Self::Change { .. }
             | Self::Struct { .. }
@@ -4523,6 +4530,9 @@ impl ExecutableOp {
             Self::Startup { .. } => {
                 return format!("\0rawr.application.startup.{support_id:016x}");
             }
+            Self::OpenStartup => {
+                return format!("\0rawr.application.open-startup.{support_id:016x}");
+            }
             Self::Struct { definition, .. } => (definition, "construct".to_string()),
             Self::Enum {
                 definition,
@@ -4625,6 +4635,7 @@ impl ExecutableOp {
                 vec![output.runtime(), state.runtime()]
             }
             Self::Startup { state, task } => vec![*state, *task],
+            Self::OpenStartup => vec![TypeId::of::<crate::application::startup::Envelope>()],
             Self::Struct { item, .. } => item
                 .fields
                 .iter()
@@ -4874,6 +4885,14 @@ impl ExecutableOp {
                 args[0].take(),
                 args[1].take(),
             ))),
+            Self::OpenStartup => {
+                let (state, task) = crate::application::startup::Envelope::open(
+                    args[0].take(),
+                    models.runtime.generation(),
+                )
+                .map_err(|error| invariant(&error.to_string()))?;
+                Ok(Dynamic::from_array(vec![state, task]))
+            }
             Self::Struct {
                 definition,
                 item: _,
@@ -11877,6 +11896,7 @@ impl<'a> Parser<'a> {
                 state: self.executable_type_id(&state, "application startup state", Span::NONE)?,
                 task: self.executable_type_id(&task, "application startup task", Span::NONE)?,
             },
+            Op::OpenStartup => ExecutableOp::OpenStartup,
             Op::Struct { definition, item } => ExecutableOp::Struct { definition, item },
             Op::Enum {
                 definition,
@@ -16337,6 +16357,16 @@ impl<'a> Parser<'a> {
         self.last_type = Ty::Never;
         self.last_expression = None;
         Ok(())
+    }
+
+    /// `source`, a call of the boot, opened into its `(State, Task)` tuple
+    /// when `opens` is set.
+    fn opened_startup(&mut self, opens: bool, source: origin::Fragment) -> origin::Fragment {
+        if !opens {
+            return source;
+        }
+        let helper = self.push_op(Op::OpenStartup);
+        origin::Fragment::call(&helper, [source])
     }
 
     fn parse_startup_tail(&mut self, output: &type_ref::Type) -> Result<(), Error> {
@@ -29008,6 +29038,7 @@ impl<'a> Parser<'a> {
                 .push((name.clone(), span(name_span.start(), end)));
         }
         let mut witnesses = Vec::new();
+        let mut opens_startup = false;
         let output = if let Some(function) = function {
             self.used_nominal = true;
             if arguments.len() != function.definition.parameters.len() {
@@ -29034,13 +29065,10 @@ impl<'a> Parser<'a> {
                 let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
             }
-            if function.definition.output.as_ref().is_some_and(is_tuple)
-                && self.models.boot.as_ref() == Some(&function.key)
-            {
-                return Err(self.unsupported(
-                    "tuple-valued function calls outside the explicit boot boundary",
-                ));
-            }
+            // The boot returns its sealed startup envelope: script code
+            // that calls it gets the tuple back.
+            opens_startup = function.definition.output.as_ref().is_some_and(is_tuple)
+                && self.models.boot.as_ref() == Some(&function.key);
             let output = instantiate(
                 &function
                     .definition
@@ -29064,6 +29092,7 @@ impl<'a> Parser<'a> {
                     .collect();
                 let source = self.mutation_call(&place, &name, operands)?;
                 let source = self.copied_call(source, &places[1..])?;
+                let source = self.opened_startup(opens_startup, source);
                 return Ok(self.operator_expr(source, output, call));
             }
             if !places.is_empty() {
@@ -29075,21 +29104,23 @@ impl<'a> Parser<'a> {
                         .chain(witnesses),
                 );
                 let source = self.copied_call(source, &places)?;
+                let source = self.opened_startup(opens_startup, source);
                 return Ok(self.operator_expr(source, output, call));
             }
             output
         } else {
             self.native_output(&name, arguments.len()).unwrap_or(Ty::Unknown)
         };
+        let source = origin::Fragment::call(
+            name.as_str(),
+            arguments
+                .iter()
+                .map(ParsedExpr::rendered_source)
+                .chain(witnesses),
+        );
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
-            source: origin::Fragment::call(
-                name.as_str(),
-                arguments
-                    .iter()
-                    .map(ParsedExpr::rendered_source)
-                    .chain(witnesses),
-            ),
+            source: self.opened_startup(opens_startup, source),
             ty: output,
             span: span(name_span.start(), end),
             lvalue: None,
@@ -31141,12 +31172,8 @@ impl<'a> Parser<'a> {
                 span(owner_span.start(), end),
                 &substitution,
             )?;
-            if is_tuple(definition.output()) && self.models.boot.as_ref() == Some(definition.key())
-            {
-                return Err(self.unsupported(
-                    "tuple-valued associated calls outside the explicit boot boundary",
-                ));
-            }
+            let opens_startup = is_tuple(definition.output())
+                && self.models.boot.as_ref() == Some(definition.key());
             let witnesses = self.witness_arguments(
                 definition.generics(),
                 &substitution,
@@ -31160,9 +31187,10 @@ impl<'a> Parser<'a> {
                     .map(ParsedExpr::rendered_source)
                     .chain(witnesses),
             );
+            let source = self.copied_call(source, &places)?;
             return Ok(ParsedExpr {
                 prelude: origin::Fragment::default(),
-                source: self.copied_call(source, &places)?,
+                source: self.opened_startup(opens_startup, source),
                 ty: instantiate(&Ty::from_resolved(definition.output()), &substitution),
                 span: span(owner_span.start(), end),
                 lvalue: None,

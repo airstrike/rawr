@@ -200,19 +200,18 @@ fn foreign_startup_done_is_dropped_without_mutation_or_diagnostic() {
 }
 
 #[test]
-fn startup_envelope_cannot_escape_through_an_ordinary_script_call() {
-    let mut source = explicit_source("(Counter, Task<Message>)", "Task<Message>");
-    source.push_str("\npub fn leak() -> (Counter, Task<Message>) { Counter::boot() }\n");
-    let mut engine = Engine::new();
-    rawr_iced::install(&mut engine).unwrap();
-
-    let error = engine.compile_application_descriptor(source).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("tuple-valued associated calls outside the explicit boot boundary"),
-        "{error}"
+fn a_script_call_of_the_boot_gets_its_state_and_task() {
+    let mut source = explicit_source("(Counter, Task<Message>)", "Task<Message>").replace(
+        "self.value += 1;",
+        "let (fresh, _task) = Counter::boot(); self.value += fresh.value;",
     );
+    source.push_str("\npub fn again() -> (Counter, Task<Message>) { Counter::boot() }\n");
+    let mut adapter = boot(&source);
+    let message = click(&adapter, "Increment");
+
+    adapter.update(message).unwrap();
+    adapter.refresh_view().unwrap();
+    assert_text(&adapter, "14");
 }
 
 #[test]
