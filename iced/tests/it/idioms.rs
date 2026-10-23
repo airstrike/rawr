@@ -1151,3 +1151,18 @@ fn plain(_theme: &Theme) -> container::Style {
     styled(&adapter, "dim");
     styled(&adapter, "plain");
 }
+
+#[test]
+fn a_use_starts_at_a_module_another_use_imported() {
+    let adapter = boot_with(
+        r#"text(if spaced() { "space" } else { "other" })"#,
+        r#"
+use iced::keyboard;
+fn spaced() -> bool {
+    use keyboard::key;
+    keyboard::Key::Named(key::Named::Space) == keyboard::Key::Named(key::Named::Space)
+}
+"#,
+    );
+    find(&adapter, "space");
+}

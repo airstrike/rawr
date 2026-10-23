@@ -937,6 +937,33 @@ fn resolve_imports(
 ) -> Result<Vec<Option<item::Use>>, Error> {
     let mut occupied = local_declarations.clone();
     let mut uses = vec![None; parsed_items.len()];
+    // A `use` may start at a module another `use` imported, as Rust allows:
+    // after `use iced::keyboard;`, `use keyboard::key;` names
+    // `iced::keyboard::key`.
+    let mut modules = BTreeMap::<ImmutableString, ImmutableString>::new();
+    for parsed in parsed_items {
+        let crate::item::Parsed::Use(parsed) = parsed else {
+            continue;
+        };
+        for (name, path) in parsed.bindings() {
+            let qualified = host.canonical_str(&std_reexport(&path.join("::"), host));
+            if matches!(host.entry(&qualified), Some(host::Entry::Module)) {
+                modules.insert(name.text, qualified);
+            }
+        }
+    }
+    let through_module = |path: ImmutableString| -> ImmutableString {
+        if host.entry(&std_reexport(&path, host)).is_some() {
+            return path;
+        }
+        match path.split_once("::") {
+            Some((first, rest)) => match modules.get(first) {
+                Some(module) => format!("{module}::{rest}").into(),
+                None => path,
+            },
+            None => path,
+        }
+    };
 
     for (index, parsed) in parsed_items.iter().enumerate() {
         let crate::item::Parsed::Use(parsed) = parsed else {
@@ -970,7 +997,7 @@ fn resolve_imports(
             });
         }
         if let crate::item::UseTree::Group { prefix, .. } = &parsed.tree {
-            let prefix = parsed_path(prefix);
+            let prefix = through_module(parsed_path(prefix));
             match host.entry(&std_reexport(&prefix, host)) {
                 None if std_fmt_import(&prefix) => {}
                 Some(host::Entry::Module | host::Entry::ModuleItem(_) | host::Entry::Type(_)) => {}
@@ -991,7 +1018,7 @@ fn resolve_imports(
             }
         }
         for (name, path) in parsed.bindings() {
-            let qualified: ImmutableString = path.join("::").into();
+            let qualified = through_module(path.join("::").into());
             bindings.push(resolve_import_binding(name, qualified, host)?);
         }
         for (name, qualified) in globbed {
