@@ -242,8 +242,8 @@ test("the landing page's runnable sources are its files, exactly", async () => {
   const sources = runnable(html);
   assert.equal(sources.length, 2, "cart.rs and the counter");
   assert.deepEqual(runBlocks(html).map((block) => block.name), ["cart.rs", "main.rs"]);
-  // What the page shows (and its Run button sends) is examples/scripts/cart.rs.
-  assert.equal(sources[0], readFileSync(new URL("examples/scripts/cart.rs", root), "utf8").trimEnd());
+  // What the page shows (and its Run button sends) is examples/scripts/cart.rawr, marked as a program.
+  assert.equal(sources[0], "// rawr\n" + readFileSync(new URL("examples/scripts/cart.rawr", root), "utf8").trimEnd());
   assert.match(sources[1], /^\/\/ rawr\nuse iced::Center;\n/);
   assert.ok(sources[1].includes("fn view(&self) -> impl Widget<Message> {"));
   assert.equal(decodeHtml("&amp;self &lt;T&gt; &rsquo; &#39; &#x41;"), "&self <T> ’ ' A");
