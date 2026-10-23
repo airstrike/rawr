@@ -356,8 +356,14 @@ fn render_application(
     let compile = |error: rawr_iced::application::Error| {
         PlayError::Compile(report(&error.report(diagnostic(program)), program, source))
     };
-    let mut adapter = compiler
-        .check_named_source(SOURCE_NAME, program)
+    // An inline `mod` needs the crate compiler, which reads the one file
+    // as a crate's root.
+    let checked = if has_top_level_mod(program) {
+        compiler.check_named_crate_source(SOURCE_NAME, program)
+    } else {
+        compiler.check_named_source(SOURCE_NAME, program)
+    };
+    let mut adapter = checked
         .and_then(rawr_iced::application::Checked::prepare)
         .map_err(compile)?
         .into_adapter();
@@ -738,6 +744,27 @@ pub fn wrap(source: &str, options: &Options) -> Result<String, PlayError> {
 /// `iced::application`.
 fn runs_itself(source: &str) -> bool {
     source.contains("iced::run(") || source.contains("iced::application(")
+}
+
+/// Whether a line of `source` outside every brace declares an inline
+/// module: `mod name {` or `pub mod name {`.
+fn has_top_level_mod(source: &str) -> bool {
+    let mut depth = 0usize;
+    for line in source.lines() {
+        let item = line.trim_start();
+        let item = item.strip_prefix("pub ").unwrap_or(item);
+        if depth == 0 && item.starts_with("mod ") && item.contains('{') {
+            return true;
+        }
+        for c in line.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 /// Whether a line of `source` outside every brace starts with `use `.
@@ -1448,6 +1475,20 @@ fn view() -> impl Widget<()> {
             };
             assert!(error.contains("?play has no files"), "{error}");
         }
+    }
+
+    #[test]
+    fn an_app_with_an_inline_module_renders() {
+        let source = include_str!("../tests/fixtures/counter.rs")
+            .replace("text(self.value)", "text(label::of(self.value))");
+        let source = format!("mod label {{\n    pub fn of(value: i64) -> String {{\n        format!(\"count {{value}}\")\n    }}\n}}\n{source}");
+        let with_module = image(&source);
+        let inline = image(
+            &include_str!("../tests/fixtures/counter.rs")
+                .replace("text(self.value)", "text(format!(\"count {}\", self.value))"),
+        );
+        assert!(is_png(&with_module.bytes));
+        assert_eq!(with_module.bytes, inline.bytes);
     }
 
     #[test]
