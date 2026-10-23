@@ -1685,6 +1685,71 @@ fn master_rotations_match_and_turn_images() {
     find(&adapter, "true");
 }
 
+/// iced master's gallery example fades with an `Animation<bool>`.
+#[test]
+fn master_bool_animations_go_and_interpolate() {
+    let mut adapter = boot(
+        r#"
+use iced::animation;
+use iced::time::{Instant, milliseconds};
+use iced::widget::{button, column, text};
+use iced::{Animation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct State {
+    fade_in: Animation<bool>,
+    now: Instant,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let now = Instant::now();
+        Self {
+            fade_in: Animation::new(false)
+                .easing(animation::Easing::EaseIn)
+                .duration(milliseconds(200)),
+            now,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Show,
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Show => self.fade_in.go_mut(true, self.now),
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let opacity = self.fade_in.interpolate(0.0, 1.0, self.now);
+        column![
+            button(text("Show")).on_press(Message::Show),
+            text(format!(
+                "{} {} {opacity:.1}",
+                self.fade_in.value(),
+                self.fade_in.is_animating(self.now)
+            )),
+        ]
+    }
+}
+"#,
+    );
+    find(&adapter, "false false 0.0");
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("Show").unwrap();
+    let show = simulator.into_messages().next().expect("the button emits");
+    adapter.update(show).unwrap();
+    find(&adapter, "true true 0.0");
+}
+
 /// iced master's ferris example turns its rotation through
 /// `*self.rotation.radians_mut() = ..`.
 #[test]

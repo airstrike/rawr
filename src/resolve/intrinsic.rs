@@ -118,6 +118,11 @@ impl Proof {
         requirement
     }
 
+    /// Whether this is a method with a `&mut self` receiver.
+    pub(super) fn mutates_receiver(&self) -> bool {
+        self.receiver == Some(crate::receiver::Mode::Mutable)
+    }
+
     pub(super) fn symbol_id(&self) -> u64 {
         crate::program::schema::symbol_id(self)
     }

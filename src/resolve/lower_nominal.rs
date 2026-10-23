@@ -5177,6 +5177,9 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
     // A map's or set's operation takes it by reference, as a method.
     let by_reference = match &op {
         ExecutableOp::Prelude(op) => op.by_reference(),
+        // A facade method with a `&mut self` receiver changes the receiver
+        // it is called on, which the caller stores back.
+        ExecutableOp::Intrinsic { proof } if proof.mutates_receiver() => Some(true),
         _ => None,
     };
     // Output is a side effect: never folded or dropped.
@@ -15052,6 +15055,7 @@ impl<'a> Parser<'a> {
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let ty = facade_output(&item, &output);
+        let mutable = item.receiver() == Some(receiver::Mode::Mutable);
         let helper = self.push_intrinsic(
             item,
             owner,
@@ -15061,6 +15065,47 @@ impl<'a> Parser<'a> {
             signature.requirements,
             call,
         )?;
+        // `animation.go_mut(..)` of a facade value in a place: the call
+        // changes a copy, which is stored back, as a script `&mut self`
+        // method's receiver is.
+        if mutable
+            && definition.identity().imported().is_none()
+            && !scoped
+            && self.host_witnesses.is_empty()
+            && let Some(lvalue) = receiver.lvalue.clone()
+        {
+            self.require_mutable_binding(lvalue.binding(), member_span)?;
+            let place = self.temporary("receiver");
+            let result = self.temporary("result");
+            let mut prelude = origin::Fragment::default();
+            let operands = arguments
+                .into_iter()
+                .enumerate()
+                .map(|(index, argument)| {
+                    self.materialize(argument, &format!("{helper}_arg_{index}"), &mut prelude)
+                })
+                .collect::<Vec<_>>();
+            let mut source = origin::Fragment::plain("{ ");
+            source.push(prelude);
+            source.push_text(format!("let {place} = "));
+            source.push(receiver.rendered_source());
+            source.push_text(format!("; let {result} = {place}.{helper}("));
+            source.push(origin::Fragment::join(operands, ", "));
+            source.push_text("); ");
+            let store = self.store_lvalue(&lvalue, origin::Fragment::plain(place))?;
+            source.push(store);
+            source.push_text(format!(" {result} }}"));
+            return Ok(ParsedExpr {
+                prelude: origin::Fragment::default(),
+                source,
+                ty,
+                span: call,
+                lvalue: None,
+                outcome,
+                evaluation,
+            }
+            .retain_origin());
+        }
         let (prelude, source) =
             self.private_call(&helper, std::iter::once(receiver).chain(arguments));
         Ok(ParsedExpr {
@@ -15073,6 +15118,44 @@ impl<'a> Parser<'a> {
             evaluation,
         }
         .retain_origin())
+    }
+
+    /// The statement storing `value` into `lvalue`.
+    fn store_lvalue(
+        &mut self,
+        lvalue: &Lvalue,
+        value: origin::Fragment,
+    ) -> Result<origin::Fragment, Error> {
+        Ok(match lvalue {
+            Lvalue::Binding { binding, .. } => {
+                let mut rendered = origin::Fragment::plain(format!("{binding} = "));
+                rendered.push(value);
+                rendered.push_text(";");
+                rendered
+            }
+            Lvalue::Place { place, .. } => {
+                let mut rendered = place.clone();
+                rendered.push_text(" = ");
+                rendered.push(value);
+                rendered.push_text(";");
+                rendered
+            }
+            Lvalue::Field(field) => {
+                let helper = self.push_op(Op::SetField {
+                    definition: field.definition.clone(),
+                    slot: field.slot,
+                });
+                let mut rendered = origin::Fragment::plain(format!(
+                    "{} = {helper}({}, ",
+                    field.binding, field.binding
+                ));
+                rendered.push(value);
+                rendered.push_text(");");
+                rendered
+            }
+            Lvalue::Slice(_) => return Err(self.unsupported("changing a slice range in place")),
+            Lvalue::Nested(nested) => self.store_nested(nested, value),
+        })
     }
 
     #[cfg(feature = "rust-import")]

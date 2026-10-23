@@ -522,7 +522,17 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         &[],
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
-    builder.value_type::<marker::Animation>("Animation", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<marker::Animation>(
+        "Animation",
+        &["T"],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
     builder.value_type::<marker::Easing>("animation::Easing", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.value_type::<marker::Instant>("time::Instant", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.project("widget::Column", "Element", &["Message"])?;
@@ -1764,30 +1774,7 @@ fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
     )?)?;
     length_builders(builder, "widget::ProgressBar", &["length", "girth"])?;
 
-    builder.item(item::Definition::associated_function(
-        "Animation::new",
-        repeated_builtin_signature(type_ref::Builtin::F64, 1, "Animation")?,
-    )?)?;
-    for name in ["very_quick", "quick", "slow", "very_slow"] {
-        builder.item(item::Definition::method(
-            format!("Animation::{name}"),
-            receiver::Mode::Owned,
-            output_signature("Animation")?,
-        )?)?;
-    }
-    builder.item(item::Definition::method(
-        "Animation::easing",
-        receiver::Mode::Owned,
-        fixed_builder_signature("Animation", type_ref::Type::registered("animation::Easing")?)?,
-    )?)?;
-    let mut interpolate = signature::Builder::new();
-    interpolate.parameter(type_ref::Type::registered("time::Instant")?);
-    interpolate.output(type_ref::Type::builtin(type_ref::Builtin::F64));
-    builder.item(item::Definition::method(
-        "Animation::interpolate",
-        receiver::Mode::Owned,
-        interpolate.finish(),
-    )?)?;
+    declare_animation(builder)?;
     for name in EASINGS {
         builder.item(item::Definition::associated_value(
             format!("animation::Easing::{name}"),
@@ -1801,11 +1788,11 @@ fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
     // `impl Fn() -> Animation`: a callable of no inputs takes `()`.
     transition.parameter(type_ref::Type::callable(
         type_ref::Type::unit(),
-        type_ref::Type::registered("Animation")?,
+        float_animation()?,
     ));
     transition.parameter(type_ref::Type::callable(
         type_ref::Type::tuple([
-            type_ref::Type::registered("Animation")?,
+            float_animation()?,
             type_ref::Type::registered("time::Instant")?,
         ])?,
         type_ref::Type::applied("Element", [type_ref::Type::parameter("Message")?])?,
@@ -1815,6 +1802,99 @@ fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
         [type_ref::Type::parameter("Message")?],
     )?);
     builder.item(item::Definition::function("widget::transition", transition.finish())?)?;
+    Ok(())
+}
+
+/// iced's `Animation<f32>`, as `transition` takes it.
+fn float_animation() -> Result<type_ref::Type, host::Error> {
+    type_ref::Type::applied("Animation", [type_ref::Type::builtin(type_ref::Builtin::F64)])
+}
+
+/// iced's `Animation<T>` of a `bool` or an `f32`: `new`, its builders, `go`
+/// and `go_mut` at an `Instant`, `is_animating`, `value`, `remaining` and
+/// `interpolate`. A `bool` animation interpolates between two numbers; a
+/// number animation interpolates its own value.
+fn declare_animation(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let t = || type_ref::Type::parameter("T");
+    let animation = || type_ref::Type::applied("Animation", [t()?]);
+    let instant = || type_ref::Type::registered("time::Instant");
+    let duration = || type_ref::Type::registered("time::Duration");
+    let f64 = || type_ref::Type::builtin(type_ref::Builtin::F64);
+    let method = |builder: &mut facade::Builder,
+                  name: &str,
+                  mode: receiver::Mode,
+                  inputs: Vec<type_ref::Type>,
+                  output: type_ref::Type|
+     -> Result<(), host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("T", &[])?;
+        for input in inputs {
+            signature.parameter(input);
+        }
+        signature.output(output);
+        builder.item(item::Definition::method(
+            format!("Animation::{name}"),
+            mode,
+            signature.finish(),
+        )?)?;
+        Ok(())
+    };
+    let mut new = signature::Builder::new();
+    new.type_parameter("T", &[])?;
+    new.parameter(t()?).output(animation()?);
+    builder.item(item::Definition::associated_function("Animation::new", new.finish())?)?;
+    for name in [
+        "very_quick",
+        "quick",
+        "slow",
+        "very_slow",
+        "repeat_forever",
+        "auto_reverse",
+    ] {
+        method(builder, name, receiver::Mode::Owned, Vec::new(), animation()?)?;
+    }
+    method(
+        builder,
+        "easing",
+        receiver::Mode::Owned,
+        vec![type_ref::Type::registered("animation::Easing")?],
+        animation()?,
+    )?;
+    for name in ["duration", "delay"] {
+        method(builder, name, receiver::Mode::Owned, vec![duration()?], animation()?)?;
+    }
+    method(
+        builder,
+        "repeat",
+        receiver::Mode::Owned,
+        vec![type_ref::Type::builtin(type_ref::Builtin::I64)],
+        animation()?,
+    )?;
+    method(builder, "go", receiver::Mode::Owned, vec![t()?, instant()?], animation()?)?;
+    method(
+        builder,
+        "go_mut",
+        receiver::Mode::Mutable,
+        vec![t()?, instant()?],
+        type_ref::Type::unit(),
+    )?;
+    method(
+        builder,
+        "is_animating",
+        receiver::Mode::Shared,
+        vec![instant()?],
+        type_ref::Type::builtin(type_ref::Builtin::Bool),
+    )?;
+    method(builder, "value", receiver::Mode::Shared, Vec::new(), t()?)?;
+    method(builder, "remaining", receiver::Mode::Shared, vec![instant()?], duration()?)?;
+    method(builder, "interpolate", receiver::Mode::Shared, vec![instant()?], f64())?;
+    method(
+        builder,
+        "interpolate",
+        receiver::Mode::Shared,
+        vec![f64(), f64(), instant()?],
+        f64(),
+    )?;
     Ok(())
 }
 

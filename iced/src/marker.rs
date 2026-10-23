@@ -404,14 +404,26 @@ pub(crate) struct Transition {
     pub(crate) view: item::Value,
 }
 
-/// iced's `Animation<f32>`, settled: no time passes in a Rawr view, so it
-/// interpolates to its value.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Animation(pub(crate) f64);
+/// iced's `Animation<T>` of a `bool` or an `f32`.
+#[derive(Clone, Debug)]
+pub(crate) enum Animation {
+    Bool(iced::Animation<bool>),
+    Float(iced::Animation<f32>),
+}
 
-/// `animation::Easing`: a settled animation has no curve to follow.
+impl PartialEq for Animation {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Bool(left), Self::Bool(right)) => left.value() == right.value(),
+            (Self::Float(left), Self::Float(right)) => left.value() == right.value(),
+            _ => false,
+        }
+    }
+}
+
+/// `animation::Easing`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Easing;
+pub(crate) struct Easing(pub(crate) iced::animation::Easing);
 
 /// `time::Instant`: a moment, as `Instant::now()`, a frame or a tick reads it.
 #[derive(Clone, Copy, Debug, PartialEq)]

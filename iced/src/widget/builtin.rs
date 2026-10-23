@@ -259,7 +259,7 @@ impl widget::Descriptor for marker::ProgressBar {
 impl widget::Descriptor for marker::Transition {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut arguments = [
-            Dynamic::from(marker::Animation(self.value)),
+            Dynamic::from(marker::Animation::Float(iced::Animation::new(self.value as f32))),
             Dynamic::from(marker::Instant::now()),
         ];
         match context.invoke(&self.view, &mut arguments) {
@@ -2719,33 +2719,7 @@ fn bind_progress(builder: &mut host::runtime::Builder) {
             }))
         })
         .expect("the iced facade must retain the exact transition item");
-    builder
-        .bind("iced::Animation::new", |args| {
-            if args.len() != 1 {
-                return Err(arity("Animation::new", 1, args.len()));
-            }
-            Ok(Dynamic::from(marker::Animation(number(args[0], "Animation::new")?)))
-        })
-        .expect("the iced facade must retain the exact Animation::new item");
-    for name in ["very_quick", "quick", "slow", "very_slow", "easing"] {
-        let path = format!("iced::Animation::{name}");
-        builder
-            .bind(path.clone(), move |args| {
-                take::<marker::Animation>(args[0], "iced::Animation").map(Dynamic::from)
-            })
-            .expect("the iced facade must retain every Animation builder");
-    }
-    builder
-        .bind("iced::Animation::interpolate", |args| {
-            let marker::Animation(value) = take::<marker::Animation>(args[0], "iced::Animation")?;
-            Ok(Dynamic::from(value))
-        })
-        .expect("the iced facade must retain the exact Animation::interpolate item");
-    for name in crate::EASINGS {
-        builder
-            .bind(format!("iced::animation::Easing::{name}"), |_| Ok(Dynamic::from(marker::Easing)))
-            .expect("the iced facade must retain every Easing value");
-    }
+    super::animation::bind(builder);
 }
 
 impl Witnessed for marker::Text {

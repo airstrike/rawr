@@ -2,6 +2,7 @@
 
 mod adapter;
 mod angle;
+mod animation;
 pub(crate) mod builtin;
 mod canvas;
 pub mod children;
