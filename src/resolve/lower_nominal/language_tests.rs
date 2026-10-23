@@ -7115,3 +7115,25 @@ fn language_std_glob_imports_bind_the_module_names() {
     "#);
     assert_eq!(value, 17);
 }
+
+#[test]
+fn language_registered_rust_functions_are_typed() {
+    let mut engine = Engine::new();
+    engine.register_fn("double", |n: i64| n * 2);
+    engine.register_fn("shout", |s: &str| s.to_uppercase());
+    engine.register_fn("half", |x: f64| x / 2.0);
+    let value = engine
+        .eval::<i64>(
+            r#"
+            pub fn run() -> i64 {
+                let n: i64 = double(20);
+                let s: String = shout("hi");
+                let h: f64 = half(5.0);
+                n + s.len() as i64 + h as i64
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(value, 44);
+}

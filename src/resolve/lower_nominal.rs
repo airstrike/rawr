@@ -26938,6 +26938,45 @@ impl<'a> Parser<'a> {
         Ok(self.operator_expr(source.surrounded("(", ")"), ty, expression))
     }
 
+    /// The type a call of the engine's native function `name` returns: the
+    /// Rust return type of each function of that name and arity registered
+    /// with its signature (`Engine::register_fn`), when they agree on one
+    /// that Rawr names.
+    fn native_output(&self, name: &str, arity: usize) -> Option<Ty> {
+        use std::any::TypeId;
+        let ty = |id: TypeId| -> Option<Ty> {
+            Some(if id == TypeId::of::<crate::INT>() {
+                Ty::Int(Int::I64)
+            } else if id == TypeId::of::<crate::FLOAT>() {
+                Ty::Float(Float::F64)
+            } else if id == TypeId::of::<bool>() {
+                Ty::Bool
+            } else if id == TypeId::of::<char>() {
+                Ty::Char
+            } else if id == TypeId::of::<String>() || id == TypeId::of::<ImmutableString>() {
+                Ty::String
+            } else if id == TypeId::of::<()>() {
+                Ty::Unit
+            } else {
+                return None;
+            })
+        };
+        let mut found = None;
+        for module in &self.native_modules {
+            for (_, metadata) in module.iter_fn() {
+                if metadata.name.as_str() != name || metadata.num_params != arity {
+                    continue;
+                }
+                let output = ty(metadata.output_type?)?;
+                if found.as_ref().is_some_and(|found| *found != output) {
+                    return None;
+                }
+                found = Some(output);
+            }
+        }
+        found
+    }
+
     /// A use of `const NAME` evaluates its initializer, as Rust inlines it.
     fn constant_use(&mut self, function: &ScriptFunction, span: Span) -> ParsedExpr {
         self.used_nominal = true;
@@ -27073,7 +27112,7 @@ impl<'a> Parser<'a> {
             }
             output
         } else {
-            Ty::Unknown
+            self.native_output(&name, arguments.len()).unwrap_or(Ty::Unknown)
         };
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),

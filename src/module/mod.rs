@@ -86,6 +86,9 @@ pub struct FuncMetadata {
     pub num_params: usize,
     /// Parameter types (if applicable).
     pub param_types: FnArgsVec<TypeId>,
+    /// The Rust return type of a function registered with its Rust
+    /// signature, which checked code types its calls by.
+    pub output_type: Option<TypeId>,
     /// Parameter names and types (if available).
     /// Exported under the `metadata` feature only.
     #[cfg(feature = "metadata")]
@@ -241,6 +244,7 @@ impl FuncRegistration {
                 access: FnAccess::Public,
                 num_params: 0,
                 param_types: <_>::default(),
+                output_type: None,
                 #[cfg(feature = "metadata")]
                 params_info: <_>::default(),
                 #[cfg(feature = "metadata")]
@@ -488,6 +492,7 @@ impl FuncRegistration {
         let mut reg = self;
         reg.purity = None;
         reg.volatility = None;
+        reg.metadata.output_type = Some(TypeId::of::<R>());
 
         reg.set_into_module_raw(module, FUNC::param_types(), func)
     }
@@ -1311,6 +1316,7 @@ impl Module {
             access: fn_def.access,
             num_params,
             param_types: FnArgsVec::new_const(),
+            output_type: None,
             #[cfg(feature = "metadata")]
             params_info: fn_def.params.iter().map(Into::into).collect(),
             #[cfg(feature = "metadata")]
