@@ -2136,8 +2136,11 @@ pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString
         type_ref::Type::Unit(_) => return Some((-9, "()".into())),
         type_ref::Type::Path(path) if path.target == type_ref::Target::Builtin => {
             match path.name.as_str() {
-                "i64" => -2,
-                "f64" => -3,
+                // Every integer is the runtime's one integer, and every
+                // float its one float.
+                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64"
+                | "usize" => -2,
+                "f32" | "f64" => -3,
                 "String" => -4,
                 "bool" => -5,
                 "char" => -6,

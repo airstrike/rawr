@@ -550,6 +550,31 @@ fn language_vec_repeat_takes_any_count() {
     rejected("pub fn run() -> i64 { let n = 2; let a = [0; n]; a[0] } run()");
 }
 
+#[test]
+fn language_from_impls_for_sized_numbers() {
+    // `impl From<Local> for u32`, also through an alias, is a trait impl
+    // with a local type argument, which Rust's orphan rule allows.
+    let value = run(r#"
+        type Decibels = u32;
+        #[derive(Clone, Copy)]
+        enum Roar { Squeak = 3, Growl = 7 }
+        impl From<Roar> for Decibels {
+            fn from(r: Roar) -> Decibels { r as u32 * 10 }
+        }
+        impl From<Roar> for f32 {
+            fn from(r: Roar) -> f32 { r as u8 as f32 / 2.0 }
+        }
+        pub fn run() -> i64 {
+            let d: Decibels = Roar::Growl.into();
+            let e = u32::from(Roar::Squeak);
+            let h: f32 = Roar::Growl.into();
+            (d + e * 1000) as i64 + (h * 2.0) as i64 * 1000000
+        }
+        run()
+    "#);
+    assert_eq!(value, 70 + 30 * 1000 + 7 * 1000000);
+}
+
 /// `Button::style` takes a two-parameter host callable, as iced's
 /// `fn(&Theme, Status) -> Style`.
 fn style_facade() -> crate::host::facade::Definition {
