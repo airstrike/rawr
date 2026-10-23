@@ -16978,16 +16978,34 @@ impl<'a> Parser<'a> {
     /// bindings back into their place after it (after a block's tail, around
     /// it), unless a new binding shadows one.
     fn end_write_backs(&mut self, outer: Vec<bool>) {
+        let visible = self
+            .write_backs
+            .iter()
+            .map(|write_back| {
+                write_back.bindings.iter().all(|(name, at)| {
+                    self.bindings
+                        .get(name)
+                        .is_some_and(|binding| binding.declaration == *at)
+                })
+            })
+            .collect::<Vec<_>>();
+        // A write-back into a binding of an enclosing pattern uses that
+        // binding: the inner one runs first, then the outer one.
         let mut hooks = origin::Fragment::default();
-        for (write_back, outer) in self.write_backs.iter_mut().zip(outer) {
-            let visible = write_back.bindings.iter().all(|(name, at)| {
-                self.bindings
-                    .get(name)
-                    .is_some_and(|binding| binding.declaration == *at)
-            });
-            if write_back.touched && visible {
-                hooks.push(write_back.hook.clone());
+        for index in (0..self.write_backs.len()).rev() {
+            if !(self.write_backs[index].touched && visible[index]) {
+                continue;
             }
+            hooks.push(self.write_backs[index].hook.clone());
+            if let Some(root) = self.write_backs[index].root.clone() {
+                for enclosing in &mut self.write_backs[..index] {
+                    if enclosing.bindings.contains(&root) {
+                        enclosing.touched = true;
+                    }
+                }
+            }
+        }
+        for (write_back, outer) in self.write_backs.iter_mut().zip(outer) {
             write_back.touched |= outer;
         }
         if hooks.is_empty() {
@@ -17151,8 +17169,14 @@ impl<'a> Parser<'a> {
         ));
         hook.push(store);
         hook.push_text("}");
+        let root = lvalue.as_ref().map(Lvalue::binding).and_then(|root| {
+            self.bindings
+                .get(root)
+                .map(|binding| (root.clone(), binding.declaration))
+        });
         Ok(Some(WriteBack {
             bindings: bound,
+            root,
             hook,
             touched: false,
         }))
@@ -35998,6 +36022,9 @@ fn contains_inference(ty: &Ty) -> bool {
 struct WriteBack {
     /// Each binding's name and declaration.
     bindings: Vec<(ImmutableString, Span)>,
+    /// The local the place is in, with its declaration: writing the place
+    /// uses it, so a pattern binding it writes back after this one.
+    root: Option<(ImmutableString, Span)>,
     hook: origin::Fragment,
     /// The statement being read uses a binding.
     touched: bool,

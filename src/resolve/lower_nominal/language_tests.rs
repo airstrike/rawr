@@ -7407,6 +7407,32 @@ fn language_mutable_loops_destructure_their_elements() {
 }
 
 #[test]
+fn language_a_pattern_inside_a_mut_pattern_writes_back_through_both() {
+    let value = run(r#"
+        enum S { A(Option<i64>), B }
+        struct H { s: S }
+        impl H {
+            fn f(&mut self) {
+                match &mut self.s {
+                    S::A(o) => {
+                        let Some(x) = o else { return; };
+                        *x = 9;
+                    }
+                    S::B => {}
+                }
+            }
+        }
+        pub fn run() -> i64 {
+            let mut h = H { s: S::A(Some(1)) };
+            h.f();
+            match h.s { S::A(Some(x)) => x, _ => 0 }
+        }
+        run()
+    "#);
+    assert_eq!(value, 9);
+}
+
+#[test]
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(error.contains("nknown function") && error.contains("centre"), "{error}");
