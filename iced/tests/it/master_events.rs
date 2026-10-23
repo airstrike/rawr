@@ -256,3 +256,76 @@ fn master_event_patterns_match_library_enums() {
     let mut simulator = iced_test::simulator(view);
     simulator.find("1 1 x 1 0").unwrap();
 }
+
+const URLS: &str = r#"
+use iced::event;
+use iced::widget::{center, text};
+use iced::{Subscription, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(App::default, App::update, App::view)
+        .subscription(App::subscription)
+        .run()
+}
+
+#[derive(Debug, Default)]
+struct App {
+    url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    UrlReceived(String),
+}
+
+impl App {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::UrlReceived(url) => self.url = Some(url),
+        }
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        event::listen_url().map(Message::UrlReceived)
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let content = match &self.url {
+            Some(url) => text(url),
+            None => text("No URL received yet!"),
+        };
+        center(content.size(48))
+    }
+}
+"#;
+
+#[test]
+fn master_listen_url_delivers_received_urls() {
+    use iced::advanced::subscription::{Event, MacOS, PlatformSpecific};
+
+    let adapter = boot(URLS);
+    let application = program::Application::from_adapter(adapter);
+    let (mut state, _) = <program::Application as iced::Program>::boot(&application);
+    let subscription = <program::Application as iced::Program>::subscription(&application, &state);
+    let recipes = iced::advanced::subscription::into_recipes(subscription);
+    assert_eq!(recipes.len(), 1);
+    let events = Box::pin(iced::futures::stream::iter([
+        press(iced::keyboard::Key::Character("x".into())),
+        Event::PlatformSpecific(PlatformSpecific::MacOS(MacOS::ReceivedUrl(
+            "rawr://hello".into(),
+        ))),
+    ])) as iced::advanced::subscription::EventStream;
+    let recipe = recipes.into_iter().next().unwrap();
+    let messages: Vec<runtime::Message> =
+        iced::futures::executor::block_on(recipe.stream(events).collect::<Vec<_>>());
+    assert_eq!(messages.len(), 1);
+    for message in messages {
+        let _ = <program::Application as iced::Program>::update(&application, &mut state, message);
+    }
+    let view = <program::Application as iced::Program>::view(
+        &application,
+        &state,
+        iced::window::Id::unique(),
+    );
+    iced_test::simulator(view).find("rawr://hello").unwrap();
+}

@@ -2745,6 +2745,12 @@ fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
         item::Definition::stream_operation(path, signature.finish(), host::stream::Version::new(1))
     };
     builder.item(stream("event::listen", &[], type_ref::Type::registered("Event")?)?)?;
+    // iced's `event::listen_url()`: the URLs macOS hands the application.
+    builder.item(stream(
+        "event::listen_url",
+        &[],
+        type_ref::Type::builtin(type_ref::Builtin::String),
+    )?)?;
     builder.item(stream(
         "keyboard::listen",
         &[],

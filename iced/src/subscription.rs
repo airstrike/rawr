@@ -265,7 +265,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
         .expect("the iced facade must retain the exact Subscription::map item");
 }
 
-/// `event::listen()`, `keyboard::listen()`, `window::frames()` and
+/// `event::listen()`, `event::listen_url()`, `keyboard::listen()`, `window::frames()` and
 /// `time::every(duration)`: native streams of iced's runtime events, as
 /// iced's own subscriptions filter them, and of timer ticks.
 fn bind_events(builder: &mut host::runtime::Builder) {
@@ -315,6 +315,12 @@ fn bind_events(builder: &mut host::runtime::Builder) {
                 status: iced::event::Status::Ignored,
                 ..
             } => Some(Dynamic::from(event)),
+            _ => None,
+        }),
+        ("iced::event::listen_url", |event| match event {
+            Input::PlatformSpecific(iced::advanced::subscription::PlatformSpecific::MacOS(
+                iced::advanced::subscription::MacOS::ReceivedUrl(url),
+            )) => Some(Dynamic::from(url)),
             _ => None,
         }),
         ("iced::window::frames", |event| match event {
