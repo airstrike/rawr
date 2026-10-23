@@ -12984,6 +12984,7 @@ impl<'a> Parser<'a> {
                 }
             }
             Shape::External { export, arguments } => {
+                let writer = owner;
                 let path = export.path();
                 let definition = self.models.host.type_(&path).cloned().ok_or_else(|| {
                     Error::InvalidHostOperation {
@@ -13009,6 +13010,9 @@ impl<'a> Parser<'a> {
                         definition.identity().imported().map(|_| definition.clone()),
                         owner.clone(),
                     ),
+                    // The arguments are written by the referencing facade, so
+                    // an imported argument is that facade's: a crate's
+                    // `task::Sipper<Output, Progress>` names its own types.
                     arguments: arguments
                         .iter()
                         .map(|argument| {
@@ -13016,8 +13020,8 @@ impl<'a> Parser<'a> {
                                 argument,
                                 parameters,
                                 operation,
-                                owner.as_ref(),
-                                Some(&definition),
+                                writer,
+                                originating,
                             )
                         })
                         .collect::<Result<Vec<_>, _>>()?
