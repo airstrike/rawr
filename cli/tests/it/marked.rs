@@ -118,7 +118,6 @@ fn discovery_follows_mod_declarations_and_ignores_other_files() {
         sources,
         [PathBuf::from("src/main.rs"), PathBuf::from("src/item.rs")]
     );
-    assert!(graph.entry_package().is_marked());
     assert!(!graph.declares_rust_import());
 
     // `mod item;` also finds `item/mod.rs`, as rustc does.
@@ -401,14 +400,12 @@ fn background_cargo_check_restarts_on_saves_and_reports_only_the_newest() {
     assert_eq!(lines("finished"), ["2"]);
 }
 
-/// A marked crate's Cargo.toml dependencies are its Rust imports. No
-/// rawr.toml is needed.
+/// A marked crate's Cargo.toml dependencies are its Rust imports.
 #[test]
 fn a_marked_crate_imports_its_cargo_dependencies() {
     let sandbox = Sandbox::new("marked-deps");
     for name in ["rs-marker-rand", "rs-marker-chrono", "rs-marker-palette"] {
         let root = copy(name, &sandbox.work());
-        assert!(!root.join("rawr.toml").exists());
         let graph = graph(&root, None).unwrap();
         assert!(graph.declares_rust_import(), "{name}");
         assert!(graph.entry_package().rust_modules().is_empty(), "{name}");
@@ -425,7 +422,6 @@ fn a_marked_workspace_member_inherits_its_dependencies() {
     let graph = graph(&root.join("app"), None).unwrap();
 
     assert!(graph.declares_rust_import());
-    assert!(graph.entry_package().is_marked());
 }
 
 /// The `rawr` attribute crate: Rawr reads `#[preview]` and

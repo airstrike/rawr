@@ -376,7 +376,7 @@ mod tests {
     fn facts(source: &str) -> Facts {
         let id = std::process::id();
         let path =
-            std::env::temp_dir().join(format!("rawr-layer-facts-{id}-{}.rawr", source.len()));
+            std::env::temp_dir().join(format!("rawr-layer-facts-{id}-{}.rs", source.len()));
         std::fs::write(&path, source).unwrap();
         let target = crate::project::Target::discover(&path).unwrap();
         let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
@@ -450,9 +450,12 @@ mod tests {
     fn a_reload_recomputes_only_the_edited_files_facts() {
         let root = std::env::temp_dir().join(format!("rawr-layer-sheet-{}", std::process::id()));
         std::fs::create_dir_all(root.join("src")).unwrap();
-        let main = "mod view;\nfn main() { let n = view::count(); }\n";
-        std::fs::write(root.join("src/main.rawr"), main).unwrap();
-        let view = |text: &str| std::fs::write(root.join("src/view.rawr"), text).unwrap();
+        let main = "// rawr\nmod view;\nfn main() { let n = view::count(); }\n";
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"sheet\"\n").unwrap();
+        std::fs::write(root.join("src/main.rs"), main).unwrap();
+        let view = |text: &str| {
+            std::fs::write(root.join("src/view.rs"), format!("// rawr\n{text}")).unwrap();
+        };
         let mut sheet = super::Sheet::default();
         let load = |sheet: &mut super::Sheet| {
             let target = crate::project::Target::discover(&root).unwrap();

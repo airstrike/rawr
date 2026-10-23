@@ -102,18 +102,21 @@ pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
 }
 
 pub(crate) fn snapshot(source: &str) -> package::snapshot::Snapshot {
-    let path = std::path::PathBuf::from("/resident-fixture/main.rawr");
+    let path = std::path::PathBuf::from("/resident-fixture/main.rs");
     package::snapshot::Snapshot::new(path.clone(), vec![(path, source.into())]).unwrap()
 }
 
 pub(crate) fn native_snapshot(source: &str) -> package::snapshot::Snapshot {
     let root = std::path::Path::new("/resident-fixture");
-    let manifest = root.join("rawr.toml");
+    let entry = root.join("src/main.rs");
     package::snapshot::Snapshot::new(
-        manifest.clone(),
+        entry.clone(),
         vec![
-            (manifest, "[package]\nname = \"resident\"\n[rust.dependencies]\nnative = { path = \"native\" }\n".into()),
-            (root.join("src/main.rawr"), source.into()),
+            (
+                root.join("Cargo.toml"),
+                "[package]\nname = \"resident\"\n[dependencies]\nnative = { path = \"native\" }\n".into(),
+            ),
+            (entry, source.into()),
         ],
     )
     .unwrap()

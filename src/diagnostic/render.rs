@@ -157,8 +157,8 @@ mod tests {
 
     #[test]
     fn renderer_handles_unicode_multiline_and_cross_source_labels() {
-        let primary = Source::new("src/main.rawr", "αβγ\nline two\n").unwrap();
-        let secondary = Source::new("src/other.rawr", "first\n").unwrap();
+        let primary = Source::new("src/main.rs", "αβγ\nline two\n").unwrap();
+        let secondary = Source::new("src/other.rs", "first\n").unwrap();
         let report = Report::error(code::RESOLVE_DUPLICATE_ITEM, "duplicate `β`")
             .primary(
                 primary,
@@ -180,13 +180,13 @@ mod tests {
             render(&report),
             concat!(
                 "error[RAWR-RESOLVE-DUPLICATE-ITEM]: duplicate `β`\n",
-                " --> src/main.rawr:1:2-2:5\n",
+                " --> src/main.rs:1:2-2:5\n",
                 " 1 | αβγ\n",
                 "   |  ^^ duplicate spans two lines\n",
                 "   | ...\n",
                 " 2 | line two\n",
                 "   | ^^^^\n",
-                " ::: src/other.rawr:1:1-1:6\n",
+                " ::: src/other.rs:1:1-1:6\n",
                 " 1 | first\n",
                 "   | ----- first declared here\n",
                 "  = help: rename it\n",

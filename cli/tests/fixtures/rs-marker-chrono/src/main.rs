@@ -1,6 +1,6 @@
 // rawr
 // Time spans and the clock with chrono. Rawr imports chrono from this
-// crate's Cargo.toml, with no rawr.toml.
+// crate's Cargo.toml.
 use chrono::{Datelike, Duration, Local, TimeDelta};
 
 fn main() {

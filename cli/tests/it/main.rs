@@ -151,15 +151,15 @@ fn rawr_runs_the_cart_with_no_build_and_leaves_its_directory_as_it_was() {
 #[test]
 fn rawr_prints_a_final_value_and_main_output() {
     let sandbox = Sandbox::new("output");
-    fs::write(sandbox.work().join("value.rawr"), "let x = 20.0 + 7.0;\nx\n").unwrap();
+    fs::write(sandbox.work().join("value.rs"), "let x = 20.0 + 7.0;\nx\n").unwrap();
     fs::write(
-        sandbox.work().join("main.rawr"),
+        sandbox.work().join("main.rs"),
         "fn main() {\n    print!(\"a\");\n    println!(\"{}\", 1 + 1);\n    eprintln!(\"to stderr\");\n}\n",
     )
     .unwrap();
 
-    let value = sandbox.rawr(&["run", "value.rawr"]);
-    let main = sandbox.rawr(&["main.rawr"]);
+    let value = sandbox.rawr(&["run", "value.rs"]);
+    let main = sandbox.rawr(&["main.rs"]);
 
     assert_success(&value);
     assert_eq!(stdout(&value), "27.0\n");
@@ -172,12 +172,12 @@ fn rawr_prints_a_final_value_and_main_output() {
 fn main_returning_err_fails_like_rust() {
     let sandbox = Sandbox::new("err");
     fs::write(
-        sandbox.work().join("err.rawr"),
+        sandbox.work().join("err.rs"),
         "fn main() -> Result<(), String> {\n    Err(String::from(\"boom\"))\n}\n",
     )
     .unwrap();
 
-    let output = sandbox.rawr(&["run", "err.rawr"]);
+    let output = sandbox.rawr(&["run", "err.rs"]);
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -188,12 +188,12 @@ fn main_returning_err_fails_like_rust() {
 fn a_panic_exits_101_like_rust() {
     let sandbox = Sandbox::new("panic");
     fs::write(
-        sandbox.work().join("panic.rawr"),
+        sandbox.work().join("panic.rs"),
         "fn main() {\n    println!(\"before\");\n    panic!(\"boom {}\", 1);\n}\n",
     )
     .unwrap();
 
-    let output = sandbox.rawr(&["run", "panic.rawr"]);
+    let output = sandbox.rawr(&["run", "panic.rs"]);
 
     assert_eq!(output.status.code(), Some(101));
     assert_eq!(stdout(&output), "before\n");
@@ -203,11 +203,11 @@ fn a_panic_exits_101_like_rust() {
 #[test]
 fn type_errors_are_the_same_diagnostic_for_check_and_run() {
     let sandbox = Sandbox::new("type-error");
-    let source = sandbox.work().join("wrong.rawr");
+    let source = sandbox.work().join("wrong.rs");
     fs::write(&source, "fn main() {\n    let x: i64 = \"text\";\n}\n").unwrap();
 
-    let checked = sandbox.rawr(&["check", "wrong.rawr"]);
-    let run = sandbox.rawr(&["run", "wrong.rawr"]);
+    let checked = sandbox.rawr(&["check", "wrong.rs"]);
+    let run = sandbox.rawr(&["run", "wrong.rs"]);
 
     assert!(!checked.status.success());
     assert!(!run.status.success());
@@ -221,13 +221,13 @@ fn type_errors_are_the_same_diagnostic_for_check_and_run() {
 fn a_program_using_iced_without_rawr_iced_says_how_to_install_it() {
     let sandbox = Sandbox::new("missing-iced");
     fs::write(
-        sandbox.work().join("app.rawr"),
+        sandbox.work().join("app.rs"),
         "use iced::widget::text;\npub fn main() -> iced::Result { Ok(()) }\n",
     )
     .unwrap();
 
     for command in ["run", "check"] {
-        let output = sandbox.rawr(&[command, "app.rawr"]);
+        let output = sandbox.rawr(&[command, "app.rs"]);
         assert_eq!(output.status.code(), Some(1));
         let text = stderr(&output);
         assert!(
@@ -247,7 +247,6 @@ fn a_command_from_rawr_iced_says_how_to_install_it() {
     let sandbox = Sandbox::new("missing-preview");
 
     let preview = sandbox.rawr(&["preview"]);
-    let as_rust = sandbox.rawr(&["check", "--as-rust"]);
     let unknown = sandbox.rawr(&["bogus"]);
 
     assert_eq!(preview.status.code(), Some(1));
@@ -256,7 +255,6 @@ fn a_command_from_rawr_iced_says_how_to_install_it() {
         "{}",
         stderr(&preview)
     );
-    assert!(stderr(&as_rust).contains("`rawr check --as-rust` comes with rawr-iced"));
     assert_eq!(unknown.status.code(), Some(2));
     assert!(stderr(&unknown).contains("unknown command `bogus`"));
 }
@@ -266,20 +264,20 @@ fn rawr_forwards_a_command_and_hands_off_a_program_to_the_binary_serving_it() {
     let sandbox = Sandbox::new("hand-off");
     sandbox.binary("fake", FAKE);
     fs::write(
-        sandbox.work().join("app.rawr"),
+        sandbox.work().join("app.rs"),
         "use fakecrate::thing;\nfn main() { let x = 1; }\n",
     )
     .unwrap();
 
     let forwarded = sandbox.rawr(&["fly", "high"]);
-    let handed = sandbox.rawr(&["run", "app.rawr"]);
-    let checked = sandbox.rawr(&["check", "app.rawr"]);
+    let handed = sandbox.rawr(&["run", "app.rs"]);
+    let checked = sandbox.rawr(&["check", "app.rs"]);
 
     assert_eq!(forwarded.status.code(), Some(3));
     assert_eq!(stdout(&forwarded), "fake: fly high\n");
     assert_eq!(handed.status.code(), Some(3));
-    assert_eq!(stdout(&handed), "fake: run app.rawr\n");
-    assert_eq!(stdout(&checked), "fake: check app.rawr\n");
+    assert_eq!(stdout(&handed), "fake: run app.rs\n");
+    assert_eq!(stdout(&checked), "fake: check app.rs\n");
     // `rawr` kept the program's parse for the binary it handed it to.
     let cells = fs::read_dir(sandbox.work().join("target/rawr/parse"))
         .unwrap()
@@ -293,10 +291,10 @@ fn rawr_forwards_a_command_and_hands_off_a_program_to_the_binary_serving_it() {
 fn rawr_says_how_it_loaded_a_program_when_asked() {
     let sandbox = Sandbox::new("verbose");
     sandbox.binary("fake", FAKE);
-    fs::write(sandbox.work().join("app.rawr"), "use fakecrate::thing;\n").unwrap();
+    fs::write(sandbox.work().join("app.rs"), "use fakecrate::thing;\n").unwrap();
 
-    let first = sandbox.rawr_verbose(&["check", "app.rawr"]);
-    let second = sandbox.rawr_verbose(&["check", "app.rawr"]);
+    let first = sandbox.rawr_verbose(&["check", "app.rs"]);
+    let second = sandbox.rawr_verbose(&["check", "app.rs"]);
 
     let first = stderr(&first);
     assert!(first.contains("rawr: parsed 1 sources, read 0 from parse cells"), "{first}");
@@ -315,12 +313,12 @@ fn a_program_two_binaries_claim_is_a_diagnostic() {
         "format = 1\nname = \"rawr-other\"\ncrates = [\"othercrate\"]",
     );
     fs::write(
-        sandbox.work().join("app.rawr"),
+        sandbox.work().join("app.rs"),
         "use fakecrate::a;\nuse othercrate::b;\nfn main() {}\n",
     )
     .unwrap();
 
-    let output = sandbox.rawr(&["run", "app.rawr"]);
+    let output = sandbox.rawr(&["run", "app.rs"]);
 
     assert_eq!(output.status.code(), Some(1));
     let text = stderr(&output);
@@ -371,9 +369,11 @@ fn inline_modules_and_cfg_test_items_build_as_rustc_does() {
     let sandbox = Sandbox::new("inline-modules");
     let project = sandbox.work().join("shapes");
     fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(project.join("Cargo.toml"), "[package]\nname = \"shapes\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
     fs::write(
-        project.join("src/main.rawr"),
-        r#"const BASE: i64 = 40;
+        project.join("src/main.rs"),
+        r#"// rawr
+const BASE: i64 = 40;
 
 fn main() {
     use shapes::inner::double;
@@ -428,9 +428,11 @@ fn compile_time_macros_read_the_project_as_rustc_does() {
     let project = sandbox.work().join("macros");
     fs::create_dir_all(project.join("src")).unwrap();
     fs::write(project.join("src/greeting.txt"), "hello\n").unwrap();
+    fs::write(project.join("Cargo.toml"), "[package]\nname = \"macros\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
     fs::write(
-        project.join("src/main.rawr"),
-        r#"use std::f32::consts::TAU;
+        project.join("src/main.rs"),
+        r#"// rawr
+use std::f32::consts::TAU;
 use std::f64::consts;
 
 const NAME: &str = concat!("ra", "wr", '-', 1, 2.5, true);
@@ -457,4 +459,31 @@ fn main() {
         stdout(&output),
         "rawr-12.5true hello 6 104\ntrue true\n3.14159 2.71828 6.28319 1.414\na + b\n"
     );
+}
+
+#[test]
+fn a_rawr_file_or_rawr_toml_says_how_to_convert_it() {
+    let sandbox = Sandbox::new("legacy");
+    fs::write(sandbox.work().join("app.rawr"), "fn main() {}\n").unwrap();
+    let app = sandbox.work().join("old");
+    fs::create_dir_all(app.join("src")).unwrap();
+    fs::write(app.join("rawr.toml"), "[package]\nname = \"old\"\n").unwrap();
+    fs::write(app.join("src/main.rawr"), "fn main() {}\n").unwrap();
+
+    let file = sandbox.rawr(&["run", "app.rawr"]);
+    let manifest = sandbox.rawr(&["check", "old/rawr.toml"]);
+    let directory = sandbox.rawr(&["run", "old"]);
+
+    assert_eq!(file.status.code(), Some(1));
+    let text = stderr(&file);
+    assert!(text.contains("is a `.rawr` file. Rawr reads `.rs` files now."), "{text}");
+    assert!(text.contains("Rename the file to `.rs` and put `// rawr` on its first line."), "{text}");
+    assert_eq!(manifest.status.code(), Some(1));
+    let text = stderr(&manifest);
+    assert!(text.contains("rawr.toml` is no longer read."), "{text}");
+    assert!(text.contains("Put the project in a Cargo crate whose `src/main.rs` starts with `// rawr`."), "{text}");
+    assert_eq!(directory.status.code(), Some(1));
+    let text = stderr(&directory);
+    assert!(text.contains("no Rawr project found"), "{text}");
+    assert!(text.contains("rawr.toml` is no longer read."), "{text}");
 }

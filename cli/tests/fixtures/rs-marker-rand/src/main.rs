@@ -1,6 +1,6 @@
 // rawr
 // Flip coins and roll dice with rand. Rawr imports rand from this crate's
-// Cargo.toml, with no rawr.toml.
+// Cargo.toml.
 use rand::Rng;
 
 fn main() {

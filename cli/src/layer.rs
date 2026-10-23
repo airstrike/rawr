@@ -422,7 +422,7 @@ mod tests {
 
     fn facts(source: &str) -> rawr::layer::Facts {
         let path = std::env::temp_dir().join(format!(
-            "rawr-claimed-{}-{}.rawr",
+            "rawr-claimed-{}-{}.rs",
             std::process::id(),
             source.len()
         ));

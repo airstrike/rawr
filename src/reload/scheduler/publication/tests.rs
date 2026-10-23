@@ -19,7 +19,7 @@ impl Fixture {
         ));
         fs::create_dir(&root).unwrap();
         let root = fs::canonicalize(root).unwrap();
-        let graph = graph(&root.join("main.rawr"));
+        let graph = graph(&root.join("main.rs"));
         Self { root, graph }
     }
 
@@ -56,7 +56,7 @@ fn graph(path: &Path) -> source::Graph {
 #[test]
 fn full_observation_survives_source_binding_validation_and_publication() {
     let fixture = Fixture::new("publish");
-    let previous = graph(&fixture.root.join("previous.rawr"));
+    let previous = graph(&fixture.root.join("previous.rs"));
     let slot = Arc::new(Slot::new(source::Inputs::from_graph(&previous)));
     let observed = slot.register(fixture.observed());
     let native = fixture.root.join("native.rs");
@@ -75,10 +75,10 @@ fn full_observation_survives_source_binding_validation_and_publication() {
     assert!(slot
         .read()
         .contains(&fixture.root.join("native-tree/new.rs")));
-    assert!(!slot.read().contains(&fixture.root.join("previous.rawr")));
+    assert!(!slot.read().contains(&fixture.root.join("previous.rs")));
     assert!(retired
         .previous()
-        .contains(&fixture.root.join("previous.rawr")));
+        .contains(&fixture.root.join("previous.rs")));
     retired.release();
 }
 
@@ -95,7 +95,7 @@ fn withdrawing_one_registration_preserves_other_and_current_coverage() {
     drop(first);
     assert!(!slot.read().contains(&fixture.root.join("native.rs")));
     assert!(slot.read().contains(&fixture.root.join("other.rs")));
-    assert!(slot.read().contains(&fixture.root.join("main.rawr")));
+    assert!(slot.read().contains(&fixture.root.join("main.rs")));
     drop(second);
     assert_eq!(slot.read().staged(), 0);
     assert!(!slot.read().contains(&fixture.root.join("other.rs")));
@@ -104,28 +104,28 @@ fn withdrawing_one_registration_preserves_other_and_current_coverage() {
 #[test]
 fn recursive_coverage_cannot_replace_an_exact_rawr_identity() {
     let fixture = Fixture::new("coverage");
-    let other = graph(&fixture.root.join("other.rawr"));
+    let other = graph(&fixture.root.join("other.rs"));
     let slot = Arc::new(Slot::new(fixture.inputs()));
     let incomplete =
         source::Inputs::from_graph(&other).with_imported([Watch::Tree(fixture.root.clone())]);
-    assert!(incomplete.contains(&fixture.root.join("main.rawr")));
+    assert!(incomplete.contains(&fixture.root.join("main.rs")));
     let observed = slot.register(incomplete);
     assert!(matches!(
         observed.bind(fixture.snapshot()),
         Err(IncompleteObservation)
     ));
     assert_eq!(slot.read().staged(), 0);
-    assert!(!slot.read().contains(&fixture.root.join("other.rawr")));
+    assert!(!slot.read().contains(&fixture.root.join("other.rs")));
 }
 
 #[test]
 fn observation_cannot_advertise_source_roles_outside_the_compiled_snapshot() {
     let fixture = Fixture::new("source-role-binding");
-    let other = graph(&fixture.root.join("other.rawr"));
+    let other = graph(&fixture.root.join("other.rs"));
     let slot = Arc::new(Slot::new(fixture.inputs()));
     let observation = source::Inputs::from_graph(&other)
-        .with_imported([Watch::Exact(fixture.root.join("main.rawr"))]);
-    assert!(observation.contains(&fixture.root.join("main.rawr")));
+        .with_imported([Watch::Exact(fixture.root.join("main.rs"))]);
+    assert!(observation.contains(&fixture.root.join("main.rs")));
     let observed = slot.register(observation);
     assert!(matches!(
         observed.bind(fixture.snapshot()),
@@ -139,7 +139,7 @@ fn full_observation_does_not_weaken_rawr_byte_validation() {
     let fixture = Fixture::new("bytes");
     let slot = Arc::new(Slot::new(fixture.inputs()));
     let observed = slot.register(fixture.observed());
-    fs::write(fixture.root.join("main.rawr"), "let value = 2;").unwrap();
+    fs::write(fixture.root.join("main.rs"), "let value = 2;").unwrap();
     assert!(observed
         .bind(fixture.snapshot())
         .unwrap()

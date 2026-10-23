@@ -416,7 +416,7 @@ fn assert_widget_error(source: &str, reason: &str) {
         ),
         "unexpected error for `{reason}`: {error:?}"
     );
-    let report = Report::from_parse(Source::new("main.rawr", source).unwrap(), &error).unwrap();
+    let report = Report::from_parse(Source::new("main.rs", source).unwrap(), &error).unwrap();
     assert_eq!(report.code(), code::RESOLVE_WIDGET);
 }
 

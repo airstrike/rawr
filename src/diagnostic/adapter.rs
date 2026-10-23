@@ -775,7 +775,7 @@ mod tests {
             generated_declaration.start(),
         );
         let translated = Span::new(Position::new(2, 8), Position::new(2, 12));
-        let source = Source::new("src/lib.rawr", "fn one() {}\nfn view() {}\n")
+        let source = Source::new("src/lib.rs", "fn one() {}\nfn view() {}\n")
             .expect("test source has a stable identity");
 
         let report = Report::from_parse_at(source, &error, translated)

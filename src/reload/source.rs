@@ -546,16 +546,17 @@ mod tests {
         }
         let _cleanup = Cleanup(root.clone());
         fs::create_dir(root.join("src")).unwrap();
-        fs::write(root.join("rawr.toml"), "[package]\nname = \"roles\"\n").unwrap();
-        fs::write(root.join("src/main.rawr"), "pub fn main() {}\n").unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"roles\"\n").unwrap();
+        fs::write(root.join("src/main.rs"), "// rawr\npub fn main() {}\n").unwrap();
         let target = crate::project::Target::discover(&root).unwrap();
         let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
         let graph = super::Graph::from_package(&graph);
         let inputs = Inputs::from_graph(&graph);
         let source = graph.entry_source().path();
-        let manifest = graph.entry_package().manifest().unwrap();
+        let manifest = graph.entry_package().root().join("Cargo.toml");
+        assert!(inputs.contains(&manifest));
         assert_eq!(inputs.source_paths(), &[source.to_path_buf()]);
-        assert!(!inputs.is_source_only(manifest));
+        assert!(!inputs.is_source_only(&manifest));
         let exact = inputs
             .clone()
             .with_imported([Watch::Exact(source.to_path_buf())]);
@@ -576,11 +577,11 @@ mod tests {
             .join(format!("rawr-source-native-{}", std::process::id()));
         fs::create_dir_all(root.join("src/nested")).unwrap();
         fs::create_dir_all(root.join("crate/src")).unwrap();
-        let rawr = [root.join("src/main.rawr"), root.join("src/nested/a.rawr"), root.join("rawr.toml")];
+        let rawr = [root.join("src/main.rs"), root.join("src/nested/a.rs"), root.join("Cargo.toml")];
         let native = [
             Watch::Exact(root.join("crate/src/lib.rs")),
             Watch::Exact(root.join("crate/Cargo.toml")),
-            Watch::Exact(root.join("src/main.rawr")),
+            Watch::Exact(root.join("src/main.rs")),
             Watch::Exact(root.join("absent/build.rs")),
             Watch::Tree(root.join("src/nested")),
         ];
@@ -618,12 +619,12 @@ mod tests {
             }
         }
         let _cleanup = Cleanup(root.clone());
-        fs::write(root.join("rawr.toml"), "[package]\nname = \"nested\"\n").unwrap();
-        fs::write(root.join("src/main.rawr"), "mod theme;\npub fn main() {}\n").unwrap();
-        fs::write(root.join("src/theme.rawr"), "pub mod button;\n").unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"nested\"\n").unwrap();
+        fs::write(root.join("src/main.rs"), "// rawr\nmod theme;\npub fn main() {}\n").unwrap();
+        fs::write(root.join("src/theme.rs"), "// rawr\npub mod button;\n").unwrap();
         fs::write(
-            root.join("src/theme/button.rawr"),
-            "pub fn edge() -> i64 { 1 }\n",
+            root.join("src/theme/button.rs"),
+            "// rawr\npub fn edge() -> i64 { 1 }\n",
         )
         .unwrap();
         let target = crate::project::Target::discover(&root).unwrap();
@@ -654,7 +655,7 @@ mod tests {
         ));
         assert!(matches!(
             snapshot(
-                "/entry.rawr".into(),
+                "/entry.rs".into(),
                 Box::from([File {
                     path: invalid,
                     contents: Box::default(),

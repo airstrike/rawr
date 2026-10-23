@@ -30,7 +30,7 @@ fn observation_roundtrip_preserves_non_utf8_absent_paths_and_trees() {
     ));
     fs::create_dir(&directory).expect("create fixture");
     let directory = fs::canonicalize(directory).expect("canonical fixture");
-    let missing = directory.join("missing/entry.rawr");
+    let missing = directory.join("missing/entry.rs");
     let non_utf8 = directory.join(OsStr::from_bytes(b"missing/\xff"));
     let tree = directory.join("absent-tree");
     let inputs = Inputs::from_paths(
@@ -160,7 +160,7 @@ fn observation_directory_reconstruction_uses_current_transport_state() {
     ));
     fs::create_dir(&directory).expect("create fixture");
     let directory = fs::canonicalize(directory).expect("canonical fixture");
-    let path = directory.join("later/file.rawr");
+    let path = directory.join("later/file.rs");
     let encoded = payload(&[path.as_os_str().as_bytes()], &[]);
     let decoded = decode(&encoded).expect("pure decode while parent absent");
     fs::create_dir(directory.join("later")).expect("create new parent");
@@ -173,11 +173,11 @@ fn observation_directory_reconstruction_uses_current_transport_state() {
 
 #[test]
 fn observation_source_roles_roundtrip_and_reject_invalid_subsets() {
-    let encoded = roles(&[b"/a.rawr", b"/rawr.toml"], &[b"/native"], &[b"/a.rawr"]);
+    let encoded = roles(&[b"/Cargo.toml", b"/a.rs"], &[b"/native"], &[b"/a.rs"]);
     let inputs = decode(&encoded).unwrap().into_inputs();
-    assert_eq!(inputs.source_paths(), &[PathBuf::from("/a.rawr")]);
-    assert!(inputs.is_source_only(Path::new("/a.rawr")));
-    assert!(!inputs.is_source_only(Path::new("/rawr.toml")));
+    assert_eq!(inputs.source_paths(), &[PathBuf::from("/a.rs")]);
+    assert!(inputs.is_source_only(Path::new("/a.rs")));
+    assert!(!inputs.is_source_only(Path::new("/Cargo.toml")));
     assert_eq!(inputs.encode_observation().unwrap().as_ref(), encoded);
     for encoded in [
         roles(&[b"/a"], &[], &[b"/b"]),

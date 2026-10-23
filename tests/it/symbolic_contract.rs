@@ -413,7 +413,7 @@ impl Fixture {
         let root = std::env::temp_dir().join(format!("rawr-p2-symbolic-{}-{id}", std::process::id()));
         fs::create_dir_all(&root).expect("fixture directory creates");
         let root = fs::canonicalize(root).expect("fixture directory is canonical");
-        let source_path = root.join("fixture.rawr");
+        let source_path = root.join("fixture.rs");
         fs::write(&source_path, source).expect("fixture source writes");
         Self { root, source: source_path }
     }

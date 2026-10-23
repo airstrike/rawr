@@ -190,8 +190,8 @@ mod tests {
 
     #[test]
     fn keys_resolve_only_against_the_table_that_issued_them() {
-        let first = Table::new(vec![source("first.rawr", "first")].into_boxed_slice());
-        let second = Table::new(vec![source("second.rawr", "second")].into_boxed_slice());
+        let first = Table::new(vec![source("first.rs", "first")].into_boxed_slice());
+        let second = Table::new(vec![source("second.rs", "second")].into_boxed_slice());
         let key = first.key(0);
 
         assert_eq!(first.resolve(key).unwrap().text(), "first");
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn debug_output_never_enumerates_source_identity_or_text() {
         let table = Table::new(
-            vec![source("secret-identity.rawr", "secret source text")].into_boxed_slice(),
+            vec![source("secret-identity.rs", "secret source text")].into_boxed_slice(),
         );
         let rendered = format!("{table:?} {:?}", table.key(0));
 

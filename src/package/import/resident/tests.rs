@@ -639,7 +639,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
         .unwrap();
     let original = "pub fn main() -> bool { fixture::family_2(7) }\n\
         #[preview] pub fn sample() -> iced::Element<()> { throw \"not invoked\" }";
-    let path = "/resident-fixture/main.rawr";
+    let path = "/resident-fixture/main.rs";
     let mut inputs = rawr_import::surface::Snapshot::builder(&limits);
     inputs.entry(path).unwrap();
     inputs.file(path, original.as_bytes()).unwrap();

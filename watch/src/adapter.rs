@@ -974,7 +974,7 @@ mod tests {
             adapter.notices().try_recv(),
             Ok(Notice::Changed(_))
         ));
-        handler.handle_at(change(next.root.join("unrelated.rawr")), now);
+        handler.handle_at(change(next.root.join("unrelated.rs")), now);
         assert!(adapter.notices().try_recv().is_err());
 
         drop(staged);
@@ -1054,7 +1054,7 @@ mod tests {
         fs::create_dir_all(&candidate_root).expect("candidate directory opens");
         let candidate_root =
             fs::canonicalize(candidate_root).expect("candidate directory canonicalizes");
-        let candidate_path = candidate_root.join("candidate.rawr");
+        let candidate_path = candidate_root.join("candidate.rs");
         fs::write(&candidate_path, "candidate").expect("candidate source writes");
         let candidate_path =
             fs::canonicalize(candidate_path).expect("candidate source canonicalizes");
@@ -1730,10 +1730,10 @@ mod tests {
         let parent = fixture.source.parent().unwrap();
         let directory = parent.join("native-directory");
         let retired = parent.join("retired-directory");
-        let native = directory.join("main.rawr");
+        let native = directory.join("main.rs");
         let unrelated = parent.join("unrelated-directory");
         fs::create_dir(&unrelated).unwrap();
-        fs::write(unrelated.join("main.rawr"), "unrelated").unwrap();
+        fs::write(unrelated.join("main.rs"), "unrelated").unwrap();
         let alias = parent.join("event-alias");
         symlink(parent, &alias).unwrap();
 
@@ -1756,7 +1756,7 @@ mod tests {
 
                 fs::rename(&directory, &retired).unwrap();
                 symlink(target, &directory).unwrap();
-                let event = source_event(&alias.join("native-directory/main.rawr"));
+                let event = source_event(&alias.join("native-directory/main.rs"));
                 assert_eq!(
                     adapter
                         .filter
@@ -1770,7 +1770,7 @@ mod tests {
                     rawr::reload::scheduler::Admission::Obsolete(())
                 ));
                 fs::remove_file(&directory).unwrap();
-                fs::remove_file(retired.join("main.rawr")).unwrap();
+                fs::remove_file(retired.join("main.rs")).unwrap();
                 fs::remove_dir(&retired).unwrap();
             }
         }
@@ -1897,8 +1897,8 @@ mod tests {
             ));
             fs::create_dir_all(root.join("src")).unwrap();
             fs::write(
-                root.join("src/main.rawr"),
-                r#"
+                root.join("src/main.rs"),
+                r#"// rawr
 use iced::Element;
 use iced::widget::text;
 #[derive(Default)] struct State;
@@ -1911,7 +1911,9 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 "#,
             )
             .unwrap();
-            let target = rawr::project::Target::discover(&root).unwrap();
+            // One explicit file: no Cargo.toml, so the watched inputs are
+            // the source alone.
+            let target = rawr::project::Target::discover(root.join("src/main.rs")).unwrap();
             let mut engine = rawr::Engine::new();
             rawr_iced::install(&mut engine).unwrap();
             let candidate = engine.compile_package_generation(&target).unwrap();

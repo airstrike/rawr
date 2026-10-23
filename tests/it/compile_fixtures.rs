@@ -8,7 +8,7 @@ const FAIL_FIXTURES: &[&str] = &["duplicate_item", "unknown_header_type", "malfo
 #[test]
 fn compile_pass_fixtures_resolve_with_source_spans() {
     for name in PASS_FIXTURES {
-        let source = fixture(name, "pass", "rawr");
+        let source = fixture(name, "pass", "rs");
         let expected = fixture(name, "pass", "expect");
         let engine = Engine::new();
         let unit = engine.parse_unit(&source).unwrap_or_else(|error| panic!("compile-pass fixture `{name}` did not parse: {error}"));
@@ -28,7 +28,7 @@ fn compile_pass_fixtures_resolve_with_source_spans() {
 #[test]
 fn compile_fail_fixtures_match_structured_diagnostics() {
     for name in FAIL_FIXTURES {
-        let source = fixture(name, "fail", "rawr");
+        let source = fixture(name, "fail", "rs");
         let expected = fixture(name, "fail", "expect");
         let mut engine = Engine::new();
         engine.register_host_facade(fixture_facade()).unwrap();

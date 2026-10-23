@@ -835,11 +835,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("rawr-parse-cells-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).unwrap();
-        let main = include_str!("../../iced/examples/application_counter.rawr");
-        std::fs::write(root.join("src/main.rawr"), format!("mod view;\n{main}")).unwrap();
+        let main = include_str!("../../iced-cli/assets/counter/src/main.rs");
+        let main = main.strip_prefix("// rawr\n").unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"cells\"\n").unwrap();
+        std::fs::write(root.join("src/main.rs"), format!("// rawr\nmod view;\n{main}")).unwrap();
         std::fs::write(
-            root.join("src/view.rawr"),
-            "#[preview(name = \"Wide\", size = (400, 200))]\npub fn wide(n: &(i64, Option<String>)) -> i64 { let x = 3; 0 }\n",
+            root.join("src/view.rs"),
+            "// rawr\n#[preview(name = \"Wide\", size = (400, 200))]\npub fn wide(n: &(i64, Option<String>)) -> i64 { let x = 3; 0 }\n",
         )
         .unwrap();
         let target = crate::project::Target::discover(&root).unwrap();
@@ -884,7 +886,7 @@ mod tests {
         engine.compile_package(kept).unwrap();
 
         // An edit misses its cell; a cell of another build is stale.
-        std::fs::write(root.join("src/view.rawr"), "pub fn wide() -> i64 { 1 }\n").unwrap();
+        std::fs::write(root.join("src/view.rs"), "// rawr\npub fn wide() -> i64 { 1 }\n").unwrap();
         let mut other = Cells::new(root.join("cells"));
         other.stamp.push_str("/other");
         load(&other).unwrap();

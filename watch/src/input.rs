@@ -172,7 +172,7 @@ mod tests {
         let root = fs::canonicalize(std::env::temp_dir())
             .unwrap()
             .join(format!("rawr-watch-remove-parent-{}", std::process::id()));
-        let path = root.join("nested/source.rawr");
+        let path = root.join("nested/source.rs");
         let change = Change::from_event(
             &Event::new(EventKind::Remove(RemoveKind::Folder)).add_path(path.clone()),
         );
@@ -183,7 +183,7 @@ mod tests {
 
         let modified = Change::from_event(
             &Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Any)))
-                .add_path(root.join("other.rawr")),
+                .add_path(root.join("other.rs")),
         );
         assert!(matches!(modified, Change::Exact(_)));
     }
@@ -191,8 +191,8 @@ mod tests {
     #[test]
     fn canonical_regular_source_event_retains_one_identity() {
         let project = Project::new();
-        project.write("main.rawr", "pub fn main() {}\n");
-        let source = fs::canonicalize(project.root.join("main.rawr")).unwrap();
+        project.write("main.rs", "pub fn main() {}\n");
+        let source = fs::canonicalize(project.root.join("main.rs")).unwrap();
         let change = Change::from_event(
             &Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
                 .add_path(source.clone()),
@@ -206,8 +206,8 @@ mod tests {
     #[test]
     fn creating_an_ancestor_of_a_missing_imported_input_is_relevant() {
         let project = Project::new();
-        project.write("rawr.toml", "[package]\nname = \"watch-input\"\n");
-        project.write("src/main.rawr", "pub fn main() {}\n");
+        project.write("Cargo.toml", "[package]\nname = \"watch-input\"\n");
+        project.write("src/main.rs", "// rawr\npub fn main() {}\n");
         let target = rawr::project::Target::discover(&project.root).unwrap();
         let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target).unwrap();
         let source = rawr::reload::source::Graph::from_package(&graph);
@@ -228,14 +228,12 @@ mod tests {
     }
 
     #[test]
-    fn admitted_manifest_rollover_revokes_new_inputs_and_ignores_removed_inputs() {
+    fn admitted_module_rollover_revokes_new_inputs_and_ignores_removed_inputs() {
         let project = Project::new();
-        project.write("rawr.toml", manifest("old"));
-        project.write("src/main.rawr", application());
-        project.write("old/rawr.toml", "[package]\nname = \"old\"\n");
-        project.write("old/src/lib.rawr", "pub fn value() -> i64 { 1 }\n");
-        project.write("new/rawr.toml", "[package]\nname = \"new\"\n");
-        project.write("new/src/lib.rawr", "pub fn value() -> i64 { 2 }\n");
+        project.write("Cargo.toml", "[package]\nname = \"rollover\"\n");
+        project.write("src/main.rs", &application("old"));
+        project.write("src/old/mod.rs", "// rawr\npub fn value() -> i64 { 1 }\n");
+        project.write("src/new/mod.rs", "// rawr\npub fn value() -> i64 { 2 }\n");
 
         let mut engine = rawr::Engine::new();
         rawr_iced::install(&mut engine).unwrap();
@@ -248,7 +246,7 @@ mod tests {
         let bootstrap = first.bind(&engine, registry()).unwrap();
         let mut slot = bootstrap.install(());
 
-        project.write("rawr.toml", manifest("new"));
+        project.write("src/main.rs", &application("new"));
         let target = rawr::project::Target::discover(&project.root).unwrap();
         let candidate = engine.compile_package_generation(&target).unwrap();
         let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());
@@ -283,13 +281,13 @@ mod tests {
         let () = retired.release();
         inputs.release();
 
-        let old = fs::canonicalize(project.root.join("old/src/lib.rawr")).unwrap();
-        let new = fs::canonicalize(project.root.join("new/src/lib.rawr")).unwrap();
+        let old = fs::canonicalize(project.root.join("src/old/mod.rs")).unwrap();
+        let new = fs::canonicalize(project.root.join("src/new/mod.rs")).unwrap();
         let old = Change::from_event(&Event::new(EventKind::Modify(ModifyKind::Any)).add_path(old));
         let new = Change::from_event(&Event::new(EventKind::Modify(ModifyKind::Any)).add_path(new));
         let renamed_directory = Change::from_event(
             &Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From)))
-                .add_path(project.root.join("new")),
+                .add_path(project.root.join("src/new")),
         );
         assert!(!old.relevant(&publication.read()));
         assert!(new.relevant(&publication.read()));
@@ -304,14 +302,11 @@ mod tests {
         registry
     }
 
-    fn manifest(dependency: &str) -> String {
-        format!(
-            "[package]\nname = \"rollover\"\n\n[dependencies]\n{dependency} = {{ path = \"{dependency}\" }}\n"
-        )
+    fn application(module: &str) -> String {
+        format!("// rawr\nmod {module};\n{}", APPLICATION)
     }
 
-    fn application() -> &'static str {
-        r#"
+    const APPLICATION: &str = r#"
 use iced::Element;
 use iced::widget::text;
 
@@ -322,8 +317,7 @@ impl State {
     fn view(&self) -> Element<Message> { text("rollover") }
 }
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
-"#
-    }
+"#;
 
     struct Project {
         root: std::path::PathBuf,

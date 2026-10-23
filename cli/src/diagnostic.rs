@@ -15,7 +15,7 @@ mod tests {
 
     #[test]
     fn cli_uses_the_core_canonical_report_rendering() {
-        let source = Source::new("src/main.rawr", "alpha\n").unwrap();
+        let source = Source::new("src/main.rs", "alpha\n").unwrap();
         let report = Report::error(code::PARSE_SYNTAX, "invalid source")
             .primary(
                 source,

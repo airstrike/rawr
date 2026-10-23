@@ -1,3 +1,4 @@
+// rawr
 use crate::model::Thing;
 
 pub fn total() -> i64 {

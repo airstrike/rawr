@@ -1,11 +1,11 @@
 [package]
 name = "rust-import-zero"
+version = "0.1.0"
+edition = "2024"
+publish = false
 
-[rust]
-profile = "dev"
-
-[rust.dependencies]
+[dependencies]
 catalog = { package = "catalog-api", path = "../../../importer/tests/fixtures/catalog-api", default-features = false }
 
-[rust.exclude]
-"catalog::Product" = "the application does not expose product storage"
+# A fixture inside the Rawr repository is its own workspace root.
+[workspace]

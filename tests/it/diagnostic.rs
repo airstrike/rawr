@@ -3,8 +3,8 @@ use rawr::{Engine, ParseErrorType, Position, Span};
 
 #[test]
 fn report_validates_owned_cross_source_evidence() {
-    let first = Source::new("src/first.rawr", "struct Café {}\n").unwrap();
-    let second = Source::new("src/second.rawr", "struct Café {}\n").unwrap();
+    let first = Source::new("src/first.rs", "struct Café {}\n").unwrap();
+    let second = Source::new("src/second.rs", "struct Café {}\n").unwrap();
     let report = Report::error(code::RESOLVE_DUPLICATE_ITEM, "duplicate item `Café`")
         .primary(second, Span::new(Position::new(1, 8), Position::new(1, 12)), Some("duplicate declaration".into()))
         .unwrap()
@@ -16,13 +16,13 @@ fn report_validates_owned_cross_source_evidence() {
     assert_eq!(report.category(), rawr::diagnostic::Category::Resolve);
     assert_eq!(report.labels().len(), 2);
     assert_eq!(report.labels()[0].kind(), LabelKind::Primary);
-    assert_eq!(report.labels()[1].source().identity(), "src/first.rawr");
+    assert_eq!(report.labels()[1].source().identity(), "src/first.rs");
     assert_eq!(report.help(), Some("rename one declaration"));
 }
 
 #[test]
 fn report_retains_external_positions_without_claiming_source_text() {
-    let source = Source::new("src/main.rawr", "use support::Deferred;\n").unwrap();
+    let source = Source::new("src/main.rs", "use support::Deferred;\n").unwrap();
     let external = ExternalPosition::checked("support/src/lib.rs", 41, 49, (3, 4), (3, 12)).unwrap();
     let report = Report::error(code::RESOLVE_UNKNOWN_IMPORT, "deferred Rust import")
         .primary(source, Span::new(Position::new(1, 5), Position::new(1, 22)), Some("Rawr use is here".into()))
@@ -42,7 +42,7 @@ fn report_retains_external_positions_without_claiming_source_text() {
 
 #[test]
 fn report_rejects_duplicate_primary_and_out_of_bounds_spans() {
-    let source = Source::new("main.rawr", "one\ntwo").unwrap();
+    let source = Source::new("main.rs", "one\ntwo").unwrap();
     let builder = Report::error(code::PARSE_SYNTAX, "broken")
         .primary(source.clone(), Span::new(Position::new(1, 1), Position::new(1, 2)), None)
         .unwrap();
@@ -52,19 +52,19 @@ fn report_rejects_duplicate_primary_and_out_of_bounds_spans() {
 
 #[test]
 fn unpositioned_report_still_retains_its_exact_source_context() {
-    let source = Source::new("main.rawr", "pub fn helper() {}\n").unwrap();
+    let source = Source::new("main.rs", "pub fn helper() {}\n").unwrap();
     let report = Report::error(code::FRAMEWORK_MISSING_ENTRY, "missing application entry").source(source.clone()).finish();
 
     assert!(report.labels().is_empty());
     assert_eq!(report.sources(), &[source]);
-    assert_eq!(report.view().sources()[0].identity(), "main.rawr");
+    assert_eq!(report.view().sources()[0].identity(), "main.rs");
 }
 
 #[test]
 fn duplicate_item_adapter_preserves_both_exact_spans() {
     let text = "struct Counter {}\nstruct Counter {}\n";
     let error = Engine::new().compile(text).unwrap_err();
-    let report = Report::from_parse(Source::new("main.rawr", text).unwrap(), &error).unwrap();
+    let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
 
     assert_eq!(report.code(), code::RESOLVE_DUPLICATE_ITEM);
     assert_eq!(report.labels().len(), 2);
@@ -77,7 +77,7 @@ fn duplicate_item_adapter_preserves_both_exact_spans() {
 fn unknown_type_adapter_is_actionable_and_positioned() {
     let text = "struct Counter { value: Missing }\n";
     let error = Engine::new().compile(text).unwrap_err();
-    let report = Report::from_parse(Source::new("main.rawr", text).unwrap(), &error).unwrap();
+    let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
 
     assert_eq!(report.code(), code::RESOLVE_UNKNOWN_TYPE);
     assert_eq!(report.labels().len(), 1);
@@ -88,7 +88,7 @@ fn unknown_type_adapter_is_actionable_and_positioned() {
 fn unknown_qualified_type_says_it_is_not_available_yet() {
     let text = "struct Counter { value: lib::widget::Missing }\n";
     let error = Engine::new().compile(text).unwrap_err();
-    let report = Report::from_parse(Source::new("main.rawr", text).unwrap(), &error).unwrap();
+    let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
 
     assert_eq!(report.code(), code::RESOLVE_UNKNOWN_TYPE);
     assert_eq!(

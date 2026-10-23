@@ -1,4 +1,4 @@
-//! Polyglot `src/`: `.rs` and `.rawr` modules in one module tree.
+//! Native modules: unmarked `.rs` modules beside marked ones in one crate.
 #![cfg(not(feature = "no_std"))]
 
 use std::fs;
@@ -20,7 +20,7 @@ fn polyglot_discovery_records_rust_modules_and_compiles_only_rawr() {
     let target = rawr::project::Target::discover(&root).unwrap();
     let graph = Graph::load(&Engine::new(), &target).unwrap();
     let sources = graph.sources().iter().map(|source| source.path().to_path_buf()).collect::<Vec<_>>();
-    assert_eq!(sources, [root.join("src/main.rawr"), root.join("src/view.rawr")]);
+    assert_eq!(sources, [root.join("src/main.rs"), root.join("src/view.rs")]);
     let rust = graph.entry_package().rust_modules();
     assert_eq!(rust.len(), 1);
     assert_eq!(rust[0].modules(), ["model"]);
@@ -30,8 +30,8 @@ fn polyglot_discovery_records_rust_modules_and_compiles_only_rawr() {
 #[test]
 fn polyglot_discovery_follows_mod_rs_and_rust_children() {
     let project = Project::new("children");
-    project.write("src/main.rawr", "mod ui;\nmod data;\n");
-    project.write("src/ui/mod.rawr", "pub mod widgets;\n");
+    project.write("src/main.rs", "// rawr\nmod ui;\nmod data;\n");
+    project.write("src/ui/mod.rs", "// rawr\npub mod widgets;\n");
     project.write("src/ui/widgets.rs", "pub mod button;\nmod inner { mod deep; }\n#[path = \"x.rs\"] mod moved;\n");
     project.write("src/ui/widgets/button.rs", "pub struct Button;\n");
     project.write("src/ui/widgets/inner/deep.rs", "");
@@ -44,26 +44,26 @@ fn polyglot_discovery_follows_mod_rs_and_rust_children() {
 }
 
 #[test]
-fn a_module_with_both_extensions_is_an_error() {
+fn a_module_with_both_files_is_an_error() {
     let project = Project::new("both");
-    project.write("src/main.rawr", "mod model;\n");
-    project.write("src/model.rawr", "");
-    project.write("src/model.rs", "");
+    project.write("src/main.rs", "// rawr\nmod model;\n");
+    project.write("src/model.rs", "// rawr\n");
+    project.write("src/model/mod.rs", "");
     let target = rawr::project::Target::discover(project.path()).unwrap();
     let error = Graph::load(&Engine::new(), &target).unwrap_err().to_string();
-    assert!(error.contains("file for module `model` found at both") && error.contains("model.rawr") && error.contains("model.rs"), "{error}");
+    assert!(error.contains("file for module `model` found at both") && error.contains("model.rs") && error.contains("model/mod.rs"), "{error}");
 }
 
 #[test]
-fn a_rust_module_declaring_a_rawr_module_is_an_error() {
+fn a_native_module_declaring_a_marked_module_is_an_error() {
     let project = Project::new("one-way");
-    project.write("src/main.rawr", "mod model;\n");
+    project.write("src/main.rs", "// rawr\nmod model;\n");
     project.write("src/model.rs", "pub mod view;\n");
-    project.write("src/model/view.rawr", "");
+    project.write("src/model/view.rs", "// rawr\n");
     let target = rawr::project::Target::discover(project.path()).unwrap();
     let error = Graph::load(&Engine::new(), &target).unwrap_err();
     let message = error.to_string();
-    assert!(message.contains("Rust module `crate::model` declares `mod view;`") && message.contains("never depends on a `.rawr` module"), "{message}");
+    assert!(message.contains("native module `crate::model` declares `mod view;`") && message.contains("Native Rust cannot depend on a marked module."), "{message}");
     let report = error.report().unwrap();
     assert!(report.labels()[0].source().identity().ends_with("src/model.rs"));
 }
@@ -77,6 +77,7 @@ impl Project {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("rawr-polyglot-{}-{id}-{name}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("Cargo.toml"), format!("[package]\nname = \"poly-{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n")).unwrap();
         Self { root: fs::canonicalize(root).unwrap() }
     }
 
@@ -105,8 +106,8 @@ fn a_path_into_a_rust_module_names_the_app_crate() {
     use rawr::host;
     let project = Project::new("crate-path");
     project.write("Cargo.toml", "[package]\nname = \"poly-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
-    project.write("src/main.rawr", "mod model;\nmod view;\nuse crate::model::answer;\n\npub fn main() -> i64 {\n    view::total() + answer()\n}\n");
-    project.write("src/view.rawr", "use super::model::answer;\n\npub fn total() -> i64 {\n    answer()\n}\n");
+    project.write("src/main.rs", "// rawr\nmod model;\nmod view;\nuse crate::model::answer;\n\npub fn main() -> i64 {\n    view::total() + answer()\n}\n");
+    project.write("src/view.rs", "// rawr\nuse super::model::answer;\n\npub fn total() -> i64 {\n    answer()\n}\n");
     project.write("src/model.rs", "pub fn answer() -> i64 { 21 }\n");
 
     let target = rawr::project::Target::discover(project.path()).unwrap();
@@ -122,7 +123,7 @@ fn a_path_into_a_rust_module_names_the_app_crate() {
     engine.register_host_facade(facade.finish().unwrap()).unwrap();
     engine.compile_package_executable(&target).unwrap();
 
-    project.write("src/view.rawr", "use crate::model::missing;\n\npub fn total() -> i64 {\n    missing()\n}\n");
+    project.write("src/view.rs", "// rawr\nuse crate::model::missing;\n\npub fn total() -> i64 {\n    missing()\n}\n");
     let error = engine.compile_package_executable(&target).unwrap_err().to_string();
     assert!(error.contains("poly_app::model::missing"), "{error}");
 }
@@ -134,8 +135,8 @@ fn a_qualified_expression_path_into_a_rust_module_names_the_app_crate() {
     use rawr::host;
     let project = Project::new("qualified-path");
     project.write("Cargo.toml", "[package]\nname = \"poly-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
-    project.write("src/main.rawr", "mod model;\nmod view;\n\npub fn main() -> i64 {\n    view::total() + crate::model::answer()\n}\n");
-    project.write("src/view.rawr", "pub fn total() -> i64 {\n    super::model::answer()\n}\n");
+    project.write("src/main.rs", "// rawr\nmod model;\nmod view;\n\npub fn main() -> i64 {\n    view::total() + crate::model::answer()\n}\n");
+    project.write("src/view.rs", "// rawr\npub fn total() -> i64 {\n    super::model::answer()\n}\n");
     project.write("src/model.rs", "pub fn answer() -> i64 { 21 }\n");
 
     let target = rawr::project::Target::discover(project.path()).unwrap();
@@ -164,8 +165,8 @@ fn a_qualified_type_path_into_a_rust_module_names_the_app_crate() {
     struct Thing;
     let project = Project::new("qualified-type");
     project.write("Cargo.toml", "[package]\nname = \"poly-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
-    project.write("src/main.rawr", "mod model;\nmod view;\n\npub fn main() -> i64 {\n    let t: crate::model::Thing = crate::model::make();\n    view::total()\n}\n");
-    project.write("src/view.rawr", "pub fn keep(t: super::model::Thing) -> super::model::Thing {\n    t\n}\n\npub fn total() -> i64 {\n    let t: super::model::Thing = keep(super::model::make());\n    1\n}\n");
+    project.write("src/main.rs", "// rawr\nmod model;\nmod view;\n\npub fn main() -> i64 {\n    let t: crate::model::Thing = crate::model::make();\n    view::total()\n}\n");
+    project.write("src/view.rs", "// rawr\npub fn keep(t: super::model::Thing) -> super::model::Thing {\n    t\n}\n\npub fn total() -> i64 {\n    let t: super::model::Thing = keep(super::model::make());\n    1\n}\n");
     project.write("src/model.rs", "pub struct Thing;\npub fn make() -> Thing { Thing }\n");
 
     let target = rawr::project::Target::discover(project.path()).unwrap();
@@ -181,7 +182,7 @@ fn a_qualified_type_path_into_a_rust_module_names_the_app_crate() {
 }
 
 /// The app's own crate is a Cargo dependency generated from its
-/// `Cargo.toml` and its `.rs` modules; `view.rawr` uses `crate::model::Thing`
+/// `Cargo.toml` and its native modules; `view.rs` uses `crate::model::Thing`
 /// defined in `model.rs`, through the real importer.
 #[cfg(feature = "rust-import-driver-tests")]
 #[test]
@@ -192,7 +193,7 @@ fn the_app_crate_is_imported_and_a_rawr_module_uses_its_rust_module() {
 
     let _turn = rawr_import::store::test_turn();
     let project = Project::new("import");
-    for file in ["Cargo.toml", "src/main.rawr", "src/view.rawr", "src/model.rs"] {
+    for file in ["Cargo.toml", "src/main.rs", "src/view.rs", "src/model.rs"] {
         project.write(file, &fs::read_to_string(fixture().join(file)).unwrap());
     }
     let engine = Engine::new();
@@ -211,7 +212,7 @@ fn the_app_crate_is_imported_and_a_rawr_module_uses_its_rust_module() {
             .expect("the package declares a Rust import")
             .resolve(&native, &limits)
             .and_then(|resolution| extract::from_resolution(resolution, &native, &limits))
-            .expect("the generated app crate builds without its .rawr modules and extracts")
+            .expect("the generated app crate builds without its marked modules and extracts")
             .classify(&classify::Policy::standard(), &limits)
             .expect("the app crate classifies")
     };
@@ -227,10 +228,10 @@ fn the_app_crate_is_imported_and_a_rawr_module_uses_its_rust_module() {
     assert!(demand.entries().len() >= 2, "Thing::new and doubled are demanded");
 
     // An edit to the `.rs` module reaches the next import, and a
-    // `pub(crate)` method is visible to the `.rawr` modules of its crate.
+    // `pub(crate)` method is visible to the marked modules of its crate.
     let model = fs::read_to_string(project.path().join("src/model.rs")).unwrap();
     project.write("src/model.rs", &model.replace("    pub fn doubled", "    pub(crate) fn tripled(&self) -> i64 {\n        self.count * 3\n    }\n\n    pub fn doubled"));
-    project.write("src/view.rawr", "use crate::model::Thing;\n\npub fn total() -> i64 {\n    Thing::new(1).tripled()\n}\n");
+    project.write("src/view.rs", "// rawr\nuse crate::model::Thing;\n\npub fn total() -> i64 {\n    Thing::new(1).tripled()\n}\n");
     let graph = Graph::load(&engine, &target).unwrap();
     let contract = import(&graph);
     let snapshot = rawr::reload::source::Snapshot::from_graph(&rawr::reload::source::Graph::from_package(&graph));

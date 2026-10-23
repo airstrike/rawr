@@ -636,7 +636,7 @@ mod tests {
         };
         let source = program::source::Source::from_resolved(
             source::Map::new(""),
-            diagnostic::Source::new("digest.rawr", "").unwrap(),
+            diagnostic::Source::new("digest.rs", "").unwrap(),
         );
         let location = super::super::Location {
             source: source.key(program::source::Id::ROOT),

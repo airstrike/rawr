@@ -23,8 +23,8 @@ impl Project {
         let catalog = workspace.join("importer/tests/fixtures/catalog-api");
         let repository = Path::new(env!("CARGO_MANIFEST_DIR"));
         for (source, destination) in [
-            (repository.join("tests/fixtures/rust-import-zero/rawr.toml"), root.join("rawr.toml")),
-            (repository.join("tests/fixtures/rust-import-zero/src/main.rawr"), root.join("src/main.rawr")),
+            (repository.join("tests/fixtures/rust-import-zero/Cargo.toml"), root.join("Cargo.toml")),
+            (repository.join("tests/fixtures/rust-import-zero/src/main.rs"), root.join("src/main.rs")),
             (repository.join("importer/tests/fixtures/catalog-api/Cargo.toml"), catalog.join("Cargo.toml")),
             (repository.join("importer/tests/fixtures/catalog-api/src/lib.rs"), catalog.join("src/lib.rs")),
         ] {
@@ -83,19 +83,6 @@ fn unchanged_rust_library_flows_from_manifest_to_extracted_graph() {
     assert!(internal.contains("features = [\"rust-import\", \"std\"]"), "{internal}");
 
     let extracted = rawr_import::extract::from_resolution(resolution, &native, &limits).expect("the unchanged Rust library canonicalizes");
-    let excluded = extracted
-        .exports()
-        .find(|outcome| outcome.key().root_alias() == "catalog" && outcome.key().path().eq(["Product"].into_iter()))
-        .expect("the manifest exclusion has one selected-path outcome");
-    match excluded {
-        ledger::Path::Excluded { reason, policy_span, .. } => {
-            assert_eq!(reason.as_ref(), "the application does not expose product storage");
-            assert!(policy_span.file().ends_with("rawr.toml"));
-        }
-        ledger::Path::Imported(_) | ledger::Path::Rejected { .. } => {
-            panic!("the exact manifest path must remain excluded")
-        }
-    }
     assert!(
         extracted
             .exports()
