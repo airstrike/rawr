@@ -9,8 +9,8 @@ description = "Private bounded Cargo manifest document foundation"
 
 [dependencies]
 thiserror = "2"
-toml_datetime = { version = "=1.1.1", default-features = false, features = ["std"] }
-winnow = { version = "=1.0.4", default-features = false }
+toml_datetime = { version = "1.1.1", default-features = false, features = ["std"] }
+winnow = { version = "1.0.4", default-features = false }
 
 [dev-dependencies]
 serde_json = "1"

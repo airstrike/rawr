@@ -379,10 +379,11 @@ impl Request {
             cargo::PlacementState::Fresh => {
                 cargo::write_atomic(provisional.manifest(), provisional_manifest.as_bytes())?;
                 cargo::write_atomic(provisional.source(), cargo::HARNESS_SOURCE.as_bytes())?;
-                // The provisional resolution starts from the universe's seed, as
-                // the candidate does, so Cargo reads its index cache instead of
-                // querying the registry for every package.
-                cargo::write_atomic(provisional.lock(), definition.seed())?;
+                // The provisional resolution starts from the lock the candidate
+                // starts from (the project's own, else the universe's seed), so
+                // Cargo reads its index cache instead of querying the registry
+                // for every package.
+                cargo::write_atomic(provisional.lock(), self.starting_lock(definition))?;
                 drop(provisional_manifest);
                 let materialized = self.materialize_fresh(
                     limits,
