@@ -312,6 +312,7 @@ impl Model {
                     #[cfg(not(feature = "no_float"))]
                     "f64" => Ok(0.0_f64.into()),
                     "String" => Ok(ImmutableString::new().into()),
+                    "Duration" => Ok(Dynamic::from(std::time::Duration::ZERO)),
                     _ => Err(construction::Error::ValueType {
                         expected: path.name.clone(),
                         actual: "no executable Default implementation".into(),

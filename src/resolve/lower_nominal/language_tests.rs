@@ -624,6 +624,39 @@ fn language_iter_once_and_empty() {
     assert_eq!(value, 600 + 1);
 }
 
+#[test]
+fn language_std_time_in_plain_programs() {
+    // `std::time::Duration` and `Instant` without iced: Rust's values, with
+    // their constructors, readers and operators.
+    let value = run(r#"
+        use std::time::{Duration, Instant};
+        #[derive(Debug, Clone, Copy, PartialEq, Default)]
+        struct Lap { best: Duration }
+        fn total(laps: &[Duration]) -> Duration {
+            let mut sum = Duration::ZERO;
+            for lap in laps {
+                sum += *lap;
+            }
+            sum
+        }
+        pub fn run() -> i64 {
+            let start = Instant::now();
+            let laps = vec![Duration::from_millis(1500), Duration::from_secs(2), Duration::from_secs_f64(0.25)];
+            let sum = total(&laps);
+            let half = sum / 2;
+            let later = start + Duration::from_millis(10);
+            let lap = Lap::default();
+            let shown = format!("{:?} {:?} {:?}", sum, half * 3, lap);
+            assert_eq!(shown, "3.75s 5.625s Lap { best: 0ns }");
+            assert!(sum > half && later > start && start.elapsed() < Duration::from_secs(5));
+            assert_eq!(Duration::from_secs(1).checked_sub(Duration::from_secs(2)), None);
+            (sum.as_millis() + (later - start).as_millis()) as i64 + sum.subsec_millis() as i64 * 10000
+        }
+        run()
+    "#);
+    assert_eq!(value, 3750 + 10 + 750 * 10000);
+}
+
 /// `Button::style` takes a two-parameter host callable, as iced's
 /// `fn(&Theme, Status) -> Style`.
 fn style_facade() -> crate::host::facade::Definition {

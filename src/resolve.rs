@@ -1168,6 +1168,9 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "iter"
                 | "iter::once"
                 | "iter::empty"
+                | "time"
+                | "time::Duration"
+                | "time::Instant"
         )
     ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
         || rest.is_some_and(|rest| {
@@ -1190,7 +1193,7 @@ pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
     const NAMES: &[&str] = &[
         "HashMap", "HashSet", "BTreeMap", "BTreeSet", "Debug", "Display", "Formatter", "Write",
         "Ordering", "PartialOrd", "Ord", "min", "max", "Reverse", "Hash", "TryFrom", "TryInto",
-        "FromStr", "swap", "replace", "take",
+        "FromStr", "swap", "replace", "take", "Duration", "Instant",
     ];
     NAMES
         .iter()
@@ -1287,6 +1290,18 @@ pub(crate) fn std_parse_error(path: &str) -> Option<&'static str> {
         _ => return None,
     };
     (module.is_empty() || module == expected).then_some(error)
+}
+
+/// `std::time::Duration` and `Instant` as a type path is written: bare
+/// (imported, or Rawr's when the crate has no type of that name), or by
+/// `time::`, `std::time::` or `core::time::`; the type's name.
+pub(crate) fn std_time(path: &str) -> Option<&'static str> {
+    let name = path
+        .strip_prefix("std::time::")
+        .or_else(|| path.strip_prefix("core::time::"))
+        .or_else(|| path.strip_prefix("time::"))
+        .unwrap_or(path);
+    ["Duration", "Instant"].into_iter().find(|time| *time == name)
 }
 
 pub(crate) fn std_ordering(path: &str) -> bool {

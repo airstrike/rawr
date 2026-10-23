@@ -214,6 +214,9 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                 "char" => value.is_char(),
                 // `std::cmp::Ordering` is its discriminant at runtime.
                 "i64" | "Ordering" => value.is_int(),
+                // `std::time`'s types are Rust's at runtime.
+                "Duration" => value.is::<std::time::Duration>(),
+                "Instant" => value.is::<std::time::Instant>(),
                 "String" => value.is_string(),
                 #[cfg(not(feature = "no_float"))]
                 "f64" => value.is_float(),
