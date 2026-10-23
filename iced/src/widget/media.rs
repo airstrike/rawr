@@ -53,7 +53,7 @@ where
 
 impl widget::Descriptor for marker::Image {
     fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
-        let mut image = iced::widget::image(self.handle.clone());
+        let mut image = iced::widget::image(drawable(&self.handle));
         if let Some(width) = self.width {
             image = image.width(width);
         }
@@ -80,6 +80,22 @@ impl widget::Descriptor for marker::Image {
 
     fn identity(&self) -> widget::Identity {
         self.identity.clone()
+    }
+}
+
+/// `handle`, or a blank pixel when it names a file that does not exist.
+///
+/// iced's wgpu renderer draws an image it cannot load as nothing, 1 pixel
+/// square. iced's tiny-skia renderer panics instead: it measures the image
+/// first, remembers the failed load, and expects an image when it draws.
+/// A blank pixel draws the same in both.
+fn drawable(handle: &iced::widget::image::Handle) -> iced::widget::image::Handle {
+    static BLANK: std::sync::OnceLock<iced::widget::image::Handle> = std::sync::OnceLock::new();
+    match handle {
+        iced::widget::image::Handle::Path(_, path) if !path.is_file() => BLANK
+            .get_or_init(|| iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]))
+            .clone(),
+        _ => handle.clone(),
     }
 }
 
