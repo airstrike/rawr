@@ -7433,6 +7433,43 @@ fn language_a_pattern_inside_a_mut_pattern_writes_back_through_both() {
 }
 
 #[test]
+fn language_let_chains() {
+    let value = run(r#"
+        enum Shape { Dot, Circle(Option<i64>) }
+        struct H { o: Option<i64>, shape: Shape }
+        impl H {
+            fn grow(&mut self) {
+                if let Some(n) = &mut self.o && *n > 0 && let Shape::Circle(Some(r)) = &mut self.shape {
+                    *n += 1;
+                    *r *= 2;
+                }
+            }
+        }
+        fn first_even(v: &Vec<i64>) -> i64 {
+            if let Some(x) = v.first() && *x % 2 == 0 { *x } else if v.len() > 1 && let Some(y) = v.last() { *y } else { -1 }
+        }
+        pub fn run() -> i64 {
+            let mut h = H { o: Some(1), shape: Shape::Circle(Some(5)) };
+            h.grow();
+            let a = Some(3);
+            let b: Option<i64> = None;
+            let both = if let Some(x) = a && let Some(y) = b { x + y } else { 0 };
+            let gated = if a.is_some() && let Some(x) = a && x > 2 { x * 100 } else { 0 };
+            let mut stack = vec![1, 2, 3, 4];
+            let mut taken = 0;
+            while let Some(top) = stack.pop() && top > 2 { taken += top; }
+            let r = match h.shape { Shape::Circle(Some(r)) => r, _ => 0 };
+            h.o.unwrap() * 1000000 + r * 10000 + both + gated + taken * 10
+                + first_even(&vec![4, 5]) * 1000 + first_even(&vec![3, 7]) * 100000
+        }
+        run()
+    "#);
+    assert_eq!(value, 2 * 1000000 + 10 * 10000 + 0 + 300 + 7 * 10 + 4 * 1000 + 7 * 100000);
+    let error = rejected("pub fn run() -> i64 { let a = Some(1); if let Some(x) = a && x > 0 || true { 1 } else { 0 } } run()");
+    assert!(error.contains("||"), "{error}");
+}
+
+#[test]
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(error.contains("nknown function") && error.contains("centre"), "{error}");

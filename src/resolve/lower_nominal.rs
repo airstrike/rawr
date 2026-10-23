@@ -8186,6 +8186,9 @@ struct Parser<'a> {
     unresolved_calls: Vec<(ImmutableString, Span)>,
     /// Patterns matched on `&mut` places whose bindings are in scope.
     write_backs: Vec<WriteBack>,
+    /// The expression depth of a let chain's link being read: `&&` there
+    /// ends the link (`parse_chain`).
+    chain_link: Option<usize>,
     /// A closure being read changes `self`.
     self_changed: std::cell::Cell<bool>,
     /// The statement being read makes a closure that changes `self`: it
@@ -8458,6 +8461,7 @@ impl<'a> Parser<'a> {
             native_modules: engine.global_modules.clone(),
             unresolved_calls: Vec::new(),
             write_backs: Vec::new(),
+            chain_link: None,
             self_changed: std::cell::Cell::new(false),
             lend_self: false,
             mutable_borrow: None,
@@ -19549,6 +19553,33 @@ impl<'a> Parser<'a> {
         label: Option<ImmutableString>,
     ) -> Result<ParsedExpr, Error> {
         let source = match token {
+            // `while` over a let chain is `loop { links { body } }` that
+            // breaks when a link fails.
+            Token::While if self.let_chain_ahead() => {
+                let original = self.bindings.clone();
+                let write_backs = self.write_backs.len();
+                let chain = self.parse_chain();
+                let looped = chain.and_then(|(open, close)| {
+                    let hit = self.temporary("hit");
+                    let mut head = origin::Fragment::plain(format!("{{\nlet {hit} = false;\n"));
+                    head.push(open);
+                    head.push_text(format!("{hit} = true; "));
+                    let tail = format!("{close}\nif !{hit} {{ break; }}\n}}");
+                    self.parse_loop_body(
+                        origin::Fragment::plain("loop"),
+                        start,
+                        label,
+                        false,
+                        Some((head, origin::Fragment::plain(tail))),
+                    )
+                });
+                self.write_backs.truncate(write_backs);
+                let inner = std::mem::replace(&mut self.bindings, original);
+                for (name, binding) in &mut self.bindings {
+                    binding.available &= inner.get(name).is_some_and(|binding| binding.available);
+                }
+                return looped;
+            }
             // `while let pattern = subject { body }` is
             // `loop { switch subject { pattern => body, _ => break } }`.
             Token::While if matches!(self.peek(), Token::Let) => {
@@ -20971,7 +21002,142 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The head ahead is a let chain, as in Rust 2024: `let` joined to
+    /// another condition by `&&` (`if let A = x && let B = y && c`).
+    fn let_chain_ahead(&mut self) -> bool {
+        let leading_let = matches!(self.peek(), Token::Let);
+        let mut depth = 0usize;
+        let mut previous = Token::EOF;
+        for (token, _) in self.input.clone() {
+            match token {
+                Token::LeftParen | Token::LeftBracket => depth += 1,
+                Token::RightParen | Token::RightBracket => {
+                    let Some(next) = depth.checked_sub(1) else {
+                        return false;
+                    };
+                    depth = next;
+                }
+                Token::LeftBrace | Token::SemiColon | Token::EOF if depth == 0 => return false,
+                Token::Let if depth == 0 && previous == Token::And => return true,
+                Token::And if depth == 0 && leading_let => return true,
+                _ => {}
+            }
+            previous = token;
+        }
+        false
+    }
+
+    /// The links of a let chain up to its block: each `let` a switch on
+    /// its subject whose bindings the later links and the block see, each
+    /// other condition an `if`. The text that opens them, the text that
+    /// closes them, and the patterns' write-backs, which stay in scope.
+    fn parse_chain(&mut self) -> Result<(origin::Fragment, String), Error> {
+        let mut open = origin::Fragment::default();
+        let mut close = String::new();
+        loop {
+            let depth = Some(self.expression_stack.len() + 1);
+            let outer = std::mem::replace(&mut self.chain_link, depth);
+            if matches!(self.peek(), Token::Let) {
+                let scrutinee = self.temporary("match");
+                let parsed = self.parse_let_condition(&scrutinee);
+                self.chain_link = outer;
+                let (subject, arm, binds, write_back) = parsed?;
+                self.write_backs.extend(write_back);
+                open.push_text(format!("{{ let {scrutinee} = "));
+                open.push(subject);
+                open.push_text(format!("; switch {scrutinee} {{ "));
+                open.push(arm);
+                open.push_text(" => { ");
+                open.push(binds);
+                close.insert_str(0, " }, _ => () } }");
+            } else {
+                let condition = self.parse_head(Self::parse_expr);
+                self.chain_link = outer;
+                let condition = condition?;
+                self.require_type(&Ty::Bool, &condition.ty, condition.span)?;
+                open.push_text("if ");
+                open.push(condition.rendered_source());
+                open.push_text(" { ");
+                close.insert_str(0, " }");
+            }
+            if !matches!(self.peek(), Token::And) {
+                return Ok((open, close));
+            }
+            self.next();
+        }
+    }
+
+    /// `if` over a let chain. The block runs inside every link and marks
+    /// that it ran; otherwise the alternative runs.
+    fn parse_if_chain(&mut self, if_span: Span) -> Result<ParsedExpr, Error> {
+        let original_bindings = self.bindings.clone();
+        let write_backs = self.write_backs.len();
+        let chain = self.parse_chain();
+        let chain = chain.and_then(|chain| {
+            if matches!(self.peek(), Token::LeftBrace) {
+                Ok(chain)
+            } else {
+                Err(self.unsupported("`if` consequent without a block"))
+            }
+        });
+        let consequent = chain.and_then(|chain| Ok((chain, self.parse_match_action()?)));
+        self.write_backs.truncate(write_backs);
+        let ((open, close), consequent) = consequent?;
+        let consequent_bindings = std::mem::replace(&mut self.bindings, original_bindings.clone());
+        let alternative = if !matches!(self.peek(), Token::Else) {
+            self.require_type(&Ty::Unit, &consequent.value.ty, consequent.value.span)?;
+            Branch {
+                value: self.literal("()", Ty::Unit, consequent.syntax),
+                syntax: consequent.syntax,
+            }
+        } else if matches!(self.next_after_else(), Token::If) {
+            let nested = self.next().1;
+            let value = self.parse_if(point_span(nested))?;
+            Branch {
+                syntax: value.span,
+                value,
+            }
+        } else {
+            if !matches!(self.peek(), Token::LeftBrace) {
+                return Err(self.unsupported("`if` alternative without a block"));
+            }
+            self.parse_match_action()?
+        };
+        let alternative_bindings = std::mem::replace(&mut self.bindings, original_bindings);
+        for (name, binding) in &mut self.bindings {
+            binding.available = consequent_bindings
+                .get(name)
+                .is_some_and(|binding| binding.available)
+                && alternative_bindings
+                    .get(name)
+                    .is_some_and(|binding| binding.available);
+        }
+        let mut branches = [consequent, alternative];
+        let output = self.coerce_branches(
+            &mut branches
+                .iter_mut()
+                .map(|branch| &mut branch.value)
+                .collect::<Vec<_>>(),
+        )?;
+        let [consequent, alternative] = branches;
+        let span = span(if_span.start(), alternative.syntax.end());
+        let (hit, value) = (self.temporary("hit"), self.temporary("chain"));
+        let mut source = origin::Fragment::plain(format!("{{\nlet {hit} = false;\nlet {value} = ();\n"));
+        source.push(open);
+        source.push_text(format!("{hit} = true; {value} = "));
+        source.push(consequent.value.rendered_block());
+        source.push_text(";");
+        source.push_text(close);
+        source.push_text(format!("\nif {hit} {{ {value} }} else "));
+        source.push(alternative.value.rendered_block());
+        source.push_text("\n}");
+        Ok(self.operator_expr(source.surrounded("(", ")"), output, span))
+    }
+
     fn parse_if(&mut self, if_span: Span) -> Result<ParsedExpr, Error> {
+        if self.let_chain_ahead() {
+            return self.parse_if_chain(if_span);
+        }
         // `if let Some(v) = map.get_mut(&k)`: `v` is the value's place.
         if matches!(self.peek(), Token::Let)
             && let Some(value) = self.parse_get_mut_if(if_span)?
@@ -21443,6 +21609,16 @@ impl<'a> Parser<'a> {
         while let Some(precedence) = binary_precedence(&self.peek()) {
             if precedence < minimum {
                 break;
+            }
+            // `&&` ends a let chain's link; `||` cannot join one, as in Rust.
+            if self.chain_link == Some(self.expression_stack.len()) {
+                match self.peek() {
+                    Token::And => break,
+                    Token::Or => {
+                        return Err(self.unsupported("`||` in a `let` chain"));
+                    }
+                    _ => {}
+                }
             }
             let operator = self.next().0;
             let rhs = self.parse_binary(precedence + 1)?;
