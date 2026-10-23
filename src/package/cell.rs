@@ -872,7 +872,7 @@ mod tests {
         }
         // A program loaded from its cells compiles as the parsed one does.
         let cart = crate::project::Target::discover(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/cart.rawr"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/scripts/cart.rs"),
         )
         .unwrap();
         let cells = Cells::new(root.join("cart"));

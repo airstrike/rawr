@@ -423,7 +423,7 @@ fn field_mutation_preserves_the_dynamic_envelope() {
 #[test]
 fn evolving_nominal_counter_example_executes_end_to_end() {
     let engine = Engine::new();
-    let ast = engine.compile(include_str!("../../examples/nominal_counter.rawr")).unwrap();
+    let ast = engine.compile(include_str!("../../examples/scripts/nominal_counter.rs")).unwrap();
 
     assert_eq!(engine.eval_ast::<i64>(&ast).unwrap(), 42);
 }

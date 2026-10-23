@@ -1017,7 +1017,7 @@ impl State {
 
     #[test]
     fn run_plain_program_prints_its_output() {
-        let cart = text(include_str!("../../examples/cart.rawr"));
+        let cart = text(include_str!("../../examples/scripts/cart.rs"));
         assert_eq!(cart.text(), "total: 27\n");
         assert_eq!((cart.status, cart.truncated, cart.limit), (0, false, false));
     }

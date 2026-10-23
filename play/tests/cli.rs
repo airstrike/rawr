@@ -152,7 +152,7 @@ fn text_result(source: &str, args: &[&str]) -> rawr_play::Output {
 
 #[test]
 fn cli_writes_a_plain_programs_output_as_json() {
-    let cart = text_result(include_str!("../../examples/cart.rawr"), &[]);
+    let cart = text_result(include_str!("../../examples/scripts/cart.rs"), &[]);
     assert_eq!((cart.text().as_str(), cart.status), ("total: 27\n", 0));
     let expression = text_result("vec![1, 2, 3].iter().sum::<i64>()", &[]);
     assert_eq!(expression.text(), "6\n");

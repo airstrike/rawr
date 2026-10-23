@@ -131,14 +131,14 @@ const FAKE: &str = "format = 1\nname = \"rawr-fake\"\ncrates = [\"fakecrate\"]\n
 fn rawr_runs_the_cart_with_no_build_and_leaves_its_directory_as_it_was() {
     let sandbox = Sandbox::new("cart");
     fs::write(
-        sandbox.work().join("cart.rawr"),
-        include_str!("../../../examples/cart.rawr"),
+        sandbox.work().join("cart.rs"),
+        include_str!("../../../examples/scripts/cart.rs"),
     )
     .unwrap();
     let before = tree(&sandbox.work());
 
-    let run = sandbox.rawr(&["run", "cart.rawr"]);
-    let checked = sandbox.rawr(&["check", "cart.rawr"]);
+    let run = sandbox.rawr(&["run", "cart.rs"]);
+    let checked = sandbox.rawr(&["check", "cart.rs"]);
 
     assert_success(&run);
     assert_eq!(stdout(&run), "total: 27\n");

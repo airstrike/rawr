@@ -8,7 +8,7 @@ use rawr::{Dynamic, Engine, ParseError, ParseErrorType, Position, Scope, host};
 #[test]
 fn rust_shaped_counter_update_matches_unit_variants() {
     let engine = Engine::new();
-    let ast = engine.compile(include_str!("../../examples/nominal_counter.rawr")).unwrap();
+    let ast = engine.compile(include_str!("../../examples/scripts/nominal_counter.rs")).unwrap();
 
     assert_eq!(engine.eval_ast::<i64>(&ast).unwrap(), 42);
 }

@@ -8,7 +8,7 @@ use rawr::{Dynamic, Engine, ParseError, ParseErrorType, Scope};
 #[test]
 fn nominal_struct_default_fields_and_mutation_execute() {
     let engine = Engine::new();
-    let ast = engine.compile(include_str!("../../examples/nominal_counter.rawr")).unwrap();
+    let ast = engine.compile(include_str!("../../examples/scripts/nominal_counter.rs")).unwrap();
 
     assert_eq!(engine.eval_ast::<i64>(&ast).unwrap(), 42);
 }

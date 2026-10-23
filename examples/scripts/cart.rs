@@ -1,3 +1,4 @@
+// rawr
 enum Item {
     Book { price: f64 },
     Coffee { cups: i64 },
