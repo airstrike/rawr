@@ -102,7 +102,8 @@ fn catalog_reports_from_retained_source_after_the_package_file_is_deleted() {
         .unwrap()
         .bind(registry())
         .unwrap();
-    assert_eq!(bound.package(), "main");
+    // The package is named as rustc names the crate (D471).
+    assert_eq!(bound.package(), "fixture");
     let retained = bound.source(location).unwrap();
     assert_eq!(retained.text(), format!("// rawr\n{}", standalone_source()));
     assert!(retained.identity().ends_with("src/main.rs"));

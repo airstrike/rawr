@@ -763,14 +763,14 @@ fn plan() -> rawr_import::surface::facade::Plan {
     let source = [11; 32];
     let target = [12; 32];
     let bytes = serde_json::to_vec(&serde_json::json!({
-        "schema": 6, "aliases": [], "sources": [], "abis": [], "operations": [],
+        "schema": 8, "aliases": [], "sources": [], "abis": [], "operations": [],
         "facades": [
             {"root": "native", "types": [{"path": "Source", "identity": source, "parameters": [], "copy": false, "default": false,
                 "shape": {"Struct": {"form": "Unit", "constructor": constructor, "fields": [], "constructible": true}}}],
              "items": [{"path": "produce", "kind": "Function", "selector": producer,
-                "signature": {"parameters": [], "inputs": [], "output": {"Nominal": {"identity": source, "arguments": []}}}}]},
+                "signature": {"parameters": [], "inputs": [], "output": {"Nominal": {"identity": source, "arguments": []}}}}], "traits": []},
             {"root": "target", "types": [{"path": "Event", "identity": target, "parameters": ["Message"], "copy": false, "default": false,
-                "shape": {"Struct": {"form": "Unit", "constructor": null, "fields": [], "constructible": false}}}], "items": []}
+                "shape": {"Struct": {"form": "Unit", "constructor": null, "fields": [], "constructible": false}}}], "items": [], "traits": []}
         ]
     })).unwrap();
     rawr_import::surface::facade::Plan::decode(&bytes, &rawr_import::cargo::Limits::standard())

@@ -200,7 +200,8 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 
     assert_eq!(descriptor.previews().len(), 1);
     let preview = &descriptor.previews()[0];
-    assert_eq!(preview.key().subject().package(), "main");
+    // The package is named as rustc names the crate (D471).
+    assert_eq!(preview.key().subject().package(), "preview_app");
     assert_eq!(preview.key().subject().modules(), ["component"]);
     assert_eq!(
         preview.seed().callback().unwrap().item().key().name(),

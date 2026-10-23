@@ -278,7 +278,7 @@ fn linked_profile_decorates_exact_semantics_and_rejects_a_second_owner() {
         iced.types()
             .map(|definition| definition.projections().len())
             .sum::<usize>(),
-        28,
+        31,
         "the exact closed compatibility-projection cohort installs"
     );
     assert_eq!(

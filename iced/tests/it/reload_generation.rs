@@ -25,7 +25,8 @@ fn candidate_retains_one_exact_generation_proof_bundle() {
     assert!(first.callbacks().widgets().is_empty());
     assert_eq!(first.source().packages().len(), 1);
     assert_eq!(first.source().sources().len(), 2);
-    assert_eq!(first.source().entry_package().name(), "main");
+    // The package is named as rustc names the crate (D471).
+    assert_eq!(first.source().entry_package().name(), "reload_app");
     assert_eq!(
         first.source().entry_source().text(),
         format!("// rawr\nmod palette;\n{}", source("self.value += 1"))
