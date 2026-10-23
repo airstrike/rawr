@@ -16832,7 +16832,8 @@ impl<'a> Parser<'a> {
         // through the app crate, as the same path is in an expression.
         if segments.len() >= 2 {
             let first_span = segments[0].1;
-            let last_end = segments[segments.len() - 1].1.end();
+            let (last, last_span) = &segments[segments.len() - 1];
+            let last_end = text_end(last_span.start(), last);
             if let Some(spelled) = self
                 .models
                 .qualified_rust(Span::new(first_span.start(), last_end))
