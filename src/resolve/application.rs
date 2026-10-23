@@ -174,7 +174,60 @@ pub(super) fn resolve(
         return Ok(None);
     };
     items.extend(boot);
+    closure_view_output(items, methods, registry, &entry);
     Ok(Some(entry))
+}
+
+/// A `view` closure returns `impl Widget<Message>` of the Message its
+/// application's `update` takes, as Rust infers its return type.
+fn closure_view_output(
+    items: &mut [item::Shell],
+    methods: &[method::Definition],
+    registry: &host::Registry,
+    entry: &Entry,
+) {
+    let message = items
+        .iter()
+        .find(|shell| shell.key.as_ref() == Some(&entry.update))
+        .and_then(|shell| match &shell.kind {
+            item::Kind::Function(function) => function.parameters.get(1),
+            _ => None,
+        })
+        .or_else(|| {
+            methods
+                .iter()
+                .find(|method| method.key() == &entry.update)
+                .and_then(|method| method.parameters().first())
+        })
+        .map(|parameter| parameter.ty.clone());
+    let element = "iced::Element";
+    let (Some(message), Some(definition)) = (message, registry.type_(element)) else {
+        return;
+    };
+    for shell in items.iter_mut() {
+        if shell.key.as_ref() != Some(&entry.view) {
+            continue;
+        }
+        let item::Kind::Function(function) = &mut shell.kind else {
+            continue;
+        };
+        if function.output.is_none()
+            && function
+                .name
+                .text
+                .starts_with(crate::parser::CALLBACK_CLOSURE_PREFIX)
+        {
+            function.output = Some(super::type_ref::Type::Path(super::type_ref::Path {
+                name: element.into(),
+                target: super::type_ref::Target::Host {
+                    definition: definition.clone(),
+                    owner: registry.type_owner(element).cloned(),
+                },
+                arguments: Box::new([super::type_ref::Argument::Type(message.clone())]),
+                span: function.body.span,
+            }));
+        }
+    }
 }
 
 fn resolve_entry(

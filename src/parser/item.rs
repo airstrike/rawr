@@ -3557,8 +3557,30 @@ fn parse_body_syntax(
     let mut tokens = Vec::new();
     // Whether a statement may start here: a nested `fn` item.
     let mut boundary = true;
+    // Each open parenthesis: the callback roles of an `iced::run(..)` or
+    // `iced::application(..)` call it opens, and the argument it is at.
+    let mut calls: Vec<Option<(&'static [&'static str], usize)>> = Vec::new();
 
     loop {
+        #[cfg(not(feature = "no_std"))]
+        if let Some((Token::Pipe, _)) = input.peek()
+            && let Some(Some((roles, index))) = calls.last()
+            && let Some(role) = roles.get(*index)
+            && tokens.last().is_some_and(|token: &crate::item::BodyToken| {
+                matches!(
+                    token.kind(),
+                    crate::item::BodyTokenKind::LeftParen | crate::item::BodyTokenKind::Comma
+                )
+            })
+        {
+            let function = parse_callback_closure(input, tokenizer_control, role)?;
+            tokens.push(crate::item::BodyToken::new(
+                crate::item::BodyTokenKind::Identifier(function.name.text.clone()),
+                function.span,
+            ));
+            NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(function)));
+            continue;
+        }
         #[cfg(not(feature = "no_std"))]
         if boundary && let Some((Token::Fn, position)) = input.peek() {
             let position = *position;
@@ -3595,10 +3617,163 @@ fn parse_body_syntax(
                 .into_err(position));
             }
             (Token::LexError(error), position) => return Err(error.into_err(position)),
-            (token, position) => tokens.push(body_token(token, position)),
+            (token, position) => {
+                match token {
+                    Token::LeftParen => {
+                        let roles: Option<&'static [&'static str]> = match &tokens[..] {
+                            [.., iced, colons, name]
+                                if matches!(iced.kind(),
+                                    crate::item::BodyTokenKind::Identifier(text) if text == "iced")
+                                    && matches!(
+                                        colons.kind(),
+                                        crate::item::BodyTokenKind::DoubleColon
+                                    ) =>
+                            {
+                                match name.kind() {
+                                    crate::item::BodyTokenKind::Identifier(text)
+                                        if text == "run" =>
+                                    {
+                                        Some(&["update", "view"])
+                                    }
+                                    crate::item::BodyTokenKind::Identifier(text)
+                                        if text == "application" =>
+                                    {
+                                        Some(&["boot", "update", "view"])
+                                    }
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        };
+                        calls.push(roles.map(|roles| (roles, 0)));
+                    }
+                    Token::Unit => {}
+                    Token::RightParen => {
+                        calls.pop();
+                    }
+                    Token::Comma => {
+                        if let Some(Some((_, index))) = calls.last_mut() {
+                            *index += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                tokens.push(body_token(token, position));
+            }
         }
     }
 }
+
+/// `|state: &mut State, message: Message| body`, a callback of
+/// `iced::run(..)` or `iced::application(..)`: a typed function of its
+/// parameters, which the application entry names in its place. Its output
+/// is the closure's `-> T`, or the unit for an `update`; a `view`'s is
+/// `impl Widget<Message>` of the update's Message, which the entry sets.
+#[cfg(not(feature = "no_std"))]
+fn parse_callback_closure(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    role: &str,
+) -> ParseResult<crate::item::Function> {
+    let start = expect(input, Token::Pipe, "to start a closure")?;
+    let mut parameters = Vec::new();
+    while !matches!(input.peek(), Some((Token::Pipe, _))) {
+        let name = parse_name(input, "as a closure parameter")?;
+        if !matches!(input.peek(), Some((Token::Colon, _))) {
+            return Err(PERR::MissingToken(
+                Token::Colon.into(),
+                format!(
+                    "and a type after the {role} closure's parameter `{}`, since Rawr reads \
+                     an application callback closure as a function with typed parameters",
+                    name.text
+                ),
+            )
+            .into_err(after(name.span.start(), name.text.chars().count())));
+        }
+        input.next();
+        let ty = parse_type(input)?;
+        let span = Span::new(name.span.start(), ty.span().end());
+        parameters.push(crate::item::Parameter {
+            name,
+            ty,
+            span,
+            pattern: None,
+        });
+        consume_comma_or_end(input, Token::Pipe, "between closure parameters")?;
+    }
+    expect(input, Token::Pipe, "to end closure parameters")?;
+    let output = if matches!(input.peek(), Some((Token::ThinArrow, _))) {
+        input.next();
+        Some(parse_type(input)?)
+    } else {
+        None
+    };
+    let (body_span, body_syntax, constant) =
+        if let Some((Token::LeftBrace, open)) = input.peek() {
+            let open = *open;
+            input.next();
+            let (span, syntax) = parse_body_syntax(input, tokenizer_control, open)?;
+            (span, syntax, false)
+        } else {
+            // An expression body runs to the argument's end, as a `const`
+            // initializer runs to its `;`.
+            let body = input.peek().map_or(start, |(_, position)| *position);
+            let mut scan = ScanState::default();
+            let mut tokens = Vec::new();
+            let end = loop {
+                match input.peek().expect("token streams always end with EOF") {
+                    (Token::Comma | Token::RightParen, position) if scan.delimiter_depth == 0 => {
+                        break *position;
+                    }
+                    (Token::EOF, position) => {
+                        return Err(PERR::MissingToken(
+                            Token::RightParen.into(),
+                            "to end the application call".into(),
+                        )
+                        .into_err(*position));
+                    }
+                    _ => {}
+                }
+                match scan
+                    .next(input, tokenizer_control)
+                    .expect("token streams always end with EOF")
+                {
+                    (Token::LexError(error), position) => return Err(error.into_err(position)),
+                    (token, position) => tokens.push(body_token(token, position)),
+                }
+            };
+            (
+                Span::new(body, end),
+                crate::item::BodySyntax::new(tokens),
+                true,
+            )
+        };
+    let span = Span::new(start, body_span.end());
+    Ok(crate::item::Function {
+        header: crate::item::Header {
+            attributes: Box::default(),
+            visibility: None,
+            span: Span::new(start, body_span.start()),
+        },
+        name: crate::item::Name {
+            text: format!("{CALLBACK_CLOSURE_PREFIX}{role}").into(),
+            span: Span::new(start, after(start, 1)),
+        },
+        generics: Box::default(),
+        receiver: None,
+        parameters: parameters.into_boxed_slice(),
+        output: output.or_else(|| {
+            (role == "update").then(|| type_ref::Type::Unit(Span::new(start, start)))
+        }),
+        body_span,
+        body_syntax,
+        constant,
+        span,
+    })
+}
+
+/// The name prefix of a function read from an application callback closure.
+pub(crate) const CALLBACK_CLOSURE_PREFIX: &str = "__rawr_closure_";
 
 #[cfg(not(feature = "no_function"))]
 /// A private top-level `fn` is a typed item when its signature is typed
