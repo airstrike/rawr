@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rawr: Rust Augmented With Rust</title>
-<meta name="description" content="Rawr is Rust Augmented With Rust. It is a scripting language that reads like Rust. The rawr crate embeds it in any Rust program on stable Rust. The rawr command runs Rawr programs. rawr-iced adds iced support. It reloads native iced apps in about 0.2 s.">
+<meta name="description" content="Rawr is Rust Augmented With Rust. You write Rust. Rawr runs the files marked // rawr while you develop and reloads them when you save. Cargo builds the same crate for release. The rawr crate embeds the language in any Rust program. rawr-iced adds iced support.">
 <meta property="og:title" content="Rawr: Rust Augmented With Rust">
 <meta property="og:description" content="A scripting language that reads like Rust. Embed it in any Rust program. With rawr-iced, iced apps reload when you save. Pre-alpha.">
 <meta property="og:type" content="website">
@@ -203,7 +203,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
     <div>
       <p class="cap"><span class="slash">//</span>A scripting language that reads like Rust</p>
       <h1><span class="ini">R</span>ust <span class="ini">A</span>ugmented <span class="ini">W</span>ith <span class="ini">R</span>ust</h1>
-      <p class="lede">Rawr has Rust&rsquo;s structs, enums, traits and <code>match</code>. It checks your code before running it and reports errors the way rustc does. Your program stays Rust. You write the parts you want to change while it runs in Rawr. Rawr code runs on an interpreter. Everything it calls into is native Rust.</p>
+      <p class="lede">You write Rust. Rawr runs the files marked <code>// rawr</code> while you develop. It reloads them when you save. Cargo builds the same crate for release. Rawr checks your code before running it and reports errors the way rustc does. Rawr code runs on an interpreter. Everything it calls into is native Rust.</p>
       <p class="lede">The <code>rawr</code> crate is the language. Any Rust program can embed it. The <code>rawr</code> command runs Rawr programs. <a href="#iced"><code>rawr-iced</code></a> adds <a href="https://github.com/iced-rs/iced">iced</a> support. Install it and <code>rawr</code> hands programs that use iced to it. It reloads native iced apps in about 0.2&nbsp;s.</p>
       <div class="actions">
         <a class="btn go" href="#install">Install Rawr</a>
@@ -211,17 +211,18 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
       </div>
     </div>
 
-    <figure class="compare intro" style="--pos: 50%" data-left="main.rs" data-right="cart.rawr">
+    <figure class="compare intro" style="--pos: 50%" data-left="cargo run" data-right="rawr run">
       <div class="tabs">
-        <button type="button" data-to="100" aria-pressed="false" aria-controls="stage-cart">main.rs</button>
+        <button type="button" data-to="100" aria-pressed="false" aria-controls="stage-cart">cargo run</button>
         <span class="hint">drag the divider</span>
-        <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-cart">cart.rawr</button>
+        <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-cart">rawr run</button>
       </div>
       <div class="scroller">
       <div class="stage" id="stage-cart">
         <div class="layer rs">
-          <div class="file"><b>src/main.rs</b><span>Rust</span></div>
-          <pre><code data-lang="rust">enum Item {
+          <div class="file"><b>src/main.rs</b><span>built by cargo</span></div>
+          <pre><code data-lang="rust">// rawr
+enum Item {
     Book { price: f64 },
     Coffee { cups: i64 },
 }
@@ -254,8 +255,9 @@ fn main() {
           <div class="run"><b>cargo run</b><span>total: 27</span></div>
         </div>
         <div class="layer rawr" aria-hidden="true">
-          <div class="file"><b>cart.rawr</b><span>Rawr</span></div>
-          <pre><code data-lang="rust" data-run="cart.rawr" id="src-cart">enum Item {
+          <div class="file"><b>src/main.rs</b><span>run by Rawr</span></div>
+          <pre><code data-lang="rust" data-run="cart.rs" id="src-cart">// rawr
+enum Item {
     Book { price: f64 },
     Coffee { cups: i64 },
 }
@@ -285,17 +287,17 @@ fn main() {
     let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
     println!("total: {}", total(&amp;cart));
 }</code></pre>
-          <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rawr" hidden></button><b>rawr run cart.rawr</b><span id="out-cart" aria-live="polite">total: 27</span></div>
+          <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rs" hidden></button><b>rawr run</b><span id="out-cart" aria-live="polite">total: 27</span></div>
         </div>
         <div class="divider">
           <span class="hit" aria-hidden="true"></span>
-          <button type="button" class="grip" role="slider" aria-label="Compare main.rs and cart.rawr" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="50% main.rs, 50% cart.rawr" aria-controls="stage-cart"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
+          <button type="button" class="grip" role="slider" aria-label="Compare src/main.rs built by cargo and run by Rawr" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="50% cargo run, 50% rawr run" aria-controls="stage-cart"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
         </div>
       </div>
       </div>
       <figcaption>
-        The two files are identical. <code>cargo run</code> builds it as Rust and <code>rawr run</code> runs it as Rawr. Both print <code>total: 27</code>.
-        <small>Right: <code>examples/cart.rawr</code>. Left: the same file copied to <code>src/main.rs</code>; stable <code>rustc</code> (edition 2024) compiles it without warnings.</small>
+        Both sides show the same file. <code>cargo run</code> builds it as Rust. <code>rawr run</code> runs it on the interpreter. Both print <code>total: 27</code>.
+        <small>The file is <code>examples/scripts/cart.rs</code> in the repository. Stable <code>rustc</code> (edition 2024) compiles it without warnings.</small>
       </figcaption>
     </figure>
   </div>
@@ -307,7 +309,7 @@ fn main() {
       <p class="cap"><span class="slash">//</span>Parts</p>
       <h2>The crate, the command and rawr-iced</h2>
       <p>The <code>rawr</code> crate knows nothing about windows or widgets. It parses, checks and runs Rawr inside whatever Rust program embeds it.</p>
-      <p>The <code>rawr</code> command runs Rawr programs. <code>rawr run cart.rawr</code> runs once and exits.</p>
+      <p>The <code>rawr</code> command runs Rawr programs. <code>rawr run cart.rs</code> runs one file once and exits.</p>
       <p><strong>rawr-iced adds iced support.</strong> Install it and <code>rawr</code> hands programs that use iced to it. <code>rawr</code> parses the program once. rawr-iced reads that parse and does not parse it again.</p>
     </div>
     <div class="stack">
@@ -323,10 +325,10 @@ use rawr::{Engine, Scope};
 
 fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
     let engine = Engine::new();
-    let ast = engine.compile(include_str!("cart.rawr"))?;
+    let ast = engine.compile(include_str!("scripts/cart.rs"))?;
     engine.call_fn::&lt;()&gt;(&amp;mut Scope::new(), &amp;ast, "main", ())
 }</code></pre>
-        <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-host" aria-label="Run cart.rawr, the file this host runs" hidden></button><b>cargo run --example cart</b><span id="out-host" aria-live="polite">total: 27</span></div>
+        <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-host" aria-label="Run cart.rs, the file this host runs" hidden></button><b>cargo run --example cart</b><span id="out-host" aria-live="polite">total: 27</span></div>
       </div>
     </div>
   </div>
@@ -370,7 +372,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
         <div class="cmds">
           <div class="cmd"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre><button type="button" class="copy">Copy</button></div>
         </div>
-        <p class="note">With rawr-iced installed, <code>rawr new</code> writes a counter app to <code>src/main.rawr</code>. You don&rsquo;t need a manifest until you add Rust crates. Edit it while the window is open.</p>
+        <p class="note">With rawr-iced installed, <code>rawr new hello</code> writes a Cargo crate. Its <code>src/main.rs</code> starts with <code>// rawr</code> and holds iced&rsquo;s counter. Edit it while the window is open.</p>
       </div>
     </div>
   </div>
@@ -382,19 +384,21 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
       <p class="cap"><span class="slash">//</span>rawr-iced</p>
       <h2>iced apps that reload when you save</h2>
       <p>When your code uses iced, <code>rawr</code> brings in <code>rawr-iced</code> on top of the base language. It runs native iced apps written in Rawr. Rawr code uses the same <code>impl Widget&lt;Message&gt;</code>, <code>column![]</code> and <code>match</code> as iced master.</p>
-      <p>Save a <code>.rawr</code> file and <code>rawr run</code> reloads it in about 0.2&nbsp;s. The window stays open and keeps its state.</p>
+      <p>Save a file marked <code>// rawr</code> and <code>rawr run</code> reloads it in about 0.2&nbsp;s. The window stays open and keeps its state.</p>
+      <p>For release, <code>cargo build --release</code> builds the same crate natively. No interpreter ships with it.</p>
     </div>
-      <figure class="compare" style="--pos: 50%" data-left="main.rs" data-right="main.rawr">
+      <figure class="compare" style="--pos: 50%" data-left="cargo run" data-right="rawr run">
         <div class="tabs">
-          <button type="button" data-to="100" aria-pressed="false" aria-controls="stage-counter">main.rs</button>
+          <button type="button" data-to="100" aria-pressed="false" aria-controls="stage-counter">cargo run</button>
           <span class="hint">drag the divider</span>
-          <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-counter">main.rawr</button>
+          <button type="button" data-to="0" aria-pressed="false" aria-controls="stage-counter">rawr run</button>
         </div>
         <div class="scroller">
         <div class="stage" id="stage-counter">
           <div class="layer rs">
-            <div class="file"><b>src/main.rs</b><span>Rust</span></div>
-            <pre><code data-lang="rust">use iced::Center;
+            <div class="file"><b>src/main.rs</b><span>built by cargo</span></div>
+            <pre><code data-lang="rust">// rawr
+use iced::Center;
 use iced::widget::{Widget, button, column, text};
 
 pub fn main() -&gt; iced::Result {
@@ -437,8 +441,9 @@ impl Counter {
             <div class="run"><b>cargo run</b><span class="quiet">(opens a window)</span></div>
           </div>
           <div class="layer rawr" aria-hidden="true">
-            <div class="file"><b>src/main.rawr</b><span>Rawr</span></div>
-            <pre><code data-lang="rust" data-run="main.rawr" id="src-counter">use iced::Center;
+            <div class="file"><b>src/main.rs</b><span>run by Rawr</span></div>
+            <pre><code data-lang="rust" data-run="main.rs" id="src-counter">// rawr
+use iced::Center;
 use iced::widget::{Widget, button, column, text};
 
 pub fn main() -&gt; iced::Result {
@@ -478,17 +483,17 @@ impl Counter {
         .align_x(Center)
     }
 }</code></pre>
-            <div class="run"><button type="button" class="runbtn" data-source="src-counter" data-out="out-counter" data-alt="The counter's first frame, drawn by rawr-iced on the server" aria-label="Run main.rawr" hidden></button><b>rawr run</b><span class="quiet" id="out-counter" aria-live="polite">(opens a window)</span></div>
+            <div class="run"><button type="button" class="runbtn" data-source="src-counter" data-out="out-counter" data-alt="The counter's first frame, drawn by rawr-iced on the server" aria-label="Run main.rs" hidden></button><b>rawr run</b><span class="quiet" id="out-counter" aria-live="polite">(opens a window)</span></div>
           </div>
           <div class="divider">
             <span class="hit" aria-hidden="true"></span>
-            <button type="button" class="grip" role="slider" aria-label="Compare main.rs and main.rawr" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="Half main.rs, half main.rawr" aria-controls="stage-counter"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
+            <button type="button" class="grip" role="slider" aria-label="Compare src/main.rs built by cargo and run by Rawr" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="50% cargo run, 50% rawr run" aria-controls="stage-counter"><span aria-hidden="true">&lsaquo;&rsaquo;</span></button>
           </div>
         </div>
         </div>
         <figcaption>
-          On the left is iced&rsquo;s own counter example. On the right is the same file saved as <code>main.rawr</code>. Only the file extension and the command differ.
-          <small>Left: <code>examples/counter</code> from iced master at <code>be88873d</code>, with its test module left out. Right: those exact bytes, which <code>rawr check</code> accepts unchanged.</small>
+          Both sides show iced&rsquo;s own counter example with <code>// rawr</code> as its first line. <code>cargo run</code> builds it natively. <code>rawr run</code> runs it on the interpreter and reloads it when you save.
+          <small>The counter is <code>examples/counter</code> from iced master at <code>be88873d</code>, with its test module left out. <code>rawr check</code> accepts it.</small>
         </figcaption>
       </figure>
   </div>
@@ -499,12 +504,11 @@ impl Counter {
     <div class="side">
       <p class="cap"><span class="slash">//</span>rawr-iced &middot; Commands</p>
       <h2>Commands</h2>
-      <p><code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> come with <code>rawr</code>. The others come with rawr-iced. Every command takes a project directory or a single file. Run <code>rawr --help</code> for every option.</p>
+      <p><code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> come with <code>rawr</code>. The others come with rawr-iced. Every command takes a crate directory, its <code>Cargo.toml</code> or a single <code>.rs</code> file. Run <code>rawr --help</code> for every option.</p>
     </div>
     <table>
-      <tr><td><code>rawr run</code></td><td>Runs a program once. A program that uses iced goes to rawr-iced, which opens the app. Saving a <code>.rawr</code> file reloads the app in place. Changing your Rust crates rebuilds them natively.</td></tr>
-      <tr><td><code>rawr check</code></td><td>Type-checks without a window and reports errors the way rustc does.</td></tr>
-      <tr><td><code>rawr check --as-rust</code></td><td>Copies the project under <code>target/</code> with <code>.rawr</code> renamed to <code>.rs</code> and runs <code>cargo check</code> on it.</td></tr>
+      <tr><td><code>rawr run</code></td><td>Runs a program once. A program that uses iced goes to rawr-iced, which opens the app. Saving a file marked <code>// rawr</code> reloads the app in place. Saving a native module or a dependency rebuilds it natively.</td></tr>
+      <tr><td><code>rawr check</code></td><td>Type-checks without a window and reports errors the way rustc does. Then it runs <code>cargo check</code> on the crate.</td></tr>
       <tr><td><code>rawr preview</code></td><td>Opens a view marked <code>#[preview]</code> on its own. &larr; and &rarr; step through a group.</td></tr>
       <tr><td><code>rawr snapshot</code></td><td>Renders every preview to a PNG. <code>--check</code> compares them with the committed images. <code>--update</code> replaces them.</td></tr>
       <tr><td><code>rawr mcp</code></td><td>An MCP server that lets a coding agent list and render previews, run checks and screenshot the running window. Run <code>rawr init --claude --codex</code> to set it up for Claude Code and Codex.</td></tr>
@@ -523,11 +527,11 @@ impl Counter {
     <div class="block diag">
       <div class="file"><b>rawr check</b><span>exit 1</span></div>
       <pre><code><span class="e">error[RAWR-RESOLVE-MATCH]</span><span class="h">: invalid match for `Message`: non-exhaustive patterns; missing Message::Decrement</span>
- <span class="c">--&gt;</span> src/main.rawr:21:9-25:9
- <span class="c">21 |</span>         match message {
+ <span class="c">--&gt;</span> src/main.rs:22:9-26:9
+ <span class="c">22 |</span>         match message {
     <span class="c">|</span>         <span class="e">^^^^^^^^^^^^^^^</span>
     <span class="c">| ...</span>
- <span class="c">25 |</span>         }
+ <span class="c">26 |</span>         }
     <span class="c">|</span> <span class="e">^^^^^^^^</span></code></pre>
     </div>
   </div>
@@ -538,18 +542,19 @@ impl Counter {
     <div class="side">
       <p class="cap"><span class="slash">//</span>rawr-iced &middot; Rust imports</p>
       <h2>Import your own Rust crates without writing bindings</h2>
-      <p>List a crate in <code>rawr.toml</code> and <code>use</code> it. Rawr reads only the Rust items your code uses. You can import custom iced widgets from your own crates.</p>
-      <p><code>gallery_ui::Dial</code> is an ordinary iced <code>Widget</code> written in Rust. RawrGallery drives it from <code>dial.rawr</code>.</p>
+      <p>Add a crate to <code>[dependencies]</code> in <code>Cargo.toml</code> and <code>use</code> it. Rawr reads only the Rust items your code uses. You can import custom iced widgets from your own crates.</p>
+      <p><code>gallery_ui::Dial</code> is an ordinary iced <code>Widget</code> written in Rust. RawrGallery drives it from <code>src/dial.rs</code>, which starts with <code>// rawr</code>.</p>
     </div>
     <div class="stack">
       <div class="block">
-        <div class="file"><b>rawr.toml</b></div>
-        <pre><code data-lang="toml">[rust.dependencies]
-gallery_ui = { package = "gallery-ui", path = "rust/gallery-ui" }</code></pre>
+        <div class="file"><b>Cargo.toml</b></div>
+        <pre><code data-lang="toml">[dependencies]
+gallery-ui = { path = "rust/gallery-ui" }</code></pre>
       </div>
       <div class="block">
-        <div class="file"><b>src/dial.rawr</b></div>
-        <pre><code data-lang="rust">use gallery_ui::Dial;
+        <div class="file"><b>src/dial.rs</b></div>
+        <pre><code data-lang="rust">// rawr
+use gallery_ui::Dial;
 
 let face = container(Dial::new(self.value, Message::Turn).range(0..=100))
     .padding(LOOSE)

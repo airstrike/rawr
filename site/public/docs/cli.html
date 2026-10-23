@@ -51,15 +51,16 @@
 <p class="lede">You type every command as <code>rawr ..</code>. The <code>rawr</code> binary runs some of them itself. It hands the rest to <code>rawr-iced</code> when rawr-iced is installed.</p>
 
 <h2 id="paths">Paths</h2>
-<p>Most commands take an optional path. The path can be a project directory, a single <code>.rawr</code> file or a <code>rawr.toml</code>. Without a path, the command uses the current directory. In a project directory the entry file is <code>src/main.rawr</code>.</p>
+<p>Most commands take an optional path. The path can be a crate directory, its <code>Cargo.toml</code> or a single <code>.rs</code> file. Without a path, Rawr looks in the current directory and its parents for a crate whose root file starts with <code>// rawr</code>. The root file is <code>src/main.rs</code> or <code>src/lib.rs</code>. If the root file of the crate doesn&rsquo;t start with the marker, Rawr reports that its first line is not <code>// rawr</code>.</p>
+<p>A single file runs with or without the marker. It may hold top-level statements. Rawr runs them and then calls <code>fn main</code>.</p>
 <p><code>rawr --help</code> lists the commands. When rawr-iced is installed, the help also shows where it was found and which commands it adds. <code>rawr</code> looks for <code>rawr-iced</code> next to its own binary first and then on <code>PATH</code>.</p>
 
 <h2 id="rawr">Commands of <code>rawr</code></h2>
-<p>These come with <code>rawr-cli</code> and build on stable Rust.</p>
+<p>These come with <code>rawr-cli</code> and build on stable Rust. rawr-cli also installs <code>cargo-rawr</code>, which forwards to <code>rawr</code>. So <code>cargo rawr run</code> works the same as <code>rawr run</code>.</p>
 <table class="wide">
   <tr><th>Command</th><th>What it does</th></tr>
-  <tr><td><code>rawr [run] [path]</code></td><td>Checks a program and runs it. <code>run</code> is the default command, so <code>rawr</code> alone runs the project in the current directory. A plain program runs once and exits. A program that uses iced goes to rawr-iced. rawr-iced opens the app and reloads it on save.</td></tr>
-  <tr><td><code>rawr check [path]</code></td><td>Checks a program without running it. It prints <code>Checked</code> and the entry path when the program is valid. It prints the first error and exits with status 1 when it isn&rsquo;t.</td></tr>
+  <tr><td><code>rawr [run] [path]</code></td><td>Checks a program and runs it. <code>run</code> is the default command, so <code>rawr</code> alone runs the crate in the current directory. A plain program runs once and exits. Then cargo&rsquo;s errors from <code>cargo check</code> are printed, if there are any. A program that uses iced goes to rawr-iced. rawr-iced opens the app and reloads it on save. It runs <code>cargo check</code> in the background when the app opens and after each save.</td></tr>
+  <tr><td><code>rawr check [path]</code></td><td>Checks a program without running it. It prints <code>Checked</code> and the entry path when the program is valid. It prints the first error when it isn&rsquo;t. Then it runs <code>cargo check</code> on the crate. It prints <code>cargo check passed</code> or rustc&rsquo;s errors. It exits with status 1 if either check fails.</td></tr>
   <tr><td><code>rawr doctor [path]</code></td><td>Reports on the environment and the project. It shows where <code>rawr</code> and <code>rawr-iced</code> are, their versions, the iced revision, the renderer, the project root, the entry file and the manifest.</td></tr>
   <tr><td><code>rawr -h</code>, <code>--help</code></td><td>Prints the help.</td></tr>
   <tr><td><code>rawr -V</code>, <code>--version</code></td><td>Prints the version.</td></tr>
@@ -70,8 +71,7 @@
 <p>These need <a href="/docs/start#install-iced">rawr-iced</a>. With rawr-iced installed, it also runs <code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> for programs that use iced.</p>
 <table class="wide">
   <tr><th>Command</th><th>What it does</th></tr>
-  <tr><td><code>rawr new &lt;name-or-path&gt;</code></td><td>Creates a project directory with a counter app in <code>src/main.rawr</code>.</td></tr>
-  <tr id="check-as-rust"><td><code>rawr check --as-rust [path]</code></td><td>Copies the project under <code>target/</code> with every <code>.rawr</code> file renamed to <code>.rs</code>. Then it runs <code>cargo check</code> on the copy. It reports <code>ok</code> or the first error for each module. It needs a <code>Cargo.toml</code> with a <code>[package]</code>. A <code>rawr.toml</code> with <code>[rust.dependencies]</code> also works.</td></tr>
+  <tr><td><code>rawr new &lt;name-or-path&gt;</code></td><td>Creates a Cargo crate. It writes <code>Cargo.toml</code> and <code>src/main.rs</code>. <code>src/main.rs</code> starts with <code>// rawr</code> and holds iced&rsquo;s counter. <code>rawr run</code> opens it and <code>cargo run</code> builds it natively.</td></tr>
   <tr><td><code>rawr preview [path] [name]</code></td><td>Opens one <code>#[preview]</code> view in a window. <code>name</code> is the preview&rsquo;s name or <code>group/name</code>. Without a name it opens the last preview you picked. The arrow keys step through a group.</td></tr>
   <tr><td><code>rawr snapshot --update [path]</code></td><td>Renders every preview to a PNG under <code>snapshots/</code> and replaces the stored images.</td></tr>
   <tr><td><code>rawr snapshot --check [path]</code></td><td>Renders every preview and compares it with the stored image. It exits with status 1 if any pixel differs. The new images go under <code>target/rawr/snapshots/</code>.</td></tr>
@@ -85,7 +85,7 @@
 <h2 id="exit">Exit status</h2>
 <ul>
   <li>0 when the command succeeds.</li>
-  <li>1 when a check fails, when <code>main</code> returns <code>Err</code> or when a snapshot differs.</li>
+  <li>1 when a check fails, when <code>main</code> returns <code>Err</code> or when a snapshot differs. <code>rawr check</code> also exits with status 1 when <code>cargo check</code> fails.</li>
   <li>101 when a program panics.</li>
 </ul>
 
@@ -93,8 +93,7 @@
 <ul>
   <li><code>snapshots/</code> holds the stored preview images. Commit it.</li>
   <li><code>target/rawr/</code> holds Rawr&rsquo;s build files. The images from the last <code>rawr snapshot --check</code> go in <code>target/rawr/snapshots/</code>.</li>
-  <li><code>target/rawr-as-rust/</code> holds the copy that <code>rawr check --as-rust</code> checks.</li>
-  <li><code>.rawr/cache</code> holds cached data for the project.</li>
+  <li><code>.rawr/cache</code> holds cached data for the crate.</li>
 </ul>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/play">Previous<b>?play and the playground</b></a><a class="next" href="/docs/faq">Next<b>FAQ</b></a></nav>
 </article>

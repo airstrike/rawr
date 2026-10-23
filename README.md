@@ -6,10 +6,13 @@ Docs: <https://rawr.airstrike.fyi/docs>
 
 ## What is Rawr?
 
-A scripting language that reads like Rust. It has Rust's structs, enums,
-traits and `match`. It checks your code before running it and reports errors
-the way rustc does. Your program stays Rust. You write the parts you want to
-change while it runs in Rawr.
+A scripting language whose programs are Rust. You write Rust. Rawr runs the
+files marked `// rawr` while you develop. It reloads them when you save. Cargo
+builds the same crate for release.
+
+A Rawr file is a `.rs` file whose first line is `// rawr`. A Rawr project is an
+ordinary Cargo crate. Rawr checks your code before running it and reports
+errors the way rustc does.
 
 Rawr code runs on an interpreter. Everything it calls into is native Rust.
 
@@ -20,9 +23,10 @@ programs that use iced to it.
 
 ## What does it look like?
 
-On its own, `cart.rawr`:
+On its own, `cart.rs`:
 
 ```rust
+// rawr
 enum Item {
     Book { price: f64 },
     Coffee { cups: i64 },
@@ -56,11 +60,12 @@ fn main() {
 ```
 
 ```sh
-$ rawr run cart.rawr
+$ rawr run cart.rs
 total: 27
 ```
 
-It is also a Rust program: rename it to `cart.rs` and rustc prints the same.
+The same file can be `src/main.rs` of a Cargo crate. Then `cargo run` prints the
+same line.
 
 Embedded in a Rust program, the same file:
 
@@ -69,18 +74,20 @@ use rawr::{Engine, Scope};
 
 fn main() -> Result<(), Box<rawr::EvalAltResult>> {
     let engine = Engine::new();
-    let ast = engine.compile(include_str!("cart.rawr"))?;
+    let ast = engine.compile(include_str!("scripts/cart.rs"))?;
     engine.call_fn::<()>(&mut Scope::new(), &ast, "main", ())
 }
 ```
 
-That's `examples/cart.rs`; `cargo run --example cart` prints `total: 27`.
+That's `examples/cart.rs`. `cargo run --example cart` prints `total: 27`.
 
-With iced, this is iced's own counter example. Save it as
-`src/main.rawr` and `rawr check` accepts it unchanged. `rawr run` opens the
-app and reloads it when you save.
+With iced, this is iced's own counter example with `// rawr` as its first line.
+It is `src/main.rs` in a crate that depends on iced. `rawr check` accepts it.
+`rawr run` opens the app and reloads it when you save. `cargo run` builds the
+same app natively.
 
 ```rust
+// rawr
 use iced::Center;
 use iced::widget::{Widget, button, column, text};
 
@@ -126,20 +133,19 @@ impl Counter {
 ## Why would I use it instead of plain Rust?
 
 - Code you change while the program runs doesn't need a rebuild. With iced,
-  saving a `.rawr` file reloads the running app in about 0.2 s, and the
+  saving a marked file reloads the running app in about 0.2 s, and the
   window stays open and keeps its state.
 - It's still Rust to read and to review. Errors look like rustc's. They show
   the error code, the span and what is missing.
-- With iced, you import your own Rust crates without writing bindings.
+- Rawr code uses the crates in your Cargo.toml without bindings.
   `#[preview]` and `rawr snapshot` render views to PNG for review.
 
 The cost is speed. Rawr code is interpreted, so its own logic runs slower than
-compiled Rust. Keep hot loops and heavy work in Rust crates.
+compiled Rust. Keep hot loops and heavy work in native modules or Rust crates.
 
-Rawr has no release mode that compiles to machine code. Because the code is
-Rust-shaped, `rawr check --as-rust` copies the project under `target/` with
-`.rawr` renamed to `.rs` and runs `cargo check` on it. If that passes, cargo
-can build the same files as a normal Rust program.
+For release, `cargo build --release` builds the same crate natively. No
+interpreter ships with it. `rawr check` runs `cargo check` on the crate after
+its own check, so rustc tells you whether the code is valid Rust.
 
 ## How do I install it?
 
@@ -155,8 +161,8 @@ The `rawr` command runs Rawr programs. It builds on stable Rust too:
 cargo install --locked --git https://github.com/airstrike/rawr rawr-cli
 ```
 
-`rawr-cli` installs `rawr`. A program without iced runs once and exits. It
-doesn't build anything or hot reload.
+`rawr-cli` installs `rawr`. It also installs `cargo-rawr`, so `cargo rawr run`
+works too. A program without iced runs once and exits. It doesn't hot reload.
 
 rawr-iced adds iced support. Install it and `rawr` hands programs that use
 iced to it. Importing your own Rust crates currently works only on Apple
@@ -185,28 +191,30 @@ With rawr-iced installed:
 rawr new hello && cd hello && rawr run
 ```
 
-`rawr new` writes a counter app to `src/main.rawr`. You don't need a manifest
-until you add Rust crates. Edit it while the window is open.
+`rawr new hello` writes a Cargo crate. `hello/Cargo.toml` depends on iced at the
+revision rawr-iced is built against. `hello/src/main.rs` starts with `// rawr`
+and holds iced's counter. Edit it while the window is open. `cargo run` builds
+and runs the same app.
 
 The other commands you will use:
 
-- `rawr check`: type-check without opening a window.
+- `rawr check`: check with Rawr and run `cargo check`, without opening a window.
 - `rawr preview [name]`: open one `#[preview]` view on its own.
 - `rawr snapshot --check` / `--update`: render every preview to a PNG, then
   compare them with the committed images or replace them.
 - `rawr doctor`: report on the environment and the project.
 
 `rawr new`, `rawr preview` and `rawr snapshot` come with rawr-iced. Every
-command takes a project directory or a single file. `rawr --help` lists them
-all.
+command takes a crate directory, its Cargo.toml or a single `.rs` file.
+`rawr --help` lists them all.
 
 ## Can I use my own Rust code?
 
-Yes. List the crate in `rawr.toml` and `use` it:
+Yes. Add the crate to `[dependencies]` in Cargo.toml and `use` it:
 
 ```toml
-[rust.dependencies]
-gallery_ui = { package = "gallery-ui", path = "rust/gallery-ui" }
+[dependencies]
+gallery-ui = { path = "rust/gallery-ui" }
 ```
 
 ```rust
@@ -214,8 +222,21 @@ use gallery_ui::Dial;
 ```
 
 Rawr reads only the items your code touches. A custom iced widget written in
-Rust is just another widget. Changing the Rust crate triggers a native rebuild;
-changing `.rawr` files does not.
+Rust is just another widget.
+
+A module whose file doesn't start with `// rawr` is native Rust. `rawr run`
+builds it with cargo and calls it from Rawr. Saving a native module or a
+dependency triggers a native rebuild. Saving a marked file does not.
+
+`#[preview]` and `#[widget]` come from the `rawr-attributes` crate. Its library
+name is `rawr`. Add it to `[dependencies]`:
+
+```toml
+rawr-attributes = { git = "https://github.com/airstrike/rawr" }
+```
+
+Then write `#[rawr::preview(..)]`, or `use rawr::preview;` and `#[preview(..)]`.
+Under cargo the attributes leave the item as written.
 
 ## What's ?play?
 
@@ -256,7 +277,8 @@ Rawr doesn't cover all of Rust yet. Known gaps include:
 
 The [docs](https://rawr.airstrike.fyi/docs/language) keep the full list.
 
-If Rawr rejects valid Rust that it claims to support, that's a bug. Please
+Unsupported Rust in a marked file fails the Rawr check with an error. If Rawr
+rejects valid Rust that it claims to support, that's a bug. Please
 report it with a small reproduction.
 
 ## What's the license?

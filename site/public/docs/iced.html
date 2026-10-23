@@ -48,10 +48,10 @@
 <article>
 <p class="cap"><span class="slash">//</span>rawr-iced</p>
 <h1>rawr-iced</h1>
-<p class="lede">rawr-iced runs <a href="https://github.com/iced-rs/iced">iced</a> apps written in Rawr. The app is a native iced app. Saving a <code>.rawr</code> file reloads it while the window stays open.</p>
+<p class="lede">rawr-iced runs <a href="https://github.com/iced-rs/iced">iced</a> apps written in Rawr. The app is a native iced app. Saving a file marked <code>// rawr</code> reloads it while the window stays open.</p>
 
 <h2 id="when">When rawr-iced is used</h2>
-<p>The <code>rawr</code> command reads a program once and decides who runs it. A program goes to rawr-iced when it names the <code>iced</code> crate. It also goes there when its <code>rawr.toml</code> has a <code>[rust]</code> table. Every other program runs on the base language. Set <code>RAWR_VERBOSE=1</code> to see which way a program went.</p>
+<p>The <code>rawr</code> command reads a program once and decides who runs it. A program goes to rawr-iced when it names the <code>iced</code> crate. It also goes there when it imports Rust crates from its <code>Cargo.toml</code>. Every other program runs on the base language. Set <code>RAWR_VERBOSE=1</code> to see which way a program went.</p>
 <p>rawr-iced follows iced master. It is built against one iced revision. <code>rawr doctor</code> prints that revision. Install rawr-iced as described in <a href="/docs/start#install-iced">Getting started</a>.</p>
 
 <h2 id="shapes">App shapes</h2>
@@ -69,9 +69,11 @@
 <p>Window and renderer settings such as <code>.window_size(..)</code>, <code>.font(..)</code> and <code>.style(..)</code> are accepted. rawr-iced doesn&rsquo;t apply them yet.</p>
 <p><code>update</code> can return nothing or a <code>Task&lt;Message&gt;</code>. This app uses the builder, a <code>Task</code>, a text input and a list built at run time:</p>
 <div class="block">
-  <div class="file"><b>src/main.rawr</b></div>
-  <pre><code data-lang="rust">use iced::widget::{Column, Widget, button, column, row, text, text_input};
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">// rawr
+use iced::widget::{Column, Widget, button, column, row, text, text_input};
 use iced::{Element, Fill, Task};
+use rawr::preview;
 
 pub fn main() -&gt; iced::Result {
     iced::application(Todos::default, Todos::update, Todos::view)
@@ -143,6 +145,7 @@ impl Todos {
   <img src="/img/docs-todos.png" width="360" height="180" alt="The Todos app with an empty text input and two items, Write the docs and Ship them, each with an x button">
   <figcaption>The <code>two items</code> preview as <code>rawr snapshot</code> renders it.</figcaption>
 </figure>
+<p>The line <code>use rawr::preview;</code> is there for cargo. The <code>rawr-attributes</code> dependency provides it, as <a href="#previews">Previews and snapshots</a> describes.</p>
 
 <h2 id="views">Views and elements</h2>
 <p>A view returns <code>impl Widget&lt;Message&gt;</code> as views do in iced master. It can also return <code>Element&lt;'_, Message&gt;</code>.</p>
@@ -166,13 +169,19 @@ fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
 </div>
 
 <h2 id="hot-reload">Hot reload</h2>
-<p><code>rawr run</code> opens the app and watches the project. Saving a <code>.rawr</code> file reloads the app in about 0.2&nbsp;s. The window stays open and the app keeps its state.</p>
+<p><code>rawr run</code> opens the app and watches the crate. Saving a file marked <code>// rawr</code> reloads the app in about 0.2&nbsp;s. The window stays open and the app keeps its state.</p>
 <p>A save that doesn&rsquo;t pass the check doesn&rsquo;t replace the running app. A bar in the window says <code>Last good still running</code> and shows the error. Its buttons retry, copy the error or reset the app.</p>
-<p>Changing a Rust crate the app imports rebuilds that crate natively. The app reloads when the build finishes.</p>
+<p>Saving a native module or the source of a dependency rebuilds it natively. The app reloads when the build finishes.</p>
+<p><code>rawr run</code> also runs <code>cargo check</code> in the background when the app opens and after each save. Its errors appear in a card at the top of the window and on stderr. They don&rsquo;t block the reload.</p>
 <p>Press Cmd+Shift+S in the window to save a PNG of it.</p>
 
 <h2 id="previews">Previews and snapshots</h2>
-<p><code>#[preview]</code> marks a view function to render on its own. A view can have several. <code>rawr check --as-rust</code> leaves the attribute out, so a file with previews still compiles as Rust.</p>
+<p><code>#[preview]</code> marks a view function to render on its own. A view can have several. The attribute comes from the <code>rawr-attributes</code> crate, whose library name is <code>rawr</code>. Add it to <code>[dependencies]</code> in <code>Cargo.toml</code>:</p>
+<div class="block">
+  <div class="file"><b>Cargo.toml</b></div>
+  <pre><code data-lang="toml">rawr-attributes = { git = "https://github.com/airstrike/rawr" }</code></pre>
+</div>
+<p>Then write <code>#[rawr::preview(..)]</code>, or write <code>use rawr::preview;</code> and then <code>#[preview(..)]</code>. Under cargo the attribute leaves the item as written. Rawr reads it itself. Cargo doesn&rsquo;t warn about a function that only previews use. The crate is not on crates.io yet.</p>
 <table>
   <tr><th>Option</th><th>Meaning</th></tr>
   <tr><td><code>name = ".."</code></td><td>The preview&rsquo;s name.</td></tr>
@@ -198,22 +207,23 @@ fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
 </div>
 
 <h2 id="rust-crates">Importing your own Rust crates</h2>
-<p>An app can <code>use</code> items from your own Rust crates without bindings. List each crate under <code>[rust.dependencies]</code> in <code>rawr.toml</code> at the project root. List <code>iced</code> there too. Use the revision that <code>rawr doctor</code> prints. Importing your own Rust crates currently works only on Apple Silicon Macs.</p>
+<p>An app can <code>use</code> items from your own Rust crates without bindings. List each crate under <code>[dependencies]</code> in the crate&rsquo;s <code>Cargo.toml</code>. List <code>iced</code> there too. Use the revision that <code>rawr doctor</code> prints. Importing your own Rust crates currently works only on Apple Silicon Macs.</p>
 <div class="block">
-  <div class="file"><b>rawr.toml</b></div>
-  <pre><code data-lang="toml">[rust.dependencies]
-mathx = { path = "rust/mathx" }
+  <div class="file"><b>Cargo.toml</b></div>
+  <pre><code data-lang="toml">[dependencies]
+mathx = { path = "mathx" }
 iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }</code></pre>
 </div>
 <div class="block">
-  <div class="file"><b>rust/mathx/src/lib.rs</b></div>
+  <div class="file"><b>mathx/src/lib.rs</b></div>
   <pre><code data-lang="rust">pub fn double(x: i64) -&gt; i64 {
     x * 2
 }</code></pre>
 </div>
 <div class="block">
-  <div class="file"><b>src/main.rawr</b></div>
-  <pre><code data-lang="rust">use iced::widget::{Widget, button, column, text};
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">// rawr
+use iced::widget::{Widget, button, column, text};
 use mathx::double;
 
 pub fn main() -&gt; iced::Result {
@@ -245,21 +255,21 @@ impl App {
     }
 }</code></pre>
 </div>
-<p>A dependency is an inline table. It takes the keys Cargo uses: <code>path</code>, <code>git</code>, <code>rev</code>, <code>version</code>, <code>package</code>, <code>features</code> and <code>default-features</code>. Use <code>package</code> when the crate&rsquo;s name differs from the name you import, as in <code>gallery_ui = { package = "gallery-ui", path = "rust/gallery-ui" }</code>. The <code>[rust]</code> table can also set <code>cargo-authority</code> to a <code>Cargo.toml</code>. Rawr then uses that workspace and its lock file.</p>
+<p>Rawr uses the dependencies as cargo resolves them. Workspace inheritance works. A path dependency is built natively, even if its files start with <code>// rawr</code>. Only the crate you run is interpreted.</p>
+<p>A module of your crate whose first line is not <code>// rawr</code> is native Rust too. <code>rawr run</code> builds it with cargo and rebuilds it when you save it. Native code must not use code from marked files. Rawr reports an error if it does.</p>
 <p>Rawr reads only the items your code uses. A custom iced widget written in Rust is imported like any other item. The crates compile with the pinned nightly on the first run, so that run takes longer.</p>
 <p>A Rust type imported this way doesn&rsquo;t provide derives to Rawr types yet. A Rawr struct with a field of an imported type can&rsquo;t <code>#[derive(Default)]</code>.</p>
-<p>A <code>rawr.toml</code> can also list Rawr packages under <code>[dependencies]</code> with a <code>path</code>. The package&rsquo;s own <code>rawr.toml</code> gives its name under <code>[package]</code>.</p>
 
 <h2 id="diagnostics">Diagnostics</h2>
 <p><code>rawr check</code> checks an app without opening a window. Errors look like rustc&rsquo;s. Delete the <code>Decrement</code> arm from the counter and it reports the missing arm:</p>
 <div class="block diag">
   <div class="file"><b>rawr check</b><span>exit 1</span></div>
   <pre><code><span class="e">error[RAWR-RESOLVE-MATCH]</span><span class="h">: invalid match for `Message`: non-exhaustive patterns; missing Message::Decrement</span>
- <span class="c">--&gt;</span> src/main.rawr:20:9-22:9
- <span class="c">20 |</span>         match message {
+ <span class="c">--&gt;</span> src/main.rs:22:9-26:9
+ <span class="c">22 |</span>         match message {
     <span class="c">|</span>         <span class="e">^^^^^^^^^^^^^^^</span>
     <span class="c">| ...</span>
- <span class="c">22 |</span>         }
+ <span class="c">26 |</span>         }
     <span class="c">|</span> <span class="e">^^^^^^^^</span></code></pre>
 </div>
 <p>The error code names the stage that failed and the kind of error. Codes will change while Rawr is pre-alpha.</p>
@@ -284,7 +294,7 @@ impl App {
   <li><code>async fn</code> and <code>.await</code>.</li>
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
-<p>iced master has 56 examples. Seven of them pass <code>rawr check</code> unchanged with their files renamed from <code>.rs</code> to <code>.rawr</code>: <code>combo_box</code>, <code>counter</code>, <code>exit</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>slider</code> and <code>tooltip</code>. The biggest gap is <code>canvas</code>, which 13 examples use. About 20 examples need crates outside iced such as <code>reqwest</code>, <code>tokio</code> or <code>rand</code>. Some need native features such as file dialogs. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
+<p>iced master has 56 examples. Seven of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>combo_box</code>, <code>counter</code>, <code>exit</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>slider</code> and <code>tooltip</code>. The biggest gap is <code>canvas</code>, which 13 examples use. About 20 examples need crates outside iced such as <code>reqwest</code>, <code>tokio</code> or <code>rand</code>. Some need native features such as file dialogs. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/embedding">Previous<b>Embedding</b></a><a class="next" href="/docs/play">Next<b>?play and the playground</b></a></nav>
 </article>
 </main>

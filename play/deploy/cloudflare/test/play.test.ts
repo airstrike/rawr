@@ -194,11 +194,11 @@ test("the landing page's runnable sources are its files, exactly", async () => {
   const root = new URL("../../../../", import.meta.url);
   const html = readFileSync(new URL("site/public/index.html", root), "utf8");
   const sources = runnable(html);
-  assert.equal(sources.length, 2, "cart.rawr and the counter");
-  assert.deepEqual(runBlocks(html).map((block) => block.name), ["cart.rawr", "main.rawr"]);
-  // What the page shows (and its Run button sends) is examples/cart.rawr.
-  assert.equal(sources[0], readFileSync(new URL("examples/cart.rawr", root), "utf8").trimEnd());
-  assert.match(sources[1], /^use iced::Center;\n/);
+  assert.equal(sources.length, 2, "cart.rs and the counter");
+  assert.deepEqual(runBlocks(html).map((block) => block.name), ["cart.rs", "main.rs"]);
+  // What the page shows (and its Run button sends) is examples/scripts/cart.rs.
+  assert.equal(sources[0], readFileSync(new URL("examples/scripts/cart.rs", root), "utf8").trimEnd());
+  assert.match(sources[1], /^\/\/ rawr\nuse iced::Center;\n/);
   assert.ok(sources[1].includes("fn view(&self) -> impl Widget<Message> {"));
   assert.equal(decodeHtml("&amp;self &lt;T&gt; &rsquo; &#39; &#x41;"), "&self <T> ’ ' A");
   // The allow-list is the set of their hashes; anything else is refused.
@@ -214,12 +214,12 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   const pages = sitePages(new URL("../../../../site/public", import.meta.url).pathname);
   const { hashes, blocks } = await allowList(pages);
   const at = (page: string) => blocks.filter((block: { page: string }) => block.page === page).map((block: { name: string }) => block.name);
-  assert.deepEqual(at("index.html"), ["cart.rawr", "main.rawr"]);
-  assert.deepEqual(at("docs/index.html"), ["cart.rawr"]);
-  assert.deepEqual(at("docs/start.html"), ["cart.rawr"]);
-  assert.deepEqual(at("docs/language.html"), ["parse.rawr", "generics.rawr", "closures.rawr"]);
+  assert.deepEqual(at("index.html"), ["cart.rs", "main.rs"]);
+  assert.deepEqual(at("docs/index.html"), ["cart.rs"]);
+  assert.deepEqual(at("docs/start.html"), ["cart.rs"]);
+  assert.deepEqual(at("docs/language.html"), ["parse.rs", "generics.rs", "closures.rs"]);
   assert.deepEqual(at("docs/play.html"), [""]);
-  // The docs' cart.rawr is the landing page's, so it is one entry.
+  // The docs' cart.rs is the landing page's, so it is one entry.
   assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
   assert.equal(hashes.length, blocks.length - 2);
   assert.ok(hashes.includes(await sha256("let xs = vec![3, 1, 2];\nxs.iter().sum::<i64>()")));
@@ -231,13 +231,13 @@ test("the allow-list build fails on empty, marked-up or disagreeing blocks", asy
   const fails = (pages: Record<string, string>, message: RegExp) =>
     assert.rejects(allowList(new Map(Object.entries(pages))), message);
   await fails({ "a.html": "<p>no snippets</p>" }, /no <code data-run> blocks/);
-  await fails({ "a.html": '<code data-run="x.rawr">  \n</code>' }, /a\.html \(data-run="x\.rawr"\) is empty/);
+  await fails({ "a.html": '<code data-run="x.rs">  \n</code>' }, /a\.html \(data-run="x\.rs"\) is empty/);
   await fails({ "a.html": '<code data-run><span class="k">fn</span> main() {}</code>' }, /holds markup/);
   await fails(
-    { "a.html": '<code data-run="x.rawr">fn main() {}</code>', "b.html": '<code data-run="x.rawr">fn main() { }</code>' },
-    /b\.html \(data-run="x\.rawr"\) differs from the block of the same name in a\.html/,
+    { "a.html": '<code data-run="x.rs">fn main() {}</code>', "b.html": '<code data-run="x.rs">fn main() { }</code>' },
+    /b\.html \(data-run="x\.rs"\) differs from the block of the same name in a\.html/,
   );
-  const ok = await allowList(new Map([["a.html", '<code data-run="x.rawr">1 &lt; 2</code>'], ["b.html", '<code data-run="x.rawr">1 &lt; 2</code>']]));
+  const ok = await allowList(new Map([["a.html", '<code data-run="x.rs">1 &lt; 2</code>'], ["b.html", '<code data-run="x.rs">1 &lt; 2</code>']]));
   assert.equal(ok.hashes.length, 1);
   assert.equal(ok.blocks[0].code, "1 < 2");
 });

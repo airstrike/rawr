@@ -68,7 +68,7 @@
 <h2 id="borrowing">How does Rawr handle borrow checking?</h2>
 <p>Rawr does not have a full borrow checker. It rejects two live <code>&amp;mut</code> borrows of the same value. It accepts some programs that rustc rejects. Use after a move is one example. <a href="/docs/language#lenient">The language page</a> lists these cases.</p>
 <p>Values are reference-counted, so a Rawr program cannot corrupt memory. Borrow checking only rejects programs. It never changes what a valid program does. A program that rustc accepts behaves the same in Rawr.</p>
-<p>rustc is what tells you whether a program is valid Rust. <a href="/docs/cli#check-as-rust"><code>rawr check --as-rust</code></a> copies a project as <code>.rs</code> files and runs <code>cargo check</code> on the copy. It needs rawr-iced. Once Rawr files are ordinary <code>.rs</code> files, <code>cargo check</code> and rust-analyzer will check them directly. That is <a href="#ship">planned</a>.</p>
+<p>rustc is what tells you whether a program is valid Rust. <code>rawr check</code> runs <code>cargo check</code> on the crate after its own check. It fails if either check fails. <code>rawr run</code> runs <code>cargo check</code> in the background. With an iced app, its errors appear in the window and don&rsquo;t block the reload. With a plain program, they are printed after the program ends. Rawr files are ordinary <code>.rs</code> files, so rust-analyzer checks them as well.</p>
 
 <h2 id="generics">How are generics handled?</h2>
 <p>Rawr checks generics as rustc does. Each call is checked against the bounds of the function it calls. A missing bound is an error.</p>
@@ -82,8 +82,8 @@
 <p>Using rustc&rsquo;s typed output as Rawr&rsquo;s front end is a possible future direction.</p>
 
 <h2 id="ship">Can I ship a Rawr app?</h2>
-<p>Not yet. Rawr is a development tool today. A Rawr app runs with <code>rawr run</code>. There is no release build.</p>
-<p>The plan is for Rawr files to become ordinary <code>.rs</code> files. A file will be marked for Rawr with <code>// rawr</code> on its first line. <code>cargo build --release</code> will then build the same code natively without an interpreter. Rawr will be the fast edit loop during development. This is planned and not available yet.</p>
+<p>Yes. A Rawr project is an ordinary Cargo crate. <code>cargo build --release</code> builds it natively. No interpreter ships with it.</p>
+<p>Rawr runs the files marked <code>// rawr</code> while you develop. Cargo ignores the marker, because it is a comment. If you use <code>#[preview]</code> or <code>#[widget]</code>, add the <code>rawr-attributes</code> crate to <code>[dependencies]</code>. Under cargo those attributes leave the item as written.</p>
 
 <h2 id="snippets">Is it safe to run snippets on the bot?</h2>
 <p>The <code>?play</code> bot runs each snippet in a separate process. That process has <a href="/docs/play#limits">time and memory limits</a>. It writes nothing to disk. Rawr code has no access to files, processes, the network or the environment. The playground runs snippets the same way.</p>

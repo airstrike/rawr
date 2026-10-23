@@ -62,7 +62,7 @@
 <h3 id="install-command">The <code>rawr</code> command</h3>
 <p>The <code>rawr</code> command runs Rawr programs. It builds on stable Rust too.</p>
 <div class="block"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre></div>
-<p>The <code>rawr-cli</code> package installs the <code>rawr</code> binary. A program without iced runs once and exits. It doesn&rsquo;t build anything or hot reload.</p>
+<p>The <code>rawr-cli</code> package installs the <code>rawr</code> binary. It also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works too. A program without iced runs once and exits. It doesn&rsquo;t hot reload.</p>
 
 <h3 id="install-iced">rawr-iced</h3>
 <p>rawr-iced adds iced support. Install it and <code>rawr</code> hands every program that uses iced to it.</p>
@@ -75,10 +75,11 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 <p>Run <code>rawr doctor</code> to see what is installed and where. Run <code>rawr --help</code> to see which commands each binary provides.</p>
 
 <h2 id="first-program">A first program</h2>
-<p>A plain program is one that doesn&rsquo;t use iced. Save this as <code>cart.rawr</code>.</p>
+<p>A plain program is one that doesn&rsquo;t use iced. Save this as <code>cart.rs</code>. Its first line is <code>// rawr</code>. That line marks it as a Rawr file.</p>
 <div class="block">
-  <div class="file"><b>cart.rawr</b></div>
-  <pre><code data-lang="rust" data-run="cart.rawr" id="src-cart">enum Item {
+  <div class="file"><b>cart.rs</b></div>
+  <pre><code data-lang="rust" data-run="cart.rs" id="src-cart">// rawr
+enum Item {
     Book { price: f64 },
     Coffee { cups: i64 },
 }
@@ -108,32 +109,44 @@ fn main() {
     let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
     println!("total: {}", total(&amp;cart));
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rawr" hidden></button><b>rawr run cart.rawr</b><span id="out-cart" aria-live="polite">total: 27</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rs" hidden></button><b>rawr run cart.rs</b><span id="out-cart" aria-live="polite">total: 27</span></div>
 </div>
-<p><code>rawr run</code> checks the whole file first. If the check passes, it runs the file&rsquo;s top-level statements and then <code>fn main</code>. A file can be only statements. It can also be only items and a <code>main</code>, as in Rust.</p>
-<p><code>rawr check cart.rawr</code> runs the check without running the program. It prints <code>Checked</code> and the path when the file is valid.</p>
+<p><code>rawr run</code> checks the whole file first. If the check passes, it runs the file&rsquo;s top-level statements and then <code>fn main</code>. A file can be only statements. It can also be only items and a <code>main</code>, as in Rust. Cargo would not build a file of top-level statements, so keep those to snippets and the playground.</p>
+<p><code>rawr check cart.rs</code> runs the check without running the program. It prints <code>Checked</code> and the path when the file is valid.</p>
 
 <h3 id="errors">Errors</h3>
 <p>Rawr reports one error at a time. Each error has a code, a message and the source span. Change <code>item.price()</code> to <code>item.cost()</code> and run it again:</p>
 <div class="block diag">
-  <div class="file"><b>rawr run cart.rawr</b><span>exit 1</span></div>
+  <div class="file"><b>rawr run cart.rs</b><span>exit 1</span></div>
   <pre><code><span class="e">error[RAWR-RESOLVE-UNKNOWN-MEMBER]</span><span class="h">: unknown member `Item::cost`</span>
- <span class="c">--&gt;</span> cart.rawr:22:21
- <span class="c">22 |</span>         sum += item.cost();
+ <span class="c">--&gt;</span> cart.rs:23:21
+ <span class="c">23 |</span>         sum += item.cost();
     <span class="c">|</span>                     <span class="e">^</span></code></pre>
 </div>
 <p>The program doesn&rsquo;t start, so nothing is printed before the error.</p>
 
 <h2 id="first-app">A first iced app</h2>
-<p>With rawr-iced installed, <code>rawr new</code> writes a starter project.</p>
+<p>With rawr-iced installed, <code>rawr new</code> writes a starter crate.</p>
 <div class="block">
   <pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre>
 </div>
-<p><code>rawr new hello</code> creates the <code>hello</code> directory. Its only file is <code>src/main.rawr</code>. That file is a counter app with two buttons. You don&rsquo;t need a manifest until you add Rust crates. <code>rawr run</code> opens the app in a window.</p>
-<p>This is iced&rsquo;s own counter example. <code>rawr check</code> accepts it unchanged.</p>
+<p><code>rawr new hello</code> creates the <code>hello</code> directory. It holds an ordinary Cargo crate with two files. <code>rawr run</code> opens the app in a window.</p>
+<p><code>hello/Cargo.toml</code> depends on iced from git. The revision is the one rawr-iced is built against. <code>rawr doctor</code> prints it.</p>
 <div class="block">
-  <div class="file"><b>src/main.rawr</b></div>
-  <pre><code data-lang="rust">use iced::Center;
+  <div class="file"><b>Cargo.toml</b></div>
+  <pre><code data-lang="toml">[package]
+name = "hello"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }</code></pre>
+</div>
+<p><code>hello/src/main.rs</code> is iced&rsquo;s own counter example with <code>// rawr</code> as its first line. <code>rawr check</code> accepts it.</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">// rawr
+use iced::Center;
 use iced::widget::{Widget, button, column, text};
 
 pub fn main() -&gt; iced::Result {
@@ -175,9 +188,12 @@ impl Counter {
 }</code></pre>
 </div>
 
+<p><code>cargo run</code> builds and runs the same app natively. <code>cargo build --release</code> builds it for release. No interpreter ships with it.</p>
+
 <h2 id="hot-reload">Hot reload</h2>
-<p>Keep the window open and edit <code>src/main.rawr</code>. When you save, <code>rawr run</code> reloads the app in about 0.2&nbsp;s. The window stays open. The app keeps its state, so the counter keeps its value.</p>
-<p>Saving a <code>.rawr</code> file never rebuilds native code. Changing one of your own Rust crates does. <code>rawr run</code> rebuilds that crate natively and then reloads the app.</p>
+<p>Keep the window open and edit <code>src/main.rs</code>. When you save, <code>rawr run</code> reloads the app in about 0.2&nbsp;s. The window stays open. The app keeps its state, so the counter keeps its value.</p>
+<p>Saving a file marked <code>// rawr</code> never rebuilds native code. Saving a native module or the source of a dependency does. A native module is a file without the marker. <code>rawr run</code> rebuilds the native code and then reloads the app.</p>
+<p><code>rawr run</code> also runs <code>cargo check</code> in the background on launch and after each save. Its errors appear in a card at the top of the window and on stderr. They don&rsquo;t block the reload.</p>
 <p>If a save doesn&rsquo;t pass the check, the last good version keeps running. The window shows the error until you fix it.</p>
 
 <h2 id="next">Next steps</h2>

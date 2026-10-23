@@ -53,11 +53,12 @@
 
 <h2 id="overview">How a program runs</h2>
 <p>Rawr checks a whole program before any of it runs. The check resolves names and types, traits and method calls. It also checks that every <code>match</code> covers every case. A program that fails the check doesn&rsquo;t start.</p>
-<p>A program is one file or a project directory. In a project, the entry file is <code>src/main.rawr</code>. A file can hold items, top-level statements, or both. Rawr runs the top-level statements first and then calls <code>fn main</code> if there is one.</p>
+<p>A program is a Cargo crate or a single <code>.rs</code> file. In a crate, the root file is <code>src/main.rs</code> or <code>src/lib.rs</code>. Its first line is <code>// rawr</code>. A single file is one <code>.rs</code> file you give to <code>rawr run</code>. Its first line may be <code>// rawr</code> but doesn&rsquo;t have to be.</p>
+<p>A single file can hold items, top-level statements, or both. Rawr runs the top-level statements first and then calls <code>fn main</code> if there is one. Cargo would not build a file with top-level statements, so keep them to snippets and the playground.</p>
 <p>This program uses <code>?</code>, a <code>Result</code> from <code>main</code> and a closure. It prints the same output as the Rust binary and exits with the same status.</p>
 <div class="block">
-  <div class="file"><b>parse.rawr</b></div>
-  <pre><code data-lang="rust" data-run="parse.rawr" id="src-parse">fn parse(s: &amp;str) -&gt; Result&lt;i64, String&gt; {
+  <div class="file"><b>parse.rs</b></div>
+  <pre><code data-lang="rust" data-run="parse.rs" id="src-parse">fn parse(s: &amp;str) -&gt; Result&lt;i64, String&gt; {
     s.parse::&lt;i64&gt;().map_err(|e| format!("{s:?}: {e}"))
 }
 
@@ -68,7 +69,7 @@ fn main() -&gt; Result&lt;(), String&gt; {
     println!("m = {m}");
     Ok(())
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-parse" data-out="out-parse" aria-label="Run parse.rawr" hidden></button><b>rawr run parse.rawr</b><span id="out-parse" aria-live="polite">n = 42
+  <div class="run"><button type="button" class="runbtn" data-source="src-parse" data-out="out-parse" aria-label="Run parse.rs" hidden></button><b>rawr run parse.rs</b><span id="out-parse" aria-live="polite">n = 42
 Error: "\"forty\": invalid digit found in string"
 <span class="exit">exit status 1</span></span></div>
 </div>
@@ -82,7 +83,7 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>impl</code> blocks with methods, associated functions and associated consts.</li>
   <li><code>trait</code> with default methods, associated types and static functions. Traits can be implemented for your own types and for built-in types such as <code>i64</code>.</li>
   <li><code>const</code> and <code>static</code> items.</li>
-  <li><code>mod</code>. A <code>mod util;</code> declaration loads <code>util.rawr</code> beside the file that declares it. An inline <code>mod m { .. }</code> works too.</li>
+  <li><code>mod</code>. A <code>mod util;</code> declaration loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. A module without that line is native Rust, and cargo builds it. An inline <code>mod m { .. }</code> works too.</li>
   <li><code>use</code> with paths and groups, such as <code>use std::collections::{HashMap, HashSet};</code>.</li>
   <li><code>#[derive]</code> of <code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. Rawr checks a derive the way rustc does. Deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</li>
 </ul>
@@ -105,8 +106,8 @@ Error: "\"forty\": invalid digit found in string"
 <h2 id="generics-traits">Generics and traits</h2>
 <p>Functions, structs, enums and impl blocks can be generic. Bounds work inline and in <code>where</code> clauses. A generic type without the bound it needs fails the check. rustc rejects it too.</p>
 <div class="block">
-  <div class="file"><b>generics.rawr</b></div>
-  <pre><code data-lang="rust" data-run="generics.rawr" id="src-generics">use std::fmt;
+  <div class="file"><b>generics.rs</b></div>
+  <pre><code data-lang="rust" data-run="generics.rs" id="src-generics">use std::fmt;
 use std::ops::Add;
 
 struct Stack&lt;T&gt; {
@@ -160,7 +161,7 @@ fn main() {
     println!("{}", stack.top().unwrap());
     println!("{}", largest(&amp;[3, 9, 2]));
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-generics" data-out="out-generics" aria-label="Run generics.rawr" hidden></button><b>rawr run generics.rawr</b><span id="out-generics" aria-live="polite">3.5 m
+  <div class="run"><button type="button" class="runbtn" data-source="src-generics" data-out="out-generics" aria-label="Run generics.rs" hidden></button><b>rawr run generics.rs</b><span id="out-generics" aria-live="polite">3.5 m
 9</span></div>
 </div>
 <p>Trait objects work through <code>Box&lt;dyn Trait&gt;</code>. A <code>Vec&lt;Box&lt;dyn Shape&gt;&gt;</code> can hold different types that implement <code>Shape</code>. Implementing <code>Iterator</code> for your own type gives it <code>map</code>, <code>filter</code>, <code>collect</code> and the other adapters. Operator traits from <code>std::ops</code> such as <code>Add</code> work.</p>
@@ -179,8 +180,8 @@ fn main() {
 <h2 id="closures">Closures</h2>
 <p>Closures capture their environment. <code>move</code> closures work. A closure that mutates what it captures is <code>FnMut</code>. Functions can take closures as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. They can return them as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>.</p>
 <div class="block">
-  <div class="file"><b>closures.rawr</b></div>
-  <pre><code data-lang="rust" data-run="closures.rawr" id="src-closures">fn apply(f: impl Fn(i64) -&gt; i64, x: i64) -&gt; i64 {
+  <div class="file"><b>closures.rs</b></div>
+  <pre><code data-lang="rust" data-run="closures.rs" id="src-closures">fn apply(f: impl Fn(i64) -&gt; i64, x: i64) -&gt; i64 {
     f(x)
 }
 
@@ -198,7 +199,7 @@ fn main() {
     let odd_squares: Vec&lt;i64&gt; = (1..=10).filter(|x| x % 2 == 1).map(|x| x * x).collect();
     println!("{:?}", odd_squares);
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-closures" data-out="out-closures" aria-label="Run closures.rawr" hidden></button><b>rawr run closures.rawr</b><span id="out-closures" aria-live="polite">["first", "second"]
+  <div class="run"><button type="button" class="runbtn" data-source="src-closures" data-out="out-closures" aria-label="Run closures.rs" hidden></button><b>rawr run closures.rs</b><span id="out-closures" aria-live="polite">["first", "second"]
 2 6
 [1, 9, 25, 49, 81]</span></div>
 </div>
@@ -296,7 +297,7 @@ fn main() {
   <li><strong>Panic messages.</strong> A panic exits with status 101 in both. Rawr writes the message to stderr as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
 </ul>
 <h3 id="lenient">Code that Rawr accepts and rustc rejects</h3>
-<p>Rawr&rsquo;s check is not rustc. Some code passes <code>rawr check</code> and fails <code>cargo build</code>. Run <code>rawr check --as-rust</code> to find these cases in a project. <a href="/docs/cli#check-as-rust">Commands</a> says what it needs.</p>
+<p>Rawr&rsquo;s check is not rustc. Some code passes <code>rawr check</code> and fails <code>cargo build</code>. <code>rawr check</code> also runs <code>cargo check</code>, which reports these cases. <a href="/docs/cli#rawr">Commands</a> describes its output.</p>
 <ul>
   <li>There is no borrow checker beyond rejecting two live <code>&amp;mut</code> borrows of one value. Use after move, a shared borrow held across a mutation, and returning a reference to a local are all accepted.</li>
   <li><code>String</code> and <code>&amp;str</code> are one type to the checker. Passing <code>"x"</code> where a <code>String</code> is expected is accepted.</li>
