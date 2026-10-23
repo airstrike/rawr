@@ -5133,7 +5133,7 @@ fn matches_runtime_type(value: &Dynamic, ty: &type_ref::Type, models: &Models) -
         .is_ok()
 }
 
-fn nominal_payload_type(ty: &Ty, models: &Models, span: Span) -> Result<NominalPayloadType, Error> {
+fn nominal_payload_type(ty: &Ty, models: &Models, _span: Span) -> Result<NominalPayloadType, Error> {
     Ok(match ty.clone() {
         Ty::Unit => NominalPayloadType::Unit,
         // A generic payload is erased: any value.
@@ -5145,13 +5145,12 @@ fn nominal_payload_type(ty: &Ty, models: &Models, span: Span) -> Result<NominalP
                 schema: definition.schema().clone(),
             }
         }
-        other => NominalPayloadType::Host(other.native_type_id(models).ok_or_else(|| {
-            Error::InvalidHostOperation {
-                item: other.name(models),
-                reason: "symbolic imported pattern payload has no native runtime TypeId".into(),
-                operation: span,
-            }
-        })?),
+        // An imported Rust value is a handle the generated runner names:
+        // the pattern takes any value, and the bridge checks the handle
+        // where it is used.
+        other => other
+            .native_type_id(models)
+            .map_or(NominalPayloadType::Any, NominalPayloadType::Host),
     })
 }
 
@@ -37425,7 +37424,7 @@ pub fn run() {
 
     #[cfg(feature = "rust-import")]
     #[test]
-    fn local_enum_payload_patterns_keep_imported_types_symbolic() {
+    fn local_enum_payload_patterns_bind_imported_values() {
         for pattern in ["pair", "_"] {
             let mut engine = Engine::new();
             engine
@@ -37440,23 +37439,8 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
 "#
             );
             let program = imported_program(&engine, &source);
-            let error = match symbolic_imported(&engine, &program) {
-                Ok(_) => panic!("symbolic imported payload must remain non-executable"),
-                Err(failure) => failure.into_error(),
-            };
-            let ParseErrorType::Resolution(crate::resolve::Error::InvalidHostOperation {
-                reason,
-                operation,
-                ..
-            }) = error.err_type()
-            else {
-                panic!("unexpected symbolic imported payload error: {error}");
-            };
-            assert_eq!(
-                reason,
-                "symbolic imported pattern payload has no native runtime TypeId"
-            );
-            assert!(!operation.is_none());
+            symbolic_imported(&engine, &program)
+                .unwrap_or_else(|failure| panic!("imported payload pattern: {}", failure.into_error()));
         }
     }
 
