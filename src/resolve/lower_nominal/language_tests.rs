@@ -7362,3 +7362,38 @@ fn language_type_aliases() {
     rejected("type Pair = (i64, i64); pub fn run() -> i64 { let p: Pair = (1, true); p.0 } run()");
     rejected("type Grid<T> = Vec<T>; pub fn run() -> i64 { let g: Grid = vec![1]; g[0] } run()");
 }
+
+#[test]
+fn language_field_and_variant_attributes_are_inert() {
+    // Derive helpers such as `#[serde(..)]` mean nothing to Rawr, as rustc
+    // leaves them inert. `#[cfg(..)]` still leaves a field out.
+    let value = run(r#"
+        #[derive(Debug, Clone, Default)]
+        struct Task {
+            #[serde(default = "Uuid::new_v4")]
+            id: i64,
+            #[serde(skip)]
+            #[allow(dead_code)]
+            pub weight: i64,
+            #[cfg(test)]
+            missing: String,
+        }
+        struct Pair(#[allow(unused)] i64, i64);
+        #[derive(Debug, Clone, Copy, PartialEq, Default)]
+        enum Filter {
+            #[serde(rename = "all")]
+            #[default]
+            All,
+            Done { #[allow(unused)] count: i64 },
+        }
+        pub fn run() -> i64 {
+            let task = Task { id: 1, weight: 20 };
+            let pair = Pair(300, 4000);
+            let done = match (Filter::Done { count: 50000 }) { Filter::Done { count } => count, Filter::All => 0 };
+            let all = if Filter::default() == Filter::All { 600000 } else { 0 };
+            task.id + task.weight + pair.0 + pair.1 + done + all
+        }
+        run()
+    "#);
+    assert_eq!(value, 654321);
+}

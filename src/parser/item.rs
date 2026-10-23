@@ -798,6 +798,66 @@ fn skip_item(input: &mut TokenStream) -> ParseResult<Position> {
     }
 }
 
+/// The attributes on a field or an enum variant. Only `#[cfg(..)]` and a
+/// variant's `#[default]` mean anything to Rawr. Any other attribute, such as
+/// a derive helper like `#[serde(default = "..")]`, is passed over unread, the
+/// way rustc leaves a derive helper inert.
+#[derive(Default)]
+struct MemberAttributes {
+    default: Option<Span>,
+    disabled: bool,
+}
+
+fn parse_member_attributes(input: &mut TokenStream) -> ParseResult<MemberAttributes> {
+    let mut attributes = MemberAttributes::default();
+    while input
+        .peek()
+        .is_some_and(|(token, _)| is_attribute_marker(token))
+    {
+        let (_, hash) = input.next().expect("peeked attribute marker must exist");
+        expect(input, Token::LeftBracket, "after '#' in an attribute")?;
+        let path = parse_path(input)?;
+        let name = (path.segments.len() == 1).then(|| path.segments[0].name.text.as_str());
+        if name == Some("cfg") {
+            expect(input, Token::LeftParen, "after `cfg`")?;
+            attributes.disabled |= !parse_cfg_predicate(input)?;
+            expect(input, Token::RightParen, "to close `cfg`")?;
+            expect(input, Token::RightBracket, "to close an attribute")?;
+            continue;
+        }
+        let close = skip_to_attribute_end(input)?;
+        if name == Some("default") {
+            attributes.default = Some(Span::new(hash, after(close, 1)));
+        }
+    }
+    Ok(attributes)
+}
+
+/// Pass over the rest of an attribute up to and including its `]`, and
+/// return where that `]` is.
+fn skip_to_attribute_end(input: &mut TokenStream) -> ParseResult<Position> {
+    let mut depth = 0usize;
+    loop {
+        match input.next().expect("token streams always end with EOF") {
+            (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
+                depth += 1;
+            }
+            (Token::RightBracket, position) if depth == 0 => return Ok(position),
+            (Token::RightBrace | Token::RightParen | Token::RightBracket, _) => {
+                depth = depth.saturating_sub(1);
+            }
+            (Token::EOF, position) => {
+                return Err(PERR::MissingToken(
+                    Token::RightBracket.into(),
+                    "to close an attribute".into(),
+                )
+                .into_err(position));
+            }
+            _ => {}
+        }
+    }
+}
+
 fn parse_attribute(input: &mut TokenStream) -> ParseResult<crate::item::Attribute> {
     let marker = match input.next().expect("token streams always end with EOF") {
         (token, position) if is_attribute_marker(&token) => position,
@@ -1323,6 +1383,7 @@ fn parse_struct(
         let mut fields = Vec::new();
         if matches!(input.next(), Some((Token::LeftParen, _))) {
             while !matches!(input.peek(), Some((Token::RightParen, _))) {
+                parse_member_attributes(input)?;
                 let ty = match skip_field_visibility(input)? {
                     Some(open) => parse_parenthesized_type(input, open)?,
                     None => parse_type(input)?,
@@ -1362,6 +1423,7 @@ fn parse_struct(
     let mut fields = Vec::new();
 
     while !matches!(input.peek(), Some((Token::RightBrace, _))) {
+        let field_attributes = parse_member_attributes(input)?;
         if let Some(open) = skip_field_visibility(input)? {
             return Err(PERR::MissingToken(
                 "`crate`, `super`, `self` or `in`".into(),
@@ -1373,11 +1435,13 @@ fn parse_struct(
         expect(input, Token::Colon, "after a struct field name")?;
         let ty = parse_type(input)?;
         let span = Span::new(field_name.span.start(), ty.span().end());
-        fields.push(crate::item::Field {
-            name: field_name,
-            ty,
-            span,
-        });
+        if !field_attributes.disabled {
+            fields.push(crate::item::Field {
+                name: field_name,
+                ty,
+                span,
+            });
+        }
 
         consume_comma_or_end(input, Token::RightBrace, "between struct fields")?;
     }
@@ -1469,18 +1533,8 @@ fn parse_enum(
     while !matches!(input.peek(), Some((Token::RightBrace, _))) {
         // `#[default]` marks the variant a derived `Default` builds; other
         // variant attributes have no effect.
-        let mut default = None;
-        while input
-            .peek()
-            .is_some_and(|(token, _)| is_attribute_marker(token))
-        {
-            let attribute = parse_attribute(input)?;
-            if attribute.path.segments.len() == 1
-                && attribute.path.segments[0].name.text == "default"
-            {
-                default = Some(attribute.span);
-            }
-        }
+        let variant_attributes = parse_member_attributes(input)?;
+        let default = variant_attributes.default;
         let variant_name = parse_name(input, "as an enum variant")?;
         let mut payload = Vec::new();
         let mut fields = None;
@@ -1503,6 +1557,7 @@ fn parse_enum(
             let mut names = Vec::new();
 
             while !matches!(input.peek(), Some((Token::RightBrace, _))) {
+                parse_member_attributes(input)?;
                 let field = parse_name(input, "as a variant field")?;
                 if names
                     .iter()
