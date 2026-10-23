@@ -507,6 +507,31 @@ fn language_closures_in_variables_are_values() {
     assert_eq!(value, 16 + 25 * 100 + 18 * 10000);
 }
 
+#[test]
+fn language_associated_functions_are_values() {
+    // `Db::from` of a user `From` impl and an inherent `Db::new` are
+    // function values: passed to `map`, bound to a local, and coerced to
+    // a `fn` pointer.
+    let value = run(r#"
+        #[derive(Clone, Copy)]
+        enum Roar { Squeak = 3, Growl = 7 }
+        struct Db(i64);
+        impl From<Roar> for Db {
+            fn from(r: Roar) -> Db { Db(r as i64 * 2) }
+        }
+        impl Db { fn new(n: i64) -> Db { Db(n) } }
+        pub fn run() -> i64 {
+            let v: Vec<i64> = [Roar::Squeak, Roar::Growl].iter().copied().map(Db::from).map(|d| d.0).collect();
+            let loud = Db::from;
+            let f: fn(Roar) -> Db = Db::from;
+            let n = Db::new;
+            v[0] + v[1] * 100 + loud(Roar::Growl).0 * 10000 + f(Roar::Squeak).0 * 1000000 + n(5).0 * 100000000
+        }
+        run()
+    "#);
+    assert_eq!(value, 6 + 14 * 100 + 14 * 10000 + 6 * 1000000 + 5 * 100000000);
+}
+
 /// `Button::style` takes a two-parameter host callable, as iced's
 /// `fn(&Theme, Status) -> Style`.
 fn style_facade() -> crate::host::facade::Definition {

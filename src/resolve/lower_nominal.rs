@@ -12663,6 +12663,41 @@ impl<'a> Parser<'a> {
         Ok(self.symbolic_expr(value, inputs, output, expression, Vec::new()))
     }
 
+    /// An associated function named as a value (`Db::new`, or `Db::from`
+    /// of an `impl From<T> for Db`): a function item that calls it, which
+    /// coerces to a `fn` pointer as a named function does.
+    fn associated_value(
+        &mut self,
+        definition: &method::Definition,
+        expression: Span,
+    ) -> Result<ParsedExpr, Error> {
+        self.used_nominal = true;
+        let substitution = self.method_substitution(definition, None, expression)?;
+        let inputs: Box<[Ty]> = definition
+            .parameters()
+            .iter()
+            .map(|parameter| instantiate(&Ty::from_resolved(&parameter.ty), &substitution))
+            .collect();
+        let output = instantiate(&Ty::from_resolved(definition.output()), &substitution);
+        let parameters = (0..inputs.len())
+            .map(|index| format!("__rawr_argument_{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source = origin::Fragment::plain(format!(
+            "(|{parameters}| {}({parameters}))",
+            method_name(definition.id())
+        ));
+        Ok(self.operator_expr(
+            source,
+            Ty::FnItem {
+                key: Box::new(definition.key().clone()),
+                inputs,
+                output: Box::new(output),
+            },
+            expression,
+        ))
+    }
+
     fn symbolic_associated(
         &mut self,
         definition: &method::Definition,
@@ -24159,6 +24194,21 @@ impl<'a> Parser<'a> {
             value.ty = symbolic.ty;
             return Ok(());
         }
+        // An associated function named as a value (`associated_value`).
+        if let Some(definition) = self
+            .models
+            .methods
+            .values()
+            .chain(self.models.trait_methods.values().flatten())
+            .find(|definition| definition.receiver().is_none() && definition.key() == &*key)
+            .cloned()
+        {
+            let symbolic = self.symbolic_associated(&definition, value.span)?;
+            value.source = symbolic.source;
+            value.prelude = symbolic.prelude;
+            value.ty = symbolic.ty;
+            return Ok(());
+        }
         let Some(index) = self.lifted.iter().position(|closure| closure.key == *key) else {
             return Ok(());
         };
@@ -29275,8 +29325,11 @@ impl<'a> Parser<'a> {
             let (mut arguments, end) = if definition.constant() {
                 (Vec::new(), text_end(member_span.start(), &member))
             } else if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
-                return self
-                    .symbolic_associated(&definition, span(owner_span.start(), member_span.end()));
+                let expression = span(owner_span.start(), member_span.end());
+                if definition.generics().is_empty() && method_copied(&definition).is_empty() {
+                    return self.associated_value(&definition, expression);
+                }
+                return self.symbolic_associated(&definition, expression);
             } else {
                 self.parse_borrowing_arguments("associated function arguments")?
             };
