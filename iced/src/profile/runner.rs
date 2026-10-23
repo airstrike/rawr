@@ -32,7 +32,7 @@ const COMPATIBILITY_SEMANTIC_POLICY: &[u8] = b"rawr.iced.compatibility-applicati
 const COMPATIBILITY_RUNTIME_BINDING: &[u8] = b"rawr.iced.compatibility-runtime-binding/v2";
 const TEXT_ENDPOINT_DISPOSITION: &[u8] =
     b"rawr.iced.compatibility-text-endpoint/suppressed-by-D271/v1";
-const COMPATIBILITY_PROJECTIONS: usize = 31;
+const COMPATIBILITY_PROJECTIONS: usize = 32;
 const COMPATIBILITY_ABI: u32 = 16;
 const COMPATIBILITY_DIGEST: [u8; 16] = [
     87, 131, 148, 253, 251, 174, 0, 74, 148, 89, 230, 120, 37, 55, 178, 125,
@@ -2834,10 +2834,12 @@ impl<'proof> Decoration<'proof> {
 
         // Every builder path with its overloads: `impl Into<Length>` and
         // `impl Into<Pixels>` each register one item per accepted input.
-        const BUILDERS: [&str; 9] = [
+        const BUILDERS: [&str; 11] = [
             "iced::widget::Text::align_x",
             "iced::widget::Text::align_y",
+            "iced::widget::Text::center",
             "iced::widget::Text::color",
+            "iced::widget::Text::color_maybe",
             "iced::widget::Text::font",
             "iced::widget::Text::height",
             "iced::widget::Text::line_height",
@@ -2845,7 +2847,7 @@ impl<'proof> Decoration<'proof> {
             "iced::widget::Text::style",
             "iced::widget::Text::width",
         ];
-        const OVERLOADS: usize = 16;
+        const OVERLOADS: usize = 18;
         let builder_count = semantic
             .items()
             .filter(|item| item.path().strip_prefix("iced::widget::Text::").is_some())
