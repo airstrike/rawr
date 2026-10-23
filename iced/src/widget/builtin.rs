@@ -22,6 +22,7 @@ pub(super) fn bind_profile(iced: &mut host::runtime::Builder, rawr: &mut host::r
 impl marker::text::Style {
     fn native(self) -> fn(&iced::Theme) -> iced::widget::text::Style {
         match self {
+            Self::Default => iced::widget::text::default,
             Self::Base => iced::widget::text::base,
             Self::Primary => iced::widget::text::primary,
             Self::Secondary => iced::widget::text::secondary,
@@ -938,6 +939,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
         ("iced::widget::text::warning", marker::text::Style::Warning),
         ("iced::widget::text::danger", marker::text::Style::Danger),
         ("iced::widget::text::base", marker::text::Style::Base),
+        ("iced::widget::text::default", marker::text::Style::Default),
     ] {
         builder
             .bind(path, move |_| Ok(Dynamic::from(style)))
@@ -3173,6 +3175,7 @@ mod tests {
             (marker::text::Style::Success, iced::widget::text::success),
             (marker::text::Style::Warning, iced::widget::text::warning),
             (marker::text::Style::Danger, iced::widget::text::danger),
+            (marker::text::Style::Default, iced::widget::text::default),
         ] {
             assert_eq!(style.native()(&theme), expected(&theme));
         }

@@ -4553,7 +4553,8 @@ fn string_constructor_signature(
     Ok(signature.finish())
 }
 
-const BUILT_IN_TEXT_STYLES: [&str; 6] = ["base", "primary", "secondary", "success", "warning", "danger"];
+const BUILT_IN_TEXT_STYLES: [&str; 7] =
+    ["default", "base", "primary", "secondary", "success", "warning", "danger"];
 const BUILT_IN_CONTAINER_STYLES: [&str; 9] = [
     "transparent",
     "rounded_box",

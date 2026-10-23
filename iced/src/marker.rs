@@ -10,6 +10,7 @@ pub(crate) mod text {
     /// One compiler-sealed identity for a pinned iced text style item.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum Style {
+        Default,
         Base,
         Primary,
         Secondary,

@@ -1551,3 +1551,37 @@ fn master_table_draws_a_cell_per_column_and_row() {
     find(&adapter, "$20.50");
     find(&adapter, "Free");
 }
+
+const TEXT_DEFAULT_STYLE: &str = r#"
+use iced::widget::{column, text};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let minutes = 95;
+        column![
+            text!("{minutes} min").style(if minutes > 90 { text::warning } else { text::default }),
+            text("inherited").style(text::default),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_text_takes_the_default_style() {
+    let adapter = boot(TEXT_DEFAULT_STYLE);
+    find(&adapter, "95 min");
+    find(&adapter, "inherited");
+}
