@@ -906,6 +906,7 @@ fn build(
                 host::type_def::import::Identity::new(identity),
                 ty.copy(),
                 ty.default(),
+                ty.debug(),
                 parameters,
                 shape,
                 allocation,

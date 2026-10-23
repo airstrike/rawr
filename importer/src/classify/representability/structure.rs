@@ -21,6 +21,7 @@ pub struct Plan {
     declaration_only: bool,
     copy: bool,
     default: bool,
+    debug: bool,
 }
 
 impl Field {
@@ -76,6 +77,7 @@ impl Plan {
         declaration_only: bool,
         copy: bool,
         default: bool,
+        debug: bool,
     ) -> Self {
         Self {
             constructor,
@@ -86,6 +88,7 @@ impl Plan {
             declaration_only,
             copy,
             default,
+            debug,
         }
     }
 
@@ -128,6 +131,12 @@ impl Plan {
     #[must_use]
     pub const fn default(&self) -> bool {
         self.default
+    }
+
+    /// Whether the crate implements `Debug` for the type.
+    #[must_use]
+    pub const fn debug(&self) -> bool {
+        self.debug
     }
 
     /// Drop the public fields `keep` refuses. A struct that lost one has no

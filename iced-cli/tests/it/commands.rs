@@ -801,3 +801,50 @@ fn main() {
     assert_success(&output);
     assert_eq!(String::from_utf8_lossy(&output.stdout), "7 7 7 0\n");
 }
+
+/// A struct deriving `Debug` with a field of an imported Rust type prints
+/// the field with its crate's `Debug`, as Rust does.
+#[test]
+#[ignore = "builds the path dependency and a runner with the import driver"]
+fn a_derived_debug_prints_an_imported_field() {
+    let sandbox = Sandbox::new("imported-debug");
+    let root = copy_fixture("rs-marker-path", sandbox.path());
+    fs::write(
+        root.join("app/src/main.rs"),
+        r#"// rawr
+use gauge::Gauge;
+
+#[derive(Debug)]
+enum Reading {
+    Level(Gauge),
+    Missing,
+}
+
+#[derive(Debug)]
+struct Panel {
+    gauge: Gauge,
+    reading: Reading,
+}
+
+fn main() {
+    let panel = Panel { gauge: Gauge::default(), reading: Reading::Level(Gauge::default()) };
+    println!("{panel:?}");
+    println!("{:?} {:?}", Gauge::default(), Reading::Missing);
+}
+"#,
+    )
+    .unwrap();
+
+    let output = rawr_command()
+        .arg("run")
+        .arg(root.join("app"))
+        .output()
+        .unwrap();
+
+    writable(&root);
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Panel { gauge: Gauge { level: 7 }, reading: Level(Gauge { level: 7 }) }\nGauge { level: 7 } Missing\n"
+    );
+}

@@ -45,7 +45,72 @@ struct Arguments<'slice, 'value, 'arena> { values: &'slice mut [&'value mut Dyna
 
 #[derive(Clone, Copy)]
 struct NativeHandle { epoch: [u8; 32], slot: u32, generation: u64 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, debug: Option<DebugText>, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
+
+/// Rust's `Debug` text of a stored value, for a type that implements it.
+type DebugText = fn(&dyn Any) -> Option<String>;
+
+fn debug_text<T: std::fmt::Debug + 'static>(value: &dyn Any) -> Option<String> {
+    value.downcast_ref::<T>().map(|value| format!("{value:?}"))
+}
+
+/// Chooses `debug_text::<T>` when `T` implements `Debug` and nothing
+/// otherwise, by method resolution on a concrete `T`.
+struct DebugProbe<T>(std::marker::PhantomData<T>);
+
+#[allow(dead_code)]
+fn debug_probe<T>(_: &T) -> DebugProbe<T> {
+    DebugProbe(std::marker::PhantomData)
+}
+
+#[allow(dead_code)]
+trait ViaDebug {
+    fn native_debug(&self) -> Option<DebugText>;
+}
+
+impl<T: std::fmt::Debug + 'static> ViaDebug for DebugProbe<T> {
+    fn native_debug(&self) -> Option<DebugText> {
+        Some(debug_text::<T>)
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutDebug {
+    fn native_debug(&self) -> Option<DebugText>;
+}
+
+impl<T> WithoutDebug for &DebugProbe<T> {
+    fn native_debug(&self) -> Option<DebugText> {
+        None
+    }
+}
+
+/// Store `value` in the arena, remembering its `Debug` text when its type
+/// has one.
+#[allow(unused_macros)]
+macro_rules! insert_native {
+    ($arena:expr, $value:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::{ViaDebug as _, WithoutDebug as _};
+        let value = $value;
+        let debug = (&$crate::debug_probe(&value)).native_debug();
+        $arena.insert_debug(value, debug)
+    }};
+}
+
+/// `{:?}` of an imported value prints its Rust `Debug` text.
+impl std::fmt::Debug for NativeHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = NATIVE_ARENA.with(|arena| {
+            let arena = arena.try_borrow().ok()?;
+            arena.as_ref()?.debug(*self)
+        });
+        match text {
+            Some(text) => f.write_str(&text),
+            None => f.write_str("NativeHandle"),
+        }
+    }
+}
 struct Arena { epoch: [u8; 32], slots: Vec<NativeSlot>, free: Vec<u32> }
 
 thread_local! {
@@ -138,17 +203,34 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, witness: None, project: None, mapper: None });
+                self.slots.push(NativeSlot { generation: 1, value: None, debug: None, witness: None, project: None, mapper: None });
                 slot
             }
         };
         let entry = self.slots.get_mut(slot as usize).ok_or(Error::StaleHandle)?;
         if entry.value.is_some() { return Err(Error::StaleHandle); }
         entry.value = Some(Box::new(value));
+        entry.debug = None;
         entry.witness = None;
         entry.project = None;
         entry.mapper = None;
         Ok(NativeHandle { epoch: self.epoch, slot, generation: entry.generation })
+    }
+
+    fn insert_debug<T: 'static>(&mut self, value: T, debug: Option<DebugText>) -> Result<NativeHandle, Error> {
+        let handle = self.insert(value)?;
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
+            entry.debug = debug;
+        }
+        Ok(handle)
+    }
+
+    fn debug(&self, handle: NativeHandle) -> Option<String> {
+        let entry = self.slots.get(handle.slot as usize)?;
+        if handle.epoch != self.epoch || handle.generation != entry.generation {
+            return None;
+        }
+        (entry.debug?)(entry.value.as_deref()?)
     }
 
     fn insert_projectable<T: 'static>(&mut self, value: T, project: Project, mapper: [u8; 16]) -> Result<NativeHandle, Error> {
@@ -278,6 +360,7 @@ impl Arena {
 }
 
 fn install_arena(epoch: [u8; 32]) {
+    __rawr_internal::host::debug::register::<NativeHandle>();
     NATIVE_ARENA.with(|arena| *arena.borrow_mut() = Some(Arena::new(epoch)));
 }
 
@@ -3249,7 +3332,7 @@ fn render_adapter(
             write!(output, "    let output = {path}").map_err(|_| request::Error::Encoding)?;
             render_constructor(*form, fields, output)?;
             output
-                .write_all(b";\n    arguments.arena.insert(output).map(Dynamic::from)\n")
+                .write_all(b";\n    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
                 .map_err(|_| request::Error::Encoding)?;
         }
         Operation::StructField { field, .. } => {
@@ -3282,7 +3365,7 @@ fn render_adapter(
                 .map_err(|_| request::Error::Encoding)?;
             render_constructor(*form, fields, output)?;
             output
-                .write_all(b";\n    arguments.arena.insert(output).map(Dynamic::from)\n")
+                .write_all(b";\n    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
                 .map_err(|_| request::Error::Encoding)?;
         }
         Operation::Function {
@@ -3704,7 +3787,7 @@ fn render_builder(
                     .map_err(|_| request::Error::Encoding)?;
                 if final_step && !replay {
                     output
-                        .write_all(b"    arguments.arena.insert(output).map(Dynamic::from)\n")
+                        .write_all(b"    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
                         .map_err(|_| request::Error::Encoding)?;
                 }
             }
@@ -4879,7 +4962,7 @@ fn render_give(
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => {
             writeln!(
                 output,
-                "    arguments.arena.insert({value}).map(Dynamic::from)"
+                "    insert_native!(arguments.arena, {value}).map(Dynamic::from)"
             )
         }
         convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => {
@@ -5004,7 +5087,7 @@ fn render_to_dynamic(
     match ty {
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
-            "arguments.arena.insert({value}).map(Dynamic::from)"
+            "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
         ),
         convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => {
             write!(output, "int_into({value}).map(Dynamic::from)")

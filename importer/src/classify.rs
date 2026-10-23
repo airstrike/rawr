@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 5;
-const CLASSIFIER_VERSION: u32 = 4;
+const CLASSIFIER_VERSION: u32 = 5;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3025,6 +3025,7 @@ impl<P: api::Phase> Context<'_, P> {
             declaration_only,
             self.implements(definition, "Copy"),
             self.implements(definition, "Default"),
+            self.implements_for_any(definition, "Debug"),
         ))
     }
 
@@ -3106,6 +3107,7 @@ impl<P: api::Phase> Context<'_, P> {
             declaration_only,
             self.implements(definition, "Copy"),
             self.implements(definition, "Default"),
+            self.implements_for_any(definition, "Debug"),
         ))
     }
 
@@ -3334,13 +3336,26 @@ impl<P: api::Phase> Context<'_, P> {
     /// Whether the crate implements the `core` trait `name` (`Copy`,
     /// `Default`) for the definition itself, without generics.
     fn implements(&self, definition: usize, name: &str) -> bool {
+        self.core_implementation(definition, name, false)
+    }
+
+    /// Whether the crate implements the `core` trait `name` for the
+    /// definition with any arguments, as `impl<Tz> Debug for DateTime<Tz>`
+    /// does. Bounds on the arguments are not read: `cargo check` holds the
+    /// crate to them.
+    fn implements_for_any(&self, definition: usize, name: &str) -> bool {
+        self.core_implementation(definition, name, true)
+    }
+
+    fn core_implementation(&self, definition: usize, name: &str, generic: bool) -> bool {
         let Some(definition) = self.graph.definitions().nth(definition) else {
             return false;
         };
         self.graph.implementations().any(|implementation| {
             if implementation.polarity() != model::Polarity::Positive
-                || implementation.generics().parameters().len() != 0
-                || implementation.generics().predicates().len() != 0
+                || (!generic
+                    && (implementation.generics().parameters().len() != 0
+                        || implementation.generics().predicates().len() != 0))
             {
                 return false;
             }
@@ -3357,7 +3372,12 @@ impl<P: api::Phase> Context<'_, P> {
             let core_trait = id.unit().authority().sysroot().is_some()
                 && id.unit().crate_name() == "core"
                 && trait_definition.display_path().last() == Some(name);
-            core_trait && exact_definition(implementation.self_type(), definition.id())
+            core_trait
+                && if generic {
+                    any_arguments(implementation.self_type(), definition.id())
+                } else {
+                    exact_definition(implementation.self_type(), definition.id())
+                }
         })
     }
 }
@@ -3383,6 +3403,16 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
 
 fn exact_definition(ty: &model::Type, id: &api::identity::Definition) -> bool {
     matches!(ty, model::Type::Definition { id: actual, arguments } if actual == id && arguments.is_empty())
+}
+
+/// `ty` is the definition `id` whose type arguments are all generic
+/// parameters, as the self type of a blanket `impl<T> Trait for Type<T>`.
+fn any_arguments(ty: &model::Type, id: &api::identity::Definition) -> bool {
+    matches!(ty, model::Type::Definition { id: actual, arguments } if actual == id
+        && arguments.iter().all(|argument| match argument {
+            model::Argument::Type(ty) => matches!(ty, model::Type::Parameter { .. }),
+            model::Argument::Lifetime(_) | model::Argument::Const(_) => true,
+        }))
 }
 
 fn definition_is_public(definition: &model::Definition) -> Result<(), Failure> {

@@ -2819,6 +2819,7 @@ mod tests {
                 host::type_def::import::Identity::new(*identity),
                 false,
                 false,
+                false,
                 parameters.clone(),
                 shape,
                 &mut allocation,

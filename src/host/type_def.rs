@@ -339,6 +339,7 @@ impl Definition {
         identity: import::Identity,
         copy: bool,
         default: bool,
+        debug: bool,
         parameters: Box<[ImmutableString]>,
         shape: Shared<Shape>,
     ) -> Result<Self, host::Error> {
@@ -351,7 +352,8 @@ impl Definition {
                 copy.then_some([capability::Kind::Clone, capability::Kind::Copy])
                     .into_iter()
                     .flatten()
-                    .chain(default.then_some(capability::Kind::Default)),
+                    .chain(default.then_some(capability::Kind::Default))
+                    .chain(debug.then_some(capability::Kind::Debug)),
             ),
             storage: Storage::Owned,
             role: Role::Ordinary,

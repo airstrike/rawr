@@ -319,6 +319,7 @@ fn executable_use_collection_retains_profile_event_mapper_seals() {
             identity,
             false,
             false,
+            false,
             Box::from(["Message".into()]),
             Shared::new(host::type_def::Shape::Opaque),
             &mut host::TestImportAllocation::default(),
@@ -379,6 +380,7 @@ fn executable_use_collection_requires_and_retains_exact_structural_adapters() {
         .imported_type(
             "Cell",
             host::type_def::import::Identity::new([11; 32]),
+            false,
             false,
             false,
             Box::default(),
