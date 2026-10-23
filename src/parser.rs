@@ -3132,6 +3132,12 @@ impl Engine {
         // let/const... (specified in `var_type`)
         settings.pos = state.input.next().unwrap().1;
 
+        // `let mut name`: a script binding is mutable as it is; the nominal
+        // checker reads `mut` from the source.
+        if matches!(state.input.peek(), Some((Token::Mut, _))) {
+            state.input.next();
+        }
+
         // let name ...
         let (name, pos) = parse_var_name(state.input)?;
 

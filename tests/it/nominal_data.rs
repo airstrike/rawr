@@ -157,11 +157,12 @@ fn qualified_enum_constructors_support_bare_empty_and_payload_forms() {
                 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
                 enum Message { Tick, Move(i64, bool) }
 
-                Message::Move(7, true).debug()
+                format!("{:?}", Message::Move(7, true))
             "#,
         )
         .unwrap();
-    assert_eq!(engine.eval_ast::<String>(&debug).unwrap(), "Message::Move(7, true)");
+    // Rust's derived Debug names the variant alone.
+    assert_eq!(engine.eval_ast::<String>(&debug).unwrap(), "Move(7, true)");
 }
 
 #[test]
@@ -175,7 +176,7 @@ fn valid_clone_copy_debug_and_equality_capabilities_execute() {
 
                 let point = Point { x: 4, y: true };
                 let cloned = point.clone();
-                let copied = cloned.copy();
+                let copied = cloned;
                 copied == point
             "#,
         )
@@ -187,7 +188,7 @@ fn valid_clone_copy_debug_and_equality_capabilities_execute() {
             r#"
                 #[derive(Debug)]
                 struct Point { x: i64, y: bool }
-                Point { x: 4, y: true }.debug()
+                format!("{:?}", Point { x: 4, y: true })
             "#,
         )
         .unwrap();
@@ -279,7 +280,7 @@ fn capability_operations_require_the_corresponding_derive() {
     let cases = [
         ("struct Value { inner: i64 } Value::default()", "Default"),
         ("struct Value { inner: i64 } Value { inner: 1 }.clone()", "Clone"),
-        ("struct Value { inner: i64 } Value { inner: 1 }.debug()", "Debug"),
+        ("struct Value { inner: i64 } format!(\"{:?}\", Value { inner: 1 })", "Debug"),
         ("struct Value { inner: i64 } Value { inner: 1 } == Value { inner: 1 }", "PartialEq"),
     ];
 

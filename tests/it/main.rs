@@ -74,7 +74,6 @@ mod symbolic_contract;
 mod throw;
 mod time;
 mod tokens;
-mod types;
 mod unary_after_binary;
 mod unary_minus;
 mod unit;

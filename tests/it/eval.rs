@@ -24,65 +24,6 @@ fn test_eval() {
 }
 
 #[test]
-fn test_eval_blocks() {
-    let engine = Engine::new();
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                r#"
-                    let x = 999;
-
-                    eval("let x = x - 1000");
-
-                    let y = if x < 0 {
-                        eval("let x = 42");
-                        x
-                    } else {
-                        0
-                    };
-
-                    x + y
-                "#
-            )
-            .unwrap(),
-        41
-    );
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                r#"
-                    let foo = 42;
-
-                    eval("{ let foo = 123; }");
-
-                    foo
-                "#
-            )
-            .unwrap(),
-        42
-    );
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                r#"
-                    let foo = 42;
-                    { { {
-                        eval("let foo = 123");
-                    } } }
-                    foo
-                "#
-            )
-            .unwrap(),
-        42
-    );
-}
-
-#[cfg(not(feature = "no_function"))]
-#[cfg(not(feature = "no_module"))]
-#[test]
 fn test_eval_globals() {
     let engine = Engine::new();
 

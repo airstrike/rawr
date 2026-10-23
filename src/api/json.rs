@@ -68,8 +68,9 @@ impl Engine {
             Some(if has_null {
                 &|token, _, _| {
                     match token {
-                        // `null` => `()`
+                        // `null` => `()`. The lexer reads `null` as a name.
                         Token::Reserved(s) if &*s == "null" => Token::Unit,
+                        Token::Identifier(s) if s.as_str() == "null" => Token::Unit,
                         // `{` => `#{`
                         Token::LeftBrace => Token::MapStart,
                         // Disallowed syntax
@@ -92,6 +93,9 @@ impl Engine {
                 &|token, _, _| {
                     match token {
                         Token::Reserved(s) if &*s == "null" => Token::LexError(
+                            LexError::ImproperSymbol("null".to_string(), String::new()).into(),
+                        ),
+                        Token::Identifier(s) if s.as_str() == "null" => Token::LexError(
                             LexError::ImproperSymbol("null".to_string(), String::new()).into(),
                         ),
                         // `{` => `#{`

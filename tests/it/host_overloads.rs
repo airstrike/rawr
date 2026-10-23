@@ -34,8 +34,8 @@ fn overload_resolution_reports_positioned_no_match_and_ambiguity() {
     assert!(matches!(
         no_match.err_type(),
         ParseErrorType::Resolution(resolve::Error::InvalidHostOperation { item, reason, .. })
-            if item == "keyed::Value::key" && reason.contains("no exact overload")
-    ));
+            if item == "keyed::Value::key" && reason.contains("no form of it takes")
+    ), "{no_match:?}");
     assert!(!no_match.primary_span().is_none());
 
     let mut ambiguous = Engine::new();
@@ -52,7 +52,7 @@ fn overload_resolution_reports_positioned_no_match_and_ambiguity() {
     assert!(matches!(
         ambiguity.err_type(),
         ParseErrorType::Resolution(resolve::Error::InvalidHostOperation { item, reason, .. })
-            if item == "keyed::Value::key" && reason.contains("exact overloads match")
+            if item == "keyed::Value::key" && reason.contains("forms of it take these arguments")
     ));
     assert!(!ambiguity.primary_span().is_none());
 }
@@ -106,8 +106,8 @@ fn generic_capabilities_filter_candidates_without_leaking_inference() {
     assert!(matches!(
         ambiguity.err_type(),
         ParseErrorType::Resolution(resolve::Error::InvalidHostOperation { item, reason, .. })
-            if item == "constrained::Value::key" && reason.contains("exact overloads match")
-    ));
+            if item == "constrained::Value::key" && reason.contains("forms of it take these arguments")
+    ), "{ambiguity:?}");
 
     let mut constraint_only = Engine::new();
     constraint_only.register_host_facade(constraint_only_facade()).unwrap();
@@ -132,8 +132,8 @@ fn generic_capabilities_filter_candidates_without_leaking_inference() {
     assert!(matches!(
         ambiguity.err_type(),
         ParseErrorType::Resolution(resolve::Error::InvalidHostOperation { item, reason, .. })
-            if item == "constrained::Value::key" && reason.contains("exact overloads match")
-    ));
+            if item == "constrained::Value::key" && reason.contains("forms of it take these arguments")
+    ), "{ambiguity:?}");
 
     let no_match = constraint_only
         .compile_executable(
@@ -149,7 +149,7 @@ fn generic_capabilities_filter_candidates_without_leaking_inference() {
     assert!(matches!(
         no_match.err_type(),
         ParseErrorType::Resolution(resolve::Error::InvalidHostOperation { item, reason, .. })
-            if item == "constrained::Value::key" && reason.contains("no exact overload")
+            if item == "constrained::Value::key" && reason.contains("no form of it takes")
     ));
     assert!(!no_match.primary_span().is_none());
 }

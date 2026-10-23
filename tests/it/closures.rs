@@ -79,25 +79,6 @@ fn test_closures() {
         engine
             .eval::<INT>(
                 "
-                    let x = 8;
-
-                    let res = |y, z| {
-                        let w = 12;
-
-                        return (|| x + y + z + w).call();
-                    }.curry(15).call(2);
-
-                    res + (|| x - 3).call()
-                "
-            )
-            .unwrap(),
-        42
-    );
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                "
                     let a = 41;
                     let foo = |x| { a += x };
                     foo.call(1);

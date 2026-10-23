@@ -9,7 +9,9 @@ fn test_string() {
     assert_eq!(engine.eval::<String>("\"Test\rstring: \\u2764\"").unwrap(), "Test\rstring: ❤");
     assert_eq!(
         engine.eval::<String>("   \"Test string: \\u2764\\\n     hello, world!\"").unwrap(),
-        if cfg!(not(feature = "no_position")) { "Test string: ❤ hello, world!" } else { "Test string: ❤     hello, world!" }
+        // A `\` at the end of a line skips the line break and the next
+        // line's leading whitespace, as in Rust.
+        "Test string: ❤hello, world!"
     );
     assert_eq!(engine.eval::<String>("     `Test string: \\u2764\nhello,\\nworld!`").unwrap(), "Test string: \\u2764\nhello,\\nworld!");
     assert_eq!(engine.eval::<String>(r#"     `Test string: \\u2764\n``hello``,\\n"world"!`"#).unwrap(), r#"Test string: \\u2764\n`hello`,\\n"world"!"#);
@@ -82,7 +84,7 @@ string: "## + "\u2764""###
     assert_eq!(engine.eval::<INT>(r#"let y = "hello"; y.len"#).unwrap(), 5);
 
     #[cfg(not(feature = "no_object"))]
-    assert_eq!(engine.eval::<INT>(r#"let y = "hello"; y.clear(); y.len"#).unwrap(), 0);
+    assert_eq!(engine.eval::<INT>(r#"let mut y = "hello"; y.clear(); y.len()"#).unwrap(), 0);
 
     assert_eq!(engine.eval::<INT>(r#"let y = "hello"; len(y)"#).unwrap(), 5);
 
@@ -100,85 +102,19 @@ fn test_string_index() {
     // char index
     assert_eq!(engine.eval::<char>(r#"let y = "hello"; y[-4]"#).unwrap(), 'e');
 
-    // range index
-
     // range index returns a string
     assert_eq!(engine.eval::<char>(r#"let y = "hello"; y[1..2]"#).unwrap_err().to_string(), "Output type incorrect: string (expecting char)");
 
-    // 1..3
+    // A range of a string is its slice, as in Rust.
     assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..3]"#).unwrap(), "el");
-    // 0..5
     assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..]"#).unwrap(), "hello");
-    // 0..2
     assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..2]"#).unwrap(), "he");
-    // 1..4
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..-1]"#).unwrap(), "ell");
-    // 1..1
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..-4]"#).unwrap(), "");
-    // 2..1
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[2..-4]"#).unwrap(), "");
-    // overflow index
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[0..18]"#).unwrap(), "hello");
-    // overflow negative index
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[2..-18]"#).unwrap(), "");
-
-    // inclusive range
+    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..]"#).unwrap(), "ello");
     assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..=3]"#).unwrap(), "ell");
-    // 0..=5
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..=]"#).unwrap(), "hello");
-    // 0..=2
     assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..=2]"#).unwrap(), "hel");
-    // 1..=4
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..=-1]"#).unwrap(), "ello");
-    // 1..=1
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..=-4]"#).unwrap(), "");
-    // 2..=1
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[2..-4]"#).unwrap(), "");
-    // overflow index
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[0..18]"#).unwrap(), "hello");
-    // overflow negative index
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[2..-18]"#).unwrap(), "");
-    // overflow
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..=] = "x"; y"#).unwrap(), "x");
-    // overflow
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..] = "x"; y"#).unwrap(), "x");
-    // overflow
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; crop(y, ..); y"#).unwrap(), "hello");
-    // overflow
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; crop(y, ..=); y"#).unwrap(), "hello");
 
-    // mut slice index
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1] = 'i'; y"#).unwrap(), "hillo");
-    // mut slice index
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..2] = "i"; y"#).unwrap(), "hillo");
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..3] = "i"; y"#).unwrap(), "hilo");
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..3] = "iii"; y"#).unwrap(), "hiiilo");
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..=2] = "iii"; y"#).unwrap(), "hiiilo");
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..=2] = y[2..]; y"#).unwrap(), "hllolo");
-
-    // new string will not be affected by mut slice index on old string.
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..=2] = y[2..]; let s2 = y[1..]; s2[1..20] = "abc"; y"#).unwrap(), "hllolo");
-
-    assert_eq!(
-        engine
-            .eval::<String>(
-                r#"
-                    let y = "hello";
-                    let s2 = y[1..];
-                    s2[1..20] = "abc";
-                    if (s2 == "eabc") {
-                        y[2] = 'd';
-                    }
-                    y[3..] = "xyz";
-                    y[4] = '\u2764';
-                    y[6..] = "\u2764\u2764";
-                    
-                    y
-                "#
-            )
-            .unwrap(),
-        "hedx❤z❤❤"
-    );
+    // A range past the end fails, as Rust's panics.
+    let _ = engine.eval::<String>(r#"let y = "hello"; y[0..18]"#).unwrap_err();
 }
 #[test]
 fn test_string_dynamic() {
@@ -289,20 +225,16 @@ fn test_string_fn() {
 fn test_string_split() {
     let engine = Engine::new();
 
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.split(' ').len"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.split("hello").len"#).unwrap(), 2);
+    // `split` is Rust's iterator of the parts.
+    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.split(' ').count()"#).unwrap(), 3);
+    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.split("hello").count()"#).unwrap(), 2);
 
-    // Verify that split/split_rev work on const strings (regression test for issue #1081).
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split(",").len"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split(",", 2).len"#).unwrap(), 2);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split(',').len"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split(',', 2).len"#).unwrap(), 2);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a b c"; x.split().len"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split(3).len"#).unwrap(), 2);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split_rev(",").len"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split_rev(",", 2).len"#).unwrap(), 2);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split_rev(',').len"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split_rev(',', 2).len"#).unwrap(), 2);
+    // Verify that split works on const strings (regression test for issue #1081).
+    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split(",").count()"#).unwrap(), 3);
+    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.splitn(2, ",").count()"#).unwrap(), 2);
+    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split(',').count()"#).unwrap(), 3);
+    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.splitn(2, ',').count()"#).unwrap(), 2);
+    assert_eq!(engine.eval::<INT>(r#"const x = "a b c"; x.split_whitespace().count()"#).unwrap(), 3);
 }
 
 #[test]

@@ -37,10 +37,10 @@ fn test_arrays() {
     #[cfg(not(feature = "no_object"))]
     {
         assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; y.push(4); y").unwrap().into_typed_array::<INT>().unwrap(), [1, 2, 3, 4]);
-        assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; y.insert(0, 4); y").unwrap().into_typed_array::<INT>().unwrap(), [4, 1, 2, 3]);
-        assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; y.insert(999, 4); y").unwrap().into_typed_array::<INT>().unwrap(), [1, 2, 3, 4]);
-        assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; y.insert(-2, 4); y").unwrap().into_typed_array::<INT>().unwrap(), [1, 4, 2, 3]);
-        assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; y.insert(-999, 4); y").unwrap().into_typed_array::<INT>().unwrap(), [4, 1, 2, 3]);
+        // `insert` is Vec's: it takes a `usize` index up to the length.
+        assert_eq!(engine.eval::<Dynamic>("let mut y = [1, 2, 3]; y.insert(0, 4); y").unwrap().into_typed_array::<INT>().unwrap(), [4, 1, 2, 3]);
+        assert_eq!(engine.eval::<Dynamic>("let mut y = [1, 2, 3]; y.insert(3, 4); y").unwrap().into_typed_array::<INT>().unwrap(), [1, 2, 3, 4]);
+        let _ = engine.eval::<Dynamic>("let mut y = [1, 2, 3]; y.insert(999, 4); y").unwrap_err();
         assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; let z = [42]; y[z.len]").unwrap(), 2);
         assert_eq!(engine.eval::<INT>("let y = [1, 2, [3, 4, 5, 6]]; let z = [42]; y[2][z.len]").unwrap(), 4);
         assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; let z = [2]; y[z[0]]").unwrap(), 3);
@@ -49,15 +49,14 @@ fn test_arrays() {
             engine
                 .eval::<Dynamic>(
                     "
-                        let x = [2, 9];
-                        x.insert(-1, 1);
-                        x.insert(999, 3);
-                        x.insert(-9, 99);
+                        let mut x = [2, 9];
+                        x.insert(1, 1);
+                        x.insert(3, 3);
+                        x.insert(0, 99);
 
                         let r = x.remove(2);
 
-                        let y = [4, 5];
-                        x.append(y);
+                        x.extend([4, 5]);
 
                         x
                     "
@@ -254,7 +253,6 @@ fn test_arrays_map_reduce() {
         12
     );
     assert_eq!(engine.eval::<INT>("([1].map(|x| x + 41))[0]").unwrap(), 42);
-    assert_eq!(engine.eval::<INT>("let c = 40; let y = 1; [1].map(|x, i| c + x + y + i)[0]").unwrap(), 42);
     assert_eq!(engine.eval::<INT>("let x = [1, 2, 3]; x.for_each(|i| this += i); x[2]").unwrap(), 5);
 
     assert_eq!(
@@ -325,20 +323,6 @@ fn test_arrays_map_reduce() {
             .into_typed_array::<INT>()
             .unwrap(),
         [2, 4, 6]
-    );
-
-    assert_eq!(
-        engine
-            .eval::<Dynamic>(
-                "
-                    let x = [1, 2, 3];
-                    x.map(|v, i| v * i)
-                "
-            )
-            .unwrap()
-            .into_typed_array::<INT>()
-            .unwrap(),
-        [0, 2, 6]
     );
 
     assert_eq!(

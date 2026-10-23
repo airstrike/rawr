@@ -577,7 +577,7 @@ fn names_arity_owner_and_arm_types_are_compile_checked() {
         (
             "enum Message { Tick, Tock } pub fn f(message: Message) -> i64 { match message { Message::Tick => 1, Message::Tock => false } }",
             Category::TypeMismatch,
-            "expected 'i64', found 'bool'",
+            "expected '{integer}', found 'bool'",
         ),
         ("enum Message { Tick } enum Other { Tick } pub fn f(message: Message) { match message { Other::Tick => () } }", Category::TypeMismatch, "expected 'Message', found 'Other'"),
     ];
@@ -587,7 +587,7 @@ fn names_arity_owner_and_arm_types_are_compile_checked() {
     }
 
     let source = "enum Message { Tick, Tock } pub fn f(message: Message) -> i64 { match message { Message::Tick => 1, Message::Tock => false } }";
-    let error = assert_resolution(source, Category::TypeMismatch, "expected 'i64', found 'bool'");
+    let error = assert_resolution(source, Category::TypeMismatch, "expected '{integer}', found 'bool'");
     assert_eq!(error.primary_span().start(), position_of(source, "false"));
 }
 

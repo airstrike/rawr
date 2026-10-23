@@ -2966,8 +2966,27 @@ impl Iterator for TokenIterator<'_> {
             // Custom keyword/symbol - must be disabled
             #[cfg(not(feature = "no_custom_syntax"))]
             (token, pos) if token.is_literal() && self.engine.custom_keywords.contains_key(token.literal_syntax()) => {
-                // Active standard keyword should never be a custom keyword!
-                debug_assert!(self.engine.is_symbol_disabled(token.literal_syntax()), "{:?} is an active keyword", token);
+                // Active standard keyword should never be a custom keyword,
+                // except the item syntax a host may override
+                // (`Engine::register_custom_operator`).
+                debug_assert!(
+                    self.engine.is_symbol_disabled(token.literal_syntax())
+                        || matches!(
+                            token,
+                            Token::ThinArrow
+                                | Token::Hash
+                                | Token::Apostrophe
+                                | Token::Pub
+                                | Token::Struct
+                                | Token::Enum
+                                | Token::Impl
+                                | Token::Use
+                                | Token::SelfValue
+                                | Token::Mut
+                        ),
+                    "{:?} is an active keyword",
+                    token
+                );
 
                 (Token::Custom(Box::new(token.literal_syntax().into())), pos)
             }
@@ -3036,6 +3055,9 @@ impl Iterator for TokenIterator<'_> {
                         pair.push(cur);
                         Token::lookup_symbol_from_syntax(&pair).is_some()
                             || is_reserved_keyword_or_symbol(&pair).0
+                            // Rust reads `<-` and `--` as two tokens, but
+                            // a reader takes them for one.
+                            || matches!((prev, cur), ('<' | '-', '-'))
                     };
 
                     if need_space {

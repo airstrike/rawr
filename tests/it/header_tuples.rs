@@ -40,9 +40,15 @@ fn tuple_members_resolve_normally_and_report_inner_failures() {
 
 #[test]
 fn singleton_tuple_types_are_positioned_unsupported_syntax() {
-    for source in ["pub fn broken() -> (i64) { () }", "pub fn broken() -> (i64,) { () }"] {
+    // `(i64)` is `i64` in parentheses, as in Rust, so `()` mismatches it.
+    let error = Engine::new().compile_executable("pub fn broken() -> (i64) { () }").unwrap_err();
+    assert!(matches!(
+        error.err_type(),
+        ParseErrorType::Resolution(resolve::Error::TypeMismatch { expected, .. }) if expected == "i64"
+    ), "{error:?}");
+    for source in ["pub fn broken() -> (i64,) { () }"] {
         let error = Engine::new().compile_executable(source).unwrap_err();
-        assert!(matches!(error.err_type(), ParseErrorType::MalformedTypeTuple(1, _)));
+        assert!(matches!(error.err_type(), ParseErrorType::MalformedTypeTuple(1, _)), "{error:?}");
         assert_eq!(error.primary_span().start().position(), Some(20));
         assert_eq!(error.primary_span().end().position(), Some(if source.contains(",)") { 26 } else { 25 }));
     }

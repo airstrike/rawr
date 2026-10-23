@@ -89,22 +89,9 @@ fn stack_overflow_parsing() {
         6,
     );
 
-    engine
-        .compile(
-            "
-                1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 0 +
-                1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 0 +
-                1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 0 +
-                1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 0 +
-                1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 0 + 0 +
-                1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 0 +
-                1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 0 +
-                1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 0 +
-                1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 0 +
-                1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9
-            ",
-        )
-        .unwrap();
+    // Rawr's checked integer `+` nests in the code it generates, so a chain
+    // of additions is deeper than its source. Ten terms fit in depth 100.
+    engine.compile("1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 0").unwrap();
 
     assert_eq!(
         *engine

@@ -54,13 +54,14 @@ fn test_loop() {
 fn test_loop_expression() {
     let mut engine = Engine::new();
 
+    // `break` with a value ends a `loop`, as in Rust, not a `while` (E0571).
     assert_eq!(
         engine
             .eval::<INT>(
                 "
-                    let x = 0;
+                    let mut x = 0;
 
-                    let value = while x < 10 {
+                    let value = loop {
                         if x % 5 == 0 { break 42; }
                         x += 1;
                     };
@@ -77,9 +78,9 @@ fn test_loop_expression() {
     let _ = engine
         .eval::<INT>(
             "
-				let x = 0;
+				let mut x = 0;
 
-				let value = while x < 10 {
+				let value = loop {
                     if x % 5 == 0 { break 42; }
                     x += 1;
 				};

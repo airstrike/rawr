@@ -321,7 +321,8 @@ fn if_unit_branches_and_divergence_boundary_are_explicit() {
 #[test]
 fn if_block_tail_mismatch_points_to_the_endpoint() {
     let source = "pub fn choose(flag: bool) -> i64 { if flag { let x = 1; x } else { false } }";
-    let error = resolution_error(&Engine::new(), source, Category::TypeMismatch, "expected 'i64', found 'bool'");
+    // As rustc, the `else` branch is held to the `if` branch's type.
+    let error = resolution_error(&Engine::new(), source, Category::TypeMismatch, "expected '{integer}', found 'bool'");
     let false_column = source.find("false").unwrap() + 1;
     assert_eq!(error.primary_span().start(), Position::new(1, false_column as u16));
 }
