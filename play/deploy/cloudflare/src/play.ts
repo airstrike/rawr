@@ -187,6 +187,11 @@ export function pngSize(bytes: Uint8Array): { width: number; height: number } | 
   return { width: view.getUint32(16), height: view.getUint32(20) };
 }
 
+/** A share's render request asking for a still image: the last frame as a PNG, never a GIF. */
+export function stillBody(share: string): string {
+  return JSON.stringify({ ...JSON.parse(share), still: true });
+}
+
 /** The first non-blank line of the code, trimmed, at most 150 characters. */
 export function firstLine(code: string): string {
   const line = code.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";

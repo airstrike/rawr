@@ -19,6 +19,7 @@ import {
   PASS_SECONDS,
   passCookie,
   pngSize,
+  stillBody,
   previewHeaders,
   purgeSelection,
   parseSnippet,
@@ -316,4 +317,9 @@ test("the playground shows text results as a terminal", () => {
   assert.ok(page.includes('const terminal = (result)'));
   assert.ok(page.includes('type.startsWith("application/json")'));
   assert.ok(page.includes("ignored for programs without iced"));
+});
+
+test("a share preview asks for a still image", () => {
+  const body = JSON.parse(stillBody(JSON.stringify({ code: "x", messages: ["Message::A"] })));
+  assert.deepEqual(body, { code: "x", messages: ["Message::A"], still: true });
 });

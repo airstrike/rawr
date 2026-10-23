@@ -50,6 +50,7 @@ import {
   firstOutputLine,
   parseTextResult,
   pngSize,
+  stillBody,
   previewHeaders,
   purgeSelection,
   RENDER_LIMITS,
@@ -289,7 +290,8 @@ export class PlayBot extends Container<Env> {
     let response: Response;
     try {
       response = await this.containerFetch(
-        new Request("http://container/render", { method: "POST", headers: { "content-type": "application/json" }, body: text }),
+        // A preview is the last frame as a PNG, never an animation.
+        new Request("http://container/render", { method: "POST", headers: { "content-type": "application/json" }, body: stillBody(text) }),
         HTTP_PORT,
       );
     } catch {
@@ -718,11 +720,12 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     });
     try {
       const response = await bot.fetch(forward);
+      const headers: Record<string, string> = { "content-type": response.headers.get("content-type") ?? "text/plain", "cache-control": "no-store" };
+      // A note on an animation, such as why it was cut.
+      const note = response.headers.get("x-play-note");
+      if (note) headers["x-play-note"] = note;
       return withPass(
-        new Response(response.body, {
-          status: response.status,
-          headers: { "content-type": response.headers.get("content-type") ?? "text/plain", "cache-control": "no-store" },
-        }),
+        new Response(response.body, { status: response.status, headers }),
         pass,
       );
     } catch (error) {
