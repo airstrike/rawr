@@ -757,8 +757,10 @@ impl Adapter {
         }
         let owner = effect::Owner::new(self.instance(), self.generation());
         let authority = self.task_authority_from(authority);
-        let task = plan.lower(owner.instance(), owner.generation(), &authority)?;
-        Ok(self.tasks.track(owner, task))
+        let (task, aborts) = task::collect_aborts(|| {
+            plan.lower(owner.instance(), owner.generation(), &authority)
+        });
+        Ok(self.tasks.track_with(owner, task?, aborts))
     }
 
     pub(crate) fn lower_prepared_task(
@@ -772,8 +774,15 @@ impl Adapter {
         }
         let owner = effect::Owner::new(self.instance(), self.generation());
         let authority = self.task_authority_from(authority);
-        let task = prepared.lower(owner.instance(), owner.generation(), context, authority);
-        self.tasks.track(owner, task)
+        let (task, aborts) = task::collect_aborts(|| {
+            prepared.lower(owner.instance(), owner.generation(), context, authority)
+        });
+        self.tasks.track_with(owner, task, aborts)
+    }
+
+    /// A task this owner started is still running.
+    pub(crate) fn has_running_tasks(&self) -> bool {
+        self.tasks.is_running()
     }
 
     pub(crate) fn activate_prepared(

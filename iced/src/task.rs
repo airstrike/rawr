@@ -243,8 +243,25 @@ pub(crate) struct Abort {
 
 struct Guard(Arc<Abort>);
 
+thread_local! {
+    /// The handles of the abortable plans lowered in `collect_aborts`.
+    static LOWERED: std::cell::RefCell<Option<Vec<Arc<Abort>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Lower with `lower`, and the handles of the abortable plans it lowered,
+/// which the task's owner aborts when it retires the task.
+pub(crate) fn collect_aborts<R>(lower: impl FnOnce() -> R) -> (R, Vec<Arc<Abort>>) {
+    let outer = LOWERED.with(|lowered| lowered.replace(Some(Vec::new())));
+    let result = lower();
+    let collected = LOWERED
+        .with(|lowered| lowered.replace(outer))
+        .unwrap_or_default();
+    (result, collected)
+}
+
 impl Abort {
-    fn abort(&self) {
+    pub(crate) fn abort(&self) {
         self.aborted.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(handle) = self.native.lock().unwrap_or_else(PoisonError::into_inner).take() {
             handle.abort();
@@ -256,7 +273,12 @@ impl Abort {
     }
 
     /// Make a lowered task abortable through this handle.
-    fn attach(&self, task: iced::Task<runtime::Message>) -> iced::Task<runtime::Message> {
+    fn attach(self: &Arc<Self>, task: iced::Task<runtime::Message>) -> iced::Task<runtime::Message> {
+        LOWERED.with(|lowered| {
+            if let Some(lowered) = lowered.borrow_mut().as_mut() {
+                lowered.push(self.clone());
+            }
+        });
         let (task, handle) = task.abortable();
         if self.is_aborted() {
             handle.abort();

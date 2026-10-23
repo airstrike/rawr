@@ -262,8 +262,8 @@ impl State {
             self.service.timing(),
         ) {
             Ok(Admission::Current(outcome)) => {
-                self.status
-                    .installed(outcome.evidence(), self.host.prelude_note());
+                let note = outcome.note(self.host.prelude_note());
+                self.status.installed(outcome.evidence(), note);
                 let (task, inputs) = outcome.into_parts();
                 self.service.installed(inputs);
                 task.map(Message::Script)
@@ -340,7 +340,7 @@ impl Host {
             })
     }
 
-    fn lower(&mut self, transition: Transition) -> iced::Task<runtime::Message> {
+    pub(crate) fn lower(&mut self, transition: Transition) -> iced::Task<runtime::Message> {
         let mut mutation = self.slot.mutation();
         let (adapter, context) = mutation.parts();
         let plan = transition.into_plan();

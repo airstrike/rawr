@@ -435,6 +435,50 @@ pub fn main() -> iced::Result {
             }
         }
 
+        /// Install `source` as a script edit; whether it cancelled a task.
+        fn edit_cancelling(&mut self, source: &str) -> bool {
+            crate::write_marked(&self.root, "src/main.rs", source);
+            let next = self.engine.compile_package_generation(&self.target).unwrap();
+            let now = Instant::now();
+            let gate = Gate::new(Duration::ZERO);
+            gate.observe(now).unwrap();
+            let snapshot = rawr::reload::source::Snapshot::from_graph(next.source());
+            let candidate = gate
+                .start(now)
+                .unwrap()
+                .complete((next, snapshot))
+                .stage_inputs(&self.publication);
+            match self.host.install(
+                &gate,
+                &self.publication,
+                candidate,
+                &self.engine,
+                self.registry.next_generation(),
+            ) {
+                Ok(Admission::Current(outcome)) => {
+                    let cancelled = outcome.cancelled();
+                    assert_eq!(
+                        outcome.note(None).as_deref(),
+                        cancelled.then_some("The reload cancelled a running task.")
+                    );
+                    let _task = outcome.into_task();
+                    cancelled
+                }
+                Ok(Admission::Obsolete(())) => panic!("a fresh edit must stay current"),
+                Err(error) => panic!("the edit must apply: {error:?}"),
+            }
+        }
+
+        /// Click `label` and start the task its update returns, which
+        /// nothing drives here, so it keeps running.
+        fn click_and_start(&mut self, label: &str) {
+            let mut simulator = iced_test::simulator(self.host.view());
+            simulator.click(label).unwrap();
+            let message = simulator.into_messages().next().unwrap();
+            let transition = self.host.update(message).unwrap();
+            drop(self.host.lower(transition));
+        }
+
         fn click(&mut self, label: &str) {
             let mut simulator = iced_test::simulator(self.host.view());
             simulator.click(label).unwrap();
@@ -504,6 +548,51 @@ pub fn main() -> iced::Result {
         );
         drop(runner.host.reset().unwrap());
         assert!(runner.shows("new 0"));
+    }
+
+    /// A task started before an edit and still running. The edit cancels
+    /// it, as retiring its owner does.
+    const RUNNING: &str = r#"
+use iced::task;
+use iced::widget::{button, column, text};
+use iced::{Element, Task};
+#[derive(Default)]
+struct State { handle: Option<task::Handle> }
+#[derive(Debug, Clone)]
+enum Message { Start, Done }
+impl State {
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Start => {
+                let (task, handle) = Task::done(Message::Done).abortable();
+                self.handle = Some(handle);
+                task
+            }
+            Message::Done => Task::none(),
+        }
+    }
+    fn view(&self) -> Element<'_, Message> {
+        let aborted = match &self.handle {
+            Some(handle) => handle.is_aborted().to_string(),
+            None => "none".to_string(),
+        };
+        column![button(text("Start")).on_press(Message::Start), text(format!("TAG {aborted}"))]
+    }
+}
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+"#;
+
+    #[test]
+    fn a_reload_cancels_a_running_task_and_says_so() {
+        let mut runner = Runner::start("cancel", RUNNING);
+        assert!(!runner.edit_cancelling(&RUNNING.replace("TAG", "idle")));
+        runner.click_and_start("Start");
+        assert!(runner.shows("idle false"));
+        assert!(runner.edit_cancelling(&RUNNING.replace("TAG", "new")));
+        assert!(runner.shows("new true"));
+        assert!(!runner.edit_cancelling(&RUNNING.replace("TAG", "newer")));
     }
 
     #[test]
