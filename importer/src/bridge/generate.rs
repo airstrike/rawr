@@ -45,7 +45,7 @@ struct Arguments<'slice, 'value, 'arena> { values: &'slice mut [&'value mut Dyna
 
 #[derive(Clone, Copy)]
 struct NativeHandle { epoch: [u8; 32], slot: u32, generation: u64 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, debug: Option<DebugText>, clone: Option<CloneValue>, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
 
 /// Rust's `Debug` text of a stored value, for a type that implements it.
 type DebugText = fn(&dyn Any) -> Option<String>;
@@ -85,6 +85,32 @@ impl<T> WithoutDebug for &DebugProbe<T> {
     }
 }
 
+fn display_text<T: std::fmt::Display + 'static>(value: &dyn Any) -> Option<String> {
+    value.downcast_ref::<T>().map(ToString::to_string)
+}
+
+#[allow(dead_code)]
+trait ViaDisplay {
+    fn native_display(&self) -> Option<DebugText>;
+}
+
+impl<T: std::fmt::Display + 'static> ViaDisplay for DebugProbe<T> {
+    fn native_display(&self) -> Option<DebugText> {
+        Some(display_text::<T>)
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutDisplay {
+    fn native_display(&self) -> Option<DebugText>;
+}
+
+impl<T> WithoutDisplay for &DebugProbe<T> {
+    fn native_display(&self) -> Option<DebugText> {
+        None
+    }
+}
+
 /// A copy of a stored value, for a type that implements `Clone`.
 type CloneValue = fn(&dyn Any) -> Option<Box<dyn Any>>;
 
@@ -120,12 +146,35 @@ impl<T> WithoutClone for &DebugProbe<T> {
 macro_rules! insert_native {
     ($arena:expr, $value:expr) => {{
         #[allow(unused_imports)]
-        use $crate::{ViaClone as _, ViaDebug as _, WithoutClone as _, WithoutDebug as _};
+        use $crate::{
+            ViaClone as _, ViaDebug as _, ViaDisplay as _, WithoutClone as _, WithoutDebug as _,
+            WithoutDisplay as _,
+        };
         let value = $value;
         let debug = (&$crate::debug_probe(&value)).native_debug();
+        let display = (&$crate::debug_probe(&value)).native_display();
         let clone = (&$crate::debug_probe(&value)).native_clone();
-        $arena.insert_debug(value, debug, clone)
+        let handle = $arena.insert_debug(value, debug, clone);
+        if let Ok(handle) = &handle {
+            $arena.set_display(*handle, display);
+        }
+        handle
     }};
+}
+
+/// `to_string()` and `{}` of an imported value print its Rust `Display`
+/// text.
+impl std::fmt::Display for NativeHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = NATIVE_ARENA.with(|arena| {
+            let arena = arena.try_borrow().ok()?;
+            arena.as_ref()?.display(*self)
+        });
+        match text {
+            Some(text) => f.write_str(&text),
+            None => f.write_str("NativeHandle"),
+        }
+    }
 }
 
 /// `{:?}` of an imported value prints its Rust `Debug` text.
@@ -233,7 +282,7 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, debug: None, clone: None, witness: None, project: None, mapper: None });
+                self.slots.push(NativeSlot { generation: 1, value: None, debug: None, display: None, clone: None, witness: None, project: None, mapper: None });
                 slot
             }
         };
@@ -241,6 +290,7 @@ impl Arena {
         if entry.value.is_some() { return Err(Error::StaleHandle); }
         entry.value = Some(Box::new(value));
         entry.debug = None;
+        entry.display = None;
         entry.clone = None;
         entry.witness = None;
         entry.project = None;
@@ -263,6 +313,21 @@ impl Arena {
             return None;
         }
         (entry.debug?)(entry.value.as_deref()?)
+    }
+
+    #[allow(dead_code)]
+    fn set_display(&mut self, handle: NativeHandle, display: Option<DebugText>) {
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
+            entry.display = display;
+        }
+    }
+
+    fn display(&self, handle: NativeHandle) -> Option<String> {
+        let entry = self.slots.get(handle.slot as usize)?;
+        if handle.epoch != self.epoch || handle.generation != entry.generation {
+            return None;
+        }
+        (entry.display?)(entry.value.as_deref()?)
     }
 
     fn insert_projectable<T: 'static>(&mut self, value: T, project: Project, mapper: [u8; 16]) -> Result<NativeHandle, Error> {
@@ -400,6 +465,7 @@ impl Arena {
 
 fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::host::debug::register::<NativeHandle>();
+    __rawr_internal::host::display::register::<NativeHandle>();
     NATIVE_ARENA.with(|arena| *arena.borrow_mut() = Some(Arena::new(epoch)));
 }
 
@@ -3351,12 +3417,16 @@ fn witness_mode(plan: &Plan) -> u8 {
     }
 }
 
-/// Whether `ty` is Copy as the compiler sees it: a scalar, or an `Option`
-/// or `Result` of scalars, as a `cpu_cores: Option<usize>` field is.
+/// Whether `ty` is Copy as the compiler sees it: a scalar, an imported
+/// Copy type, or an `Option` or `Result` of them, as a `cpu_cores:
+/// Option<usize>` field is.
 fn copy_scalar(ty: &convert::Type) -> bool {
     match ty {
         convert::Type::Unit => true,
         convert::Type::Builtin(builtin) => builtin.rust_name().is_some(),
+        convert::Type::Nominal { definition, .. } => {
+            COPY_TYPES.with_borrow(|copy| copy.contains(definition.as_bytes()))
+        }
         convert::Type::Option(inner) => copy_scalar(inner),
         convert::Type::Result(ok, err) => copy_scalar(ok) && copy_scalar(err),
         _ => false,
@@ -4590,8 +4660,13 @@ fn render_rust_type(
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => output
             .write_all(b"std::ops::RangeInclusive<i64>")
             .map_err(|_| request::Error::Encoding),
-        convert::Type::Builtin(convert::Builtin::String) => output
+        convert::Type::Builtin(
+            convert::Builtin::String | convert::Builtin::Text,
+        ) => output
             .write_all(b"String")
+            .map_err(|_| request::Error::Encoding),
+        convert::Type::Builtin(convert::Builtin::Str) => output
+            .write_all(b"&str")
             .map_err(|_| request::Error::Encoding),
         convert::Type::Builtin(builtin) => output
             .write_all(builtin.rust_name().unwrap_or_default().as_bytes())
@@ -5038,6 +5113,14 @@ fn render_take(
     ty: &convert::Type,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    // A `&str` input lends the string taken from Rawr.
+    if matches!(ty, convert::Type::Builtin(convert::Builtin::Str)) {
+        return writeln!(
+            output,
+            "    let argument_{local}_owned = take_string(arguments, {index})?;\n    let argument_{local} = argument_{local}_owned.as_str();"
+        )
+        .map_err(|_| request::Error::Encoding);
+    }
     let helper = match ty {
         convert::Type::Builtin(convert::Builtin::String) => "take_string",
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_range",
@@ -5091,6 +5174,10 @@ fn render_give(
         }
         convert::Type::Builtin(convert::Builtin::F32) => {
             writeln!(output, "    Ok(Dynamic::from(f64::from({value})))")
+        }
+        // An output Rawr cannot hold: its `Display` text.
+        convert::Type::Builtin(convert::Builtin::Text) => {
+            writeln!(output, "    Ok(Dynamic::from({value}.to_string()))")
         }
         convert::Type::Unit | convert::Type::Builtin(_) => {
             writeln!(output, "    Ok(Dynamic::from({value}))")
@@ -5156,7 +5243,9 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from)"
         ),
-        convert::Type::Builtin(convert::Builtin::String) => write!(
+        convert::Type::Builtin(
+            convert::Builtin::String | convert::Builtin::Str | convert::Builtin::Text,
+        ) => write!(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
         ),
@@ -5519,6 +5608,10 @@ thread_local! {
     /// finds has its exact type (`chrono::DateTime<chrono::Local>`).
     static TYPE_PATHS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], String>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The imported types that are Copy, by identity, as the compiler reads
+    /// a field of one through a shared borrow.
+    static COPY_TYPES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 /// Fills `TYPE_PATHS` for one generation and empties it when dropped.
@@ -5536,6 +5629,12 @@ impl TypePaths {
                 }
             }
         });
+        COPY_TYPES.with_borrow_mut(|copy| {
+            copy.clear();
+            for owner in facade.into_iter().flat_map(crate::surface::facade::Plan::facades) {
+                copy.extend(owner.types().filter(|ty| ty.copy()).map(|ty| *ty.identity()));
+            }
+        });
         Self
     }
 }
@@ -5543,6 +5642,7 @@ impl TypePaths {
 impl Drop for TypePaths {
     fn drop(&mut self) {
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
+        COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
     }
 }
 
@@ -5551,7 +5651,10 @@ impl Drop for TypePaths {
 fn concrete_type(ty: &convert::Type) -> Option<String> {
     Some(match ty {
         convert::Type::Unit => "()".to_owned(),
-        convert::Type::Builtin(convert::Builtin::String) => "String".to_owned(),
+        convert::Type::Builtin(convert::Builtin::String | convert::Builtin::Text) => {
+            "String".to_owned()
+        }
+        convert::Type::Builtin(convert::Builtin::Str) => "&str".to_owned(),
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => {
             "std::ops::RangeInclusive<i64>".to_owned()
         }
@@ -6025,7 +6128,9 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         ) => "Dynamic::from(0_i64)",
         convert::Type::Builtin(convert::Builtin::F32) => "Dynamic::from(0.0_f64)",
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "Dynamic::from(0_i64..=0_i64)",
-        convert::Type::Builtin(convert::Builtin::String) => "Dynamic::from(\"\")",
+        convert::Type::Builtin(
+            convert::Builtin::String | convert::Builtin::Str | convert::Builtin::Text,
+        ) => "Dynamic::from(\"\")",
         convert::Type::Option(_) => "__rawr_internal::option::none()",
         // `Result` has no `Default`, as in Rust.
         convert::Type::Result(..)
@@ -6104,6 +6209,32 @@ mod tests {
     };
     use crate::classify::representability::convert::{Builtin, Constant, Type};
     use crate::classify::representability::signature::{Kind, Parameter, Signature};
+
+    #[test]
+    fn a_str_input_is_lent_and_a_display_output_is_its_text() {
+        let mut take = Vec::new();
+        super::render_take(1, 1, &Type::Builtin(Builtin::Str), &mut take).unwrap();
+        let take = String::from_utf8(take).unwrap();
+        assert!(take.contains("let argument_1_owned = take_string(arguments, 1)?;"), "{take}");
+        assert!(take.contains("let argument_1 = argument_1_owned.as_str();"), "{take}");
+        let mut give = Vec::new();
+        super::render_give(&Type::Builtin(Builtin::Text), "output", &mut give).unwrap();
+        let give = String::from_utf8(give).unwrap();
+        assert!(give.contains("Dynamic::from(output.to_string())"), "{give}");
+    }
+
+    #[test]
+    fn an_imported_copy_type_is_read_as_a_copy() {
+        let nominal = |byte| Type::Nominal {
+            definition: crate::surface::identity::Definition::authenticated([byte; 32]),
+            arguments: Box::default(),
+        };
+        super::COPY_TYPES.with_borrow_mut(|copy| copy.insert([3; 32]));
+        assert!(super::copy_scalar(&nominal(3)));
+        assert!(super::copy_scalar(&Type::Option(Box::new(nominal(3)))));
+        assert!(!super::copy_scalar(&nominal(4)));
+        super::COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
+    }
 
     #[test]
     fn an_option_of_a_scalar_is_read_as_a_copy() {

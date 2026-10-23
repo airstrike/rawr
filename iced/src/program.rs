@@ -171,6 +171,13 @@ impl Host {
         self.reseeded.take()
     }
 
+    /// The note for an edit to `main`'s statements before the entry, which
+    /// ran once when the process started.
+    pub(crate) fn prelude_note(&self) -> Option<String> {
+        let launch = self.slot.context().application()?;
+        prelude_note(&launch.borrow())
+    }
+
     /// Bootstrap one reloadable host without exposing candidate authority.
     pub fn bootstrap(
         bootstrap: rawr::reload::installation::Bootstrap,
@@ -349,12 +356,60 @@ impl Adapter {
     }
 }
 
+/// What the window notes after an edit to `main`'s statements before the
+/// entry.
+pub(crate) const PRELUDE_NOTE: &str = "This edit to `main` takes effect when `rawr run` restarts.";
+
+/// The text of `main`'s statements before the entry that ran in this
+/// process, by package. A package with no such statements keeps "".
+static PRELUDES: Mutex<Vec<(String, Box<str>)>> = Mutex::new(Vec::new());
+
+fn prelude_package(launch: &rawr::reload::installation::Application<'_>) -> String {
+    launch.update().callback().item().key().package().to_owned()
+}
+
+fn prelude_text<'a>(launch: &'a rawr::reload::installation::Application<'_>) -> &'a str {
+    launch.prelude().map_or("", application::Prelude::text)
+}
+
+/// Run `main`'s statements before the entry before the package's first
+/// boot in this process, as Rust runs them once. A reset or a reload boots
+/// again without them.
+fn run_prelude(launch: &rawr::reload::installation::Application<'_>) -> Result<(), Error> {
+    let package = prelude_package(launch);
+    {
+        let mut ran = PRELUDES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if ran.iter().any(|(name, _)| *name == package) {
+            return Ok(());
+        }
+        ran.push((package, prelude_text(launch).into()));
+    }
+    launch.invoke_prelude().map_err(Error::Boot)
+}
+
+/// The note for `main`'s statements before the entry when they differ from
+/// the ones that ran in this process.
+pub(crate) fn prelude_note(
+    launch: &rawr::reload::installation::Application<'_>,
+) -> Option<String> {
+    let package = prelude_package(launch);
+    PRELUDES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|(name, text)| *name == package && **text != *prelude_text(launch))
+        .then(|| PRELUDE_NOTE.to_owned())
+}
+
 impl Draft {
     pub(crate) fn boot(
         launch: &rawr::reload::installation::Application<'_>,
         source: Option<rawr::diagnostic::Source>,
         timing: Option<timing::Session>,
     ) -> Result<Self, Error> {
+        run_prelude(launch)?;
         let (state, startup) = match launch.boot() {
             application::Boot::Default => (
                 launch.boot_default().map_err(Error::Boot)?,

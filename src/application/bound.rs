@@ -89,6 +89,12 @@ impl BoundLaunch {
         self.launch.boot()
     }
 
+    /// Return `main`'s statements before the entry, when present.
+    #[must_use]
+    pub fn prelude(&self) -> Option<&application::Prelude> {
+        self.launch.prelude()
+    }
+
     /// Return the normalized update callback.
     #[must_use]
     pub fn update(&self) -> &application::Update {
@@ -278,6 +284,19 @@ impl BoundLaunch {
             &self.runtime,
         )?;
         Ok(Some(value))
+    }
+
+    /// Run `main`'s statements before the entry, when there are any.
+    #[cfg(not(feature = "no_function"))]
+    pub fn invoke_prelude(&self) -> Result<(), RuntimeError> {
+        let Some(prelude) = self.prelude() else {
+            return Ok(());
+        };
+        self.launch
+            .authority()
+            .invoke_bound(prelude.callback().item(), &mut [], self.runtime.clone())
+            .map(drop)
+            .map_err(RuntimeError::Invocation)
     }
 
     /// Invoke and validate the exact explicit boot callback.

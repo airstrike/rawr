@@ -238,8 +238,10 @@ ${sitekey ? '<div id="ts"></div>' : ""}
         markMessages(false);
         if (url) URL.revokeObjectURL(url);
         url = URL.createObjectURL(await response.blob());
-        const img = new Image(); img.src = url; img.alt = "The first frame";
-        show(img); status.textContent = ms + " ms";
+        const animated = type.startsWith("image/gif");
+        const img = new Image(); img.src = url; img.alt = animated ? "The animation" : "The rendered frame";
+        const note = response.headers.get("x-play-note");
+        show(img); status.textContent = ms + " ms" + (note ? " · " + note : "");
       } else {
         show(text(await response.text(), "error"));
         status.textContent = response.status === 429 ? "slow down" : response.status === 422 ? "error" : "failed";

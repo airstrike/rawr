@@ -535,7 +535,17 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         &[],
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
-    builder.value_type::<marker::Animation>("Animation", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<marker::Animation>(
+        "Animation",
+        &["T"],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
     builder.value_type::<marker::Easing>("animation::Easing", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.value_type::<marker::Instant>("time::Instant", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.project("widget::Column", "Element", &["Message"])?;
@@ -1883,30 +1893,7 @@ fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
     )?)?;
     length_builders(builder, "widget::ProgressBar", &["length", "girth"])?;
 
-    builder.item(item::Definition::associated_function(
-        "Animation::new",
-        repeated_builtin_signature(type_ref::Builtin::F64, 1, "Animation")?,
-    )?)?;
-    for name in ["very_quick", "quick", "slow", "very_slow"] {
-        builder.item(item::Definition::method(
-            format!("Animation::{name}"),
-            receiver::Mode::Owned,
-            output_signature("Animation")?,
-        )?)?;
-    }
-    builder.item(item::Definition::method(
-        "Animation::easing",
-        receiver::Mode::Owned,
-        fixed_builder_signature("Animation", type_ref::Type::registered("animation::Easing")?)?,
-    )?)?;
-    let mut interpolate = signature::Builder::new();
-    interpolate.parameter(type_ref::Type::registered("time::Instant")?);
-    interpolate.output(type_ref::Type::builtin(type_ref::Builtin::F64));
-    builder.item(item::Definition::method(
-        "Animation::interpolate",
-        receiver::Mode::Owned,
-        interpolate.finish(),
-    )?)?;
+    declare_animation(builder)?;
     for name in EASINGS {
         builder.item(item::Definition::associated_value(
             format!("animation::Easing::{name}"),
@@ -1920,11 +1907,11 @@ fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
     // `impl Fn() -> Animation`: a callable of no inputs takes `()`.
     transition.parameter(type_ref::Type::callable(
         type_ref::Type::unit(),
-        type_ref::Type::registered("Animation")?,
+        float_animation()?,
     ));
     transition.parameter(type_ref::Type::callable(
         type_ref::Type::tuple([
-            type_ref::Type::registered("Animation")?,
+            float_animation()?,
             type_ref::Type::registered("time::Instant")?,
         ])?,
         type_ref::Type::applied("Element", [type_ref::Type::parameter("Message")?])?,
@@ -1934,6 +1921,99 @@ fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
         [type_ref::Type::parameter("Message")?],
     )?);
     builder.item(item::Definition::function("widget::transition", transition.finish())?)?;
+    Ok(())
+}
+
+/// iced's `Animation<f32>`, as `transition` takes it.
+fn float_animation() -> Result<type_ref::Type, host::Error> {
+    type_ref::Type::applied("Animation", [type_ref::Type::builtin(type_ref::Builtin::F64)])
+}
+
+/// iced's `Animation<T>` of a `bool` or an `f32`: `new`, its builders, `go`
+/// and `go_mut` at an `Instant`, `is_animating`, `value`, `remaining` and
+/// `interpolate`. A `bool` animation interpolates between two numbers; a
+/// number animation interpolates its own value.
+fn declare_animation(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let t = || type_ref::Type::parameter("T");
+    let animation = || type_ref::Type::applied("Animation", [t()?]);
+    let instant = || type_ref::Type::registered("time::Instant");
+    let duration = || type_ref::Type::registered("time::Duration");
+    let f64 = || type_ref::Type::builtin(type_ref::Builtin::F64);
+    let method = |builder: &mut facade::Builder,
+                  name: &str,
+                  mode: receiver::Mode,
+                  inputs: Vec<type_ref::Type>,
+                  output: type_ref::Type|
+     -> Result<(), host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("T", &[])?;
+        for input in inputs {
+            signature.parameter(input);
+        }
+        signature.output(output);
+        builder.item(item::Definition::method(
+            format!("Animation::{name}"),
+            mode,
+            signature.finish(),
+        )?)?;
+        Ok(())
+    };
+    let mut new = signature::Builder::new();
+    new.type_parameter("T", &[])?;
+    new.parameter(t()?).output(animation()?);
+    builder.item(item::Definition::associated_function("Animation::new", new.finish())?)?;
+    for name in [
+        "very_quick",
+        "quick",
+        "slow",
+        "very_slow",
+        "repeat_forever",
+        "auto_reverse",
+    ] {
+        method(builder, name, receiver::Mode::Owned, Vec::new(), animation()?)?;
+    }
+    method(
+        builder,
+        "easing",
+        receiver::Mode::Owned,
+        vec![type_ref::Type::registered("animation::Easing")?],
+        animation()?,
+    )?;
+    for name in ["duration", "delay"] {
+        method(builder, name, receiver::Mode::Owned, vec![duration()?], animation()?)?;
+    }
+    method(
+        builder,
+        "repeat",
+        receiver::Mode::Owned,
+        vec![type_ref::Type::builtin(type_ref::Builtin::I64)],
+        animation()?,
+    )?;
+    method(builder, "go", receiver::Mode::Owned, vec![t()?, instant()?], animation()?)?;
+    method(
+        builder,
+        "go_mut",
+        receiver::Mode::Mutable,
+        vec![t()?, instant()?],
+        type_ref::Type::unit(),
+    )?;
+    method(
+        builder,
+        "is_animating",
+        receiver::Mode::Shared,
+        vec![instant()?],
+        type_ref::Type::builtin(type_ref::Builtin::Bool),
+    )?;
+    method(builder, "value", receiver::Mode::Shared, Vec::new(), t()?)?;
+    method(builder, "remaining", receiver::Mode::Shared, vec![instant()?], duration()?)?;
+    method(builder, "interpolate", receiver::Mode::Shared, vec![instant()?], f64())?;
+    method(
+        builder,
+        "interpolate",
+        receiver::Mode::Shared,
+        vec![f64(), f64(), instant()?],
+        f64(),
+    )?;
     Ok(())
 }
 
@@ -2567,6 +2647,11 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     builder.type_::<marker::PathBuilder>("widget::canvas::path::Builder", &[], cloned)?;
     builder.type_::<marker::Frame>("widget::canvas::Frame", &[], cloned)?;
     builder.type_::<marker::Geometry>("widget::canvas::Geometry", &[], debug)?;
+    builder.value_type::<marker::CacheGroup>(
+        "widget::canvas::Group",
+        &[],
+        OWNED_VALUE_CAPABILITIES,
+    )?;
     builder.default_type::<marker::Cache>(
         "widget::canvas::Cache",
         &[],
@@ -2804,6 +2889,16 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
             signature(Vec::new(), cache()?),
         )?)?;
     }
+    // `Group::unique()` and `Cache::with_group(group)`: iced batches the
+    // caches of a group, which Rawr draws one by one.
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Group::unique",
+        signature(Vec::new(), ty("widget::canvas::Group")?),
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Cache::with_group",
+        signature(vec![ty("widget::canvas::Group")?], cache()?),
+    )?)?;
     builder.item(item::Definition::method(
         "widget::canvas::Cache::clear",
         receiver::Mode::Shared,
@@ -3704,6 +3799,14 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let mut from = signature::Builder::new();
     from.parameter(degrees()?).output(radians()?);
     builder.item(item::Definition::associated_function("Radians::from", from.finish())?)?;
+    // `f32::from(degrees)`: the angle as a number.
+    for path in ["Degrees", "Radians"] {
+        builder.item(item::Definition::method(
+            format!("{path}::into"),
+            receiver::Mode::Owned,
+            output_signature_of(f64()),
+        )?)?;
+    }
     // `Rotation::Floating(angle)` and `Rotation::Solid(angle)`, matched as
     // in Rust, with the angle read in radians or degrees.
     let rotation = || type_ref::Type::registered("Rotation");
@@ -3733,6 +3836,17 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
             output_signature(output)?,
         )?)?;
     }
+    // `*rotation.radians_mut() = angle`: the rotation with its angle
+    // replaced, which Rawr stores back into the place.
+    let mut radians_mut = signature::Builder::new();
+    radians_mut
+        .parameter(rotation()?)
+        .parameter(radians()?)
+        .output(rotation()?);
+    builder.item(item::Definition::associated_function(
+        "Rotation::radians_mut",
+        radians_mut.finish(),
+    )?)?;
     for input in [rotation()?, radians()?, degrees()?] {
         builders(builder, "widget::Image", "rotation", [input])?;
     }
@@ -4548,6 +4662,21 @@ fn declare_canonical_values(builder: &mut facade::Builder) -> Result<(), host::E
         "Length::FillPortion",
         integer_signature("Length", 1)?,
     )?)?;
+    // iced's `impl From<f32> for Length` and its kin: a fixed length, as
+    // `impl Into<Length>` takes a number.
+    for input in PIXELS {
+        let mut from = signature::Builder::new();
+        from.parameter(type_ref::Type::builtin(input));
+        from.output(type_ref::Type::registered("Length")?);
+        builder.item(item::Definition::associated_function("Length::from", from.finish())?)?;
+    }
+    // A `T: Into<Length>` as the `Length` it converts to: the value, a
+    // `Length` or a number, settled when it runs.
+    let mut into = signature::Builder::new();
+    into.type_parameter("T", &[])?;
+    into.parameter(type_ref::Type::parameter("T")?);
+    into.output(type_ref::Type::registered("Length")?);
+    builder.item(item::Definition::associated_function("Length::__into", into.finish())?)?;
     // `Fit.max(600)`: a length with a bound, as iced's `Length::min` and
     // `Length::max`.
     for name in ["min", "max"] {

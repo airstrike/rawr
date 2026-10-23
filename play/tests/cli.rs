@@ -41,9 +41,12 @@ fn render_fixture_with(name: &str, output: &str, args: &[&str]) -> Vec<u8> {
     let output = root.join(format!("../target/play/cli-test/{output}.png"));
     std::fs::create_dir_all(output.parent().unwrap()).unwrap();
     let _ = std::fs::remove_file(&output);
+    // Messages animate an app's view; these check the view they end on.
+    let still = args.contains(&"--message").then_some("--still");
     let result = Command::new(env!("CARGO_BIN_EXE_rawr-play"))
         .arg(root.join(format!("tests/fixtures/{name}.rs")))
         .args(args)
+        .args(still)
         .arg("-o")
         .arg(&output)
         .output()

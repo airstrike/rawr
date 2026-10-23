@@ -1685,6 +1685,151 @@ fn master_rotations_match_and_turn_images() {
     find(&adapter, "true");
 }
 
+/// iced master's layout example sizes a square by `impl Into<Length> + Copy`.
+#[test]
+fn master_impl_into_length_takes_a_number() {
+    let adapter = boot(
+        r#"
+use iced::widget::{column, container, text};
+use iced::{Length, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+fn square(size: impl Into<Length> + Copy) -> impl Widget<Message> {
+    container(text("square")).width(size).height(size)
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        column![square(50), square(40.5), square(Length::Fill)]
+    }
+}
+"#,
+    );
+    find(&adapter, "square");
+}
+
+/// iced master's gallery example fades with an `Animation<bool>`.
+#[test]
+fn master_bool_animations_go_and_interpolate() {
+    let mut adapter = boot(
+        r#"
+use iced::animation;
+use iced::time::{Instant, milliseconds};
+use iced::widget::{button, column, text};
+use iced::{Animation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct State {
+    fade_in: Animation<bool>,
+    now: Instant,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let now = Instant::now();
+        Self {
+            fade_in: Animation::new(false)
+                .easing(animation::Easing::EaseIn)
+                .duration(milliseconds(200)),
+            now,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Show,
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Show => self.fade_in.go_mut(true, self.now),
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let opacity = self.fade_in.interpolate(0.0, 1.0, self.now);
+        column![
+            button(text("Show")).on_press(Message::Show),
+            text(format!(
+                "{} {} {opacity:.1}",
+                self.fade_in.value(),
+                self.fade_in.is_animating(self.now)
+            )),
+        ]
+    }
+}
+"#,
+    );
+    find(&adapter, "false false 0.0");
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("Show").unwrap();
+    let show = simulator.into_messages().next().expect("the button emits");
+    adapter.update(show).unwrap();
+    find(&adapter, "true true 0.0");
+}
+
+/// iced master's ferris example turns its rotation through
+/// `*self.rotation.radians_mut() = ..`.
+#[test]
+fn master_rotation_radians_mut_writes_the_place() {
+    let adapter = boot(
+        r#"
+use iced::widget::{column, text};
+use iced::{Degrees, Radians, Rotation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct State {
+    rotation: Rotation,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let mut rotation = Rotation::Solid(Radians(1.0));
+        *rotation.radians_mut() = Radians(2.0);
+        let mut state = Self { rotation };
+        *state.rotation.radians_mut() = (state.rotation.radians() + Radians::PI) % (2.0 * Radians::PI);
+        state
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let solid = match self.rotation {
+            Rotation::Solid(_) => "solid",
+            Rotation::Floating(_) => "floating",
+        };
+        column![text(format!("{solid} {:.1}", f32::from(self.rotation.degrees())))]
+    }
+}
+"#,
+    );
+    find(&adapter, "solid 294.6");
+}
+
 /// iced master's delineate example matches `Some(Point { x, y })`.
 #[test]
 fn master_facade_struct_patterns_bind_their_fields() {

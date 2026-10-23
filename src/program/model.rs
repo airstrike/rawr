@@ -456,6 +456,17 @@ impl Model {
         if let Some(element) = expected.box_element() {
             return self.validate_type(value, element, shared);
         }
+        // A `RefCell`'s value is checked where it is stored.
+        if expected.cell_element().is_some() {
+            return if crate::resolve::lower_nominal::is_cell(value) {
+                Ok(())
+            } else {
+                Err(construction::Error::ValueType {
+                    expected: type_name(expected),
+                    actual: value.type_name().into(),
+                })
+            };
+        }
         // A shared reference, as a `&'a State` field, is its referent's
         // value at runtime.
         if let type_ref::Type::Reference {

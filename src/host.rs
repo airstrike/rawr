@@ -2,6 +2,8 @@
 
 #[cfg(not(feature = "no_std"))]
 pub mod debug;
+#[cfg(not(feature = "no_std"))]
+pub mod display;
 pub(crate) mod endpoint;
 pub mod value;
 mod error;

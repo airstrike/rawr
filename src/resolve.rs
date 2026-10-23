@@ -1216,6 +1216,10 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "time"
                 | "time::Duration"
                 | "time::Instant"
+                | "marker"
+                | "marker::PhantomData"
+                | "cell"
+                | "cell::RefCell"
         )
     ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
         || rest.is_some_and(|rest| {
@@ -1347,6 +1351,25 @@ pub(crate) fn std_time(path: &str) -> Option<&'static str> {
         .or_else(|| path.strip_prefix("time::"))
         .unwrap_or(path);
     ["Duration", "Instant"].into_iter().find(|time| *time == name)
+}
+
+/// `std::cell::RefCell` as a path is written.
+pub(crate) fn std_cell(path: &str) -> bool {
+    matches!(
+        path,
+        "RefCell" | "cell::RefCell" | "std::cell::RefCell" | "core::cell::RefCell"
+    )
+}
+
+/// `std::marker::PhantomData` as a path is written.
+pub(crate) fn std_phantom(path: &str) -> bool {
+    matches!(
+        path,
+        "PhantomData"
+            | "marker::PhantomData"
+            | "std::marker::PhantomData"
+            | "core::marker::PhantomData"
+    )
 }
 
 pub(crate) fn std_ordering(path: &str) -> bool {
@@ -1710,6 +1733,7 @@ fn resolve_item(
                     syntax: parsed.body_syntax,
                     constant: false,
                     text: None,
+                    elide: None,
                 },
             })
         }
@@ -1808,6 +1832,7 @@ fn resolve_function(
             syntax: parsed.body_syntax,
             constant: parsed.constant,
             text: None,
+            elide: None,
         },
     })
 }
@@ -2896,6 +2921,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: false,
             text: None,
+            elide: None,
         },
     };
     let functions = match name {

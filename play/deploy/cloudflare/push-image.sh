@@ -3,7 +3,7 @@
 # push it to Cloudflare's registry and point wrangler.jsonc at it.
 #   ./push-image.sh            (CLOUDFLARE_ACCOUNT_ID overrides the account)
 # Needs `npx wrangler login` first. Builds the committed HEAD. The release
-# build needs more than the builder's default 2 GB, so the builder VM is
+# build needs more than the builder's default 2 GB, so the builder VM (26 GB; 20 GB ran out compiling rawr with a cold cache) is
 # started with 20 GB and deleted (with its cache) afterwards.
 set -eu
 CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-fce80b8101fbb2f85548560babc6c7bc}"
@@ -18,7 +18,7 @@ rm -rf "$context"
 mkdir -p "$context"
 git -C "$repo" archive HEAD | tar -x -C "$context"
 container builder delete --force >/dev/null 2>&1 || true
-container builder start --cpus 4 --memory 20g
+container builder start --cpus 4 --memory 26g
 trap 'container builder delete --force >/dev/null 2>&1 || true' EXIT
 container build --platform linux/amd64 --build-arg PLAY_VERSION="$sha" -f "$context/play/Dockerfile" -t "$image" "$context"
 rm -rf "$context"

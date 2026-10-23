@@ -1,5 +1,6 @@
-//! Run untrusted Rawr snippets: render an iced snippet to PNG, or run a
-//! plain program and return its output as text.
+//! Run untrusted Rawr snippets: render an iced snippet to PNG, or to a GIF
+//! when a full app's view changes over time, or run a plain program and
+//! return its output as text.
 //!
 //! [`run`] parses a snippet once and asks rawr-iced's own claims (its
 //! manifest) whether it is iced's: it names `iced`, or uses a name of the
@@ -15,6 +16,9 @@
 //! - a stateless `fn view() -> impl Widget<()>`
 //! - a full app: a type with `fn view(&self)` and `fn update(&mut self, ..)`
 //!
+//! A full app runs on a simulated clock (see [`motion`]): a view that
+//! changes, after its boot or a message, renders as a GIF.
+//!
 //! A source that declares its own `#[preview]` is refused: its size would
 //! bypass [`MAX_SIDE`].
 //!
@@ -22,9 +26,11 @@
 //! operations, call depth, data sizes, and a wall-clock deadline; the iced
 //! facade exposes no filesystem or network functions to scripts.
 
+pub mod budget;
 #[cfg(feature = "bot")]
 pub mod channels;
 pub mod message;
+pub mod motion;
 pub mod plain;
 pub mod server;
 #[cfg(feature = "bot")]
@@ -36,6 +42,8 @@ use std::fmt;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+pub use motion::{Gif, Image, Picture};
+use rawr_iced::snapshot::Deadline;
 pub use plain::Output;
 
 /// A rendered PNG.
@@ -152,6 +160,18 @@ pub struct Limits {
     pub map_size: usize,
     /// Wall-clock budget for script evaluation in one render.
     pub time: Duration,
+    /// Wall-clock budget for a full app's render once its view changes:
+    /// an animation's longer budget. Below `time`, it is `time`.
+    pub animation: Duration,
+}
+
+impl Limits {
+    /// The wall-clock budget an animation has: [`Limits::animation`], and
+    /// never less than [`Limits::time`].
+    #[must_use]
+    pub fn animation_budget(&self) -> Duration {
+        self.animation.max(self.time)
+    }
 }
 
 impl Default for Limits {
@@ -164,6 +184,7 @@ impl Default for Limits {
             array_size: 64 * 1024,
             map_size: 10_000,
             time: Duration::from_secs(2),
+            animation: Duration::from_secs(2),
         }
     }
 }
@@ -182,6 +203,8 @@ pub struct Options {
     pub messages: Vec<String>,
     /// Per-render limits.
     pub limits: Limits,
+    /// Render the last frame as a still image, never an animation.
+    pub still: bool,
 }
 
 /// Parse `WxH` (e.g. `400x300`) into a size.
@@ -214,6 +237,7 @@ impl Default for Options {
             theme: Theme::default(),
             messages: Vec::new(),
             limits: Limits::default(),
+            still: false,
         }
     }
 }
@@ -254,12 +278,12 @@ impl std::error::Error for PlayError {}
 /// Identity used for the wrapped source in diagnostics.
 pub const SOURCE_NAME: &str = "play.rs";
 
-/// What a snippet gave: the first frame of an iced snippet, or a plain
-/// program's output.
+/// What a snippet gave: an iced snippet's image, or a plain program's
+/// output.
 #[derive(Clone, Debug)]
 pub enum Outcome {
-    /// The rendered PNG.
-    Image(Png),
+    /// The rendered image.
+    Image(Image),
     /// The text a plain program wrote, and how it ended.
     Text(Output),
 }
@@ -298,7 +322,7 @@ pub fn run_claimed(
     let parsed = plain::Parsed::new(source, &options.limits, deadline)?;
     if parsed.claimed(claims) {
         drop(parsed);
-        return render(source, options).map(Outcome::Image);
+        return animate(source, options).map(Outcome::Image);
     }
     // Messages drive an iced app; a plain program runs without them.
     let mut output = parsed.run(source, &options.limits)?;
@@ -309,23 +333,76 @@ pub fn run_claimed(
     Ok(Outcome::Text(output))
 }
 
-/// Check, evaluate, and render one iced snippet to a PNG.
-pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
+/// Check, evaluate, and render one iced snippet: a full app on a simulated
+/// clock, as [`motion`] decides, and anything else (or any snippet when
+/// [`Options::still`] is set) as a still PNG.
+pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
+    if options.still || shape(source) != Shape::App {
+        return render(source, options).map(|png| Image {
+            picture: Picture::Still(png),
+            note: None,
+        });
+    }
     validate(options)?;
     rawr::resolve::deny_files(NO_FILES);
     let program = wrap(source, options)?;
-    let deadline = Instant::now() + options.limits.time;
-    let canvas = rawr_iced::snapshot::Canvas {
+    let start = Instant::now();
+    let deadline = Deadline::new(start + options.limits.time);
+    let canvas = canvas(options);
+    // The app boots on the simulated clock, so the times it reads are on it.
+    let _clock = rawr_iced::snapshot::clock::freeze();
+    let (mut adapter, messages) = application(&program, source, options, deadline.clone())?;
+    let theme = app_theme(source).is_none().then(|| options.theme.variant());
+    let bound = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
+    // Still images keep `time`. Once the view changes, the recording and
+    // the app's scripts share the animation's budget.
+    let budget = options.limits.animation_budget();
+    let motion = rawr_iced::snapshot::Motion {
+        step: motion::STEP,
+        frames: motion::FRAMES,
+        phase: motion::PHASE,
+        span: motion::SPAN,
+        deadline,
+        extended: start + budget,
+    };
+    let mut loops = motion::Loops::default();
+    let recording = rawr_iced::snapshot::record_application(
+        &mut adapter,
+        messages,
+        canvas,
+        bound,
+        theme,
+        motion,
+        &mut |frames| loops.check(frames),
+    )
+    .map_err(|error| classify(&error.to_string(), &options.limits))?;
+    motion::picture(recording, &loops, budget)
+}
+
+/// How a render sizes and scales its image.
+fn canvas(options: &Options) -> rawr_iced::snapshot::Canvas {
+    rawr_iced::snapshot::Canvas {
         fit: options.size.is_none(),
         fallback: FALLBACK_SIZE,
         margin: if options.size.is_none() { MARGIN } else { 0 },
         scale: options.scale as f32,
         max_pixels: MAX_SIDE,
-    };
+    }
+}
+
+/// Check, evaluate, and render one iced snippet to a PNG: a full app once
+/// its view settles after its boot and messages.
+pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
+    validate(options)?;
+    rawr::resolve::deny_files(NO_FILES);
+    let program = wrap(source, options)?;
+    let deadline = Instant::now() + options.limits.time;
+    let canvas = canvas(options);
     let rendered = if shape(source) == Shape::App {
-        render_application(&program, source, options, canvas, deadline)
+        render_application(&program, source, options, canvas, Deadline::new(deadline))
     } else {
-        let compiler = rawr_iced::preview::Compiler::configured(sandbox(&options.limits, deadline))
+        let sandbox = sandbox(&options.limits, Deadline::new(deadline));
+        let compiler = rawr_iced::preview::Compiler::configured(sandbox)
             .map_err(|error| PlayError::Render(error.to_string()))?;
         let checked = compiler
             .check_named_source(SOURCE_NAME, &program)
@@ -349,8 +426,23 @@ fn render_application(
     source: &str,
     options: &Options,
     canvas: rawr_iced::snapshot::Canvas,
-    deadline: Instant,
+    deadline: Deadline,
 ) -> Result<Png, PlayError> {
+    let (mut adapter, messages) = application(program, source, options, deadline)?;
+    // The app's own `.theme(f)` wins over the built-in theme.
+    let theme = app_theme(source).is_none().then(|| options.theme.variant());
+    let bound = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
+    rawr_iced::snapshot::render_application(&mut adapter, messages, canvas, bound, theme)
+        .map_err(|error| classify(&error.to_string(), &options.limits))
+}
+
+/// A full app checked and booted, and the options' messages for it.
+fn application(
+    program: &str,
+    source: &str,
+    options: &Options,
+    deadline: Deadline,
+) -> Result<(rawr_iced::program::Adapter, Vec<rawr_iced::runtime::Message>), PlayError> {
     let compiler = rawr_iced::application::Compiler::configured(sandbox(&options.limits, deadline))
         .map_err(|error| PlayError::Render(error.to_string()))?;
     let compile = |error: rawr_iced::application::Error| {
@@ -363,7 +455,7 @@ fn render_application(
     } else {
         compiler.check_named_source(SOURCE_NAME, program)
     };
-    let mut adapter = checked
+    let adapter = checked
         .and_then(rawr_iced::application::Checked::prepare)
         .map_err(compile)?
         .into_adapter();
@@ -375,15 +467,11 @@ fn render_application(
                 .map_err(|error| classify(&error.to_string(), &options.limits))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    // The app's own `.theme(f)` wins over the built-in theme.
-    let theme = app_theme(source).is_none().then(|| options.theme.variant());
-    let bound = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
-    rawr_iced::snapshot::render_application(&mut adapter, messages, canvas, bound, theme)
-        .map_err(|error| classify(&error.to_string(), &options.limits))
+    Ok((adapter, messages))
 }
 
 /// The untrusted-snippet limits on an Engine.
-fn sandbox(limits: &Limits, deadline: Instant) -> impl FnOnce(&mut rawr::Engine) + use<> {
+fn sandbox(limits: &Limits, deadline: Deadline) -> impl FnOnce(&mut rawr::Engine) + use<> {
     let limits = limits.clone();
     move |engine| {
         let depth = engine.max_call_levels().min(limits.call_depth);
@@ -393,7 +481,7 @@ fn sandbox(limits: &Limits, deadline: Instant) -> impl FnOnce(&mut rawr::Engine)
             .set_max_string_size(limits.string_size)
             .set_max_array_size(limits.array_size)
             .set_max_map_size(limits.map_size)
-            .on_progress(move |_| (Instant::now() >= deadline).then(|| TIME_LIMIT.into()))
+            .on_progress(move |_| deadline.past().then(|| TIME_LIMIT.into()))
             // Untyped `fn f(x) { .. }` bodies reach the base
             // language: no output, no module files, no eval, no sleeping.
             .on_print(|_| {})
@@ -1220,7 +1308,11 @@ fn view() -> impl Widget<()> {
 
     fn image(source: &str) -> super::Png {
         match super::run(source, &Options::default()).unwrap() {
-            super::Outcome::Image(png) => png,
+            super::Outcome::Image(super::Image {
+                picture: super::Picture::Still(png),
+                ..
+            }) => png,
+            super::Outcome::Image(_) => panic!("{source} rendered an animation"),
             super::Outcome::Text(output) => panic!("{source} ran as text: {output:?}"),
         }
     }
@@ -1288,6 +1380,86 @@ fn view() -> impl Widget<()> {
             panic!("expected a compile error, got {error:?}");
         };
         assert!(text.contains("play.rs:2:"), "{text}");
+    }
+
+    /// A full app that ticks once, then spins in its `update` until a
+    /// deadline stops it.
+    const TICK_THEN_SPIN: &str = "use iced::time::{self, Duration};
+use iced::widget::text;
+use iced::{Subscription, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(Spin::default, Spin::update, Spin::view)
+        .subscription(Spin::subscription)
+        .run()
+}
+
+#[derive(Default)]
+struct Spin {
+    ticks: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Tick,
+}
+
+impl Spin {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Tick => {
+                self.ticks += 1;
+                if self.ticks > 1 {
+                    let mut n = 0;
+                    loop {
+                        n += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        text(format!(\"{} ticks\", self.ticks))
+    }
+}
+";
+
+    /// How long `animate` ran `source` with these budgets, and its note.
+    fn animate_for(source: &str, time: u64, animation: u64) -> (std::time::Duration, Option<String>) {
+        let options = Options {
+            limits: super::Limits {
+                operations: u64::MAX,
+                time: std::time::Duration::from_millis(time),
+                animation: std::time::Duration::from_millis(animation),
+                ..super::Limits::default()
+            },
+            ..Options::default()
+        };
+        let started = std::time::Instant::now();
+        let image = super::animate(source, &options).unwrap();
+        (started.elapsed(), image.note)
+    }
+
+    #[test]
+    fn budget_switches_once_the_view_changes() {
+        // The view changes, so the spin runs to the animation budget.
+        let (ran, note) = animate_for(TICK_THEN_SPIN, 1_000, 4_000);
+        assert!(ran >= std::time::Duration::from_millis(4_000), "{ran:?}");
+        let note = note.unwrap();
+        assert!(note.starts_with("Rendering stopped after 4 s, so the animation shows its first "), "{note}");
+        // Without a longer budget, it stops at the still one.
+        let (ran, note) = animate_for(TICK_THEN_SPIN, 1_000, 1_000);
+        assert!(ran < std::time::Duration::from_millis(3_000), "{ran:?}");
+        assert!(note.unwrap().starts_with("Rendering stopped after 1 s"));
+        // A view that never changes keeps the still budget.
+        let still = TICK_THEN_SPIN.replace("self.ticks > 1", "true");
+        let (ran, _) = animate_for(&still, 1_000, 4_000);
+        assert!(ran < std::time::Duration::from_millis(3_000), "{ran:?}");
     }
 
     #[test]

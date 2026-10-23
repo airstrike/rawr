@@ -66,6 +66,28 @@ pub struct View {
     projection: Option<host::projection::Site>,
 }
 
+/// `main`'s statements before the application entry, which a runner runs
+/// once, before the first boot.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Prelude {
+    callback: Callback,
+    text: Box<str>,
+}
+
+impl Prelude {
+    /// Return the function of the statements.
+    #[must_use]
+    pub const fn callback(&self) -> &Callback {
+        &self.callback
+    }
+
+    /// Return the statements as written.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
 /// A normalized state-derived application title callback.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Title {
@@ -116,6 +138,7 @@ pub(super) struct Proof {
     pub(super) state: application::Type,
     pub(super) message: application::Type,
     pub(super) boot: Boot,
+    pub(super) prelude: Option<Prelude>,
     pub(super) update: Update,
     pub(super) view: View,
     pub(super) title: Option<Title>,
@@ -154,6 +177,9 @@ impl Proof {
         completed = completed.saturating_add(self.state.normalize_profile(profile));
         completed = completed.saturating_add(self.message.normalize_profile(profile));
         completed = completed.saturating_add(self.boot.normalize_profile(profile));
+        if let Some(prelude) = &mut self.prelude {
+            completed = completed.saturating_add(prelude.callback.normalize_profile(profile));
+        }
         completed = completed.saturating_add(self.update.normalize_profile(profile));
         completed = completed.saturating_add(self.view.normalize_profile(profile));
         if let Some(title) = &mut self.title {
@@ -353,6 +379,12 @@ impl Descriptor {
     #[must_use]
     pub fn boot(&self) -> &Boot {
         &self.contract.proof.boot
+    }
+
+    /// Return `main`'s statements before the entry, when present.
+    #[must_use]
+    pub fn prelude(&self) -> Option<&Prelude> {
+        self.contract.proof.prelude.as_ref()
     }
 
     /// Return the normalized update callback.
@@ -682,6 +714,19 @@ impl Contract {
             }
         };
 
+        let prelude = match entry.prelude() {
+            None => None,
+            Some((item, text)) => {
+                let prelude = checked_callback(executable, item, "prelude")?;
+                require_kind(&prelude, &[item::Kind::Function], "a free function")?;
+                require_arity(&prelude, 0)?;
+                Some(Prelude {
+                    callback: prelude.normalized(),
+                    text: text.into(),
+                })
+            }
+        };
+
         let title = match entry.title() {
             Some(item) => {
                 let title = checked_callback(executable, item, "title")?;
@@ -855,6 +900,7 @@ impl Contract {
             title.as_ref(),
             theme.as_ref(),
             subscription.as_ref(),
+            prelude.as_ref(),
         )?;
 
         Ok(Self {
@@ -870,6 +916,7 @@ impl Contract {
                 state,
                 message,
                 boot,
+                prelude,
                 update,
                 view,
                 title,
@@ -926,6 +973,9 @@ impl Contract {
     pub(crate) fn reload_fingerprint(&self) -> Fingerprint {
         let mut proof = Proof::clone(&self.proof);
         proof.previews = crate::preview::Fingerprint::default();
+        // The statements before the entry run once, so an edit to them
+        // keeps the State.
+        proof.prelude = None;
         Fingerprint(Shared::new(proof))
     }
 
@@ -1184,6 +1234,7 @@ fn collect_dependencies(
     title: Option<&Title>,
     theme: Option<&Theme>,
     subscription: Option<&Subscription>,
+    prelude: Option<&Prelude>,
 ) -> Result<Box<[host::facade::Dependency]>, application::Error> {
     let mut dependencies = Dependencies::default();
     dependencies.insert(entry.dependency().clone())?;
@@ -1203,6 +1254,9 @@ fn collect_dependencies(
     }
     if let Some(subscription) = subscription {
         dependencies.callback(&subscription.callback)?;
+    }
+    if let Some(prelude) = prelude {
+        dependencies.callback(&prelude.callback)?;
     }
     if let Some(projection) = view.projection.as_ref() {
         for dependency in projection.dependencies() {

@@ -8,6 +8,7 @@ mod location;
 mod origin;
 mod places;
 mod reverse;
+mod cell;
 
 #[cfg(all(test, not(feature = "no_function"), feature = "rust-import"))]
 mod collected_tests;
@@ -146,13 +147,13 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
         {
             continue;
         }
-        let body_source = source_span(
+        let body_source = body_source(
             definition
                 .body
                 .text
                 .as_deref()
                 .unwrap_or_else(|| program.source.text_at(shell.source)),
-            definition.body.span,
+            &definition.body,
         );
         let mut parser = Parser::for_function(
             engine,
@@ -604,13 +605,13 @@ fn lower_with_context(
         {
             continue;
         }
-        let body_source = source_span(
+        let body_source = body_source(
             definition
                 .body
                 .text
                 .as_deref()
                 .unwrap_or_else(|| program.source.text_at(shell.source)),
-            definition.body.span,
+            &definition.body,
         );
         let mut parser = Parser::for_function(
             engine,
@@ -1821,6 +1822,114 @@ fn source_span(source: &str, selected: Span) -> String {
     output
 }
 
+/// A function's body as `source_span` selects it, with its elided source
+/// blank.
+fn body_source(source: &str, body: &item::Body) -> String {
+    let selected = source_span(source, body.span);
+    let Some(elide) = body.elide else {
+        return selected;
+    };
+    let mut output = String::with_capacity(selected.len());
+    let mut line = 1_u16;
+    let mut column = 0_u16;
+    for character in selected.chars() {
+        if character == '\n' {
+            output.push(character);
+            line = line.saturating_add(1);
+            column = 0;
+            continue;
+        }
+        column = column.saturating_add(1);
+        let position = Position::new(line, column);
+        output.push(if position >= elide.start() && position < elide.end() {
+            ' '
+        } else {
+            character
+        });
+    }
+    output
+}
+
+/// Whether `cfg(name = "value")` holds on the target Rawr runs on.
+fn cfg_value(name: &str, value: &str) -> bool {
+    let actual = match name {
+        "target_arch" => {
+            if cfg!(target_arch = "aarch64") {
+                "aarch64"
+            } else if cfg!(target_arch = "x86_64") {
+                "x86_64"
+            } else if cfg!(target_arch = "wasm32") {
+                "wasm32"
+            } else if cfg!(target_arch = "x86") {
+                "x86"
+            } else {
+                "unknown"
+            }
+        }
+        "target_os" => {
+            if cfg!(target_os = "macos") {
+                "macos"
+            } else if cfg!(target_os = "linux") {
+                "linux"
+            } else if cfg!(target_os = "windows") {
+                "windows"
+            } else if cfg!(target_os = "ios") {
+                "ios"
+            } else if cfg!(target_os = "android") {
+                "android"
+            } else {
+                "unknown"
+            }
+        }
+        "target_family" => {
+            if cfg!(target_family = "unix") {
+                "unix"
+            } else if cfg!(target_family = "windows") {
+                "windows"
+            } else if cfg!(target_family = "wasm") {
+                "wasm"
+            } else {
+                "unknown"
+            }
+        }
+        "target_pointer_width" => {
+            if cfg!(target_pointer_width = "64") {
+                "64"
+            } else {
+                "32"
+            }
+        }
+        _ => return false,
+    };
+    actual == value
+}
+
+/// Whether the `cfg` flag `name` is set on the target Rawr runs on.
+fn cfg_flag(name: &str) -> bool {
+    match name {
+        "unix" => cfg!(unix),
+        "windows" => cfg!(windows),
+        "debug_assertions" => true,
+        _ => false,
+    }
+}
+
+/// Whether a library function's numeric `parameter` takes a `source`
+/// number: an integer or a float, as Rust's literal settles.
+fn host_number_accepts(parameter: &crate::host::type_ref::Type, source: &Ty) -> bool {
+    use crate::host::type_ref::{Builtin, Shape};
+    match parameter.shape() {
+        Shape::Builtin(Builtin::I64) => matches!(source, Ty::Int(_)),
+        Shape::Builtin(Builtin::F64 | Builtin::F32) => matches!(source, Ty::Float(_)),
+        _ => false,
+    }
+}
+
+/// Whether `value` is a `RefCell` at runtime.
+pub(crate) fn is_cell(value: &Dynamic) -> bool {
+    value.is::<cell::Cell>()
+}
+
 fn source_full_span(source: &str) -> Span {
     let mut line = 1_u16;
     let mut column = 0_u16;
@@ -2461,6 +2570,9 @@ impl Models {
     fn default_folds(&self, ty: &Ty, visiting: &mut Vec<type_def::Id>) -> bool {
         match ty {
             Ty::Boxed(inner) | Ty::Reverse(inner) => self.default_folds(inner, visiting),
+            // A cell is made where its default is used, so copies share
+            // no cell.
+            Ty::Cell(_) => false,
             Ty::Array {
                 element,
                 length: Some(_),
@@ -2594,6 +2706,7 @@ impl Models {
             | Ty::Time(_)
             | Ty::ParseError(_)
             | Ty::Reference { .. }
+            | Ty::Cell(_)
             | Ty::Boxed(_)
             | Ty::Iter(_)
             | Ty::Keyed(..)
@@ -2872,6 +2985,18 @@ enum PreludeOp {
     /// `Reverse(value)` and its `.0`.
     ReverseWrap,
     ReverseInner,
+    /// `RefCell::new(value)`, a borrow of a cell (`1` mutable), a cell's or
+    /// a borrow's value, a borrow's store, a borrow's release, and
+    /// `into_inner`, `replace` and `clone` (`cell.rs`).
+    /// An imported value's Rust `Display` text, kept by the bridge.
+    DisplayText,
+    CellNew,
+    CellBorrow,
+    CellGet,
+    CellSet,
+    CellRelease,
+    CellReplace,
+    CellClone,
     /// A string's `lines()`, `split_whitespace()` and `split(pattern)` (a
     /// `char` or a string): the array of its pieces.
     StrLines,
@@ -2976,6 +3101,14 @@ impl PreludeOp {
             Self::MapFrom => "map.from",
             Self::SetFrom => "set.from",
             Self::ReverseWrap => "reverse.new",
+            Self::DisplayText => "format.display",
+            Self::CellNew => "cell.new",
+            Self::CellBorrow => "cell.borrow",
+            Self::CellGet => "cell.get",
+            Self::CellSet => "cell.set",
+            Self::CellRelease => "cell.release",
+            Self::CellReplace => "cell.replace",
+            Self::CellClone => "cell.clone",
             Self::ReverseInner => "reverse.0",
             Self::StrLines => "str.lines",
             Self::StrSplitWhitespace => "str.split-whitespace",
@@ -3038,7 +3171,15 @@ impl PreludeOp {
             | Self::GenericDebug
             | Self::TypeIndex
             | Self::Discriminant
-            | Self::ReverseWrap => vec![TypeId::of::<Dynamic>()],
+            | Self::ReverseWrap
+            | Self::DisplayText
+            | Self::CellNew
+            | Self::CellGet
+            | Self::CellRelease
+            | Self::CellClone => vec![TypeId::of::<Dynamic>()],
+            Self::CellBorrow | Self::CellSet | Self::CellReplace => {
+                vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
+            }
             Self::ReverseInner => vec![TypeId::of::<std::cmp::Reverse<Dynamic>>()],
             Self::IntFromBool | Self::FloatFromBool => vec![TypeId::of::<bool>()],
             Self::StringFromChar => vec![TypeId::of::<char>()],
@@ -3388,6 +3529,14 @@ impl PreludeOp {
                 });
             }
             Self::ReverseWrap => return Ok(Dynamic::from(std::cmp::Reverse(args[0].take()))),
+            Self::DisplayText => return Ok(args[0].to_string().into()),
+            Self::CellNew
+            | Self::CellBorrow
+            | Self::CellGet
+            | Self::CellSet
+            | Self::CellRelease
+            | Self::CellReplace
+            | Self::CellClone => return cell::invoke(self, args),
             Self::Join => {
                 let array = args[0]
                     .as_array_ref()
@@ -5089,6 +5238,9 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
     // A map's or set's operation takes it by reference, as a method.
     let by_reference = match &op {
         ExecutableOp::Prelude(op) => op.by_reference(),
+        // A facade method with a `&mut self` receiver changes the receiver
+        // it is called on, which the caller stores back.
+        ExecutableOp::Intrinsic { proof } if proof.mutates_receiver() => Some(true),
         _ => None,
     };
     // Output is a side effect: never folded or dropped.
@@ -5565,6 +5717,9 @@ enum Ty {
     /// `std::cmp::Reverse<T>`: a `std::cmp::Reverse<Dynamic>` at runtime,
     /// which `compare_value` orders backwards.
     Reverse(Box<Ty>),
+    /// `std::cell::RefCell<T>`: a `cell::Cell` at runtime, which every
+    /// copy of it shares (`cell.rs`).
+    Cell(Box<Ty>),
     /// An iterator of `Item` (`impl Iterator<Item = T>`): an adaptor chain
     /// fused into one loop where it is consumed, else the array of its
     /// items at runtime.
@@ -5621,6 +5776,7 @@ impl Ty {
             | Self::Boxed(target)
             | Self::Iter(target)
             | Self::Reverse(target)
+            | Self::Cell(target)
             | Self::Projection(target, ..) => {
                 target.collect_dependencies(dependencies);
             }
@@ -5734,6 +5890,9 @@ impl Ty {
         }
         if let Some(inner) = ty.reverse_element() {
             return Self::Reverse(Box::new(Self::from_resolved(inner)));
+        }
+        if let Some(inner) = ty.cell_element() {
+            return Self::Cell(Box::new(Self::from_resolved(inner)));
         }
         if let Some((name, arguments)) = ty.keyed_arguments()
             && let Some(kind) = Keyed::from_name(name)
@@ -5895,6 +6054,7 @@ impl Ty {
             Self::Boxed(target) => format!("Box<{}>", target.name(models)).into(),
             Self::Iter(item) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
+            Self::Cell(inner) => format!("RefCell<{}>", inner.name(models)).into(),
             Self::Keyed(kind, arguments) => format!(
                 "{}<{}>",
                 kind.name(),
@@ -5978,6 +6138,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..) => Some(TypeId::of::<crate::Array>()),
             Self::Reverse(_) => Some(TypeId::of::<std::cmp::Reverse<Dynamic>>()),
+            Self::Cell(_) => Some(TypeId::of::<cell::Cell>()),
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
             #[cfg(feature = "rust-import")]
@@ -6133,6 +6294,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..)
             | Self::Reverse(_)
+            | Self::Cell(_)
             | Self::Dyn(..)
             | Self::Infer(_)
             | Self::Unknown => crate::host::usage::Policy::Ordinary,
@@ -6308,7 +6470,8 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
             (Ty::Option(left), Ty::Option(right))
             | (Ty::Boxed(left), Ty::Boxed(right))
             | (Ty::Iter(left), Ty::Iter(right))
-            | (Ty::Reverse(left), Ty::Reverse(right)) => compare(left, right, forward, reverse),
+            | (Ty::Reverse(left), Ty::Reverse(right))
+            | (Ty::Cell(left), Ty::Cell(right)) => compare(left, right, forward, reverse),
             (Ty::Keyed(left_kind, left), Ty::Keyed(right_kind, right)) => {
                 left_kind == right_kind
                     && left.len() == right.len()
@@ -6544,6 +6707,7 @@ impl Inference {
             Ty::Boxed(target) => Ty::Boxed(Box::new(self.resolve(target))),
             Ty::Iter(item) => Ty::Iter(Box::new(self.resolve(item))),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
+            Ty::Cell(inner) => Ty::Cell(Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
                 *kind,
                 arguments
@@ -6776,6 +6940,18 @@ enum PlaceStep {
         slot: usize,
     },
     Index(origin::Fragment),
+    /// A facade `&mut` accessor: `read` reads the part of the value bound
+    /// to `place`, and `store` is the value with `stored` in its place.
+    Accessor {
+        place: String,
+        stored: String,
+        read: origin::Fragment,
+        store: origin::Fragment,
+    },
+    /// A `RefCell` borrow's value: read from the borrow, stored back into
+    /// the cell, and the borrow released after the statement when it was
+    /// made in it.
+    Cell { release: bool },
 }
 
 #[derive(Clone)]
@@ -7484,6 +7660,7 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         Ty::Boxed(target) => Ty::Boxed(Box::new(instantiate(target, substitution))),
         Ty::Iter(item) => Ty::Iter(Box::new(instantiate(item, substitution))),
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
+        Ty::Cell(inner) => Ty::Cell(Box::new(instantiate(inner, substitution))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
             *kind,
             arguments
@@ -8020,6 +8197,17 @@ struct Parser<'a> {
     /// The chains bound to immutable locals, by name: each use of the
     /// local runs its chain.
     bound_iterators: BTreeMap<ImmutableString, BoundIterator>,
+    /// The locals holding a map entry's `&mut`, as `let grains =
+    /// map.entry(k).or_default();`, by name: their declaration and the
+    /// tokens of the entry, which each use reads again.
+    entry_aliases: BTreeMap<ImmutableString, (Span, Vec<(Token, Position)>)>,
+    /// The borrow of a `RefCell` the expression just read made, which a
+    /// `let` keeps (`cell.rs`).
+    last_cell_borrow: Option<cell::CellBorrow>,
+    /// The locals bound to a `RefCell` borrow, by name: their declaration,
+    /// the hidden local holding the borrow, whether it is mutable and the
+    /// value's type.
+    cell_guards: BTreeMap<ImmutableString, (Span, String, bool, Ty)>,
     /// The second field of `t.0.1`, read with the first.
     pending_member: Option<(ImmutableString, Span)>,
     /// The elements of mutable loops by name: their declaration, their
@@ -8274,6 +8462,9 @@ impl<'a> Parser<'a> {
             lend_self: false,
             mutable_borrow: None,
             bound_iterators: BTreeMap::new(),
+            entry_aliases: BTreeMap::new(),
+            last_cell_borrow: None,
+            cell_guards: BTreeMap::new(),
             pending_member: None,
             aliases: BTreeMap::new(),
             borrows: BTreeMap::new(),
@@ -9547,6 +9738,23 @@ impl<'a> Parser<'a> {
             if self.prelude_from(&target, &source) {
                 return true;
             }
+            // `impl Into<Length>` of a number: a library type's own
+            // `from` of it.
+            if let Ty::Host { proof, .. } = &target
+                && let Some(items) = self
+                    .models
+                    .host_items(&format!("{}::from", proof.definition.path()))
+            {
+                let source = source.clone();
+                let converts = items.iter().any(|item| {
+                    item.kind() == crate::host::item::Kind::AssociatedFunction
+                        && matches!(item.signature().parameters(), [parameter]
+                            if host_number_accepts(parameter, &source))
+                });
+                if converts {
+                    return true;
+                }
+            }
             if trait_name != "From" {
                 return self.type_implements_with(&target, "From", &[source]);
             }
@@ -9667,6 +9875,17 @@ impl<'a> Parser<'a> {
     fn display_piece(&mut self, ty: &Ty, value: origin::Fragment) -> Option<origin::Fragment> {
         if let Some(text) = self.display_text(ty, value.clone()) {
             return Some(text);
+        }
+        // An imported value: its Rust `Display`, which `cargo check` holds
+        // the type to.
+        let target = match ty {
+            Ty::Reference { target, .. } => self.inference.resolve(target),
+            ty => ty.clone(),
+        };
+        if let Ty::Host { proof, .. } = &target
+            && proof.definition.identity().imported().is_some()
+        {
+            return Some(self.prelude_op(PreludeOp::DisplayText, [value]));
         }
         match ty {
             Ty::Int(kind @ (Int::U64 | Int::Usize)) => Some(self.prelude_op(
@@ -12029,6 +12248,13 @@ impl<'a> Parser<'a> {
             },
             // `Reverse<T>` derives everything from `T`.
             Ty::Reverse(inner) => self.type_provides(&inner, capability),
+            // `RefCell<T>` is `Clone`, `Default`, `Debug`, `PartialEq` and
+            // `Eq` when `T` is, and never `Copy`.
+            Ty::Cell(inner) => {
+                capability != capability::Kind::Copy
+                    && capability != capability::Kind::Hash
+                    && self.type_provides(&inner, capability)
+            }
             // Rawr's iterators are `Clone` when their items are.
             Ty::Iter(item) => {
                 capability == capability::Kind::Clone && self.type_provides(&item, capability)
@@ -12117,6 +12343,9 @@ impl<'a> Parser<'a> {
                     operation: span,
                 });
             }
+            // A `RefCell`, as a canvas Program's State, the host keeps and
+            // hands back as it is.
+            Ty::Cell(_) => intrinsic::Type::builtin("RefCell", TypeId::of::<cell::Cell>()),
             Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
@@ -12384,6 +12613,24 @@ impl<'a> Parser<'a> {
             }
             self.host_callable(argument)?;
             self.option_host_callable(argument)?;
+            // A `T: Into<Length>` passed where the library takes a `Length`:
+            // the caller converted it (`convert_into_host`), so it is one.
+            if facade
+                && let ty @ (Ty::Param(_) | Ty::Projection(..)) =
+                    self.inference.resolve(&argument.ty)
+                && let Some(target) = self
+                    .bound_trait_arguments(&ty, "Into")
+                    .first()
+                    .and_then(|arguments| arguments.first())
+                    .map(|target| self.inference.resolve(target))
+                && let Ty::Host { proof, .. } = &target
+                && self
+                    .models
+                    .host_items(&format!("{}::__into", proof.definition.path()))
+                    .is_some()
+            {
+                argument.ty = target;
+            }
             if facade
                 && let Ty::Callable {
                     inputs,
@@ -14755,6 +15002,24 @@ impl<'a> Parser<'a> {
         }
 
         let resolved = self.inference.resolve(&receiver.ty);
+        // `value.to_string()` of an imported type: Rust's blanket
+        // `ToString` through its `Display`, which `cargo check` holds the
+        // type to.
+        #[cfg(feature = "rust-import")]
+        if member.as_str() == "to_string"
+            && self.pending_arguments.is_none()
+            && matches!(self.peek(), Token::Unit)
+            && let Ty::Host { proof, .. } = match &resolved {
+                Ty::Reference { target, .. } => self.inference.resolve(target),
+                ty => ty.clone(),
+            }
+            && proof.definition.identity().imported().is_some()
+            && self.imported_member_owner(&resolved, &member).is_none()
+        {
+            let end = self.next().1;
+            let source = self.prelude_op(PreludeOp::DisplayText, [receiver.rendered_source()]);
+            return Ok(self.operator_expr(source, Ty::String, span(receiver.span.start(), end)));
+        }
         #[cfg(feature = "rust-import")]
         let alias = resolved
             .host_alias()
@@ -14778,6 +15043,21 @@ impl<'a> Parser<'a> {
             member
         };
         let path = format!("{}::{member}", definition.path());
+        // `*rotation.radians_mut() = angle`: a facade writes a `&mut`
+        // accessor as the function that stores the value back.
+        if let Some(base) = member.strip_suffix("_mut")
+            && matches!(self.peek(), Token::Unit)
+            && let Some(setters) = self.models.host_items(&path).filter(|items| {
+                items.iter().all(|item| {
+                    item.kind() == crate::host::item::Kind::AssociatedFunction
+                        && item.signature().parameters().len() == 2
+                })
+            })
+        {
+            let setters = setters.to_vec();
+            let base: ImmutableString = base.into();
+            return self.parse_host_accessor(receiver, &path, base, &setters, member_span);
+        }
         // `value.clone()` of a library type that is `Clone`: the value, as
         // Rawr's library values are copied where they are used.
         if member.as_str() == "clone"
@@ -14914,6 +15194,83 @@ impl<'a> Parser<'a> {
             arguments,
             call,
         )
+    }
+
+    /// `value.name_mut()` of a facade type: a `&mut` place whose reader is
+    /// `value.name()` and whose store is `Type::name_mut(value, new)`.
+    fn parse_host_accessor(
+        &mut self,
+        receiver: ParsedExpr,
+        path: &str,
+        base: ImmutableString,
+        setters: &[crate::host::item::Definition],
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let Some(lvalue) = receiver.lvalue.clone() else {
+            return Err(Error::InvalidHostOperation {
+                item: path.into(),
+                reason: "lends a `&mut` only of a place, such as a field or a local".into(),
+                operation: member_span,
+            });
+        };
+        let place = self.temporary("place");
+        let stored = self.temporary("stored");
+        let receiver_ty = receiver.ty.clone();
+        let at = receiver.span;
+        let local = self.operator_expr(origin::Fragment::plain(place.clone()), receiver_ty.clone(), at);
+        let getter = self.parse_host_method(local, base, member_span)?;
+        let ty = self.inference.resolve(&getter.ty);
+        let owner = self.models.item_owner(path).cloned();
+        let arguments = vec![
+            self.operator_expr(origin::Fragment::plain(place.clone()), receiver_ty, at),
+            self.operator_expr(origin::Fragment::plain(stored.clone()), ty.clone(), at),
+        ];
+        let setter = self.call_host_function(setters, owner, arguments, getter.span)?;
+        let mut read = origin::Fragment::plain("{ ");
+        read.push(getter.prelude.clone());
+        read.push(getter.source.clone());
+        read.push_text(" }");
+        let mut store = origin::Fragment::plain("{ ");
+        store.push(setter.prelude.clone());
+        store.push(setter.source.clone());
+        store.push_text(" }");
+        let step = PlaceStep::Accessor {
+            place: place.clone(),
+            stored,
+            read: read.clone(),
+            store,
+        };
+        let lvalue = match &lvalue {
+            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(NestedLvalue {
+                binding: binding.clone(),
+                base: origin::Fragment::plain(binding.to_string()),
+                steps: vec![step],
+                ty: ty.clone(),
+            })),
+            Lvalue::Slice(_) => {
+                return Err(Error::InvalidHostOperation {
+                    item: path.into(),
+                    reason: "lends a `&mut` only of a place, such as a field or a local".into(),
+                    operation: member_span,
+                })
+            }
+            lvalue => nested_step(lvalue, step, ty.clone()),
+        };
+        let mut source = origin::Fragment::plain(format!("{{ let {place} = "));
+        source.push(receiver.rendered_source());
+        source.push_text("; ");
+        source.push(read);
+        source.push_text(" }");
+        let mut value = self.operator_expr(
+            source,
+            Ty::Reference {
+                mutable: true,
+                target: Box::new(ty),
+            },
+            span(at.start(), getter.span.end()),
+        );
+        value.lvalue = Some(lvalue);
+        Ok(value)
     }
 
     /// A host method whose callable argument is a `fn` pointer choice: one
@@ -15056,6 +15413,7 @@ impl<'a> Parser<'a> {
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let ty = facade_output(&item, &output);
+        let mutable = item.receiver() == Some(receiver::Mode::Mutable);
         let helper = self.push_intrinsic(
             item,
             owner,
@@ -15065,6 +15423,47 @@ impl<'a> Parser<'a> {
             signature.requirements,
             call,
         )?;
+        // `animation.go_mut(..)` of a facade value in a place: the call
+        // changes a copy, which is stored back, as a script `&mut self`
+        // method's receiver is.
+        if mutable
+            && definition.identity().imported().is_none()
+            && !scoped
+            && self.host_witnesses.is_empty()
+            && let Some(lvalue) = receiver.lvalue.clone()
+        {
+            self.require_mutable_binding(lvalue.binding(), member_span)?;
+            let place = self.temporary("receiver");
+            let result = self.temporary("result");
+            let mut prelude = origin::Fragment::default();
+            let operands = arguments
+                .into_iter()
+                .enumerate()
+                .map(|(index, argument)| {
+                    self.materialize(argument, &format!("{helper}_arg_{index}"), &mut prelude)
+                })
+                .collect::<Vec<_>>();
+            let mut source = origin::Fragment::plain("{ ");
+            source.push(prelude);
+            source.push_text(format!("let {place} = "));
+            source.push(receiver.rendered_source());
+            source.push_text(format!("; let {result} = {place}.{helper}("));
+            source.push(origin::Fragment::join(operands, ", "));
+            source.push_text("); ");
+            let store = self.store_lvalue(&lvalue, origin::Fragment::plain(place))?;
+            source.push(store);
+            source.push_text(format!(" {result} }}"));
+            return Ok(ParsedExpr {
+                prelude: origin::Fragment::default(),
+                source,
+                ty,
+                span: call,
+                lvalue: None,
+                outcome,
+                evaluation,
+            }
+            .retain_origin());
+        }
         let (prelude, source) =
             self.private_call(&helper, std::iter::once(receiver).chain(arguments));
         Ok(ParsedExpr {
@@ -15079,6 +15478,44 @@ impl<'a> Parser<'a> {
         .retain_origin())
     }
 
+    /// The statement storing `value` into `lvalue`.
+    fn store_lvalue(
+        &mut self,
+        lvalue: &Lvalue,
+        value: origin::Fragment,
+    ) -> Result<origin::Fragment, Error> {
+        Ok(match lvalue {
+            Lvalue::Binding { binding, .. } => {
+                let mut rendered = origin::Fragment::plain(format!("{binding} = "));
+                rendered.push(value);
+                rendered.push_text(";");
+                rendered
+            }
+            Lvalue::Place { place, .. } => {
+                let mut rendered = place.clone();
+                rendered.push_text(" = ");
+                rendered.push(value);
+                rendered.push_text(";");
+                rendered
+            }
+            Lvalue::Field(field) => {
+                let helper = self.push_op(Op::SetField {
+                    definition: field.definition.clone(),
+                    slot: field.slot,
+                });
+                let mut rendered = origin::Fragment::plain(format!(
+                    "{} = {helper}({}, ",
+                    field.binding, field.binding
+                ));
+                rendered.push(value);
+                rendered.push_text(");");
+                rendered
+            }
+            Lvalue::Slice(_) => return Err(self.unsupported("changing a slice range in place")),
+            Lvalue::Nested(nested) => self.store_nested(nested, value),
+        })
+    }
+
     #[cfg(feature = "rust-import")]
     fn ambiguous_imported_member(
         &mut self,
@@ -15089,6 +15526,11 @@ impl<'a> Parser<'a> {
     ) -> Option<Error> {
         let (identity, owner, alias) = ty.imported_alias_context()?;
         if alias.is_some() {
+            return None;
+        }
+        // `to_string()` is Rust's blanket `ToString`, through `Display`
+        // (`parse_host_method`).
+        if method && member == "to_string" && self.imported_member_owner(ty, member).is_none() {
             return None;
         }
         // Every alias names the same Rust type: a method any alias has is
@@ -15395,6 +15837,17 @@ impl<'a> Parser<'a> {
             None
         };
         self.expect(Token::Equals, "'=' after binding name")?;
+        // `let grains = map.entry(k).or_default();`: each use of `grains`
+        // is the entry again, so `*grains += n` changes the map. Rust's
+        // borrow keeps the map and the entry as they are meanwhile.
+        if !mutable
+            && annotation.is_none()
+            && let Some(tokens) = self.entry_alias_tokens()
+        {
+            self.entry_aliases.insert(name.clone(), (name_span, tokens));
+        } else {
+            self.entry_aliases.remove(&name);
+        }
         // `let r = &mut place;` keeps the borrow: `r` is the place.
         let borrowing =
             matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut);
@@ -15404,9 +15857,23 @@ impl<'a> Parser<'a> {
         if borrowing {
             self.mutable_borrow = Some(self.expression_stack.len() + 1);
         }
+        self.last_cell_borrow = None;
         let value = self.parse_expr_expecting(annotation.as_ref());
         self.mutable_borrow = outer;
         let mut value = value?;
+        // `let v = cell.borrow_mut();`: the borrow lasts for `v`'s block.
+        if let Some(borrow) = self.last_cell_borrow.take()
+            && borrow.span == value.span
+            && annotation.is_none()
+        {
+            self.entry_aliases.remove(&name);
+            let rendered = self.bind_cell_borrow(&name, name_span, mutable, borrow);
+            let rendered = self.with_field_entries(pending, rendered);
+            self.write_output(rendered, span(start, value.span.end()));
+            self.last_type = Ty::Unit;
+            self.last_expression = None;
+            return self.consume_terminator(start).map(|_| ());
+        }
         // A closure that changes `self` writes it back after its statement,
         // so it cannot outlive that statement in a local.
         if self.lend_self
@@ -15558,15 +16025,28 @@ impl<'a> Parser<'a> {
     /// A `struct`, `enum`, `impl`, `trait` or `type` item inside a body,
     /// with its attributes: the item parser hoisted it to the file's items,
     /// so its tokens are passed over here. A statement's attributes have no
-    /// effect and are passed over too.
+    /// effect and are passed over too, except a `#[cfg(..)]` that is false,
+    /// which leaves the statement out.
     fn skip_nested_item(&mut self) -> Result<(), Error> {
         let start = self.position();
         let unclosed = |position| Error::UnsupportedNominalSyntax {
             construct: "an item inside a body without its end".into(),
             source: span(start, position),
         };
+        let mut configured = true;
         while self.attribute_ahead() {
             self.next();
+            if matches!(self.peek(), Token::LeftBracket)
+                && matches!(self.peek_second(), Token::Identifier(name) if name.as_str() == "cfg")
+            {
+                self.next();
+                self.next();
+                self.expect(Token::LeftParen, "`(` after `cfg`")?;
+                configured &= self.cfg_predicate()?;
+                self.expect(Token::RightParen, "`)` to close `cfg`")?;
+                self.expect(Token::RightBracket, "`]` to close an attribute")?;
+                continue;
+            }
             let mut depth = 0usize;
             loop {
                 match self.next() {
@@ -15577,6 +16057,9 @@ impl<'a> Parser<'a> {
                     _ => {}
                 }
             }
+        }
+        if !configured && !self.nested_item_ahead() {
+            return self.skip_statement();
         }
         if !self.nested_item_ahead() {
             return Ok(());
@@ -15598,6 +16081,231 @@ impl<'a> Parser<'a> {
                 (Token::EOF, position) => return Err(unclosed(position)),
                 _ => {}
             }
+        }
+    }
+
+    /// An argument for a parameter of type `T: Into<Length>`, where the
+    /// library converts into `Length`: the converted value, so the function
+    /// passes it on as a `Length`.
+    fn convert_into_host(
+        &mut self,
+        generics: &[item::Generic],
+        parameter: &type_ref::Type,
+        argument: &mut ParsedExpr,
+    ) -> Result<(), Error> {
+        let type_ref::Type::Path(type_ref::Path {
+            name,
+            target: type_ref::Target::Parameter,
+            ..
+        }) = parameter
+        else {
+            return Ok(());
+        };
+        let Some(target) = generics
+            .iter()
+            .find(|generic| generic.name.text == *name)
+            .and_then(|generic| {
+                generic
+                    .trait_arguments
+                    .iter()
+                    .find(|(trait_name, _)| trait_name.as_str() == "Into")
+            })
+            .and_then(|(_, arguments)| arguments.first())
+        else {
+            return Ok(());
+        };
+        let Ty::Host { proof, .. } = self.inference.resolve(&Ty::from_resolved(target)) else {
+            return Ok(());
+        };
+        let path = format!("{}::__into", proof.definition.path());
+        let Some(into) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+            return Ok(());
+        };
+        if matches!(
+            self.inference.resolve(&argument.ty),
+            Ty::Param(_) | Ty::Projection(..) | Ty::Infer(_) | Ty::Unknown
+        ) {
+            return Ok(());
+        }
+        let owner = self.models.item_owner(&path).cloned();
+        let span = argument.span;
+        let ty = argument.ty.clone();
+        let mut converted = self.call_host_function(&into, owner, vec![argument.clone()], span)?;
+        // The call's own type stays the caller's, which the bound checks.
+        converted.ty = ty;
+        *argument = converted;
+        Ok(())
+    }
+
+    /// The tokens up to the `;` ahead when they are a map entry's `&mut`:
+    /// `map.entry(k)` ended by `or_default()`, `or_insert(v)` or
+    /// `or_insert_with(f)`.
+    fn entry_alias_tokens(&mut self) -> Option<Vec<(Token, Position)>> {
+        if self.split_angle.is_some() {
+            return None;
+        }
+        let mut ahead = self.input.clone();
+        let mut tokens = Vec::new();
+        let mut depth = 0usize;
+        loop {
+            let (token, position) = ahead.next()?;
+            match token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.checked_sub(1)?;
+                }
+                Token::SemiColon if depth == 0 => break,
+                Token::EOF => return None,
+                _ => {}
+            }
+            tokens.push((token, position));
+        }
+        let entry = tokens.windows(2).position(|pair| {
+            matches!(&pair[0].0, Token::Period)
+                && matches!(&pair[1].0, Token::Identifier(name) if name.as_str() == "entry")
+        })?;
+        // The last call of the chain is the entry's value.
+        let last = tokens.iter().rposition(|(token, _)| matches!(token, Token::Period))?;
+        let ends = matches!(
+            tokens.get(last + 1),
+            Some((Token::Identifier(name), _))
+                if matches!(name.as_str(), "or_default" | "or_insert" | "or_insert_with")
+        );
+        (ends && last > entry).then_some(tokens)
+    }
+
+    /// `PhantomData<T>`, which holds nothing: the unit type. Its arguments
+    /// are read and left out.
+    fn parse_phantom_type(&mut self) -> Result<Ty, Error> {
+        if matches!(self.peek(), Token::LessThan) {
+            self.next();
+            loop {
+                self.parse_local_type()?;
+                if matches!(self.peek(), Token::Comma) {
+                    self.next();
+                } else {
+                    break;
+                }
+            }
+            self.expect_close_angle("'>' after `PhantomData`'s argument")?;
+        }
+        Ok(Ty::Unit)
+    }
+
+    /// How many `::name` segments follow `name` to spell `PhantomData`:
+    /// `PhantomData`, `marker::PhantomData` or `std::marker::PhantomData`.
+    fn phantom_path(&mut self, name: &str) -> Option<usize> {
+        if self.models.get("PhantomData").is_some() {
+            return None;
+        }
+        let names = self.lookahead_path(name);
+        (1..=names.len())
+            .find(|count| crate::resolve::std_phantom(&names[..*count].join("::")))
+            .map(|count| (count - 1) * 2)
+    }
+
+    /// `name` and the names after it joined by `::`, as written ahead.
+    fn lookahead_path(&mut self, name: &str) -> Vec<String> {
+        let mut names = vec![name.to_owned()];
+        if self.split_angle.is_some() || self.bindings.contains_key(name) {
+            return names;
+        }
+        let mut ahead = self.input.clone();
+        loop {
+            if !matches!(ahead.next(), Some((Token::DoubleColon, _))) {
+                break;
+            }
+            let Some((Token::Identifier(next), _)) = ahead.next() else {
+                break;
+            };
+            names.push(next.to_string());
+        }
+        names
+    }
+
+    /// One statement a false `#[cfg(..)]` leaves out: through its `;`, or
+    /// through the `}` that ends a block, `if`, `match` or loop.
+    fn skip_statement(&mut self) -> Result<(), Error> {
+        let start = self.position();
+        let braced = match self.peek() {
+            Token::LeftBrace | Token::If | Token::For | Token::While | Token::Loop => true,
+            Token::Reserved(keyword) => matches!(keyword.as_str(), "match" | "unsafe"),
+            _ => false,
+        };
+        let mut depth = 0usize;
+        loop {
+            match self.next() {
+                (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
+                    depth += 1;
+                }
+                (Token::RightParen | Token::RightBracket, _) => depth = depth.saturating_sub(1),
+                (Token::RightBrace, _) => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 && braced && !matches!(self.peek(), Token::Else) {
+                        return Ok(());
+                    }
+                }
+                (Token::SemiColon, _) if depth == 0 => return Ok(()),
+                (Token::EOF, position) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a statement under `#[cfg(..)]` without its end".into(),
+                        source: span(start, position),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The predicate of `cfg(..)` or `cfg!(..)` for the target Rawr runs
+    /// on. No feature is on.
+    fn cfg_predicate(&mut self) -> Result<bool, Error> {
+        let (name, at) = match self.next() {
+            (Token::Identifier(name), position) => (name.to_string(), position),
+            (_, position) => {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "a `cfg` predicate that is not a name".into(),
+                    source: point_span(position),
+                })
+            }
+        };
+        match name.as_str() {
+            "not" | "all" | "any" => {
+                self.expect(Token::LeftParen, "`(` after a `cfg` operator")?;
+                let mut values = Vec::new();
+                while !matches!(self.peek(), Token::RightParen) {
+                    values.push(self.cfg_predicate()?);
+                    if matches!(self.peek(), Token::Comma) {
+                        self.next();
+                    }
+                }
+                self.next();
+                match name.as_str() {
+                    "not" if values.len() == 1 => Ok(!values[0]),
+                    "not" => Err(Error::UnsupportedNominalSyntax {
+                        construct: "`not` in `cfg` takes one predicate".into(),
+                        source: point_span(at),
+                    }),
+                    "all" => Ok(values.iter().all(|value| *value)),
+                    _ => Ok(values.iter().any(|value| *value)),
+                }
+            }
+            _ if matches!(self.peek(), Token::Equals) => {
+                self.next();
+                let value = match self.next() {
+                    (Token::StringConstant(value), _) => value.to_string(),
+                    (_, position) => {
+                        return Err(Error::UnsupportedNominalSyntax {
+                            construct: "a `cfg` value that is not a string".into(),
+                            source: point_span(position),
+                        })
+                    }
+                };
+                Ok(cfg_value(&name, &value))
+            }
+            _ => Ok(cfg_flag(&name)),
         }
     }
 
@@ -21063,6 +21771,33 @@ impl<'a> Parser<'a> {
                     stores.push(store);
                     place = origin::Fragment::plain(local);
                 }
+                PlaceStep::Cell { release } => {
+                    let (cell_read, cell_store, local) = self.cell_step(&place, *release);
+                    read.push(cell_read);
+                    stores.push(cell_store);
+                    place = origin::Fragment::plain(local);
+                }
+                PlaceStep::Accessor {
+                    place: bound,
+                    stored,
+                    read: reader,
+                    store: writer,
+                } => {
+                    let local = self.temporary("part");
+                    read.push_text(format!("let {local} = {{ let {bound} = "));
+                    read.push(place.clone());
+                    read.push_text("; ");
+                    read.push(reader.clone());
+                    read.push_text(" }; ");
+                    let mut store = place.clone();
+                    store.push_text(format!(" = {{ let {bound} = "));
+                    store.push(place.clone());
+                    store.push_text(format!("; let {stored} = {local}; "));
+                    store.push(writer.clone());
+                    store.push_text(" }; ");
+                    stores.push(store);
+                    place = origin::Fragment::plain(local);
+                }
             }
         }
         let mut store = origin::Fragment::default();
@@ -21147,6 +21882,36 @@ impl<'a> Parser<'a> {
             Ty::Reference { target, .. } => self.inference.resolve(target),
             ty => ty.clone(),
         };
+        // `2.0 * angle` through `impl Mul<Radians> for f32`: the library
+        // type's own `mul` of the number, as multiplying commutes.
+        if symbol == "*"
+            && matches!(host, Ty::Float(_) | Ty::Int(_) | Ty::Unknown)
+            && let Some(rhs) = rhs.as_deref()
+            && let Ty::Host { proof, .. } = self.inference.resolve(&rhs.ty)
+        {
+            let path = format!("{}::mul", proof.definition.path());
+            if self.models.host_items(&path).is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.kind() == crate::host::item::Kind::Method
+                        && item.signature().parameters().first().is_some_and(|parameter| {
+                            matches!(
+                                parameter.shape(),
+                                crate::host::type_ref::Shape::Builtin(
+                                    crate::host::type_ref::Builtin::F64
+                                        | crate::host::type_ref::Builtin::F32
+                                )
+                            )
+                        })
+                })
+            }) {
+                let ty = self.inference.resolve(&rhs.ty);
+                let receiver = self.operator_expr(rhs.rendered_source(), ty, rhs.span);
+                self.pending_arguments = Some((vec![lhs.clone()], expression.end()));
+                let mut value = self.parse_host_method(receiver, "mul".into(), expression)?;
+                value.span = expression;
+                return Ok(Some(value));
+            }
+        }
         if let Ty::Host { proof, .. } = &host
             && let Some(rhs) = rhs.as_deref()
         {
@@ -23224,6 +23989,10 @@ impl<'a> Parser<'a> {
                     ty: (*target).clone(),
                     place,
                 }),
+                (Ty::Reference { mutable: true, .. }, Some(Lvalue::Nested(mut nested))) => {
+                    nested.ty = (*target).clone();
+                    Some(Lvalue::Nested(nested))
+                }
                 _ => None,
             };
             operand.ty = *target;
@@ -23777,6 +24546,18 @@ impl<'a> Parser<'a> {
                 )
             {
                 value = self.parse_reverse_member(value, inner, member, member_span)?;
+                continue;
+            }
+            let cell = match &builtin {
+                Ty::Cell(inner) => Some((**inner).clone()),
+                Ty::Reference { target, .. } => match &**target {
+                    Ty::Cell(inner) => Some((**inner).clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(inner) = cell {
+                value = self.parse_cell_member(value, inner, member, member_span)?;
                 continue;
             }
             let tuple = match &builtin {
@@ -24876,11 +25657,47 @@ impl<'a> Parser<'a> {
             return self.parse_compile_time_macro(&name, name_span);
         }
         if matches!(self.peek(), Token::Bang)
+            && name.as_str() == "cfg"
+            && self.models.import(&name).is_none()
+        {
+            self.next();
+            let open = self.expect(Token::LeftParen, "`(` after `cfg!`")?;
+            let value = self.cfg_predicate()?;
+            let close = self.expect(Token::RightParen, "`)` to close `cfg!`")?;
+            let _ = open;
+            return Ok(self.literal(
+                if value { "true" } else { "false" },
+                Ty::Bool,
+                span(name_span.start(), close),
+            ));
+        }
+        if matches!(self.peek(), Token::Bang)
             && name.as_str() == "matches"
             && self.models.import(&name).is_none()
         {
             self.next();
             return self.parse_matches(name_span);
+        }
+        // `RefCell::new(value)` and `RefCell::default()`.
+        if let Some(skip) = self.cell_path(&name) {
+            for _ in 0..skip {
+                self.next();
+            }
+            return self.parse_cell_constructor(name_span);
+        }
+        // `PhantomData`, also `PhantomData::<T>` or in full: a value that is
+        // nothing at run time.
+        if let Some(skip) = self.phantom_path(&name) {
+            for _ in 0..skip {
+                self.next();
+            }
+            let mut end = name_span.end();
+            if matches!(self.peek(), Token::DoubleColon) && matches!(self.peek_second(), Token::LessThan) {
+                self.next();
+                self.parse_phantom_type()?;
+                end = self.position();
+            }
+            return Ok(self.literal("()", Ty::Unit, span(name_span.start(), end)));
         }
         // `std::mem::swap(&mut a, &mut b)`, `mem::replace`, `take`.
         if let Some((function, skip)) = self.mem_path(&name) {
@@ -25781,9 +26598,34 @@ impl<'a> Parser<'a> {
             return Ok(element);
         }
         self.end_borrows(&name);
+        // A local bound to a `RefCell` borrow: the cell's value.
+        if self.closures.is_empty()
+            && let Some(value) = self.cell_guard_use(&name, name_span)
+        {
+            return Ok(value);
+        }
         let Some(binding) = self.bindings.get(name.as_str()) else {
             return Err(self.unsupported("unknown variable in nominal expression"));
         };
+        // A local holding a map entry's `&mut`: the entry, read again.
+        if let Some((_, tokens)) = self
+            .entry_aliases
+            .get(&name)
+            .filter(|(declaration, _)| *declaration == binding.declaration)
+            .cloned()
+            && self.closures.is_empty()
+        {
+            let at = name_span.start();
+            self.splice_tokens(
+                tokens
+                    .into_iter()
+                    .map(|(token, _)| (token, at))
+                    .collect(),
+            );
+            let mut value = self.parse_operand()?;
+            value.span = span(name_span.start(), name_span.end());
+            return Ok(value);
+        }
         // A local iterator's chain, run where it is used; a closure using
         // it captures what its binding evaluated.
         if let Some(bound) = self
@@ -27807,6 +28649,10 @@ impl<'a> Parser<'a> {
                 let value = self.default_source(inner, span)?;
                 self.prelude_op(PreludeOp::ReverseWrap, [value])
             }
+            Ty::Cell(inner) => {
+                let value = self.default_source(inner, span)?;
+                self.prelude_op(PreludeOp::CellNew, [value])
+            }
             Ty::Tuple(members) => {
                 let members = members
                     .iter()
@@ -28159,6 +29005,11 @@ impl<'a> Parser<'a> {
                 let unwrapped = self.prelude_op(PreludeOp::ReverseInner, [value]);
                 self.debug_source(inner, unwrapped, span)?
                     .surrounded("(\"Reverse(\" + ", " + \")\")")
+            }
+            Ty::Cell(inner) => {
+                let unwrapped = self.prelude_op(PreludeOp::CellGet, [value]);
+                self.debug_source(inner, unwrapped, span)?
+                    .surrounded("(\"RefCell { value: \" + ", " + \" }\")")
             }
             // `{1: "a", 2: "b"}` and `{1, 2}`, in key order.
             Ty::Keyed(kind, arguments) => {
@@ -28543,6 +29394,50 @@ impl<'a> Parser<'a> {
                 }
                 let source = self.mutation_call(&value, member.as_str(), operands)?;
                 (source.surrounded("{ ", "; }"), Ty::Unit)
+            }
+            // `resize(n, value)` and `resize_with(n, f)`: the new items made
+            // first, then one change of the `Vec` (`splice`), which drops the
+            // items past `n` or adds the new ones.
+            ("resize" | "resize_with", [length, argument]) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), length)?;
+                let with = member.as_str() == "resize_with";
+                let expected = if with {
+                    Ty::Fn {
+                        inputs: Box::default(),
+                        output: Box::new(element.clone()),
+                    }
+                } else {
+                    element.clone()
+                };
+                self.coerce_expr(&expected, argument)?;
+                let (n, len, extra, made) = (
+                    self.temporary("length"),
+                    self.temporary("len"),
+                    self.temporary("extra"),
+                    self.temporary("made"),
+                );
+                let item = if with {
+                    format!("{made}.call()")
+                } else {
+                    made.clone()
+                };
+                let mut source = origin::Fragment::plain(format!("{{ let {n} = "));
+                source.push(length.rendered_source());
+                source.push_text(format!("; let {len} = "));
+                source.push(receiver.clone());
+                source.push_text(format!(".len(); let {extra} = []; let {made} = "));
+                source.push(argument.rendered_source());
+                source.push_text(format!(
+                    "; while {len} + {extra}.len() < {n} {{ {extra}.push({item}); }} "
+                ));
+                let operands = vec![
+                    origin::Fragment::plain(format!("if {n} < {len} {{ {n} }} else {{ {len} }}")),
+                    origin::Fragment::plain(len.clone()),
+                    origin::Fragment::plain(extra.clone()),
+                ];
+                source.push(self.mutation_call(&value, "splice", operands)?);
+                source.push_text("; }");
+                (source, Ty::Unit)
             }
             // `extend` from an iterable of `T`, or of `&T` for a `Copy` `T`.
             ("extend" | "extend_from_slice", [argument]) => {
@@ -29291,6 +30186,7 @@ impl<'a> Parser<'a> {
             {
                 let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
+                self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
             }
             // The boot returns its sealed startup envelope: script code
             // that calls it gets the tuple back.
@@ -30720,6 +31616,23 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(self.operator_expr(value, builtin, expression));
             }
+            // `f32::from(degrees)`: a facade number type's `into`.
+            if let Ty::Host { proof, .. } = &source
+                && matches!(builtin, Ty::Float(_))
+                && self
+                    .models
+                    .host_items(&format!("{}::into", proof.definition.path()))
+                    .is_some_and(|items| {
+                        items.iter().any(|item| {
+                            item.kind() == crate::host::item::Kind::Method
+                                && item.signature().parameters().is_empty()
+                        })
+                    })
+            {
+                self.pending_arguments = Some((Vec::new(), expression.end()));
+                let value = self.parse_host_method(argument.clone(), "into".into(), expression)?;
+                return Ok(self.operator_expr(value.rendered_source(), builtin, expression));
+            }
             if let Some(op) = builtin_conversion(&builtin, &source) {
                 let value = match op {
                     Some(op) => self.prelude_op(op, [argument.rendered_source()]),
@@ -31459,11 +32372,18 @@ impl<'a> Parser<'a> {
                 self.expect(Token::LeftParen, "'(' after default")?;
                 self.expect(Token::RightParen, "')' after default")?
             };
-            let source = self.default_source(&model.ty(), member_span)?;
+            // A generic type's `default()` has fresh arguments, which its
+            // use settles, as `let w: W<i64> = W::default()` does.
+            let ty = if model.generics().is_empty() {
+                model.ty()
+            } else {
+                self.fresh_nominal(&model, member_span).0
+            };
+            let source = self.default_source(&ty, member_span)?;
             return Ok(ParsedExpr {
                 prelude: origin::Fragment::default(),
                 source,
-                ty: model.ty(),
+                ty,
                 span: span(owner_span.start(), end),
                 lvalue: None,
                 outcome: crate::host::usage::Outcome::Conservative,
@@ -32063,6 +32983,12 @@ impl<'a> Parser<'a> {
             if crate::resolve::std_reverse(&name) && self.models.get("Reverse").is_none() {
                 return self.parse_reverse_type();
             }
+            if crate::resolve::std_phantom(&name) && self.models.get("PhantomData").is_none() {
+                return self.parse_phantom_type();
+            }
+            if crate::resolve::std_cell(&name) && self.models.get("RefCell").is_none() {
+                return self.parse_cell_type();
+            }
             if let Some(range) = crate::resolve::std_range(&name)
                 && self.models.get(range).is_none()
             {
@@ -32141,6 +33067,17 @@ impl<'a> Parser<'a> {
             && self.models.get(&name).is_none()
         {
             return self.parse_reverse_type();
+        }
+        if name.as_str() == "PhantomData" && qualified.is_none() && self.models.get(&name).is_none()
+        {
+            return self.parse_phantom_type();
+        }
+        if name.as_str() == "RefCell"
+            && matches!(self.peek(), Token::LessThan)
+            && qualified.is_none()
+            && self.models.get(&name).is_none()
+        {
+            return self.parse_cell_type();
         }
         if let Some(range) = crate::resolve::std_range(&name)
             && matches!(self.peek(), Token::LessThan)
@@ -33987,7 +34924,8 @@ impl<'a> Parser<'a> {
             (Ty::Option(expected_element), Ty::Option(actual_element))
             | (Ty::Boxed(expected_element), Ty::Boxed(actual_element))
             | (Ty::Iter(expected_element), Ty::Iter(actual_element))
-            | (Ty::Reverse(expected_element), Ty::Reverse(actual_element)) => {
+            | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
+            | (Ty::Cell(expected_element), Ty::Cell(actual_element)) => {
                 self.unify_type(expected_element, actual_element)
             }
             (Ty::Result(expected_ok, expected_err), Ty::Result(actual_ok, actual_err)) => {
@@ -34922,7 +35860,8 @@ fn contains_inference(ty: &Ty) -> bool {
         Ty::Reference { target, .. }
         | Ty::Boxed(target)
         | Ty::Iter(target)
-        | Ty::Reverse(target) => contains_inference(target),
+        | Ty::Reverse(target)
+        | Ty::Cell(target) => contains_inference(target),
         Ty::Array { element, .. } | Ty::Option(element) => contains_inference(element),
         Ty::Result(ok, err) => contains_inference(ok) || contains_inference(err),
         Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(contains_inference),
@@ -35355,6 +36294,9 @@ fn debug_value(value: &Dynamic, models: &Models) -> String {
 }
 
 fn debug_text(value: &Dynamic, models: &Models) -> String {
+    if let Some(inner) = cell::value(value) {
+        return format!("RefCell {{ value: {} }}", debug_value(&inner, models));
+    }
     if let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() {
         return format!("Reverse({})", debug_value(&reverse.0, models));
     }

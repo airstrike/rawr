@@ -742,9 +742,14 @@ fn authenticate_structural(
 }
 
 /// Whether a field of type `ty` is read as a copy, as the generated bridge
-/// reads it: a scalar, or an `Option` or `Result` of scalars.
-fn copy_scalar(ty: &host::type_ref::Type) -> bool {
+/// reads it: a scalar, an imported Copy type of `facade`, or an `Option` or
+/// `Result` of them.
+fn copy_scalar(ty: &host::type_ref::Type, facade: &host::facade::Definition) -> bool {
     match ty.shape() {
+        host::type_ref::Shape::Imported { identity, .. } => facade.types().any(|definition| {
+            definition.identity().imported() == Some(identity)
+                && definition.capabilities().contains(crate::capability::Kind::Copy)
+        }),
         host::type_ref::Shape::Unit => true,
         host::type_ref::Shape::Builtin(builtin) => matches!(
             builtin,
@@ -763,8 +768,10 @@ fn copy_scalar(ty: &host::type_ref::Type) -> bool {
                 | host::type_ref::Builtin::Usize
                 | host::type_ref::Builtin::F32
         ),
-        host::type_ref::Shape::Option(inner) => copy_scalar(inner),
-        host::type_ref::Shape::Result(ok, err) => copy_scalar(ok) && copy_scalar(err),
+        host::type_ref::Shape::Option(inner) => copy_scalar(inner, facade),
+        host::type_ref::Shape::Result(ok, err) => {
+            copy_scalar(ok, facade) && copy_scalar(err, facade)
+        }
         _ => false,
     }
 }
@@ -787,7 +794,7 @@ fn structural_path<'facade>(
                 .chain(fields.iter().filter_map(|field| {
                     (field.imported_identity().fingerprint() == row.selector).then_some(
                         StructuralKind::Field {
-                            copy: copy_scalar(field.ty()),
+                            copy: copy_scalar(field.ty(), facade),
                         },
                     )
                 }))

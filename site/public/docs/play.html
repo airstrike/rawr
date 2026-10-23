@@ -144,13 +144,84 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
   <li>An animation that asks for the very next frame settles right away.</li>
   <li>At most 8 frames are drawn.</li>
 </ul>
-<p>Subscriptions don&rsquo;t run, so a timer never ticks. Use <code>msg=</code> to put the app in the state you want to show.</p>
+<p>Use <code>msg=</code> to put the app in the state you want to show.</p>
+
+<h3 id="animations">Animations</h3>
+<p>An app runs on a simulated clock that moves 50&nbsp;ms each frame. <code>time::every</code> ticks and <code>window::frames</code> fires as it moves. <code>Instant::now()</code> reads it. The same snippet gives the same frames on every run.</p>
+<ul>
+  <li>An app whose view never changes gets a PNG.</li>
+  <li>An app whose view changes and then settles gets a GIF that plays once. Its last frame stays for about 3&nbsp;s. Each <code>msg=</code> is applied after the frames before it settle, so each message&rsquo;s change shows.</li>
+  <li>An app whose frames repeat gets a GIF of one cycle that loops.</li>
+  <li>An app that keeps changing without repeating gets the first 5&nbsp;s, played once. The reply notes the cut.</li>
+  <li>A GIF over 8&nbsp;MB is replaced by a PNG of its last frame. So are messages that run past 100 frames. The reply notes why.</li>
+</ul>
+<p>This bar eases from empty to full in one second. It listens to <code>window::frames</code> only while it moves.</p>
+<div class="block">
+  <div class="file"><b>fill.rs</b></div>
+  <pre><code data-lang="rust" data-run="fill.rs" id="src-fill">use iced::animation::Easing;
+use iced::time::{Instant, milliseconds};
+use iced::widget::{column, progress_bar, text};
+use iced::{Animation, Subscription, Widget, window};
+
+pub fn main() -&gt; iced::Result {
+    iced::application(Fill::new, Fill::update, Fill::view)
+        .subscription(Fill::subscription)
+        .run()
+}
+
+struct Fill {
+    progress: Animation&lt;bool&gt;,
+    now: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Frame(Instant),
+}
+
+impl Fill {
+    fn new() -&gt; Self {
+        let now = Instant::now();
+        let mut progress = Animation::new(false)
+            .duration(milliseconds(1000))
+            .easing(Easing::EaseInOut);
+        progress.go_mut(true, now);
+        Self { progress, now }
+    }
+
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Frame(now) =&gt; self.now = now,
+        }
+    }
+
+    fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
+        if self.progress.is_animating(self.now) {
+            window::frames().map(Message::Frame)
+        } else {
+            Subscription::none()
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        let value = self.progress.interpolate(0.0, 100.0, self.now);
+        column![
+            text(format!("{value:.0}%")).size(24),
+            progress_bar(0.0..=100.0, value).length(240),
+        ]
+        .spacing(8)
+    }
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-fill" data-out="out-fill" data-alt="A progress bar that eases from 0% to 100%, drawn by rawr-iced on the server" aria-label="Run fill.rs" hidden></button><span class="quiet" id="out-fill" aria-live="polite">(plays a bar filling up)</span></div>
+</div>
+<p>The playground shows the same GIF. A share link&rsquo;s preview image is the last frame.</p>
 
 <h2 id="limits">Limits</h2>
 <p>Snippets are untrusted. Each one runs in its own process with these limits on the hosted bot and playground:</p>
 <table>
   <tr><th>Limit</th><th>Value</th></tr>
-  <tr><td>Script time</td><td>5 seconds. The whole run is stopped after 10 seconds.</td></tr>
+  <tr><td>Script time</td><td>5 seconds. The whole run is stopped after 25 seconds.</td></tr>
+  <tr><td>Animation time</td><td>15 seconds, once the view changes. Each user gets 45 seconds of it in any 10 minutes. One animation at a time gets it. Others get 5 seconds.</td></tr>
   <tr><td>Memory</td><td>256 MB per run.</td></tr>
   <tr><td>Operations</td><td>1,000,000 per evaluation.</td></tr>
   <tr><td>Call depth</td><td>32.</td></tr>
@@ -159,6 +230,7 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
   <tr><td>Canvas</td><td>2048 logical pixels per side.</td></tr>
 </table>
 <p>A limit gets a plain reply such as <code>time limit exceeded</code>. Snippets have no filesystem, network or environment access.</p>
+<p>An animation cut by its time says so, as in <code>Rendering stopped after 15 s, so the animation shows its first 2.3 s.</code> When it had only 5 seconds, a second line says why. Either your animation time is used up for now, or another animation was rendering at the same time.</p>
 
 <h3 id="no-files">Images without files</h3>
 <p>?play has no files. An image or svg path draws as a missing file. <code>include_str!</code> and <code>include_bytes!</code> fail with an error that says so. <code>env!</code> fails the same way, since ?play has no environment variables either. A snippet can still draw an image from bytes it holds. <code>svg::Handle::from_memory</code> takes svg text as bytes. <code>image::Handle::from_bytes</code> takes the bytes of a PNG or JPEG file. <code>image::Handle::from_rgba</code> takes a width, a height and 4 bytes for each pixel.</p>

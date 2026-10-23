@@ -16,6 +16,8 @@ pub(crate) struct Entry {
     centered_intrinsic: Option<host::item::Fingerprint>,
     run_intrinsic: Option<host::item::Fingerprint>,
     boot: Option<crate::item::Key>,
+    /// `main`'s statements before the entry, which run once.
+    prelude: Option<crate::item::Key>,
     update: crate::item::Key,
     view: crate::item::Key,
     title: Option<crate::item::Key>,
@@ -64,6 +66,21 @@ impl Entry {
 
     pub(crate) const fn boot(&self) -> Option<&crate::item::Key> {
         self.boot.as_ref()
+    }
+
+    pub(crate) const fn prelude(&self) -> Option<&crate::item::Key> {
+        self.prelude.as_ref()
+    }
+
+    /// The span of `main`'s statements before the entry.
+    pub(crate) fn prelude_span(&self, items: &[item::Shell]) -> Option<Span> {
+        let key = self.prelude.as_ref()?;
+        items.iter().find_map(|shell| match &shell.kind {
+            item::Kind::Function(function) if shell.key.as_ref() == Some(key) => {
+                Some(Span::new(function.body.span.start(), function.body.elide?.start()))
+            }
+            _ => None,
+        })
     }
 
     pub(crate) const fn update(&self) -> &crate::item::Key {
@@ -472,7 +489,11 @@ fn resolve_main(
     let tokens = attempt.syntax.tokens();
     let mut boot_closure = Vec::new();
 
-    if tokens
+    let nested = delimiter_depth(tokens, attempt.index) > 0;
+    // Statements may come before the entry, as Rust's `main` runs them
+    // first. Each one ends where the entry starts.
+    let after = if nested { 0 } else { attempt.index };
+    if tokens[after..]
         .iter()
         .any(|token| matches!(token.kind(), crate::item::BodyTokenKind::If))
     {
@@ -480,19 +501,23 @@ fn resolve_main(
             entry: attempt.span,
         });
     }
-    if attempt.index != 0 {
-        return Err(if delimiter_depth(tokens, attempt.index) > 0 {
-            application::Error::NestedEntry {
-                entry: attempt.span,
-            }
-        } else {
-            application::Error::NonTailEntry {
-                entry: attempt.span,
-            }
+    if nested {
+        return Err(application::Error::NestedEntry {
+            entry: attempt.span,
+        });
+    }
+    if attempt.index != 0
+        && !matches!(
+            tokens[attempt.index - 1].kind(),
+            crate::item::BodyTokenKind::Semicolon | crate::item::BodyTokenKind::RightBrace
+        )
+    {
+        return Err(application::Error::NonTailEntry {
+            entry: attempt.span,
         });
     }
 
-    let mut cursor = Cursor::new(tokens, attempt.span);
+    let mut cursor = Cursor::new(&tokens[attempt.index..], attempt.span);
     cursor.consume_intrinsic()?;
     let result = match attempt.kind {
         AttemptKind::Run => {
@@ -535,6 +560,7 @@ fn resolve_main(
                 centered_intrinsic: None,
                 run_intrinsic: None,
                 boot,
+                prelude: None,
                 update,
                 view,
                 title: None,
@@ -656,6 +682,7 @@ fn resolve_main(
                         .fingerprint(),
                 ),
                 boot,
+                prelude: None,
                 update,
                 view,
                 title,
@@ -676,8 +703,69 @@ fn resolve_main(
             entry: attempt.span,
         });
     }
+    let mut result = result;
+    if attempt.index != 0 {
+        let shell = prelude_function(attempt, result.span, items, boot_closure.len())
+            .ok_or(application::Error::NonTailEntry {
+                entry: attempt.span,
+            })?;
+        result.prelude = shell.key.clone();
+        boot_closure.push(shell);
+    }
     Ok(Some((result, boot_closure)))
 }
+
+/// The statements of `main` before its entry, as a function of no
+/// parameters returning `()`: `main`'s body with the entry left out. The
+/// runner calls it once, before the first boot.
+fn prelude_function(
+    attempt: &Attempt<'_>,
+    entry: Span,
+    items: &[item::Shell],
+    synthesized: usize,
+) -> Option<item::Shell> {
+    let (main, function) = items.iter().find_map(|shell| match &shell.kind {
+        item::Kind::Function(function) if function.name.span == attempt.name.span => {
+            Some((shell, function))
+        }
+        _ => None,
+    })?;
+    let key = main.key.as_ref()?;
+    let name = crate::item::Name {
+        text: PRELUDE.into(),
+        span: function.name.span,
+    };
+    Some(item::Shell {
+        id: crate::item::Id::from_index(items.len() + synthesized),
+        source: main.source,
+        key: Some(crate::item::Key::new(
+            key.package().into(),
+            key.modules().into(),
+            name.text.clone(),
+            crate::item::Kind::Function,
+        )),
+        span: main.span,
+        kind: item::Kind::Function(item::Function {
+            header: function.header.clone(),
+            name,
+            generics: Box::default(),
+            receiver: None,
+            parameters: Box::default(),
+            output: None,
+            body: item::Body {
+                span: function.body.span,
+                lowering: item::Lowering::NominalFunction,
+                syntax: crate::item::BodySyntax::new(Vec::new()),
+                constant: false,
+                text: None,
+                elide: Some(entry),
+            },
+        }),
+    })
+}
+
+/// The name of the function of `main`'s statements before its entry.
+pub(crate) const PRELUDE: &str = "__rawr_main";
 
 /// `|| value` as a boot: a function of no parameters returning `value`, of
 /// the State the free `update` function takes as `&mut`, beside `main`.
@@ -745,6 +833,7 @@ fn boot_function(
                 syntax: crate::item::BodySyntax::new(Vec::new()),
                 constant: true,
                 text: None,
+                elide: None,
             },
         }),
     })
@@ -829,6 +918,7 @@ fn default_boot(
                 syntax: crate::item::BodySyntax::new(Vec::new()),
                 constant: true,
                 text: Some(text.into()),
+                elide: None,
             },
         }),
     })
@@ -999,6 +1089,7 @@ fn theme_function(
                 syntax: crate::item::BodySyntax::new(Vec::new()),
                 constant: true,
                 text: None,
+                elide: None,
             },
         }),
     })
@@ -1060,15 +1151,22 @@ fn resolve_callback(
                     | item::Kind::Enum(_) => None,
                 });
             match owner {
-                Some(owner) => methods
-                    .iter()
-                    .find(|method| {
+                // An inherent method before a trait's of the same name, as
+                // Rust resolves `State::update` when State is also a canvas
+                // Program.
+                Some(owner) => {
+                    let candidates = methods.iter().filter(|method| {
                         method.owner() == owner
                             && method.name() == name.as_str()
                             && (source.is_none_or(|source| method.source() == source)
                                 || method.is_public())
-                    })
-                    .map(|method| method.key().clone()),
+                    });
+                    candidates
+                        .clone()
+                        .find(|method| method.trait_name().is_none())
+                        .or_else(|| candidates.clone().next())
+                        .map(|method| method.key().clone())
+                }
                 // `view::view`: a function of the crate's module `view`.
                 None => items.iter().find_map(|shell| match &shell.kind {
                     item::Kind::Function(function)

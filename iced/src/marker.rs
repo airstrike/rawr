@@ -404,22 +404,36 @@ pub(crate) struct Transition {
     pub(crate) view: item::Value,
 }
 
-/// iced's `Animation<f32>`, settled: no time passes in a Rawr view, so it
-/// interpolates to its value.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Animation(pub(crate) f64);
+/// iced's `Animation<T>` of a `bool` or an `f32`.
+#[derive(Clone, Debug)]
+pub(crate) enum Animation {
+    Bool(iced::Animation<bool>),
+    Float(iced::Animation<f32>),
+}
 
-/// `animation::Easing`: a settled animation has no curve to follow.
+impl PartialEq for Animation {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Bool(left), Self::Bool(right)) => left.value() == right.value(),
+            (Self::Float(left), Self::Float(right)) => left.value() == right.value(),
+            _ => false,
+        }
+    }
+}
+
+/// `animation::Easing`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Easing;
+pub(crate) struct Easing(pub(crate) iced::animation::Easing);
 
 /// `time::Instant`: a moment, as `Instant::now()`, a frame or a tick reads it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Instant(pub(crate) iced::time::Instant);
 
 impl Instant {
+    /// The present, or the simulated time while a recording's clock is
+    /// frozen.
     pub(crate) fn now() -> Self {
-        Self(iced::time::Instant::now())
+        Self(crate::snapshot::clock::now().unwrap_or_else(iced::time::Instant::now))
     }
 }
 
@@ -622,6 +636,10 @@ pub(crate) struct Geometry {
 /// share it, so `clear` through `&self` empties every copy.
 #[derive(Clone, Default)]
 pub(crate) struct Cache(pub(crate) std::sync::Arc<std::sync::Mutex<Option<Geometry>>>);
+
+/// `canvas::Group`: caches iced draws together, which Rawr draws one by one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CacheGroup;
 
 impl std::fmt::Debug for Cache {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

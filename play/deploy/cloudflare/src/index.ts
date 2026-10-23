@@ -50,6 +50,7 @@ import {
   firstOutputLine,
   parseTextResult,
   pngSize,
+  stillBody,
   previewHeaders,
   purgeSelection,
   RENDER_LIMITS,
@@ -59,6 +60,7 @@ import {
   hmac,
   checkPass,
   cookie,
+  renderRequest,
   makePass,
   PASS_COOKIE,
   passCookie,
@@ -131,6 +133,9 @@ interface Env {
   PLAY_MEMORY_MB: string;
   PLAY_TIMEOUT_MS: string;
   PLAY_TIME_MS: string;
+  PLAY_ANIMATION_TIME_MS: string;
+  PLAY_ANIMATION_ALLOWANCE_S: string;
+  PLAY_ANIMATION_WINDOW_S: string;
   PLAY_VERSION: string;
   /**
    * Secret: the key the bot makes server tokens with. The Worker only
@@ -163,6 +168,9 @@ export class PlayBot extends Container<Env> {
       PLAY_MEMORY_MB: env.PLAY_MEMORY_MB,
       PLAY_TIMEOUT_MS: env.PLAY_TIMEOUT_MS,
       PLAY_TIME_MS: env.PLAY_TIME_MS,
+      PLAY_ANIMATION_TIME_MS: env.PLAY_ANIMATION_TIME_MS,
+      PLAY_ANIMATION_ALLOWANCE_S: env.PLAY_ANIMATION_ALLOWANCE_S,
+      PLAY_ANIMATION_WINDOW_S: env.PLAY_ANIMATION_WINDOW_S,
       PLAY_CONFIG_URL: `http://${CONFIG_HOST}/channels`,
       PLAY_REPORT_URL: `http://${CONFIG_HOST}`,
       PLAY_HTTP_PORT: String(HTTP_PORT),
@@ -289,7 +297,8 @@ export class PlayBot extends Container<Env> {
     let response: Response;
     try {
       response = await this.containerFetch(
-        new Request("http://container/render", { method: "POST", headers: { "content-type": "application/json" }, body: text }),
+        // A preview is the last frame as a PNG, never an animation.
+        new Request("http://container/render", { method: "POST", headers: { "content-type": "application/json" }, body: stillBody(text) }),
         HTTP_PORT,
       );
     } catch {
@@ -426,7 +435,10 @@ export class PlayBot extends Container<Env> {
   /** The image and the settings the container reads at start: a change to either restarts it. */
   private wanted(): string {
     const e = this.env;
-    return `${e.PLAY_VERSION} workers=${e.PLAY_WORKERS},memory=${e.PLAY_MEMORY_MB},timeout=${e.PLAY_TIMEOUT_MS},time=${e.PLAY_TIME_MS}`;
+    return (
+      `${e.PLAY_VERSION} workers=${e.PLAY_WORKERS},memory=${e.PLAY_MEMORY_MB},timeout=${e.PLAY_TIMEOUT_MS},time=${e.PLAY_TIME_MS},` +
+      `animation=${e.PLAY_ANIMATION_TIME_MS},allowance=${e.PLAY_ANIMATION_ALLOWANCE_S}/${e.PLAY_ANIMATION_WINDOW_S}`
+    );
   }
 
   private async ensureOnce(): Promise<boolean> {
@@ -674,17 +686,18 @@ async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Pr
   const snippet: Snippet = { code, theme: "dark", size: "", messages: [] };
   let response: Response;
   try {
-    response = await bot.fetch(
-      new Request("http://container/render", { method: "POST", headers: { "content-type": "application/json" }, body: canonical(snippet) }),
-    );
+    response = await bot.fetch(renderRequest(canonical(snippet), await ipHash(request, env)));
   } catch (error) {
     return plain(`the runner is not reachable right now (${String(error).slice(0, 200)})`, 503);
   }
   const bytes = await response.arrayBuffer();
   const type = response.headers.get("content-type") ?? "text/plain";
   if (!response.ok) return new Response(bytes, { status: response.status, headers: { "content-type": type, "cache-control": "no-store" } });
-  const result = new Response(bytes, { headers: { "content-type": type, "cache-control": "public, max-age=86400" } });
-  ctx.waitUntil(cache.put(key, result.clone()));
+  // A render the clock cut short (the bot was busy, or the IP's animation
+  // time was used up) is not kept: the next run may get the full time.
+  const cut = (response.headers.get("x-play-note") ?? "").includes("Rendering stopped");
+  const result = new Response(bytes, { headers: { "content-type": type, "cache-control": cut ? "no-store" : "public, max-age=86400" } });
+  if (!cut) ctx.waitUntil(cache.put(key, result.clone()));
   result.headers.set("x-run", "ran");
   return result;
 }
@@ -711,18 +724,16 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     }
     const wait = await bot.allow("render", await ipHash(request, env));
     if (wait > 0) return withPass(plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) }), pass);
-    const forward = new Request("http://container/render", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: canonical(snippet),
-    });
+    // The bot counts an animation's longer time against the IP's hash.
+    const forward = renderRequest(canonical(snippet), await ipHash(request, env));
     try {
       const response = await bot.fetch(forward);
+      const headers: Record<string, string> = { "content-type": response.headers.get("content-type") ?? "text/plain", "cache-control": "no-store" };
+      // A note on an animation, such as why it was cut.
+      const note = response.headers.get("x-play-note");
+      if (note) headers["x-play-note"] = note;
       return withPass(
-        new Response(response.body, {
-          status: response.status,
-          headers: { "content-type": response.headers.get("content-type") ?? "text/plain", "cache-control": "no-store" },
-        }),
+        new Response(response.body, { status: response.status, headers }),
         pass,
       );
     } catch (error) {

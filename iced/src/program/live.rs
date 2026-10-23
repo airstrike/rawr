@@ -262,7 +262,8 @@ impl State {
             self.service.timing(),
         ) {
             Ok(Admission::Current(outcome)) => {
-                self.status.installed(outcome.evidence());
+                self.status
+                    .installed(outcome.evidence(), self.host.prelude_note());
                 let (task, inputs) = outcome.into_parts();
                 self.service.installed(inputs);
                 task.map(Message::Script)
@@ -377,7 +378,7 @@ impl Host {
         }
     }
 
-    fn reset(&mut self) -> Result<iced::Task<runtime::Message>, super::install::Error> {
+    pub(super) fn reset(&mut self) -> Result<iced::Task<runtime::Message>, super::install::Error> {
         let next = {
             let context = self.slot.context();
             let previous = self.slot.state();

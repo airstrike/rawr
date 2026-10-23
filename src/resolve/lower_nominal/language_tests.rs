@@ -7714,3 +7714,149 @@ fn language_eq_and_ne_methods_on_builtins() {
     "#);
     assert_eq!(value, 111);
 }
+
+#[test]
+fn language_cfg_on_statements_and_cfg_macro() {
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let mut n = 0;
+            #[cfg(target_arch = "wasm32")]
+            {
+                n += 100;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            n += 1;
+            #[cfg(all(unix, not(windows)))]
+            n += 10;
+            #[cfg(feature = "anything")]
+            if n > 0 { n += 1000; }
+            if cfg!(target_arch = "wasm32") { n += 10000; }
+            if cfg!(any(unix, windows)) { n += 20; }
+            n
+        }
+        run()
+    "#);
+    assert_eq!(value, 31);
+}
+
+#[test]
+fn language_phantom_data_is_a_field_of_no_value() {
+    let value = run(r#"
+        use std::marker::PhantomData;
+        #[derive(Default, Clone, Copy)]
+        struct Picker<C> { space: PhantomData<C> }
+        #[derive(Clone, Copy)]
+        struct Rgb;
+        pub fn run() -> i64 {
+            let a: Picker<Rgb> = Picker::default();
+            let b: Picker<Rgb> = Picker { space: PhantomData };
+            let c: std::marker::PhantomData<i64> = PhantomData;
+            let _ = (a, b.space, c);
+            7
+        }
+        run()
+    "#);
+    assert_eq!(value, 7);
+}
+
+
+#[test]
+fn language_a_map_entry_held_in_a_local_writes_the_map() {
+    let value = run(r#"
+        use std::collections::HashMap;
+        struct Grid { sand: HashMap<i64, u32> }
+        impl Grid {
+            fn add(&mut self, cell: i64, amount: u32) {
+                let grains = self.sand.entry(cell).or_default();
+                *grains += amount;
+            }
+            fn topple(&mut self, cell: i64) -> u32 {
+                let grains = self.sand.entry(cell).or_default();
+                let amount = *grains / 4;
+                *grains %= 4;
+                amount
+            }
+        }
+        pub fn run() -> i64 {
+            let mut grid = Grid { sand: HashMap::new() };
+            grid.add(1, 9);
+            grid.add(1, 2);
+            let moved = grid.topple(1);
+            let mut local: HashMap<i64, i64> = HashMap::new();
+            let slot = local.entry(5).or_insert(10);
+            *slot += 1;
+            (grid.sand[&1] as i64) * 1000 + (moved as i64) * 100 + local[&5]
+        }
+        run()
+    "#);
+    assert_eq!(value, 3211);
+}
+
+#[test]
+fn language_ref_cell_borrows_and_changes_through_a_shared_reference() {
+    let value = run(r#"
+        use std::cell::RefCell;
+        struct Counter { hits: RefCell<Vec<i64>> }
+        impl Counter {
+            fn hit(&self, n: i64) {
+                let mut hits = self.hits.borrow_mut();
+                hits.push(n);
+                if hits.len() > 2 {
+                    hits.remove(0);
+                }
+            }
+            fn total(&self) -> i64 {
+                self.hits.borrow().iter().sum()
+            }
+        }
+        pub fn run() -> i64 {
+            let counter = Counter { hits: RefCell::new(Vec::new()) };
+            counter.hit(1);
+            counter.hit(20);
+            counter.hit(300);
+            counter.hits.borrow_mut().push(4000);
+            let cell = RefCell::new(5);
+            *cell.borrow_mut() += 1;
+            let old = cell.replace(7);
+            counter.total() * 100 + old * 10 + cell.into_inner()
+        }
+        run()
+    "#);
+    assert_eq!(value, 432000 + 60 + 7);
+}
+
+#[test]
+fn language_ref_cell_panics_on_a_conflicting_borrow() {
+    let error = Engine::new()
+        .eval::<i64>(
+            r#"
+            use std::cell::RefCell;
+            pub fn run() -> i64 {
+                let cell = RefCell::new(1);
+                let first = cell.borrow_mut();
+                let second = cell.borrow();
+                *second
+            }
+            run()
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("already mutably borrowed"), "{error}");
+    // A borrow ends with its block, as Rust's does.
+    let value = run(r#"
+        use std::cell::RefCell;
+        pub fn run() -> i64 {
+            let cell = RefCell::new(1);
+            {
+                let mut first = cell.borrow_mut();
+                *first += 1;
+            }
+            let second = cell.borrow();
+            *second
+        }
+        run()
+    "#);
+    assert_eq!(value, 2);
+}
+

@@ -402,13 +402,18 @@ fn bind_frames(builder: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain Frame::into_geometry");
 
-    for name in ["new", "default"] {
+    for name in ["new", "default", "with_group"] {
         builder
             .bind(format!("iced::widget::canvas::Cache::{name}"), |_| {
                 Ok(Dynamic::from(marker::Cache::default()))
             })
             .expect("the iced facade must retain Cache::new");
     }
+    builder
+        .bind("iced::widget::canvas::Group::unique", |_| {
+            Ok(Dynamic::from(marker::CacheGroup))
+        })
+        .expect("the iced facade must retain Group::unique");
     builder
         .bind("iced::widget::canvas::Cache::clear", |args| {
             let [receiver] = args else {

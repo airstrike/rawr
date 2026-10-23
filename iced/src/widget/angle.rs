@@ -63,6 +63,16 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     builder
         .bind("iced::Rotation::default", |_| Ok(Dynamic::from(Rotation::default())))
         .expect("the iced facade must retain Rotation::default");
+    builder
+        .bind("iced::Rotation::radians_mut", |args| {
+            let [rotation, angle] = args else {
+                return Err(arity("iced::Rotation::radians_mut", 2, args.len()));
+            };
+            let mut rotation = take::<Rotation>(rotation, "iced::Rotation")?;
+            *rotation.radians_mut() = radians(angle)?;
+            Ok(Dynamic::from(rotation))
+        })
+        .expect("the iced facade must retain Rotation::radians_mut");
     for name in ["radians", "degrees"] {
         let path = format!("iced::Rotation::{name}");
         builder
@@ -78,6 +88,22 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Rotation reader");
     }
+    builder
+        .bind("iced::Degrees::into", |args| {
+            let [degrees] = args else {
+                return Err(arity("iced::Degrees::into", 1, args.len()));
+            };
+            Ok(Dynamic::from(f64::from(take::<Degrees>(degrees, "iced::Degrees")?.0)))
+        })
+        .expect("the iced facade must retain Degrees::into");
+    builder
+        .bind("iced::Radians::into", |args| {
+            let [radians] = args else {
+                return Err(arity("iced::Radians::into", 1, args.len()));
+            };
+            Ok(Dynamic::from(f64::from(take::<Radians>(radians, "iced::Radians")?.0)))
+        })
+        .expect("the iced facade must retain Radians::into");
     builder
         .bind("iced::Radians::PI", |_| Ok(Dynamic::from(Radians::PI)))
         .expect("the iced facade must retain Radians::PI");
