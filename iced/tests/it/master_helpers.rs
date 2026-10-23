@@ -1685,6 +1685,52 @@ fn master_rotations_match_and_turn_images() {
     find(&adapter, "true");
 }
 
+/// iced master's ferris example turns its rotation through
+/// `*self.rotation.radians_mut() = ..`.
+#[test]
+fn master_rotation_radians_mut_writes_the_place() {
+    let adapter = boot(
+        r#"
+use iced::widget::{column, text};
+use iced::{Degrees, Radians, Rotation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct State {
+    rotation: Rotation,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let mut rotation = Rotation::Solid(Radians(1.0));
+        *rotation.radians_mut() = Radians(2.0);
+        let mut state = Self { rotation };
+        *state.rotation.radians_mut() = (state.rotation.radians() + Radians::PI) % (2.0 * Radians::PI);
+        state
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let solid = match self.rotation {
+            Rotation::Solid(_) => "solid",
+            Rotation::Floating(_) => "floating",
+        };
+        column![text(format!("{solid} {:.1}", f32::from(self.rotation.degrees())))]
+    }
+}
+"#,
+    );
+    find(&adapter, "solid 294.6");
+}
+
 /// iced master's delineate example matches `Some(Point { x, y })`.
 #[test]
 fn master_facade_struct_patterns_bind_their_fields() {

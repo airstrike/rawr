@@ -3585,6 +3585,14 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let mut from = signature::Builder::new();
     from.parameter(degrees()?).output(radians()?);
     builder.item(item::Definition::associated_function("Radians::from", from.finish())?)?;
+    // `f32::from(degrees)`: the angle as a number.
+    for path in ["Degrees", "Radians"] {
+        builder.item(item::Definition::method(
+            format!("{path}::into"),
+            receiver::Mode::Owned,
+            output_signature_of(f64()),
+        )?)?;
+    }
     // `Rotation::Floating(angle)` and `Rotation::Solid(angle)`, matched as
     // in Rust, with the angle read in radians or degrees.
     let rotation = || type_ref::Type::registered("Rotation");
@@ -3614,6 +3622,17 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
             output_signature(output)?,
         )?)?;
     }
+    // `*rotation.radians_mut() = angle`: the rotation with its angle
+    // replaced, which Rawr stores back into the place.
+    let mut radians_mut = signature::Builder::new();
+    radians_mut
+        .parameter(rotation()?)
+        .parameter(radians()?)
+        .output(rotation()?);
+    builder.item(item::Definition::associated_function(
+        "Rotation::radians_mut",
+        radians_mut.finish(),
+    )?)?;
     for input in [rotation()?, radians()?, degrees()?] {
         builders(builder, "widget::Image", "rotation", [input])?;
     }

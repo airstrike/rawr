@@ -6864,6 +6864,14 @@ enum PlaceStep {
         slot: usize,
     },
     Index(origin::Fragment),
+    /// A facade `&mut` accessor: `read` reads the part of the value bound
+    /// to `place`, and `store` is the value with `stored` in its place.
+    Accessor {
+        place: String,
+        stored: String,
+        read: origin::Fragment,
+        store: origin::Fragment,
+    },
 }
 
 #[derive(Clone)]
@@ -14674,6 +14682,21 @@ impl<'a> Parser<'a> {
             return Err(self.unsupported("host method receiver type"));
         };
         let path = format!("{}::{member}", definition.path());
+        // `*rotation.radians_mut() = angle`: a facade writes a `&mut`
+        // accessor as the function that stores the value back.
+        if let Some(base) = member.strip_suffix("_mut")
+            && matches!(self.peek(), Token::Unit)
+            && let Some(setters) = self.models.host_items(&path).filter(|items| {
+                items.iter().all(|item| {
+                    item.kind() == crate::host::item::Kind::AssociatedFunction
+                        && item.signature().parameters().len() == 2
+                })
+            })
+        {
+            let setters = setters.to_vec();
+            let base: ImmutableString = base.into();
+            return self.parse_host_accessor(receiver, &path, base, &setters, member_span);
+        }
         // `value.clone()` of a library type that is `Clone`: the value, as
         // Rawr's library values are copied where they are used.
         if member.as_str() == "clone"
@@ -14810,6 +14833,83 @@ impl<'a> Parser<'a> {
             arguments,
             call,
         )
+    }
+
+    /// `value.name_mut()` of a facade type: a `&mut` place whose reader is
+    /// `value.name()` and whose store is `Type::name_mut(value, new)`.
+    fn parse_host_accessor(
+        &mut self,
+        receiver: ParsedExpr,
+        path: &str,
+        base: ImmutableString,
+        setters: &[crate::host::item::Definition],
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let Some(lvalue) = receiver.lvalue.clone() else {
+            return Err(Error::InvalidHostOperation {
+                item: path.into(),
+                reason: "lends a `&mut` only of a place, such as a field or a local".into(),
+                operation: member_span,
+            });
+        };
+        let place = self.temporary("place");
+        let stored = self.temporary("stored");
+        let receiver_ty = receiver.ty.clone();
+        let at = receiver.span;
+        let local = self.operator_expr(origin::Fragment::plain(place.clone()), receiver_ty.clone(), at);
+        let getter = self.parse_host_method(local, base, member_span)?;
+        let ty = self.inference.resolve(&getter.ty);
+        let owner = self.models.item_owner(path).cloned();
+        let arguments = vec![
+            self.operator_expr(origin::Fragment::plain(place.clone()), receiver_ty, at),
+            self.operator_expr(origin::Fragment::plain(stored.clone()), ty.clone(), at),
+        ];
+        let setter = self.call_host_function(setters, owner, arguments, getter.span)?;
+        let mut read = origin::Fragment::plain("{ ");
+        read.push(getter.prelude.clone());
+        read.push(getter.source.clone());
+        read.push_text(" }");
+        let mut store = origin::Fragment::plain("{ ");
+        store.push(setter.prelude.clone());
+        store.push(setter.source.clone());
+        store.push_text(" }");
+        let step = PlaceStep::Accessor {
+            place: place.clone(),
+            stored,
+            read: read.clone(),
+            store,
+        };
+        let lvalue = match &lvalue {
+            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(NestedLvalue {
+                binding: binding.clone(),
+                base: origin::Fragment::plain(binding.to_string()),
+                steps: vec![step],
+                ty: ty.clone(),
+            })),
+            Lvalue::Slice(_) => {
+                return Err(Error::InvalidHostOperation {
+                    item: path.into(),
+                    reason: "lends a `&mut` only of a place, such as a field or a local".into(),
+                    operation: member_span,
+                })
+            }
+            lvalue => nested_step(lvalue, step, ty.clone()),
+        };
+        let mut source = origin::Fragment::plain(format!("{{ let {place} = "));
+        source.push(receiver.rendered_source());
+        source.push_text("; ");
+        source.push(read);
+        source.push_text(" }");
+        let mut value = self.operator_expr(
+            source,
+            Ty::Reference {
+                mutable: true,
+                target: Box::new(ty),
+            },
+            span(at.start(), getter.span.end()),
+        );
+        value.lvalue = Some(lvalue);
+        Ok(value)
     }
 
     /// A host method whose callable argument is a `fn` pointer choice: one
@@ -21041,6 +21141,27 @@ impl<'a> Parser<'a> {
                     stores.push(store);
                     place = origin::Fragment::plain(local);
                 }
+                PlaceStep::Accessor {
+                    place: bound,
+                    stored,
+                    read: reader,
+                    store: writer,
+                } => {
+                    let local = self.temporary("part");
+                    read.push_text(format!("let {local} = {{ let {bound} = "));
+                    read.push(place.clone());
+                    read.push_text("; ");
+                    read.push(reader.clone());
+                    read.push_text(" }; ");
+                    let mut store = place.clone();
+                    store.push_text(format!(" = {{ let {bound} = "));
+                    store.push(place.clone());
+                    store.push_text(format!("; let {stored} = {local}; "));
+                    store.push(writer.clone());
+                    store.push_text(" }; ");
+                    stores.push(store);
+                    place = origin::Fragment::plain(local);
+                }
             }
         }
         let mut store = origin::Fragment::default();
@@ -21125,6 +21246,36 @@ impl<'a> Parser<'a> {
             Ty::Reference { target, .. } => self.inference.resolve(target),
             ty => ty.clone(),
         };
+        // `2.0 * angle` through `impl Mul<Radians> for f32`: the library
+        // type's own `mul` of the number, as multiplying commutes.
+        if symbol == "*"
+            && matches!(host, Ty::Float(_) | Ty::Int(_) | Ty::Unknown)
+            && let Some(rhs) = rhs.as_deref()
+            && let Ty::Host { proof, .. } = self.inference.resolve(&rhs.ty)
+        {
+            let path = format!("{}::mul", proof.definition.path());
+            if self.models.host_items(&path).is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.kind() == crate::host::item::Kind::Method
+                        && item.signature().parameters().first().is_some_and(|parameter| {
+                            matches!(
+                                parameter.shape(),
+                                crate::host::type_ref::Shape::Builtin(
+                                    crate::host::type_ref::Builtin::F64
+                                        | crate::host::type_ref::Builtin::F32
+                                )
+                            )
+                        })
+                })
+            }) {
+                let ty = self.inference.resolve(&rhs.ty);
+                let receiver = self.operator_expr(rhs.rendered_source(), ty, rhs.span);
+                self.pending_arguments = Some((vec![lhs.clone()], expression.end()));
+                let mut value = self.parse_host_method(receiver, "mul".into(), expression)?;
+                value.span = expression;
+                return Ok(Some(value));
+            }
+        }
         if let Ty::Host { proof, .. } = &host
             && let Some(rhs) = rhs.as_deref()
         {
@@ -23202,6 +23353,10 @@ impl<'a> Parser<'a> {
                     ty: (*target).clone(),
                     place,
                 }),
+                (Ty::Reference { mutable: true, .. }, Some(Lvalue::Nested(mut nested))) => {
+                    nested.ty = (*target).clone();
+                    Some(Lvalue::Nested(nested))
+                }
                 _ => None,
             };
             operand.ty = *target;
@@ -30712,6 +30867,23 @@ impl<'a> Parser<'a> {
                     value = self.prelude_op(PreludeOp::Cast, [value, "11".into()]);
                 }
                 return Ok(self.operator_expr(value, builtin, expression));
+            }
+            // `f32::from(degrees)`: a facade number type's `into`.
+            if let Ty::Host { proof, .. } = &source
+                && matches!(builtin, Ty::Float(_))
+                && self
+                    .models
+                    .host_items(&format!("{}::into", proof.definition.path()))
+                    .is_some_and(|items| {
+                        items.iter().any(|item| {
+                            item.kind() == crate::host::item::Kind::Method
+                                && item.signature().parameters().is_empty()
+                        })
+                    })
+            {
+                self.pending_arguments = Some((Vec::new(), expression.end()));
+                let value = self.parse_host_method(argument.clone(), "into".into(), expression)?;
+                return Ok(self.operator_expr(value.rendered_source(), builtin, expression));
             }
             if let Some(op) = builtin_conversion(&builtin, &source) {
                 let value = match op {
