@@ -366,6 +366,9 @@ impl Parser<'_> {
             ),
         };
         // The element alone, or `(i, x)` / `(k, v)` with the element second.
+        // An element pattern other than a name binds the element's parts,
+        // as `let pattern = &mut element;` (`bind_let_pattern`).
+        let mut parts = None;
         let element = match (pattern, &first) {
             (None, None) => Some((name, declaration)),
             (Some(PatternSyntax::Tuple { members, .. }), Some(first)) if members.len() == 2 => {
@@ -402,13 +405,14 @@ impl Parser<'_> {
                     PatternSyntax::Binding { name, span, .. } => Some((name.clone(), *span)),
                     PatternSyntax::Discard { .. } => None,
                     other => {
-                        self.bindings = outer;
-                        return Err(Error::UnsupportedNominalSyntax {
-                            construct: "a pattern other than a name in a mutable loop".into(),
-                            source: other.span(),
-                        });
+                        parts = Some(other.clone());
+                        None
                     }
                 }
+            }
+            (Some(other), None) => {
+                parts = Some(other.clone());
+                None
             }
             _ => {
                 self.bindings = outer;
@@ -422,10 +426,52 @@ impl Parser<'_> {
             self.alias_element(
                 name,
                 declaration,
-                element_ty,
-                origin::Fragment::plain(element_place),
-                owner,
+                element_ty.clone(),
+                origin::Fragment::plain(element_place.clone()),
+                owner.clone(),
             );
+        }
+        let mut head = origin::Fragment::plain(head);
+        let write_backs = self.write_backs.len();
+        if let Some(parts) = parts {
+            let target = match &element_ty {
+                Ty::Reference { target, .. } => (**target).clone(),
+                ty => ty.clone(),
+            };
+            let place = origin::Fragment::plain(element_place.clone());
+            let subject = ParsedExpr {
+                prelude: origin::Fragment::default(),
+                source: place.clone(),
+                ty: element_ty.clone(),
+                span: parts.span(),
+                lvalue: Some(Lvalue::Place {
+                    binding: owner.clone(),
+                    ty: target,
+                    place,
+                }),
+                outcome: crate::host::usage::Outcome::Conservative,
+                evaluation: crate::host::usage::Evaluation::Required,
+            };
+            let output = std::mem::take(&mut self.output);
+            let last_type = self.last_type.clone();
+            let last_expression = self.last_expression.take();
+            let bound = self.bind_let_pattern(
+                parts.span().start(),
+                &parts,
+                subject,
+                None,
+                parts.span().end(),
+            );
+            let statement = std::mem::replace(&mut self.output, output);
+            self.last_type = last_type;
+            self.last_expression = last_expression;
+            if let Err(error) = bound {
+                self.bindings = outer;
+                self.write_backs.truncate(write_backs);
+                return Err(error);
+            }
+            head.push(statement);
+            head.push_text(" ");
         }
         let header = match range {
             Some(range) => {
@@ -435,8 +481,9 @@ impl Parser<'_> {
             }
             None => origin::Fragment::plain(format!("for {index} in 0..{root}.len()")),
         };
-        let wrap = Some((origin::Fragment::plain(head), origin::Fragment::default()));
+        let wrap = Some((head, origin::Fragment::default()));
         let looped = self.parse_loop_body(header, start, label, false, wrap);
+        self.write_backs.truncate(write_backs);
         let inner = std::mem::replace(&mut self.bindings, outer);
         self.aliases = outer_aliases;
         for (name, binding) in &mut self.bindings {

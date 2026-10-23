@@ -16395,7 +16395,7 @@ impl<'a> Parser<'a> {
     /// `otherwise` the pattern must be irrefutable. A pattern matched on a
     /// `&mut` place writes its `&mut` bindings back into the place after
     /// each statement that uses them, until the block ends (`WriteBack`).
-    fn bind_let_pattern(
+    pub(super) fn bind_let_pattern(
         &mut self,
         start: Position,
         syntax: &PatternSyntax,

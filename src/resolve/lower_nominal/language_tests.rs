@@ -7390,6 +7390,23 @@ fn language_ref_mut_in_match_and_if_let_writes_back() {
 }
 
 #[test]
+fn language_mutable_loops_destructure_their_elements() {
+    let value = run(r#"
+        struct P { x: i64, y: i64 }
+        pub fn run() -> i64 {
+            let mut pairs = vec![(1, 2), (3, 4)];
+            for (a, b) in pairs.iter_mut() { *a += 1; *b *= 2; }
+            let mut points = vec![P { x: 1, y: 1 }, P { x: 2, y: 2 }];
+            for P { x, .. } in &mut points { *x *= 10; }
+            for (i, (a, _)) in pairs.iter_mut().enumerate() { *a += i as i64 * 100; }
+            pairs[0].0 * 1000000 + pairs[1].0 * 10000 + pairs[1].1 * 1000 + points[1].x * 10 + points[0].y
+        }
+        run()
+    "#);
+    assert_eq!(value, 2 * 1000000 + 104 * 10000 + 8 * 1000 + 20 * 10 + 1);
+}
+
+#[test]
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(error.contains("nknown function") && error.contains("centre"), "{error}");
