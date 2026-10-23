@@ -643,6 +643,21 @@ impl Parser<'_> {
         self.consume(pipeline, &format!("let {out} = [];"), sink, &out)
     }
 
+    /// A discarded iterator (`v.iter().map(f);`) as Rust runs it: its
+    /// sources and closures are evaluated, and no stage runs.
+    pub(super) fn discarded(&mut self, value: &ParsedExpr) -> Option<origin::Fragment> {
+        if !matches!(self.inference.resolve(&value.ty), Ty::Iter(_)) {
+            return None;
+        }
+        let pipeline = self.pipelines.get(value.source.as_str())?.clone();
+        let (code, _, _) = self.bound_pipeline(pipeline);
+        let mut text = origin::Fragment::plain("{ ");
+        text.push(value.prelude.clone());
+        text.push(code);
+        text.push_text("}");
+        Some(text)
+    }
+
     /// The chain of a `for` loop's iterator, when it is one loop; else
     /// `None`, and the loop walks its array.
     pub(super) fn for_pipeline(&mut self, value: &ParsedExpr) -> Option<(Pipeline, Ty)> {
