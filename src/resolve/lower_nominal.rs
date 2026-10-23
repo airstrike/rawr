@@ -12267,6 +12267,30 @@ impl<'a> Parser<'a> {
         repeated: bool,
         call: Span,
     ) -> Result<(crate::host::item::Definition, InstantiatedHostSignature), Error> {
+        let (item, signature) =
+            self.select_host_signature_form(items, receiver, arguments, repeated, call)?;
+        // A value that took iced's `f32` for a facade `f64` is passed as its
+        // runtime `f64`.
+        if item.path().starts_with("iced::") && !repeated {
+            for (expected, argument) in signature.inputs.iter().zip(arguments.iter_mut()) {
+                if self.inference.resolve(expected) == Ty::Float(Float::F64)
+                    && self.inference.resolve(&argument.ty) == Ty::Float(Float::F32)
+                {
+                    argument.ty = Ty::Float(Float::F64);
+                }
+            }
+        }
+        Ok((item, signature))
+    }
+
+    fn select_host_signature_form(
+        &mut self,
+        items: &[crate::host::item::Definition],
+        receiver: Option<&Ty>,
+        arguments: &mut [ParsedExpr],
+        repeated: bool,
+        call: Span,
+    ) -> Result<(crate::host::item::Definition, InstantiatedHostSignature), Error> {
         // A call takes the functions of a path that also holds a macro
         // (`text` and `text!`).
         let functions;
@@ -12346,12 +12370,23 @@ impl<'a> Parser<'a> {
                     .iter()
                     .all(|argument| self.unify_type(expected, &argument.ty))
             } else {
+                // iced's `f64` is Rust's `f32`, as a slider's `T` is for an
+                // `f32` closure: a value whose type is not known yet takes it.
+                let iced = item.path().starts_with("iced::");
                 signature.inputs.len() == arguments.len()
                     && signature
                         .inputs
                         .iter()
                         .zip(arguments)
-                        .all(|(expected, argument)| self.unify_type(expected, &argument.ty))
+                        .all(|(expected, argument)| {
+                            if iced
+                                && matches!(self.inference.resolve(&argument.ty), Ty::Infer(_))
+                                && self.inference.resolve(expected) == Ty::Float(Float::F64)
+                            {
+                                return self.unify_type(&Ty::Float(Float::F32), &argument.ty);
+                            }
+                            self.unify_type(expected, &argument.ty)
+                        })
             };
             if matches_inputs && self.host_requirements_hold(&signature) {
                 match_count += 1;

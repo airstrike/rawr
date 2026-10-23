@@ -1727,3 +1727,49 @@ impl State {
     find(&adapter, "at 3 4");
     find(&adapter, "origin 0");
 }
+
+/// iced master's table example: an `f32` slider whose closure calls a
+/// function of `f32`.
+#[test]
+fn master_sliders_take_f32_values_and_closures() {
+    let adapter = boot(
+        r#"
+use iced::widget::{column, slider, text};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    padding: (f32, f32),
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Padding(f32, f32),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Padding(x, y) => self.padding = (x, y),
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let labeled = |range: std::ops::RangeInclusive<f32>, (x, y), on_change: fn(f32, f32) -> Message| {
+            column![
+                slider(range.clone(), x, move |x| on_change(x, y)),
+                slider(range, y, move |y| on_change(x, y)),
+                text(format!("{x:.0} {y:.0}px")),
+            ]
+        };
+        labeled(0.0..=30.0, self.padding, Message::Padding)
+    }
+}
+"#,
+    );
+    find(&adapter, "0 0px");
+}
