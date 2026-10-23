@@ -6,7 +6,7 @@
 # Rendering is tiny-skia on the CPU with the embedded Fira Sans font: the
 # runtime needs no GPU, no fonts and no CA bundle (rustls bundles its roots).
 
-FROM --platform=$BUILDPLATFORM rust:1-slim-bookworm AS build
+FROM --platform=$BUILDPLATFORM rust:1.99.0-slim-bookworm AS build
 ARG TARGETARCH
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
     CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc \
@@ -15,7 +15,7 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
     CARGO_PROFILE_RELEASE_STRIP=symbols \
     CARGO_PROFILE_RELEASE_LTO=thin \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
-    CARGO_BUILD_JOBS=1
+    CARGO_BUILD_JOBS=2
 RUN set -eu; \
     case "$TARGETARCH" in \
       amd64) arch=x86_64 gcc=x86-64 ;; \
