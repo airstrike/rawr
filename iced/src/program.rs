@@ -895,6 +895,15 @@ impl Adapter {
         if message.instance() != self.instance || message.generation() != self.generation() {
             return Ok(Transition::new(Delivery::Dropped, task::Plan::none()));
         }
+        // Script work a native task left for the UI thread runs here, after
+        // the freshness check. A stale request was dropped above, which ends
+        // the task that sent it.
+        if let Some(resume) = message.resumption() {
+            return match resume.run() {
+                Some(message) => self.update_state_authority_observed(launch, message),
+                None => Ok(Transition::new(Delivery::Dropped, task::Plan::none())),
+            };
+        }
         if let Some(error) = message.mapping_error() {
             let error = Error::Mapping(error.clone());
             self.record_update_error_authority(launch, &error);
@@ -2004,7 +2013,9 @@ pub fn main() -> iced::Result {
             let mut messages = Vec::new();
             while let Some(action) = stream.next().await {
                 match action {
-                    iced_test::runtime::Action::Output(message) => messages.push(message),
+                    iced_test::runtime::Action::Output(message) => {
+                        messages.extend(crate::dispatch::inline(message));
+                    }
                     action => panic!("expected a task output, found {action:?}"),
                 }
             }

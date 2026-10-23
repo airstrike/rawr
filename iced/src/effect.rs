@@ -240,7 +240,9 @@ mod tests {
             let mut messages = Vec::new();
             while let Some(action) = stream.next().await {
                 match action {
-                    iced_test::runtime::Action::Output(message) => messages.push(message),
+                    iced_test::runtime::Action::Output(message) => {
+                        messages.extend(crate::dispatch::inline(message));
+                    }
                     action => panic!("expected a task output, found {action:?}"),
                 }
             }

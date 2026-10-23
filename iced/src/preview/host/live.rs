@@ -761,6 +761,12 @@ pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
             let mut messages = Vec::new();
             while let Some(action) = stream.next().await {
                 match action {
+                    iced_test::runtime::Action::Output(super::LiveMessage::Host(
+                        super::Message::Script(message),
+                    )) => messages.extend(
+                        crate::dispatch::inline(message)
+                            .map(|message| super::LiveMessage::Host(super::Message::Script(message))),
+                    ),
                     iced_test::runtime::Action::Output(message) => messages.push(message),
                     _ => panic!("expected a task output"),
                 }

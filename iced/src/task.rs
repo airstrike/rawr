@@ -2,8 +2,20 @@
 
 use rawr::{application, host, item, preview, program, Dynamic, EvalAltResult, Position};
 use std::fmt;
+use std::sync::Arc;
 
-use crate::runtime;
+use crate::{dispatch, effect, runtime};
+
+/// What happens to one output once it reaches the UI thread: the rest of
+/// the plan's mappers and checks, ending in a stamped message.
+type Next = Arc<dyn Fn(Dynamic) -> iced::Task<runtime::Message> + Send + Sync>;
+
+/// The owner and authority a plan is lowered under.
+#[derive(Clone)]
+struct Lowering {
+    owner: effect::Owner,
+    authority: Authority,
+}
 
 /// A cloneable description of work to lower at an iced application boundary.
 #[derive(Clone, Debug)]
@@ -262,13 +274,12 @@ impl Plan {
         generation: program::GenerationId,
         authority: &Authority,
     ) -> Result<iced::Task<runtime::Message>, Error> {
-        let finish = authority.clone();
-        Ok(self.lower_payload(authority)?.map(move |result| {
-            match result.and_then(|payload| finish.finish(payload)) {
-                Ok(payload) => runtime::Message::new(instance, generation, payload),
-                Err(error) => runtime::Message::task_error(instance, generation, error),
-            }
-        }))
+        let lowering = Lowering {
+            owner: effect::Owner::new(instance, generation),
+            authority: authority.clone(),
+        };
+        let finish = lowering.finish();
+        self.lower_with(&lowering, finish)
     }
 
     pub(crate) fn prepare_application(
@@ -309,46 +320,136 @@ impl Plan {
         Ok(Prepared { kind, witness })
     }
 
-    fn lower_payload(
-        self,
-        authority: &Authority,
-    ) -> Result<iced::Task<Result<Dynamic, Error>>, Error> {
+    /// Lower this plan so that each output goes to `next` on the UI thread.
+    /// Only native work runs in the returned task's stream.
+    fn lower_with(self, lowering: &Lowering, next: Next) -> Result<iced::Task<runtime::Message>, Error> {
         let Self { kind, witness } = self;
-        let task = match kind {
+        let next = lowering.validated(witness, next);
+        Ok(match kind {
             Kind::None => iced::Task::none(),
-            Kind::Done(payload) => iced::Task::done(Ok(payload)),
+            // A ready value is already on the UI thread.
+            Kind::Done(payload) => next(payload),
             Kind::Perform { call, mapper } => {
-                let pending = authority.issue(*call, &mapper).map_err(Error::Operation)?;
-                iced::Task::perform(pending, |result| result.map_err(Error::Operation))
+                let pending = lowering
+                    .authority
+                    .issue(*call, &mapper)
+                    .map_err(Error::Operation)?;
+                lowering.operation(pending, next)
             }
-            Kind::Batch(plans) => plans
-                .into_vec()
-                .into_iter()
-                .map(|plan| plan.lower_payload(authority))
-                .collect::<Result<Vec<_>, _>>()
-                .map(iced::Task::batch)?,
+            Kind::Batch(plans) => iced::Task::batch(
+                plans
+                    .into_vec()
+                    .into_iter()
+                    .map(|plan| plan.lower_with(lowering, next.clone()))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
             Kind::Chain { first, second } => {
-                let first = first.lower_payload(authority)?;
-                let second = second.lower_payload(authority)?;
-                first.chain(second)
+                let first = first.lower_with(lowering, next.clone())?;
+                first.chain(second.lower_with(lowering, next)?)
             }
-            Kind::Map { plan, mapper } => {
-                let authority = authority.clone();
-                plan.lower_payload(&authority)?
-                    .map(move |result| result.and_then(|payload| authority.map(payload, &mapper)))
-            }
-            Kind::Native(native) => native.lower(),
+            Kind::Map { plan, mapper } => plan.lower_with(lowering, lowering.mapped(mapper, next))?,
+            Kind::Native(native) => lowering.resume(native.lower(), next),
             Kind::AndThen { plan, mapper } => {
-                and_then(plan.lower_payload(authority)?, authority.clone(), mapper)
+                let lowering_inner = lowering.clone();
+                let next = Arc::new(move |payload| lowering_inner.and_then(payload, &mapper, next.clone()));
+                plan.lower_with(lowering, next)?
             }
-        };
+        })
+    }
+}
+
+impl Lowering {
+    /// The last step: check the application's Message and stamp it.
+    fn finish(&self) -> Next {
+        let lowering = self.clone();
+        Arc::new(move |payload| match lowering.authority.finish(payload) {
+            Ok(payload) => iced::Task::done(runtime::Message::new(
+                lowering.owner.instance(),
+                lowering.owner.generation(),
+                payload,
+            )),
+            Err(error) => lowering.fail(error),
+        })
+    }
+
+    fn fail(&self, error: Error) -> iced::Task<runtime::Message> {
+        iced::Task::done(runtime::Message::task_error(
+            self.owner.instance(),
+            self.owner.generation(),
+            error,
+        ))
+    }
+
+    /// Check each output against the plan node's witness before `next`.
+    fn validated(&self, witness: Option<host::runtime::Witness>, next: Next) -> Next {
         let Some(witness) = witness else {
-            return Ok(task);
+            return next;
         };
-        let authority = authority.clone();
-        Ok(task.map(move |result| {
-            result.and_then(|payload| authority.validate_output(&witness, payload))
-        }))
+        let lowering = self.clone();
+        Arc::new(move |payload| match lowering.authority.validate_output(&witness, payload) {
+            Ok(payload) => next(payload),
+            Err(error) => lowering.fail(error),
+        })
+    }
+
+    /// Run the script mapper on each output before `next`.
+    fn mapped(&self, mapper: item::Value, next: Next) -> Next {
+        let lowering = self.clone();
+        Arc::new(move |payload| match lowering.authority.map(payload, &mapper) {
+            Ok(payload) => next(payload),
+            Err(error) => lowering.fail(error),
+        })
+    }
+
+    /// iced's `Task<Option<T>>::and_then`: each `Some` given to `mapper`,
+    /// whose plan is lowered here, on the UI thread, and then runs.
+    fn and_then(
+        &self,
+        mut payload: Dynamic,
+        mapper: &item::Value,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
+        let actual = payload.type_name().to_string();
+        let inner = match rawr::option::take(&mut payload) {
+            Some(Some(inner)) => inner,
+            Some(None) => return iced::Task::none(),
+            None => return self.fail(Error::Representation { actual }),
+        };
+        let plan = self
+            .authority
+            .map(inner, mapper)
+            .and_then(Plan::from_dynamic)
+            .and_then(|plan| plan.lower_with(self, next));
+        plan.unwrap_or_else(|error| self.fail(error))
+    }
+
+    /// Hand each output of a native task to `next` on the UI thread.
+    fn resume(&self, task: iced::Task<Result<Dynamic, Error>>, next: Next) -> iced::Task<runtime::Message> {
+        let lowering = self.clone();
+        task.then(move |result| {
+            let next = next.clone();
+            let failed = lowering.clone();
+            dispatch::on_ui(lowering.owner, move || match result {
+                Ok(payload) => next(payload),
+                Err(error) => failed.fail(error),
+            })
+        })
+    }
+
+    /// Await an issued operation natively, then validate its output and run
+    /// its mapper on the UI thread.
+    fn operation(&self, pending: host::operation::Pending, next: Next) -> iced::Task<runtime::Message> {
+        let lowering = self.clone();
+        iced::Task::future(pending).then(move |completed| {
+            let next = next.clone();
+            let failed = lowering.clone();
+            dispatch::on_ui(lowering.owner, move || {
+                match completed.and_then(host::operation::Finish::finish) {
+                    Ok(payload) => next(payload),
+                    Err(error) => failed.fail(Error::Operation(error)),
+                }
+            })
+        })
     }
 }
 
@@ -364,83 +465,46 @@ impl Prepared {
         context: &rawr::reload::installation::installed::Context<'_>,
         authority: Authority,
     ) -> iced::Task<runtime::Message> {
-        let finish = authority.clone();
-        self.lower_payload(context, &authority).map(move |result| {
-            match result.and_then(|payload| finish.finish(payload)) {
-                Ok(payload) => runtime::Message::new(instance, generation, payload),
-                Err(error) => runtime::Message::task_error(instance, generation, error),
-            }
-        })
+        let lowering = Lowering {
+            owner: effect::Owner::new(instance, generation),
+            authority,
+        };
+        let finish = lowering.finish();
+        self.lower_with(context, &lowering, finish)
     }
 
-    fn lower_payload(
+    fn lower_with(
         self,
         context: &rawr::reload::installation::installed::Context<'_>,
-        authority: &Authority,
-    ) -> iced::Task<Result<Dynamic, Error>> {
+        lowering: &Lowering,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
         let Self { kind, witness } = self;
-        let task = match kind {
+        let next = lowering.validated(witness, next);
+        match kind {
             PreparedKind::None => iced::Task::none(),
-            PreparedKind::Done(payload) => iced::Task::done(Ok(payload)),
-            PreparedKind::Perform { pending } => {
-                let pending = context.operation(pending);
-                iced::Task::perform(pending, |result| result.map_err(Error::Operation))
-            }
+            PreparedKind::Done(payload) => next(payload),
+            PreparedKind::Perform { pending } => lowering.operation(context.operation(pending), next),
             PreparedKind::Batch(plans) => iced::Task::batch(
                 plans
                     .into_vec()
                     .into_iter()
-                    .map(|plan| plan.lower_payload(context, authority)),
+                    .map(|plan| plan.lower_with(context, lowering, next.clone())),
             ),
             PreparedKind::Chain { first, second } => first
-                .lower_payload(context, authority)
-                .chain(second.lower_payload(context, authority)),
+                .lower_with(context, lowering, next.clone())
+                .chain(second.lower_with(context, lowering, next)),
             PreparedKind::Map { plan, mapper } => {
-                let authority = authority.clone();
-                plan.lower_payload(context, &authority)
-                    .map(move |result| result.and_then(|payload| authority.map(payload, &mapper)))
+                plan.lower_with(context, lowering, lowering.mapped(mapper, next))
             }
-            PreparedKind::Native(native) => native.lower(),
+            PreparedKind::Native(native) => lowering.resume(native.lower(), next),
             PreparedKind::AndThen { plan, mapper } => {
-                and_then(plan.lower_payload(context, authority), authority.clone(), mapper)
+                let lowering_inner = lowering.clone();
+                let next = Arc::new(move |payload| lowering_inner.and_then(payload, &mapper, next.clone()));
+                plan.lower_with(context, lowering, next)
             }
-        };
-        let Some(witness) = witness else {
-            return task;
-        };
-        let authority = authority.clone();
-        task.map(move |result| {
-            result.and_then(|payload| authority.validate_output(&witness, payload))
-        })
-    }
-}
-
-/// Each `Some` the task yields, given to `mapper`, whose plan then runs.
-fn and_then(
-    task: iced::Task<Result<Dynamic, Error>>,
-    authority: Authority,
-    mapper: item::Value,
-) -> iced::Task<Result<Dynamic, Error>> {
-    task.then(move |result| {
-        let mut payload = match result {
-            Ok(payload) => payload,
-            Err(error) => return iced::Task::done(Err(error)),
-        };
-        let actual = payload.type_name().to_string();
-        let inner = match rawr::option::take(&mut payload) {
-            Some(Some(inner)) => inner,
-            Some(None) => return iced::Task::none(),
-            None => return iced::Task::done(Err(Error::Representation { actual })),
-        };
-        let next = authority
-            .map(inner, &mapper)
-            .and_then(Plan::from_dynamic)
-            .and_then(|plan| plan.lower_payload(&authority));
-        match next {
-            Ok(task) => task,
-            Err(error) => iced::Task::done(Err(error)),
         }
-    })
+    }
 }
 
 impl Authority {
@@ -1213,11 +1277,24 @@ mod tests {
 
     fn one_message(task: iced::Task<crate::runtime::Message>) -> crate::runtime::Message {
         let mut stream = iced_test::runtime::task::into_stream(task).unwrap();
+        // Script steps come back as resume requests, which the host runs
+        // on its own thread; this test thread is that thread.
         iced_test::futures::futures::executor::block_on(async move {
-            match stream.next().await {
-                Some(iced_test::runtime::Action::Output(message)) => message,
-                Some(action) => panic!("expected message output, found {action:?}"),
-                None => panic!("operation task must emit one message"),
+            loop {
+                match stream.next().await {
+                    Some(iced_test::runtime::Action::Output(message)) => {
+                        match message.resumption() {
+                            Some(resume) => {
+                                if let Some(message) = resume.run() {
+                                    return message;
+                                }
+                            }
+                            None => return message,
+                        }
+                    }
+                    Some(action) => panic!("expected message output, found {action:?}"),
+                    None => panic!("operation task must emit one message"),
+                }
             }
         })
     }

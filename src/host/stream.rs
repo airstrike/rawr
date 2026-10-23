@@ -84,12 +84,39 @@ pub struct Recipe {
     starter: Starter,
 }
 
-/// One bound-owner-issued stream yielding exact Message payloads.
+/// One bound-owner-issued stream. It runs only native work and yields each
+/// raw item as an [`Arrival`], whose mappers the host runs on the script
+/// thread.
 #[must_use = "an issued stream must be retained by the host runtime"]
 pub struct Issued {
     identity: Identity,
     stream: Native,
-    mapper: Mapper,
+    mapper: std::sync::Arc<std::sync::Mutex<Mapper>>,
+}
+
+/// One native stream item awaiting validation and its script mappers.
+#[must_use = "a stream item must be finished on the script thread"]
+pub struct Arrival {
+    value: Dynamic,
+    mapper: std::sync::Arc<std::sync::Mutex<Mapper>>,
+}
+
+impl Arrival {
+    /// Validate the item and run the mapper chain. Call this on the thread
+    /// that owns the script runtime. `None` means a `filter_map` dropped it.
+    pub fn finish(self) -> Result<Option<Dynamic>, Error> {
+        let mut mapper = self
+            .mapper
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (mapper)(self.value)
+    }
+}
+
+impl fmt::Debug for Arrival {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Arrival(<private>)")
+    }
 }
 
 /// An exact bound owner could not issue or consume a symbolic stream.
@@ -492,7 +519,7 @@ impl Issued {
         Self {
             identity,
             stream,
-            mapper,
+            mapper: std::sync::Arc::new(std::sync::Mutex::new(mapper)),
         }
     }
 
@@ -504,19 +531,16 @@ impl Issued {
 }
 
 impl Stream for Issued {
-    type Item = Result<Dynamic, Error>;
+    type Item = Arrival;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        loop {
-            match self.stream.as_mut().poll_next(context) {
-                Poll::Ready(Some(value)) => match (self.mapper)(value) {
-                    Ok(Some(payload)) => return Poll::Ready(Some(Ok(payload))),
-                    Ok(None) => {}
-                    Err(error) => return Poll::Ready(Some(Err(error))),
-                },
-                Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Pending => return Poll::Pending,
-            }
+        match self.stream.as_mut().poll_next(context) {
+            Poll::Ready(Some(value)) => Poll::Ready(Some(Arrival {
+                value,
+                mapper: self.mapper.clone(),
+            })),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

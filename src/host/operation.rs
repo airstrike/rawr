@@ -10,9 +10,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 #[cfg(feature = "sync")]
-type Future = Pin<Box<dyn future::Future<Output = Result<Dynamic, Error>> + Send + 'static>>;
+type Future = Pin<Box<dyn future::Future<Output = Result<Finish, Error>> + Send + 'static>>;
 #[cfg(not(feature = "sync"))]
-type Future = Pin<Box<dyn future::Future<Output = Result<Dynamic, Error>> + 'static>>;
+type Future = Pin<Box<dyn future::Future<Output = Result<Finish, Error>> + 'static>>;
+#[cfg(feature = "sync")]
+type Step = Box<dyn FnOnce() -> Result<Dynamic, Error> + Send + 'static>;
+#[cfg(not(feature = "sync"))]
+type Step = Box<dyn FnOnce() -> Result<Dynamic, Error> + 'static>;
 
 /// An opaque proof of one exact instantiated symbolic host operation.
 #[derive(Clone)]
@@ -38,10 +42,21 @@ pub struct Call {
     arguments: Arguments,
 }
 
-/// One exact bound-owner-issued operation awaiting its validated payload.
+/// One exact bound-owner-issued operation awaiting its native output.
+///
+/// The future runs only native work. It yields a [`Finish`] that validates
+/// the output and runs the script mapper, which the host must call on the
+/// thread that owns the script runtime.
 #[must_use = "an issued operation must be awaited by the host runtime"]
 pub struct Pending {
     future: Future,
+}
+
+/// The script half of one completed operation: output validation and the
+/// symbolic mapper, under the issuing authority.
+#[must_use = "a completed operation must be finished on the script thread"]
+pub struct Finish {
+    step: Step,
 }
 
 /// An exact bound owner could not issue or complete a symbolic operation.
@@ -199,7 +214,7 @@ impl Call {
 impl Pending {
     #[cfg(feature = "sync")]
     pub(crate) fn new(
-        future: impl future::Future<Output = Result<Dynamic, Error>> + Send + 'static,
+        future: impl future::Future<Output = Result<Finish, Error>> + Send + 'static,
     ) -> Self {
         Self {
             future: Box::pin(future),
@@ -208,7 +223,7 @@ impl Pending {
 
     #[cfg(not(feature = "sync"))]
     pub(crate) fn new(
-        future: impl future::Future<Output = Result<Dynamic, Error>> + 'static,
+        future: impl future::Future<Output = Result<Finish, Error>> + 'static,
     ) -> Self {
         Self {
             future: Box::pin(future),
@@ -216,8 +231,36 @@ impl Pending {
     }
 }
 
+impl Finish {
+    #[cfg(feature = "sync")]
+    pub(crate) fn new(step: impl FnOnce() -> Result<Dynamic, Error> + Send + 'static) -> Self {
+        Self {
+            step: Box::new(step),
+        }
+    }
+
+    #[cfg(not(feature = "sync"))]
+    pub(crate) fn new(step: impl FnOnce() -> Result<Dynamic, Error> + 'static) -> Self {
+        Self {
+            step: Box::new(step),
+        }
+    }
+
+    /// Validate the native output and run the mapper. Call this on the
+    /// thread that owns the script runtime.
+    pub fn finish(self) -> Result<Dynamic, Error> {
+        (self.step)()
+    }
+}
+
+impl fmt::Debug for Finish {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Finish(<private>)")
+    }
+}
+
 impl future::Future for Pending {
-    type Output = Result<Dynamic, Error>;
+    type Output = Result<Finish, Error>;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         self.future.as_mut().poll(context)

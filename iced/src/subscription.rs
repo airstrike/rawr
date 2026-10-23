@@ -4,7 +4,7 @@ use rawr::{application, host, item, program, Dynamic, EvalAltResult, Position};
 use std::fmt;
 use std::hash::Hash;
 
-use crate::runtime;
+use crate::{dispatch, effect, runtime};
 
 /// A durable subscription plan could not cross or bind at the native boundary.
 #[derive(Debug)]
@@ -113,15 +113,23 @@ where
         INPUT.with(|slot| *slot.borrow_mut() = Some(input));
         let issued = self.recipe.start();
         INPUT.with(|slot| slot.borrow_mut().take());
-        Box::pin(issued.map(move |result| match result {
-            Ok(payload) => emit(runtime::Message::subscription(
-                instance, generation, payload,
-            )),
-            Err(error) => emit(runtime::Message::subscription_error(
-                instance,
-                generation,
-                Error::Stream(error),
-            )),
+        // The stream runs only native work. Each item's mappers run on the
+        // UI thread, after the host's freshness check.
+        let owner = effect::Owner::new(instance, generation);
+        Box::pin(issued.map(move |arrival| {
+            emit(dispatch::deliver_on_ui(owner, move || {
+                match arrival.finish() {
+                    Ok(Some(payload)) => Some(runtime::Message::subscription(
+                        instance, generation, payload,
+                    )),
+                    Ok(None) => None,
+                    Err(error) => Some(runtime::Message::subscription_error(
+                        instance,
+                        generation,
+                        Error::Stream(error),
+                    )),
+                }
+            }))
         }))
     }
 }

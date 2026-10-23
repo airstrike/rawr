@@ -12,6 +12,7 @@ pub mod application;
 pub mod control;
 
 pub mod diagnostic;
+mod dispatch;
 mod effect;
 mod marker;
 pub mod native;
@@ -25,6 +26,8 @@ pub mod runtime;
 pub mod snapshot;
 pub mod subscription;
 pub mod task;
+#[cfg(test)]
+mod task_thread_tests;
 pub mod theme;
 pub mod widget;
 
