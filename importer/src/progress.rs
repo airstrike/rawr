@@ -2,7 +2,7 @@
 //!
 //! The line carries one overall bar for the whole launch. Each stage owns a
 //! weight: the previous cold launch's stage durations for this project (kept in
-//! `<project>/.rawr/cache/progress`), else [`DEFAULT_WEIGHTS`]. Within a stage,
+//! `<project>/target/rawr/cache/progress`), else [`DEFAULT_WEIGHTS`]. Within a stage,
 //! progress is 90% of the crate fraction (finished crates over the unit-graph
 //! total, else over the previous launch's count for that stage), with the gap
 //! to the stage end closed by a time fraction (elapsed over the previous
@@ -78,7 +78,7 @@ fn lock() -> std::sync::MutexGuard<'static, State> {
 /// Start showing progress for one launch of the project at `project` until
 /// [`finish`].
 pub fn begin(project: &Path) {
-    let file = project.join(".rawr/cache/progress");
+    let file = project.join("target/rawr/cache/progress");
     let previous = std::fs::read_to_string(&file)
         .ok()
         .and_then(|text| parse(&text));

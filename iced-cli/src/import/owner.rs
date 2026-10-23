@@ -830,8 +830,8 @@ mod tests {
         );
 
         for path in [
-            root.join(".rawr/cache/runners"),
-            root.join(".rawr/cache/resolution/authoritative-target"),
+            root.join("target/rawr/cache/runners"),
+            root.join("target/rawr/cache/resolution/authoritative-target"),
         ] {
             if path.exists() {
                 fs::remove_dir_all(&path)

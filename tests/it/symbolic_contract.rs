@@ -234,8 +234,8 @@ fn a_remembered_crate_demand_resolves_on_the_first_attempt() {
     let source = Fixture::new("use outer::inner_api::nested::deeper; let value = deeper();\n");
     let path = "outer::inner_api::nested::deeper";
 
-    fs::create_dir_all(source.root.join(".rawr/cache")).expect("the project cache exists");
-    fs::write(source.root.join(".rawr/cache/demand"), "outer\n").expect("a malformed demand file");
+    fs::create_dir_all(source.root.join("target/rawr/cache")).expect("the project cache exists");
+    fs::write(source.root.join("target/rawr/cache/demand"), "outer\n").expect("a malformed demand file");
     assert!(rawr_import::crate_demand::load(&source.root).is_empty());
 
     rawr_import::crate_demand::store(&source.root, &[path.into()]);
@@ -305,7 +305,7 @@ fn demand_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&str
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the fixture environment is sealable");
-    let mut builder = Request::builder(root, &root.join(".rawr/cache"), limits)
+    let mut builder = Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(extract::Policy::manifest(limits).seal())
@@ -333,7 +333,7 @@ fn reexport_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&s
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the fixture environment is sealable");
-    let mut builder = Request::builder(root, &root.join(".rawr/cache"), limits)
+    let mut builder = Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(extract::Policy::manifest(limits).seal())
@@ -370,7 +370,7 @@ fn request(root: &Path, limits: &Limits) -> Request {
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the fixture environment is sealable");
-    Request::builder(root, &root.join(".rawr/cache"), limits)
+    Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(extract::Policy::manifest(limits).seal())

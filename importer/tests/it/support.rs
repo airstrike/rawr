@@ -451,7 +451,7 @@ fn duplicate_crate_names_keep_distinct_artifact_and_compiler_identities() {
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the test environment is sealable");
-    let request = Request::builder(&project.0, &project.0.join(".rawr/cache"), &limits)
+    let request = Request::builder(&project.0, &project.0.join("target/rawr/cache"), &limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(Policy::manifest(&limits).seal())
@@ -1562,7 +1562,7 @@ fn constant_request(root: &Path, limits: &Limits) -> rawr_import::cargo::Request
     let dependency = Dependency::path("constant_api", &fixture, limits)
         .and_then(|dependency| dependency.package("constant-api"))
         .expect("the constant fixture dependency is exact");
-    Request::builder(root, &root.join(".rawr/cache"), limits)
+    Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the constant request builder seals")
         .environment(environment)
         .policy(Policy::manifest(limits).seal())
@@ -1579,7 +1579,7 @@ fn request(root: &Path, limits: &Limits) -> rawr_import::cargo::Request {
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the support environment is sealable");
     let fixture = fixture("facade-api");
-    Request::builder(root, &root.join(".rawr/cache"), limits)
+    Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(Policy::manifest(limits).seal())

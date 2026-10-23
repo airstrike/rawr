@@ -329,7 +329,7 @@ fn request(root: &Path, limits: &rawr_import::cargo::Limits) -> rawr_import::car
     };
     let fixture = fs::canonicalize(importer.join("tests/fixtures/profile-clock"))
         .expect("the unchanged profile fixture exists");
-    rawr_import::cargo::Request::builder(root, &root.join(".rawr/cache"), limits)
+    rawr_import::cargo::Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the P5 request builder seals")
         .environment(environment)
         .policy(extract::Policy::manifest(limits).seal())

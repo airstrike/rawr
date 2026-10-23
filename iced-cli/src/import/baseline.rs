@@ -407,7 +407,7 @@ impl Assets {
 impl Project {
     #[cfg(feature = "import-baseline")]
     fn cache(&self) -> Result<State, Error> {
-        tree_state(&self.root.join(".rawr"))
+        tree_state(&self.root.join("target/rawr/cache"))
     }
 }
 
@@ -1061,7 +1061,7 @@ fn isolated_cell_in(
 ) -> Result<CellLaunch, Error> {
     use rawr_import::metrics::cell;
 
-    let cache_root = project.root.join(".rawr");
+    let cache_root = project.root.join("target/rawr/cache");
     let cache_before = cell::project::Manifest::read(&cache_root)?;
     let before = cell::project::Identity::read_with_manifest(&project.root, &cache_before)?;
     let fixture = assets.fixture()?;
@@ -3173,7 +3173,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         let assets = Assets::transform().unwrap();
         let fixture = assets.materialize().unwrap();
-        let root = fixture.root.join(".rawr");
+        let root = fixture.root.join("target/rawr/cache");
         let absent = super::tree_state(&root).unwrap();
         fs::create_dir(&root).unwrap();
         fs::create_dir(root.join("empty")).unwrap();
@@ -3347,7 +3347,7 @@ mod tests {
             build.executable_digest_sha256,
         )
         .expect("reviewed title-attribution authority seals");
-        let cache_root = project.root.join(".rawr");
+        let cache_root = project.root.join("target/rawr/cache");
         let corpus = rawr_import::metrics::cell::corpus_id().expect("corpus id seals");
         let setup = super::isolated_cell(
             &executable,

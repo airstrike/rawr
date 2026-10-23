@@ -2841,7 +2841,7 @@ fn graph_observation_unlocks_before_sink_and_does_not_replace_errors() {
 fn legacy_project_local_entry_is_ignored_and_never_upgraded() {
     let root = temporary("legacy-project-local");
     let context = prepare_fixture(&root);
-    let legacy = root.join("project/.rawr/cache/runners/legacy-owner");
+    let legacy = root.join("project/target/rawr/cache/runners/legacy-owner");
     fs::create_dir_all(&legacy).expect("the project-local legacy directory exists");
     fs::write(legacy.join("receipt"), b"legacy-project-local")
         .expect("the project-local legacy receipt exists");

@@ -327,7 +327,7 @@ impl State {
         let context = home.context(&project.root, target)?;
         let cargo_rawr = home.root().join("rawr");
         let parent = root(&cargo_rawr)?;
-        let project = Captured::read(&project.root.join(".rawr"))?;
+        let project = Captured::read(&project.root.join("target/rawr/cache"))?;
         let shared = Captured::read(&cargo_rawr.join("v1"))?;
         if root(&cargo_rawr)? != parent {
             return Err(Error::Evidence("shared-store parent changed"));

@@ -2694,7 +2694,7 @@ impl Builder {
     pub fn build(mut self) -> Result<Request> {
         let limits = &self.limits;
         let project_root = canonical_directory("project root", &self.project_root)?;
-        let expected_cache = project_root.join(".rawr/cache");
+        let expected_cache = project_root.join("target/rawr/cache");
         let requested_cache = lexical_absolute(&self.cache_root)?;
         if requested_cache != expected_cache {
             return Err(Error::Path {
@@ -5579,7 +5579,7 @@ mod universe_placement_tests {
         }
 
         fn cache(&self) -> PathBuf {
-            self.0.join(".rawr/cache")
+            self.0.join("target/rawr/cache")
         }
     }
 

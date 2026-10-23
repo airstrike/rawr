@@ -217,7 +217,7 @@ fn the_app_crate_is_imported_and_a_rawr_module_uses_its_rust_module() {
             .expect("the app crate classifies")
     };
     let contract = import(&graph);
-    let generated = fs::read_to_string(project.path().join(".rawr/crate/lib.rs")).unwrap();
+    let generated = fs::read_to_string(project.path().join("target/rawr/crate/lib.rs")).unwrap();
     assert!(generated.contains("pub mod model;") && !generated.contains("view"), "{generated}");
 
     let source = rawr::reload::source::Graph::from_package(&graph);
@@ -236,6 +236,6 @@ fn the_app_crate_is_imported_and_a_rawr_module_uses_its_rust_module() {
     let contract = import(&graph);
     let snapshot = rawr::reload::source::Snapshot::from_graph(&rawr::reload::source::Graph::from_package(&graph));
     engine.compile_imported(&contract, snapshot).expect("the new pub(crate) Rust method is imported");
-    let copy = fs::read_to_string(project.path().join(".rawr/crate/src/model.rs")).unwrap();
+    let copy = fs::read_to_string(project.path().join("target/rawr/crate/src/model.rs")).unwrap();
     assert!(copy.contains("    pub        fn tripled"), "{copy}");
 }

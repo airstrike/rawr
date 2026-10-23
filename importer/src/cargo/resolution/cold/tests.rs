@@ -131,7 +131,7 @@ impl Fixture {
         let authority = root.join("authority");
         let dependency =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/catalog-api");
-        Request::builder(&project, &project.join(".rawr/cache"), &limits)
+        Request::builder(&project, &project.join("target/rawr/cache"), &limits)
             .expect("request builder seals")
             .environment(environment)
             .cargo_authority(&authority.join("Cargo.toml"))

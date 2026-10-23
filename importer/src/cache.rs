@@ -32,14 +32,14 @@ pub struct Entry {
 }
 
 impl Writer {
-    /// Bind a writer to `<project>/.rawr/cache/runners`.
+    /// Bind a writer to `<project>/target/rawr/cache/runners`.
     pub fn new(project: &std::path::Path) -> std::result::Result<Self, entry::Error> {
         let project = std::fs::canonicalize(project).map_err(|source| entry::Error::Io {
             operation: "canonicalize cache project",
             path: project.to_path_buf(),
             source,
         })?;
-        let root = project.join(".rawr/cache/runners");
+        let root = project.join("target/rawr/cache/runners");
         std::fs::create_dir_all(&root).map_err(|source| entry::Error::Io {
             operation: "create runner cache",
             path: root.clone(),

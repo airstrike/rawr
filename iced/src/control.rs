@@ -15,7 +15,7 @@ use std::sync::Arc;
 /// Ask the next `rawr preview` of the project at `root` to open the preview
 /// named `name` (its name or `group/name`).
 pub fn remember(root: &std::path::Path, name: &str) -> std::io::Result<()> {
-    let directory = root.join(".rawr");
+    let directory = root.join("target/rawr");
     std::fs::create_dir_all(&directory)?;
     std::fs::write(directory.join("preview"), name)
 }
@@ -73,7 +73,7 @@ impl Host {
     }
 
     /// Present this host as `rawr preview`: open straight into the preview
-    /// named in `<root>/.rawr/preview` (see [`remember`]), else the first, and
+    /// named in `<root>/target/rawr/preview` (see [`remember`]), else the first, and
     /// remember each later pick there.
     #[must_use]
     pub fn into_preview(self, root: &std::path::Path) -> Self {
@@ -233,7 +233,7 @@ mod tests {
         let mut state = open().into_preview(&root).into_state();
         state.pick(primary);
         assert_eq!(
-            fs::read_to_string(root.join(".rawr/preview")).unwrap(),
+            fs::read_to_string(root.join("target/rawr/preview")).unwrap(),
             "counter/Primary"
         );
         fs::remove_dir_all(&root).unwrap();

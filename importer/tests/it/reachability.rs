@@ -35,7 +35,7 @@ impl Project {
     }
 
     fn cache(&self) -> PathBuf {
-        self.root.join(".rawr/cache")
+        self.root.join("target/rawr/cache")
     }
 }
 

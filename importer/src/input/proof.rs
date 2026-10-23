@@ -1957,7 +1957,7 @@ mod tests {
     fn causal_package_ownership_excludes_a_nested_unprotected_project() {
         let limits = Limits::standard();
         let protected_root = Path::new("/fixture/rawr");
-        let project_root = protected_root.join(".rawr/cache/resolution/project");
+        let project_root = protected_root.join("target/rawr/cache/resolution/project");
         let protected_id = package_id(protected_root, "rawr");
         let project_id = package_id(&project_root, "rawr-generated-import");
         let manifest = project_root.join("Cargo.toml");

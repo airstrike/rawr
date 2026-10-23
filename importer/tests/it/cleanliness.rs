@@ -11,7 +11,7 @@ fn unchanged_freshness_fixtures_match_their_content_oracle() {
     assert!(actual.keys().all(|path| {
         !path
             .components()
-            .any(|component| matches!(component.as_os_str().to_str(), Some("target" | ".rawr")))
+            .any(|component| matches!(component.as_os_str().to_str(), Some("target")))
     }));
 }
 

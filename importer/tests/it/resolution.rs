@@ -35,7 +35,7 @@ impl Project {
     }
 
     fn cache(&self) -> PathBuf {
-        self.root.join(".rawr/cache")
+        self.root.join("target/rawr/cache")
     }
 }
 
@@ -55,7 +55,7 @@ fn real_pinned_cargo_seals_final_form_resolution_without_mutating_import() {
 
     assert_eq!(
         resolution.harness_root(),
-        project.root.join(".rawr/cache/resolution")
+        project.root.join("target/rawr/cache/resolution")
     );
     assert_eq!(resolution.target(), HOST);
     assert_eq!(resolution.profile(), "dev");

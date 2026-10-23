@@ -333,8 +333,9 @@ fn execute_command(
 }
 
 /// Retire other installs' idle Rawr hosts, the only Rawr-wide cache;
-/// `all` also removes the current project's `.rawr/cache` and its
-/// `<target>/rawr` (which `cargo clean` removes too). Returns the bytes freed.
+/// `all` also removes the current project's `target/rawr/cache` and its
+/// `<target>/rawr`, which `cargo clean` removes too. They are the same
+/// directory unless the target directory is moved. Returns the bytes freed.
 fn clean(all: bool) -> Result<u64, String> {
     let mut freed = 0;
     #[cfg(feature = "native-runner")]
@@ -350,7 +351,7 @@ fn clean(all: bool) -> Result<u64, String> {
     }
     if all {
         let project = std::env::current_dir().map_err(|error| error.to_string())?;
-        let mut owned = vec![project.join(".rawr/cache")];
+        let mut owned = vec![project.join("target/rawr/cache")];
         #[cfg(feature = "native-runner")]
         owned.push(rawr_import::location::rawr_directory(
             &project,

@@ -209,7 +209,7 @@ fn request(project: &Project, limits: &Limits, dependencies: &[(&str, &str)]) ->
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the test environment is sealable");
-    let mut builder = Request::builder(&project.root, &project.root.join(".rawr/cache"), limits)
+    let mut builder = Request::builder(&project.root, &project.root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(Policy::manifest(limits).seal())

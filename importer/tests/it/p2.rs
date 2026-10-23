@@ -67,7 +67,7 @@ fn request(root: &Path, limits: &Limits) -> Request {
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the P2 environment is sealable");
     let fixture = fixture("symbolic-api");
-    Request::builder(root, &root.join(".rawr/cache"), limits)
+    Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(Policy::manifest(limits).seal())

@@ -109,7 +109,7 @@ struct Member {
 impl Identity {
     /// Seal the exact fixed fixture inputs while excluding runtime title files.
     pub fn read(root: &Path) -> Result<Self, Error> {
-        let cache = Manifest::read(&root.join(".rawr"))?;
+        let cache = Manifest::read(&root.join("target/rawr/cache"))?;
         Self::read_with_manifest(root, &cache)
     }
 

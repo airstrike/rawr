@@ -1,4 +1,4 @@
-//! The project's remembered crate demand, `<project>/.rawr/cache/demand`.
+//! The project's remembered crate demand, `<project>/target/rawr/cache/demand`.
 //!
 //! Each line is one Rust path Rawr names through a wholesale crate re-export
 //! (`iced::futures::stream`). Every preparation starts from this set, so a
@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 fn file(project: &Path) -> PathBuf {
-    project.join(".rawr/cache/demand")
+    project.join("target/rawr/cache/demand")
 }
 
 /// The remembered demand, sorted; empty when the file is missing or malformed.

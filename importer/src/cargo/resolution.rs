@@ -2339,7 +2339,7 @@ mod tests {
         let sealed = snapshot(&root.join("project/target/rawr/store"));
         fs::remove_dir_all(root.join("project/target")).expect("the cold target retires");
         fs::remove_dir_all(root.join("project/protocol")).expect("the cold protocol retires");
-        fs::remove_dir_all(root.join("project/.rawr/cache/runners"))
+        fs::remove_dir_all(root.join("project/target/rawr/cache/runners"))
             .expect("the cold local runner materialization retires");
 
         let second_elapsed = run_worker(&root, &second_report, "runner-chain");

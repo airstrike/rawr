@@ -167,8 +167,8 @@ fn app_crate_path<'a>(
 }
 
 /// The app's own crate as a Cargo path dependency. Rawr writes a
-/// generated package under `.rawr/crate/`: the app's `[package]` and
-/// `[dependencies]`, a copy of each `.rs` module under `.rawr/crate/src/`
+/// generated package under `target/rawr/crate/`: the app's `[package]` and
+/// `[dependencies]`, a copy of each `.rs` module under `target/rawr/crate/src/`
 /// with crate-wide visibility made public (`polyglot::widened`), and a
 /// library root that declares each `.rs` module a marked module declares, in
 /// the same tree (`#[path]` on one private inline module rooted at the
@@ -196,7 +196,7 @@ fn app_crate(graph: &Graph, limits: &Limits) -> rawr_import::Result<Option<Depen
         .parent()
         .unwrap_or(entry.root())
         .to_path_buf();
-    let directory = entry.root().join(".rawr/crate");
+    let directory = entry.root().join("target/rawr/crate");
     let copies = directory.join("src");
     let mut files = vec![
         (directory.join("Cargo.toml"), app_manifest(cargo)),
@@ -607,7 +607,7 @@ fn request_with_profile(
     demand: &[Box<str>],
     limits: &Limits,
 ) -> rawr_import::Result<Request> {
-    let mut builder = Request::builder(entry.root(), &entry.root().join(".rawr/cache"), limits)?
+    let mut builder = Request::builder(entry.root(), &entry.root().join("target/rawr/cache"), limits)?
         .environment(environment)
         .profile(&config.profile)?;
     builder = builder.cargo_authority(&config.cargo_authority)?;

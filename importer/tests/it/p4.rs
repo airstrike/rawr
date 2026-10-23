@@ -64,7 +64,7 @@ fn request(root: &Path, limits: &Limits) -> Request {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/generic-api"),
     )
     .expect("the immutable generic fixture exists");
-    Request::builder(root, &root.join(".rawr/cache"), limits)
+    Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the P4 request builder seals")
         .environment(environment)
         .policy(Policy::manifest(limits).seal())

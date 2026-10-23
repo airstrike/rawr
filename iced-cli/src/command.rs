@@ -69,7 +69,7 @@ pub enum Command {
     },
     /// Evict every shared-store build no running process uses.
     CacheClean {
-        /// Also remove the current project's `.rawr/cache` and `<target>/rawr`.
+        /// Also remove the current project's `<target>/rawr`.
         all: bool,
     },
 }

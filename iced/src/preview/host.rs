@@ -23,7 +23,7 @@ pub(crate) struct Host {
     storage: Storage,
     timing: Option<timing::Session>,
     run: bool,
-    /// `<project>/.rawr/preview`: the preview `rawr preview` opens next.
+    /// `<project>/target/rawr/preview`: the preview `rawr preview` opens next.
     memory: Option<std::path::PathBuf>,
 }
 
@@ -197,11 +197,11 @@ impl Host {
     }
 
     /// Present this host as `rawr preview`: open straight into the preview named
-    /// in `<root>/.rawr/preview` (written by `rawr preview <name>` and by each
+    /// in `<root>/target/rawr/preview` (written by `rawr preview <name>` and by each
     /// later pick), else the first one. A retained application stays booted
     /// behind it.
     pub(crate) fn into_preview(mut self, root: &std::path::Path) -> Self {
-        let memory = root.join(".rawr").join("preview");
+        let memory = root.join("target/rawr/preview");
         let wanted = std::fs::read_to_string(&memory).unwrap_or_default();
         let wanted = wanted.trim();
         let previews = self.control_previews();

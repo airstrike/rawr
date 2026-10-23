@@ -86,7 +86,7 @@ impl Before {
         environment: cargo::config::Environment,
     ) -> Result<Self, Error> {
         let context = Context::capture(project, environment, target, &cargo::Limits::standard())?;
-        let local = Captured::read(&context.project().join(".rawr"), false)?;
+        let local = Captured::read(&context.project().join("target/rawr/cache"), false)?;
         let shared = shared(&context)?;
         Ok(Self {
             project: context.project().into(),
@@ -253,7 +253,7 @@ mod tests {
             ));
             fs::create_dir(&path).unwrap();
             let fixture = Self(fs::canonicalize(path).unwrap());
-            for relative in ["project/.rawr", "cargo/rawr/v1", "other/rawr/v1"] {
+            for relative in ["project/target/rawr/cache", "cargo/rawr/v1", "other/rawr/v1"] {
                 fs::create_dir_all(fixture.0.join(relative)).unwrap();
             }
             fixture
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn either_durable_tree_change_retains_the_complete_failed_comparison() {
-        for relative in ["project/.rawr/member", "cargo/rawr/v1/member"] {
+        for relative in ["project/target/rawr/cache/member", "cargo/rawr/v1/member"] {
             let fixture = Fixture::transform();
             let before = fixture.capture();
             fs::write(fixture.0.join(relative), b"changed").unwrap();
@@ -328,7 +328,7 @@ mod tests {
             "absent-root",
         ] {
             let fixture = Fixture::transform();
-            let root = fixture.0.join("project/.rawr");
+            let root = fixture.0.join("project/target/rawr/cache");
             let member = root.join("member");
             if mutation != "absent-root" {
                 fs::write(&member, b"same").unwrap();
@@ -398,8 +398,8 @@ mod tests {
     fn cache_aliases_and_absent_shared_warm_store_cannot_look_unchanged() {
         use std::os::unix::fs::symlink;
         let fixture = Fixture::transform();
-        fs::remove_dir(fixture.0.join("project/.rawr")).unwrap();
-        symlink("missing", fixture.0.join("project/.rawr")).unwrap();
+        fs::remove_dir(fixture.0.join("project/target/rawr/cache")).unwrap();
+        symlink("missing", fixture.0.join("project/target/rawr/cache")).unwrap();
         assert!(matches!(
             Before::capture_in(
                 &fixture.0.join("project"),
@@ -408,7 +408,7 @@ mod tests {
             ),
             Err(Error::Root(_))
         ));
-        fs::remove_file(fixture.0.join("project/.rawr")).unwrap();
+        fs::remove_file(fixture.0.join("project/target/rawr/cache")).unwrap();
         fs::remove_dir(fixture.0.join("cargo/rawr/v1")).unwrap();
         assert!(matches!(
             Before::capture_in(
