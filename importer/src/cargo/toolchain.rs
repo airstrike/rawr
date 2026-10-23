@@ -27,7 +27,7 @@ pub(crate) const HOST: &str = include_str!(concat!(env!("OUT_DIR"), "/toolchain-
 const REQUIRED_COMPONENTS: [&str; 2] = ["rustc-dev", "rust-src"];
 #[cfg(feature = "rustc-driver")]
 const SUPPORTED_PLAN_SCHEMA: u32 = 8;
-const SUPPORTED_PROBE_PROTOCOL: u32 = 20;
+const SUPPORTED_PROBE_PROTOCOL: u32 = 21;
 const SUPPORTED_UNIT_SCHEMA: u32 = 1;
 const SUPPORTED_GRAPH_SCHEMA: u32 = 1;
 
