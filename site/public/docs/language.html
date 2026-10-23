@@ -266,6 +266,7 @@ fn main() {
   <li>Byte literals (<code>b'a'</code>, <code>b"ab"</code>) and <code>char</code> ranges such as <code>'a'..='e'</code>.</li>
   <li><code>macro_rules!</code>, <code>async</code> and <code>.await</code>.</li>
   <li>A <code>const</code> captured in a format string (<code>"{LIMIT}"</code>). Pass it as an argument instead.</li>
+  <li>A <code>let</code> whose pattern is an enum with one variant, such as <code>let Wrapper::Named(x) = value;</code>. Use <code>match</code> instead.</li>
 </ul>
 <h3 id="missing-types">Types and borrowing</h3>
 <ul>
@@ -280,6 +281,7 @@ fn main() {
 <h3 id="missing-std">Standard library</h3>
 <ul>
   <li><code>Rc</code>, <code>RefCell</code> and <code>Cell</code>.</li>
+  <li><code>std::marker::PhantomData</code>.</li>
   <li><code>VecDeque</code> and <code>BinaryHeap</code>.</li>
   <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
   <li><code>write!</code> into a <code>String</code> through <code>std::fmt::Write</code>.</li>

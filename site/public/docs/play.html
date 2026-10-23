@@ -161,7 +161,7 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
 <p>A limit gets a plain reply such as <code>time limit exceeded</code>. Snippets have no filesystem, network or environment access.</p>
 
 <h3 id="no-files">Images without files</h3>
-<p>?play has no files. An image or svg path draws as a missing file. <code>include_str!</code> and <code>include_bytes!</code> fail with an error that says so. A snippet can still draw an image from bytes it holds. <code>svg::Handle::from_memory</code> takes svg text as bytes. <code>image::Handle::from_bytes</code> takes the bytes of a PNG or JPEG file. <code>image::Handle::from_rgba</code> takes a width, a height and 4 bytes for each pixel.</p>
+<p>?play has no files. An image or svg path draws as a missing file. <code>include_str!</code> and <code>include_bytes!</code> fail with an error that says so. <code>env!</code> fails the same way, since ?play has no environment variables either. A snippet can still draw an image from bytes it holds. <code>svg::Handle::from_memory</code> takes svg text as bytes. <code>image::Handle::from_bytes</code> takes the bytes of a PNG or JPEG file. <code>image::Handle::from_rgba</code> takes a width, a height and 4 bytes for each pixel.</p>
 <div class="block">
   <div class="file"><b>circle.rs</b></div>
   <pre><code data-lang="rust" data-run="circle.rs" id="src-circle">let circle = r#"&lt;svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"&gt;
