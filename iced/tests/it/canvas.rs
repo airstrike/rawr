@@ -180,6 +180,7 @@ impl<Message> canvas::Program<Message> for Square {
             size: 20.0,
             align_x: iced::widget::text::Alignment::Center,
             align_y: iced::alignment::Vertical::Center,
+            shaping: iced::widget::text::Shaping::Advanced,
             ..canvas::Text::default()
         });
         vec![frame.into_geometry()]

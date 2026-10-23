@@ -2773,7 +2773,7 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         )?)?;
     }
 
-    // `canvas::Text { content, position, color, size, .. }`.
+    // `canvas::Text { content, position, color, size, shaping, .. }`.
     let text = || ty("widget::canvas::Text");
     builder.item(item::Definition::associated_function(
         "widget::canvas::Text::default",
@@ -2788,6 +2788,7 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         ("font", ty("Font")?),
         ("align_x", ty("widget::text::Alignment")?),
         ("align_y", ty("alignment::Vertical")?),
+        ("shaping", ty("widget::text::Shaping")?),
     ] {
         builder.item(item::Definition::method(
             format!("widget::canvas::Text::{name}"),

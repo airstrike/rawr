@@ -583,7 +583,9 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Fill field");
     }
-    for name in ["content", "position", "max_width", "color", "size", "font", "align_x", "align_y"] {
+    for name in [
+        "content", "position", "max_width", "color", "size", "font", "align_x", "align_y", "shaping",
+    ] {
         let path = format!("iced::widget::canvas::Text::{name}");
         builder
             .bind(path.clone(), move |args| {
@@ -600,6 +602,7 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
                         "size" => Dynamic::from(f64::from(text.size.0)),
                         "font" => Dynamic::from(text.font),
                         "align_x" => Dynamic::from(text.align_x),
+                        "shaping" => Dynamic::from(text.shaping),
                         _ => Dynamic::from(marker::Vertical(match text.align_y {
                             iced::alignment::Vertical::Top => iced::Alignment::Start,
                             iced::alignment::Vertical::Center => iced::Alignment::Center,
@@ -615,6 +618,7 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
                     "size" => text.size = iced::Pixels(pixels(operand, &path)?),
                     "font" => text.font = read(operand, &path)?,
                     "align_x" => text.align_x = read(operand, &path)?,
+                    "shaping" => text.shaping = read(operand, &path)?,
                     _ => text.align_y = read::<marker::Vertical>(operand, &path)?.0.into(),
                 }
                 Ok(Dynamic::from(text))
