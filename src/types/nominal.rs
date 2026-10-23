@@ -207,6 +207,12 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                     .zip(members.iter())
                     .all(|(value, member)| matches_type(value, member))
         }),
+        // A shared reference is its referent's value at runtime.
+        type_ref::Type::Reference {
+            mutable: false,
+            target,
+            ..
+        } => matches_type(value, target),
         type_ref::Type::Reference { .. } => false,
         type_ref::Type::Path(path) => match &path.target {
             type_ref::Target::Builtin => match crate::host::runtime_builtin(&path.name) {

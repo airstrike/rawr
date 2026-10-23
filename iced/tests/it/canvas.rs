@@ -201,3 +201,65 @@ fn a_generic_draw_only_program_and_a_theme_value_check() {
     simulator.draw(&iced::Theme::Dark);
     assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
 }
+
+
+/// bezier_tool's shape: the Program borrows the State and a slice of it.
+const BORROWED: &str = r#"
+use iced::mouse;
+use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path};
+use iced::{Color, Fill, Point, Rectangle, Renderer, Theme, Widget};
+
+#[derive(Default)]
+struct State {
+    cache: canvas::Cache,
+    dots: Vec<Point>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+struct Painter<'a> {
+    state: &'a State,
+    dots: &'a [Point],
+}
+
+impl<'a> canvas::Program<Message> for Painter<'a> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let dots = self.state.cache.draw(renderer, bounds.size(), |frame: &mut Frame| {
+            for dot in self.dots {
+                frame.fill(&Path::circle(*dot, 4.0), Color::BLACK);
+            }
+        });
+        vec![dots]
+    }
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        Canvas::new(Painter { state: self, dots: &self.dots }).width(Fill).height(Fill)
+    }
+}
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+"#;
+
+#[test]
+fn a_program_that_borrows_its_state_draws() {
+    let adapter = boot(BORROWED);
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.draw(&iced::Theme::Dark);
+    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+}

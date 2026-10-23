@@ -456,6 +456,16 @@ impl Model {
         if let Some(element) = expected.box_element() {
             return self.validate_type(value, element, shared);
         }
+        // A shared reference, as a `&'a State` field, is its referent's
+        // value at runtime.
+        if let type_ref::Type::Reference {
+            mutable: false,
+            target,
+            ..
+        } = expected
+        {
+            return self.validate_type(value, target, shared);
+        }
         if let Some((ok, err)) = expected.result_elements() {
             return match crate::result::read(value) {
                 Some(Ok(inner)) => self.validate_type(&inner, ok, shared),

@@ -810,6 +810,12 @@ impl Type {
                         .map(|member| Self::from_resolved(member, model))
                         .collect::<Result<_, _>>()?,
                 )),
+                // A shared reference is its referent's value at runtime.
+                crate::resolve::type_ref::Type::Reference {
+                    mutable: false,
+                    target,
+                    ..
+                } => Self::from_resolved(target, model),
                 crate::resolve::type_ref::Type::Reference { .. } => Err(Error::Unsupported {
                     ty: "reference".into(),
                 }),
