@@ -3293,10 +3293,14 @@ fn witness_mode(plan: &Plan) -> u8 {
     }
 }
 
+/// Whether `ty` is Copy as the compiler sees it: a scalar, or an `Option`
+/// or `Result` of scalars, as a `cpu_cores: Option<usize>` field is.
 fn copy_scalar(ty: &convert::Type) -> bool {
     match ty {
         convert::Type::Unit => true,
         convert::Type::Builtin(builtin) => builtin.rust_name().is_some(),
+        convert::Type::Option(inner) => copy_scalar(inner),
+        convert::Type::Result(ok, err) => copy_scalar(ok) && copy_scalar(err),
         _ => false,
     }
 }
@@ -5933,6 +5937,14 @@ mod tests {
     };
     use crate::classify::representability::convert::{Builtin, Constant, Type};
     use crate::classify::representability::signature::{Kind, Parameter, Signature};
+
+    #[test]
+    fn an_option_of_a_scalar_is_read_as_a_copy() {
+        let usize = || Type::Builtin(Builtin::Usize);
+        assert!(super::copy_scalar(&Type::Option(Box::new(usize()))));
+        assert!(super::copy_scalar(&Type::Result(Box::new(usize()), Box::new(Type::Unit))));
+        assert!(!super::copy_scalar(&Type::Option(Box::new(Type::Builtin(Builtin::String)))));
+    }
 
     #[test]
     fn runner_manifest_makes_only_the_runner_unit_incremental() {

@@ -738,6 +738,34 @@ fn authenticate_structural(
     Ok(adapters.into_boxed_slice())
 }
 
+/// Whether a field of type `ty` is read as a copy, as the generated bridge
+/// reads it: a scalar, or an `Option` or `Result` of scalars.
+fn copy_scalar(ty: &host::type_ref::Type) -> bool {
+    match ty.shape() {
+        host::type_ref::Shape::Unit => true,
+        host::type_ref::Shape::Builtin(builtin) => matches!(
+            builtin,
+            host::type_ref::Builtin::Bool
+                | host::type_ref::Builtin::Char
+                | host::type_ref::Builtin::F64
+                | host::type_ref::Builtin::I64
+                | host::type_ref::Builtin::I8
+                | host::type_ref::Builtin::I16
+                | host::type_ref::Builtin::I32
+                | host::type_ref::Builtin::Isize
+                | host::type_ref::Builtin::U8
+                | host::type_ref::Builtin::U16
+                | host::type_ref::Builtin::U32
+                | host::type_ref::Builtin::U64
+                | host::type_ref::Builtin::Usize
+                | host::type_ref::Builtin::F32
+        ),
+        host::type_ref::Shape::Option(inner) => copy_scalar(inner),
+        host::type_ref::Shape::Result(ok, err) => copy_scalar(ok) && copy_scalar(err),
+        _ => false,
+    }
+}
+
 fn structural_path<'facade>(
     facade: &'facade host::facade::Definition,
     row: &StructuralRow,
@@ -756,26 +784,7 @@ fn structural_path<'facade>(
                 .chain(fields.iter().filter_map(|field| {
                     (field.imported_identity().fingerprint() == row.selector).then_some(
                         StructuralKind::Field {
-                            copy: matches!(
-                                field.ty().shape(),
-                                host::type_ref::Shape::Unit
-                                    | host::type_ref::Shape::Builtin(
-                                        host::type_ref::Builtin::Bool
-                                            | host::type_ref::Builtin::Char
-                                            | host::type_ref::Builtin::F64
-                                            | host::type_ref::Builtin::I64
-                                            | host::type_ref::Builtin::I8
-                                            | host::type_ref::Builtin::I16
-                                            | host::type_ref::Builtin::I32
-                                            | host::type_ref::Builtin::Isize
-                                            | host::type_ref::Builtin::U8
-                                            | host::type_ref::Builtin::U16
-                                            | host::type_ref::Builtin::U32
-                                            | host::type_ref::Builtin::U64
-                                            | host::type_ref::Builtin::Usize
-                                            | host::type_ref::Builtin::F32
-                                    )
-                            ),
+                            copy: copy_scalar(field.ty()),
                         },
                     )
                 }))
