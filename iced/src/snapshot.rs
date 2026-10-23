@@ -184,6 +184,10 @@ pub struct Motion {
     /// Set from outside to stop recording before the next frame, keeping
     /// the frames so far: someone else is waiting for the renderer.
     pub cut: Option<&'static std::sync::atomic::AtomicBool>,
+    /// The scale frames are drawn at once a frame differs from the first,
+    /// when lower than the canvas's: an animation's frames can be smaller
+    /// than a still image.
+    pub animation_scale: Option<f32>,
 }
 
 /// One frame of a [`Recording`].
@@ -200,6 +204,8 @@ pub struct Frame {
     /// What ran before it: 0 for the boot, `i` once the `i`th message is
     /// applied.
     pub phase: usize,
+    /// Pixels per logical pixel it was drawn at.
+    pub scale: f32,
 }
 
 impl Frame {
@@ -252,7 +258,8 @@ pub struct Recording {
 /// [`clock::freeze`] before the application boots so its boot reads the
 /// same clock; otherwise it freezes here. After the last message, `stop`
 /// sees the frames recorded since and ends the recording when it returns
-/// `true`.
+/// `true`. `each` sees every frame recorded so far, with the background,
+/// after each frame; the time it takes counts against the deadline.
 pub fn record_application(
     adapter: &mut crate::program::Adapter,
     messages: Vec<crate::runtime::Message>,
@@ -261,6 +268,7 @@ pub fn record_application(
     theme: Option<&str>,
     motion: Motion,
     stop: &mut dyn FnMut(&[Frame]) -> bool,
+    each: &mut dyn FnMut(&[Frame], [u8; 4]),
 ) -> Result<Recording, Error> {
     use iced::time::Instant;
     use iced::window::RedrawRequest;
@@ -328,13 +336,19 @@ pub fn record_application(
                     rgba: image.into_bytes(),
                     time: now - start,
                     phase: if capped { last } else { phase },
+                    scale: scale.unwrap_or(1.0),
                 };
-                // The view changed: an animation gets the longer budget.
+                // The view changed: an animation gets the longer budget,
+                // and its next frames are drawn at its scale.
                 if !changed && frames.first().is_some_and(|first| !first.same_image(&frame)) {
                     changed = true;
                     motion.deadline.extend(motion.extended);
+                    if let Some(lower) = motion.animation_scale {
+                        scale = scale.map(|scale| scale.min(lower));
+                    }
                 }
                 frames.push(frame);
+                each(&frames, background);
                 if capped {
                     break 'record Ending::Messages;
                 }

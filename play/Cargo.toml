@@ -20,6 +20,7 @@ rawr = { path = "..", features = ["sync"] }
 rawr-cli = { path = "../cli" }
 rawr-iced = { path = "../iced" }
 # An animated render, as a GIF.
+color_quant = "1.1"
 gif = "0.13"
 image-webp = "0.2.4"
 jpeg-encoder = "0.6"

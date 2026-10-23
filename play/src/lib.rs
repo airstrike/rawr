@@ -372,8 +372,10 @@ pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
         deadline,
         extended: start + budget,
         cut: Some(&CUT),
+        animation_scale: Some(motion::SCALE),
     };
     let mut loops = motion::Loops::default();
+    let mut encoder = motion::Encoder::new(motion::SCALE);
     let recording = rawr_iced::snapshot::record_application(
         &mut adapter,
         messages,
@@ -382,6 +384,7 @@ pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
         theme,
         motion,
         &mut |frames| loops.check(frames),
+        &mut |frames, background| encoder.push(frames, background),
     )
     .map_err(|error| classify(&error.to_string(), &options.limits))?;
     // A cut recording stopped before its budget ran out.
@@ -390,7 +393,7 @@ pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
     } else {
         budget
     };
-    motion::picture(recording, &loops, stopped)
+    motion::picture(recording, &loops, stopped, encoder)
 }
 
 /// How a render sizes and scales its image.

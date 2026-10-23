@@ -3156,6 +3156,7 @@ name = "rawr-play"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "color_quant",
  "gif",
  "http-body-util",
  "hyper",

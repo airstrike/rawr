@@ -177,9 +177,14 @@ Cloudflare). A full app whose view changes may record up to
 `PLAY_ANIMATION_TIME_MS` (15 s). The switch happens at the second distinct
 frame. The app's scripts and the recording share that deadline. The
 simulated clock is unchanged, so the same snippet gives the same frames.
+Once the view changes, frames are drawn at 1x, half the scale of a still
+PNG. Each frame is encoded into the GIF as soon as it is recorded, so the
+encoding counts against the same deadline. A frame stores only the
+rectangle that changed, with its unchanged pixels transparent. Assembling
+the GIF after the deadline costs at most one more frame's encoding.
 `PLAY_TIMEOUT_MS` (80 s on Cloudflare) leaves room for the idle budget's
-60 s plus the start and the GIF's encoding. The bot shows Discord's typing
-indicator while a render runs.
+60 s plus the start. The bot shows Discord's typing indicator while a
+render runs.
 
 The longer budget has three limits (`src/budget.rs`):
 

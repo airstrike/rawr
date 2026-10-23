@@ -150,6 +150,7 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
 <p>An app runs on a simulated clock that moves 50&nbsp;ms each frame. <code>time::every</code> ticks and <code>window::frames</code> fires as it moves. <code>Instant::now()</code> reads it. The same snippet gives the same frames on every run.</p>
 <ul>
   <li>An app whose view never changes gets a PNG.</li>
+  <li>A GIF is drawn at half the scale of a PNG.</li>
   <li>An app whose view changes and then settles gets a GIF that plays once. Its last frame stays for about 3&nbsp;s. Each <code>msg=</code> is applied after the frames before it settle, so each message&rsquo;s change shows.</li>
   <li>An app whose frames repeat gets a GIF of one cycle that loops.</li>
   <li>An app that keeps changing without repeating gets the first 5&nbsp;s, played once. The reply notes the cut.</li>
