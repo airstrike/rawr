@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 5;
-const CLASSIFIER_VERSION: u32 = 8;
+const CLASSIFIER_VERSION: u32 = 9;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3241,6 +3241,13 @@ impl<P: api::Phase> Context<'_, P> {
                 definition_is_public(definition)?;
                 if is_string(definition) && arguments.is_empty() {
                     Type::Builtin(Builtin::String)
+                } else if id.unit().crate_name() == "core"
+                    && definition.display_path().eq(["core", "time", "Duration"])
+                {
+                    Type::Nominal {
+                        definition: crate::surface::identity::Definition::duration(),
+                        arguments: Box::default(),
+                    }
                 } else if is_i64_range(definition, arguments) {
                     Type::Builtin(Builtin::InclusiveRange)
                 } else if let Some(element) = option_element(definition, arguments) {

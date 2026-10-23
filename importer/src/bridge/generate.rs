@@ -5002,6 +5002,7 @@ fn render_take(
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_range",
         convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => "take_int",
         convert::Type::Builtin(convert::Builtin::F32) => "take_f32",
+        ty if is_duration(ty) => "take_primitive",
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         convert::Type::FunctionItem { .. } => {
             return Err(request::Error::Drift {
@@ -5037,6 +5038,7 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
+        ty if is_duration(ty) => writeln!(output, "    Ok(Dynamic::from({value}))"),
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => {
             writeln!(
                 output,
@@ -5117,6 +5119,7 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
         ),
+        ty if is_duration(ty) => cast(output, "std::time::Duration"),
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
             "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take(handle))"
@@ -5163,6 +5166,9 @@ fn render_to_dynamic(
 ) -> Result<(), request::Error> {
     use std::fmt::Write as _;
     match ty {
+        ty if is_duration(ty) => {
+            write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
             "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
@@ -5206,6 +5212,12 @@ fn render_to_dynamic(
         }
     }
     .map_err(|_| request::Error::Encoding)
+}
+
+/// Rust's `std::time::Duration`, which crosses by value.
+fn is_duration(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Nominal { definition, .. }
+        if *definition == crate::surface::identity::Definition::duration())
 }
 
 /// The `Output` and `Progress` of an `impl Sipper<Output, Progress>` output.

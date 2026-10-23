@@ -3105,12 +3105,18 @@ impl rawr::package::import::runner::Profile for Decoration<'_> {
             Some("Task")
         } else if identity == rawr_import::surface::identity::Definition::sipper().as_bytes() {
             Some("task::Sipper")
+        } else if identity == rawr_import::surface::identity::Definition::duration().as_bytes() {
+            Some("time::Duration")
         } else {
             None
         };
         if let Some(path) = projected {
             if facade.root() == ROOT {
-                return host::type_ref::Type::applied(path, arguments).map(Some);
+                return if arguments.is_empty() {
+                    host::type_ref::Type::registered(path).map(Some)
+                } else {
+                    host::type_ref::Type::applied(path, arguments).map(Some)
+                };
             }
             // Another crate's facade names the installed iced facade's type.
             let iced = installed
