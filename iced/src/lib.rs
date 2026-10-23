@@ -177,6 +177,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("touch")?;
     builder.module("widget::scrollable")?;
     builder.module("widget::slider")?;
+    builder.module("widget::table")?;
     builder.module("widget::text")?;
     builder.module("widget::text_input")?;
     builder.module("widget::toggler")?;
@@ -476,6 +477,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.type_::<marker::QrCode>("widget::QRCode", &[], &[])?;
     builder.type_::<marker::Span>("widget::text::Span", &["Link"], &[])?;
     builder.type_::<marker::Rich>("widget::text::Rich", &["Link", "Message"], &[])?;
+    builder.type_::<marker::TableColumn>("widget::table::Column", &["T", "Message"], &[])?;
+    builder.type_::<marker::Table>("widget::Table", &["Message"], &[])?;
+    builder.project("widget::Table", "Element", &["Message"])?;
     builder.project("widget::text::Rich", "Element", &["Message"])?;
     builder.project_with("widget::QRCode", "Element", &[host::type_def::Argument::fresh()])?;
     builder.type_::<marker::Pin>("widget::Pin", &["Message"], &[])?;
@@ -1019,6 +1023,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_checkbox_icon(&mut builder)?;
     declare_angles(&mut builder)?;
     declare_scrollable(&mut builder)?;
+    declare_table(&mut builder)?;
 
     builder.finish()
 }
@@ -3456,6 +3461,55 @@ fn declare_scrollable(builder: &mut facade::Builder) -> Result<(), host::Error> 
             receiver::Mode::Shared,
             output_signature(output)?,
         )?)?;
+    }
+    Ok(())
+}
+
+/// iced's `table(columns, rows)` and `table::column(header, view)`, whose
+/// view makes each row's cell.
+fn declare_table(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let parameter = type_ref::Type::parameter;
+    let element = || type_ref::Type::applied("Element", [parameter("Message")?]);
+    let column = || {
+        type_ref::Type::applied("widget::table::Column", [parameter("T")?, parameter("Message")?])
+    };
+    let table = || type_ref::Type::applied("widget::Table", [parameter("Message")?]);
+    let mut new = signature::Builder::new();
+    new.type_parameter("T", &[])?;
+    new.type_parameter("Message", &[])?;
+    new.parameter(element()?);
+    new.parameter(type_ref::Type::callable(parameter("T")?, element()?));
+    new.output(column()?);
+    builder.item(item::Definition::function("widget::table::column", new.finish())?)?;
+    let mut new = signature::Builder::new();
+    new.type_parameter("T", &[])?;
+    new.type_parameter("Message", &[])?;
+    new.parameter(type_ref::Type::slice(column()?));
+    new.parameter(type_ref::Type::slice(parameter("T")?));
+    new.output(table()?);
+    builder.item(item::Definition::function("widget::table", new.finish())?)?;
+    let mut inputs = vec![("width", type_ref::Type::registered("Length")?)];
+    inputs.extend(PIXELS.map(|pixels| ("width", type_ref::Type::builtin(pixels))));
+    for input in ["alignment::Horizontal", "Alignment"] {
+        inputs.push(("align_x", type_ref::Type::registered(input)?));
+    }
+    for input in ["alignment::Vertical", "Alignment"] {
+        inputs.push(("align_y", type_ref::Type::registered(input)?));
+    }
+    for (name, input) in inputs {
+        let mut setter = signature::Builder::new();
+        setter.type_parameter("T", &[])?;
+        setter.type_parameter("Message", &[])?;
+        setter.parameter(input).output(column()?);
+        builder.item(item::Definition::method(
+            format!("widget::table::Column::{name}"),
+            receiver::Mode::Owned,
+            setter.finish(),
+        )?)?;
+    }
+    length_builders(builder, "widget::Table", &["width"])?;
+    for name in ["padding", "padding_x", "padding_y", "separator", "separator_x", "separator_y"] {
+        pixels_builders(builder, "widget::Table", name)?;
     }
     Ok(())
 }

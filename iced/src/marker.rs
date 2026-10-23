@@ -51,6 +51,32 @@ pub(crate) struct Application;
 /// iced's `Widget` trait, which source names only as `impl Widget<Message>`.
 pub(crate) struct Widget;
 
+/// iced's `table::column(header, view)`: a header and the function that
+/// makes each row's cell.
+#[derive(Clone)]
+pub(crate) struct TableColumn {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) header: widget::Value,
+    pub(crate) view: item::Value,
+    pub(crate) width: Option<iced::Length>,
+    pub(crate) align_x: Option<iced::alignment::Horizontal>,
+    pub(crate) align_y: Option<iced::alignment::Vertical>,
+}
+
+/// iced's `table(columns, rows)`.
+#[derive(Clone)]
+pub(crate) struct Table {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) columns: Vec<TableColumn>,
+    pub(crate) rows: Vec<Dynamic>,
+    pub(crate) width: Option<iced::Length>,
+    pub(crate) padding_x: Option<f32>,
+    pub(crate) padding_y: Option<f32>,
+    pub(crate) separator_x: Option<f32>,
+    pub(crate) separator_y: Option<f32>,
+}
+
 /// iced's `Function` trait, whose `with` a `use iced::Function` brings to
 /// every function of two or more inputs.
 pub(crate) struct Function;

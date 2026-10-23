@@ -1485,3 +1485,69 @@ fn master_widget_ids_take_strings() {
     }
     find(&adapter, "contents");
 }
+
+const TABLE: &str = r#"
+use iced::widget::{column, table, text};
+use iced::{Center, Fill, Right, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::new, State::update, State::view).run()
+}
+
+struct State {
+    events: Vec<Event>,
+}
+
+#[derive(Clone)]
+struct Event {
+    name: String,
+    price: f32,
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            events: vec![
+                Event { name: "Concert".to_string(), price: 20.5 },
+                Event { name: "Picnic".to_string(), price: 0.0 },
+            ],
+        }
+    }
+
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let columns = [
+            table::column(text("Name"), |event: &Event| text(&event.name)).width(Fill.max(400)),
+            table::column(text("Price"), |event: &Event| {
+                if event.price > 0.0 {
+                    text!("${:.2}", event.price)
+                } else {
+                    text("Free").width(Fill).center()
+                }
+            })
+            .align_x(Right)
+            .align_y(Center),
+        ];
+        column![
+            table(columns, &self.events)
+                .padding_x(10.0)
+                .padding_y(5.0)
+                .separator_x(1.0)
+                .separator_y(1.0),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_table_draws_a_cell_per_column_and_row() {
+    let adapter = boot(TABLE);
+    find(&adapter, "Name");
+    find(&adapter, "Picnic");
+    find(&adapter, "$20.50");
+    find(&adapter, "Free");
+}

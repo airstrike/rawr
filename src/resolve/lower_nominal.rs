@@ -25186,7 +25186,8 @@ impl<'a> Parser<'a> {
             [item] => Some((item.clone(), receiver.cloned())),
             _ => None,
         };
-        let mut overloads = Vec::<Vec<Option<(Box<[Ty]>, Option<(Rc<HostTyProof>, usize)>)>>>::new();
+        let mut overloads =
+            Vec::<Vec<Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>>>::new();
         for item in items {
             let checkpoint = self.inference.checkpoint();
             let hints = self
@@ -25196,14 +25197,17 @@ impl<'a> Parser<'a> {
                         .inputs
                         .iter()
                         .map(|input| match self.inference.resolve(input) {
-                            Ty::Callable { inputs, output, .. }
-                                if !inputs.iter().any(contains_inference) =>
-                            {
+                            // An input still open gives no parameter types,
+                            // but the output still converts, as a table
+                            // column's `|row: &Row| text(..)` into `Element`.
+                            Ty::Callable { inputs, output, .. } => {
                                 let output = match self.inference.resolve(&output) {
                                     Ty::Host { proof, arguments } => Some((proof, arguments.len())),
                                     _ => None,
                                 };
-                                Some((inputs, output))
+                                let inputs =
+                                    (!inputs.iter().any(contains_inference)).then_some(inputs);
+                                (inputs.is_some() || output.is_some()).then_some((inputs, output))
                             }
                             _ => None,
                         })
@@ -25235,7 +25239,7 @@ impl<'a> Parser<'a> {
         self.closure_hints = hints
             .into_iter()
             .map(|hint| {
-                hint.map(|(inputs, _)| {
+                hint.and_then(|(inputs, _)| inputs).map(|inputs| {
                     if !immediate {
                         return inputs;
                     }
