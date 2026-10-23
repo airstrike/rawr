@@ -11965,10 +11965,10 @@ impl<'a> Parser<'a> {
                     .map(|member| self.proven_type(member, operation, span))
                     .collect::<Result<_, _>>()?,
             ),
-            Ty::Array { .. } | Ty::Keyed(..) | Ty::Reverse(_) => {
+            Ty::Keyed(..) | Ty::Reverse(_) => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
-                    reason: "vectors, maps and sets do not cross into the host".into(),
+                    reason: "maps and sets do not cross into the host".into(),
                     operation: span,
                 });
             }
