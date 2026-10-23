@@ -695,3 +695,69 @@ fn a_marked_iced_crate_writes_previews_through_the_rawr_crate() {
     assert!(prepared.adapter().diagnostics().is_empty());
     assert!(prepared.adapter().last_good_output().is_some());
 }
+
+/// A copy of the fixture directory `name` from `cli/tests/fixtures` at
+/// `into`, without build products.
+fn copy_fixture(name: &str, into: &Path) -> PathBuf {
+    fn visit(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for entry in fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name();
+            if name == "target" || name == "Cargo.lock" {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, &to.join(&name));
+            } else {
+                fs::copy(&path, to.join(&name)).unwrap();
+            }
+        }
+    }
+    let root = into.join(name);
+    visit(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../cli/tests/fixtures")
+            .join(name),
+        &root,
+    );
+    root
+}
+
+/// A marked crate that is no iced app runs with a Rust path dependency.
+/// The import adds iced at rawr-iced's revision for the profile, since the
+/// crate declares none.
+#[test]
+#[ignore = "builds the path dependency and a runner with the import driver"]
+fn a_plain_marked_crate_runs_with_a_path_dependency() {
+    let sandbox = Sandbox::new("path-dependency");
+    let root = copy_fixture("rs-marker-path", sandbox.path());
+
+    let output = rawr_command()
+        .arg("run")
+        .arg(root.join("app"))
+        .output()
+        .unwrap();
+
+    writable(&root);
+    assert_success(&output);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "double: 42\n");
+}
+
+/// Let the sandbox remove `root`: the import store keeps its files
+/// read-only.
+fn writable(root: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let metadata = fs::symlink_metadata(root).unwrap();
+    if metadata.file_type().is_symlink() {
+        return;
+    }
+    let mode = metadata.permissions().mode();
+    fs::set_permissions(root, fs::Permissions::from_mode(mode | 0o200)).unwrap();
+    if metadata.is_dir() {
+        for entry in fs::read_dir(root).unwrap() {
+            writable(&entry.unwrap().path());
+        }
+    }
+}
