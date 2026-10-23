@@ -141,6 +141,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::svg")?;
     builder.module("widget::qr_code")?;
     builder.module("widget::operation")?;
+    builder.module("widget::selector")?;
     builder.module("widget::operation::scrollable")?;
     builder.module("window")?;
     builder.module("event")?;
@@ -270,6 +271,16 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     )?;
     builder.value_type::<marker::Horizontal>("alignment::Horizontal", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.value_type::<marker::Vertical>("alignment::Vertical", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::widget::selector::Target>(
+        "widget::selector::Target",
+        &[],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
     builder.value_type::<iced::widget::Id>(
         "widget::Id",
         &[],
@@ -2451,7 +2462,7 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
         "widget::Id::unique",
         output_signature("widget::Id")?,
     )?)?;
-    for owner in ["widget::Scrollable", "widget::TextInput"] {
+    for owner in ["widget::Container", "widget::Scrollable", "widget::TextInput"] {
         builders(builder, owner, "id", [id()?])?;
     }
     for name in OPERATION_ANIMATIONS {
@@ -2499,6 +2510,24 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
     focus.parameter(id()?);
     focus.output(task()?);
     builder.item(item::Definition::function("widget::operation::focus", focus.finish())?)?;
+    // `selector::find(id)`: the widget with that id, once iced lays it out.
+    let target = || type_ref::Type::registered("widget::selector::Target");
+    let mut find = signature::Builder::new();
+    find.parameter(id()?);
+    find.output(type_ref::Type::applied("Task", [type_ref::Type::option(target()?)])?);
+    builder.item(item::Definition::function("widget::selector::find", find.finish())?)?;
+    for (name, output) in [
+        ("bounds", type_ref::Type::registered("Rectangle")?),
+        ("visible_bounds", type_ref::Type::option(type_ref::Type::registered("Rectangle")?)),
+    ] {
+        let mut reader = signature::Builder::new();
+        reader.output(output);
+        builder.item(item::Definition::method(
+            format!("widget::selector::Target::{name}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+    }
     for (name, offset) in [
         ("snap_to", Some("widget::scrollable::RelativeOffset")),
         ("snap_to_end", None),

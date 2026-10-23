@@ -345,6 +345,16 @@ fn bind_operations(builder: &mut host::runtime::Builder) {
         .bind("iced::widget::Id::unique", |_| Ok(Dynamic::from(iced::widget::Id::unique())))
         .expect("the iced facade must retain Id::unique");
     builder
+        .bind("iced::widget::Container::id", |args| {
+            if args.len() != 2 {
+                return Err(arity("Container::id", 2, args.len()));
+            }
+            let mut container = take::<marker::Container>(args[0], "iced::widget::Container")?;
+            container.id = Some(take(args[1], "iced::widget::Id")?);
+            Ok(Dynamic::from(container))
+        })
+        .expect("the iced facade must retain Container::id");
+    builder
         .bind("iced::widget::Scrollable::id", |args| {
             if args.len() != 2 {
                 return Err(arity("Scrollable::id", 2, args.len()));
@@ -493,6 +503,7 @@ fn bind_containers(builder: &mut host::runtime::Builder) {
                     align_x: iced::Alignment::Start,
                     align_y: iced::Alignment::Start,
                     style: None,
+                    id: None,
                 };
                 if let Some(x) = x {
                     container.width = iced::Length::Fill;

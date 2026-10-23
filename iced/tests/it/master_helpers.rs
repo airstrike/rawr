@@ -597,3 +597,50 @@ fn master_rich_text_takes_strings_and_spans_with_links() {
     let adapter = boot(RICH);
     find(&adapter, "0");
 }
+
+const SELECTOR: &str = r#"
+use iced::widget::{self, column, container, selector, text};
+use iced::{Rectangle, Task, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+
+#[derive(Default)]
+struct State {
+    bounds: Option<Rectangle>,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Find,
+    Found(Option<selector::Target>),
+}
+
+impl State {
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Find => selector::find(widget::Id::new("outer")).map(Message::Found),
+            Message::Found(target) => {
+                self.bounds = target.as_ref().and_then(selector::Target::visible_bounds);
+                let _whole = target.map(|target| target.bounds());
+                Task::none()
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            container(text("outer")).id(widget::Id::new("outer")).padding(10),
+            text(format!("{:?}", self.bounds.is_some())),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_selector_finds_a_container_by_id() {
+    let adapter = boot(SELECTOR);
+    find(&adapter, "outer");
+    find(&adapter, "false");
+}
