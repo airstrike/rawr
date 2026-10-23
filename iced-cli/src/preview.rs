@@ -116,6 +116,12 @@ fn execute_transform(
 ) -> Result<(), Error> {
     let loaded = crate::base::load(path.as_ref()).map_err(Error::Diagnostic)?;
     #[cfg(feature = "native-runner")]
+    if !loaded.graph.declares_rust_import() {
+        return Err(Error::Diagnostic(crate::base::without_cargo(
+            loaded.target.source().path(),
+        )));
+    }
+    #[cfg(feature = "native-runner")]
     if loaded.graph.declares_rust_import() {
         return crate::import::owner::run(
             &loaded.target,

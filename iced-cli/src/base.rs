@@ -20,13 +20,31 @@ pub(crate) enum Program {
 }
 
 /// Load the program at `path` and decide whether rawr-iced serves it.
+/// rawr-iced runs a program against the iced its project's `cargo build`
+/// builds, so a program it serves must have a Cargo.toml.
 pub(crate) fn layer(path: Option<&PathBuf>) -> Result<Program, rawr::diagnostic::Report> {
     let loaded = load(path)?;
-    Ok(if crate::layer::claims().claim(loaded.sheet.facts()) {
-        Program::Layered(loaded)
-    } else {
-        Program::Base(loaded)
-    })
+    if !crate::layer::claims().claim(loaded.sheet.facts()) {
+        return Ok(Program::Base(loaded));
+    }
+    if !loaded.graph.declares_rust_import() {
+        return Err(without_cargo(loaded.target.source().path()));
+    }
+    Ok(Program::Layered(loaded))
+}
+
+/// A program that uses iced but has no Cargo.toml naming it.
+pub(crate) fn without_cargo(path: &std::path::Path) -> rawr::diagnostic::Report {
+    rawr::diagnostic::Report::error(
+        rawr::diagnostic::code::ENVIRONMENT_PROJECT_NOT_FOUND,
+        format!(
+            "`{}` uses iced, and iced comes from a Cargo project: Rawr runs the program \
+             against the iced its `cargo build` builds. Start one with `rawr new <name>`, \
+             or add a Cargo.toml that depends on iced beside the program.",
+            path.display()
+        ),
+    )
+    .finish()
 }
 
 /// A live session of rawr-iced over a program it serves.

@@ -9,11 +9,6 @@ use crate::item;
 use crate::package::{error, manifest, source, Error};
 use crate::{diagnostic, parse, project, Engine, ImmutableString, Position, Span};
 
-/// Crates a built-in facade serves. A marked crate whose only Cargo
-/// dependencies are these, and which has no native module, needs no
-/// native build.
-const FACADE_CRATES: [&str; 1] = ["iced"];
-
 type Parts = (
     Box<[Package]>,
     Box<[source::Source]>,
@@ -231,6 +226,19 @@ impl Graph {
     #[must_use]
     pub fn declares_rust_import(&self) -> bool {
         self.entry_package().rust.is_some()
+    }
+
+    /// The features the application package's Cargo.toml names for its
+    /// dependency `alias`; empty when it has no such dependency.
+    #[must_use]
+    pub fn dependency_features(&self, alias: &str) -> Vec<String> {
+        self.entry_package()
+            .rust
+            .iter()
+            .flat_map(|config| config.dependencies.iter())
+            .filter(|dependency| dependency.alias.as_str() == alias)
+            .flat_map(|dependency| dependency.features.iter().cloned())
+            .collect()
     }
 
     /// Every source with its parse.
@@ -936,13 +944,10 @@ impl<'a> Builder<'a> {
         self.push_evidence(source);
         {
             let package = &mut self.packages[package.0];
-            // A marked crate that uses only crates a built-in facade
-            // serves runs without a native build.
-            let imports = !package.rust_modules.is_empty()
-                || cargo
-                    .dependencies
-                    .iter()
-                    .any(|dependency| !FACADE_CRATES.contains(&dependency.alias.as_str()));
+            // A marked crate with any Cargo dependency imports Rust: even
+            // one that uses only iced runs against the iced its own
+            // `cargo build` builds, never one built into rawr-iced.
+            let imports = !package.rust_modules.is_empty() || !cargo.dependencies.is_empty();
             if imports {
                 package.rust = Some(manifest::rust::Config::from_cargo(
                     &cargo.path,

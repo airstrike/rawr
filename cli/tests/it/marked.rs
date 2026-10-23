@@ -156,11 +156,11 @@ fn an_unmarked_module_is_native_rust() {
     assert!(graph.declares_rust_import());
 }
 
-/// The iced counter's view calls a native module, so it imports its
-/// Cargo dependencies. Without the native module it would not: a built-in
-/// facade serves iced.
+/// A marked iced crate imports its Cargo dependencies with or without a
+/// native module: rawr-iced runs it against the iced its own `cargo build`
+/// builds, never one built into rawr-iced.
 #[test]
-fn a_native_module_makes_a_marked_iced_crate_import_its_dependencies() {
+fn a_marked_iced_crate_imports_its_dependencies_with_or_without_a_native_module() {
     let sandbox = Sandbox::new("marked-counter");
     let root = copy("rs-marker-counter", &sandbox.work());
 
@@ -184,7 +184,7 @@ fn a_native_module_makes_a_marked_iced_crate_import_its_dependencies() {
     .unwrap();
     let graph = self::graph(&root, None).unwrap();
     assert!(graph.entry_package().rust_modules().is_empty());
-    assert!(!graph.declares_rust_import());
+    assert!(graph.declares_rust_import());
 }
 
 /// Native code must not use marked code: Rawr builds the native modules
