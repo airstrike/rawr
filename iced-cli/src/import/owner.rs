@@ -23,7 +23,9 @@ struct Initial {
     manifests: resident::Manifests,
 }
 
-/// Check one imported application without opening a native window.
+/// Check one imported application without opening a native window: its
+/// Rust imports are resolved and extracted and the Rawr source is checked
+/// against them. No runner is built; `rawr run` builds it.
 pub(crate) fn check(
     target: &rawr::project::Target,
     graph: Option<rawr::package::Graph>,
@@ -31,16 +33,17 @@ pub(crate) fn check(
 ) -> Result<PathBuf, diagnostic::Report> {
     let source = target.source().path().to_path_buf();
     let fallback = fallback(target)?;
-    let (mut lane, _) = initial(
+    let revision = rawr_import::supervisor::Owner::new()
+        .revision()
+        .map_err(|error| framework(error, fallback.clone()))?;
+    super::prepare_loaded(
         target,
         graph,
-        rawr_import::process::Lifecycle::Check,
-        false,
+        revision,
         #[cfg(feature = "import-baseline")]
         profile,
-    )?;
-    lane.shutdown()
-        .map_err(|error| framework(error, fallback))?;
+    )
+    .map_err(|error| import(error, fallback))?;
     Ok(source)
 }
 
