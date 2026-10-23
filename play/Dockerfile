@@ -41,8 +41,9 @@ RUN cargo chef prepare --recipe-path /recipe.json
 # Dependencies compile in their own layer, cached until Cargo.lock or a
 # manifest changes. The workspace crates (rawr among them) compile after.
 FROM toolchain AS build
-# Parallel rustc jobs. The CI build passes 1, as rawr's thin-LTO compile needs
-# most of a 16 GB runner.
+# Parallel rustc jobs, which also bound the codegen and thin-LTO threads. They
+# change build time only, never the binary's speed. CI passes 4 (16 GB runner
+# plus swap); 2 keeps a small local builder VM within its memory.
 ARG CARGO_BUILD_JOBS=2
 COPY --from=plan /recipe.json /recipe.json
 RUN . /cross.env \

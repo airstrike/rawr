@@ -49,21 +49,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The runner starts with about 14 GB free. The Rust build and its cache
-      # need more, so drop toolchains this job never uses.
-      - name: Free disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell
-          docker image prune --all --force >/dev/null
-          df -h /
-
-      # 16 GB of RAM is tight for rawr's thin-LTO compile (a 26 GB local
-      # builder ran out), so the build gets 24 GB of swap on the runner's
-      # second disk as a cushion.
+      # The runner has about 85 GB free on / (the build needs about 20), so
+      # nothing is deleted. Four rustc jobs on 16 GB of RAM peak above it
+      # during rawr's thin-LTO link, so the build gets 24 GB of swap on the
+      # runner's second disk as a cushion.
       - name: Add swap
         run: |
+          df -h / /mnt
           sudo swapoff -a
           sudo rm -f /mnt/swapfile
           sudo fallocate -l 24G /mnt/swapfile
@@ -82,10 +74,11 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # Built before logging in, since the registry's credentials last only
-      # 15 minutes and a cold build takes far longer. The cooked dependencies
-      # live in the GitHub Actions cache, so later runs rebuild only the
-      # workspace crates.
+      # Built once and loaded into the local docker, then pushed: the
+      # registry's credentials last only 15 minutes and a cold build takes far
+      # longer. The cooked dependencies live in the GitHub Actions cache, so
+      # later runs rebuild only the workspace crates. CARGO_BUILD_JOBS sets
+      # build speed only: the profile (opt-level 3, thin LTO) is the Dockerfile's.
       - name: Build the image
         uses: docker/build-push-action@v6
         with:
@@ -94,10 +87,17 @@ jobs:
           platforms: linux/amd64
           build-args: |
             PLAY_VERSION=${{ steps.image.outputs.sha }}
-            CARGO_BUILD_JOBS=1
+            CARGO_BUILD_JOBS=4
           tags: ${{ steps.image.outputs.ref }}
+          load: true
+          provenance: false
           cache-from: type=gha,scope=play
           cache-to: type=gha,scope=play,mode=max
+
+      - name: Show the image's size
+        run: |
+          docker image ls "${{ steps.image.outputs.ref }}"
+          docker history --format '{{.Size}}\t{{.CreatedBy}}' "${{ steps.image.outputs.ref }}" | cut -c1-120
 
       - uses: actions/setup-node@v5
         with:
@@ -108,28 +108,17 @@ jobs:
         working-directory: play/deploy/cloudflare
         run: npm install --no-audit --no-fund
 
-      - name: Log in to Cloudflare's registry
+      - name: Push the image
         working-directory: play/deploy/cloudflare
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
         run: |
           credentials="$(npx wrangler containers registries credentials registry.cloudflare.com --push --json)"
           field() { printf '%s' "$credentials" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s)[process.argv[1]]))" "$1"; }
           password="$(field password)"
           echo "::add-mask::$password"
           printf '%s' "$password" | docker login registry.cloudflare.com -u "$(field username)" --password-stdin
-
-      # Every layer is in the builder already, so this step only pushes.
-      - name: Push the image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: play/Dockerfile
-          platforms: linux/amd64
-          build-args: |
-            PLAY_VERSION=${{ steps.image.outputs.sha }}
-            CARGO_BUILD_JOBS=1
-          tags: ${{ steps.image.outputs.ref }}
-          cache-from: type=gha,scope=play
-          push: true
+          docker push "$IMAGE"
 
       # wrangler has no flag for the container image, so the job's own copy
       # of wrangler.jsonc names it. PLAY_VERSION tells the bot to restart.
