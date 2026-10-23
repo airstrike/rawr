@@ -7575,3 +7575,21 @@ fn language_items_declared_in_a_function_body() {
     );
     assert_eq!(value, "square 9 dark");
 }
+
+#[test]
+fn language_matches_inside_an_if_inside_some() {
+    let value = run(r#"
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        enum Message { Next, Previous }
+        fn pick(message: Message) -> Option<i64> {
+            let mut turns = 0;
+            while matches!(message, Message::Next) && turns < 3 { turns += 1; }
+            Some(if matches!(message, Message::Next) { 1 } else { 2 } + turns * 100)
+        }
+        pub fn run() -> i64 {
+            pick(Message::Next).unwrap() * 10 + pick(Message::Previous).unwrap()
+        }
+        run()
+    "#);
+    assert_eq!(value, 3012);
+}

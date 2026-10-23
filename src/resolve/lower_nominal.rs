@@ -19764,7 +19764,14 @@ impl<'a> Parser<'a> {
         let outer = std::mem::replace(&mut self.no_struct, true);
         let value = parse(self);
         self.no_struct = outer;
-        value
+        // A head that is a block, as `matches!(..)`'s match, is wrapped so
+        // the script reads it as the head and not as the body.
+        value.map(|mut value| {
+            if value.source.as_str().trim_start().starts_with('{') {
+                value.source = std::mem::take(&mut value.source).surrounded("(", ")");
+            }
+            value
+        })
     }
 
     fn parse_if(&mut self, if_span: Span) -> Result<ParsedExpr, Error> {
