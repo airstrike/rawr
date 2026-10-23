@@ -824,10 +824,15 @@ impl Example {
                 });
             }
             Message::Step => {
-                self.downloads[0].update(Update::Downloading(42.0));
+                if let Some(download) = self.downloads.iter_mut().find(|download| download.id == 0) {
+                    download.update(Update::Downloading(42.0));
+                }
             }
             Message::Finish => {
-                self.downloads[0].update(Update::Finished(true));
+                let Some(download) = self.downloads.get_mut(0) else {
+                    return Task::none();
+                };
+                download.update(Update::Finished(true));
             }
         }
         Task::none()

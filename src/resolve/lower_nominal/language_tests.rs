@@ -7470,6 +7470,42 @@ fn language_let_chains() {
 }
 
 #[test]
+fn language_get_mut_and_iter_mut_find_lend_an_element() {
+    let value = run(r#"
+        struct D { id: i64, n: i64 }
+        impl D { fn bump(&mut self) { self.n += 1; } }
+        struct E { ds: Vec<D> }
+        impl E {
+            fn start(&mut self, index: usize) -> i64 {
+                let Some(d) = self.ds.get_mut(index) else { return -1; };
+                d.bump();
+                d.n
+            }
+            fn set(&mut self, id: i64, n: i64) {
+                if let Some(d) = self.ds.iter_mut().find(|d| d.id == id) { d.n = n; }
+            }
+        }
+        pub fn run() -> i64 {
+            let mut e = E { ds: vec![D { id: 7, n: 0 }, D { id: 9, n: 0 }] };
+            let started = e.start(1);
+            let missing = e.start(5);
+            e.set(7, 40);
+            e.set(3, 99);
+            let mut v = vec![1, 2, 3];
+            if let Some(x) = v.get_mut(2) { *x *= 10; }
+            *v.get_mut(0).unwrap() += 4;
+            match v.iter_mut().find(|x| **x == 2) { Some(x) => *x = 20, None => {} }
+            let mut i = 0;
+            while let Some(x) = v.get_mut(i) { *x += 1; i += 1; }
+            e.ds[0].n * 1000000 + e.ds[1].n * 100000 + started * 10000 + missing
+                + v[0] * 1000 + v[1] * 10 + v[2] - 31
+        }
+        run()
+    "#);
+    assert_eq!(value, 40 * 1000000 + 1 * 100000 + 1 * 10000 - 1 + 6 * 1000 + 21 * 10 + 31 - 31);
+}
+
+#[test]
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(error.contains("nknown function") && error.contains("centre"), "{error}");

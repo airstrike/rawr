@@ -461,6 +461,7 @@ impl Parser<'_> {
                 subject,
                 None,
                 parts.span().end(),
+                self.field_entries.len(),
             );
             let statement = std::mem::replace(&mut self.output, output);
             self.last_type = last_type;
@@ -494,6 +495,121 @@ impl Parser<'_> {
         looped.map(Some)
     }
 
+    /// `Some(&mut v[slot])`, or `None` when `locate` sets `slot` below 0:
+    /// what `v.get_mut(i)` and `v.iter_mut().find(f)` are. The value has
+    /// the element's place, which a pattern's `&mut` binding writes back
+    /// (`pattern_write_back`). `slot` is a local declared before the
+    /// statement; `locate` sets it each time the value is evaluated.
+    pub(super) fn optional_element(
+        &mut self,
+        value: &ParsedExpr,
+        element: &Ty,
+        slot: &str,
+        locate: origin::Fragment,
+        expression: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let index = origin::Fragment::plain(slot);
+        let lvalue = match &value.lvalue {
+            Some(Lvalue::Binding { binding, .. }) => Some(Lvalue::Place {
+                binding: binding.clone(),
+                ty: element.clone(),
+                place: origin::Fragment::plain(format!("{binding}[{slot}]")),
+            }),
+            Some(Lvalue::Place { binding, place, .. }) => {
+                let mut place = place.clone();
+                place.push_text(format!("[{slot}]"));
+                Some(Lvalue::Place {
+                    binding: binding.clone(),
+                    ty: element.clone(),
+                    place,
+                })
+            }
+            Some(lvalue @ (Lvalue::Field(_) | Lvalue::Nested(_))) => Some(nested_step(
+                lvalue,
+                PlaceStep::Index(index),
+                element.clone(),
+            )),
+            _ => None,
+        };
+        let Some(lvalue) = lvalue else {
+            return Err(self.unsupported("`get_mut` or `iter_mut().find` of a value that is not a place"));
+        };
+        let owner = lvalue.binding().clone();
+        let mutable = self.bindings.get(&owner).is_some_and(|binding| {
+            binding.mutable || matches!(binding.ty, Ty::Reference { mutable: true, .. })
+        });
+        if !mutable {
+            self.require_mutable_binding(&owner, value.span)?;
+        }
+        self.field_entries.push((
+            origin::Fragment::plain(format!("let {slot} = -1; ")),
+            origin::Fragment::default(),
+        ));
+        let receiver = value.rendered_source().surrounded("(", ")");
+        let mut element_at = receiver;
+        element_at.push_text(format!("[{slot}]"));
+        let some = self.prelude_op(PreludeOp::Some, [element_at]);
+        let none = self.prelude_op(PreludeOp::None, []);
+        let mut source = origin::Fragment::plain("{ ");
+        source.push(locate);
+        source.push_text(format!("if {slot} < 0 {{ "));
+        source.push(none);
+        source.push_text(" } else { ");
+        source.push(some);
+        source.push_text(" } }");
+        let ty = Ty::Option(Box::new(Ty::Reference {
+            mutable: true,
+            target: Box::new(element.clone()),
+        }));
+        let mut parsed = self.operator_expr(source.surrounded("(", ")"), ty, expression);
+        parsed.lvalue = Some(lvalue);
+        Ok(parsed)
+    }
+
+    /// `v.iter_mut().find(f)`: `Some` of the first element's place `f`
+    /// holds for, or `None` (`optional_element`).
+    fn parse_iter_mut_find(
+        &mut self,
+        value: &ParsedExpr,
+        element: Ty,
+    ) -> Result<ParsedExpr, Error> {
+        for _ in 0..3 {
+            self.next();
+        }
+        let item = Ty::Reference {
+            mutable: false,
+            target: Box::new(Ty::Reference {
+                mutable: true,
+                target: Box::new(element.clone()),
+            }),
+        };
+        self.closure_hints = vec![Some(Box::new([item.clone()]) as Box<[Ty]>)];
+        let arguments = self.parse_call_arguments("`find` arguments");
+        self.closure_hints = Vec::new();
+        let (mut arguments, end) = arguments?;
+        let expression = span(value.span.start(), end);
+        let [predicate] = arguments.as_mut_slice() else {
+            return Err(Error::InvalidMethodCall {
+                owner: "Iterator".into(),
+                method: "find".into(),
+                reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
+                call: expression,
+            });
+        };
+        let slot = self.temporary("index");
+        let at = self.temporary("at");
+        let receiver = value.rendered_source().surrounded("(", ")");
+        let mut candidate = receiver.clone();
+        candidate.push_text(format!("[{at}]"));
+        let call = self.callable_call(predicate, &[item], &Ty::Bool, vec![candidate])?;
+        let mut locate = origin::Fragment::plain(format!("{slot} = -1; for {at} in 0.."));
+        locate.push(receiver);
+        locate.push_text(".len() { if ");
+        locate.push(call);
+        locate.push_text(format!(" {{ {slot} = {at}; break; }} }} "));
+        self.optional_element(value, &element, &slot, locate, expression)
+    }
+
     /// `v.iter_mut()`: followed by `.for_each(|x| body)`, the body run on
     /// each element's place; a mutable loop is `for x in v.iter_mut()`.
     pub(super) fn parse_iter_mut(
@@ -502,6 +618,19 @@ impl Parser<'_> {
         element: Ty,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        {
+            let mut ahead = self.input.clone();
+            let tokens: Vec<Token> = (0..4)
+                .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
+                .collect();
+            if tokens[0] == Token::Unit
+                && tokens[1] == Token::Period
+                && matches!(&tokens[2], Token::Identifier(name) if name.as_str() == "find")
+                && tokens[3] == Token::LeftParen
+            {
+                return self.parse_iter_mut_find(value, element);
+            }
+        }
         let (root, owner) = match &value.lvalue {
             Some(Lvalue::Binding { binding, .. }) => (binding.to_string(), binding.clone()),
             Some(Lvalue::Place { binding, place, .. }) => {

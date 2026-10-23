@@ -16372,6 +16372,7 @@ impl<'a> Parser<'a> {
     /// `let pattern = value else { diverging };`: the pattern's bindings
     /// after the statement, or the `else` block, which must diverge.
     fn parse_let_else(&mut self, start: Position) -> Result<(), Error> {
+        let pending = self.field_entries.len();
         let syntax = self.parse_pattern_syntax()?;
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
         let subject = self.parse_subject()?;
@@ -16392,7 +16393,7 @@ impl<'a> Parser<'a> {
         }
         let end = otherwise.syntax.end();
         self.consume_terminator(start)?;
-        self.bind_let_pattern(start, &syntax, subject, Some(otherwise), end)
+        self.bind_let_pattern(start, &syntax, subject, Some(otherwise), end, pending)
     }
 
     /// The bindings of `let pattern = subject`, after the statement. Without
@@ -16406,6 +16407,7 @@ impl<'a> Parser<'a> {
         subject: ParsedExpr,
         otherwise: Option<Branch>,
         end: Position,
+        pending: usize,
     ) -> Result<(), Error> {
         let written_ty = self.inference.resolve(&subject.ty);
         let subject_ty = match written_ty.clone() {
@@ -16481,6 +16483,7 @@ impl<'a> Parser<'a> {
             );
         }
         self.write_backs.extend(write_back);
+        let rendered = self.with_field_entries(pending, rendered);
         self.write_output(rendered, span(start, end));
         self.last_type = Ty::Unit;
         self.last_expression = None;
@@ -16510,15 +16513,15 @@ impl<'a> Parser<'a> {
         if annotation.is_none()
             && !syntax.has_ref_mut()
             && value.lvalue.is_some()
-            && matches!(
-                self.inference.resolve(&value.ty),
-                Ty::Reference { mutable: true, .. }
-            )
+            && match self.inference.resolve(&value.ty) {
+                Ty::Reference { mutable: true, .. } => true,
+                Ty::Option(inner) => matches!(*inner, Ty::Reference { mutable: true, .. }),
+                _ => false,
+            }
         {
             let end = value.span.end();
-            self.field_entries.truncate(pending);
             self.consume_terminator(start)?;
-            return self.bind_let_pattern(start, &syntax, value, None, end);
+            return self.bind_let_pattern(start, &syntax, value, None, end, pending);
         }
         self.reject_invocation(&value.ty, value.span, "retained in a local binding")?;
         self.reject_signature_support(&value.ty, value.span, "retained in a local binding")?;
@@ -17152,14 +17155,31 @@ impl<'a> Parser<'a> {
             names,
         })));
         let written = self.temporary("written");
+        // `Some(&mut place)` (`optional_element`): the pattern matched the
+        // place inside `Some`, and the place takes what is inside again.
+        let optional = !borrowed
+            && matches!(
+                self.inference.resolve(&subject.ty),
+                Ty::Option(inner) if matches!(*inner, Ty::Reference { mutable: true, .. })
+            );
         let mut hook = origin::Fragment::plain("{ ");
         hook.push(read);
         hook.push_text(format!("let {written} = {helper}("));
-        hook.push(place.clone());
+        if optional {
+            hook.push(self.prelude_op(PreludeOp::Some, [place.clone()]));
+        } else {
+            hook.push(place.clone());
+        }
         hook.push_text(format!(
             ", {scrutinee}, [{values}]); if {written}[0] {{ "
         ));
-        if let Some(Lvalue::Slice(_)) = &lvalue {
+        if optional {
+            let inner = self.prelude_op(PreludeOp::Unwrap, [format!("{written}[1]").into()]);
+            hook.push(place);
+            hook.push_text(" = ");
+            hook.push(inner);
+            hook.push_text(";");
+        } else if let Some(Lvalue::Slice(_)) = &lvalue {
             let stored = format!("{written}[1]");
             let mut place = subject.clone();
             place.lvalue = lvalue.clone();
@@ -28142,6 +28162,8 @@ impl<'a> Parser<'a> {
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
         let owner = Ty::Option(Box::new(element.clone()));
+        let keeps_place = matches!(member.as_str(), "unwrap" | "expect")
+            && matches!(self.inference.resolve(&element), Ty::Reference { mutable: true, .. });
         let reference = Ty::Reference {
             mutable: false,
             target: Box::new(element.clone()),
@@ -28524,8 +28546,14 @@ impl<'a> Parser<'a> {
             }
         };
         source.push_text(" }");
+        // `v.get_mut(i).unwrap()` is the element's place.
+        let place = if keeps_place { value.lvalue.clone() } else { None };
         // A block is not an `if` condition in the legacy parser.
-        Ok(self.operator_expr(source.surrounded("(", ")"), ty, expression))
+        let mut parsed = self.operator_expr(source.surrounded("(", ")"), ty, expression);
+        if place.is_some() {
+            parsed.lvalue = place;
+        }
+        Ok(parsed)
     }
 
     /// `b.then_some(v)` (`v` evaluated eagerly, as Rust does) and
@@ -29509,6 +29537,19 @@ impl<'a> Parser<'a> {
         }
         let receiver = value.rendered_source().surrounded("(", ")");
         let expression = span(value.span.start(), end);
+        // `v.get_mut(i)`: `Some` of the element's place, or `None`.
+        if member.as_str() == "get_mut"
+            && let [index] = arguments.as_mut_slice()
+        {
+            self.coerce_expr(&Ty::Int(Int::Usize), index)?;
+            let slot = self.temporary("index");
+            let mut locate = origin::Fragment::plain(format!("{slot} = "));
+            locate.push(index.rendered_source());
+            locate.push_text(format!("; if {slot} >= "));
+            locate.push(receiver.clone());
+            locate.push_text(format!(".len() {{ {slot} = -1; }} "));
+            return self.optional_element(&value, &element, &slot, locate, expression);
+        }
         let (source, ty) = match (member.as_str(), arguments.as_mut_slice()) {
             ("len", []) => (receiver.surrounded("", ".len()"), Ty::Int(Int::Usize)),
             ("is_empty", []) => (receiver.surrounded("(", ".len() == 0)"), Ty::Bool),
