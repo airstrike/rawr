@@ -356,8 +356,18 @@ fn bind_events(builder: &mut host::runtime::Builder) {
             _ => None,
         }),
     ] {
+        // A recording's clock runs while `window::frames` is listened to.
+        let frames = path == "iced::window::frames";
         builder
-            .bind_stream_operation(&definition(path), no_arguments, move |_| input(filter), unit)
+            .bind_stream_operation(
+                &definition(path),
+                no_arguments,
+                move |_| match frames && crate::snapshot::clock::now().is_some() {
+                    true => armed(input(filter)),
+                    false => input(filter),
+                },
+                unit,
+            )
             .expect("the iced facade must retain every event stream");
     }
     builder
@@ -379,7 +389,10 @@ fn bind_events(builder: &mut host::runtime::Builder) {
                     .and_then(|value| value.read_lock::<std::time::Duration>().map(|d| *d))
                     .unwrap_or(std::time::Duration::from_secs(1))
                     .max(std::time::Duration::from_millis(1));
-                ticks(duration)
+                match crate::snapshot::clock::now() {
+                    Some(start) => simulated_ticks(duration, start),
+                    None => ticks(duration),
+                }
             },
             unit,
         )
@@ -405,6 +418,57 @@ fn ticks(
     });
     receiver
         .map(|()| Ok(Dynamic::from(crate::marker::Instant::now())))
+        .boxed()
+}
+
+/// A tick every `duration` of a recording's clock, from `start`: each frame
+/// the recording draws (a `RedrawRequested` at the clock's time) gives
+/// every tick due by then, each at its own time.
+fn simulated_ticks(
+    duration: std::time::Duration,
+    start: iced::time::Instant,
+) -> iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>> {
+    use iced::advanced::subscription::Event as Input;
+    use iced::futures::stream::{self, StreamExt};
+
+    /// Most ticks one frame gives.
+    const MOST: usize = 1024;
+    let Some(events) = events() else {
+        return stream::empty().boxed();
+    };
+    let mut next = start + duration;
+    armed(
+        events
+            .flat_map(move |event| {
+                let mut due = Vec::new();
+                if let Input::Interaction {
+                    event: iced::Event::Window(iced::window::Event::RedrawRequested(now)),
+                    ..
+                } = event
+                {
+                    while next <= now && due.len() < MOST {
+                        due.push(Ok(Dynamic::from(crate::marker::Instant(next))));
+                        next += duration;
+                    }
+                }
+                stream::iter(due)
+            })
+            .boxed(),
+    )
+}
+
+/// `stream`, counted as driven by the recording's clock while it runs.
+fn armed(
+    stream: iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>>,
+) -> iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>> {
+    use iced::futures::StreamExt;
+
+    let armed = crate::snapshot::clock::Armed::new();
+    stream
+        .map(move |item| {
+            let _ = &armed;
+            item
+        })
         .boxed()
 }
 

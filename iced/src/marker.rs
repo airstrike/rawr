@@ -430,8 +430,10 @@ pub(crate) struct Easing(pub(crate) iced::animation::Easing);
 pub(crate) struct Instant(pub(crate) iced::time::Instant);
 
 impl Instant {
+    /// The present, or the simulated time while a recording's clock is
+    /// frozen.
     pub(crate) fn now() -> Self {
-        Self(iced::time::Instant::now())
+        Self(crate::snapshot::clock::now().unwrap_or_else(iced::time::Instant::now))
     }
 }
 

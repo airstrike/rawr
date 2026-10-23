@@ -67,8 +67,22 @@ impl Renderer {
         let Some(canvas) = self.canvas.filter(|canvas| canvas.fit) else {
             return declared;
         };
+        let interface = self.settle(view, declared);
+        self.fit(interface, declared, canvas).1
+    }
+
+    /// The size `canvas` fits a settled `interface` to within `declared`,
+    /// and the interface laid out at the width it measured with.
+    fn fit(
+        &mut self,
+        mut interface: UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
+        declared: Size,
+        canvas: super::Canvas,
+    ) -> (
+        UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
+        Size,
+    ) {
         let fallback = Size::new(canvas.fallback.0 as f32, canvas.fallback.1 as f32);
-        let mut interface = self.settle(view, declared);
         let mut size = self.measure(&mut interface);
         if size.width >= declared.width {
             let width = fallback.width.min(declared.width);
@@ -79,7 +93,8 @@ impl Renderer {
         if size.height >= declared.height {
             size.height = fallback.height.min(declared.height);
         }
-        Size::new(size.width.ceil().max(1.0), size.height.ceil().max(1.0))
+        let size = Size::new(size.width.ceil().max(1.0), size.height.ceil().max(1.0));
+        (interface, size)
     }
 
     /// The size of the root container `framing` adds.
@@ -158,6 +173,15 @@ impl Renderer {
         unreachable!("the frames end at the cap")
     }
 
+    /// The pixels per logical pixel for an image of `size`: the canvas
+    /// scale while the larger side stays within `max_pixels`, never below 1x.
+    fn scale(&self, size: Size) -> f32 {
+        self.canvas.map_or(SCALE, |canvas| {
+            let largest = size.width.max(size.height);
+            canvas.scale.min(canvas.max_pixels as f32 / largest).max(1.0)
+        })
+    }
+
     /// Draw `view` at `size` once it settles.
     pub(super) fn render(
         &mut self,
@@ -165,13 +189,101 @@ impl Renderer {
         theme: &iced::Theme,
         size: Size,
     ) -> Result<image::Image, Error> {
-        // Rasterize at the canvas scale while the larger side stays within
-        // `max_pixels`, never below 1x.
-        let scale = self.canvas.map_or(SCALE, |canvas| {
-            let largest = size.width.max(size.height);
-            canvas.scale.min(canvas.max_pixels as f32 / largest).max(1.0)
-        });
+        let scale = self.scale(size);
         let mut interface = self.settle(view, size);
+        self.draw(&mut interface, theme, size, scale)
+    }
+
+    /// One frame of a recording at the clock's `now`, over the widget trees
+    /// of the frame before. `view(published, true)` gives the content to
+    /// measure and `view(published, false)` the view to draw, each settled
+    /// within the frame (each message its widgets publish applied while the
+    /// clock stands still). The image is sized as the canvas sizes the
+    /// content and drawn at `scale` (the first frame's, once set). Gives
+    /// when the drawn interface asked to be redrawn.
+    pub(super) fn frame(
+        &mut self,
+        view: &mut dyn FnMut(Vec<runtime::Message>, bool) -> iced::Element<'static, runtime::Message>,
+        trees: &mut Trees,
+        declared: Size,
+        now: time::Instant,
+        theme: &iced::Theme,
+        scale: &mut Option<f32>,
+    ) -> Result<(image::Image, window::RedrawRequest), Error> {
+        let size = match self.canvas.filter(|canvas| canvas.fit) {
+            Some(canvas) => {
+                let mut content = |published| view(published, true);
+                let cache = std::mem::take(&mut trees.content);
+                let (interface, _) = self.settle_at(&mut content, declared, cache, now);
+                let (interface, size) = self.fit(interface, declared, canvas);
+                trees.content = interface.into_cache();
+                size
+            }
+            None => declared,
+        };
+        let mut drawn = |published| view(published, false);
+        let cache = std::mem::take(&mut trees.view);
+        let (mut interface, request) = self.settle_at(&mut drawn, size, cache, now);
+        let scale = *scale.get_or_insert_with(|| self.scale(size));
+        let image = self.draw(&mut interface, theme, size, scale)?;
+        trees.view = interface.into_cache();
+        Ok((image, request))
+    }
+
+    /// `view` settled at `now` over `cache`, as [`Self::settle`] settles it
+    /// but with the clock held: a frame that publishes a message or changes
+    /// the interface is rebuilt, and the first that does neither ends it.
+    /// Gives when the interface asked to be redrawn; one still changing
+    /// after [`FRAMES`] asks for the next frame.
+    fn settle_at(
+        &mut self,
+        view: &mut View<'_>,
+        size: Size,
+        mut cache: user_interface::Cache,
+        now: time::Instant,
+    ) -> (
+        UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
+        window::RedrawRequest,
+    ) {
+        let mut published = Vec::new();
+        for frame in 1.. {
+            let element = view(std::mem::take(&mut published));
+            let mut interface = UserInterface::build(element, size, cache, &mut self.raw);
+            let mut messages = shell::Bus::new();
+            let (state, _) = interface.update(
+                &window::Headless,
+                &shell::Waker::noop(),
+                &[Event::Window(window::Event::RedrawRequested(now))],
+                mouse::Cursor::Unavailable,
+                &mut self.raw,
+                &mut messages,
+            );
+            if let user_interface::State::Updated {
+                change: user_interface::Change::None,
+                redraw_request,
+                ..
+            } = state
+                && messages.is_empty()
+            {
+                return (interface, redraw_request);
+            }
+            if frame == FRAMES {
+                return (interface, window::RedrawRequest::NextFrame);
+            }
+            published = messages.drain().map(|(message, _)| message).collect();
+            cache = interface.into_cache();
+        }
+        unreachable!("the frames end at the cap")
+    }
+
+    /// Draw a settled `interface` at `size` and `scale`.
+    fn draw(
+        &mut self,
+        interface: &mut UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
+        theme: &iced::Theme,
+        size: Size,
+        scale: f32,
+    ) -> Result<image::Image, Error> {
         let base = theme.base();
         interface.draw(
             &mut self.raw,
@@ -186,9 +298,16 @@ impl Renderer {
             (size.height * scale).round() as u32,
         );
         let bytes = self.raw.screenshot(physical, scale, base.background_color);
-        drop(interface);
         image::Image::new(physical.width, physical.height, bytes)
     }
+}
+
+/// The widget trees a recording builds each frame over: the content it
+/// measures and the view it draws.
+#[derive(Default)]
+pub(super) struct Trees {
+    content: user_interface::Cache,
+    view: user_interface::Cache,
 }
 
 /// A view to render: given the messages the last frame published, the
