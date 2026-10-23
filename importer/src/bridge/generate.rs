@@ -647,10 +647,40 @@ fn runtime_invoke(
             if let Some(witness) = witness {
                 arguments.arena.attest(handle, witness)?;
             }
+        } else if let Ok(witness) = call.output_witness() {
+            // A Rust value inside an `Option` or a `Result` takes the
+            // witness of its own type argument.
+            attest_inner(&output, &witness, arguments.arena)?;
         }
         Ok(output)
     })
     .map_err(runtime_error)
+}
+
+fn attest_inner(
+    value: &Dynamic,
+    witness: &__rawr_internal::host::runtime::Witness,
+    arena: &mut Arena,
+) -> Result<(), Error> {
+    let mut copy = value.clone();
+    let inner = if __rawr_internal::option::is(value) {
+        __rawr_internal::option::take(&mut copy).flatten().map(|inner| (inner, 0))
+    } else if __rawr_internal::result::is(value) {
+        match __rawr_internal::result::take(&mut copy) {
+            Some(Ok(inner)) => Some((inner, 0)),
+            Some(Err(inner)) => Some((inner, 1)),
+            None => None,
+        }
+    } else {
+        None
+    };
+    if let Some((inner, index)) = inner
+        && let Some(handle) = inner.read_lock::<NativeHandle>().map(|value| *value)
+        && let Some(witness) = witness.argument_witness(index)
+    {
+        arena.attest(handle, witness)?;
+    }
+    Ok(())
 }
 
 fn runtime_project(
