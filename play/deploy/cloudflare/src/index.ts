@@ -22,7 +22,11 @@
 // Durable Object (content-addressed), limits each IP (by HMAC, never in
 // clear), checks Turnstile, and forwards renders to the bot's HTTP port,
 // which only this Durable Object can reach. A render is an iced snippet's
-// PNG or a plain program's output (JSON).
+// PNG or a plain program's output (JSON). The Turnstile widget stays
+// invisible unless Cloudflare needs an interaction. After one successful
+// Siteverify the Worker sets a 30-day pass cookie (HttpOnly, Secure,
+// SameSite=Lax), signed with a key derived from TURNSTILE_SECRET. While
+// the pass verifies, /play skips Turnstile.
 //
 // POST /play/run runs the site's own snippets without Turnstile: only
 // sources whose SHA-256 is one of the `<code data-run>` texts in the site's
@@ -53,6 +57,11 @@ import {
   canonical,
   sha256,
   hmac,
+  checkPass,
+  cookie,
+  makePass,
+  PASS_COOKIE,
+  passCookie,
   parseSnippet,
   same,
   shareId,
@@ -567,6 +576,26 @@ async function human(token: unknown, request: Request, env: Env): Promise<boolea
   return outcome.success === true;
 }
 
+/** The key passes are signed with, derived from the Turnstile secret. */
+const passKey = (secret: string) => hmac(secret, "rawr-play pass");
+
+/** True when the request carries an unexpired pass signed by this Worker. */
+async function hasPass(request: Request, env: Env): Promise<boolean> {
+  if (!env.TURNSTILE_SECRET) return false;
+  const value = cookie(request.headers.get("cookie"), PASS_COOKIE);
+  return checkPass(await passKey(env.TURNSTILE_SECRET), value, Date.now());
+}
+
+/** The response with a new pass cookie, when there is one to set. */
+function withPass(response: Response, pass: string | null): Response {
+  if (pass) {
+    response.headers.append("set-cookie", passCookie(pass));
+    // The cookie is HttpOnly, so the page learns of it from this header.
+    response.headers.set("x-play-pass", "set");
+  }
+  return response;
+}
+
 async function readJson(request: Request, max: number): Promise<unknown> {
   const text = await request.text();
   if (text.length > max) return null;
@@ -670,11 +699,18 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     const body = (await readJson(request, 48 * 1024)) as Record<string, unknown> | null;
     const snippet = parseSnippet(body);
     if (typeof snippet === "string") return plain(snippet, 400);
-    if (!(await admin(request, env)) && !(await human(body?.turnstile, request, env))) {
-      return plain("the browser check did not pass; reload the page and try again", 403);
+    // A pass from an earlier Siteverify skips Turnstile for 30 days. A
+    // missing, forged or expired one falls back to Turnstile, and a
+    // successful Siteverify sets a new one.
+    let pass: string | null = null;
+    if (!(await hasPass(request, env)) && !(await admin(request, env))) {
+      if (!(await human(body?.turnstile, request, env))) {
+        return plain("the browser check did not pass; reload the page and try again", 403);
+      }
+      if (env.TURNSTILE_SECRET) pass = await makePass(await passKey(env.TURNSTILE_SECRET), Date.now());
     }
     const wait = await bot.allow("render", await ipHash(request, env));
-    if (wait > 0) return plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) });
+    if (wait > 0) return withPass(plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) }), pass);
     const forward = new Request("http://container/render", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -682,12 +718,15 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     });
     try {
       const response = await bot.fetch(forward);
-      return new Response(response.body, {
-        status: response.status,
-        headers: { "content-type": response.headers.get("content-type") ?? "text/plain", "cache-control": "no-store" },
-      });
+      return withPass(
+        new Response(response.body, {
+          status: response.status,
+          headers: { "content-type": response.headers.get("content-type") ?? "text/plain", "cache-control": "no-store" },
+        }),
+        pass,
+      );
     } catch (error) {
-      return plain(`the renderer is not reachable right now (${String(error).slice(0, 200)})`, 503);
+      return withPass(plain(`the renderer is not reachable right now (${String(error).slice(0, 200)})`, 503), pass);
     }
   }
   if (path === "/play/run" && request.method === "POST") {
@@ -748,7 +787,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
           ...(info && "width" in info ? info : {}),
         };
   }
-  const page = renderPlay({ snippet, examples: EXAMPLES, sitekey: env.TURNSTILE_SITEKEY ?? null, shared, og });
+  const page = renderPlay({ snippet, examples: EXAMPLES, sitekey: env.TURNSTILE_SITEKEY ?? null, pass: await hasPass(request, env), shared, og });
   return html(request.method === "HEAD" ? "" : page);
 }
 

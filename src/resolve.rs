@@ -82,6 +82,9 @@ pub struct Program {
     /// Qualified expression paths into a `.rs` module, by path span,
     /// spelled through the app's crate name.
     qualified_rust: BTreeMap<(program::source::Id, Span), Box<[ImmutableString]>>,
+    /// The type aliases each source names, declared or imported, which a
+    /// body reads as the item headers do.
+    aliases: BTreeMap<(program::source::Id, ImmutableString), type_ref::Alias>,
     scripts: Box<[Script]>,
     #[cfg(feature = "rust-import")]
     native: Option<std::sync::Arc<native::Capture>>,
@@ -281,6 +284,7 @@ fn resolve_with_evidence_and_namespace(
         | crate::item::Parsed::Impl(_)
         | crate::item::Parsed::Trait(_)
         | crate::item::Parsed::Function(_)
+        | crate::item::Parsed::TypeAlias(_)
         | crate::item::Parsed::LegacyFunction(_) => None,
     }) {
         return Err(Error::UnsupportedNominalSyntax {
@@ -291,7 +295,11 @@ fn resolve_with_evidence_and_namespace(
     let symbols = Symbols::predeclare(&parsed_items, namespace, allocation_order, host)?;
     let mut items = Vec::with_capacity(parsed_items.len());
 
+    let aliases = source_aliases(program::source::Id::ROOT, &symbols.types);
     for (source_index, parsed) in parsed_items.into_vec().into_iter().enumerate() {
+        if matches!(parsed, crate::item::Parsed::TypeAlias(_)) {
+            continue;
+        }
         items.push(resolve_item(
             symbols.item_id(source_index),
             program::source::Id::ROOT,
@@ -328,6 +336,7 @@ fn resolve_with_evidence_and_namespace(
         qualified_owners: BTreeMap::new(),
         qualified_pattern_owners: BTreeMap::new(),
         qualified_rust: BTreeMap::new(),
+        aliases,
         scripts: vec![Script {
             source: program::source::Id::ROOT,
             ast: legacy_script,
@@ -456,7 +465,7 @@ fn invocation_path(ty: &type_ref::Type) -> Option<String> {
                 | type_ref::Target::Host { .. }
                 | type_ref::Target::Script { .. }
                 | type_ref::Target::Parameter
-                | type_ref::Target::Projection(..) => {}
+                | type_ref::Target::Projection(..) | type_ref::Target::Alias(_) => {}
             }
             path.arguments.iter().find_map(|argument| match argument {
                 type_ref::Argument::Type(ty) => invocation_path(ty),
@@ -628,6 +637,21 @@ impl Symbols {
 
             declarations.insert(name.text.clone(), name.span);
         }
+        for parsed in items {
+            let crate::item::Parsed::TypeAlias(alias) = parsed else {
+                continue;
+            };
+            let name = &alias.name;
+            if let Some(previous_declaration) = declarations.get(name.text.as_str()) {
+                return Err(Error::DuplicateItem {
+                    name: name.text.clone(),
+                    declaration: name.span,
+                    previous_declaration: *previous_declaration,
+                });
+            }
+            declarations.insert(name.text.clone(), name.span);
+            types.insert(name.text.clone(), unresolved_alias(alias));
+        }
 
         let mut source_indices: Vec<_> = (0..items.len()).collect();
 
@@ -668,6 +692,9 @@ impl Symbols {
 
         let uses = resolve_imports(items, host, &declarations, &mut types)?;
         module_header_types(items, &uses, host, &mut types);
+        if let Some(error) = resolve_aliases(items, &mut types, host) {
+            return Err(error);
+        }
 
         Ok(Self {
             item_ids: item_ids
@@ -781,6 +808,7 @@ fn named_declaration(
         | crate::item::Parsed::Use(_)
         | crate::item::Parsed::Impl(_)
         | crate::item::Parsed::Trait(_)
+        | crate::item::Parsed::TypeAlias(_)
         | crate::item::Parsed::LegacyFunction(_) => None,
         crate::item::Parsed::Struct(item) => Some((
             &item.name,
@@ -795,6 +823,91 @@ fn named_declaration(
         crate::item::Parsed::Function(item) => {
             Some((&item.name, None, crate::item::Kind::Function))
         }
+    }
+}
+
+/// The type aliases `types` names, for the bodies of `source`.
+fn source_aliases(
+    source: program::source::Id,
+    types: &BTreeMap<ImmutableString, type_ref::Target>,
+) -> BTreeMap<(program::source::Id, ImmutableString), type_ref::Alias> {
+    types
+        .iter()
+        .filter_map(|(name, target)| match target {
+            type_ref::Target::Alias(alias) => Some(((source, name.clone()), alias.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A type alias before its target resolves.
+fn unresolved_alias(alias: &crate::item::TypeAlias) -> type_ref::Target {
+    type_ref::Target::Alias(type_ref::Alias {
+        params: alias
+            .generics
+            .iter()
+            .map(|generic| generic.name.text.clone())
+            .collect(),
+        target: None,
+    })
+}
+
+/// Resolve the target of each type alias `items` declare, in `types`, which
+/// names them. An alias may name another alias declared after it, so the
+/// targets resolve until none is left or none more resolves. Returns the
+/// first error of an alias that does not resolve.
+fn resolve_aliases(
+    items: &[crate::item::Parsed],
+    types: &mut BTreeMap<ImmutableString, type_ref::Target>,
+    host: &host::Registry,
+) -> Option<Error> {
+    let mut pending = items
+        .iter()
+        .filter_map(|parsed| match parsed {
+            crate::item::Parsed::TypeAlias(alias) => Some(alias),
+            _ => None,
+        })
+        .filter(|alias| {
+            matches!(types.get(&alias.name.text),
+                Some(type_ref::Target::Alias(type_ref::Alias { target: None, .. })))
+        })
+        .collect::<Vec<_>>();
+    loop {
+        let count = pending.len();
+        let mut failed = Vec::new();
+        let mut first = None;
+        for alias in pending {
+            let mut scope = types.clone();
+            for generic in alias.generics.iter() {
+                scope.insert(generic.name.text.clone(), type_ref::Target::Parameter);
+            }
+            match type_ref::resolve(
+                alias.target.clone(),
+                &scope,
+                host,
+                #[cfg(feature = "rust-import")]
+                None,
+            ) {
+                Ok(target) => {
+                    if let Some(type_ref::Target::Alias(declared)) =
+                        types.get_mut(&alias.name.text)
+                    {
+                        declared.target = Some(Box::new(target));
+                    }
+                }
+                Err(error) => {
+                    first.get_or_insert(error);
+                    failed.push(alias);
+                }
+            }
+        }
+        if failed.is_empty() {
+            return None;
+        }
+        if failed.len() == count {
+            return first;
+        }
+        pending = failed;
     }
 }
 
@@ -813,7 +926,24 @@ fn resolve_imports(
         };
         let mut bindings = Vec::new();
 
+        let mut globbed = Vec::new();
         if let crate::item::UseTree::Glob { prefix, span } = &parsed.tree {
+            let module = parsed_path(prefix);
+            for name in std_glob(&module) {
+                if !occupied.contains_key(&name) {
+                    globbed.push((
+                        crate::item::Name {
+                            span: *span,
+                            text: name.clone(),
+                        },
+                        format!("{module}::{name}"),
+                    ));
+                }
+            }
+        }
+        if let crate::item::UseTree::Glob { prefix, span } = &parsed.tree
+            && globbed.is_empty()
+        {
             return Err(Error::InvalidImport {
                 path: parsed_path(prefix),
                 reason: "glob imports are supported for Rust modules in a package".into(),
@@ -845,6 +975,9 @@ fn resolve_imports(
         for (name, path) in parsed.bindings() {
             let qualified: ImmutableString = path.join("::").into();
             bindings.push(resolve_import_binding(name, qualified, host)?);
+        }
+        for (name, qualified) in globbed {
+            bindings.push(resolve_import_binding(name, qualified.into(), host)?);
         }
 
         for binding in &bindings {
@@ -1030,6 +1163,21 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
         })
 }
 
+/// The names `use std::collections::*;` and its kin bind: each name of
+/// that std module that `std_fmt_import` knows. None for another module.
+pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
+    const NAMES: &[&str] = &[
+        "HashMap", "HashSet", "BTreeMap", "BTreeSet", "Debug", "Display", "Formatter", "Write",
+        "Ordering", "PartialOrd", "Ord", "min", "max", "Reverse", "Hash", "TryFrom", "TryInto",
+        "FromStr", "swap", "replace", "take",
+    ];
+    NAMES
+        .iter()
+        .filter(|name| std_fmt_import(&format!("{module}::{name}")))
+        .map(|name| ImmutableString::from(*name))
+        .collect()
+}
+
 /// `std::ops::RangeInclusive` and `std::ops::Range` as a type path is
 /// written: the name, or one of its `ops::`, `std::ops::` or `core::ops::`
 /// spellings. A `Range` is an iterator in Rawr; a `RangeInclusive` of
@@ -1157,6 +1305,14 @@ fn resolve_item(
 ) -> Result<item::Shell, Error> {
     let span = parsed.span();
     let kind = match parsed {
+        crate::item::Parsed::TypeAlias(alias) => {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "a type alias read as an item; its target is resolved with the \
+                            module's types"
+                    .into(),
+                source: alias.span,
+            });
+        }
         crate::item::Parsed::Module(module) => {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: "file modules require project/package compilation".into(),
@@ -1540,6 +1696,15 @@ fn resolve_function(
         })
         .transpose()?;
 
+    let mut generics = generics;
+    for generic in &mut generics {
+        generic.host = parameters
+            .iter()
+            .map(|parameter| &parameter.ty)
+            .chain(output.as_ref())
+            .any(|ty| names_in_host_type(ty, &generic.name.text, false));
+    }
+
     Ok(item::Function {
         header: parsed.header,
         name: parsed.name,
@@ -1554,6 +1719,31 @@ fn resolve_function(
             constant: parsed.constant,
         },
     })
+}
+
+/// Whether `ty` names the generic parameter `name` as a type argument of a
+/// host type, at any depth.
+fn names_in_host_type(ty: &type_ref::Type, name: &str, inside_host: bool) -> bool {
+    match ty {
+        type_ref::Type::Unit(_) => false,
+        type_ref::Type::Tuple { members, .. } => members
+            .iter()
+            .any(|member| names_in_host_type(member, name, inside_host)),
+        type_ref::Type::Reference { target, .. } => names_in_host_type(target, name, inside_host),
+        type_ref::Type::Path(path) => {
+            if inside_host
+                && matches!(path.target, type_ref::Target::Parameter)
+                && path.name.as_str() == name
+            {
+                return true;
+            }
+            let host = inside_host || matches!(path.target, type_ref::Target::Host { .. });
+            path.arguments.iter().any(|argument| match argument {
+                type_ref::Argument::Type(ty) => names_in_host_type(ty, name, host),
+                type_ref::Argument::Lifetime(_) => false,
+            })
+        }
+    }
 }
 
 /// A generic parameter bounded by a facade trait (`W: Widget<Message>`, or
@@ -2759,6 +2949,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             projections: Box::default(),
             trait_arguments: Box::default(),
             default: None,
+            host: false,
         }])
     } else if operator && !matches!(name, "Neg" | "Not") {
         Box::new([item::Generic {
@@ -2771,6 +2962,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             projections: Box::default(),
             trait_arguments: Box::default(),
             default: Some(this()),
+            host: false,
         }])
     } else if matches!(name, "From" | "Into") {
         Box::new([item::Generic {
@@ -2783,6 +2975,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             projections: Box::default(),
             trait_arguments: Box::default(),
             default: None,
+            host: false,
         }])
     } else {
         Box::default()
@@ -3495,6 +3688,7 @@ fn generic_scope(
             projections: Box::default(),
             trait_arguments: Box::default(),
             default: None,
+            host: false,
         });
     }
     // `trait Add<Rhs = Self>`: a default may name `Self` and the earlier
@@ -4243,7 +4437,7 @@ fn declared_type(
         type_ref::Target::Builtin
         | type_ref::Target::Host { .. }
         | type_ref::Target::Parameter
-        | type_ref::Target::Projection(..)
+        | type_ref::Target::Projection(..) | type_ref::Target::Alias(_)
         | type_ref::Target::Script {
             identity: type_def::Identity::Host(_),
             ..
@@ -4829,6 +5023,7 @@ mod tests {
                     nominal_value(program, key.name())
                 }
                 Target::Host { .. } => panic!("test schemas contain no host values"),
+                Target::Alias(_) => panic!("test schemas contain no aliases"),
             },
         }
     }

@@ -1130,3 +1130,24 @@ fn shown(events: &Vec<iced::Event>) -> String {
     );
     find(&adapter, "Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }");
 }
+
+#[test]
+fn container_style_literals_set_the_optional_fields() {
+    let adapter = boot_with(
+        r#"column![container(text("dim")).style(dimmed), container(text("plain")).style(plain)]"#,
+        r#"
+fn dimmed(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color { a: 0.8, ..Color::BLACK }.into()),
+        text_color: Some(Color::WHITE),
+        ..container::Style::default()
+    }
+}
+fn plain(_theme: &Theme) -> container::Style {
+    container::Style { background: None, text_color: None, ..container::Style::default() }
+}
+"#,
+    );
+    styled(&adapter, "dim");
+    styled(&adapter, "plain");
+}

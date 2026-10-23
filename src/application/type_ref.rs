@@ -189,7 +189,7 @@ impl Type {
                     }
                     resolve::type_ref::Target::Builtin
                     | resolve::type_ref::Target::Parameter
-                    | resolve::type_ref::Target::Projection(..) => {
+                    | resolve::type_ref::Target::Projection(..) | resolve::type_ref::Target::Alias(_) => {
                         Self(Shape::Builtin(path.name.clone()))
                     }
                     resolve::type_ref::Target::Host { definition, owner } => Self(Shape::Host {
@@ -806,7 +806,7 @@ fn collect_resolved_dependencies(
             match &path.target {
                 resolve::type_ref::Target::Builtin
                 | resolve::type_ref::Target::Parameter
-                | resolve::type_ref::Target::Projection(..) => {}
+                | resolve::type_ref::Target::Projection(..) | resolve::type_ref::Target::Alias(_) => {}
                 resolve::type_ref::Target::Host { owner, .. } => {
                     dependencies.extend(owner.iter().cloned());
                 }
@@ -835,7 +835,7 @@ fn resolved_type_is_tuple_free(
                 resolve::type_ref::Target::Builtin
                 | resolve::type_ref::Target::Host { .. }
                 | resolve::type_ref::Target::Parameter
-                | resolve::type_ref::Target::Projection(..) => true,
+                | resolve::type_ref::Target::Projection(..) | resolve::type_ref::Target::Alias(_) => true,
                 resolve::type_ref::Target::Script { definition, .. } => definitions[definition],
             };
             target

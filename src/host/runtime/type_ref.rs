@@ -7,6 +7,11 @@ use std::fmt;
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
 
+const WITNESS_PREFIX: &str = "\0rawr.witness.";
+
+/// The runtime representation of a generic parameter, which no value has.
+struct WitnessParameter;
+
 /// One sealed, fully instantiated runtime type proof.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum Type {
@@ -317,6 +322,81 @@ impl Type {
 
     pub(crate) const fn unit() -> Self {
         Self::Unit
+    }
+
+    /// The generic parameter at `index` of a proof that a witnessed body
+    /// instantiates at run time.
+    pub(crate) fn witness_parameter(index: usize) -> Self {
+        Self::builtin(
+            format!("{WITNESS_PREFIX}{index}"),
+            TypeId::of::<WitnessParameter>(),
+        )
+    }
+
+    /// The index of a generic parameter `witness_parameter` made.
+    pub(crate) fn witness_index(&self) -> Option<usize> {
+        match self {
+            Self::Builtin { name, .. } => name.strip_prefix(WITNESS_PREFIX)?.parse().ok(),
+            _ => None,
+        }
+    }
+
+    /// This type with each generic parameter replaced by its argument.
+    pub(crate) fn instantiate(&self, arguments: &[Self]) -> Self {
+        let each = |types: &[Self]| -> Box<[Self]> {
+            types.iter().map(|ty| ty.instantiate(arguments)).collect()
+        };
+        match self {
+            Self::Builtin { .. } => match self.witness_index() {
+                Some(index) => arguments.get(index).cloned().unwrap_or(Self::Unit),
+                None => self.clone(),
+            },
+            Self::Array { element, length } => Self::Array {
+                element: Box::new(element.instantiate(arguments)),
+                length: *length,
+            },
+            Self::Option(element) => Self::Option(Box::new(element.instantiate(arguments))),
+            Self::Result(ok, err) => Self::Result(
+                Box::new(ok.instantiate(arguments)),
+                Box::new(err.instantiate(arguments)),
+            ),
+            Self::Tuple(members) => Self::Tuple(each(members)),
+            Self::Callable {
+                inputs,
+                output,
+                item,
+            } => Self::Callable {
+                inputs: each(inputs),
+                output: Box::new(output.instantiate(arguments)),
+                item: item.clone(),
+            },
+            Self::Host {
+                path,
+                identity,
+                arguments: own,
+                owner,
+            } => Self::Host {
+                path: path.clone(),
+                identity: *identity,
+                arguments: each(own),
+                owner: owner.clone(),
+            },
+            #[cfg(feature = "rust-import")]
+            Self::Imported {
+                path,
+                identity,
+                arguments: own,
+                owner,
+            } => Self::Imported {
+                path: path.clone(),
+                identity: *identity,
+                arguments: each(own),
+                owner: owner.clone(),
+            },
+            Self::Unit | Self::Object(_) | Self::Script { .. } | Self::Support { .. } => {
+                self.clone()
+            }
+        }
     }
 
     pub(crate) fn array(element: Self, length: Option<usize>) -> Self {
@@ -781,7 +861,7 @@ impl Type {
                 "f64" => Ok(Self::builtin("f64", TypeId::of::<crate::FLOAT>())),
                 name => Err(Error::Unsupported { ty: name.into() }),
             },
-            Target::Parameter | Target::Projection(..) => Err(Error::Unsupported {
+            Target::Parameter | Target::Projection(..) | Target::Alias(_) => Err(Error::Unsupported {
                 ty: path.name.clone(),
             }),
             Target::Script { identity, .. } => {

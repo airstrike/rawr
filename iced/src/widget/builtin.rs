@@ -352,12 +352,15 @@ impl widget::Descriptor for marker::Row {
 
 impl widget::Descriptor for marker::Container {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
-        let container = iced::widget::container(self.child.lower(context))
+        let mut container = iced::widget::container(self.child.lower(context))
             .padding(self.padding)
             .width(self.width)
             .height(self.height)
             .align_x(self.align_x)
             .align_y(self.align_y);
+        if let Some(id) = &self.id {
+            container = container.id(id.clone());
+        }
         match container_style(&self.style, context, "container") {
             Ok(Some(style)) => container.style(style).boxed(),
             Ok(None) => container.boxed(),
@@ -1070,6 +1073,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 align_x: iced::Alignment::Start,
                 align_y: iced::Alignment::Start,
                 style: None,
+                id: None,
             }))
         })
         .expect("the iced facade must retain the exact container item");
@@ -1103,6 +1107,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                     align_x,
                     align_y,
                     style: None,
+                    id: None,
                 }))
             })
             .expect("the iced facade must retain the exact center items");
@@ -1870,13 +1875,10 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(iced::Border::default()))
         })
         .expect("the iced facade must retain Border::default");
-    for (name, set) in [
-        (
-            "background",
-            (|style, color| style.background(color)) as fn(Style, iced::Color) -> Style,
-        ),
-        ("color", |style, color| style.color(color)),
-    ] {
+    for (name, set) in [(
+        "color",
+        (|style, color| style.color(color)) as fn(Style, iced::Color) -> Style,
+    )] {
         builder
             .bind(
                 format!("iced::widget::container::Style::{name}"),

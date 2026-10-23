@@ -546,3 +546,275 @@ fn master_closure_parameters_take_the_types_of_the_other_arguments() {
     find(&adapter, "BETA");
     find(&adapter, "version 1");
 }
+
+const RICH: &str = r#"
+use iced::widget::{column, rich_text, span, text};
+use iced::{Color, Font, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+
+#[derive(Default)]
+struct State {
+    opened: i64,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    OpenTrunk,
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::OpenTrunk => self.opened += 1,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            rich_text![
+                "Run it with ",
+                span("trunk")
+                    .color(Color::from_rgb(0.5, 0.5, 1.0))
+                    .underline(true)
+                    .font(Font::MONOSPACE)
+                    .link(Message::OpenTrunk),
+                "."
+            ]
+            .on_link_click(|link| link),
+            rich_text([span("plain"), span(" spans").size(12).link(Message::OpenTrunk)])
+                .on_link_click(|link| link),
+            text(self.opened),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_rich_text_takes_strings_and_spans_with_links() {
+    let adapter = boot(RICH);
+    find(&adapter, "0");
+}
+
+const SELECTOR: &str = r#"
+use iced::widget::{self, column, container, selector, text};
+use iced::{Rectangle, Task, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+
+#[derive(Default)]
+struct State {
+    bounds: Option<Rectangle>,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Find,
+    Found(Option<selector::Target>),
+}
+
+impl State {
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Find => selector::find(widget::Id::new("outer")).map(Message::Found),
+            Message::Found(target) => {
+                self.bounds = target.as_ref().and_then(selector::Target::visible_bounds);
+                let _whole = target.map(|target| target.bounds());
+                Task::none()
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            container(text("outer")).id(widget::Id::new("outer")).padding(10),
+            text(format!("{:?}", self.bounds.is_some())),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_selector_finds_a_container_by_id() {
+    let adapter = boot(SELECTOR);
+    find(&adapter, "outer");
+    find(&adapter, "false");
+}
+
+const SVG_STYLE: &str = r#"
+use iced::widget::{column, svg, text};
+use iced::{Fill, Widget, color};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+
+#[derive(Default)]
+struct State {
+    tinted: bool,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Toggle(bool),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Toggle(tinted) => self.tinted = tinted,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let icon = svg("missing.svg")
+            .width(Fill)
+            .style(|_theme, status| svg::Style {
+                color: match status {
+                    svg::Status::Hovered => Some(color!(0x0000ff)),
+                    svg::Status::Idle if self.tinted => Some(color!(0x00ff00)),
+                    svg::Status::Idle => None,
+                },
+            });
+        column![icon, text("tiger")]
+    }
+}
+"#;
+
+#[test]
+fn master_svg_takes_a_style_function() {
+    let adapter = boot(SVG_STYLE);
+    find(&adapter, "tiger");
+}
+
+const FONT_LIST: &str = r#"
+use iced::font;
+use iced::widget::text;
+use iced::{Task, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::new, State::update, State::view).run()
+}
+
+struct State {
+    families: Vec<font::Family>,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    FontsListed(Vec<font::Family>),
+}
+
+impl State {
+    fn new() -> (Self, Task<Message>) {
+        (
+            Self { families: font::Family::VARIANTS.to_vec() },
+            font::list()
+                .map(Result::ok)
+                .and_then(Task::done)
+                .map(Message::FontsListed),
+        )
+    }
+
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::FontsListed(families) => self.families = families,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        text(format!("{} families", self.families.len()))
+    }
+}
+"#;
+
+#[test]
+fn master_font_list_is_a_task_of_families() {
+    let adapter = boot(FONT_LIST);
+    find(&adapter, "5 families");
+}
+
+#[test]
+fn master_derived_default_takes_facade_fields_that_are_default() {
+    let adapter = boot(
+        r#"
+use iced::widget::text;
+use iced::time::Duration;
+use iced::{Color, Font, Padding, Point, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    color: Color,
+    font: Font,
+    padding: Padding,
+    point: Point,
+    wait: Duration,
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        text(format!("alpha {}", self.color.a))
+    }
+}
+"#,
+    );
+    find(&adapter, "alpha 0");
+}
+
+/// iced master's `Row<W>` and `Column<W>` take their child type.
+#[test]
+fn master_rows_and_columns_take_their_child_type() {
+    let adapter = boot(
+        r#"
+use iced::widget::{Column, Row, column, row, text};
+use iced::{Element, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    count: i64,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Add,
+}
+
+fn header() -> Row<Element<'static, Message>> {
+    row![text("left"), text("right")]
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn body(&self) -> Column<Element<'_, Message>> {
+        let mut items: Row<Element<'static, Message>> = Row::new();
+        items = items.push(text("pushed"));
+        column![header(), items, text(self.count)]
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        self.body()
+    }
+}
+"#,
+    );
+    find(&adapter, "pushed");
+    find(&adapter, "right");
+}

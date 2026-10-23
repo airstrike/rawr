@@ -49,7 +49,9 @@ pub(crate) enum Native {
     CloseWindow(iced::window::Id),
     FocusNext,
     FocusPrevious,
+    FontList,
     Focus(iced::widget::Id),
+    Find(iced::widget::Id),
     SnapTo(
         iced::widget::Id,
         iced::widget::scrollable::RelativeOffset,
@@ -80,8 +82,19 @@ impl Native {
             }
             Self::CloseWindow(id) => iced::window::close(id),
             Self::FocusNext => iced::widget::operation::focus_next(),
+            Self::FontList => iced::font::list().map(|families| {
+                Ok(match families {
+                    Ok(families) => rawr::result::ok(Dynamic::from_array(
+                        families.into_iter().map(Dynamic::from).collect(),
+                    )),
+                    Err(error) => rawr::result::err(Dynamic::from(error)),
+                })
+            }),
             Self::FocusPrevious => iced::widget::operation::focus_previous(),
             Self::Focus(id) => iced::widget::operation::focus(id),
+            Self::Find(id) => {
+                iced::widget::selector::find(id).map(|target| Ok(rawr::option::from(target)))
+            }
             Self::SnapTo(id, offset, animation) => {
                 iced::widget::operation::scrollable::snap_to(id, offset, animation)
             }
@@ -542,6 +555,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
         ("iced::window::latest", Native::LatestWindow),
         ("iced::widget::operation::focus_next", Native::FocusNext),
         ("iced::widget::operation::focus_previous", Native::FocusPrevious),
+        ("iced::font::list", Native::FontList),
     ] {
         builder
             .bind_with_context(path, move |call, args| {
@@ -582,6 +596,36 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             native_task(call, Native::Focus(take_value(id, "widget::Id")?))
         })
         .expect("the iced facade must retain operation::focus");
+    builder
+        .bind_with_context("iced::widget::selector::find", |call, args| {
+            let [id] = args else {
+                return Err(arity("selector::find", 1, args.len()));
+            };
+            native_task(call, Native::Find(take_value(id, "widget::Id")?))
+        })
+        .expect("the iced facade must retain selector::find");
+    for name in ["bounds", "visible_bounds"] {
+        let path = format!("iced::widget::selector::Target::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let [target] = args else {
+                    return Err(arity(&path, 1, args.len()));
+                };
+                let target = target
+                    .read_lock::<iced::widget::selector::Target>()
+                    .ok_or_else(|| {
+                        EvalAltResult::ErrorRuntime(
+                            format!("{path} expects a `widget::selector::Target`").into(),
+                            Position::NONE,
+                        )
+                    })?;
+                Ok(match name {
+                    "bounds" => Dynamic::from(target.bounds()),
+                    _ => rawr::option::from(target.visible_bounds()),
+                })
+            })
+            .expect("the iced facade must retain every selector::Target reader");
+    }
     for name in ["snap_to", "snap_to_end", "scroll_to", "scroll_by"] {
         let path = format!("iced::widget::operation::scrollable::{name}");
         builder

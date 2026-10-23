@@ -13,6 +13,7 @@ pub(crate) mod key;
 pub mod layout;
 mod mapped;
 mod media;
+mod rich;
 pub mod mouse;
 pub mod operation;
 pub mod overlay;

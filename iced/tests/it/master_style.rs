@@ -633,7 +633,29 @@ impl State {
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 "#,
     );
-    assert!(error.contains("use `.boxed()`"), "{error}");
+    assert!(error.contains("Call `.boxed()` on the widget instead"), "{error}");
+    // A helper's `.into()` and `Element::from(widget)` carry the same fix.
+    for body in [
+        "fn card(label: &str) -> Element<'static, Message> { container(text(label.to_string())).into() }",
+        "fn card(label: &str) -> Element<'static, Message> { Element::from(text(label.to_string())) }",
+    ] {
+        let error = rejected(&format!(
+            r#"
+use iced::widget::{{column, container, text}};
+use iced::Element;
+#[derive(Default)] struct State;
+#[derive(Debug, Clone)] enum Message {{}}
+{body}
+impl State {{
+    fn update(&mut self, message: Message) {{}}
+    fn view(&self) -> Element<'_, Message> {{ column![card("a")].boxed() }}
+}}
+pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
+"#
+        ));
+        assert!(error.contains("has no `From` conversion"), "{error}");
+        assert!(error.contains("Call `.boxed()` on the widget instead"), "{error}");
+    }
     // Other conversions keep `.into()`.
     let adapter = boot(
         r#"
@@ -728,4 +750,52 @@ fn master_component_keeps_its_state_and_consumes_its_events() {
     simulator.find("hi").unwrap();
     assert_eq!(simulator.into_messages().count(), 0);
     assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+}
+
+/// iced's re-exports: `iced::widget::Component` and `iced::Renderer`.
+#[test]
+fn master_component_is_named_from_widget() {
+    let source = COMPONENT
+        .replace(
+            "use iced::widget::{Renderer, Widget, button, column, component, sensor, space, text};",
+            "use iced::widget::{Component, Widget, button, column, component, sensor, space, text};\nuse iced::Renderer;",
+        )
+        .replace("struct Component;", "struct Shower;")
+        .replace("component(Component)", "component(Shower)")
+        .replace("component::Component<'a, ()> for Component", "Component<'a, ()> for Shower");
+    assert!(source.contains("for Shower"), "{source}");
+    let adapter = boot(&source);
+    find(&adapter, "show");
+}
+
+#[test]
+fn generic_view_helpers_take_their_callers_message() {
+    let adapter = boot(
+        r#"
+use iced::widget::{button, column, container, text};
+use iced::Element;
+#[derive(Default)] struct State { pressed: i64 }
+#[derive(Debug, Clone)] enum Message { Pressed }
+fn card<Message: Clone + 'static>(label: &str) -> Element<'static, Message> {
+    container(text(label.to_string())).padding(8).boxed()
+}
+fn press<M: Clone + 'static>(label: &str, on: M) -> Element<'static, M> {
+    button(text(label.to_string())).on_press(on).boxed()
+}
+fn framed<M: Clone + 'static>(label: &str, on: M) -> Element<'static, M> {
+    column![card(label), press("go", on)].boxed()
+}
+impl State {
+    fn update(&mut self, message: Message) { self.pressed += 1; }
+    fn view(&self) -> Element<'_, Message> {
+        column![framed("card", Message::Pressed), text(format!("pressed {}", self.pressed))].boxed()
+    }
+}
+pub fn main() -> iced::Result { iced::run(State::update, State::view) }
+"#,
+    );
+    find(&adapter, "card");
+    find(&adapter, "pressed 0");
+    let message = click(&adapter, "go");
+    assert!(format!("{message:?}").contains("Pressed"), "{message:?}");
 }

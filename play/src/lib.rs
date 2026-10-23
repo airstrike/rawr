@@ -617,11 +617,9 @@ pub fn wrap(source: &str, options: &Options) -> Result<String, PlayError> {
         ));
     }
     // rawr-iced's prelude, for `fn view()` and expression snippets that
-    // import nothing themselves.
-    let prelude = if source
-        .lines()
-        .any(|line| line.trim_start().starts_with("use "))
-    {
+    // import nothing themselves. A `use` inside a function body imports
+    // only there.
+    let prelude = if has_top_level_use(source) {
         String::new()
     } else {
         iced_claims().prelude_imports()
@@ -675,6 +673,24 @@ pub fn wrap(source: &str, options: &Options) -> Result<String, PlayError> {
             program
         }
     })
+}
+
+/// Whether a line of `source` outside every brace starts with `use `.
+fn has_top_level_use(source: &str) -> bool {
+    let mut depth = 0usize;
+    for line in source.lines() {
+        if depth == 0 && line.trim_start().starts_with("use ") {
+            return true;
+        }
+        for c in line.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 /// The parameters of the `fn view` at the start of `view`.
@@ -948,6 +964,14 @@ impl State {
         assert!(jpeg.starts_with(&[0xff, 0xd8]));
         let webp = super::encode(&png, super::Format::Webp).unwrap();
         assert!(webp.starts_with(b"RIFF") && &webp[8..12] == b"WEBP");
+    }
+
+    #[test]
+    fn a_use_in_a_function_body_keeps_the_prelude() {
+        let source = "fn view() -> impl Widget<()> {\n    use iced::widget::column;\n    column![text(\"hi\")]\n}\n";
+        render(source, &Options::default()).unwrap();
+        assert!(super::has_top_level_use("use iced::widget::text;\nfn view() {}"));
+        assert!(!super::has_top_level_use("fn view() {\n    use iced::widget::text;\n}"));
     }
 
     #[test]

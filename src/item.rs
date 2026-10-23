@@ -346,6 +346,8 @@ pub enum Parsed {
     Trait(Trait),
     /// A top-level function with a Rawr header.
     Function(Function),
+    /// A type alias: `type Name<T> = Type;`.
+    TypeAlias(TypeAlias),
     /// A private legacy function retained only for application-root diagnostics.
     LegacyFunction(LegacyFunction),
 }
@@ -362,6 +364,7 @@ impl Parsed {
             Self::Impl(item) => item.span,
             Self::Trait(item) => item.span,
             Self::Function(item) => item.span,
+            Self::TypeAlias(item) => item.span,
             Self::LegacyFunction(item) => item.span,
         }
     }
@@ -369,6 +372,22 @@ impl Parsed {
     pub(crate) const fn masks_legacy_source(&self) -> bool {
         !matches!(self, Self::LegacyFunction(_))
     }
+}
+
+/// A type alias: `type Grid<T> = Vec<Vec<T>>;`. The resolver reads its
+/// target once, in the module that declares it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TypeAlias {
+    /// Alias header metadata.
+    pub header: Header,
+    /// Declared alias name.
+    pub name: Name,
+    /// The alias's generic parameters.
+    pub generics: Box<[GenericParam]>,
+    /// The aliased type.
+    pub target: type_ref::Type,
+    /// Complete item span, including the semicolon.
+    pub span: Span,
 }
 
 /// A declared file module.

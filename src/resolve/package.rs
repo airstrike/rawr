@@ -221,6 +221,19 @@ impl<'a> Resolver<'a> {
                     continue;
                 }
 
+                if let crate::item::Parsed::TypeAlias(alias) = parsed {
+                    self.insert_declaration(
+                        context.address(&alias.name.text),
+                        Declaration {
+                            source: context.source,
+                            span: alias.name.span,
+                            public: alias.header.visibility.is_some(),
+                            target: Target::Type(super::unresolved_alias(alias)),
+                        },
+                    )?;
+                    slots.push(None);
+                    continue;
+                }
                 if let crate::item::Parsed::Trait(declared) = parsed {
                     self.insert_declaration(
                         context.address(&declared.name.text),
@@ -425,7 +438,8 @@ impl<'a> Resolver<'a> {
                                 type_ref::Target::Builtin
                                 | type_ref::Target::Host { .. }
                                 | type_ref::Target::Parameter
-                                | type_ref::Target::Projection(..),
+                                | type_ref::Target::Projection(..)
+                                | type_ref::Target::Alias(_),
                             ) => continue,
                         }
                     }
@@ -483,7 +497,8 @@ impl<'a> Resolver<'a> {
                             type_ref::Target::Builtin
                             | type_ref::Target::Host { .. }
                             | type_ref::Target::Parameter
-                            | type_ref::Target::Projection(..),
+                            | type_ref::Target::Projection(..)
+                            | type_ref::Target::Alias(_),
                         ) => {}
                     }
                 }
@@ -520,7 +535,8 @@ impl<'a> Resolver<'a> {
                     type_ref::Target::Builtin
                     | type_ref::Target::Host { .. }
                     | type_ref::Target::Parameter
-                    | type_ref::Target::Projection(..),
+                    | type_ref::Target::Projection(..)
+                    | type_ref::Target::Alias(_),
                 )
                 | Target::Item(_)
                 | Target::HostItem { .. }
@@ -573,6 +589,8 @@ impl<'a> Resolver<'a> {
         let mut shells = Vec::new();
         let mut scripts = Vec::new();
 
+        self.resolve_aliases()?;
+        let mut aliases = BTreeMap::new();
         let units = std::mem::take(&mut self.units);
         for Unit {
             context,
@@ -611,6 +629,10 @@ impl<'a> Resolver<'a> {
             }
 
             let (uses, types, _occupied) = self.resolve_unit_bindings(&context, &parsed_items)?;
+            aliases.extend(super::source_aliases(
+                program::source::Id::from_index(context.source.index()),
+                &types,
+            ));
             for (index, parsed) in parsed_items.into_vec().into_iter().enumerate() {
                 let Some(slot) = &slots[index] else {
                     continue;
@@ -700,6 +722,7 @@ impl<'a> Resolver<'a> {
             qualified_owners: qualified_calls.owners,
             qualified_pattern_owners,
             qualified_rust: qualified_calls.rust,
+            aliases,
             scripts,
         };
         super::validate_invocation_storage(&program).map_err(Failure::from_located)?;
@@ -708,6 +731,76 @@ impl<'a> Resolver<'a> {
         program.previews =
             crate::preview::resolve(&program, self.host).map_err(Failure::from_located)?;
         Ok(program)
+    }
+
+    /// Resolve each type alias's target in the module that declares it.
+    /// An alias may name one another module declares, so the modules
+    /// resolve theirs until every alias has its target or none more does.
+    fn resolve_aliases(&mut self) -> Result<(), Failure> {
+        let declares = |unit: &Unit| {
+            unit.parsed
+                .items()
+                .iter()
+                .any(|parsed| matches!(parsed, crate::item::Parsed::TypeAlias(_)))
+        };
+        if !self.units.iter().any(declares) {
+            return Ok(());
+        }
+        loop {
+            let mut resolved = false;
+            let mut first = None;
+            for index in 0..self.units.len() {
+                if !declares(&self.units[index]) {
+                    continue;
+                }
+                let context = self.units[index].context.clone();
+                let items = self.units[index].parsed.items().to_vec();
+                let (_, mut types, _) = self.resolve_unit_bindings(&context, &items)?;
+                let before = items
+                    .iter()
+                    .filter(|parsed| {
+                        matches!(parsed, crate::item::Parsed::TypeAlias(alias)
+                            if matches!(types.get(&alias.name.text),
+                                Some(type_ref::Target::Alias(type_ref::Alias { target: None, .. }))))
+                    })
+                    .count();
+                let error = super::resolve_aliases(&items, &mut types, self.host);
+                for parsed in &items {
+                    let crate::item::Parsed::TypeAlias(alias) = parsed else {
+                        continue;
+                    };
+                    let Some(type_ref::Target::Alias(done)) = types.get(&alias.name.text) else {
+                        continue;
+                    };
+                    if done.target.is_none() {
+                        continue;
+                    }
+                    if let Some(declaration) =
+                        self.declarations.get_mut(&context.address(&alias.name.text))
+                        && matches!(declaration.target,
+                            Target::Type(type_ref::Target::Alias(type_ref::Alias { target: None, .. })))
+                    {
+                        declaration.target = Target::Type(type_ref::Target::Alias(done.clone()));
+                        resolved = true;
+                    }
+                }
+                if let Some(error) = error
+                    && first.is_none()
+                    && before > 0
+                {
+                    first = Some(Failure {
+                        primary: context.source,
+                        secondary: None,
+                        error,
+                    });
+                }
+            }
+            match first {
+                None => return Ok(()),
+                Some(failure) if !resolved => return Err(failure),
+                Some(_) => {}
+            }
+        }
     }
 
     fn validate_exports(&self) -> Result<(), Failure> {
@@ -788,10 +881,17 @@ impl<'a> Resolver<'a> {
                 },
             });
         }
-        if !matches!(
+        // `use std::collections::*;`: the names of that std module Rawr
+        // knows.
+        let std_names = super::std_glob(&module);
+        let names = if !std_names.is_empty() {
+            std_names
+        } else if matches!(
             self.host.entry(&module),
             Some(host::Entry::Module | host::Entry::ModuleItem(_))
         ) {
+            self.host.children(&module)
+        } else {
             return Err(Failure {
                 primary: context.source,
                 secondary: None,
@@ -800,10 +900,8 @@ impl<'a> Resolver<'a> {
                     reference: *span,
                 },
             });
-        }
-        Ok(self
-            .host
-            .children(&module)
+        };
+        Ok(names
             .into_iter()
             .filter(|name| !occupied.contains_key(name))
             .map(|name| {
@@ -961,6 +1059,10 @@ impl<'a> Resolver<'a> {
                             },
                         );
                         item::Import::Type { definition, owner }
+                    }
+                    Target::Type(type_ref::Target::Alias(alias)) => {
+                        types.insert(name.text.clone(), type_ref::Target::Alias(alias));
+                        item::Import::Alias
                     }
                     Target::Type(
                         type_ref::Target::Builtin
@@ -1393,6 +1495,7 @@ fn preview_syntaxes(parsed: &crate::item::Parsed) -> Vec<&crate::preview::Syntax
         | crate::item::Parsed::Use(_)
         | crate::item::Parsed::Struct(_)
         | crate::item::Parsed::Enum(_)
+        | crate::item::Parsed::TypeAlias(_)
         | crate::item::Parsed::LegacyFunction(_) => {}
     }
     syntaxes
@@ -1465,7 +1568,8 @@ fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
         crate::item::Parsed::Module(_)
         | crate::item::Parsed::Use(_)
         | crate::item::Parsed::Struct(_)
-        | crate::item::Parsed::Enum(_) => {}
+        | crate::item::Parsed::Enum(_)
+        | crate::item::Parsed::TypeAlias(_) => {}
     }
     output
 }
@@ -1579,7 +1683,8 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
         crate::item::Parsed::Module(_)
         | crate::item::Parsed::Use(_)
         | crate::item::Parsed::Struct(_)
-        | crate::item::Parsed::Enum(_) => {}
+        | crate::item::Parsed::Enum(_)
+        | crate::item::Parsed::TypeAlias(_) => {}
     }
     output
 }
@@ -1622,6 +1727,7 @@ fn header(parsed: &crate::item::Parsed) -> Option<&crate::item::Header> {
         crate::item::Parsed::Impl(item) => Some(&item.header),
         crate::item::Parsed::Trait(item) => Some(&item.header),
         crate::item::Parsed::Function(item) => Some(&item.header),
+        crate::item::Parsed::TypeAlias(item) => Some(&item.header),
         crate::item::Parsed::LegacyFunction(_) => None,
     }
 }
@@ -1722,6 +1828,7 @@ pub(super) fn collect_item_type_paths<'a>(
             }
         }
         crate::item::Parsed::Function(item) => collect_function_type_paths(item, output),
+        crate::item::Parsed::TypeAlias(item) => collect_type_paths(&item.target, output),
         crate::item::Parsed::Module(_)
         | crate::item::Parsed::Use(_)
         | crate::item::Parsed::LegacyFunction(_) => {}

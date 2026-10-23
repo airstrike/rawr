@@ -61,6 +61,8 @@ const STD_TRAIT_FUNCTIONS: &[(&str, &[&str])] = &[
 const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
 const TASK_PERFORM_PATH: &str = "iced::Task::perform";
 const WIDGET_TEXT_PATH: &str = "iced::widget::text";
+const WIDGET_SPAN_PATH: &str = "iced::widget::span";
+const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
 const WIDGET_VOID_PATH: &str = "iced::widget::void";
 
 type OperationSelector = (
@@ -1851,6 +1853,8 @@ struct Tables {
     qualified_owners: BTreeMap<(crate::program::source::Id, Span), type_def::Identity>,
     qualified_pattern_owners: BTreeMap<(crate::program::source::Id, Span), type_def::Identity>,
     qualified_rust: BTreeMap<(crate::program::source::Id, Span), Box<[ImmutableString]>>,
+    /// The type aliases each source names, resolved once with the headers.
+    aliases: BTreeMap<(crate::program::source::Id, ImmutableString), type_ref::Alias>,
     methods: BTreeMap<(type_def::Id, ImmutableString), method::Definition>,
     /// Each type's `impl From<T>` functions, by the type converted to.
     conversions: BTreeMap<type_def::Id, Vec<method::Definition>>,
@@ -2125,7 +2129,8 @@ impl Models {
                     | item::Import::ModuleItem { .. }
                     | item::Import::Endpoint { .. }
                     | item::Import::Type { .. }
-                    | item::Import::Item { .. } => {}
+                    | item::Import::Item { .. }
+                    | item::Import::Alias => {}
                 }
             }
         }
@@ -2258,6 +2263,20 @@ impl Models {
             }
         }
 
+        // An alias of a script type names it in expressions too:
+        // `Alias { .. }` and `Alias::new()`.
+        for ((source, name), alias) in &program.aliases {
+            if let Some(target) = &alias.target
+                && let type_ref::Type::Path(path) = &**target
+                && let type_ref::Target::Script { definition, .. } = &path.target
+                && path.arguments.is_empty()
+                && let Some(nominal) = by_definition.get(definition)
+            {
+                by_name
+                    .entry((*source, name.clone()))
+                    .or_insert_with(|| Nominal::clone(nominal));
+            }
+        }
         let tables = Tables {
             runtime,
             host,
@@ -2269,6 +2288,7 @@ impl Models {
             qualified_owners: program.qualified_owners.clone(),
             qualified_pattern_owners: program.qualified_pattern_owners.clone(),
             qualified_rust: program.qualified_rust.clone(),
+            aliases: program.aliases.clone(),
             methods,
             conversions,
             trait_methods,
@@ -2330,6 +2350,10 @@ impl Models {
 
     fn get(&self, name: &str) -> Option<&Nominal> {
         self.by_name.get(&(self.context, name.into()))
+    }
+
+    fn alias(&self, name: &str) -> Option<&type_ref::Alias> {
+        self.aliases.get(&(self.context, name.into()))
     }
 
     fn qualified_owner(&self, span: Span) -> Option<&Nominal> {
@@ -3821,6 +3845,9 @@ enum ExecutableOp {
     Imported {
         proof: crate::host::structural::Proof,
     },
+    /// A host operation of a body whose signature names generics inside a
+    /// host type: its proof is instantiated by the witnesses it takes.
+    Witnessed(Box<WitnessedOp>),
     Symbolic {
         value: crate::item::Value,
         /// A lifted closure's captures, passed to the op where it is written.
@@ -4034,6 +4061,109 @@ struct ProjectionOperation {
     span: Span,
 }
 
+/// An intrinsic or projection proof over generic parameters
+/// (`intrinsic::Type::witness_parameter`), instantiated once per tuple of
+/// witnesses its calls pass after their operands.
+#[derive(Clone)]
+struct WitnessedOp {
+    template: ExecutableOp,
+    /// The template with each parameter as `()`: what the load checks,
+    /// since a binding and its attestations never depend on a script type.
+    placeholder: ExecutableOp,
+    witnesses: usize,
+    instances: Shared<crate::Locked<BTreeMap<Box<[crate::INT]>, Shared<WitnessedInstance>>>>,
+}
+
+struct WitnessedInstance {
+    op: ExecutableOp,
+    requirement: Option<crate::host::runtime::Requirement>,
+}
+
+impl WitnessedOp {
+    fn new(template: ExecutableOp, witnesses: usize) -> Self {
+        let placeholder = template.instantiate(&vec![intrinsic::Type::unit(); witnesses]);
+        Self {
+            template,
+            placeholder,
+            witnesses,
+            instances: Shared::new(crate::Locked::new(BTreeMap::new())),
+        }
+    }
+
+    fn invoke(
+        &self,
+        context: Option<NativeCallContext<'_>>,
+        args: &mut FnCallArgs,
+        models: &Models,
+    ) -> RawrResult {
+        let Some(split) = args.len().checked_sub(self.witnesses) else {
+            return Err(invariant("a witnessed host operation lost its witnesses"));
+        };
+        let codes = args[split..]
+            .iter()
+            .map(|code| code.as_int().map_err(|_| invariant("a type witness is not a code")))
+            .collect::<Result<Box<[_]>, _>>()?;
+        let known = crate::func::locked_read(&self.instances)
+            .and_then(|instances| instances.get(&codes).cloned());
+        let instance = match known {
+            Some(instance) => instance,
+            None => {
+                let arguments = codes
+                    .iter()
+                    .map(|code| {
+                        witness_type(models, *code).ok_or_else(|| {
+                            invariant(
+                                "a generic helper's type argument must be a script type or a \
+                                 number, string, bool, char or `()`",
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let op = self.template.instantiate(&arguments);
+                let requirement = op.runtime_requirement();
+                let instance = Shared::new(WitnessedInstance { op, requirement });
+                if let Some(mut instances) = crate::func::locked_write(&self.instances) {
+                    instances.insert(codes, instance.clone());
+                }
+                instance
+            }
+        };
+        instance
+            .op
+            .invoke(context, &mut args[..split], models, instance.requirement.as_ref())
+    }
+}
+
+/// The runtime type a witness code names (`builtin_code`, or a script
+/// type's index).
+fn witness_type(models: &Models, code: crate::INT) -> Option<intrinsic::Type> {
+    Some(match code {
+        -2 => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
+        #[cfg(not(feature = "no_float"))]
+        -3 => intrinsic::Type::builtin("f64", TypeId::of::<crate::FLOAT>()),
+        -4 => intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>()),
+        -5 => intrinsic::Type::builtin("bool", TypeId::of::<bool>()),
+        -6 => intrinsic::Type::builtin("char", TypeId::of::<char>()),
+        -9 => intrinsic::Type::unit(),
+        code => {
+            let index = usize::try_from(code).ok()?;
+            let id = models.by_definition.keys().find(|id| id.index() == index)?;
+            script_type(models, *id)
+        }
+    })
+}
+
+/// The runtime type of the script type `id`.
+fn script_type(models: &Models, id: type_def::Id) -> intrinsic::Type {
+    let model = models.definition(id);
+    intrinsic::Type::script(
+        model.identity(),
+        model.definition().schema().clone(),
+        model.definition().kind(),
+        model.ty().type_id(models),
+    )
+}
+
 struct InstantiatedHostSignature {
     inputs: Vec<Ty>,
     output: Ty,
@@ -4041,8 +4171,28 @@ struct InstantiatedHostSignature {
 }
 
 impl ExecutableOp {
+    /// An intrinsic or projection with each generic parameter replaced by
+    /// its argument.
+    fn instantiate(&self, arguments: &[intrinsic::Type]) -> Self {
+        match self {
+            Self::Intrinsic { proof } => Self::Intrinsic {
+                proof: proof.instantiate(arguments),
+            },
+            Self::Projection { proof } => Self::Projection {
+                proof: Box::new(crate::host::projection::Site::new(
+                    proof.key().clone(),
+                    proof.source().instantiate(arguments),
+                    proof.target().instantiate(arguments),
+                    proof.span(),
+                )),
+            },
+            op => op.clone(),
+        }
+    }
+
     fn dependencies(&self) -> BTreeSet<crate::host::facade::Dependency> {
         match self {
+            Self::Witnessed(op) => op.placeholder.dependencies(),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => proof.dependencies(),
             Self::Symbolic { .. } => BTreeSet::new(),
@@ -4094,6 +4244,7 @@ impl ExecutableOp {
 
     fn projection_requirement(&self) -> Option<crate::host::projection::Site> {
         match self {
+            Self::Witnessed(op) => op.placeholder.projection_requirement(),
             Self::Projection { proof } => Some((**proof).clone()),
             #[cfg(feature = "rust-import")]
             Self::Imported { .. } | Self::Event { .. } => None,
@@ -4123,6 +4274,7 @@ impl ExecutableOp {
 
     fn runtime_requirement(&self) -> Option<crate::host::runtime::Requirement> {
         match self {
+            Self::Witnessed(op) => op.placeholder.runtime_requirement(),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => Some(crate::host::runtime::Requirement::structural(proof)),
             #[cfg(feature = "rust-import")]
@@ -4168,6 +4320,13 @@ impl ExecutableOp {
 
     fn private_name(&self, models: &Models, support_id: u64) -> String {
         let (definition, operation) = match self {
+            Self::Witnessed(op) => {
+                return format!(
+                    "{}.witnessed.{}",
+                    op.template.private_name(models, support_id),
+                    op.witnesses
+                );
+            }
             Self::Prelude(op) => return format!("\0rawr.{}", op.name()),
             Self::Kinded { op, kinds } => {
                 return format!("\0rawr.{}.{}.{}", op.name(), kinds[0], kinds[1]);
@@ -4310,6 +4469,16 @@ impl ExecutableOp {
 
     fn argument_types(&self, models: &Models) -> Vec<TypeId> {
         match self {
+            // A bare generic operand takes any value; the proof checks it.
+            Self::Witnessed(op) => {
+                let parameter = intrinsic::Type::witness_parameter(0).runtime();
+                op.template
+                    .argument_types(models)
+                    .into_iter()
+                    .map(|ty| if ty == parameter { TypeId::of::<Dynamic>() } else { ty })
+                    .chain(std::iter::repeat_n(TypeId::of::<INT>(), op.witnesses))
+                    .collect()
+            }
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => proof
                 .operands()
@@ -4402,6 +4571,7 @@ impl ExecutableOp {
         requirement: Option<&crate::host::runtime::Requirement>,
     ) -> RawrResult {
         match self {
+            Self::Witnessed(op) => op.invoke(context, args, models),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => {
                 let Some(runtime) = context.and_then(|context| context.host_runtime()) else {
@@ -5487,6 +5657,8 @@ impl Ty {
                     trait_name.clone().unwrap_or_default(),
                     path.name.clone(),
                 ),
+                // A resolved header names an alias's target, never the alias.
+                type_ref::Target::Alias(_) => Self::Unknown,
             },
         }
     }
@@ -7193,7 +7365,8 @@ fn witness_generics<'a>(
     models: &'a Models,
 ) -> impl Iterator<Item = &'a item::Generic> {
     generics.iter().filter(|generic| {
-        generic.bounds.contains(capability::Kind::Default)
+        generic.host
+            || generic.bounds.contains(capability::Kind::Default)
             || generic
                 .traits
                 .iter()
@@ -7414,6 +7587,15 @@ fn generic_equalities(
 }
 
 /// The user trait bounds of each generic parameter in `generics`.
+/// The generic parameters a signature names inside a host type.
+fn host_witnesses(generics: &[item::Generic]) -> Vec<ImmutableString> {
+    generics
+        .iter()
+        .filter(|generic| generic.host)
+        .map(|generic| generic.name.text.clone())
+        .collect()
+}
+
 fn generic_traits(generics: &[item::Generic]) -> BTreeMap<ImmutableString, Box<[ImmutableString]>> {
     generics
         .iter()
@@ -7734,6 +7916,14 @@ struct Parser<'a> {
     /// Type witnesses passed for `Default`-bounded generic parameters,
     /// written over their placeholders once the types are inferred.
     pending_witnesses: Vec<(String, Ty, Span)>,
+    /// This body's generic parameters a signature names inside a host
+    /// type, in declaration order: each host operation here takes their
+    /// witnesses after its operands.
+    host_witnesses: Vec<ImmutableString>,
+    /// The witnessed generics a proof being proven names as parameters.
+    template_params: std::cell::RefCell<Box<[ImmutableString]>>,
+    /// The witness names each such host operation took, by op index.
+    witnessed_ops: BTreeMap<usize, Box<[ImmutableString]>>,
     /// Arithmetic on a literal's `{integer}` whose kind inference had not
     /// settled: each placeholder, written over with the kind's code once
     /// it has (`i32` when nothing binds it, as in Rust).
@@ -7923,6 +8113,9 @@ impl<'a> Parser<'a> {
             pending_traits: Vec::new(),
             pending_projections: Vec::new(),
             pending_witnesses: Vec::new(),
+            host_witnesses: Vec::new(),
+            template_params: std::cell::RefCell::new(Box::default()),
+            witnessed_ops: BTreeMap::new(),
             pending_int_kinds: Vec::new(),
             pending_defaults: Vec::new(),
             no_struct: false,
@@ -7976,6 +8169,7 @@ impl<'a> Parser<'a> {
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
         parser.generic_traits = generic_traits(definition.generics());
+        parser.host_witnesses = host_witnesses(definition.generics());
         parser.generic_trait_arguments = generic_trait_arguments(definition.generics());
         parser.impl_instance = instance_text(definition.trait_arguments());
         // `T` of `trait Convert<T>` is the impl's argument.
@@ -8098,6 +8292,7 @@ impl<'a> Parser<'a> {
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
         parser.generic_traits = generic_traits(&definition.generics);
+        parser.host_witnesses = host_witnesses(&definition.generics);
         parser.generic_trait_arguments = generic_trait_arguments(&definition.generics);
         parser.inference.equalities = generic_equalities(&definition.generics);
 
@@ -8662,7 +8857,8 @@ impl<'a> Parser<'a> {
 
     /// Whether this body's generic parameter `name` has a type witness.
     fn has_witness(&self, name: &str) -> bool {
-        self.generics
+        self.host_witnesses.iter().any(|host| host.as_str() == name)
+            || self.generics
             .get(name)
             .is_some_and(|bounds| bounds.contains(capability::Kind::Default))
             || self
@@ -8702,14 +8898,15 @@ impl<'a> Parser<'a> {
                 return Err(Error::InvalidMethodCall {
                     owner: "<generic>".into(),
                     method: "default".into(),
-                    reason: "type annotations needed: a `Default` type argument is unknown".into(),
+                    reason: "type annotations needed: a generic call's type argument is unknown"
+                        .into(),
                     call: span,
                 });
             }
             _ => {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
-                        "`{}` as a `Default` type argument of a generic call",
+                        "`{}` as the type argument of a generic call",
                         ty.name(&self.models)
                     )
                     .into(),
@@ -9686,6 +9883,27 @@ impl<'a> Parser<'a> {
         }
         self.expect_close_angle("'>' after a trait's arguments")?;
         Ok(types)
+    }
+
+    /// `::ok` after `Result` where it is not called: the method named as a
+    /// value. A variant (`Option::Some`) or a call is not one.
+    fn std_method_value(&self) -> Option<ImmutableString> {
+        let mut ahead = self.input.clone();
+        if !matches!(ahead.next(), Some((Token::DoubleColon, _))) {
+            return None;
+        }
+        let Some((Token::Identifier(member), _)) = ahead.next() else {
+            return None;
+        };
+        if !member.starts_with(|c: char| c.is_ascii_lowercase())
+            || matches!(
+                ahead.peek(),
+                Some((Token::LeftParen | Token::Unit | Token::DoubleColon | Token::LessThan, _))
+            )
+        {
+            return None;
+        }
+        Some((*member).as_str().into())
     }
 
     /// `Default::default`, `From::from`, `std::convert::Into::into`: a std
@@ -10975,14 +11193,24 @@ impl<'a> Parser<'a> {
         let mut next_perform = 0;
         let mut next_change = 0;
         ops.into_iter()
-            .map(|op| {
-                self.prove_executable_op(
+            .enumerate()
+            .map(|(index, op)| {
+                let witnesses = self.witnessed_ops.get(&index).cloned();
+                if let Some(names) = &witnesses {
+                    *self.template_params.borrow_mut() = names.clone();
+                }
+                let op = self.prove_executable_op(
                     op,
                     &mut performs,
                     &mut next_perform,
                     &mut changes,
                     &mut next_change,
-                )
+                );
+                let Some(names) = witnesses else {
+                    return op;
+                };
+                *self.template_params.borrow_mut() = Box::default();
+                Ok(ExecutableOp::Witnessed(Box::new(WitnessedOp::new(op?, names.len()))))
             })
             .collect()
     }
@@ -11577,15 +11805,7 @@ impl<'a> Parser<'a> {
             Ty::Reference { target, .. } => {
                 return self.proven_type(&target, operation, span);
             }
-            Ty::Script(id, ..) => {
-                let model = self.models.definition(id);
-                intrinsic::Type::script(
-                    model.identity(),
-                    model.definition().schema().clone(),
-                    model.definition().kind(),
-                    model.ty().type_id(&self.models),
-                )
-            }
+            Ty::Script(id, ..) => script_type(&self.models, id),
             Ty::Host { proof, arguments } => {
                 let definition = &proof.definition;
                 let arguments = arguments
@@ -11650,6 +11870,15 @@ impl<'a> Parser<'a> {
                 proof.owner.clone(),
                 proof.contract.clone(),
             ),
+            Ty::Param(name)
+                if let Some(index) = self
+                    .template_params
+                    .borrow()
+                    .iter()
+                    .position(|parameter| *parameter == name) =>
+            {
+                intrinsic::Type::witness_parameter(index)
+            }
             Ty::Endpoint(_)
             | Ty::Never
             | Ty::Param(_)
@@ -13398,7 +13627,7 @@ impl<'a> Parser<'a> {
         )?;
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
-            source: origin::Fragment::call(&helper, []),
+            source: self.op_call(&helper, []),
             ty: signature.output,
             span: name_span,
             lvalue: None,
@@ -23735,6 +23964,28 @@ impl<'a> Parser<'a> {
                 Span::new(name_span.start(), end),
             ));
         }
+        // `.map(Result::ok)`, `.and_then(Option::as_ref)`: a method of
+        // `Option` or `Result` named as a value is the closure that calls it.
+        if matches!(name.as_str(), "Option" | "Result")
+            && self.models.get(&name).is_none()
+            && self.models.import(&name).is_none()
+            && !self.bindings.contains_key(name.as_str())
+            && let Some(member) = self.std_method_value()
+        {
+            self.next();
+            self.next();
+            let at = name_span.start();
+            let argument = || (Token::Identifier(Box::new("__rawr_method_value".into())), at);
+            self.splice_tokens(vec![
+                argument(),
+                (Token::Pipe, at),
+                argument(),
+                (Token::Period, at),
+                (Token::Identifier(Box::new(member.as_str().into())), at),
+                (Token::Unit, at),
+            ]);
+            return self.parse_closure(Token::Pipe, point_span(at), false);
+        }
         // `Default::default()`, `From::from(x)`, `std::convert::Into::into(x)`:
         // a std or prelude trait's function called by path.
         if matches!(self.peek(), Token::DoubleColon)
@@ -27068,6 +27319,45 @@ impl<'a> Parser<'a> {
         Ok(self.operator_expr(source.surrounded("(", ")"), ty, expression))
     }
 
+    /// The type a call of the engine's native function `name` returns: the
+    /// Rust return type of each function of that name and arity registered
+    /// with its signature (`Engine::register_fn`), when they agree on one
+    /// that Rawr names.
+    fn native_output(&self, name: &str, arity: usize) -> Option<Ty> {
+        use std::any::TypeId;
+        let ty = |id: TypeId| -> Option<Ty> {
+            Some(if id == TypeId::of::<crate::INT>() {
+                Ty::Int(Int::I64)
+            } else if id == TypeId::of::<crate::FLOAT>() {
+                Ty::Float(Float::F64)
+            } else if id == TypeId::of::<bool>() {
+                Ty::Bool
+            } else if id == TypeId::of::<char>() {
+                Ty::Char
+            } else if id == TypeId::of::<String>() || id == TypeId::of::<ImmutableString>() {
+                Ty::String
+            } else if id == TypeId::of::<()>() {
+                Ty::Unit
+            } else {
+                return None;
+            })
+        };
+        let mut found = None;
+        for module in &self.native_modules {
+            for (_, metadata) in module.iter_fn() {
+                if metadata.name.as_str() != name || metadata.num_params != arity {
+                    continue;
+                }
+                let output = ty(metadata.output_type?)?;
+                if found.as_ref().is_some_and(|found| *found != output) {
+                    return None;
+                }
+                found = Some(output);
+            }
+        }
+        found
+    }
+
     /// A use of `const NAME` evaluates its initializer, as Rust inlines it.
     fn constant_use(&mut self, function: &ScriptFunction, span: Span) -> ParsedExpr {
         self.used_nominal = true;
@@ -27203,7 +27493,7 @@ impl<'a> Parser<'a> {
             }
             output
         } else {
-            Ty::Unknown
+            self.native_output(&name, arguments.len()).unwrap_or(Ty::Unknown)
         };
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
@@ -27518,6 +27808,48 @@ impl<'a> Parser<'a> {
         let mut prelude = origin::Fragment::plain("({\n");
         let mut values = Vec::new();
         for (field, field_span, value) in fields {
+            // The field's declared type is the value's expected type, as in
+            // Rust: `background: Some(color.into())` converts into the
+            // field's `Option<Background>`. A value it does not fit still
+            // reaches the field's builders. The type the field reads as is
+            // its declared type where a builder also takes it. A facade's
+            // `f64` and `i64` stand for iced's narrower numbers, so a number
+            // keeps its own type.
+            let members = self
+                .models
+                .host
+                .members(&definition.path())
+                .filter(|item| item.path_ref().name() == field.as_str())
+                .collect::<Vec<_>>();
+            let reader = members
+                .iter()
+                .find(|item| {
+                    item.receiver() == Some(crate::receiver::Mode::Shared)
+                        && item.signature().parameters().is_empty()
+                })
+                .map(|item| item.signature().output().clone())
+                .filter(|output| {
+                    !matches!(output.shape(), crate::host::type_ref::Shape::Builtin(_))
+                        && members.iter().any(|item| {
+                        matches!(item.signature().parameters(), [input] if input == output)
+                    })
+                });
+            if let Some(declared) = reader
+                && let Ok(declared) = self.instantiate_host_type(
+                    &declared,
+                    &mut BTreeMap::new(),
+                    field.as_str(),
+                    None,
+                    Some(&definition),
+                )
+            {
+                let checkpoint = self.inference.checkpoint();
+                if self.unify_type(&declared, &value.ty) {
+                    self.inference.commit(checkpoint);
+                } else {
+                    self.inference.rollback(checkpoint);
+                }
+            }
             let temporary = self.temporary("field");
             prelude.push_text(format!("let {temporary} = "));
             prelude.push(value.rendered_source());
@@ -28709,6 +29041,27 @@ impl<'a> Parser<'a> {
                 && self.models.host_items(&format!("{full}::from")).is_none()
             {
                 let target = type_def::Id::foreign(&definition.path());
+                // `Element::from(widget)`: a widget has no `From` conversion
+                // into the type its facade trait erases to, as in rustc.
+                if !self.models.conversions.contains_key(&target)
+                    && self.erasure_types().iter().any(|erased| {
+                        matches!(erased, Ty::Host { proof, .. } if proof.definition.path() == definition.path())
+                    })
+                {
+                    let (arguments, end) = self.parse_call_arguments("`from` arguments")?;
+                    let call = span(owner_span.start(), end);
+                    if let [argument] = &arguments[..] {
+                        let source = self.inference.resolve(&argument.ty);
+                        if let Some(erased) = self.widget_erasure(&source) {
+                            return Err(self.no_widget_conversion(&source, &erased, "from", call));
+                        }
+                    }
+                    return Err(Error::UnknownMember {
+                        owner: full.into(),
+                        member,
+                        reference: member_span,
+                    });
+                }
                 if self.models.conversions.contains_key(&target) {
                     let (mut arguments, end) = self.parse_call_arguments("`from` arguments")?;
                     let call = span(owner_span.start(), end);
@@ -29726,6 +30079,43 @@ impl<'a> Parser<'a> {
             }
             return Ok(ty);
         }
+        // A type alias: its target, resolved once with the item headers.
+        if !matches!(self.peek(), Token::DoubleColon)
+            && !self.generics.contains_key(name.as_str())
+            && let Some(alias) = self.models.alias(&name).cloned()
+        {
+            let mut arguments = Vec::new();
+            if matches!(self.peek(), Token::LessThan) {
+                self.next();
+                while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                    if !self.skip_lifetime() {
+                        arguments.push(self.parse_local_type()?);
+                    }
+                    if matches!(self.peek(), Token::Comma) {
+                        self.next();
+                    } else if !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                        return Err(self.unsupported("generic arguments"));
+                    }
+                }
+                self.expect_close_angle("'>' after generic arguments")?;
+            }
+            if arguments.len() != alias.params.len() {
+                return Err(Error::InvalidTypeArguments {
+                    ty: name,
+                    expected: alias.params.len(),
+                    actual: arguments.len(),
+                    reference: name_span,
+                });
+            }
+            let Some(target) = &alias.target else {
+                return Err(Error::UnknownType {
+                    name,
+                    reference: name_span,
+                });
+            };
+            let substitution = alias.params.iter().cloned().zip(arguments).collect();
+            return Ok(instantiate(&Ty::from_resolved(target), &substitution));
+        }
         let mut qualified = None;
         // `T::Output`, `Self::Output`, `Square::Output`: an associated type.
         if matches!(self.peek(), Token::DoubleColon)
@@ -29882,6 +30272,9 @@ impl<'a> Parser<'a> {
                     _ => None,
                 })
         });
+        if let Some((definition, _)) = &host {
+            self.content_messages(definition, &mut arguments);
+        }
         match host {
             Some((definition, owner)) if generic || !definition.parameters().is_empty() => {
                 if arguments.len() != definition.parameters().len() {
@@ -29942,6 +30335,70 @@ impl<'a> Parser<'a> {
             }
             _ => self.resolve_type(&name, name_span),
         }
+    }
+
+    /// iced master's widgets are generic over their content, as
+    /// `Row<Element<'static, Message>>`; a facade widget is generic over its
+    /// Message. A content argument names its Message, a content without one
+    /// (`String`) is dropped when the arguments overflow, as an item header
+    /// reads them (`type_ref::content_messages`).
+    fn content_messages(
+        &self,
+        definition: &crate::host::type_def::Definition,
+        arguments: &mut Vec<Ty>,
+    ) {
+        let erased = self
+            .models
+            .host
+            .trait_types()
+            .filter(|(definition, _)| {
+                !matches!(definition.shape(), crate::host::type_def::Shape::Trait(_))
+            })
+            .flat_map(|(definition, _)| definition.projections().iter().map(|p| p.target()))
+            .collect::<Vec<_>>();
+        let widget = |definition: &crate::host::type_def::Definition| {
+            definition
+                .projections()
+                .iter()
+                .any(|projection| erased.contains(&projection.target()))
+        };
+        if !widget(definition) {
+            return;
+        }
+        let content = |argument: &Ty| -> Option<Option<Ty>> {
+            match argument {
+                Ty::Host { proof, arguments }
+                    if widget(&proof.definition) || erased.contains(&proof.definition.path()) =>
+                {
+                    Some(
+                        proof
+                            .definition
+                            .parameters()
+                            .iter()
+                            .position(|parameter| parameter == "Message")
+                            .and_then(|index| arguments.get(index).cloned()),
+                    )
+                }
+                Ty::String => Some(None),
+                _ => None,
+            }
+        };
+        if arguments.len() == definition.parameters().len()
+            && !arguments
+                .iter()
+                .any(|argument| content(argument).is_some_and(|message| message.is_some()))
+        {
+            return;
+        }
+        let limit = definition.parameters().len();
+        *arguments = std::mem::take(arguments)
+            .into_iter()
+            .filter_map(|argument| match content(&argument) {
+                Some(message) => message,
+                None => Some(argument),
+            })
+            .take(limit)
+            .collect();
     }
 
     /// `(A, ..) -> B` after `fn` or `dyn Fn` in a local type.
@@ -30456,6 +30913,20 @@ impl<'a> Parser<'a> {
             *value = self.call_host_function(&items, owner, vec![string], call)?;
             return self.coerce_expr(&target, value);
         }
+        // iced's `impl From<&str> for Span`: a string where a span is
+        // expected is its `span`, as `rich_text!["a ", span("b")]` takes.
+        if matches!(&source, Ty::String)
+            && let Ty::Host { proof, .. } = &target
+            && proof.definition.path().as_str() == WIDGET_SPAN_TYPE
+            && let Some(items) = self.models.host_items(WIDGET_SPAN_PATH).map(<[_]>::to_vec)
+        {
+            let owner = self.models.item_owner(WIDGET_SPAN_PATH).cloned();
+            let call = value.span;
+            let placeholder = self.operator_expr(origin::Fragment::default(), Ty::Unit, call);
+            let string = std::mem::replace(value, placeholder);
+            *value = self.call_host_function(&items, owner, vec![string], call)?;
+            return self.coerce_expr(&target, value);
+        }
         if self.coerce_implemented_trait(&source, &target, value)? {
             return self.coerce_expr(&target, value);
         }
@@ -30473,10 +30944,10 @@ impl<'a> Parser<'a> {
             });
             if self.normalize_private_calls {
                 let operand = self.materialize_in_place(value, &format!("{helper}_arg_0"));
-                value.source = origin::Fragment::call(&helper, [operand]);
+                value.source = self.op_call(&helper, [operand]);
             } else {
                 debug_assert!(value.prelude.is_empty());
-                value.source = origin::Fragment::call(&helper, [std::mem::take(&mut value.source)]);
+                value.source = self.op_call(&helper, [std::mem::take(&mut value.source)]);
             }
             value.ty = target;
             value.lvalue = None;
@@ -30507,10 +30978,10 @@ impl<'a> Parser<'a> {
             });
             if self.normalize_private_calls {
                 let operand = self.materialize_in_place(value, &format!("{helper}_arg_0"));
-                value.source = origin::Fragment::call(&helper, [operand]);
+                value.source = self.op_call(&helper, [operand]);
             } else {
                 debug_assert!(value.prelude.is_empty());
-                value.source = origin::Fragment::call(&helper, [std::mem::take(&mut value.source)]);
+                value.source = self.op_call(&helper, [std::mem::take(&mut value.source)]);
             }
             value.ty = target;
             value.lvalue = None;
@@ -30535,10 +31006,10 @@ impl<'a> Parser<'a> {
             });
             if self.normalize_private_calls {
                 let operand = self.materialize_in_place(value, &format!("{helper}_arg_0"));
-                value.source = origin::Fragment::call(&helper, [operand]);
+                value.source = self.op_call(&helper, [operand]);
             } else {
                 debug_assert!(value.prelude.is_empty());
-                value.source = origin::Fragment::call(&helper, [std::mem::take(&mut value.source)]);
+                value.source = self.op_call(&helper, [std::mem::take(&mut value.source)]);
             }
             value.ty = target;
             value.lvalue = None;
@@ -30870,27 +31341,38 @@ impl<'a> Parser<'a> {
     /// `.into()` is rejected as rustc rejects it (E0277).
     fn parse_into(&mut self, mut value: ParsedExpr, end: Position) -> Result<ParsedExpr, Error> {
         let source = self.inference.resolve(&value.ty);
-        let target = match self.projected_host_types(&source).into_iter().next() {
-            None if self.erased_widget(&source) => self.erasure_types().into_iter().next(),
-            target => target,
-        };
-        if let Some(target) = target {
-            return Err(Error::InvalidMethodCall {
-                owner: source.name(&self.models),
-                method: "into".into(),
-                reason: format!(
-                    "`{}` has no `From` conversion into `{}`; use `.boxed()`, or drop the \
-                     `.into()` where an `impl Widget` is expected",
-                    source.name(&self.models),
-                    target.name(&self.models)
-                )
-                .into(),
-                call: span(value.span.start(), end),
-            });
+        if let Some(target) = self.widget_erasure(&source) {
+            let call = span(value.span.start(), end);
+            return Err(self.no_widget_conversion(&source, &target, "into", call));
         }
         value.span = span(value.span.start(), end);
         value.lvalue = None;
         Ok(value.retain_origin())
+    }
+
+    /// The type a widget erases to (iced's `Element`), when `source` is a
+    /// widget.
+    fn widget_erasure(&mut self, source: &Ty) -> Option<Ty> {
+        match self.projected_host_types(source).into_iter().next() {
+            None if self.erased_widget(source) => self.erasure_types().into_iter().next(),
+            target => target,
+        }
+    }
+
+    /// A widget's `.into()` or `Element::from(widget)`, which rustc rejects
+    /// (E0277) and Rawr rejects with the `.boxed()` fix.
+    fn no_widget_conversion(&self, source: &Ty, target: &Ty, method: &str, call: Span) -> Error {
+        let (source, target) = (source.name(&self.models), target.name(&self.models));
+        Error::InvalidMethodCall {
+            owner: if method == "from" { target.clone() } else { source.clone() },
+            method: method.into(),
+            reason: format!(
+                "`{source}` has no `From` conversion into `{target}`. Call `.boxed()` on the \
+                 widget instead. Where an `impl Widget` is expected, pass the widget as it is"
+            )
+            .into(),
+            call,
+        }
     }
 
     /// The types facade traits erase to (iced's `Element`), each with fresh
@@ -31409,10 +31891,7 @@ impl<'a> Parser<'a> {
                     operand.source
                 })
                 .collect::<Vec<_>>();
-            return (
-                origin::Fragment::default(),
-                origin::Fragment::call(helper, operands),
-            );
+            return (origin::Fragment::default(), self.op_call(helper, operands));
         }
         let mut prelude = origin::Fragment::default();
         let operands = operands
@@ -31422,7 +31901,41 @@ impl<'a> Parser<'a> {
                 self.materialize(operand, &format!("{helper}_arg_{index}"), &mut prelude)
             })
             .collect::<Vec<_>>();
-        (prelude, origin::Fragment::call(helper, operands))
+        (prelude, self.op_call(helper, operands))
+    }
+
+    /// The call of a pushed operation. A host operation in a body whose
+    /// signature names a generic inside a host type also takes those
+    /// generics' witnesses, which instantiate its proof at run time.
+    fn op_call(
+        &mut self,
+        helper: &str,
+        operands: impl IntoIterator<Item = origin::Fragment>,
+    ) -> origin::Fragment {
+        let mut operands = operands.into_iter().collect::<Vec<_>>();
+        if self.host_witnesses.is_empty() {
+            return origin::Fragment::call(helper, operands);
+        }
+        let index = helper
+            .strip_prefix(SENTINEL)
+            .and_then(|index| index.parse::<usize>().ok())
+            .and_then(|index| index.checked_sub(self.op_offset));
+        if let Some(index) = index
+            && matches!(
+                self.ops.get(index),
+                Some(Op::Intrinsic { .. } | Op::Projection { .. })
+            )
+        {
+            self.capture_witnesses();
+            operands.extend(
+                self.host_witnesses
+                    .iter()
+                    .map(|name| origin::Fragment::plain(witness_variable(name))),
+            );
+            self.witnessed_ops
+                .insert(index, self.host_witnesses.clone().into_boxed_slice());
+        }
+        origin::Fragment::call(helper, operands)
     }
 
     fn materialize(

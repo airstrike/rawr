@@ -10,8 +10,14 @@ import {
   canonical,
   day,
   firstLine,
+  checkPass,
+  cookie,
   hmac,
+  makePass,
   ogTags,
+  PASS_COOKIE,
+  PASS_SECONDS,
+  passCookie,
   pngSize,
   previewHeaders,
   purgeSelection,
@@ -103,6 +109,46 @@ test("hmac and constant-time compare", async () => {
   assert.ok(same(mac, mac));
   assert.ok(!same(mac, mac.slice(1) + "0"));
   assert.ok(!same(mac, mac.slice(1)));
+});
+
+test("a pass verifies for 30 days under its key only", async () => {
+  const now = Date.UTC(2026, 9, 22);
+  const pass = await makePass("key", now);
+  assert.match(pass, /^\d+\.[0-9a-f]{64}$/);
+  assert.ok(await checkPass("key", pass, now));
+  assert.ok(await checkPass("key", pass, now + (PASS_SECONDS - 1) * 1000));
+  assert.ok(!(await checkPass("key", pass, now + PASS_SECONDS * 1000)), "an expired pass falls back to Turnstile");
+  assert.ok(!(await checkPass("other", pass, now)), "another key's pass is refused");
+  const [expires, mac] = pass.split(".");
+  assert.ok(!(await checkPass("key", `${Number(expires) + 60}.${mac}`, now)), "a moved expiry is refused");
+  const far = Math.floor(now / 1000) + 2 * PASS_SECONDS;
+  assert.ok(!(await checkPass("key", `${far}.${await hmac("key", `pass ${far}`)}`, now)), "an expiry past 30 days is refused");
+  for (const bad of [null, "", "x", `${expires}.`, `${expires}.${mac.toUpperCase()}`, `${expires}.${mac}x`]) {
+    assert.ok(!(await checkPass("key", bad, now)));
+  }
+});
+
+test("the pass cookie is HttpOnly, Secure and SameSite=Lax for 30 days", () => {
+  const header = passCookie("123.abc");
+  assert.ok(header.startsWith(`${PASS_COOKIE}=123.abc;`));
+  for (const part of ["Max-Age=2592000", "Path=/play", "HttpOnly", "Secure", "SameSite=Lax"]) {
+    assert.ok(header.split("; ").includes(part), part);
+  }
+  assert.equal(cookie(`a=1; ${PASS_COOKIE}=123.abc; b=2`, PASS_COOKIE), "123.abc");
+  assert.equal(cookie(`x${PASS_COOKIE}=1`, PASS_COOKIE), null);
+  assert.equal(cookie(null, PASS_COOKIE), null);
+});
+
+test("a page with a pass loads no widget until the server refuses the pass", () => {
+  const html = render({ snippet: snippet(), examples: [], sitekey: "0xKEY", pass: true, shared: null, og: OG });
+  assert.ok(!html.includes("<script src=\"https://challenges.cloudflare.com"), "no Turnstile script up front");
+  assert.ok(html.includes(`id="ts"`), "the widget can still mount as a fallback");
+  assert.ok(html.includes("let pass = true;"));
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  assert.doesNotThrow(() => new Function(scripts[0]));
+  assert.ok(scripts[0].includes('appearance: "interaction-only"'));
+  const fresh = render({ snippet: snippet(), examples: [], sitekey: "0xKEY", shared: null, og: OG });
+  assert.ok(fresh.includes("let pass = false;"));
 });
 
 test("the page escapes the code and embeds the examples safely", () => {

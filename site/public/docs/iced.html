@@ -58,6 +58,7 @@
 <p>An app starts from <code>main</code> with one of iced&rsquo;s own entry points.</p>
 <h3 id="iced-run"><code>iced::run</code></h3>
 <p><code>iced::run(State::update, State::view)</code> boots <code>State::default()</code>. The state type needs <code>#[derive(Default)]</code>. The counter on <a href="/docs/start#first-app">Getting started</a> has this shape.</p>
+<p><code>update</code> and <code>view</code> can also be closures with typed parameters. <code>iced::run(|state: &amp;mut State, message: Message| state.update(message), State::view)</code> is one example. An update closure returns <code>()</code> unless it is written with a return type such as <code>-&gt; Task&lt;Message&gt;</code>. An untyped closure parameter fails the check with an error that asks for its type.</p>
 <h3 id="application">The application builder</h3>
 <p><code>iced::application(boot, update, view)</code> takes a boot function such as <code>State::default</code>. It accepts these builders before <code>.run()</code>:</p>
 <ul>
@@ -149,8 +150,9 @@ impl Todos {
 
 <h2 id="views">Views and elements</h2>
 <p>A view returns <code>impl Widget&lt;Message&gt;</code> as views do in iced master. It can also return <code>Element&lt;'_, Message&gt;</code>.</p>
-<p>To turn a widget into an <code>Element</code>, call <code>.boxed()</code>. The list above uses it to collect its rows into a <code>Vec&lt;Element&gt;</code>. <code>.into()</code> into an <code>Element</code> is not supported yet. The error says to use <code>.boxed()</code> instead.</p>
-<p>Helper functions that build part of a view work when they name the app&rsquo;s own <code>Message</code> type. A helper that is generic over the message type, such as <code>fn padded&lt;Message&gt;(..)</code>, is not supported yet.</p>
+<p>To turn a widget into an <code>Element</code>, call <code>.boxed()</code>. The list above uses it to collect its rows into a <code>Vec&lt;Element&gt;</code>. A widget&rsquo;s <code>.into()</code> into an <code>Element</code> fails the check, as rustc rejects it on iced master. <code>Element::from(widget)</code> fails the same way. Both errors say to call <code>.boxed()</code> instead.</p>
+<p><code>Row&lt;Element&lt;'_, Message&gt;&gt;</code> and <code>Column&lt;Element&lt;'_, Message&gt;&gt;</code> name a row&rsquo;s or a column&rsquo;s type as iced master writes it. That works in a signature and in a <code>let</code> inside a function body.</p>
+<p>Helper functions can build part of a view. A helper can name the app&rsquo;s own <code>Message</code> type. It can also be generic over the message type, as in <code>fn card&lt;Message: Clone + 'static&gt;(label: &amp;str) -&gt; Element&lt;'static, Message&gt;</code>. Each caller passes its own message type. That type must be a type your program declares, a number, a <code>String</code>, a <code>bool</code>, a <code>char</code> or <code>()</code>.</p>
 <h3 id="components">Components</h3>
 <p>A type can implement iced&rsquo;s <code>component::Component</code> trait. Its state lives in the widget tree. Its events reach its own <code>update</code>. <code>component(value)</code> puts it in a view.</p>
 <h3 id="subscriptions">Subscriptions</h3>
@@ -280,15 +282,17 @@ impl App {
 <ul>
   <li>Layout: <code>column!</code>, <code>row!</code>, <code>Column</code>, <code>Row</code>, <code>container</code>, <code>center</code>, <code>stack</code>, <code>space</code>, <code>scrollable</code>, <code>responsive</code>, <code>pin</code> and <code>lazy</code>.</li>
   <li>Controls: <code>button</code>, <code>checkbox</code>, <code>toggler</code>, <code>radio</code>, <code>slider</code>, <code>vertical_slider</code>, <code>pick_list</code>, <code>combo_box</code>, <code>text_input</code> and <code>progress_bar</code>.</li>
-  <li>Display: <code>text</code>, <code>image</code>, <code>svg</code>, <code>qr_code</code>, <code>rule</code> and <code>tooltip</code>.</li>
+  <li>Display: <code>text</code>, <code>image</code>, <code>svg</code>, <code>qr_code</code>, <code>rule</code> and <code>tooltip</code>. <code>Svg::style</code> takes a style function.</li>
+  <li>Rich text: <code>rich_text</code>, <code>rich_text!</code> and <code>span</code>. A string works as a span. <code>on_link_click</code> maps a span&rsquo;s link to a message.</li>
   <li>Interaction: <code>mouse_area</code>, <code>opaque</code>, <code>hover</code>, <code>sensor</code>, <code>component</code> and <code>widget::operation</code>.</li>
-  <li>Modules: <code>iced::time</code>, <code>iced::keyboard</code>, <code>iced::event</code>, <code>iced::window</code>, <code>iced::mouse</code>, <code>iced::font</code>, <code>iced::border</code> and <code>iced::theme</code>. <code>Color</code>, <code>color!</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code> and the other alignment names work.</li>
+  <li><code>selector::find</code> with a widget <code>Id</code>. Its <code>Target</code> has <code>bounds</code> and <code>visible_bounds</code>.</li>
+  <li>Modules: <code>iced::time</code>, <code>iced::keyboard</code>, <code>iced::event</code>, <code>iced::window</code>, <code>iced::mouse</code>, <code>iced::font</code>, <code>iced::border</code> and <code>iced::theme</code>. <code>font::list()</code> lists the system&rsquo;s font families. <code>Seed::LIGHT</code> and iced&rsquo;s other built-in seeds are in <code>iced::theme::palette</code>. <code>Color</code>, <code>color!</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code> and the other alignment names work.</li>
 </ul>
-<p>An available widget may still miss some of its methods. For example, <code>Checkbox::icon</code> and <code>Svg::style</code> are not there yet.</p>
+<p>An available widget may still miss some of its methods. For example, <code>Checkbox::icon</code> is not there yet.</p>
 <h3 id="not-available">Not available yet</h3>
 <ul>
   <li><code>canvas</code> and <code>iced::advanced</code>. Without them you can&rsquo;t write a custom widget in Rawr. Write it in Rust and import it instead.</li>
-  <li><code>pane_grid</code>, <code>rich_text</code>, <code>text_editor</code>, <code>markdown</code>, <code>table</code>, <code>grid</code>, <code>float</code>, <code>keyed_column</code> and <code>selector</code>.</li>
+  <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code>, <code>table</code>, <code>grid</code>, <code>float</code> and <code>keyed_column</code>.</li>
   <li><code>iced::gradient</code>, <code>Radians</code>, <code>Degrees</code>, <code>iced::clipboard</code>, <code>iced::task</code> streams and the <code>Function</code> trait.</li>
   <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
   <li><code>async fn</code> and <code>.await</code>.</li>

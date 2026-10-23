@@ -325,7 +325,7 @@ impl Model {
                     })?;
                     self.default_nominal(identity, &nested.schema.clone(), active)
                 }
-                type_ref::Target::Parameter | type_ref::Target::Projection(..) => {
+                type_ref::Target::Parameter | type_ref::Target::Projection(..) | type_ref::Target::Alias(_) => {
                     Err(construction::Error::ValueType {
                         expected: path.name.clone(),
                         actual: "no executable Default implementation of a generic parameter"

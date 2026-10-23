@@ -32,10 +32,10 @@ const COMPATIBILITY_SEMANTIC_POLICY: &[u8] = b"rawr.iced.compatibility-applicati
 const COMPATIBILITY_RUNTIME_BINDING: &[u8] = b"rawr.iced.compatibility-runtime-binding/v2";
 const TEXT_ENDPOINT_DISPOSITION: &[u8] =
     b"rawr.iced.compatibility-text-endpoint/suppressed-by-D271/v1";
-const COMPATIBILITY_PROJECTIONS: usize = 28;
+const COMPATIBILITY_PROJECTIONS: usize = 29;
 const COMPATIBILITY_ABI: u32 = 16;
 const COMPATIBILITY_DIGEST: [u8; 16] = [
-    31, 92, 189, 182, 143, 63, 84, 178, 139, 77, 199, 248, 77, 91, 219, 191,
+    12, 181, 173, 50, 179, 228, 107, 15, 218, 247, 25, 46, 146, 155, 49, 83,
 ];
 
 /// One exact target-argument substitution sealed into a generated projection table.

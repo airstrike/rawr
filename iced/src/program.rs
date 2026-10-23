@@ -1838,6 +1838,49 @@ mod tests {
         assert_eq!(report.labels()[0].span(), declaration);
     }
 
+    #[test]
+    fn closures_with_parameters_are_application_callbacks() {
+        let state = r#"
+use iced::widget::{button, column, text};
+#[derive(Default)]
+struct State { value: i64 }
+#[derive(Debug, Clone, Copy)]
+enum Message { Increment }
+"#;
+        for main in [
+            r#"fn main() -> iced::Result {
+    iced::run(
+        |state: &mut State, message: Message| match message {
+            Message::Increment => state.value += 1,
+        },
+        |state: &State| column![text(state.value), button("Increment").on_press(Message::Increment)],
+    )
+}"#,
+            r#"fn main() -> iced::Result {
+    iced::application(State::default, |state: &mut State, message: Message| {
+        match message {
+            Message::Increment => state.value += 1,
+        }
+    }, |state: &State| column![text(state.value), button("Increment").on_press(Message::Increment)])
+    .run()
+}"#,
+        ] {
+            let mut engine = Engine::new();
+            crate::install(&mut engine).unwrap();
+            let engine = Shared::new(engine);
+            let descriptor = engine
+                .compile_application_descriptor(&format!("{state}{main}"))
+                .unwrap();
+            let mut adapter =
+                Adapter::boot(bind(engine.launch_application(descriptor).unwrap())).unwrap();
+            assert_text(&adapter, "0");
+            let increment = click(&adapter, "Increment");
+            adapter.update(increment).unwrap();
+            adapter.refresh_view().unwrap();
+            assert_text(&adapter, "1");
+        }
+    }
+
     fn boot() -> Adapter {
         Adapter::boot(launch()).unwrap()
     }

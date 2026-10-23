@@ -18,14 +18,20 @@ struct RightDescriptor {
 fn exact_counter_view_lowers_registered_intrinsics() {
     let mut engine = Engine::new();
     rawr_iced::install(&mut engine).unwrap();
-    // The golden counter with its view typed as the `Column` it builds.
-    let source = include_str!("../../examples/scripts/application_counter.rs")
-        .replace("{Widget, button", "{Column, button")
-        .replace("impl Widget<Message>", "Column<'_, Message>");
-    let descriptor = engine.compile_application_descriptor(source).unwrap();
+    let golden = include_str!("../../examples/scripts/application_counter.rs");
+    let descriptor = engine.compile_application_descriptor(golden).unwrap();
 
     assert_eq!(descriptor.state().display_name(), "main::Counter");
     assert_eq!(descriptor.message().display_name(), "main::Message");
+    // `impl Widget<Message>` is the erased Element itself, so nothing projects.
+    assert!(descriptor.view().projection().is_none());
+
+    // The same counter with its view typed as the `Column` it builds projects
+    // that Column to an Element.
+    let column = golden
+        .replace("{Widget, button", "{Column, button")
+        .replace("impl Widget<Message>", "Column<'_, Message>");
+    let descriptor = engine.compile_application_descriptor(column).unwrap();
     assert_eq!(
         descriptor.view().projection().unwrap().target(),
         "iced::Element"

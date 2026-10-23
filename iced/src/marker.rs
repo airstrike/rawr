@@ -122,6 +122,7 @@ pub(crate) struct Container {
     pub(crate) align_x: iced::Alignment,
     pub(crate) align_y: iced::Alignment,
     pub(crate) style: Option<container::Source>,
+    pub(crate) id: Option<iced::widget::Id>,
 }
 
 #[derive(Clone)]
@@ -430,6 +431,34 @@ pub(crate) struct Image {
     pub(crate) scale: Option<f32>,
 }
 
+/// iced's `span(text)`: a fragment of rich text, its link a Message-like
+/// value that `on_link_click` maps.
+#[derive(Clone)]
+pub(crate) struct Span {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) text: String,
+    pub(crate) size: Option<f32>,
+    pub(crate) font: Option<iced::Font>,
+    pub(crate) color: Option<iced::Color>,
+    pub(crate) link: Option<Dynamic>,
+    pub(crate) underline: bool,
+    pub(crate) strikethrough: bool,
+}
+
+/// iced's `rich_text(spans)` and `rich_text![..]`.
+#[derive(Clone)]
+pub(crate) struct Rich {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) spans: Vec<Span>,
+    pub(crate) on_link_click: Option<item::Value>,
+    pub(crate) size: Option<f32>,
+    pub(crate) font: Option<iced::Font>,
+    pub(crate) color: Option<iced::Color>,
+    pub(crate) width: Option<iced::Length>,
+    pub(crate) height: Option<iced::Length>,
+}
+
 /// iced's `svg(handle)`.
 #[derive(Clone)]
 pub(crate) struct Svg {
@@ -440,6 +469,7 @@ pub(crate) struct Svg {
     pub(crate) height: Option<iced::Length>,
     pub(crate) content_fit: Option<iced::ContentFit>,
     pub(crate) opacity: Option<f32>,
+    pub(crate) style: Option<Source<iced::widget::svg::Status, iced::widget::svg::Style>>,
 }
 
 /// iced's `qr_code::Data`, as the text it encodes: iced's holds a drawing

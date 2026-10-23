@@ -74,7 +74,7 @@ impl Witnessed for marker::Image {
 }
 
 impl widget::Descriptor for marker::Svg {
-    fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut svg = iced::widget::svg(self.handle.clone());
         if let Some(width) = self.width {
             svg = svg.width(width);
@@ -87,6 +87,11 @@ impl widget::Descriptor for marker::Svg {
         }
         if let Some(opacity) = self.opacity {
             svg = svg.opacity(opacity);
+        }
+        match super::style::lower(&self.style, context, &super::style::SVG, "svg") {
+            Ok(Some(style)) => svg = svg.style(style),
+            Ok(None) => {}
+            Err(diagnostic) => return diagnostic,
         }
         svg.boxed()
     }
@@ -195,6 +200,7 @@ fn bind_svg(builder: &mut host::runtime::Builder) {
                 height: None,
                 content_fit: None,
                 opacity: None,
+                style: None,
             }))
         })
         .expect("the iced facade must retain svg");

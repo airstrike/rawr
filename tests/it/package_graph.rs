@@ -143,6 +143,35 @@ fn unit_and_tuple_structs_through_module_paths() {
 }
 
 #[test]
+fn public_type_aliases_are_read_across_modules() {
+    let project = Project::new("type-aliases");
+    project.write(
+        "src/main.rs",
+        r#"
+            pub mod geometry;
+            use crate::geometry::{Coord, Path};
+            pub fn answer() -> i64 {
+                let start: Coord = (40, 0);
+                let path: Path = vec![start, (1, 1)];
+                geometry::first(&path) + path.len() as i64
+            }
+        "#,
+    );
+    project.write(
+        "src/geometry.rs",
+        "pub type Path = Vec<Coord>;\npub type Coord = (i64, i64);\npub fn first(path: &Path) -> i64 { path[0].0 }\n",
+    );
+    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let engine = Shared::new(Engine::new());
+
+    let executable = engine.compile_package_executable(&target).unwrap();
+    let authority = engine.authorize(executable).unwrap();
+    let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
+
+    assert_eq!(authority.invoke(&answer, &mut []).unwrap().as_int().unwrap(), 42);
+}
+
+#[test]
 fn aggregate_compile_rejects_private_import_hops_with_both_sources() {
     // As in Rust, a private module is open to its parent but not to a sibling.
     let project = Project::new("private-hop");

@@ -659,7 +659,7 @@ pub(crate) fn type_supports(
             type_ref::Target::Builtin => builtin_supports(&path.name, capability),
             // A generic parameter's capabilities are checked where it is
             // instantiated, as a derive's bounds are.
-            type_ref::Target::Parameter | type_ref::Target::Projection(..) => true,
+            type_ref::Target::Parameter | type_ref::Target::Projection(..) | type_ref::Target::Alias(_) => true,
             type_ref::Target::Host { definition, .. } => {
                 definition.capabilities().contains(capability)
             }

@@ -141,6 +141,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::svg")?;
     builder.module("widget::qr_code")?;
     builder.module("widget::operation")?;
+    builder.module("widget::selector")?;
     builder.module("widget::operation::scrollable")?;
     builder.module("window")?;
     builder.module("event")?;
@@ -211,7 +212,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     )?;
     builder.default_value_type::<iced::Border>("Border", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder.private_type::<marker::text::Style>("widget::text::Style", &[], &[])?;
-    builder.value_type::<iced::Color>("Color", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.default_value_type::<iced::Color>("Color", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder
         .carried::<theme::CarryColor>()
         .carried::<theme::CarryTheme>();
@@ -263,6 +264,10 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         COMPONENT,
     )?;
     builder.project("widget::component::Component", "widget::component::Instance", &["Message"])?;
+    // iced's `pub use component::Component` in `widget`, and its
+    // `iced::Renderer`.
+    builder.alias("widget::Component", "widget::component::Component")?;
+    builder.alias("Renderer", "widget::Renderer")?;
     builder.default_value_type::<iced::widget::tooltip::Position>(
         "widget::tooltip::Position",
         &[],
@@ -270,6 +275,16 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     )?;
     builder.value_type::<marker::Horizontal>("alignment::Horizontal", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.value_type::<marker::Vertical>("alignment::Vertical", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::widget::selector::Target>(
+        "widget::selector::Target",
+        &[],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
     builder.value_type::<iced::widget::Id>(
         "widget::Id",
         &[],
@@ -350,6 +365,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.type_::<marker::Svg>("widget::Svg", &[], &[])?;
     builder.project_with("widget::Svg", "Element", &[host::type_def::Argument::fresh()])?;
     builder.type_::<marker::QrCode>("widget::QRCode", &[], &[])?;
+    builder.type_::<marker::Span>("widget::text::Span", &["Link"], &[])?;
+    builder.type_::<marker::Rich>("widget::text::Rich", &["Link", "Message"], &[])?;
+    builder.project("widget::text::Rich", "Element", &["Message"])?;
     builder.project_with("widget::QRCode", "Element", &[host::type_def::Argument::fresh()])?;
     builder.type_::<marker::Pin>("widget::Pin", &["Message"], &[])?;
     builder.project("widget::Pin", "Element", &["Message"])?;
@@ -370,6 +388,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         &[],
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
+    builder.value_type::<iced::font::Error>("font::Error", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::font::Family>(
         "font::Family",
         &[],
@@ -876,6 +895,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_native_tasks(&mut builder)?;
     declare_wrappers(&mut builder)?;
     declare_media(&mut builder)?;
+    declare_rich_text(&mut builder)?;
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
@@ -2066,6 +2086,93 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
     Ok(())
 }
 
+/// iced's `span(text)`, `rich_text(spans)` and `rich_text![..]`. A span's
+/// `Link` is any value; `on_link_click` maps a clicked link to a Message.
+fn declare_rich_text(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let link = || type_ref::Type::parameter("Link");
+    let span = || type_ref::Type::applied("widget::text::Span", [type_ref::Type::parameter("Link")?]);
+    let rich = || {
+        type_ref::Type::applied(
+            "widget::text::Rich",
+            [type_ref::Type::parameter("Link")?, type_ref::Type::parameter("Message")?],
+        )
+    };
+    let mut function = signature::Builder::new();
+    function.type_parameter("Link", &[])?;
+    function.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    function.output(span()?);
+    builder.item(item::Definition::function("widget::span", function.finish())?)?;
+    let span_builder = |input: type_ref::Type| -> Result<signature::Definition, host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("Link", &[])?;
+        signature.parameter(input);
+        signature.output(span()?);
+        Ok(signature.finish())
+    };
+    let color = || type_ref::Type::registered("Color");
+    let font = || type_ref::Type::registered("Font");
+    let bool_ = || type_ref::Type::builtin(type_ref::Builtin::Bool);
+    let mut span_inputs = vec![
+        ("color", color()?),
+        ("color_maybe", type_ref::Type::option(color()?)),
+        ("font", font()?),
+        ("font_maybe", type_ref::Type::option(font()?)),
+        ("link", link()?),
+        ("link_maybe", type_ref::Type::option(link()?)),
+        ("underline", bool_()),
+        ("strikethrough", bool_()),
+    ];
+    span_inputs.extend(PIXELS.map(|pixels| ("size", type_ref::Type::builtin(pixels))));
+    for (name, input) in span_inputs {
+        builder.item(item::Definition::method(
+            format!("widget::text::Span::{name}"),
+            receiver::Mode::Owned,
+            span_builder(input)?,
+        )?)?;
+    }
+
+    let rich_signature = |input: Option<type_ref::Type>| -> Result<signature::Definition, host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("Link", &[])?;
+        signature.type_parameter("Message", &[])?;
+        if let Some(input) = input {
+            signature.parameter(input);
+        }
+        signature.output(rich()?);
+        Ok(signature.finish())
+    };
+    builder.item(item::Definition::function(
+        "widget::rich_text",
+        rich_signature(Some(type_ref::Type::slice(span()?)))?,
+    )?)?;
+    builder.item(item::Definition::intrinsic_macro(
+        "widget::rich_text",
+        rich_signature(Some(span()?))?,
+    )?)?;
+    let mut rich_inputs = vec![
+        ("color", color()?),
+        ("color_maybe", type_ref::Type::option(color()?)),
+        ("font", font()?),
+        (
+            "on_link_click",
+            type_ref::Type::callable(link()?, type_ref::Type::parameter("Message")?),
+        ),
+    ];
+    rich_inputs.extend(PIXELS.map(|pixels| ("size", type_ref::Type::builtin(pixels))));
+    for name in ["width", "height"] {
+        rich_inputs.push((name, type_ref::Type::registered("Length")?));
+        rich_inputs.extend(PIXELS.map(|pixels| (name, type_ref::Type::builtin(pixels))));
+    }
+    for (name, input) in rich_inputs {
+        builder.item(item::Definition::method(
+            format!("widget::text::Rich::{name}"),
+            receiver::Mode::Owned,
+            rich_signature(Some(input))?,
+        )?)?;
+    }
+    Ok(())
+}
+
 /// iced's runtime events as subscriptions: `event::listen()`,
 /// `keyboard::listen()`, `window::frames()` and `time::every(duration)`,
 /// with `Subscription::filter_map`. `keyboard::Event` matches as in Rust
@@ -2335,6 +2442,16 @@ fn declare_native_tasks(builder: &mut facade::Builder) -> Result<(), host::Error
         [type_ref::Type::option(type_ref::Type::registered("window::Id")?)],
     )?);
     builder.item(item::Definition::function("window::latest", latest.finish())?)?;
+    // `font::list()`: the system's font families.
+    let mut list = signature::Builder::new();
+    list.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::result(
+            type_ref::Type::slice(type_ref::Type::registered("font::Family")?),
+            type_ref::Type::registered("font::Error")?,
+        )],
+    )?);
+    builder.item(item::Definition::function("font::list", list.finish())?)?;
     let mut scale_factor = signature::Builder::new();
     scale_factor.parameter(type_ref::Type::registered("window::Id")?);
     scale_factor.output(type_ref::Type::applied(
@@ -2382,7 +2499,7 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
         "widget::Id::unique",
         output_signature("widget::Id")?,
     )?)?;
-    for owner in ["widget::Scrollable", "widget::TextInput"] {
+    for owner in ["widget::Container", "widget::Scrollable", "widget::TextInput"] {
         builders(builder, owner, "id", [id()?])?;
     }
     for name in OPERATION_ANIMATIONS {
@@ -2430,6 +2547,24 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
     focus.parameter(id()?);
     focus.output(task()?);
     builder.item(item::Definition::function("widget::operation::focus", focus.finish())?)?;
+    // `selector::find(id)`: the widget with that id, once iced lays it out.
+    let target = || type_ref::Type::registered("widget::selector::Target");
+    let mut find = signature::Builder::new();
+    find.parameter(id()?);
+    find.output(type_ref::Type::applied("Task", [type_ref::Type::option(target()?)])?);
+    builder.item(item::Definition::function("widget::selector::find", find.finish())?)?;
+    for (name, output) in [
+        ("bounds", type_ref::Type::registered("Rectangle")?),
+        ("visible_bounds", type_ref::Type::option(type_ref::Type::registered("Rectangle")?)),
+    ] {
+        let mut reader = signature::Builder::new();
+        reader.output(output);
+        builder.item(item::Definition::method(
+            format!("widget::selector::Target::{name}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+    }
     for (name, offset) in [
         ("snap_to", Some("widget::scrollable::RelativeOffset")),
         ("snap_to_end", None),
@@ -3043,6 +3178,12 @@ fn declare_palette(builder: &mut facade::Builder) -> Result<(), host::Error> {
         "theme::palette::Seed::default",
         default.finish(),
     )?)?;
+    for &(name, _) in crate::theme::SEEDS {
+        builder.item(item::Definition::associated_value(
+            format!("theme::palette::Seed::{name}"),
+            seed()?,
+        )?)?;
+    }
     for &(owner, field, _) in PALETTE_FIELDS {
         if owner != "theme::palette::Seed" {
             continue;
@@ -3126,11 +3267,9 @@ fn declare_styles(builder: &mut facade::Builder) -> Result<(), host::Error> {
             default.finish(),
         )?)?;
     }
-    for (name, input) in [
-        ("background", color()?),
-        ("border", border()?),
-        ("color", color()?),
-    ] {
+    // `background` is a field (`widget::style`): its builder takes a color
+    // or a background, and a literal takes an `Option`.
+    for (name, input) in [("border", border()?), ("color", color()?)] {
         let mut method = signature::Builder::new();
         method.parameter(input).output(style()?);
         builder.item(item::Definition::method(
