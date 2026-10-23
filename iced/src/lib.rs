@@ -95,6 +95,7 @@ fn register_debug() {
     register::<iced::Border>();
     register::<iced::Color>();
     register::<iced::ContentFit>();
+    register::<iced::event::Status>();
     register::<iced::widget::scrollable::Anchor>();
     register::<iced::widget::scrollable::Direction>();
     register::<iced::widget::scrollable::Scroll>();
@@ -411,6 +412,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
     builder.value_type::<iced::window::Id>("window::Id", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::event::Status>("event::Status", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
     builder.type_::<marker::Stack>("widget::Stack", &["Message"], &[])?;
     builder.project("widget::Stack", "Element", &["Message"])?;
     builder.value_type::<iced::widget::image::Handle>(
@@ -2854,6 +2856,23 @@ fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
         item::Definition::stream_operation(path, signature.finish(), host::stream::Version::new(1))
     };
     builder.item(stream("event::listen", &[], type_ref::Type::registered("Event")?)?)?;
+    // iced's `event::listen_with(f)`: every runtime event but redraws,
+    // with its status and window, filtered through `f`.
+    builder.item(stream(
+        "event::listen_with",
+        &[],
+        type_ref::Type::tuple([
+            type_ref::Type::registered("Event")?,
+            type_ref::Type::registered("event::Status")?,
+            type_ref::Type::registered("window::Id")?,
+        ])?,
+    )?)?;
+    for name in ["Ignored", "Captured"] {
+        builder.item(item::Definition::associated_value(
+            format!("event::Status::{name}"),
+            type_ref::Type::registered("event::Status")?,
+        )?)?;
+    }
     // iced's `event::listen_url()`: the URLs macOS hands the application.
     builder.item(stream(
         "event::listen_url",
@@ -3009,7 +3028,7 @@ fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Err
         ("Closed", None),
         ("Moved", Some(some("Point")?)),
         ("Resized", Some(some("Size")?)),
-        ("Rescaled", Some(type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::F64)))),
+        ("Rescaled", Some(type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::F32)))),
         ("RedrawRequested", Some(some("time::Instant")?)),
         ("CloseRequested", None),
         ("Focused", None),

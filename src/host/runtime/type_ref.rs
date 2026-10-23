@@ -410,6 +410,10 @@ impl Type {
         Self::Option(Box::new(element))
     }
 
+    pub(crate) fn tuple(members: Box<[Self]>) -> Self {
+        Self::Tuple(members)
+    }
+
     pub(crate) fn result(ok: Self, err: Self) -> Self {
         Self::Result(Box::new(ok), Box::new(err))
     }

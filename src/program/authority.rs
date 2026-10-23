@@ -310,9 +310,30 @@ impl Authority {
                             })?;
                         let mut payload = value;
                         for (mapper, filter) in mappers.iter_mut().zip(filters.iter()) {
-                            let mut arguments = [payload];
+                            // A tuple is spread over a closure of as many
+                            // parameters: `listen_with(|event, status, window| ..)`.
+                            let spread = authority
+                                .verify(mapper)
+                                .ok()
+                                .and_then(|callable| {
+                                    callable.arity().checked_sub(mapper.captures().len())
+                                })
+                                .filter(|arity| *arity > 1 && payload.is_array())
+                                .and_then(|arity| {
+                                    let tuple = payload.clone().into_array().ok()?;
+                                    (tuple.len() == arity).then_some(tuple)
+                                });
+                            let mut single;
+                            let mut spread = spread;
+                            let arguments = match &mut spread {
+                                Some(values) => values.as_mut_slice(),
+                                None => {
+                                    single = [payload];
+                                    single.as_mut_slice()
+                                }
+                            };
                             payload = authority
-                                .invoke_bound(mapper, &mut arguments, runtime.clone())
+                                .invoke_bound(mapper, arguments, runtime.clone())
                                 .map_err(crate::host::stream::Error::Mapper)?;
                             // `filter_map`: `None` drops the item, `Some` carries on.
                             if *filter {

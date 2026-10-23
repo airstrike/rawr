@@ -329,3 +329,108 @@ fn master_listen_url_delivers_received_urls() {
     );
     iced_test::simulator(view).find("rawr://hello").unwrap();
 }
+
+const LISTEN_WITH: &str = r#"
+use iced::event::{self, Event};
+use iced::keyboard;
+use iced::widget::text;
+use iced::window;
+use iced::{Subscription, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view)
+        .subscription(State::subscription)
+        .run()
+}
+
+#[derive(Default)]
+struct State {
+    ignored: i64,
+    captured: i64,
+    scale: f32,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Pressed(bool),
+    WindowRescaled(f32),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Pressed(true) => self.ignored += 1,
+            Message::Pressed(false) => self.captured += 1,
+            Message::WindowRescaled(scale) => self.scale = scale,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        text(format!("{} {} {}", self.ignored, self.captured, self.scale))
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        Subscription::batch([
+            event::listen_with(|event, status, _window| match event {
+                Event::Keyboard(keyboard::Event::KeyPressed { .. }) => {
+                    Some(Message::Pressed(status == event::Status::Ignored))
+                }
+                _ => None,
+            }),
+            event::listen_with(|event, _, _| {
+                let Event::Window(window::Event::Rescaled(scale_factor)) = event else {
+                    return None;
+                };
+                Some(Message::WindowRescaled(scale_factor))
+            }),
+        ])
+    }
+}
+"#;
+
+#[test]
+fn master_listen_with_hands_over_status_and_window() {
+    use iced::advanced::subscription::Event;
+
+    let adapter = boot(LISTEN_WITH);
+    let application = program::Application::from_adapter(adapter);
+    let (mut state, _) = <program::Application as iced::Program>::boot(&application);
+    let subscription = <program::Application as iced::Program>::subscription(&application, &state);
+    let recipes = iced::advanced::subscription::into_recipes(subscription);
+    assert_eq!(recipes.len(), 2);
+    let events = || {
+        let captured = match press(iced::keyboard::Key::Character("y".into())) {
+            Event::Interaction { window, event, .. } => Event::Interaction {
+                window,
+                event,
+                status: iced::event::Status::Captured,
+            },
+            other => other,
+        };
+        Box::pin(iced::futures::stream::iter([
+            press(iced::keyboard::Key::Character("x".into())),
+            captured,
+            Event::Interaction {
+                window: iced::window::Id::unique(),
+                event: iced::Event::Window(iced::window::Event::Rescaled(2.0)),
+                status: iced::event::Status::Ignored,
+            },
+        ])) as iced::advanced::subscription::EventStream
+    };
+    let mut messages: Vec<runtime::Message> = Vec::new();
+    for recipe in recipes {
+        messages.extend(iced::futures::executor::block_on(
+            recipe.stream(events()).collect::<Vec<_>>(),
+        ));
+    }
+    assert_eq!(messages.len(), 3);
+    for message in messages {
+        let _ = <program::Application as iced::Program>::update(&application, &mut state, message);
+    }
+    let view = <program::Application as iced::Program>::view(
+        &application,
+        &state,
+        iced::window::Id::unique(),
+    );
+    iced_test::simulator(view).find("1 1 2").unwrap();
+}

@@ -11883,10 +11883,17 @@ impl<'a> Parser<'a> {
                 self.proven_type(&ok, operation, span)?,
                 self.proven_type(&err, operation, span)?,
             ),
-            Ty::Array { .. } | Ty::Tuple(_) | Ty::Keyed(..) | Ty::Reverse(_) => {
+            // A tuple the host hands over, as `event::listen_with`'s.
+            Ty::Tuple(members) => intrinsic::Type::tuple(
+                members
+                    .iter()
+                    .map(|member| self.proven_type(member, operation, span))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Ty::Array { .. } | Ty::Keyed(..) | Ty::Reverse(_) => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
-                    reason: "vectors, maps, sets and tuples do not cross into the host".into(),
+                    reason: "vectors, maps and sets do not cross into the host".into(),
                     operation: span,
                 });
             }
@@ -12764,15 +12771,23 @@ impl<'a> Parser<'a> {
                 )?),
                 length: *length,
             },
-            Shape::Tuple(_) => {
-                return Err(Error::InvalidHostOperation {
-                    item: operation.into(),
-                    reason:
-                        "tuple-valued facade operations have no runtime transport in this phase"
-                            .into(),
-                    operation: Span::NONE,
-                });
-            }
+            // A tuple is an array at runtime, as `event::listen_with`'s
+            // `(Event, Status, window::Id)`.
+            Shape::Tuple(members) => Ty::Tuple(
+                members
+                    .iter()
+                    .map(|member| {
+                        self.instantiate_host_type(
+                            member,
+                            parameters,
+                            operation,
+                            owner,
+                            originating,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+            ),
         })
     }
 
@@ -13657,6 +13672,27 @@ impl<'a> Parser<'a> {
                 reason: "stream operation overload set contains another item kind".into(),
                 operation: name_span,
             });
+        }
+        // `event::listen_with(f)`: a stream of tuples with no inputs, called
+        // with one argument, is filtered through it, as
+        // `event::listen_with().filter_map(f)`. Each tuple is spread over
+        // the closure's parameters.
+        if matches!(self.peek(), Token::LeftParen)
+            && items.iter().all(|item| {
+                item.signature().parameters().is_empty()
+                    && matches!(
+                        item.signature().output().shape(),
+                        crate::host::type_ref::Shape::Tuple(_)
+                    )
+            })
+        {
+            let (_, at) = self.next();
+            self.splice_tokens(vec![
+                (Token::Unit, at),
+                (Token::Period, at),
+                (Token::Identifier(Box::new("filter_map".into())), at),
+                (Token::LeftParen, at),
+            ]);
         }
         let (mut arguments, end) = self.parse_call_arguments("stream operation arguments")?;
         let call = span(name_span.start(), end);
@@ -27859,7 +27895,32 @@ impl<'a> Parser<'a> {
         start: Span,
         moved: bool,
     ) -> Result<ParsedExpr, Error> {
-        let hint = self.closure_hint.take();
+        let mut hint = self.closure_hint.take();
+        // A tuple the host hands over spreads over a closure of as many
+        // parameters: `event::listen_with(|event, status, window| ..)`.
+        if token == Token::Pipe
+            && let Some([single]) = hint.as_deref()
+            && let Ty::Tuple(members) = self.inference.resolve(single)
+            && members.len() > 1
+        {
+            let mut depth = 0_usize;
+            let mut count = 1_usize;
+            for (token, _) in self.input.clone() {
+                match token {
+                    Token::Pipe if depth == 0 => break,
+                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                    Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                        depth = depth.saturating_sub(1);
+                    }
+                    Token::Comma if depth == 0 => count += 1,
+                    Token::EOF => break,
+                    _ => {}
+                }
+            }
+            if count == members.len() {
+                hint = Some(members);
+            }
+        }
         let output_hint = self.closure_output.take();
         let mut parameters = Vec::<(ImmutableString, Ty, Span)>::new();
         let mut patterns = Vec::<(usize, PatternSyntax)>::new();
@@ -33005,6 +33066,37 @@ impl<'a> Parser<'a> {
                 },
             ) if expected_inputs.len() == actual_inputs.len() => {
                 expected_inputs
+                    .iter()
+                    .zip(actual_inputs.iter())
+                    .all(|(expected, actual)| self.unify_type(expected, actual))
+                    && self.unify_type(expected_output, actual_output)
+            }
+            // A stream's tuple spread over a closure of as many parameters,
+            // as `event::listen_with(|event, status, window| ..)`.
+            (
+                Ty::Callable {
+                    inputs: expected_inputs,
+                    output: expected_output,
+                    ..
+                },
+                Ty::Callable {
+                    inputs: actual_inputs,
+                    output: actual_output,
+                    ..
+                },
+            ) if actual_inputs.len() > 1
+                && matches!(
+                    expected_inputs.as_ref(),
+                    [input] if matches!(
+                        self.inference.resolve(input),
+                        Ty::Tuple(members) if members.len() == actual_inputs.len()
+                    )
+                ) =>
+            {
+                let Ty::Tuple(members) = self.inference.resolve(&expected_inputs[0]) else {
+                    unreachable!("matched a tuple input");
+                };
+                members
                     .iter()
                     .zip(actual_inputs.iter())
                     .all(|(expected, actual)| self.unify_type(expected, actual))

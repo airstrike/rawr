@@ -272,6 +272,15 @@ fn bind_events(builder: &mut host::runtime::Builder) {
     use iced::advanced::subscription::Event as Input;
     use iced::futures::stream::{self, StreamExt};
 
+    for (name, status) in [
+        ("Ignored", iced::event::Status::Ignored),
+        ("Captured", iced::event::Status::Captured),
+    ] {
+        builder
+            .bind(format!("iced::event::Status::{name}"), move |_| Ok(Dynamic::from(status)))
+            .expect("the iced facade must retain every event::Status");
+    }
+
     type Native = iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>>;
 
     fn input(filter: fn(Input) -> Option<Dynamic>) -> Native {
@@ -315,6 +324,22 @@ fn bind_events(builder: &mut host::runtime::Builder) {
                 status: iced::event::Status::Ignored,
                 ..
             } => Some(Dynamic::from(event)),
+            _ => None,
+        }),
+        ("iced::event::listen_with", |event| match event {
+            Input::Interaction {
+                event: iced::Event::Window(iced::window::Event::RedrawRequested(_)),
+                ..
+            } => None,
+            Input::Interaction {
+                window,
+                event,
+                status,
+            } => Some(Dynamic::from_array(vec![
+                Dynamic::from(event),
+                Dynamic::from(status),
+                Dynamic::from(window),
+            ])),
             _ => None,
         }),
         ("iced::event::listen_url", |event| match event {
