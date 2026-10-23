@@ -17042,7 +17042,22 @@ impl<'a> Parser<'a> {
         if bound.is_empty() {
             return Ok(None);
         }
-        let (read, place, store) = match &subject.lvalue {
+        // `match self` in a `&mut self` method matches the receiver.
+        let receiver = subject.lvalue.is_none()
+            && self.closures.is_empty()
+            && subject.source.as_str() == "this"
+            && self.bindings.get("this").is_some_and(|binding| {
+                binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
+            });
+        let lvalue = if receiver {
+            Some(Lvalue::Binding {
+                binding: "this".into(),
+                ty: Ty::Unknown,
+            })
+        } else {
+            subject.lvalue.clone()
+        };
+        let (read, place, store) = match &lvalue {
             Some(Lvalue::Binding { binding, .. }) => (
                 origin::Fragment::default(),
                 origin::Fragment::plain(binding.to_string()),
@@ -17078,7 +17093,7 @@ impl<'a> Parser<'a> {
                 })
             }
         };
-        if let Some(root) = subject.lvalue.as_ref().map(Lvalue::binding) {
+        if let Some(root) = lvalue.as_ref().map(Lvalue::binding) {
             let root = root.clone();
             self.require_mutable_binding(&root, subject.span)?;
         }

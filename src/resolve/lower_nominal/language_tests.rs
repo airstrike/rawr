@@ -7330,6 +7330,28 @@ fn language_let_patterns_on_mut_places_write_their_bindings_back() {
 }
 
 #[test]
+fn language_patterns_on_a_mut_receiver_write_back() {
+    let value = run(r#"
+        enum S { A { x: i64 }, B(i64) }
+        impl S {
+            fn set(&mut self) { match self { S::A { x } => *x = 4, S::B(n) => *n += 1 } }
+            fn bump(&mut self) { if let S::A { x } = self { *x += 10; } }
+            fn get(&self) -> i64 { match self { S::A { x } => *x, S::B(n) => *n } }
+        }
+        pub fn run() -> i64 {
+            let mut a = S::A { x: 1 };
+            a.set();
+            a.bump();
+            let mut b = S::B(7);
+            b.set();
+            a.get() * 100 + b.get()
+        }
+        run()
+    "#);
+    assert_eq!(value, 14 * 100 + 8);
+}
+
+#[test]
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(error.contains("nknown function") && error.contains("centre"), "{error}");
