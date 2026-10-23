@@ -737,3 +737,39 @@ fn master_font_list_is_a_task_of_families() {
     let adapter = boot(FONT_LIST);
     find(&adapter, "5 families");
 }
+
+#[test]
+fn master_derived_default_takes_facade_fields_that_are_default() {
+    let adapter = boot(
+        r#"
+use iced::widget::text;
+use iced::time::Duration;
+use iced::{Color, Font, Padding, Point, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    color: Color,
+    font: Font,
+    padding: Padding,
+    point: Point,
+    wait: Duration,
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        text(format!("alpha {}", self.color.a))
+    }
+}
+"#,
+    );
+    find(&adapter, "alpha 0");
+}

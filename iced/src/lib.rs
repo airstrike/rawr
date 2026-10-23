@@ -212,7 +212,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     )?;
     builder.default_value_type::<iced::Border>("Border", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder.private_type::<marker::text::Style>("widget::text::Style", &[], &[])?;
-    builder.value_type::<iced::Color>("Color", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.default_value_type::<iced::Color>("Color", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder
         .carried::<theme::CarryColor>()
         .carried::<theme::CarryTheme>();
