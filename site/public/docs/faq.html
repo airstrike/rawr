@@ -73,6 +73,7 @@
 <h2 id="generics">How are generics handled?</h2>
 <p>Rawr checks generics as rustc does. Each call is checked against the bounds of the function it calls. A missing bound is an error.</p>
 <p>At run time each generic function has one body. Rawr does not make a copy for each type. Values carry their types, so a trait method call dispatches on the value it is called on. A call like <code>T::default()</code> has no value to dispatch on. Rawr passes the type to the function as a hidden argument for these calls.</p>
+<p>A function whose signature names a type parameter inside an iced type gets the same hidden argument. <code>fn card&lt;Message: Clone&gt;(label: &amp;str) -&gt; Element&lt;'static, Message&gt;</code> is one such function. Each iced call in its body uses the caller&rsquo;s message type at run time.</p>
 <p>Generic code in an imported Rust crate is compiled natively. It is compiled for the concrete types your program uses.</p>
 <p>Code that relies on a separate copy of a function for each type is not supported. <code>std::mem::size_of::&lt;T&gt;()</code> is an example.</p>
 

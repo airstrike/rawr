@@ -82,8 +82,10 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>impl</code> blocks with methods, associated functions and associated consts.</li>
   <li><code>trait</code> with default methods, associated types and static functions. Traits can be implemented for your own types and for built-in types such as <code>i64</code>.</li>
   <li><code>const</code> and <code>static</code> items.</li>
+  <li><code>type</code> aliases, generic ones included, such as <code>type Pair&lt;T&gt; = (T, T);</code>. A <code>pub type</code> can be imported from another module.</li>
+  <li><code>pub</code> and restricted visibility. <code>pub(crate)</code>, <code>pub(super)</code> and <code>pub(in path)</code> all work.</li>
   <li><code>mod</code>. A <code>mod util;</code> declaration loads <code>util.rawr</code> beside the file that declares it. An inline <code>mod m { .. }</code> works too.</li>
-  <li><code>use</code> with paths and groups, such as <code>use std::collections::{HashMap, HashSet};</code>.</li>
+  <li><code>use</code> with paths and groups, such as <code>use std::collections::{HashMap, HashSet};</code>. A glob of a standard library module such as <code>use std::collections::*;</code> works too.</li>
   <li><code>#[derive]</code> of <code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. Rawr checks a derive the way rustc does. Deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</li>
 </ul>
 
@@ -97,8 +99,9 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>Option</code> and <code>Result</code> with their usual methods and the <code>?</code> operator.</li>
   <li><code>Box&lt;T&gt;</code> and <code>Box&lt;dyn Trait&gt;</code>.</li>
   <li><code>impl Trait</code> in argument and return position. This covers <code>impl Fn(i64) -&gt; i64</code> and <code>impl Iterator&lt;Item = i64&gt;</code>.</li>
-  <li>Function pointers such as <code>fn(i64) -&gt; i64</code>.</li>
+  <li>Function pointers such as <code>fn(i64) -&gt; i64</code>. A function coerces to its pointer type with <code>double as fn(i64) -&gt; i64</code>.</li>
   <li><code>as</code> casts between numbers. They truncate and saturate as Rust&rsquo;s do. <code>u8 as char</code> works too.</li>
+  <li>A fieldless enum casts to an integer with <code>as</code>. Explicit discriminants such as <code>Red = 1</code> set its values.</li>
 </ul>
 <p>Mixing numeric types without a cast is an error in Rawr too. <code>i32 + i64</code> doesn&rsquo;t pass the check. Indexing a <code>Vec</code> takes a <code>usize</code>.</p>
 
@@ -244,6 +247,7 @@ fn main() {
   <li><code>std::mem::swap</code>, <code>replace</code> and <code>take</code>.</li>
   <li><code>std::fmt</code> for <code>Display</code> and <code>Debug</code> impls, <code>std::ops</code> for operator traits and <code>std::cmp::Ordering</code>.</li>
   <li><code>From</code> and <code>Into</code> between your own types.</li>
+  <li><code>From::from</code>, <code>Into::into</code>, <code>Clone::clone</code> and <code>ToString::to_string</code> as values. <code>.map(String::from)</code> is one example. A method of <code>Option</code> or <code>Result</code> works as a value too, as in <code>.map(Result::ok)</code>.</li>
   <li><code>TryFrom</code> between integer types.</li>
 </ul>
 <p><code>Duration</code> and <code>Instant</code> are available to iced apps as <code>iced::time::Duration</code> and <code>iced::time::Instant</code>. <code>std::time</code> is not available in plain programs yet.</p>
@@ -252,11 +256,8 @@ fn main() {
 <p>These are valid Rust that Rawr rejects today. Each one fails the check with an error that names the construct.</p>
 <h3 id="missing-syntax">Syntax and items</h3>
 <ul>
-  <li>Type aliases (<code>type Id = i64;</code>).</li>
-  <li>Glob imports (<code>use std::collections::*;</code>, <code>use Enum::*;</code>).</li>
-  <li>Restricted visibility such as <code>pub(crate)</code> and <code>pub(super)</code>.</li>
+  <li>A glob import of an enum&rsquo;s variants (<code>use Shape::*;</code>).</li>
   <li><code>const fn</code>.</li>
-  <li>Explicit enum discriminants (<code>Red = 1</code>) and casting an enum with <code>as</code>.</li>
   <li>Byte literals (<code>b'a'</code>, <code>b"ab"</code>) and <code>char</code> ranges such as <code>'a'..='e'</code>.</li>
   <li><code>macro_rules!</code>, <code>async</code> and <code>.await</code>.</li>
   <li>A <code>const</code> captured in a format string (<code>"{LIMIT}"</code>). Pass it as an argument instead.</li>
