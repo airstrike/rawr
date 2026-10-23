@@ -93,6 +93,11 @@ pub(crate) struct Generic {
     pub trait_arguments: Box<[(crate::ImmutableString, Box<[type_ref::Type]>)]>,
     /// A trait parameter's default type: `Self` of `trait Add<Rhs = Self>`.
     pub default: Option<type_ref::Type>,
+    /// The function's signature names this parameter inside a host type
+    /// (`Element<'static, Message>`). The function then takes the
+    /// parameter's runtime type as a hidden witness, which its host
+    /// operations instantiate their proofs with.
+    pub host: bool,
 }
 
 /// A trait declaration. `Self` in its signatures is the generic parameter

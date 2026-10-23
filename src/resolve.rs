@@ -1696,6 +1696,15 @@ fn resolve_function(
         })
         .transpose()?;
 
+    let mut generics = generics;
+    for generic in &mut generics {
+        generic.host = parameters
+            .iter()
+            .map(|parameter| &parameter.ty)
+            .chain(output.as_ref())
+            .any(|ty| names_in_host_type(ty, &generic.name.text, false));
+    }
+
     Ok(item::Function {
         header: parsed.header,
         name: parsed.name,
@@ -1710,6 +1719,31 @@ fn resolve_function(
             constant: parsed.constant,
         },
     })
+}
+
+/// Whether `ty` names the generic parameter `name` as a type argument of a
+/// host type, at any depth.
+fn names_in_host_type(ty: &type_ref::Type, name: &str, inside_host: bool) -> bool {
+    match ty {
+        type_ref::Type::Unit(_) => false,
+        type_ref::Type::Tuple { members, .. } => members
+            .iter()
+            .any(|member| names_in_host_type(member, name, inside_host)),
+        type_ref::Type::Reference { target, .. } => names_in_host_type(target, name, inside_host),
+        type_ref::Type::Path(path) => {
+            if inside_host
+                && matches!(path.target, type_ref::Target::Parameter)
+                && path.name.as_str() == name
+            {
+                return true;
+            }
+            let host = inside_host || matches!(path.target, type_ref::Target::Host { .. });
+            path.arguments.iter().any(|argument| match argument {
+                type_ref::Argument::Type(ty) => names_in_host_type(ty, name, host),
+                type_ref::Argument::Lifetime(_) => false,
+            })
+        }
+    }
 }
 
 /// A generic parameter bounded by a facade trait (`W: Widget<Message>`, or
@@ -2915,6 +2949,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             projections: Box::default(),
             trait_arguments: Box::default(),
             default: None,
+            host: false,
         }])
     } else if operator && !matches!(name, "Neg" | "Not") {
         Box::new([item::Generic {
@@ -2927,6 +2962,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             projections: Box::default(),
             trait_arguments: Box::default(),
             default: Some(this()),
+            host: false,
         }])
     } else if matches!(name, "From" | "Into") {
         Box::new([item::Generic {
@@ -2939,6 +2975,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             projections: Box::default(),
             trait_arguments: Box::default(),
             default: None,
+            host: false,
         }])
     } else {
         Box::default()
@@ -3651,6 +3688,7 @@ fn generic_scope(
             projections: Box::default(),
             trait_arguments: Box::default(),
             default: None,
+            host: false,
         });
     }
     // `trait Add<Rhs = Self>`: a default may name `Self` and the earlier

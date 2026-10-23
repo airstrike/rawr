@@ -3787,6 +3787,9 @@ enum ExecutableOp {
     Imported {
         proof: crate::host::structural::Proof,
     },
+    /// A host operation of a body whose signature names generics inside a
+    /// host type: its proof is instantiated by the witnesses it takes.
+    Witnessed(Box<WitnessedOp>),
     Symbolic {
         value: crate::item::Value,
         /// A lifted closure's captures, passed to the op where it is written.
@@ -4000,6 +4003,109 @@ struct ProjectionOperation {
     span: Span,
 }
 
+/// An intrinsic or projection proof over generic parameters
+/// (`intrinsic::Type::witness_parameter`), instantiated once per tuple of
+/// witnesses its calls pass after their operands.
+#[derive(Clone)]
+struct WitnessedOp {
+    template: ExecutableOp,
+    /// The template with each parameter as `()`: what the load checks,
+    /// since a binding and its attestations never depend on a script type.
+    placeholder: ExecutableOp,
+    witnesses: usize,
+    instances: Shared<crate::Locked<BTreeMap<Box<[crate::INT]>, Shared<WitnessedInstance>>>>,
+}
+
+struct WitnessedInstance {
+    op: ExecutableOp,
+    requirement: Option<crate::host::runtime::Requirement>,
+}
+
+impl WitnessedOp {
+    fn new(template: ExecutableOp, witnesses: usize) -> Self {
+        let placeholder = template.instantiate(&vec![intrinsic::Type::unit(); witnesses]);
+        Self {
+            template,
+            placeholder,
+            witnesses,
+            instances: Shared::new(crate::Locked::new(BTreeMap::new())),
+        }
+    }
+
+    fn invoke(
+        &self,
+        context: Option<NativeCallContext<'_>>,
+        args: &mut FnCallArgs,
+        models: &Models,
+    ) -> RawrResult {
+        let Some(split) = args.len().checked_sub(self.witnesses) else {
+            return Err(invariant("a witnessed host operation lost its witnesses"));
+        };
+        let codes = args[split..]
+            .iter()
+            .map(|code| code.as_int().map_err(|_| invariant("a type witness is not a code")))
+            .collect::<Result<Box<[_]>, _>>()?;
+        let known = crate::func::locked_read(&self.instances)
+            .and_then(|instances| instances.get(&codes).cloned());
+        let instance = match known {
+            Some(instance) => instance,
+            None => {
+                let arguments = codes
+                    .iter()
+                    .map(|code| {
+                        witness_type(models, *code).ok_or_else(|| {
+                            invariant(
+                                "a generic helper's type argument must be a script type or a \
+                                 number, string, bool, char or `()`",
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let op = self.template.instantiate(&arguments);
+                let requirement = op.runtime_requirement();
+                let instance = Shared::new(WitnessedInstance { op, requirement });
+                if let Some(mut instances) = crate::func::locked_write(&self.instances) {
+                    instances.insert(codes, instance.clone());
+                }
+                instance
+            }
+        };
+        instance
+            .op
+            .invoke(context, &mut args[..split], models, instance.requirement.as_ref())
+    }
+}
+
+/// The runtime type a witness code names (`builtin_code`, or a script
+/// type's index).
+fn witness_type(models: &Models, code: crate::INT) -> Option<intrinsic::Type> {
+    Some(match code {
+        -2 => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
+        #[cfg(not(feature = "no_float"))]
+        -3 => intrinsic::Type::builtin("f64", TypeId::of::<crate::FLOAT>()),
+        -4 => intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>()),
+        -5 => intrinsic::Type::builtin("bool", TypeId::of::<bool>()),
+        -6 => intrinsic::Type::builtin("char", TypeId::of::<char>()),
+        -9 => intrinsic::Type::unit(),
+        code => {
+            let index = usize::try_from(code).ok()?;
+            let id = models.by_definition.keys().find(|id| id.index() == index)?;
+            script_type(models, *id)
+        }
+    })
+}
+
+/// The runtime type of the script type `id`.
+fn script_type(models: &Models, id: type_def::Id) -> intrinsic::Type {
+    let model = models.definition(id);
+    intrinsic::Type::script(
+        model.identity(),
+        model.definition().schema().clone(),
+        model.definition().kind(),
+        model.ty().type_id(models),
+    )
+}
+
 struct InstantiatedHostSignature {
     inputs: Vec<Ty>,
     output: Ty,
@@ -4007,8 +4113,28 @@ struct InstantiatedHostSignature {
 }
 
 impl ExecutableOp {
+    /// An intrinsic or projection with each generic parameter replaced by
+    /// its argument.
+    fn instantiate(&self, arguments: &[intrinsic::Type]) -> Self {
+        match self {
+            Self::Intrinsic { proof } => Self::Intrinsic {
+                proof: proof.instantiate(arguments),
+            },
+            Self::Projection { proof } => Self::Projection {
+                proof: Box::new(crate::host::projection::Site::new(
+                    proof.key().clone(),
+                    proof.source().instantiate(arguments),
+                    proof.target().instantiate(arguments),
+                    proof.span(),
+                )),
+            },
+            op => op.clone(),
+        }
+    }
+
     fn dependencies(&self) -> BTreeSet<crate::host::facade::Dependency> {
         match self {
+            Self::Witnessed(op) => op.placeholder.dependencies(),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => proof.dependencies(),
             Self::Symbolic { .. } => BTreeSet::new(),
@@ -4060,6 +4186,7 @@ impl ExecutableOp {
 
     fn projection_requirement(&self) -> Option<crate::host::projection::Site> {
         match self {
+            Self::Witnessed(op) => op.placeholder.projection_requirement(),
             Self::Projection { proof } => Some((**proof).clone()),
             #[cfg(feature = "rust-import")]
             Self::Imported { .. } | Self::Event { .. } => None,
@@ -4089,6 +4216,7 @@ impl ExecutableOp {
 
     fn runtime_requirement(&self) -> Option<crate::host::runtime::Requirement> {
         match self {
+            Self::Witnessed(op) => op.placeholder.runtime_requirement(),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => Some(crate::host::runtime::Requirement::structural(proof)),
             #[cfg(feature = "rust-import")]
@@ -4134,6 +4262,13 @@ impl ExecutableOp {
 
     fn private_name(&self, models: &Models, support_id: u64) -> String {
         let (definition, operation) = match self {
+            Self::Witnessed(op) => {
+                return format!(
+                    "{}.witnessed.{}",
+                    op.template.private_name(models, support_id),
+                    op.witnesses
+                );
+            }
             Self::Prelude(op) => return format!("\0rawr.{}", op.name()),
             Self::Kinded { op, kinds } => {
                 return format!("\0rawr.{}.{}.{}", op.name(), kinds[0], kinds[1]);
@@ -4276,6 +4411,16 @@ impl ExecutableOp {
 
     fn argument_types(&self, models: &Models) -> Vec<TypeId> {
         match self {
+            // A bare generic operand takes any value; the proof checks it.
+            Self::Witnessed(op) => {
+                let parameter = intrinsic::Type::witness_parameter(0).runtime();
+                op.template
+                    .argument_types(models)
+                    .into_iter()
+                    .map(|ty| if ty == parameter { TypeId::of::<Dynamic>() } else { ty })
+                    .chain(std::iter::repeat_n(TypeId::of::<INT>(), op.witnesses))
+                    .collect()
+            }
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => proof
                 .operands()
@@ -4368,6 +4513,7 @@ impl ExecutableOp {
         requirement: Option<&crate::host::runtime::Requirement>,
     ) -> RawrResult {
         match self {
+            Self::Witnessed(op) => op.invoke(context, args, models),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => {
                 let Some(runtime) = context.and_then(|context| context.host_runtime()) else {
@@ -7161,7 +7307,8 @@ fn witness_generics<'a>(
     models: &'a Models,
 ) -> impl Iterator<Item = &'a item::Generic> {
     generics.iter().filter(|generic| {
-        generic.bounds.contains(capability::Kind::Default)
+        generic.host
+            || generic.bounds.contains(capability::Kind::Default)
             || generic
                 .traits
                 .iter()
@@ -7382,6 +7529,15 @@ fn generic_equalities(
 }
 
 /// The user trait bounds of each generic parameter in `generics`.
+/// The generic parameters a signature names inside a host type.
+fn host_witnesses(generics: &[item::Generic]) -> Vec<ImmutableString> {
+    generics
+        .iter()
+        .filter(|generic| generic.host)
+        .map(|generic| generic.name.text.clone())
+        .collect()
+}
+
 fn generic_traits(generics: &[item::Generic]) -> BTreeMap<ImmutableString, Box<[ImmutableString]>> {
     generics
         .iter()
@@ -7699,6 +7855,14 @@ struct Parser<'a> {
     /// Type witnesses passed for `Default`-bounded generic parameters,
     /// written over their placeholders once the types are inferred.
     pending_witnesses: Vec<(String, Ty, Span)>,
+    /// This body's generic parameters a signature names inside a host
+    /// type, in declaration order: each host operation here takes their
+    /// witnesses after its operands.
+    host_witnesses: Vec<ImmutableString>,
+    /// The witnessed generics a proof being proven names as parameters.
+    template_params: std::cell::RefCell<Box<[ImmutableString]>>,
+    /// The witness names each such host operation took, by op index.
+    witnessed_ops: BTreeMap<usize, Box<[ImmutableString]>>,
     /// Arithmetic on a literal's `{integer}` whose kind inference had not
     /// settled: each placeholder, written over with the kind's code once
     /// it has (`i32` when nothing binds it, as in Rust).
@@ -7887,6 +8051,9 @@ impl<'a> Parser<'a> {
             pending_traits: Vec::new(),
             pending_projections: Vec::new(),
             pending_witnesses: Vec::new(),
+            host_witnesses: Vec::new(),
+            template_params: std::cell::RefCell::new(Box::default()),
+            witnessed_ops: BTreeMap::new(),
             pending_int_kinds: Vec::new(),
             pending_defaults: Vec::new(),
             no_struct: false,
@@ -7940,6 +8107,7 @@ impl<'a> Parser<'a> {
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
         parser.generic_traits = generic_traits(definition.generics());
+        parser.host_witnesses = host_witnesses(definition.generics());
         parser.generic_trait_arguments = generic_trait_arguments(definition.generics());
         parser.impl_instance = instance_text(definition.trait_arguments());
         // `T` of `trait Convert<T>` is the impl's argument.
@@ -8062,6 +8230,7 @@ impl<'a> Parser<'a> {
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
         parser.generic_traits = generic_traits(&definition.generics);
+        parser.host_witnesses = host_witnesses(&definition.generics);
         parser.generic_trait_arguments = generic_trait_arguments(&definition.generics);
         parser.inference.equalities = generic_equalities(&definition.generics);
 
@@ -8626,7 +8795,8 @@ impl<'a> Parser<'a> {
 
     /// Whether this body's generic parameter `name` has a type witness.
     fn has_witness(&self, name: &str) -> bool {
-        self.generics
+        self.host_witnesses.iter().any(|host| host.as_str() == name)
+            || self.generics
             .get(name)
             .is_some_and(|bounds| bounds.contains(capability::Kind::Default))
             || self
@@ -8666,14 +8836,15 @@ impl<'a> Parser<'a> {
                 return Err(Error::InvalidMethodCall {
                     owner: "<generic>".into(),
                     method: "default".into(),
-                    reason: "type annotations needed: a `Default` type argument is unknown".into(),
+                    reason: "type annotations needed: a generic call's type argument is unknown"
+                        .into(),
                     call: span,
                 });
             }
             _ => {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
-                        "`{}` as a `Default` type argument of a generic call",
+                        "`{}` as the type argument of a generic call",
                         ty.name(&self.models)
                     )
                     .into(),
@@ -10960,14 +11131,24 @@ impl<'a> Parser<'a> {
         let mut next_perform = 0;
         let mut next_change = 0;
         ops.into_iter()
-            .map(|op| {
-                self.prove_executable_op(
+            .enumerate()
+            .map(|(index, op)| {
+                let witnesses = self.witnessed_ops.get(&index).cloned();
+                if let Some(names) = &witnesses {
+                    *self.template_params.borrow_mut() = names.clone();
+                }
+                let op = self.prove_executable_op(
                     op,
                     &mut performs,
                     &mut next_perform,
                     &mut changes,
                     &mut next_change,
-                )
+                );
+                let Some(names) = witnesses else {
+                    return op;
+                };
+                *self.template_params.borrow_mut() = Box::default();
+                Ok(ExecutableOp::Witnessed(Box::new(WitnessedOp::new(op?, names.len()))))
             })
             .collect()
     }
@@ -11557,15 +11738,7 @@ impl<'a> Parser<'a> {
             Ty::Reference { target, .. } => {
                 return self.proven_type(&target, operation, span);
             }
-            Ty::Script(id, ..) => {
-                let model = self.models.definition(id);
-                intrinsic::Type::script(
-                    model.identity(),
-                    model.definition().schema().clone(),
-                    model.definition().kind(),
-                    model.ty().type_id(&self.models),
-                )
-            }
+            Ty::Script(id, ..) => script_type(&self.models, id),
             Ty::Host { proof, arguments } => {
                 let definition = &proof.definition;
                 let arguments = arguments
@@ -11630,6 +11803,15 @@ impl<'a> Parser<'a> {
                 proof.owner.clone(),
                 proof.contract.clone(),
             ),
+            Ty::Param(name)
+                if let Some(index) = self
+                    .template_params
+                    .borrow()
+                    .iter()
+                    .position(|parameter| *parameter == name) =>
+            {
+                intrinsic::Type::witness_parameter(index)
+            }
             Ty::Endpoint(_)
             | Ty::Never
             | Ty::Param(_)
@@ -13319,7 +13501,7 @@ impl<'a> Parser<'a> {
         )?;
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
-            source: origin::Fragment::call(&helper, []),
+            source: self.op_call(&helper, []),
             ty: signature.output,
             span: name_span,
             lvalue: None,
@@ -30568,10 +30750,10 @@ impl<'a> Parser<'a> {
             });
             if self.normalize_private_calls {
                 let operand = self.materialize_in_place(value, &format!("{helper}_arg_0"));
-                value.source = origin::Fragment::call(&helper, [operand]);
+                value.source = self.op_call(&helper, [operand]);
             } else {
                 debug_assert!(value.prelude.is_empty());
-                value.source = origin::Fragment::call(&helper, [std::mem::take(&mut value.source)]);
+                value.source = self.op_call(&helper, [std::mem::take(&mut value.source)]);
             }
             value.ty = target;
             value.lvalue = None;
@@ -30602,10 +30784,10 @@ impl<'a> Parser<'a> {
             });
             if self.normalize_private_calls {
                 let operand = self.materialize_in_place(value, &format!("{helper}_arg_0"));
-                value.source = origin::Fragment::call(&helper, [operand]);
+                value.source = self.op_call(&helper, [operand]);
             } else {
                 debug_assert!(value.prelude.is_empty());
-                value.source = origin::Fragment::call(&helper, [std::mem::take(&mut value.source)]);
+                value.source = self.op_call(&helper, [std::mem::take(&mut value.source)]);
             }
             value.ty = target;
             value.lvalue = None;
@@ -30630,10 +30812,10 @@ impl<'a> Parser<'a> {
             });
             if self.normalize_private_calls {
                 let operand = self.materialize_in_place(value, &format!("{helper}_arg_0"));
-                value.source = origin::Fragment::call(&helper, [operand]);
+                value.source = self.op_call(&helper, [operand]);
             } else {
                 debug_assert!(value.prelude.is_empty());
-                value.source = origin::Fragment::call(&helper, [std::mem::take(&mut value.source)]);
+                value.source = self.op_call(&helper, [std::mem::take(&mut value.source)]);
             }
             value.ty = target;
             value.lvalue = None;
@@ -31515,10 +31697,7 @@ impl<'a> Parser<'a> {
                     operand.source
                 })
                 .collect::<Vec<_>>();
-            return (
-                origin::Fragment::default(),
-                origin::Fragment::call(helper, operands),
-            );
+            return (origin::Fragment::default(), self.op_call(helper, operands));
         }
         let mut prelude = origin::Fragment::default();
         let operands = operands
@@ -31528,7 +31707,41 @@ impl<'a> Parser<'a> {
                 self.materialize(operand, &format!("{helper}_arg_{index}"), &mut prelude)
             })
             .collect::<Vec<_>>();
-        (prelude, origin::Fragment::call(helper, operands))
+        (prelude, self.op_call(helper, operands))
+    }
+
+    /// The call of a pushed operation. A host operation in a body whose
+    /// signature names a generic inside a host type also takes those
+    /// generics' witnesses, which instantiate its proof at run time.
+    fn op_call(
+        &mut self,
+        helper: &str,
+        operands: impl IntoIterator<Item = origin::Fragment>,
+    ) -> origin::Fragment {
+        let mut operands = operands.into_iter().collect::<Vec<_>>();
+        if self.host_witnesses.is_empty() {
+            return origin::Fragment::call(helper, operands);
+        }
+        let index = helper
+            .strip_prefix(SENTINEL)
+            .and_then(|index| index.parse::<usize>().ok())
+            .and_then(|index| index.checked_sub(self.op_offset));
+        if let Some(index) = index
+            && matches!(
+                self.ops.get(index),
+                Some(Op::Intrinsic { .. } | Op::Projection { .. })
+            )
+        {
+            self.capture_witnesses();
+            operands.extend(
+                self.host_witnesses
+                    .iter()
+                    .map(|name| origin::Fragment::plain(witness_variable(name))),
+            );
+            self.witnessed_ops
+                .insert(index, self.host_witnesses.clone().into_boxed_slice());
+        }
+        origin::Fragment::call(helper, operands)
     }
 
     fn materialize(

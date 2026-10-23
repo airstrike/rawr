@@ -75,6 +75,22 @@ impl Proof {
         &self.output
     }
 
+    /// This proof with each generic parameter replaced by its argument.
+    pub(super) fn instantiate(&self, arguments: &[Type]) -> Self {
+        Self {
+            operands: self
+                .operands
+                .iter()
+                .map(|operand| Operand {
+                    ty: operand.ty.instantiate(arguments),
+                    ..operand.clone()
+                })
+                .collect(),
+            output: self.output.instantiate(arguments),
+            ..self.clone()
+        }
+    }
+
     pub(super) fn runtime_requirement(&self) -> host::runtime::Requirement {
         host::runtime::Requirement::new(
             self.owner.clone(),

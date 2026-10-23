@@ -767,3 +767,35 @@ fn master_component_is_named_from_widget() {
     let adapter = boot(&source);
     find(&adapter, "show");
 }
+
+#[test]
+fn generic_view_helpers_take_their_callers_message() {
+    let adapter = boot(
+        r#"
+use iced::widget::{button, column, container, text};
+use iced::Element;
+#[derive(Default)] struct State { pressed: i64 }
+#[derive(Debug, Clone)] enum Message { Pressed }
+fn card<Message: Clone + 'static>(label: &str) -> Element<'static, Message> {
+    container(text(label.to_string())).padding(8).boxed()
+}
+fn press<M: Clone + 'static>(label: &str, on: M) -> Element<'static, M> {
+    button(text(label.to_string())).on_press(on).boxed()
+}
+fn framed<M: Clone + 'static>(label: &str, on: M) -> Element<'static, M> {
+    column![card(label), press("go", on)].boxed()
+}
+impl State {
+    fn update(&mut self, message: Message) { self.pressed += 1; }
+    fn view(&self) -> Element<'_, Message> {
+        column![framed("card", Message::Pressed), text(format!("pressed {}", self.pressed))].boxed()
+    }
+}
+pub fn main() -> iced::Result { iced::run(State::update, State::view) }
+"#,
+    );
+    find(&adapter, "card");
+    find(&adapter, "pressed 0");
+    let message = click(&adapter, "go");
+    assert!(format!("{message:?}").contains("Pressed"), "{message:?}");
+}
