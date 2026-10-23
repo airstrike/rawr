@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 5;
-const CLASSIFIER_VERSION: u32 = 6;
+const CLASSIFIER_VERSION: u32 = 7;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3023,7 +3023,7 @@ impl<P: api::Phase> Context<'_, P> {
             admitted.into_boxed_slice(),
             constructible,
             declaration_only,
-            self.implements(definition, "Copy"),
+            self.implements_for_any(definition, "Copy"),
             self.implements(definition, "Default"),
             self.implements_for_any(definition, "Debug"),
             self.implements_for_any(definition, "Clone"),
@@ -3106,7 +3106,7 @@ impl<P: api::Phase> Context<'_, P> {
             parameters,
             admitted.into_boxed_slice(),
             declaration_only,
-            self.implements(definition, "Copy"),
+            self.implements_for_any(definition, "Copy"),
             self.implements(definition, "Default"),
             self.implements_for_any(definition, "Debug"),
             self.implements_for_any(definition, "Clone"),
@@ -3335,8 +3335,8 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
-    /// Whether the crate implements the `core` trait `name` (`Copy`,
-    /// `Default`) for the definition itself, without generics.
+    /// Whether the crate implements the `core` trait `name` (`Default`)
+    /// for the definition itself, without generics.
     fn implements(&self, definition: usize, name: &str) -> bool {
         self.core_implementation(definition, name, false)
     }

@@ -911,3 +911,58 @@ fn main() {
         "HI HI Label { text: \"hi\" }\n"
     );
 }
+
+/// A generic imported type whose crate derives Copy, as chrono's
+/// DateTime<Tz> is, lets a script enum derive Copy over it.
+#[test]
+#[ignore = "builds the path dependency and a runner with the import driver"]
+fn a_derived_copy_takes_a_generic_imported_field() {
+    let sandbox = Sandbox::new("imported-generic-copy");
+    let root = copy_fixture("rs-marker-path", sandbox.path());
+    let library = root.join("gauge/src/lib.rs");
+    let mut gauge = fs::read_to_string(&library).unwrap();
+    gauge.push_str(
+        r#"
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reading<T> {
+    pub value: T,
+}
+
+pub fn reading() -> Reading<i32> {
+    Reading { value: 3 }
+}
+"#,
+    );
+    fs::write(&library, gauge).unwrap();
+    fs::write(
+        root.join("app/src/main.rs"),
+        r#"// rawr
+use gauge::{reading, Reading};
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Read(Reading<i32>),
+}
+
+fn main() {
+    let first = Message::Read(reading());
+    let second = first;
+    println!("{first:?} {second:?}");
+}
+"#,
+    )
+    .unwrap();
+
+    let output = rawr_command()
+        .arg("run")
+        .arg(root.join("app"))
+        .output()
+        .unwrap();
+
+    writable(&root);
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Read(Reading { value: 3 }) Read(Reading { value: 3 })\n"
+    );
+}
