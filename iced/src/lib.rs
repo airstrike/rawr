@@ -3156,6 +3156,12 @@ fn declare_palette(builder: &mut facade::Builder) -> Result<(), host::Error> {
         "theme::palette::Seed::default",
         default.finish(),
     )?)?;
+    for &(name, _) in crate::theme::SEEDS {
+        builder.item(item::Definition::associated_value(
+            format!("theme::palette::Seed::{name}"),
+            seed()?,
+        )?)?;
+    }
     for &(owner, field, _) in PALETTE_FIELDS {
         if owner != "theme::palette::Seed" {
             continue;

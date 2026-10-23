@@ -121,7 +121,7 @@ fn colors_and_themes_in_state_are_carried() {
         )
         .replace(
             "self.pair = (n, format!(\"p{}\", n));",
-            "self.pair = (n, format!(\"p{}\", n)); self.themes = vec![Theme::Dracula, Theme::custom(\"Mine\".to_string(), Seed { primary: Color::from_rgb8(1, 2, 3), ..Seed::default() })]; self.tint = Some(Color::from_rgb8(9, 8, 7));",
+            "self.pair = (n, format!(\"p{}\", n)); self.themes = vec![Theme::Dracula, Theme::custom(\"Mine\".to_string(), Seed { primary: Color::from_rgb8(1, 2, 3), ..Seed::LIGHT })]; self.tint = Some(Color::from_rgb8(9, 8, 7));",
         )
         .replace(
             "self.boxed)),",

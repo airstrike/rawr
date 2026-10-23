@@ -206,6 +206,13 @@ fn bind_palette(iced: &mut host::runtime::Builder) {
         Ok(Dynamic::from(Seed::LIGHT))
     })
     .expect("the iced facade must retain Seed::default");
+    for &(name, seed) in SEEDS {
+        iced.bind(format!("iced::theme::palette::Seed::{name}"), move |args| {
+            require_arity(name, args, 0)?;
+            Ok(Dynamic::from(seed))
+        })
+        .expect("the iced facade must retain every Seed constant");
+    }
     iced.bind("iced::Theme::custom", |args| {
         require_arity("Theme::custom", args, 2)?;
         let name = string(args[0], "Theme::custom")?;
@@ -241,6 +248,35 @@ fn bind_constructors(builder: &mut host::runtime::Builder) {
         })
         .expect("the rawr_iced facade must retain theme::custom");
 }
+
+/// iced's built-in seeds, as `Seed::LIGHT` names them.
+pub(crate) const SEEDS: &[(&str, iced::theme::palette::Seed)] = {
+    use iced::theme::palette::Seed;
+    &[
+        ("LIGHT", Seed::LIGHT),
+        ("DARK", Seed::DARK),
+        ("DRACULA", Seed::DRACULA),
+        ("NORD", Seed::NORD),
+        ("SOLARIZED_LIGHT", Seed::SOLARIZED_LIGHT),
+        ("SOLARIZED_DARK", Seed::SOLARIZED_DARK),
+        ("GRUVBOX_LIGHT", Seed::GRUVBOX_LIGHT),
+        ("GRUVBOX_DARK", Seed::GRUVBOX_DARK),
+        ("CATPPUCCIN_LATTE", Seed::CATPPUCCIN_LATTE),
+        ("CATPPUCCIN_FRAPPE", Seed::CATPPUCCIN_FRAPPE),
+        ("CATPPUCCIN_MACCHIATO", Seed::CATPPUCCIN_MACCHIATO),
+        ("CATPPUCCIN_MOCHA", Seed::CATPPUCCIN_MOCHA),
+        ("TOKYO_NIGHT", Seed::TOKYO_NIGHT),
+        ("TOKYO_NIGHT_STORM", Seed::TOKYO_NIGHT_STORM),
+        ("TOKYO_NIGHT_LIGHT", Seed::TOKYO_NIGHT_LIGHT),
+        ("KANAGAWA_WAVE", Seed::KANAGAWA_WAVE),
+        ("KANAGAWA_DRAGON", Seed::KANAGAWA_DRAGON),
+        ("KANAGAWA_LOTUS", Seed::KANAGAWA_LOTUS),
+        ("MOONFLY", Seed::MOONFLY),
+        ("NIGHTFLY", Seed::NIGHTFLY),
+        ("OXOCARBON", Seed::OXOCARBON),
+        ("FERRA", Seed::FERRA),
+    ]
+};
 
 fn built_in_themes() -> [(&'static str, iced::Theme); 22] {
     [
