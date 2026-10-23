@@ -27343,6 +27343,48 @@ impl<'a> Parser<'a> {
         let mut prelude = origin::Fragment::plain("({\n");
         let mut values = Vec::new();
         for (field, field_span, value) in fields {
+            // The field's declared type is the value's expected type, as in
+            // Rust: `background: Some(color.into())` converts into the
+            // field's `Option<Background>`. A value it does not fit still
+            // reaches the field's builders. The type the field reads as is
+            // its declared type where a builder also takes it. A facade's
+            // `f64` and `i64` stand for iced's narrower numbers, so a number
+            // keeps its own type.
+            let members = self
+                .models
+                .host
+                .members(&definition.path())
+                .filter(|item| item.path_ref().name() == field.as_str())
+                .collect::<Vec<_>>();
+            let reader = members
+                .iter()
+                .find(|item| {
+                    item.receiver() == Some(crate::receiver::Mode::Shared)
+                        && item.signature().parameters().is_empty()
+                })
+                .map(|item| item.signature().output().clone())
+                .filter(|output| {
+                    !matches!(output.shape(), crate::host::type_ref::Shape::Builtin(_))
+                        && members.iter().any(|item| {
+                        matches!(item.signature().parameters(), [input] if input == output)
+                    })
+                });
+            if let Some(declared) = reader
+                && let Ok(declared) = self.instantiate_host_type(
+                    &declared,
+                    &mut BTreeMap::new(),
+                    field.as_str(),
+                    None,
+                    Some(&definition),
+                )
+            {
+                let checkpoint = self.inference.checkpoint();
+                if self.unify_type(&declared, &value.ty) {
+                    self.inference.commit(checkpoint);
+                } else {
+                    self.inference.rollback(checkpoint);
+                }
+            }
             let temporary = self.temporary("field");
             prelude.push_text(format!("let {temporary} = "));
             prelude.push(value.rendered_source());

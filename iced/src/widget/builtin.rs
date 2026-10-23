@@ -1870,13 +1870,10 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(iced::Border::default()))
         })
         .expect("the iced facade must retain Border::default");
-    for (name, set) in [
-        (
-            "background",
-            (|style, color| style.background(color)) as fn(Style, iced::Color) -> Style,
-        ),
-        ("color", |style, color| style.color(color)),
-    ] {
+    for (name, set) in [(
+        "color",
+        (|style, color| style.color(color)) as fn(Style, iced::Color) -> Style,
+    )] {
         builder
             .bind(
                 format!("iced::widget::container::Style::{name}"),

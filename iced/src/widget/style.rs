@@ -882,6 +882,7 @@ fields! {
         bottom_left: f32,
     }
     "widget::container::Style" => container::Style {
+        background: Option<Background>,
         text_color: Option<Color>,
         shadow: Shadow,
         snap: bool,

@@ -3104,11 +3104,9 @@ fn declare_styles(builder: &mut facade::Builder) -> Result<(), host::Error> {
             default.finish(),
         )?)?;
     }
-    for (name, input) in [
-        ("background", color()?),
-        ("border", border()?),
-        ("color", color()?),
-    ] {
+    // `background` is a field (`widget::style`): its builder takes a color
+    // or a background, and a literal takes an `Option`.
+    for (name, input) in [("border", border()?), ("color", color()?)] {
         let mut method = signature::Builder::new();
         method.parameter(input).output(style()?);
         builder.item(item::Definition::method(
