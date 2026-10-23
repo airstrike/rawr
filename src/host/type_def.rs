@@ -355,7 +355,10 @@ impl Definition {
                     .flatten()
                     .chain(default.then_some(capability::Kind::Default))
                     .chain(debug.then_some(capability::Kind::Debug))
-                    .chain((clone && !copy).then_some(capability::Kind::Clone)),
+                    .chain((clone && !copy).then_some(capability::Kind::Clone))
+                    // A handle is plain data, and cargo check holds the
+                    // Rust type to the `Send` an iced Message needs.
+                    .chain([capability::Kind::Send, capability::Kind::Static]),
             ),
             storage: Storage::Owned,
             role: Role::Ordinary,

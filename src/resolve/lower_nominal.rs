@@ -37598,6 +37598,23 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
 
     #[cfg(feature = "rust-import")]
     #[test]
+    fn an_imported_type_is_send_as_an_iced_message_needs() {
+        let mut engine = Engine::new();
+        engine
+            .register_host_facade(imported_facade())
+            .expect("symbolic imported facade installs");
+        for path in ["imported::Choice", "imported::Pair"] {
+            let Some(host::Entry::Type(definition)) = engine.host_registry.entry(path) else {
+                panic!("{path} is an imported type");
+            };
+            for capability in [crate::capability::Kind::Send, crate::capability::Kind::Static] {
+                assert!(definition.capabilities().contains(capability), "{path} {capability:?}");
+            }
+        }
+    }
+
+    #[cfg(feature = "rust-import")]
+    #[test]
     fn derived_clone_takes_an_imported_field_whose_type_implements_clone() {
         let mut engine = Engine::new();
         engine
