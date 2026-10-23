@@ -23538,6 +23538,40 @@ impl<'a> Parser<'a> {
                 Ty::Reference { target, .. } => (**target).clone(),
                 builtin => builtin.clone(),
             };
+            // `a.eq(&b)` and `a.ne(&b)` on builtin values: `==` and `!=`.
+            if matches!(member.as_str(), "eq" | "ne")
+                && matches!(self.peek(), Token::LeftParen)
+                && matches!(
+                    without_references(&number),
+                    Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char | Ty::String | Ty::Ordering
+                )
+            {
+                let (mut arguments, end) = self.parse_call_arguments("comparison arguments")?;
+                let call = span(value.span.start(), end);
+                let [other] = arguments.as_mut_slice() else {
+                    return Err(Error::InvalidMethodCall {
+                        owner: number.name(&self.models),
+                        method: member,
+                        reason: format!("expects 1 argument(s), found {}", arguments.len())
+                            .into(),
+                        call,
+                    });
+                };
+                let mut other = other.clone();
+                while let Ty::Reference { target, .. } = self.inference.resolve(&other.ty) {
+                    other.ty = *target;
+                }
+                let mut subject = value;
+                subject.ty = without_references(&number).clone();
+                let operator = if member.as_str() == "eq" {
+                    Token::EqualsTo
+                } else {
+                    Token::NotEqualsTo
+                };
+                value = self.apply_binary(operator, subject, other)?;
+                value.span = call;
+                continue;
+            }
             // `a.cmp(&b)` and `a.partial_cmp(&b)` on builtin values (Rust's
             // `Ord` and `PartialOrd` impls), and `Ordering`'s methods.
             if matches!(member.as_str(), "cmp" | "partial_cmp")

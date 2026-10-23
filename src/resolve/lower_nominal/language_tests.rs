@@ -7640,3 +7640,23 @@ fn language_builtin_to_string_as_a_value_takes_a_reference() {
     );
     assert_eq!(value, "42 1,2");
 }
+
+#[test]
+fn language_eq_and_ne_methods_on_builtins() {
+    let value = run(r#"
+        struct Item { name: String, size: i64 }
+        impl PartialEq for Item {
+            fn eq(&self, other: &Self) -> bool { self.name.eq(&other.name) }
+        }
+        pub fn run() -> i64 {
+            let a = Item { name: "a".to_string(), size: 1 };
+            let b = Item { name: "a".to_string(), size: 2 };
+            let same = if a == b { 1 } else { 0 };
+            let ne = if a.size.ne(&b.size) { 10 } else { 0 };
+            let eq = if 'x'.eq(&'x') { 100 } else { 0 };
+            same + ne + eq
+        }
+        run()
+    "#);
+    assert_eq!(value, 111);
+}
