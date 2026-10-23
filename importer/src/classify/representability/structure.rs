@@ -129,4 +129,17 @@ impl Plan {
     pub const fn default(&self) -> bool {
         self.default
     }
+
+    /// Drop the public fields `keep` refuses. A struct that lost one has no
+    /// constructor, as with a private field.
+    pub(crate) fn retain_fields(&mut self, mut keep: impl FnMut(&Field) -> bool) {
+        let before = self.fields.len();
+        let mut fields = std::mem::take(&mut self.fields).into_vec();
+        fields.retain(|field| keep(field));
+        if fields.len() != before {
+            self.constructible = false;
+            self.constructor = None;
+        }
+        self.fields = fields.into_boxed_slice();
+    }
 }

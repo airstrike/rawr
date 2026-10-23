@@ -1649,6 +1649,7 @@ impl<P: api::Phase> api::Graph<P> {
                 return Err(Error::Cardinality);
             }
             definitions.sort_unstable();
+            drop_unnameable_fields(self, &mut definitions);
             for path in self.exports() {
                 outcomes.push(context.classify(path, &definitions)?);
             }
@@ -2124,6 +2125,70 @@ impl<'graph> Names<'graph> {
             visiting: Vec::new(),
             resolved: Vec::new(),
         }
+    }
+}
+
+/// A public field whose type no import names (`Arc<reqwest::Error>` in an
+/// error enum) is unavailable by itself, as a field Rawr cannot hold is. The
+/// struct or enum stays, and a struct or variant that lost a field cannot be
+/// built. A field's type is nameable when every definition in it is an
+/// exported struct or enum, so the verdict does not lean on fields.
+fn drop_unnameable_fields(graph: &api::Graph<impl api::Phase>, plans: &mut [DefinitionPlan]) {
+    use representability::Representability as R;
+    let mut exported = std::collections::BTreeSet::new();
+    for path in graph.exports() {
+        if let ledger::Path::Imported(export) = path {
+            exported.insert(crate::surface::identity::Definition::of(export.target()));
+        }
+    }
+    let nominal = graph
+        .definitions()
+        .map(|model| (crate::surface::identity::Definition::of(model.id()), model))
+        .filter(|(definition, model)| {
+            exported.contains(definition)
+                && model.display_path().all(facade_segment_nameable)
+                && matches!(
+                    shared_plan(plans, *definition),
+                    Some(R::Struct(_) | R::Enum(_))
+                )
+        })
+        .map(|(definition, _)| definition)
+        .collect::<std::collections::BTreeSet<_>>();
+    for plan in plans {
+        let keep = |field: &representability::structure::Field| {
+            field_type_nameable(field.ty(), &nominal)
+        };
+        match &mut plan.representability {
+            R::Struct(structure) => structure.retain_fields(keep),
+            R::Enum(enumeration) => enumeration.retain_fields(keep),
+            _ => {}
+        }
+    }
+}
+
+fn field_type_nameable(
+    ty: &representability::convert::Type,
+    nominal: &std::collections::BTreeSet<crate::surface::identity::Definition>,
+) -> bool {
+    use representability::convert::Type;
+    match ty {
+        Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            nominal.contains(definition)
+                && arguments
+                    .iter()
+                    .all(|argument| field_type_nameable(argument, nominal))
+        }
+        Type::FunctionItem { input, output } => {
+            field_type_nameable(input, nominal) && field_type_nameable(output, nominal)
+        }
+        Type::ProfileMessage { payload, .. } | Type::Option(payload) => {
+            field_type_nameable(payload, nominal)
+        }
+        Type::Result(ok, err) => field_type_nameable(ok, nominal) && field_type_nameable(err, nominal),
+        Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
     }
 }
 
@@ -3002,6 +3067,17 @@ impl<P: api::Phase> Context<'_, P> {
                     constructible = false;
                     continue;
                 }
+                // A field of a type Rawr cannot hold is unavailable by
+                // itself, as in a struct. The variant stays and cannot be
+                // built.
+                let ty = match self.convert(field.ty()) {
+                    Ok(ty) => ty,
+                    Err(Failure::Reject(_)) => {
+                        constructible = false;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 self.retain_selector(&variant_selector)?;
                 self.retain_str(field.name())?;
                 self.retain_span(field.span())?;
@@ -3009,7 +3085,7 @@ impl<P: api::Phase> Context<'_, P> {
                     variant_selector.clone(),
                     field.name().into(),
                     field.index(),
-                    self.convert(field.ty())?,
+                    ty,
                     field.span().clone(),
                 ));
             }

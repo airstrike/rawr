@@ -113,4 +113,21 @@ impl Plan {
     pub const fn default(&self) -> bool {
         self.default
     }
+
+    /// Drop the variant fields `keep` refuses. A variant that lost one cannot
+    /// be built, as with a private field.
+    pub(crate) fn retain_fields(
+        &mut self,
+        mut keep: impl FnMut(&super::structure::Field) -> bool,
+    ) {
+        for variant in &mut self.variants {
+            let before = variant.fields.len();
+            let mut fields = std::mem::take(&mut variant.fields).into_vec();
+            fields.retain(|field| keep(field));
+            if fields.len() != before {
+                variant.constructible = false;
+            }
+            variant.fields = fields.into_boxed_slice();
+        }
+    }
 }

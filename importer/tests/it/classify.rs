@@ -211,12 +211,13 @@ fn real_grammar_and_private_constructor_proofs_are_closed() {
         .expect("the real extracted graph classifies");
 
     let opaque = p2::outcome(&contract, "facade_a", &["OpaqueFields"]);
+    // The private field keeps the struct unbuildable. Its public field stays.
     assert!(matches!(
         opaque.representability(),
-        Representability::Rejected(reason)
-            if reason.kind()
-                == rawr_import::classify::representability::reject::Kind::UnsupportedPrimitive
-                && reason.span().file().ends_with("support-api/src/lib.rs")
+        Representability::Struct(plan)
+            if plan.fields().len() == 1
+                && plan.fields()[0].name() == "visible"
+                && plan.constructor().is_none()
     ));
     assert!(matches!(
         p2::outcome(&contract, "facade_a", &["ImplSurface"]).representability(),
@@ -225,18 +226,29 @@ fn real_grammar_and_private_constructor_proofs_are_closed() {
                 && plan.constructible()
                 && plan.constructor().is_some()
     ));
+    // A public alias names its target, so the target's shape is available.
     let external_alias = p2::outcome(&contract, "facade_a", &["ExternalAlias"]);
     assert!(matches!(
         external_alias.representability(),
-        Representability::Rejected(reason)
-            if reason.kind()
-                == rawr_import::classify::representability::reject::Kind::UnnameableType
-                && reason.span().file().ends_with("facade-api/src/lib.rs")
+        Representability::Struct(plan)
+            if plan.form() == rawr_import::api::model::FieldForm::Tuple
+                && plan.constructor().is_some()
     ));
+    // A field whose type no import names is unavailable by itself. The
+    // enum and the struct stay, and neither can be built through it.
     assert!(matches!(
         p2::outcome(&contract, "facade_a", &["VariantSurface"]).representability(),
-        Representability::Rejected(reason)
-            if reason.kind()
-                == rawr_import::classify::representability::reject::Kind::UnnameableType
+        Representability::Enum(plan)
+            if plan.variants().len() == 1
+                && plan.variants()[0].name() == "Leaf"
+                && plan.variants()[0].fields().is_empty()
+                && !plan.variants()[0].constructible()
+    ));
+    assert!(matches!(
+        p2::outcome(&contract, "facade_a", &["FieldSurface"]).representability(),
+        Representability::Struct(plan)
+            if plan.fields().is_empty()
+                && !plan.constructible()
+                && plan.constructor().is_none()
     ));
 }
