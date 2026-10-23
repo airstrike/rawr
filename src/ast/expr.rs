@@ -590,7 +590,13 @@ impl Expr {
             #[cfg(not(feature = "no_object"))]
             Union::Map(m, ..) => Self::DynamicConstant(Box::new((*m).into()), pos),
 
-            Union::FnPtr(f, ..) if !f.is_curried() => Self::FnCall(
+            // A closure's pointer carries its definition, which `Fn(name)`
+            // would lose: it stays the value itself.
+            Union::FnPtr(f, ..)
+                if !f.is_curried()
+                    && matches!(f.typ, crate::types::fn_ptr::FnPtrType::Normal) =>
+            {
+                Self::FnCall(
                 FnCallExpr {
                     #[cfg(not(feature = "no_module"))]
                     namespace: super::Namespace::NONE,
@@ -602,7 +608,8 @@ impl Expr {
                 }
                 .into(),
                 pos,
-            ),
+            )
+            }
 
             _ => Self::DynamicConstant(value.into(), pos),
         }

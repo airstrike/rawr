@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rawr-iced | Rawr docs</title>
-<meta name="description" content="Write iced apps in Rawr. App shapes, impl Widget, boxed elements, components, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
+<meta name="description" content="Write iced apps in Rawr. App shapes, impl Widget, boxed elements, components, canvas drawing, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
 <meta property="og:title" content="rawr-iced | Rawr docs">
-<meta property="og:description" content="Write iced apps in Rawr. App shapes, impl Widget, boxed elements, components, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
+<meta property="og:description" content="Write iced apps in Rawr. App shapes, impl Widget, boxed elements, components, canvas drawing, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -20,6 +20,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
 <link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
 </head>
 <body>
 <header class="bar">
@@ -58,12 +59,13 @@
 <p>An app starts from <code>main</code> with one of iced&rsquo;s own entry points.</p>
 <h3 id="iced-run"><code>iced::run</code></h3>
 <p><code>iced::run(State::update, State::view)</code> boots <code>State::default()</code>. The state type needs <code>#[derive(Default)]</code>. The counter on <a href="/docs/start#first-app">Getting started</a> has this shape.</p>
-<p><code>update</code> and <code>view</code> can also be closures with typed parameters. <code>iced::run(|state: &amp;mut State, message: Message| state.update(message), State::view)</code> is one example. An update closure returns <code>()</code> unless it is written with a return type such as <code>-&gt; Task&lt;Message&gt;</code>. An untyped closure parameter fails the check with an error that asks for its type.</p>
+<p><code>update</code> and <code>view</code> can also be closures with typed parameters. <code>iced::run(|state: &amp;mut State, message: Message| state.update(message), State::view)</code> is one example. A parameter can be a pattern such as <code>_: Message</code>. An update closure returns <code>()</code> unless it is written with a return type such as <code>-&gt; Task&lt;Message&gt;</code>. An untyped closure parameter fails the check with an error that asks for its type.</p>
+<p>The state can be any type with a <code>Default</code>. <code>iced::run(|n: &amp;mut u32, _: Message| *n += 1, |n: &amp;u32| text(n))</code> keeps a <code>u32</code>.</p>
 <h3 id="application">The application builder</h3>
 <p><code>iced::application(boot, update, view)</code> takes a boot function such as <code>State::default</code>. It accepts these builders before <code>.run()</code>:</p>
 <ul>
   <li><code>.title(..)</code> with a method of the state or a string literal.</li>
-  <li><code>.theme(..)</code> with a method that returns a <code>Theme</code>.</li>
+  <li><code>.theme(..)</code> with a method that returns a <code>Theme</code>, or with a theme such as <code>Theme::Dark</code>.</li>
   <li><code>.subscription(..)</code> with a method that returns a <code>Subscription</code>.</li>
   <li><code>.centered()</code>.</li>
 </ul>
@@ -155,6 +157,77 @@ impl Todos {
 <p>Helper functions can build part of a view. A helper can name the app&rsquo;s own <code>Message</code> type. It can also be generic over the message type, as in <code>fn card&lt;Message: Clone + 'static&gt;(label: &amp;str) -&gt; Element&lt;'static, Message&gt;</code>. Each caller passes its own message type. That type must be a type your program declares, a number, a <code>String</code>, a <code>bool</code>, a <code>char</code> or <code>()</code>.</p>
 <h3 id="components">Components</h3>
 <p>A type can implement iced&rsquo;s <code>component::Component</code> trait. Its state lives in the widget tree. Its events reach its own <code>update</code>. <code>component(value)</code> puts it in a view.</p>
+<h3 id="canvas">Custom drawing with <code>canvas</code></h3>
+<p>A type that implements <code>canvas::Program&lt;Message&gt;</code> draws in a <code>canvas</code>. Its <code>draw</code> returns the geometry to show. <code>update</code> and <code>mouse_interaction</code> are optional, as in iced. <code>update</code> turns iced&rsquo;s events into a <code>canvas::Action</code>, which can publish a message, request a redraw or capture the event. The program&rsquo;s <code>State</code> lives in the widget tree.</p>
+<ul>
+  <li><code>canvas(program)</code> and <code>Canvas::new(program)</code> make the widget. <code>canvas(self)</code> works in a view.</li>
+  <li><code>Frame</code> has <code>fill</code>, <code>stroke</code>, <code>fill_rectangle</code>, <code>stroke_rectangle</code>, <code>fill_text</code>, <code>translate</code>, <code>rotate</code>, <code>scale</code>, <code>with_save</code>, <code>center</code> and <code>into_geometry</code>.</li>
+  <li><code>Path</code> has <code>circle</code>, <code>line</code>, <code>rectangle</code> and <code>rounded_rectangle</code>. <code>Path::new(|b| ..)</code> builds one with <code>move_to</code>, <code>line_to</code>, <code>arc_to</code>, <code>circle</code>, <code>rectangle</code>, <code>quadratic_curve_to</code>, <code>bezier_curve_to</code> and <code>close</code>.</li>
+  <li><code>Stroke</code>, <code>Fill</code> and <code>canvas::Text</code> take struct literals with <code>..Default::default()</code>. <code>Stroke</code> also has <code>with_width</code>, <code>with_color</code>, <code>with_line_cap</code> and <code>with_line_join</code>.</li>
+  <li><code>Cache</code> keeps what its <code>draw</code> drew until <code>clear</code> is called or the size changes.</li>
+  <li>The same names import from <code>iced::advanced::graphics::geometry</code>.</li>
+</ul>
+<p>Gradients, images, <code>with_clip</code>, <code>Degrees</code> and <code>Radians</code> are not there yet. <code>rotate</code> takes radians as a float.</p>
+<div class="block">
+  <div class="file"><b>sun.rs</b></div>
+  <pre><code data-lang="rust" data-run="sun.rs" id="src-sun">use iced::mouse;
+use iced::widget::canvas::{Cache, Geometry, LineCap, Path, Stroke};
+use iced::widget::{canvas, center};
+use iced::{Color, Element, Point, Rectangle, Renderer, Theme, Vector};
+
+#[derive(Default)]
+struct Sun {
+    rays: Cache,
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl Sun {
+    fn update(&amp;mut self, _message: Message) {}
+
+    fn view(&amp;self) -&gt; Element&lt;'_, Message&gt; {
+        center(canvas(self).width(240).height(240)).boxed()
+    }
+}
+
+impl&lt;Message&gt; canvas::Program&lt;Message&gt; for Sun {
+    type State = ();
+
+    fn draw(
+        &amp;self,
+        _state: &amp;(),
+        renderer: &amp;Renderer,
+        _theme: &amp;Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -&gt; Vec&lt;Geometry&gt; {
+        let sun = self.rays.draw(renderer, bounds.size(), |frame| {
+            let center = frame.center();
+            frame.fill(&amp;Path::circle(center, 50.0), Color::from_rgb8(0xff, 0xb3, 0x00));
+            frame.translate(Vector::new(center.x, center.y));
+            for ray in 0..12 {
+                frame.with_save(|frame| {
+                    frame.rotate(ray as f32 * std::f32::consts::PI / 6.0);
+                    frame.stroke(
+                        &amp;Path::line(Point::new(70.0, 0.0), Point::new(100.0, 0.0)),
+                        Stroke::default()
+                            .with_width(6.0)
+                            .with_color(Color::from_rgb8(0xff, 0x2e, 0x93))
+                            .with_line_cap(LineCap::Round),
+                    );
+                });
+            }
+        });
+        vec![sun]
+    }
+}
+
+fn main() -&gt; iced::Result {
+    iced::run(Sun::update, Sun::view)
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-sun" data-out="out-sun" data-alt="A yellow sun with twelve pink rays, drawn by rawr-iced on the server" aria-label="Run sun.rs" hidden></button><b>rawr run sun.rs</b><span class="quiet" id="out-sun" aria-live="polite">(opens a window)</span></div>
+</div>
 <h3 id="subscriptions">Subscriptions</h3>
 <p>A <code>.subscription(..)</code> method returns a <code>Subscription&lt;Message&gt;</code>. <code>iced::time::every</code>, <code>iced::keyboard::listen</code>, <code>iced::event::listen</code> and <code>iced::window::frames</code> work. Subscriptions combine with <code>map</code> and <code>filter_map</code>.</p>
 <div class="block">
@@ -283,22 +356,23 @@ impl App {
   <li>Layout: <code>column!</code>, <code>row!</code>, <code>Column</code>, <code>Row</code>, <code>container</code>, <code>center</code>, <code>stack</code>, <code>space</code>, <code>scrollable</code>, <code>responsive</code>, <code>pin</code> and <code>lazy</code>.</li>
   <li>Controls: <code>button</code>, <code>checkbox</code>, <code>toggler</code>, <code>radio</code>, <code>slider</code>, <code>vertical_slider</code>, <code>pick_list</code>, <code>combo_box</code>, <code>text_input</code> and <code>progress_bar</code>.</li>
   <li>Display: <code>text</code>, <code>image</code>, <code>svg</code>, <code>qr_code</code>, <code>rule</code> and <code>tooltip</code>. <code>Svg::style</code> takes a style function.</li>
-  <li>Rich text: <code>rich_text</code>, <code>rich_text!</code> and <code>span</code>. A string works as a span. <code>on_link_click</code> maps a span&rsquo;s link to a message.</li>
+  <li>Rich text: <code>rich_text</code>, <code>rich_text!</code> and <code>span</code>. A string works as a span. <code>on_link_click</code> maps a span&rsquo;s link to a message. A span without a link needs no link type.</li>
+  <li>Drawing: <code>canvas</code>, as <a href="#canvas">above</a>.</li>
   <li>Interaction: <code>mouse_area</code>, <code>opaque</code>, <code>hover</code>, <code>sensor</code>, <code>component</code> and <code>widget::operation</code>.</li>
   <li><code>selector::find</code> with a widget <code>Id</code>. Its <code>Target</code> has <code>bounds</code> and <code>visible_bounds</code>.</li>
-  <li>Modules: <code>iced::time</code>, <code>iced::keyboard</code>, <code>iced::event</code>, <code>iced::window</code>, <code>iced::mouse</code>, <code>iced::font</code>, <code>iced::border</code> and <code>iced::theme</code>. <code>font::list()</code> lists the system&rsquo;s font families. <code>Seed::LIGHT</code> and iced&rsquo;s other built-in seeds are in <code>iced::theme::palette</code>. <code>Color</code>, <code>color!</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code> and the other alignment names work.</li>
+  <li>Modules: <code>iced::time</code>, <code>iced::keyboard</code>, <code>iced::event</code>, <code>iced::window</code>, <code>iced::mouse</code>, <code>iced::font</code>, <code>iced::border</code> and <code>iced::theme</code>. <code>font::list()</code> lists the system&rsquo;s font families. <code>Seed::LIGHT</code> and iced&rsquo;s other built-in seeds are in <code>iced::theme::palette</code>. <code>Color</code>, <code>color!</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code> and the other alignment names work, also by their full paths such as <code>iced::Center</code>. <code>space::horizontal()</code> and <code>space::vertical()</code> work. <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>.</li>
 </ul>
 <p>An available widget may still miss some of its methods. For example, <code>Checkbox::icon</code> is not there yet.</p>
 <h3 id="not-available">Not available yet</h3>
 <ul>
-  <li><code>canvas</code> and <code>iced::advanced</code>. Without them you can&rsquo;t write a custom widget in Rawr. Write it in Rust and import it instead.</li>
+  <li><code>iced::advanced</code>&rsquo;s widget traits. A custom widget other than a canvas program is written in Rust and imported.</li>
   <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code>, <code>table</code>, <code>grid</code>, <code>float</code> and <code>keyed_column</code>.</li>
   <li><code>iced::gradient</code>, <code>Radians</code>, <code>Degrees</code>, <code>iced::clipboard</code>, <code>iced::task</code> streams and the <code>Function</code> trait.</li>
   <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
   <li><code>async fn</code> and <code>.await</code>.</li>
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
-<p>iced master has 56 examples. Seven of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>combo_box</code>, <code>counter</code>, <code>exit</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>slider</code> and <code>tooltip</code>. The biggest gap is <code>canvas</code>, which 13 examples use. About 20 examples need crates outside iced such as <code>reqwest</code>, <code>tokio</code> or <code>rand</code>. Some need native features such as file dialogs. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
+<p>iced master has 56 examples. Thirteen of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>combo_box</code>, <code>counter</code>, <code>events</code>, <code>exit</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>slider</code>, <code>stopwatch</code>, <code>svg</code> and <code>tooltip</code>. 13 examples use <code>canvas</code>. Two of those pass. Most of the others need crates outside iced such as <code>rand</code>, <code>chrono</code> or <code>palette</code>. <code>layout</code> declares a type inside a function. <code>sandpiles</code> changes <code>self</code> from a closure. <code>vectorial_text</code> takes a closure&rsquo;s parameter types from its later calls. About 20 examples need crates outside iced such as <code>reqwest</code>, <code>tokio</code> or <code>rand</code>. Some need native features such as file dialogs. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/embedding">Previous<b>Embedding</b></a><a class="next" href="/docs/play">Next<b>?play and the playground</b></a></nav>
 </article>
 </main>
@@ -312,5 +386,6 @@ impl App {
   </div>
 </footer>
 <script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
 </body>
 </html>

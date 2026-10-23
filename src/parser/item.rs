@@ -3705,6 +3705,27 @@ fn parse_callback_closure(
     let start = expect(input, Token::Pipe, "to start a closure")?;
     let mut parameters = Vec::new();
     while !matches!(input.peek(), Some((Token::Pipe, _))) {
+        // `_: Message`, `(a, b): (T, U)`, `&x: &T` or `mut n: u32`.
+        if matches!(
+            input.peek(),
+            Some((Token::LeftParen | Token::Underscore | Token::And | Token::Ampersand | Token::Mut, _))
+        ) {
+            let pattern = parse_parameter_pattern(input)?;
+            if !matches!(input.peek(), Some((Token::Colon, _))) {
+                return Err(PERR::MissingToken(
+                    Token::Colon.into(),
+                    format!(
+                        "and a type after the {role} closure's parameter pattern, since Rawr \
+                         reads an application callback closure as a function with typed \
+                         parameters"
+                    ),
+                )
+                .into_err(pattern.span().end()));
+            }
+            parameters.push(parse_pattern_parameter(input, pattern, parameters.len())?);
+            consume_comma_or_end(input, Token::Pipe, "between closure parameters")?;
+            continue;
+        }
         let name = parse_name(input, "as a closure parameter")?;
         if !matches!(input.peek(), Some((Token::Colon, _))) {
             return Err(PERR::MissingToken(

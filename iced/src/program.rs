@@ -1864,6 +1864,13 @@ enum Message { Increment }
     }, |state: &State| column![text(state.value), button("Increment").on_press(Message::Increment)])
     .run()
 }"#,
+            // A `_` parameter, as an update that ignores its message.
+            r#"fn main() -> iced::Result {
+    iced::run(
+        |state: &mut State, _: Message| state.value += 1,
+        |state: &State| column![text(state.value), button("Increment").on_press(Message::Increment)],
+    )
+}"#,
         ] {
             let mut engine = Engine::new();
             crate::install(&mut engine).unwrap();

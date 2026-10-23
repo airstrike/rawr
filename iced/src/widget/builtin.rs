@@ -56,6 +56,9 @@ impl widget::Descriptor for marker::Text {
         if let Some(height) = self.height {
             text = text.height(height);
         }
+        if let Some(align_y) = self.align_y {
+            text = text.align_y(align_y);
+        }
         if let Some(style) = self.style {
             text = text.style(style.native());
         }
@@ -974,6 +977,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             width: iced::Length::Fit,
             height: None,
             align_x: iced::advanced::text::Alignment::Default,
+            align_y: None,
             style: None,
             color: None,
             font: None,
@@ -1141,6 +1145,26 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             }))
         })
         .expect("the iced facade must retain the exact space item");
+    // iced master's `space::horizontal()` and `space::vertical()`: a space
+    // that fills one axis.
+    for (name, width, height) in [
+        ("horizontal", iced::Length::Fill, iced::Length::Shrink),
+        ("vertical", iced::Length::Shrink, iced::Length::Fill),
+    ] {
+        builder
+            .bind_with_context(format!("iced::widget::space::{name}"), move |call, args| {
+                if !args.is_empty() {
+                    return Err(arity("space", 0, args.len()));
+                }
+                Ok(Dynamic::from(marker::Space {
+                    witness: call.output_witness().map_err(witness_error)?,
+                    identity: widget::Identity::unique(),
+                    width,
+                    height,
+                }))
+            })
+            .expect("the iced facade must retain space::horizontal and space::vertical");
+    }
     builder
         .bind_with_context("iced::widget::text_input", |call, args| {
             if args.len() != 2 {
@@ -1478,6 +1502,17 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             Ok(Dynamic::from(text))
         })
         .expect("the iced facade must retain the exact Text::align_x item");
+    builder
+        .bind("iced::widget::Text::align_y", |args| {
+            if args.len() != 2 {
+                return Err(arity("Text::align_y", 2, args.len()));
+            }
+            let mut text = take::<marker::Text>(args[0], "iced::widget::Text")?;
+            let alignment = alignment(args[1])?;
+            text.align_y = Some(alignment.into());
+            Ok(Dynamic::from(text))
+        })
+        .expect("the iced facade must retain the exact Text::align_y item");
     builder
         .bind("iced::widget::Text::style", |args| {
             if args.len() != 2 {

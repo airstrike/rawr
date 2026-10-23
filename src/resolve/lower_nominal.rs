@@ -63,6 +63,15 @@ const TASK_PERFORM_PATH: &str = "iced::Task::perform";
 const WIDGET_TEXT_PATH: &str = "iced::widget::text";
 const WIDGET_SPAN_PATH: &str = "iced::widget::span";
 const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
+/// The library calls that run their closure where they are written, which
+/// Rawr calls there itself (`immediate_callback`).
+const IMMEDIATE_CALLBACKS: [&str; 3] = [
+    "iced::widget::canvas::Path::new",
+    "iced::widget::canvas::Frame::with_save",
+    "iced::widget::canvas::Cache::draw",
+];
+/// The iced types whose first parameter is a Link that defaults to `()`.
+const LINK_DEFAULT_TYPES: [&str; 2] = [WIDGET_SPAN_TYPE, "iced::widget::text::Rich"];
 const WIDGET_VOID_PATH: &str = "iced::widget::void";
 
 type OperationSelector = (
@@ -167,7 +176,9 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
 
     for definition in &program.methods {
         let body_source = source_span(
-            program.source.text_at(definition.source()),
+            definition
+                .body_text()
+                .unwrap_or_else(|| program.source.text_at(definition.source())),
             definition.body(),
         );
         let mut parser = Parser::for_method(
@@ -651,7 +662,9 @@ fn lower_with_context(
         }
 
         let body_source = source_span(
-            program.source.text_at(definition.source()),
+            definition
+                .body_text()
+                .unwrap_or_else(|| program.source.text_at(definition.source())),
             definition.body(),
         );
         let mut parser = Parser::for_method(
@@ -2519,6 +2532,7 @@ impl Models {
             | Ty::InclusiveRange
             | Ty::FloatRange
             | Ty::Ordering
+            | Ty::Time(_)
             | Ty::ParseError(_)
             | Ty::Reference { .. }
             | Ty::Boxed(_)
@@ -2836,6 +2850,9 @@ enum PreludeOp {
     /// An integer method of `INT_METHODS` or a bit operator, for its kinds
     /// (`ExecutableOp::Kinded`): `int(value, code, operand)`.
     IntMethod,
+    /// A `std::time` function, method or operator of `TIME_METHODS`:
+    /// `time(value, code, operand)`.
+    Time,
     /// A `str` method of `STR_METHODS`: `str(text, code, a, b)`.
     StrMethod,
     /// `s.parse::<T>()` for the target kind (`ExecutableOp::Kinded`): a
@@ -2913,6 +2930,7 @@ impl PreludeOp {
             Self::SetAlgebra => "set.algebra",
             Self::KeyedRange => "keyed.range",
             Self::IntMethod => "int.method",
+            Self::Time => "time.method",
             Self::Parse => "str.parse",
             Self::StrMethod => "str.method",
             Self::Print => "io.print",
@@ -3047,6 +3065,11 @@ impl PreludeOp {
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
+            ],
+            Self::Time => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<Dynamic>(),
             ],
             Self::VecMethod => vec![
                 TypeId::of::<crate::Array>(),
@@ -3234,6 +3257,7 @@ impl PreludeOp {
             Self::Cast => return cast_value(args[0], args[1].as_int().unwrap_or(3)),
             Self::Slice | Self::SplitAt => return slice_value(self, args),
             Self::VecMethod => return vec_method(args),
+            Self::Time => return time_method(args),
             Self::StrChange => return str_change(args),
             Self::StrPieces => return str_pieces(args),
             Self::SliceChunks => {
@@ -3581,8 +3605,32 @@ const FLOAT_UNARY_METHODS: &[(&str, &str)] = &[
     ("ceil", "ceiling"),
     ("round", "round"),
     ("trunc", "int"),
+    ("fract", "fraction"),
     ("is_nan", "is_nan"),
+    ("is_finite", "is_finite"),
+    ("is_infinite", "is_infinite"),
+    ("sin", "sin"),
+    ("cos", "cos"),
+    ("tan", "tan"),
+    ("asin", "asin"),
+    ("acos", "acos"),
+    ("atan", "atan"),
+    ("sinh", "sinh"),
+    ("cosh", "cosh"),
+    ("tanh", "tanh"),
+    ("asinh", "asinh"),
+    ("acosh", "acosh"),
+    ("atanh", "atanh"),
+    ("exp", "exp"),
+    ("ln", "ln"),
+    ("log10", "log"),
+    ("to_degrees", "to_degrees"),
+    ("to_radians", "to_radians"),
 ];
+
+/// The float methods of one argument of the same float, each with the
+/// runtime's function that computes `function(self, other)` as Rust does.
+const FLOAT_BINARY_METHODS: &[(&str, &str)] = &[("atan2", "atan"), ("hypot", "hypot"), ("log", "log")];
 
 /// Whether a builtin type has an inherent method `member` of its own:
 /// Rust's method lookup finds it before any trait's function of
@@ -3593,6 +3641,7 @@ fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
         Ty::Float(_) => {
             matches!(member, "powi" | "powf")
                 || FLOAT_UNARY_METHODS.iter().any(|(name, _)| *name == member)
+                || FLOAT_BINARY_METHODS.iter().any(|(name, _)| *name == member)
         }
         Ty::Char => member == "to_string" || CHAR_METHODS.iter().any(|(name, _)| *name == member),
         Ty::Bool => member == "to_string",
@@ -5314,6 +5363,22 @@ fn numeric_type(name: &str) -> Option<Ty> {
         .or_else(|| Float::named(name).map(Ty::Float))
 }
 
+/// `std::time`'s types, as `Ty::Time` names them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Time {
+    Duration,
+    Instant,
+}
+
+impl Time {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Duration => "Duration",
+            Self::Instant => "Instant",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Ty {
     Never,
@@ -5393,6 +5458,9 @@ enum Ty {
     /// `std::cmp::Ordering`: an `i64` at runtime, its Rust discriminant
     /// (`Less` -1, `Equal` 0, `Greater` 1), so `==` and `<` are the integers'.
     Ordering,
+    /// `std::time::Duration` or `Instant` of a program without iced (whose
+    /// own `time` names them otherwise): Rust's value at runtime.
+    Time(Time),
     /// `std::num::ParseIntError` and its kin, the error of `str::parse`:
     /// its message at runtime.
     ParseError(ParseError),
@@ -5520,6 +5588,7 @@ impl Ty {
             | Self::InclusiveRange
             | Self::FloatRange
             | Self::Ordering
+            | Self::Time(_)
             | Self::ParseError(_)
             | Self::Script(_, ..)
             | Self::Dyn(..)
@@ -5613,6 +5682,8 @@ impl Ty {
                     "char" => Self::Char,
                     "String" => Self::String,
                     "Ordering" => Self::Ordering,
+                    "Duration" => Self::Time(Time::Duration),
+                    "Instant" => Self::Time(Time::Instant),
                     // `RangeInclusive<f64>` and `RangeInclusive<i64>`.
                     "RangeInclusive" => match path.arguments.first() {
                         Some(type_ref::Argument::Type(element))
@@ -5701,6 +5772,7 @@ impl Ty {
             Self::InclusiveRange => "RangeInclusive<i64>".into(),
             Self::FloatRange => "RangeInclusive<f64>".into(),
             Self::Ordering => "Ordering".into(),
+            Self::Time(time) => time.name().into(),
             Self::ParseError(error) => error.name().into(),
             Self::Fn { inputs, output }
             | Self::FnItem { inputs, output, .. }
@@ -5847,6 +5919,8 @@ impl Ty {
             #[cfg(feature = "no_float")]
             Self::FloatRange => Some(TypeId::of::<Dynamic>()),
             Self::Ordering => Some(TypeId::of::<INT>()),
+            Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
+            Self::Time(Time::Instant) => Some(TypeId::of::<std::time::Instant>()),
             Self::ParseError(_) => Some(TypeId::of::<ImmutableString>()),
             Self::Reference { target, .. } | Self::Boxed(target) => target.native_type_id(models),
             Self::Host { proof, .. } => proof.definition.native_identity(),
@@ -5968,6 +6042,7 @@ impl Ty {
             | Self::InclusiveRange
             | Self::FloatRange
             | Self::Ordering
+            | Self::Time(_)
             | Self::ParseError(_)
             | Self::Script(_, ..)
             | Self::Param(_)
@@ -11644,6 +11719,9 @@ impl<'a> Parser<'a> {
                 capability != capability::Kind::Default
                     && crate::capability::builtin_supports("i64", capability)
             }
+            // `Duration` and `Instant` are `Copy`, compare, order and print;
+            // a `Duration` is also `Default`.
+            Ty::Time(time) => crate::capability::builtin_supports(time.name(), capability),
             // `&T` compares, orders, hashes and prints as `T` does; a shared
             // reference is `Copy`.
             Ty::Reference { mutable, target } => match capability {
@@ -11801,6 +11879,12 @@ impl<'a> Parser<'a> {
             #[cfg(feature = "no_float")]
             Ty::FloatRange => intrinsic::Type::builtin("RangeInclusive<f64>", TypeId::of::<Dynamic>()),
             Ty::Ordering => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
+            Ty::Time(Time::Duration) => {
+                intrinsic::Type::builtin("Duration", TypeId::of::<std::time::Duration>())
+            }
+            Ty::Time(Time::Instant) => {
+                intrinsic::Type::builtin("Instant", TypeId::of::<std::time::Instant>())
+            }
             Ty::ParseError(_) => intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>()),
             Ty::Reference { target, .. } => {
                 return self.proven_type(&target, operation, span);
@@ -11808,9 +11892,21 @@ impl<'a> Parser<'a> {
             Ty::Script(id, ..) => script_type(&self.models, id),
             Ty::Host { proof, arguments } => {
                 let definition = &proof.definition;
+                // iced's `Span<'a, Link = ()>`: a span no `.link(..)` gave a
+                // Link has the default one, and so has its `Rich`.
+                let linked = LINK_DEFAULT_TYPES.contains(&definition.path().as_str());
                 let arguments = arguments
                     .iter()
-                    .map(|argument| self.proven_type(argument, operation, span))
+                    .enumerate()
+                    .map(|(index, argument)| {
+                        if linked
+                            && index == 0
+                            && matches!(self.inference.resolve(argument), Ty::Infer(_))
+                        {
+                            return Ok(intrinsic::Type::unit());
+                        }
+                        self.proven_type(argument, operation, span)
+                    })
                     .collect::<Result<Vec<_>, _>>()?
                     .into_boxed_slice();
                 if let Some(native) = definition.native_identity() {
@@ -12787,6 +12883,41 @@ impl<'a> Parser<'a> {
         Ok(self.symbolic_expr(value, inputs, output, expression, Vec::new()))
     }
 
+    /// An associated function named as a value (`Db::new`, or `Db::from`
+    /// of an `impl From<T> for Db`): a function item that calls it, which
+    /// coerces to a `fn` pointer as a named function does.
+    fn associated_value(
+        &mut self,
+        definition: &method::Definition,
+        expression: Span,
+    ) -> Result<ParsedExpr, Error> {
+        self.used_nominal = true;
+        let substitution = self.method_substitution(definition, None, expression)?;
+        let inputs: Box<[Ty]> = definition
+            .parameters()
+            .iter()
+            .map(|parameter| instantiate(&Ty::from_resolved(&parameter.ty), &substitution))
+            .collect();
+        let output = instantiate(&Ty::from_resolved(definition.output()), &substitution);
+        let parameters = (0..inputs.len())
+            .map(|index| format!("__rawr_argument_{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source = origin::Fragment::plain(format!(
+            "(|{parameters}| {}({parameters}))",
+            method_name(definition.id())
+        ));
+        Ok(self.operator_expr(
+            source,
+            Ty::FnItem {
+                key: Box::new(definition.key().clone()),
+                inputs,
+                output: Box::new(output),
+            },
+            expression,
+        ))
+    }
+
     fn symbolic_associated(
         &mut self,
         definition: &method::Definition,
@@ -12898,6 +13029,173 @@ impl<'a> Parser<'a> {
         self.call_host_function(&items, owner, arguments, call)
     }
 
+    /// A library call that runs its closure where it is written, which
+    /// Rawr calls there itself around the library's own steps: iced's
+    /// `Path::new(|b| ..)` builds on a `path::Builder`, `frame.with_save(|f|
+    /// ..)` pushes and pops a transform, and `cache.draw(renderer, size, |f|
+    /// ..)` draws on a new `Frame` unless the cache has that size's geometry.
+    fn immediate_callback(
+        &mut self,
+        path: &str,
+        receiver: Option<&ParsedExpr>,
+        arguments: &mut Vec<ParsedExpr>,
+        call: Span,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        let Some(index) = IMMEDIATE_CALLBACKS.iter().position(|immediate| *immediate == path) else {
+            return Ok(None);
+        };
+        let expected = if index == 2 { 3 } else { 1 };
+        if arguments.len() != expected {
+            return Err(Error::InvalidHostOperation {
+                item: path.into(),
+                reason: format!("expects {expected} argument(s), found {}", arguments.len()).into(),
+                operation: call,
+            });
+        }
+        let mut closure = arguments.pop().expect("the closure argument is present");
+        // A host call through `items` of `path`, with `arguments` parsed.
+        let host = |this: &mut Self, path: &str, arguments: Vec<ParsedExpr>| -> Result<ParsedExpr, Error> {
+            let items = this.models.host_items(path).map(<[_]>::to_vec).ok_or_else(|| {
+                Error::InvalidHostOperation {
+                    item: path.into(),
+                    reason: "the facade lacks this item".into(),
+                    operation: call,
+                }
+            })?;
+            let owner = this.models.item_owner(path).cloned();
+            this.call_host_function(&items, owner, arguments, call)
+        };
+        let method = |this: &mut Self,
+                      receiver: ParsedExpr,
+                      member: &str,
+                      arguments: Vec<ParsedExpr>|
+         -> Result<ParsedExpr, Error> {
+            this.pending_arguments = Some((arguments, call.end()));
+            this.parse_host_method(receiver, member.into(), call)
+        };
+        let local = |this: &mut Self, name: &str, ty: Ty| this.operator_expr(name.into(), ty, call);
+        let mut source = origin::Fragment::plain("{ ");
+        let ty = match index {
+            0 => {
+                let created = host(self, "iced::widget::canvas::path::Builder::new", Vec::new())?;
+                let builder = self.temporary("builder");
+                let builder_ty = created.ty.clone();
+                source.push_text(format!("let {builder} = "));
+                source.push(created.rendered_source());
+                source.push_text("; ");
+                let invoked = self.immediate_call(&mut closure, &builder_ty, &Ty::Unit, &builder)?;
+                source.push(invoked);
+                source.push_text("; ");
+                let operand = local(self, &builder, builder_ty);
+                let built = method(self, operand, "build", Vec::new())?;
+                source.push(built.rendered_source());
+                built.ty
+            }
+            1 => {
+                let receiver = receiver.expect("with_save has its frame").clone();
+                let frame = self.temporary("frame");
+                let frame_ty = match self.inference.resolve(&receiver.ty) {
+                    Ty::Reference { target, .. } => *target,
+                    ty => ty,
+                };
+                source.push_text(format!("let {frame} = "));
+                source.push(receiver.rendered_source());
+                source.push_text("; ");
+                let operand = local(self, &frame, frame_ty.clone());
+                let pushed = method(self, operand.clone(), "push_transform", Vec::new())?;
+                source.push(pushed.rendered_source());
+                let output = self.inference.fresh();
+                let result = self.temporary("saved");
+                let invoked = self.immediate_call(&mut closure, &frame_ty, &output, &frame)?;
+                source.push_text(format!("; let {result} = "));
+                source.push(invoked);
+                source.push_text("; ");
+                let popped = method(self, operand, "pop_transform", Vec::new())?;
+                source.push(popped.rendered_source());
+                source.push_text(format!("; {result}"));
+                output
+            }
+            _ => {
+                let receiver = receiver.expect("draw has its cache").clone();
+                let mut extent = arguments.pop().expect("draw has its size");
+                let renderer = arguments.pop().expect("draw has its renderer");
+                let (cache, size, cached, frame) = (
+                    self.temporary("cache"),
+                    self.temporary("size"),
+                    self.temporary("cached"),
+                    self.temporary("frame"),
+                );
+                let cache_ty = match self.inference.resolve(&receiver.ty) {
+                    Ty::Reference { target, .. } => *target,
+                    ty => ty,
+                };
+                source.push_text(format!("let {cache} = "));
+                source.push(receiver.rendered_source());
+                source.push_text(format!("; let {size} = "));
+                if let Some(size_ty) = self.models.host.type_("iced::Size").cloned() {
+                    let owner = self.models.host.type_owner("iced::Size").cloned();
+                    let expected = Ty::Host {
+                        proof: HostTyProof::new(size_ty, None, owner),
+                        arguments: Box::default(),
+                    };
+                    self.coerce_expr(&expected, &mut extent)?;
+                }
+                let size_ty = extent.ty.clone();
+                source.push(extent.rendered_source());
+                source.push_text("; ");
+                let operand = local(self, &cache, cache_ty);
+                let sized = local(self, &size, size_ty.clone());
+                let read = method(self, operand.clone(), "__rawr_cached", vec![sized])?;
+                let geometry_ty = match self.inference.resolve(&read.ty) {
+                    Ty::Option(inner) => *inner,
+                    ty => ty,
+                };
+                source.push_text(format!("let {cached} = "));
+                source.push(read.rendered_source());
+                source.push_text("; if ");
+                source.push(self.prelude_op(PreludeOp::IsSome, [cached.as_str().into()]));
+                source.push_text(" { ");
+                source.push(self.prelude_op(PreludeOp::Unwrap, [cached.as_str().into()]));
+                source.push_text(" } else { ");
+                let sized = local(self, &size, size_ty);
+                let created = host(self, "iced::widget::canvas::Frame::new", vec![renderer, sized])?;
+                let frame_ty = created.ty.clone();
+                source.push_text(format!("let {frame} = "));
+                source.push(created.rendered_source());
+                source.push_text("; ");
+                let invoked = self.immediate_call(&mut closure, &frame_ty, &Ty::Unit, &frame)?;
+                source.push(invoked);
+                source.push_text("; ");
+                let drawn = local(self, &frame, frame_ty);
+                let finished = method(self, drawn, "into_geometry", Vec::new())?;
+                let stored = method(self, operand, "__rawr_store", vec![finished])?;
+                source.push(stored.rendered_source());
+                source.push_text(" }");
+                geometry_ty
+            }
+        };
+        source.push_text(" }");
+        Ok(Some(self.operator_expr(source.surrounded("(", ")"), ty, call)))
+    }
+
+    /// `closure(&mut value)` of a closure the library runs where it is
+    /// written: its value, as a closure with a `&mut` parameter returns
+    /// `[value, ..parameters]`.
+    fn immediate_call(
+        &mut self,
+        closure: &mut ParsedExpr,
+        input: &Ty,
+        output: &Ty,
+        operand: &str,
+    ) -> Result<origin::Fragment, Error> {
+        let input = Ty::Reference {
+            mutable: true,
+            target: Box::new(input.clone()),
+        };
+        let call = self.callable_call(closure, &[input], output, vec![operand.into()])?;
+        Ok(call.surrounded("(", ")[0]"))
+    }
+
     /// A facade function's call with its parsed `arguments`.
     fn call_host_function(
         &mut self,
@@ -12906,6 +13204,11 @@ impl<'a> Parser<'a> {
         mut arguments: Vec<ParsedExpr>,
         call: Span,
     ) -> Result<ParsedExpr, Error> {
+        if let Some(item) = items.first()
+            && let Some(value) = self.immediate_callback(&item.path(), None, &mut arguments, call)?
+        {
+            return Ok(value);
+        }
         self.supply_display_labeller(items, &mut arguments, call)?;
         self.deref_facade_strings(items, &mut arguments)?;
         self.host_turbofish = self.pending_turbofish.take();
@@ -14093,6 +14396,12 @@ impl<'a> Parser<'a> {
         mut arguments: Vec<ParsedExpr>,
         call: Span,
     ) -> Result<ParsedExpr, Error> {
+        if let Some(item) = items.first()
+            && let Some(value) =
+                self.immediate_callback(&item.path(), Some(&receiver), &mut arguments, call)?
+        {
+            return Ok(value);
+        }
         self.deref_facade_strings(items, &mut arguments)?;
         let (item, signature) =
             self.select_host_signature(items, Some(&receiver.ty), &mut arguments, false, call)?;
@@ -19709,6 +20018,9 @@ impl<'a> Parser<'a> {
             Token::Modulo => ("%", NUMBERS, None),
             _ => unreachable!("binary_precedence admits only binary operators"),
         };
+        if let Some(value) = self.time_binary(symbol, lhs.clone(), rhs.clone())? {
+            return Ok(value);
+        }
         if symbol == "+" {
             self.strip_string_reference(&mut rhs);
         }
@@ -20391,6 +20703,7 @@ impl<'a> Parser<'a> {
         | Ty::Projection(..)
         | Ty::Keyed(..)
         | Ty::Reverse(_)
+        | Ty::Time(_)
         | Ty::Host { .. } = peeled
         {
             let expression = span(lhs.span.start(), rhs.span.end());
@@ -20851,7 +21164,9 @@ impl<'a> Parser<'a> {
     /// `Ord` impl as Rawr compares builtins (`compare_value`).
     fn ordered(&self, ty: &Ty, partial: bool) -> bool {
         match self.inference.resolve(ty) {
-            Ty::Unit | Ty::Bool | Ty::Char | Ty::Int(_) | Ty::String | Ty::Ordering => true,
+            Ty::Unit | Ty::Bool | Ty::Char | Ty::Int(_) | Ty::String | Ty::Ordering | Ty::Time(_) => {
+                true
+            }
             Ty::Float(_) => partial,
             Ty::Reference { target, .. }
             | Ty::Boxed(target)
@@ -21014,6 +21329,237 @@ impl<'a> Parser<'a> {
         let path = path.collect::<Vec<_>>().join("::");
         crate::resolve::std_ordering(&path)
             && (path != "Ordering" || self.models.get("Ordering").is_none())
+    }
+
+    /// `Duration::from_secs` or `std::time::Instant::now` after its first
+    /// segment `first`, in a program whose facades do not name std's
+    /// `time` (`resolve::std_reexport`): the type, the member, the number
+    /// of tokens up to its end, and that end.
+    fn std_time_member(&self, first: &str) -> Option<(Time, ImmutableString, usize, Position)> {
+        let mut ahead = self.input.clone();
+        let mut segments = vec![ImmutableString::from(first)];
+        let mut end = Position::NONE;
+        while matches!(ahead.peek(), Some((Token::DoubleColon, _))) {
+            ahead.next();
+            match ahead.next() {
+                Some((Token::Identifier(name), position)) => {
+                    end = text_end(position, &name);
+                    segments.push((*name).as_str().into());
+                }
+                _ => return None,
+            }
+        }
+        let [path @ .., member] = &segments[..] else {
+            return None;
+        };
+        let path = path.iter().map(ImmutableString::as_str).collect::<Vec<_>>().join("::");
+        let time = match crate::resolve::std_time(&path)? {
+            "Duration" => Time::Duration,
+            _ => Time::Instant,
+        };
+        let std = format!("std::time::{}", time.name());
+        if crate::resolve::std_reexport(&std, &self.models.host) != std {
+            return None;
+        }
+        // A bare `Duration` is std's unless the crate declares or imports
+        // another.
+        if !path.contains("::")
+            && (self.models.get(&path).is_some()
+                || self
+                    .models
+                    .import(&path)
+                    .is_some_and(|binding| !matches!(binding.target, item::Import::Module)))
+        {
+            return None;
+        }
+        Some((time, member.clone(), 2 * segments.len() - 2, end))
+    }
+
+    /// `Duration::from_secs(n)`, `Duration::ZERO`, `Instant::now()` and the
+    /// other associated items of std's `time` types.
+    fn parse_time_function(
+        &mut self,
+        time: Time,
+        member: ImmutableString,
+        path: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let duration = Ty::Time(Time::Duration);
+        let (input, output) = match (time, member.as_str()) {
+            (Time::Duration, "from_secs" | "from_millis" | "from_micros" | "from_nanos") => {
+                (Some(Ty::Int(Int::U64)), duration)
+            }
+            (Time::Duration, "from_secs_f64") => (Some(Ty::Float(Float::F64)), duration),
+            (Time::Duration, "from_secs_f32") => (Some(Ty::Float(Float::F32)), duration),
+            (Time::Duration, "ZERO" | "MAX") => (None, duration),
+            (Time::Duration, "default") => (Some(Ty::Unit), duration),
+            (Time::Instant, "now") => (Some(Ty::Unit), Ty::Time(Time::Instant)),
+            _ => {
+                return Err(Error::UnknownMember {
+                    owner: time.name().into(),
+                    member,
+                    reference: path,
+                })
+            }
+        };
+        let code = match member.as_str() {
+            "default" => time_code("ZERO"),
+            member => time_code(member),
+        };
+        let (operand, end) = match input {
+            None => (origin::Fragment::plain("()"), path.end()),
+            Some(input) => {
+                let (mut arguments, end) = self.parse_call_arguments("`std::time` arguments")?;
+                match (input, arguments.as_mut_slice()) {
+                    (Ty::Unit, []) => (origin::Fragment::plain("()"), end),
+                    (input, [argument]) if input != Ty::Unit => {
+                        self.coerce_expr(&input, argument)?;
+                        (argument.rendered_source(), end)
+                    }
+                    _ => {
+                        return Err(Error::InvalidMethodCall {
+                            owner: time.name().into(),
+                            method: member,
+                            reason: format!("found {} argument(s)", arguments.len()).into(),
+                            call: span(path.start(), end),
+                        })
+                    }
+                }
+            }
+        };
+        let source = self.prelude_op(
+            PreludeOp::Time,
+            [origin::Fragment::plain("()"), code.to_string().into(), operand],
+        );
+        Ok(self.operator_expr(source, output, span(path.start(), end)))
+    }
+
+    /// A method of std's `Duration` or `Instant` on `value`.
+    fn parse_time_method(
+        &mut self,
+        value: ParsedExpr,
+        time: Time,
+        member: ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let duration = Ty::Time(Time::Duration);
+        let instant = Ty::Time(Time::Instant);
+        let optional = |ty: Ty| Ty::Option(Box::new(ty));
+        let (input, output, code) = match (time, member.as_str()) {
+            (_, "clone") => {
+                let (_, end) = self.parse_call_arguments("`clone` arguments")?;
+                let source = value.rendered_source();
+                return Ok(self.operator_expr(source, Ty::Time(time), span(value.span.start(), end)));
+            }
+            (Time::Duration, "as_secs") => (None, Ty::Int(Int::U64), "as_secs"),
+            (Time::Duration, "as_millis" | "as_micros" | "as_nanos") => {
+                (None, Ty::Int(Int::U64), member.as_str())
+            }
+            (Time::Duration, "as_secs_f64") => (None, Ty::Float(Float::F64), "as_secs_f64"),
+            (Time::Duration, "as_secs_f32") => (None, Ty::Float(Float::F32), "as_secs_f32"),
+            (Time::Duration, "subsec_millis" | "subsec_micros" | "subsec_nanos") => {
+                (None, Ty::Int(Int::U32), member.as_str())
+            }
+            (Time::Duration, "is_zero") => (None, Ty::Bool, "is_zero"),
+            (Time::Duration, "checked_add" | "checked_sub") => {
+                (Some(duration.clone()), optional(duration), member.as_str())
+            }
+            (Time::Duration, "saturating_add" | "saturating_sub" | "abs_diff") => {
+                (Some(duration.clone()), duration, member.as_str())
+            }
+            (Time::Duration, "mul_f64" | "div_f64") => {
+                (Some(Ty::Float(Float::F64)), duration, member.as_str())
+            }
+            (Time::Instant, "elapsed") => (None, duration, "elapsed"),
+            (Time::Instant, "duration_since" | "saturating_duration_since") => {
+                (Some(instant), duration, member.as_str())
+            }
+            (Time::Instant, "checked_duration_since") => {
+                (Some(instant), optional(duration), "checked_duration_since")
+            }
+            (Time::Instant, "checked_add") => {
+                (Some(duration), optional(instant), "instant_checked_add")
+            }
+            (Time::Instant, "checked_sub") => {
+                (Some(duration), optional(instant), "instant_checked_sub")
+            }
+            _ => {
+                return Err(Error::UnknownMember {
+                    owner: time.name().into(),
+                    member,
+                    reference: member_span,
+                })
+            }
+        };
+        let code = time_code(code);
+        let (mut arguments, end) = self.parse_call_arguments("`std::time` method arguments")?;
+        let operand = match (input, arguments.as_mut_slice()) {
+            (None, []) => origin::Fragment::plain("()"),
+            (Some(input), [argument]) => {
+                self.coerce_expr(&input, argument)?;
+                argument.rendered_source()
+            }
+            _ => {
+                return Err(Error::InvalidMethodCall {
+                    owner: time.name().into(),
+                    method: member,
+                    reason: format!("found {} argument(s)", arguments.len()).into(),
+                    call: span(value.span.start(), end),
+                })
+            }
+        };
+        let source = self.prelude_op(
+            PreludeOp::Time,
+            [value.rendered_source(), code.to_string().into(), operand],
+        );
+        Ok(self.operator_expr(source, output, span(value.span.start(), end)))
+    }
+
+    /// `a + b`, `a - b`, `d * n`, `d / n` and `a < b` of std's `Duration`
+    /// and `Instant`, as Rust's impls are, with their panics.
+    fn time_binary(
+        &mut self,
+        symbol: &str,
+        lhs: ParsedExpr,
+        mut rhs: ParsedExpr,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        let peel = |ty: Ty| match ty {
+            Ty::Reference { target, .. } => *target,
+            ty => ty,
+        };
+        let Ty::Time(time) = peel(self.inference.resolve(&lhs.ty)) else {
+            return Ok(None);
+        };
+        let duration = Ty::Time(Time::Duration);
+        let other = peel(self.inference.resolve(&rhs.ty));
+        let (code, output) = match (time, symbol, &other) {
+            (Time::Duration, "+" | "+=", _) => ("add", duration.clone()),
+            (Time::Duration, "-" | "-=", _) => ("sub", duration.clone()),
+            (Time::Duration, "*" | "*=", _) => ("mul", duration.clone()),
+            (Time::Duration, "/" | "/=", _) => ("div", duration.clone()),
+            (Time::Instant, "+" | "+=", _) => ("instant_add", Ty::Time(Time::Instant)),
+            (Time::Instant, "-", Ty::Time(Time::Instant)) => ("instant_since", duration.clone()),
+            (Time::Instant, "-" | "-=", _) => ("instant_sub", Ty::Time(Time::Instant)),
+            (_, "<" | ">" | "<=" | ">=", _) => ("compare", Ty::Bool),
+            _ => return Ok(None),
+        };
+        let operand = match code {
+            "mul" | "div" => Ty::Int(Int::U32),
+            "instant_since" | "compare" => Ty::Time(time),
+            _ => duration,
+        };
+        if let Ty::Time(_) = other {
+            rhs.ty = other;
+        }
+        self.coerce_expr(&operand, &mut rhs)?;
+        let expression = span(lhs.span.start(), rhs.span.end());
+        let mut source = self.prelude_op(
+            PreludeOp::Time,
+            [lhs.rendered_source(), time_code(code).to_string().into(), rhs.rendered_source()],
+        );
+        if code == "compare" {
+            source = source.surrounded("(", &format!(" {symbol} 0)"));
+        }
+        Ok(Some(self.operator_expr(source, output, expression)))
     }
 
     /// `Ordering::Less` after its first segment `first`: the variant's
@@ -21204,6 +21750,22 @@ impl<'a> Parser<'a> {
             );
             let ty = Ty::Result(Box::new(target), Box::new(Ty::Unit));
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
+        }
+        if let Ty::Float(_) = number
+            && let Some((_, function)) = FLOAT_BINARY_METHODS.iter().find(|(name, _)| *name == member)
+        {
+            let (mut arguments, end) = self.parse_call_arguments("number method arguments")?;
+            let [argument] = arguments.as_mut_slice() else {
+                return Err(self.unsupported("a float method without exactly one argument"));
+            };
+            self.coerce_expr(&number, argument)?;
+            let mut source = origin::Fragment::plain(format!("{function}("));
+            source.push(value.rendered_source());
+            source.push_text(", ");
+            source.push(argument.rendered_source());
+            source.push_text(")");
+            let value = self.operator_expr(source, number, span(value.span.start(), end));
+            return Ok(self.checked_arithmetic(value, "neg"));
         }
         let exponent = match (&number, member.as_str()) {
             (Ty::Int(_), "pow") => Ty::Int(Int::U32),
@@ -22257,6 +22819,10 @@ impl<'a> Parser<'a> {
             }
             if number == Ty::Ordering {
                 value = self.parse_ordering_method(value, member, member_span)?;
+                continue;
+            }
+            if let Ty::Time(time) = number {
+                value = self.parse_time_method(value, time, member, member_span)?;
                 continue;
             }
             // `e.to_string()` and `e.clone()` of a `ParseIntError` and kin:
@@ -23950,6 +24516,16 @@ impl<'a> Parser<'a> {
                 );
             }
         }
+        // `Duration::from_millis(5)`, `std::time::Instant::now()`.
+        if matches!(self.peek(), Token::DoubleColon)
+            && !self.bindings.contains_key(name.as_str())
+            && let Some((time, member, skip, end)) = self.std_time_member(&name)
+        {
+            for _ in 0..skip {
+                self.next();
+            }
+            return self.parse_time_function(time, member, Span::new(name_span.start(), end));
+        }
         // `Ordering::Less`, `std::cmp::Ordering::Greater`: its discriminant.
         if matches!(self.peek(), Token::DoubleColon)
             && !self.bindings.contains_key(name.as_str())
@@ -24334,6 +24910,21 @@ impl<'a> Parser<'a> {
             value.ty = symbolic.ty;
             return Ok(());
         }
+        // An associated function named as a value (`associated_value`).
+        if let Some(definition) = self
+            .models
+            .methods
+            .values()
+            .chain(self.models.trait_methods.values().flatten())
+            .find(|definition| definition.receiver().is_none() && definition.key() == &*key)
+            .cloned()
+        {
+            let symbolic = self.symbolic_associated(&definition, value.span)?;
+            value.source = symbolic.source;
+            value.prelude = symbolic.prelude;
+            value.ty = symbolic.ty;
+            return Ok(());
+        }
         let Some(index) = self.lifted.iter().position(|closure| closure.key == *key) else {
             return Ok(());
         };
@@ -24433,9 +25024,25 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|hint| hint.as_ref().and_then(|(_, output)| output.clone()))
             .collect();
+        // A closure the library runs where it is written takes its value as
+        // `&mut`, as iced's `Path::new(|b: &mut Builder| ..)` does.
+        let immediate = matches!(items, [item] if IMMEDIATE_CALLBACKS.contains(&item.path().as_str()));
         self.closure_hints = hints
             .into_iter()
-            .map(|hint| hint.map(|(inputs, _)| inputs))
+            .map(|hint| {
+                hint.map(|(inputs, _)| {
+                    if !immediate {
+                        return inputs;
+                    }
+                    inputs
+                        .iter()
+                        .map(|input| Ty::Reference {
+                            mutable: true,
+                            target: Box::new(input.clone()),
+                        })
+                        .collect()
+                })
+            })
             .collect();
     }
 
@@ -25032,6 +25639,8 @@ impl<'a> Parser<'a> {
             .filter(|_| !self.postfix_after_literal());
         let mut elements = Vec::<ParsedExpr>::new();
         let mut repeat = None;
+        // `vec![x; n]` takes any `usize` count; an array's is a constant.
+        let mut counted = None;
         while self.peek() != close {
             let outer = std::mem::replace(&mut self.no_struct, false);
             let element = self.parse_expr();
@@ -25039,7 +25648,16 @@ impl<'a> Parser<'a> {
             elements.push(element?);
             if matches!(self.peek(), Token::SemiColon) && elements.len() == 1 {
                 self.next();
-                repeat = Some(self.parse_array_length("repeat count")?);
+                if array.is_some() {
+                    repeat = Some(self.parse_array_length("repeat count")?);
+                } else {
+                    let outer = std::mem::replace(&mut self.no_struct, false);
+                    let count = self.parse_expr();
+                    self.no_struct = outer;
+                    let mut count = count?;
+                    self.coerce_expr(&Ty::Int(Int::Usize), &mut count)?;
+                    counted = Some(count);
+                }
                 break;
             }
             if matches!(self.peek(), Token::Comma) {
@@ -25057,17 +25675,31 @@ impl<'a> Parser<'a> {
         for value in elements.iter_mut().skip(skip) {
             self.coerce_expr(&element, value)?;
         }
-        let source = match repeat {
-            Some(count) => {
+        let source = match (repeat, counted) {
+            (Some(count), _) => {
                 let value = elements.pop().expect("a repeat array has its value");
-                let mut source = origin::Fragment::plain("{ let a = []; a.pad(");
+                let items = self.temporary("repeat");
+                let mut source = origin::Fragment::plain(format!("{{ let {items} = []; {items}.pad("));
                 source.push_text(format!("{count}, "));
                 source.push(value.rendered_source());
-                source.push_text("); a }");
+                source.push_text(format!("); {items} }}"));
                 source
             }
-            None => origin::Fragment::join(elements.iter().map(ParsedExpr::rendered_source), ", ")
-                .surrounded("[", "]"),
+            (None, Some(count)) => {
+                // Rust evaluates the value, then the count.
+                let value = elements.pop().expect("a repeat vector has its value");
+                let (item, items) = (self.temporary("repeat"), self.temporary("repeat"));
+                let mut source = origin::Fragment::plain(format!("{{ let {item} = "));
+                source.push(value.rendered_source());
+                source.push_text(format!("; let {items} = []; {items}.pad("));
+                source.push(count.rendered_source());
+                source.push_text(format!(", {item}); {items} }}"));
+                source
+            }
+            (None, None) => {
+                origin::Fragment::join(elements.iter().map(ParsedExpr::rendered_source), ", ")
+                    .surrounded("[", "]")
+            }
         };
         let length = array.map(|_| repeat.unwrap_or(elements.len()));
         Ok(self.operator_expr(
@@ -26084,6 +26716,10 @@ impl<'a> Parser<'a> {
             Ty::String => "\"\"".into(),
             Ty::Array { length: None, .. } | Ty::Keyed(..) => "[]".into(),
             Ty::Option(_) => self.prelude_op(PreludeOp::None, []),
+            Ty::Time(Time::Duration) => self.prelude_op(
+                PreludeOp::Time,
+                ["()".into(), time_code("ZERO").to_string().into(), "()".into()],
+            ),
             Ty::Boxed(target) => self.default_source(target, span)?,
             Ty::Reverse(inner) => {
                 let value = self.default_source(inner, span)?;
@@ -26204,7 +26840,7 @@ impl<'a> Parser<'a> {
             }
             // Maps and sets compare their sorted entries; `Reverse` its value;
             // a host value by its type's own `PartialEq`.
-            Ty::Keyed(..) | Ty::Reverse(_) | Ty::Host { .. } => {
+            Ty::Keyed(..) | Ty::Reverse(_) | Ty::Time(_) | Ty::Host { .. } => {
                 if !self.type_provides(&ty, capability::Kind::PartialEq) {
                     return Err(Error::MissingCapability {
                         owner: ty.name(&self.models),
@@ -26285,6 +26921,12 @@ impl<'a> Parser<'a> {
                 }
                 source.push_text(format!("_ => {message} }} }}"));
                 source
+            }
+            // Rust's own `Debug` text of a `Duration` (`1.5s`) or `Instant`.
+            Ty::Time(_) => {
+                crate::host::debug::register::<std::time::Duration>();
+                crate::host::debug::register::<std::time::Instant>();
+                self.prelude_op(PreludeOp::GenericDebug, [value])
             }
             Ty::Ordering => {
                 let ordering = self.temporary("debug");
@@ -26509,6 +27151,39 @@ impl<'a> Parser<'a> {
             let source = self.mutation_call(&value, &helper, operands)?;
             let ty = Ty::Iter(Box::new(element));
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
+        }
+        // `[T; N]::map(f)`: `[U; N]`, each element passed by value.
+        if member.as_str() == "map"
+            && let Ty::Array {
+                length: Some(length),
+                ..
+            } = self.inference.resolve(&value.ty)
+        {
+            self.closure_hints = vec![Some(Box::new([element.clone()]) as Box<[Ty]>)];
+            let arguments = self.parse_call_arguments("array method arguments");
+            self.closure_hints = Vec::new();
+            let (mut arguments, end) = arguments?;
+            let [callable] = arguments.as_mut_slice() else {
+                return Err(Error::InvalidMethodCall {
+                    owner: self.inference.resolve(&value.ty).name(&self.models),
+                    method: member,
+                    reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
+                    call: span(value.span.start(), end),
+                });
+            };
+            let output = self.inference.fresh();
+            let (item, items) = (self.temporary("map"), self.temporary("map"));
+            let call = self.callable_call(callable, &[element], &output, vec![item.as_str().into()])?;
+            let mut source = origin::Fragment::plain(format!("{{ let {items} = []; for {item} in "));
+            source.push(value.rendered_source().surrounded("(", ")"));
+            source.push_text(format!(" {{ {items}.push("));
+            source.push(call);
+            source.push_text(format!("); }} {items} }}"));
+            let ty = Ty::Array {
+                element: Box::new(output),
+                length: Some(length),
+            };
+            return Ok(self.operator_expr(source.surrounded("(", ")"), ty, span(value.span.start(), end)));
         }
         // A closure argument takes the parameter types Rust infers for it.
         let reference = Ty::Reference {
@@ -28931,6 +29606,43 @@ impl<'a> Parser<'a> {
                     Span::new(first_span.start(), path_end),
                 ));
             }
+            // `std::iter::once(x)` and `std::iter::empty()`: an iterator of
+            // one item, or of none.
+            let iterator = full
+                .strip_prefix("std::iter::")
+                .or_else(|| full.strip_prefix("core::iter::"));
+            if let Some(member @ ("once" | "empty")) = iterator
+                && matches!(self.peek(), Token::LeftParen | Token::Unit)
+            {
+                let (arguments, end) = self.parse_call_arguments("iterator arguments")?;
+                let call = span(first_span.start(), end);
+                let item = match (member, arguments.as_slice()) {
+                    ("once", [value]) => value.ty.clone(),
+                    ("empty", []) => self.inference.fresh(),
+                    _ => {
+                        return Err(Error::InvalidMethodCall {
+                            owner: "std::iter".into(),
+                            method: member.into(),
+                            reason: format!("found {} argument(s)", arguments.len()).into(),
+                            call,
+                        })
+                    }
+                };
+                let values = origin::Fragment::join(
+                    arguments.iter().map(ParsedExpr::rendered_source),
+                    ", ",
+                )
+                .surrounded("[", "]");
+                let values = self.operator_expr(
+                    values,
+                    Ty::Array {
+                        element: Box::new(item.clone()),
+                        length: Some(arguments.len()),
+                    },
+                    call,
+                );
+                return Ok(self.array_iterator(&values, item, end));
+            }
         }
         if let Some(spelled) = self
             .models
@@ -29177,8 +29889,11 @@ impl<'a> Parser<'a> {
         }
 
         // A facade function named in full or through an imported module:
-        // `iced::widget::slider::default(..)`, `widget::slider::default(..)`.
-        if qualified_model.is_none() && segments.len() > 1 {
+        // `iced::widget::slider::default(..)`, `widget::slider::default(..)`,
+        // and a facade root's own item, as `iced::Center`.
+        if qualified_model.is_none()
+            && (segments.len() > 1 || self.models.import(&segments[0].0).is_none())
+        {
             let path = match self.models.import(&segments[0].0) {
                 Some(binding)
                     if matches!(
@@ -29470,8 +30185,11 @@ impl<'a> Parser<'a> {
             let (mut arguments, end) = if definition.constant() {
                 (Vec::new(), text_end(member_span.start(), &member))
             } else if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
-                return self
-                    .symbolic_associated(&definition, span(owner_span.start(), member_span.end()));
+                let expression = span(owner_span.start(), member_span.end());
+                if definition.generics().is_empty() && method_copied(&definition).is_empty() {
+                    return self.associated_value(&definition, expression);
+                }
+                return self.symbolic_associated(&definition, expression);
             } else {
                 self.parse_borrowing_arguments("associated function arguments")?
             };
@@ -31418,6 +32136,11 @@ impl<'a> Parser<'a> {
         target: &Ty,
         value: &mut ParsedExpr,
     ) -> Result<bool, Error> {
+        // `canvas(self)` with `self: &Clock`: the program's value.
+        let source = &match self.inference.resolve(source) {
+            Ty::Reference { target, .. } if matches!(*target, Ty::Script(..)) => *target,
+            source => source,
+        };
         if let Ty::Script(id, _) = source
             && let Ty::Host { proof, .. } = target
             && let Some((trait_name, path)) = self.implemented_trait(*id, &proof.definition.path())
@@ -31427,6 +32150,9 @@ impl<'a> Parser<'a> {
             let owner = self.models.definition(*id).definition().clone();
             let (_, declared) = self.models.traits[&trait_name].clone();
             let mut arguments = Vec::new();
+            // `impl<Message> canvas::Program<Message> for C`: the impl's
+            // parameters are fresh, shared by its methods.
+            let mut substitution = None::<BTreeMap<ImmutableString, Ty>>;
             for function in declared.functions.iter() {
                 let Some(method) = self
                     .models
@@ -31453,15 +32179,26 @@ impl<'a> Parser<'a> {
                     method.fingerprint().clone(),
                     owner.capabilities().fingerprint(),
                 );
+                let substitution = match &substitution {
+                    Some(substitution) => substitution.clone(),
+                    None => {
+                        let fresh = self.method_substitution(&method, None, call)?;
+                        substitution = Some(fresh.clone());
+                        fresh
+                    }
+                };
                 let inputs = std::iter::once(source.clone())
                     .chain(method.parameters().iter().map(|parameter| {
-                        match self.inference.resolve(&Ty::from_resolved(&parameter.ty)) {
+                        let ty = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
+                        match self.inference.resolve(&ty) {
                             Ty::Reference { target, .. } => *target,
                             ty => ty,
                         }
                     }))
                     .collect();
-                let output = self.inference.resolve(&Ty::from_resolved(method.output()));
+                let output = self
+                    .inference
+                    .resolve(&instantiate(&Ty::from_resolved(method.output()), &substitution));
                 arguments.push(self.symbolic_expr(item, inputs, output, call, Vec::new()));
             }
             for (name, (bounds, _)) in declared.associated.iter().zip(declared.associated_bounds.iter()) {
@@ -31477,7 +32214,10 @@ impl<'a> Parser<'a> {
                 arguments.push(self.operator_expr(default, ty, call));
             }
             let placeholder = self.operator_expr(origin::Fragment::default(), Ty::Unit, call);
-            arguments.insert(0, std::mem::replace(value, placeholder));
+            let mut program = std::mem::replace(value, placeholder);
+            // A reference is its value at runtime.
+            program.ty = source.clone();
+            arguments.insert(0, program);
             let owner = self.models.item_owner(&path).cloned();
             *value = self.call_host_function(&items, owner, arguments, call)?;
             return Ok(true);
@@ -33572,6 +34312,18 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
             (lhs, rhs) => Some(lhs.is_some().cmp(&rhs.is_some())),
         };
     }
+    if let (Some(lhs), Some(rhs)) = (
+        lhs.read_lock::<std::time::Duration>(),
+        rhs.read_lock::<std::time::Duration>(),
+    ) {
+        return Some(lhs.cmp(&rhs));
+    }
+    if let (Some(lhs), Some(rhs)) = (
+        lhs.read_lock::<std::time::Instant>(),
+        rhs.read_lock::<std::time::Instant>(),
+    ) {
+        return Some(lhs.cmp(&rhs));
+    }
     // `Reverse(a) < Reverse(b)` when `b < a`.
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
@@ -33661,6 +34413,18 @@ fn facade_output(item: &crate::host::item::Definition, output: &Ty) -> Ty {
 }
 
 pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
+    if let (Some(lhs), Some(rhs)) = (
+        lhs.read_lock::<std::time::Duration>(),
+        rhs.read_lock::<std::time::Duration>(),
+    ) {
+        return *lhs == *rhs;
+    }
+    if let (Some(lhs), Some(rhs)) = (
+        lhs.read_lock::<std::time::Instant>(),
+        rhs.read_lock::<std::time::Instant>(),
+    ) {
+        return *lhs == *rhs;
+    }
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
         rhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
@@ -33867,11 +34631,8 @@ fn rewrite_expr(
         // A closure carries its own function definition.
         #[cfg(not(feature = "no_function"))]
         ast::Expr::DynamicConstant(value, ..) => {
-            if let Some(pointer) = value.downcast_mut::<crate::FnPtr>()
-                && let crate::types::fn_ptr::FnPtrType::Script(definition) = &mut pointer.typ
-            {
-                let definition = crate::func::shared_make_mut(definition);
-                rewrite_statements(definition.body.statements_mut(), rewrites, patterns);
+            if let Some(pointer) = value.downcast_mut::<crate::FnPtr>() {
+                rewrite_pointer(pointer, rewrites, patterns);
             }
         }
         #[cfg(feature = "no_function")]
@@ -33885,6 +34646,25 @@ fn rewrite_expr(
         | ast::Expr::Property(..) => {}
         #[cfg(not(feature = "no_float"))]
         ast::Expr::FloatConstant(..) => {}
+    }
+}
+
+/// A closure's definition, and those of the closures it captured, which
+/// the optimizer folds into its curried values.
+#[cfg(not(feature = "no_function"))]
+fn rewrite_pointer(
+    pointer: &mut crate::FnPtr,
+    rewrites: &BTreeMap<ImmutableString, ImmutableString>,
+    patterns: &BTreeMap<ImmutableString, NominalPattern>,
+) {
+    if let crate::types::fn_ptr::FnPtrType::Script(definition) = &mut pointer.typ {
+        let definition = crate::func::shared_make_mut(definition);
+        rewrite_statements(definition.body.statements_mut(), rewrites, patterns);
+    }
+    for value in pointer.curry.iter_mut() {
+        if let Some(captured) = value.downcast_mut::<crate::FnPtr>() {
+            rewrite_pointer(captured, rewrites, patterns);
+        }
     }
 }
 
@@ -34180,6 +34960,196 @@ fn vec_method_code(name: &str) -> usize {
         .iter()
         .position(|method| *method == name)
         .expect("a listed `Vec` method")
+}
+
+/// `std::time`'s functions, methods and operators on Rust's `Duration`
+/// and `Instant`, by code: each name, and what the operand is.
+const TIME_METHODS: &[&str] = &[
+    // Constructors of a `Duration`, from the operand.
+    "from_secs",
+    "from_millis",
+    "from_micros",
+    "from_nanos",
+    "from_secs_f64",
+    "ZERO",
+    "MAX",
+    "now",
+    // Readers of a `Duration`.
+    "as_secs",
+    "as_millis",
+    "as_micros",
+    "as_nanos",
+    "as_secs_f64",
+    "subsec_millis",
+    "subsec_micros",
+    "subsec_nanos",
+    "is_zero",
+    // A `Duration` with another.
+    "checked_add",
+    "checked_sub",
+    "saturating_add",
+    "saturating_sub",
+    "abs_diff",
+    "mul_f64",
+    "div_f64",
+    // An `Instant`.
+    "elapsed",
+    "duration_since",
+    "saturating_duration_since",
+    "checked_duration_since",
+    "instant_checked_add",
+    "instant_checked_sub",
+    // Operators.
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "instant_add",
+    "instant_sub",
+    "instant_since",
+    "compare",
+    "from_secs_f32",
+    "as_secs_f32",
+];
+
+fn time_code(name: &str) -> usize {
+    TIME_METHODS
+        .iter()
+        .position(|method| *method == name)
+        .expect("a listed `std::time` method")
+}
+
+/// One of `TIME_METHODS` on `args[0]` with the operand `args[2]`, with
+/// Rust's panics.
+fn time_method(args: &mut FnCallArgs) -> RawrResult {
+    use std::time::{Duration, Instant};
+    let fail = |message: &str| -> RawrResult {
+        Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let duration = |value: &Dynamic| value.read_lock::<Duration>().map(|value| *value);
+    let instant = |value: &Dynamic| value.read_lock::<Instant>().map(|value| *value);
+    let unsigned = |value: &Dynamic| u64::try_from(value.as_int().unwrap_or(0)).unwrap_or(0);
+    let number = |value: &Dynamic| value.as_float().unwrap_or(0.0);
+    let int = |value: u128| Dynamic::from_int(crate::INT::try_from(value).unwrap_or(crate::INT::MAX));
+    let optional = |value: Option<Dynamic>| value.map_or_else(crate::option::none, crate::option::some);
+    let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    let name = TIME_METHODS.get(code).copied().unwrap_or("");
+    let (value, operand) = (&*args[0], &*args[2]);
+    let float = |value: f64| -> Result<Duration, Box<EvalAltResult>> {
+        Duration::try_from_secs_f64(value).map_err(|error| {
+            EvalAltResult::ErrorRuntime(
+                format!("cannot convert float seconds to Duration: {error}").into(),
+                Position::NONE,
+            )
+            .into()
+        })
+    };
+    Ok(match name {
+        "from_secs" => Dynamic::from(Duration::from_secs(unsigned(operand))),
+        "from_millis" => Dynamic::from(Duration::from_millis(unsigned(operand))),
+        "from_micros" => Dynamic::from(Duration::from_micros(unsigned(operand))),
+        "from_nanos" => Dynamic::from(Duration::from_nanos(unsigned(operand))),
+        "from_secs_f64" | "from_secs_f32" => Dynamic::from(float(number(operand))?),
+        "ZERO" => Dynamic::from(Duration::ZERO),
+        "MAX" => Dynamic::from(Duration::MAX),
+        "now" => Dynamic::from(Instant::now()),
+        "elapsed" | "duration_since" | "saturating_duration_since" | "checked_duration_since"
+        | "instant_checked_add" | "instant_checked_sub" | "instant_add" | "instant_sub"
+        | "instant_since" => {
+            let Some(at) = instant(value) else {
+                return Err(invariant("an `Instant` is not Rust's at runtime"));
+            };
+            match name {
+                "elapsed" => Dynamic::from(at.elapsed()),
+                "duration_since" | "saturating_duration_since" | "instant_since" => {
+                    let Some(earlier) = instant(operand) else {
+                        return Err(invariant("an `Instant` is not Rust's at runtime"));
+                    };
+                    Dynamic::from(at.saturating_duration_since(earlier))
+                }
+                "checked_duration_since" => {
+                    let Some(earlier) = instant(operand) else {
+                        return Err(invariant("an `Instant` is not Rust's at runtime"));
+                    };
+                    optional(at.checked_duration_since(earlier).map(Dynamic::from))
+                }
+                _ => {
+                    let Some(by) = duration(operand) else {
+                        return Err(invariant("a `Duration` is not Rust's at runtime"));
+                    };
+                    let moved = if name.ends_with("add") {
+                        at.checked_add(by)
+                    } else {
+                        at.checked_sub(by)
+                    };
+                    match name {
+                        "instant_add" => match moved {
+                            Some(moved) => Dynamic::from(moved),
+                            None => return fail("overflow when adding duration to instant"),
+                        },
+                        "instant_sub" => match moved {
+                            Some(moved) => Dynamic::from(moved),
+                            None => return fail("overflow when subtracting duration from instant"),
+                        },
+                        _ => optional(moved.map(Dynamic::from)),
+                    }
+                }
+            }
+        }
+        "compare" => {
+            let ordering = match (duration(value), duration(operand), instant(value), instant(operand)) {
+                (Some(lhs), Some(rhs), ..) => lhs.cmp(&rhs),
+                (.., Some(lhs), Some(rhs)) => lhs.cmp(&rhs),
+                _ => return Err(invariant("a `std::time` value is not Rust's at runtime")),
+            };
+            Dynamic::from_int(ordering as crate::INT)
+        }
+        _ => {
+            let Some(span) = duration(value) else {
+                return Err(invariant("a `Duration` is not Rust's at runtime"));
+            };
+            let other = || duration(operand).ok_or_else(|| invariant("a `Duration` is not Rust's at runtime"));
+            match name {
+                "as_secs" => int(u128::from(span.as_secs())),
+                "as_millis" => int(span.as_millis()),
+                "as_micros" => int(span.as_micros()),
+                "as_nanos" => int(span.as_nanos()),
+                "as_secs_f64" => Dynamic::from_float(span.as_secs_f64()),
+                "as_secs_f32" => Dynamic::from_float(f64::from(span.as_secs_f32())),
+                "subsec_millis" => Dynamic::from_int(span.subsec_millis().into()),
+                "subsec_micros" => Dynamic::from_int(span.subsec_micros().into()),
+                "subsec_nanos" => Dynamic::from_int(span.subsec_nanos().into()),
+                "is_zero" => Dynamic::from_bool(span.is_zero()),
+                "checked_add" => optional(span.checked_add(other()?).map(Dynamic::from)),
+                "checked_sub" => optional(span.checked_sub(other()?).map(Dynamic::from)),
+                "saturating_add" => Dynamic::from(span.saturating_add(other()?)),
+                "saturating_sub" => Dynamic::from(span.saturating_sub(other()?)),
+                "abs_diff" => Dynamic::from(span.abs_diff(other()?)),
+                "mul_f64" => Dynamic::from(float(span.as_secs_f64() * number(operand))?),
+                "div_f64" => Dynamic::from(float(span.as_secs_f64() / number(operand))?),
+                "add" => match span.checked_add(other()?) {
+                    Some(sum) => Dynamic::from(sum),
+                    None => return fail("overflow when adding durations"),
+                },
+                "sub" => match span.checked_sub(other()?) {
+                    Some(difference) => Dynamic::from(difference),
+                    None => return fail("overflow when subtracting durations"),
+                },
+                "mul" => match u32::try_from(operand.as_int().unwrap_or(-1))
+                    .ok()
+                    .and_then(|factor| span.checked_mul(factor))
+                {
+                    Some(product) => Dynamic::from(product),
+                    None => return fail("overflow when multiplying duration by scalar"),
+                },
+                "div" => match u32::try_from(operand.as_int().unwrap_or(-1)).ok() {
+                    Some(0) | None => return fail("divide by zero error when dividing duration by scalar"),
+                    Some(divisor) => Dynamic::from(span / divisor),
+                },
+                _ => return Err(invariant("an unknown `std::time` method")),
+            }
+        }
+    })
 }
 
 /// `insert(i, x)`, `remove(i)`, `swap(a, b)`, `dedup()` and

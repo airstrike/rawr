@@ -124,6 +124,7 @@ struct Contracts<'a> {
     theme: Option<host::type_def::Contract>,
     subscription: Option<host::type_def::Contract>,
     widget: Option<host::type_def::Contract>,
+    registry: &'a host::Registry,
 }
 
 #[derive(Clone, Copy)]
@@ -235,7 +236,7 @@ fn resolve_entry(
     methods: &[method::Definition],
     registry: &host::Registry,
     source: Option<crate::program::source::Id>,
-) -> Result<Option<(Entry, Option<item::Shell>)>, application::Error> {
+) -> Result<Option<(Entry, Vec<item::Shell>)>, application::Error> {
     let Some(contracts) = Contracts::from_registry(registry) else {
         return Ok(None);
     };
@@ -297,6 +298,7 @@ impl<'a> Contracts<'a> {
             .expect("static intrinsic items retain their installed facade owner proof");
 
         Some(Self {
+            registry,
             facade,
             run,
             application,
@@ -466,9 +468,9 @@ fn resolve_main(
     items: &[item::Shell],
     methods: &[method::Definition],
     source: Option<crate::program::source::Id>,
-) -> Result<Option<(Entry, Option<item::Shell>)>, application::Error> {
+) -> Result<Option<(Entry, Vec<item::Shell>)>, application::Error> {
     let tokens = attempt.syntax.tokens();
-    let mut boot_closure = None;
+    let mut boot_closure = Vec::new();
 
     if tokens
         .iter()
@@ -556,7 +558,7 @@ fn resolve_main(
                 Some(body) => {
                     let shell = boot_function(attempt, body, &update, items)?;
                     let key = shell.key.clone();
-                    boot_closure = Some(shell);
+                    boot_closure.push(shell);
                     key
                 }
                 None => match resolve_callback(&callbacks[0], "boot", items, methods, source) {
@@ -573,11 +575,32 @@ fn resolve_main(
                 .as_ref()
                 .map(|callback| resolve_callback(callback, "title", items, methods, source))
                 .transpose()?;
-            let theme = tail
-                .theme
-                .as_ref()
-                .map(|callback| resolve_callback(callback, "theme", items, methods, source))
-                .transpose()?;
+            let theme = match &tail.theme {
+                None => None,
+                Some(callback) => Some(
+                    match resolve_callback(callback, "theme", items, methods, source) {
+                        Ok(theme) => theme,
+                        // `.theme(Theme::Dark)`: iced's theme value, which
+                        // is the function of the State that returns it.
+                        Err(error) => {
+                            let Some(shell) = theme_function(
+                                attempt,
+                                callback.span,
+                                &update,
+                                items,
+                                methods,
+                                contracts,
+                                boot_closure.len(),
+                            ) else {
+                                return Err(error);
+                            };
+                            let key = shell.key.clone().expect("a theme function has its key");
+                            boot_closure.push(shell);
+                            key
+                        }
+                    },
+                ),
+            };
             let subscription = tail
                 .subscription
                 .as_ref()
@@ -706,6 +729,115 @@ fn boot_function(
             // The closure's value is the body, as a `const` initializer is.
             body: item::Body {
                 span: body,
+                lowering: item::Lowering::NominalFunction,
+                syntax: crate::item::BodySyntax::new(Vec::new()),
+                constant: true,
+            },
+        }),
+    })
+}
+
+/// The State an `update` callback changes: the `&mut` first parameter of a
+/// free function, or the owner of a method.
+fn update_state(
+    update: &crate::item::Key,
+    items: &[item::Shell],
+    methods: &[method::Definition],
+) -> Option<super::type_ref::Type> {
+    if let Some(method) = methods.iter().find(|method| method.key() == update) {
+        return Some(super::type_ref::Type::Path(super::type_ref::Path {
+            name: method.owner_name().into(),
+            target: super::type_ref::Target::Script {
+                definition: method.owner(),
+                identity: method.owner_identity().clone(),
+            },
+            arguments: Box::default(),
+            span: Span::NONE,
+        }));
+    }
+    items
+        .iter()
+        .filter(|shell| shell.key.as_ref() == Some(update))
+        .find_map(|shell| match &shell.kind {
+            item::Kind::Function(function) => function.parameters.first().cloned(),
+            _ => None,
+        })
+        .and_then(|parameter| match parameter.ty {
+            super::type_ref::Type::Reference { target, .. } => Some(*target),
+            _ => None,
+        })
+}
+
+/// `.theme(value)` with a theme value rather than a function: the function
+/// of `&State` returning it, beside `main`.
+fn theme_function(
+    attempt: &Attempt<'_>,
+    value: Span,
+    update: &crate::item::Key,
+    items: &[item::Shell],
+    methods: &[method::Definition],
+    contracts: &Contracts<'_>,
+    synthesized: usize,
+) -> Option<item::Shell> {
+    let main = items.iter().find(|shell| match &shell.kind {
+        item::Kind::Function(function) => function.name.span == attempt.name.span,
+        item::Kind::LegacyFunction(function) => function.name.span == attempt.name.span,
+        _ => false,
+    })?;
+    let state = update_state(update, items, methods)?;
+    let theme = contracts.registry.type_("iced::Theme")?.clone();
+    let owner = contracts.registry.type_owner("iced::Theme").cloned();
+    let output = super::type_ref::Type::Path(super::type_ref::Path {
+        name: "Theme".into(),
+        target: super::type_ref::Target::Host {
+            definition: theme,
+            owner,
+        },
+        arguments: Box::default(),
+        span: value,
+    });
+    let name = crate::item::Name {
+        text: "__rawr_theme".into(),
+        span: value,
+    };
+    let parameter = item::Parameter {
+        name: crate::item::Name {
+            text: "__rawr_state".into(),
+            span: value,
+        },
+        ty: super::type_ref::Type::Reference {
+            mutable: false,
+            lifetime: None,
+            target: Box::new(state),
+            span: value,
+        },
+        span: value,
+        pattern: None,
+    };
+    Some(item::Shell {
+        id: crate::item::Id::from_index(items.len() + synthesized),
+        source: main.source,
+        key: Some(crate::item::Key::new(
+            update.package().into(),
+            update.modules().into(),
+            name.text.clone(),
+            crate::item::Kind::Function,
+        )),
+        span: value,
+        kind: item::Kind::Function(item::Function {
+            header: crate::item::Header {
+                attributes: Box::default(),
+                visibility: None,
+                span: value,
+            },
+            name,
+            generics: Box::default(),
+            receiver: None,
+            parameters: Box::new([parameter]),
+            output: Some(output),
+            // The theme value is the body, as a `const` initializer is.
+            body: item::Body {
+                span: value,
                 lowering: item::Lowering::NominalFunction,
                 syntax: crate::item::BodySyntax::new(Vec::new()),
                 constant: true,

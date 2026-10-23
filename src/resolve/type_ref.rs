@@ -409,6 +409,20 @@ fn resolve_path(
             span,
         });
     }
+    // `std::time::Duration` names iced's where iced's `time` re-exports it,
+    // and else Rawr's `Duration`, unless the crate names one.
+    let name: ImmutableString = super::std_reexport(&name, host);
+    if let Some(time) = super::std_time(&name)
+        && !types.contains_key(name.as_str())
+        && !types.contains_key(time)
+    {
+        return Ok(Path {
+            name: time.into(),
+            target: Target::Builtin,
+            arguments: Box::default(),
+            span,
+        });
+    }
     // `std::cmp::Ordering`, unless the crate names a type `Ordering`.
     if !types.contains_key(name.as_str()) && super::std_ordering(&name) {
         return Ok(Path {
@@ -517,6 +531,22 @@ fn resolve_path(
             });
         }
         content_messages(definition, &mut arguments, host);
+        // iced's defaulted `Theme` and `Renderer` parameters after the
+        // declared ones (`canvas::Geometry<Renderer>`) name the facade's own.
+        while arguments
+            .iter()
+            .filter(|argument| matches!(argument, Argument::Type(_)))
+            .count()
+            > definition.parameters().len()
+            && let Some(position) = arguments.iter().rposition(|argument| matches!(argument, Argument::Type(_)))
+            && matches!(
+                &arguments[position],
+                Argument::Type(Type::Path(Path { target: Target::Host { definition, .. }, .. }))
+                    if matches!(definition.path().as_str(), "iced::widget::Renderer" | "iced::Theme")
+            )
+        {
+            arguments.remove(position);
+        }
         let actual = arguments
             .iter()
             .filter(|argument| matches!(argument, Argument::Type(_)))

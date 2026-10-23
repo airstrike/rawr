@@ -153,6 +153,7 @@ pub(crate) struct Text {
     pub(crate) width: iced::Length,
     pub(crate) height: Option<iced::Length>,
     pub(crate) align_x: iced::advanced::text::Alignment,
+    pub(crate) align_y: Option<iced::alignment::Vertical>,
     pub(crate) style: Option<text::Style>,
     pub(crate) color: Option<iced::Color>,
     pub(crate) font: Option<iced::Font>,
@@ -485,4 +486,87 @@ pub(crate) struct QrCode {
     pub(crate) data: QrData,
     pub(crate) cell_size: Option<f32>,
     pub(crate) total_size: Option<f32>,
+}
+
+/// iced's `canvas::Program` trait, which script types implement.
+pub(crate) struct CanvasTrait;
+
+/// A script `canvas::Program`: its value, its impl's `update`, `draw` and
+/// `mouse_interaction`, and its State's default.
+#[derive(Clone)]
+pub(crate) struct CanvasProgram {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) value: Dynamic,
+    pub(crate) update: item::Value,
+    pub(crate) draw: item::Value,
+    pub(crate) interaction: item::Value,
+    pub(crate) state: Dynamic,
+}
+
+/// iced's `canvas(program)`.
+#[derive(Clone)]
+pub(crate) struct Canvas {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) program: CanvasProgram,
+    pub(crate) width: iced::Length,
+    pub(crate) height: iced::Length,
+}
+
+/// One drawing operation a script `Frame` records, replayed on iced's own
+/// frame when the canvas draws.
+#[derive(Clone, Debug)]
+pub(crate) enum Draw {
+    Fill(iced::widget::canvas::Path, iced::widget::canvas::Fill),
+    FillRectangle(iced::Point, iced::Size, iced::widget::canvas::Fill),
+    Stroke(iced::widget::canvas::Path, iced::widget::canvas::Stroke<'static>),
+    StrokeRectangle(iced::Point, iced::Size, iced::widget::canvas::Stroke<'static>),
+    FillText(iced::widget::canvas::Text),
+    PushTransform,
+    PopTransform,
+    Translate(iced::Vector),
+    Rotate(f32),
+    Scale(f32),
+    ScaleNonuniform(iced::Vector),
+}
+
+/// iced's `canvas::Frame`: the operations drawn on it so far. A copy draws
+/// on the same frame, as the `&mut Frame` a closure takes does.
+#[derive(Clone)]
+pub(crate) struct Frame {
+    pub(crate) size: iced::Size,
+    pub(crate) draws: std::sync::Arc<std::sync::Mutex<Vec<Draw>>>,
+}
+
+/// iced's `canvas::Geometry`: a finished frame's operations and size.
+#[derive(Clone, Debug)]
+pub(crate) struct Geometry {
+    pub(crate) size: iced::Size,
+    pub(crate) draws: std::sync::Arc<[Draw]>,
+}
+
+/// iced's `canvas::Cache`: the geometry it last drew, and its size. Copies
+/// share it, so `clear` through `&self` empties every copy.
+#[derive(Clone, Default)]
+pub(crate) struct Cache(pub(crate) std::sync::Arc<std::sync::Mutex<Option<Geometry>>>);
+
+impl std::fmt::Debug for Cache {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Cache")
+    }
+}
+
+/// iced's `canvas::path::Builder`, shared by the closure `Path::new` gives it.
+#[derive(Clone)]
+pub(crate) struct PathBuilder(
+    pub(crate) std::sync::Arc<std::sync::Mutex<Option<iced::widget::canvas::path::Builder>>>,
+);
+
+/// iced's `canvas::Action<Message>`.
+#[derive(Clone)]
+pub(crate) struct CanvasAction {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) message: Option<Dynamic>,
+    pub(crate) redraw: bool,
+    pub(crate) capture: bool,
 }

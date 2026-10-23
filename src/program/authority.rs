@@ -351,6 +351,9 @@ impl Authority {
         &self,
         ty: &crate::application::Type,
     ) -> Result<Dynamic, crate::program::construction::Error> {
+        if let Some(value) = ty.builtin_default() {
+            return Ok(value);
+        }
         let Some(identity) = ty.identity() else {
             return Err(crate::program::construction::Error::ValueType {
                 expected: ty.display_name().into(),

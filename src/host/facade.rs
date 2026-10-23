@@ -793,6 +793,18 @@ impl Builder {
         self.value_type::<T>(path, parameters, capabilities)
     }
 
+    /// Declare an opaque host type with a `Default`, which a derived
+    /// `Default` builds, whose values have no `PartialEq`.
+    pub fn default_type<T: Clone + Default + crate::func::SendSync + 'static>(
+        &mut self,
+        path: impl Into<ImmutableString>,
+        parameters: &[&str],
+        capabilities: &[capability::Kind],
+    ) -> Result<&mut Self, host::Error> {
+        host::value::register_default::<T>();
+        self.type_::<T>(path, parameters, capabilities)
+    }
+
     /// Let a State holding `T` values carry them into the next runner
     /// process after a `.rs` edit, as the bytes `T` writes.
     pub fn carried<T: host::value::Carry>(&mut self) -> &mut Self {

@@ -484,6 +484,179 @@ fn language_closures_and_function_values() {
     rejected("pub fn run() -> i64 { let f = |a: i64| a; f(true) } run()");
 }
 
+#[test]
+fn language_closures_in_variables_are_values() {
+    // A closure in a local is a value: passed to a function or an adaptor,
+    // copied to another local, and called from inside another closure.
+    let value = run(r#"
+        struct Db(i64);
+        impl From<i64> for Db {
+            fn from(r: i64) -> Db { Db(r * 2) }
+        }
+        fn apply(f: impl Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+        pub fn run() -> i64 {
+            let sq = |x: i64| x * x;
+            let g = sq;
+            let loud = |r: i64| Db::from(r);
+            let v: Vec<i64> = vec![1, 2, 3].into_iter().map(sq).collect();
+            let w: Vec<i64> = v.iter().map(|x| loud(*x).0).collect();
+            apply(sq, 4) + g(5) * 100 + w[2] * 10000
+        }
+        run()
+    "#);
+    assert_eq!(value, 16 + 25 * 100 + 18 * 10000);
+}
+
+#[test]
+fn language_associated_functions_are_values() {
+    // `Db::from` of a user `From` impl and an inherent `Db::new` are
+    // function values: passed to `map`, bound to a local, and coerced to
+    // a `fn` pointer.
+    let value = run(r#"
+        #[derive(Clone, Copy)]
+        enum Roar { Squeak = 3, Growl = 7 }
+        struct Db(i64);
+        impl From<Roar> for Db {
+            fn from(r: Roar) -> Db { Db(r as i64 * 2) }
+        }
+        impl Db { fn new(n: i64) -> Db { Db(n) } }
+        pub fn run() -> i64 {
+            let v: Vec<i64> = [Roar::Squeak, Roar::Growl].iter().copied().map(Db::from).map(|d| d.0).collect();
+            let loud = Db::from;
+            let f: fn(Roar) -> Db = Db::from;
+            let n = Db::new;
+            v[0] + v[1] * 100 + loud(Roar::Growl).0 * 10000 + f(Roar::Squeak).0 * 1000000 + n(5).0 * 100000000
+        }
+        run()
+    "#);
+    assert_eq!(value, 6 + 14 * 100 + 14 * 10000 + 6 * 1000000 + 5 * 100000000);
+}
+
+#[test]
+fn language_vec_repeat_takes_any_count() {
+    // `vec![x; n]` takes any `usize` expression; the value comes first.
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let code = vec![1, 2, 3];
+            let a = 4;
+            let jump = vec![0usize; code.len()];
+            let more = vec![a; code.len() * 2];
+            let fixed = [7; 2];
+            (jump.len() + more.len() * 10) as i64 + more[5] * 100 + fixed[1] * 1000
+        }
+        run()
+    "#);
+    assert_eq!(value, 3 + 60 + 400 + 7000);
+    rejected("pub fn run() -> i64 { let n = 2; let a = [0; n]; a[0] } run()");
+}
+
+#[test]
+fn language_from_impls_for_sized_numbers() {
+    // `impl From<Local> for u32`, also through an alias, is a trait impl
+    // with a local type argument, which Rust's orphan rule allows.
+    let value = run(r#"
+        type Decibels = u32;
+        #[derive(Clone, Copy)]
+        enum Roar { Squeak = 3, Growl = 7 }
+        impl From<Roar> for Decibels {
+            fn from(r: Roar) -> Decibels { r as u32 * 10 }
+        }
+        impl From<Roar> for f32 {
+            fn from(r: Roar) -> f32 { r as u8 as f32 / 2.0 }
+        }
+        pub fn run() -> i64 {
+            let d: Decibels = Roar::Growl.into();
+            let e = u32::from(Roar::Squeak);
+            let h: f32 = Roar::Growl.into();
+            (d + e * 1000) as i64 + (h * 2.0) as i64 * 1000000
+        }
+        run()
+    "#);
+    assert_eq!(value, 70 + 30 * 1000 + 7 * 1000000);
+}
+
+#[test]
+fn language_fixed_array_map() {
+    // `[T; N]::map` is `[U; N]`; a `Vec` has no `map`.
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let a = [1, 2, 3];
+            let b: [i64; 3] = a.map(|x| x * 10);
+            let c = ["a", "bc"].map(|s| s.len());
+            b[2] + (c[1] * 100) as i64 + b.len() as i64 * 1000
+        }
+        run()
+    "#);
+    assert_eq!(value, 30 + 200 + 3000);
+    rejected("pub fn run() -> i64 { let v = vec![1]; let w = v.map(|x| x); w[0] } run()");
+}
+
+#[test]
+fn language_float_trigonometry() {
+    // `f32` and `f64` have Rust's trig, exponential and log methods.
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let angle: f32 = std::f32::consts::PI / 2.0;
+            let x = 3.0_f64;
+            let total = angle.sin() * 1000.0
+                + (angle.cos().abs() < 0.001) as i64 as f32 * 100.0
+                + (1.0_f32).atan2(1.0).to_degrees();
+            (total as f64 + x.hypot(4.0) * 10000.0 + x.ln().exp() * 100000.0 + 100.0_f64.log10() * 1000000.0) as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 1000 + 100 + 45 + 50000 + 300000 + 2000000);
+}
+
+#[test]
+fn language_iter_once_and_empty() {
+    // `std::iter::once(x)` is an iterator of one item, `empty()` of none.
+    let value = run(r#"
+        use std::iter;
+        pub fn run() -> i64 {
+            let all: Vec<i64> = std::iter::once(1).chain(vec![2, 3]).collect();
+            let none: Vec<i64> = iter::empty().collect();
+            let one = iter::once(7).count() as i64;
+            all.iter().sum::<i64>() * 100 + none.len() as i64 * 10 + one
+        }
+        run()
+    "#);
+    assert_eq!(value, 600 + 1);
+}
+
+#[test]
+fn language_std_time_in_plain_programs() {
+    // `std::time::Duration` and `Instant` without iced: Rust's values, with
+    // their constructors, readers and operators.
+    let value = run(r#"
+        use std::time::{Duration, Instant};
+        #[derive(Debug, Clone, Copy, PartialEq, Default)]
+        struct Lap { best: Duration }
+        fn total(laps: &[Duration]) -> Duration {
+            let mut sum = Duration::ZERO;
+            for lap in laps {
+                sum += *lap;
+            }
+            sum
+        }
+        pub fn run() -> i64 {
+            let start = Instant::now();
+            let laps = vec![Duration::from_millis(1500), Duration::from_secs(2), Duration::from_secs_f64(0.25)];
+            let sum = total(&laps);
+            let half = sum / 2;
+            let later = start + Duration::from_millis(10);
+            let lap = Lap::default();
+            let shown = format!("{:?} {:?} {:?}", sum, half * 3, lap);
+            assert_eq!(shown, "3.75s 5.625s Lap { best: 0ns }");
+            assert!(sum > half && later > start && start.elapsed() < Duration::from_secs(5));
+            assert_eq!(Duration::from_secs(1).checked_sub(Duration::from_secs(2)), None);
+            (sum.as_millis() + (later - start).as_millis()) as i64 + sum.subsec_millis() as i64 * 10000
+        }
+        run()
+    "#);
+    assert_eq!(value, 3750 + 10 + 750 * 10000);
+}
+
 /// `Button::style` takes a two-parameter host callable, as iced's
 /// `fn(&Theme, Status) -> Style`.
 fn style_facade() -> crate::host::facade::Definition {
@@ -6453,6 +6626,26 @@ fn language_every_accepted_float_method_runs() {
             "round" => format!("{:?}", x.round()),
             "trunc" => format!("{:?}", x.trunc()),
             "is_nan" => format!("{:?}", x.is_nan()),
+            "fract" => format!("{:?}", x.fract()),
+            "is_finite" => format!("{:?}", x.is_finite()),
+            "is_infinite" => format!("{:?}", x.is_infinite()),
+            "sin" => format!("{:?}", x.sin()),
+            "cos" => format!("{:?}", x.cos()),
+            "tan" => format!("{:?}", x.tan()),
+            "asin" => format!("{:?}", x.asin()),
+            "acos" => format!("{:?}", x.acos()),
+            "atan" => format!("{:?}", x.atan()),
+            "sinh" => format!("{:?}", x.sinh()),
+            "cosh" => format!("{:?}", x.cosh()),
+            "tanh" => format!("{:?}", x.tanh()),
+            "asinh" => format!("{:?}", x.asinh()),
+            "acosh" => format!("{:?}", x.acosh()),
+            "atanh" => format!("{:?}", x.atanh()),
+            "exp" => format!("{:?}", x.exp()),
+            "ln" => format!("{:?}", x.ln()),
+            "log10" => format!("{:?}", x.log10()),
+            "to_degrees" => format!("{:?}", x.to_degrees()),
+            "to_radians" => format!("{:?}", x.to_radians()),
             other => panic!("`{other}` is accepted on floats but this test does not know it"),
         }
     };
@@ -6468,6 +6661,9 @@ fn language_every_accepted_float_method_runs() {
         })
         .collect();
     calls.push(("powi(3)".into(), Box::new(|x: f64| format!("{:?}", x.powi(3)))));
+    calls.push(("atan2(1.5)".into(), Box::new(|x: f64| format!("{:?}", x.atan2(1.5)))));
+    calls.push(("hypot(1.5)".into(), Box::new(|x: f64| format!("{:?}", x.hypot(1.5)))));
+    calls.push(("log(2.0)".into(), Box::new(|x: f64| format!("{:?}", x.log(2.0)))));
     calls.push(("powf(0.5)".into(), Box::new(|x: f64| format!("{:?}", x.powf(0.5)))));
     calls.push(("min(1.0)".into(), Box::new(|x: f64| format!("{:?}", x.min(1.0)))));
     calls.push(("max(1.0)".into(), Box::new(|x: f64| format!("{:?}", x.max(1.0)))));

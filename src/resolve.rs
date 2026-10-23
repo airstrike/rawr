@@ -953,7 +953,7 @@ fn resolve_imports(
         }
         if let crate::item::UseTree::Group { prefix, .. } = &parsed.tree {
             let prefix = parsed_path(prefix);
-            match host.entry(&prefix) {
+            match host.entry(&std_reexport(&prefix, host)) {
                 None if std_fmt_import(&prefix) => {}
                 Some(host::Entry::Module | host::Entry::ModuleItem(_) | host::Entry::Type(_)) => {}
                 Some(host::Entry::Item(_) | host::Entry::Endpoint(_)) => {
@@ -1065,7 +1065,7 @@ fn resolve_import_binding(
 ) -> Result<item::Binding, Error> {
     // A facade re-export binds the path it names: `iced::event::Event` is
     // `iced::Event`.
-    let qualified = host.canonical_str(&qualified);
+    let qualified = host.canonical_str(&std_reexport(&qualified, host));
     let target = match host.entry(&qualified) {
         Some(host::Entry::Module) => item::Import::Module,
         Some(host::Entry::ModuleItem(definitions)) => item::Import::ModuleItem {
@@ -1108,6 +1108,24 @@ fn resolve_import_binding(
     })
 }
 
+/// The facade path a std path names, where a facade re-exports that std
+/// module as its own: `std::time::Instant` is `iced::time::Instant`, as
+/// iced's `time` re-exports std's types.
+pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableString {
+    const REEXPORTS: [(&str, &str); 2] = [("std::time", "iced::time"), ("core::time", "iced::time")];
+    for (std, facade) in REEXPORTS {
+        if let Some(rest) = qualified.strip_prefix(std)
+            && (rest.is_empty() || rest.starts_with("::"))
+        {
+            let reexported = format!("{facade}{rest}");
+            if host.entry(&reexported).is_some() {
+                return reexported.into();
+            }
+        }
+    }
+    qualified.into()
+}
+
 /// `std::fmt` (or `core::fmt`) and its `Debug`, `Display` and `Formatter`,
 /// and `std::cmp` and its `Ordering`, `PartialOrd`, `Ord`, `min` and `max`: imports a
 /// hand-written `Debug`, `Display` or `Ord` impl names, which Rawr resolves
@@ -1147,6 +1165,12 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "mem::swap"
                 | "mem::replace"
                 | "mem::take"
+                | "iter"
+                | "iter::once"
+                | "iter::empty"
+                | "time"
+                | "time::Duration"
+                | "time::Instant"
         )
     ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
         || rest.is_some_and(|rest| {
@@ -1169,7 +1193,7 @@ pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
     const NAMES: &[&str] = &[
         "HashMap", "HashSet", "BTreeMap", "BTreeSet", "Debug", "Display", "Formatter", "Write",
         "Ordering", "PartialOrd", "Ord", "min", "max", "Reverse", "Hash", "TryFrom", "TryInto",
-        "FromStr", "swap", "replace", "take",
+        "FromStr", "swap", "replace", "take", "Duration", "Instant",
     ];
     NAMES
         .iter()
@@ -1266,6 +1290,18 @@ pub(crate) fn std_parse_error(path: &str) -> Option<&'static str> {
         _ => return None,
     };
     (module.is_empty() || module == expected).then_some(error)
+}
+
+/// `std::time::Duration` and `Instant` as a type path is written: bare
+/// (imported, or Rawr's when the crate has no type of that name), or by
+/// `time::`, `std::time::` or `core::time::`; the type's name.
+pub(crate) fn std_time(path: &str) -> Option<&'static str> {
+    let name = path
+        .strip_prefix("std::time::")
+        .or_else(|| path.strip_prefix("core::time::"))
+        .or_else(|| path.strip_prefix("time::"))
+        .unwrap_or(path);
+    ["Duration", "Instant"].into_iter().find(|time| *time == name)
 }
 
 pub(crate) fn std_ordering(path: &str) -> bool {
@@ -1601,6 +1637,7 @@ fn resolve_item(
                 supertraits: (supertrait_bounds, supertrait_names),
                 supertrait_arguments,
                 generics: trait_generics,
+                declaration: None,
             })
         }
         crate::item::Parsed::Function(parsed) => item::Kind::Function(resolve_function(
@@ -2039,6 +2076,9 @@ fn resolve_methods(
                     .with_trait_arguments(arguments.clone());
                 if from_trait {
                     definition = definition.as_trait_default();
+                    if let Some(text) = &declared.declaration {
+                        definition = definition.with_body_text(text.clone());
+                    }
                 }
                 if builtin.is_some() {
                     definition = definition.for_builtin(item.owner.clone());
@@ -2136,8 +2176,11 @@ pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString
         type_ref::Type::Unit(_) => return Some((-9, "()".into())),
         type_ref::Type::Path(path) if path.target == type_ref::Target::Builtin => {
             match path.name.as_str() {
-                "i64" => -2,
-                "f64" => -3,
+                // Every integer is the runtime's one integer, and every
+                // float its one float.
+                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64"
+                | "usize" => -2,
+                "f32" | "f64" => -3,
                 "String" => -4,
                 "bool" => -5,
                 "char" => -6,
@@ -2610,6 +2653,10 @@ fn declare_facade_traits(
                 None,
             )
             .map_err(|error| LocatedError::primary(program::source::Id::ROOT, error))?;
+            let mut shell = shell;
+            if let item::Kind::Trait(declared) = &mut shell.kind {
+                declared.declaration = Some(declaration.clone());
+            }
             items.push(shell);
         }
     }
@@ -3028,6 +3075,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
         },
         supertrait_arguments: Box::default(),
         generics,
+        declaration: None,
     })
 }
 

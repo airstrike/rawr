@@ -114,6 +114,18 @@ fn register_debug() {
     register::<iced::window::Event>();
     register::<iced::window::Id>();
     register::<std::time::Duration>();
+    register::<iced::mouse::Cursor>();
+    register::<iced::widget::canvas::Path>();
+    register::<iced::widget::canvas::Stroke<'static>>();
+    register::<iced::widget::canvas::Fill>();
+    register::<iced::widget::canvas::Style>();
+    register::<iced::widget::canvas::fill::Rule>();
+    register::<iced::widget::canvas::LineCap>();
+    register::<iced::widget::canvas::LineJoin>();
+    register::<iced::widget::canvas::Text>();
+    register::<iced::widget::text::Alignment>();
+    register::<marker::Cache>();
+    register::<marker::Geometry>();
 }
 
 /// Build the validated compile-time `iced` facade contract.
@@ -668,6 +680,13 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         "widget::space",
         empty_widget_signature("widget::Space")?,
     )?)?;
+    builder.module("widget::space")?;
+    for name in ["horizontal", "vertical"] {
+        builder.item(item::Definition::function(
+            format!("widget::space::{name}"),
+            empty_widget_signature("widget::Space")?,
+        )?)?;
+    }
     // iced's `void()`: what `None` is where a widget is expected; containers
     // drop it.
     builder.item(item::Definition::function(
@@ -896,6 +915,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_wrappers(&mut builder)?;
     declare_media(&mut builder)?;
     declare_rich_text(&mut builder)?;
+    declare_canvas(&mut builder)?;
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
@@ -1765,6 +1785,13 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         receiver::Mode::Owned,
         fixed_builder_signature("widget::Text", type_ref::Type::registered("alignment::Horizontal")?)?,
     )?)?;
+    for input in ["alignment::Vertical", "Alignment"] {
+        builder.item(item::Definition::method(
+            "widget::Text::align_y",
+            receiver::Mode::Owned,
+            fixed_builder_signature("widget::Text", type_ref::Type::registered(input)?)?,
+        )?)?;
+    }
     for owner in ["widget::Row", "widget::Container"] {
         builder.item(item::Definition::method(
             format!("{owner}::align_y"),
@@ -2170,6 +2197,518 @@ fn declare_rich_text(builder: &mut facade::Builder) -> Result<(), host::Error> {
             rich_signature(Some(input))?,
         )?)?;
     }
+    Ok(())
+}
+
+/// iced's `canvas::Program`, as script types implement it: its `Theme`
+/// and `Renderer` are iced's, and `update` and `mouse_interaction` have
+/// iced's defaults.
+const CANVAS_PROGRAM: &str = "pub trait Program<Message> {
+    type State: Default;
+    fn update(&self, state: &mut Self::State, event: &iced::Event, bounds: iced::Rectangle, cursor: iced::mouse::Cursor) -> Option<iced::widget::canvas::Action<Message>> { None }
+    fn draw(&self, state: &Self::State, renderer: &iced::widget::Renderer, theme: &iced::Theme, bounds: iced::Rectangle, cursor: iced::mouse::Cursor) -> Vec<iced::widget::canvas::Geometry>;
+    fn mouse_interaction(&self, state: &Self::State, bounds: iced::Rectangle, cursor: iced::mouse::Cursor) -> iced::mouse::Interaction { iced::mouse::Interaction::None }
+}";
+
+/// iced's `canvas`: a script `canvas::Program` drawn with `Frame`, `Path`,
+/// `Stroke`, `Fill`, `Text` and `Cache`, and the same names under
+/// `advanced::graphics::geometry`.
+fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let ty = type_ref::Type::registered;
+    let f64_ = || type_ref::Type::builtin(type_ref::Builtin::F64);
+    let unit = || -> Result<type_ref::Type, host::Error> { Ok(type_ref::Type::unit()) };
+    let message = || type_ref::Type::parameter("Message");
+    let signature = |inputs: Vec<type_ref::Type>, output: type_ref::Type| {
+        let mut signature = signature::Builder::new();
+        for input in inputs {
+            signature.parameter(input);
+        }
+        signature.output(output);
+        signature.finish()
+    };
+    let generic = |inputs: Vec<type_ref::Type>, output: type_ref::Type| -> Result<_, host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("Message", &[])?;
+        for input in inputs {
+            signature.parameter(input);
+        }
+        signature.output(output);
+        Ok(signature.finish())
+    };
+
+    for module in [
+        "widget::canvas",
+        "widget::canvas::path",
+        "widget::canvas::stroke",
+        "widget::canvas::fill",
+        "advanced",
+        "advanced::graphics",
+        "advanced::graphics::geometry",
+    ] {
+        builder.module(module)?;
+    }
+    builder.private_type::<marker::CanvasProgram>("widget::canvas::Instance", &["Message"], &[])?;
+    builder.implementable_trait::<marker::CanvasTrait>(
+        "widget::canvas::Program",
+        &["Message"],
+        CANVAS_PROGRAM,
+    )?;
+    builder.project("widget::canvas::Program", "widget::canvas::Instance", &["Message"])?;
+    builder.type_::<marker::Canvas>("widget::Canvas", &["Message"], &[])?;
+    builder.project("widget::Canvas", "Element", &["Message"])?;
+    builder.alias("widget::canvas::Canvas", "widget::Canvas")?;
+    builder.type_::<marker::CanvasAction>("widget::canvas::Action", &["Message"], &[])?;
+    builder.alias("widget::canvas::Event", "Event")?;
+    let cloned = &[capability::Kind::Clone, capability::Kind::Send, capability::Kind::Static];
+    let debug = &[
+        capability::Kind::Debug,
+        capability::Kind::Clone,
+        capability::Kind::Send,
+        capability::Kind::Static,
+    ];
+    let copied_default = &[
+        capability::Kind::Default,
+        capability::Kind::Debug,
+        capability::Kind::Clone,
+        capability::Kind::Copy,
+        capability::Kind::Send,
+        capability::Kind::Static,
+    ];
+    builder.type_::<iced::widget::canvas::Path>("widget::canvas::Path", &[], debug)?;
+    builder.type_::<marker::PathBuilder>("widget::canvas::path::Builder", &[], cloned)?;
+    builder.type_::<marker::Frame>("widget::canvas::Frame", &[], cloned)?;
+    builder.type_::<marker::Geometry>("widget::canvas::Geometry", &[], debug)?;
+    builder.default_type::<marker::Cache>(
+        "widget::canvas::Cache",
+        &[],
+        &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
+    builder.default_type::<iced::widget::canvas::Stroke<'static>>("widget::canvas::Stroke", &[], copied_default)?;
+    builder.default_type::<iced::widget::canvas::Fill>("widget::canvas::Fill", &[], copied_default)?;
+    builder.value_type::<iced::widget::canvas::Style>("widget::canvas::Style", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::widget::canvas::fill::Rule>(
+        "widget::canvas::fill::Rule",
+        &[],
+        OWNED_EQ_VALUE_CAPABILITIES,
+    )?;
+    builder.default_type::<iced::widget::canvas::LineCap>("widget::canvas::LineCap", &[], copied_default)?;
+    builder.default_type::<iced::widget::canvas::LineJoin>("widget::canvas::LineJoin", &[], copied_default)?;
+    builder.default_type::<iced::widget::canvas::Text>(
+        "widget::canvas::Text",
+        &[],
+        &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
+    builder.default_value_type::<iced::widget::text::Alignment>(
+        "widget::text::Alignment",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.value_type::<iced::mouse::Cursor>("mouse::Cursor", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.alias("widget::canvas::stroke::Style", "widget::canvas::Style")?;
+    builder.alias("widget::canvas::fill::Style", "widget::canvas::Style")?;
+    builder.alias("widget::canvas::stroke::Stroke", "widget::canvas::Stroke")?;
+    builder.alias("widget::canvas::fill::Fill", "widget::canvas::Fill")?;
+    builder.alias("widget::canvas::path::Path", "widget::canvas::Path")?;
+    for name in ["Path", "Frame", "Cache", "Stroke", "Fill", "Style", "Text", "LineCap", "LineJoin"] {
+        builder.alias(
+            format!("advanced::graphics::geometry::{name}"),
+            format!("widget::canvas::{name}"),
+        )?;
+    }
+    builder.alias("advanced::graphics::geometry::Renderer", "widget::Renderer")?;
+    for module in ["path", "stroke", "fill"] {
+        builder.module(format!("advanced::graphics::geometry::{module}"))?;
+    }
+    builder.alias("advanced::graphics::geometry::path::Builder", "widget::canvas::path::Builder")?;
+    builder.alias("advanced::graphics::geometry::stroke::Style", "widget::canvas::Style")?;
+    builder.alias("advanced::graphics::geometry::fill::Rule", "widget::canvas::fill::Rule")?;
+
+    // `canvas(program)` and `Canvas::new(program)`, with its size.
+    let instance = || type_ref::Type::applied("widget::canvas::Instance", [message()?]);
+    let canvas = || type_ref::Type::applied("widget::Canvas", [message()?]);
+    builder.item(item::Definition::function(
+        "widget::canvas",
+        generic(vec![instance()?], canvas()?)?,
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::Canvas::new",
+        generic(vec![instance()?], canvas()?)?,
+    )?)?;
+    length_builders(builder, "widget::Canvas", &["width", "height"])?;
+    // A program's `Instance`: its value, `update`, `draw` and
+    // `mouse_interaction`, and the default of its State.
+    let mut new = signature::Builder::new();
+    for name in ["C", "S", "Message"] {
+        new.type_parameter(name, &[])?;
+    }
+    let parameter = type_ref::Type::parameter;
+    new.parameter(parameter("C")?);
+    new.parameter(type_ref::Type::callable(
+        type_ref::Type::tuple([
+            parameter("C")?,
+            parameter("S")?,
+            ty("Event")?,
+            ty("Rectangle")?,
+            ty("mouse::Cursor")?,
+        ])?,
+        type_ref::Type::option(type_ref::Type::applied("widget::canvas::Action", [message()?])?),
+    ));
+    new.parameter(type_ref::Type::callable(
+        type_ref::Type::tuple([
+            parameter("C")?,
+            parameter("S")?,
+            ty("widget::Renderer")?,
+            ty("Theme")?,
+            ty("Rectangle")?,
+            ty("mouse::Cursor")?,
+        ])?,
+        type_ref::Type::slice(ty("widget::canvas::Geometry")?),
+    ));
+    new.parameter(type_ref::Type::callable(
+        type_ref::Type::tuple([
+            parameter("C")?,
+            parameter("S")?,
+            ty("Rectangle")?,
+            ty("mouse::Cursor")?,
+        ])?,
+        ty("mouse::Interaction")?,
+    ));
+    new.parameter(parameter("S")?);
+    new.output(instance()?);
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Instance::new",
+        new.finish(),
+    )?)?;
+
+    // `canvas::Action::publish(message)` and kin.
+    let action = || type_ref::Type::applied("widget::canvas::Action", [message()?]);
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Action::publish",
+        generic(vec![message()?], action()?)?,
+    )?)?;
+    for name in ["none", "capture", "request_redraw"] {
+        builder.item(item::Definition::associated_function(
+            format!("widget::canvas::Action::{name}"),
+            generic(Vec::new(), action()?)?,
+        )?)?;
+    }
+    builder.item(item::Definition::method(
+        "widget::canvas::Action::and_capture",
+        receiver::Mode::Owned,
+        generic(Vec::new(), action()?)?,
+    )?)?;
+
+    // `Path::circle(center, radius)` and kin, and `Path::new(|b| ..)`.
+    let path = || ty("widget::canvas::Path");
+    let builder_ty = || ty("widget::canvas::path::Builder");
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Path::new",
+        signature(vec![type_ref::Type::callable(builder_ty()?, unit()?)], path()?),
+    )?)?;
+    for (name, inputs) in [
+        ("circle", vec![ty("Point")?, f64_()]),
+        ("line", vec![ty("Point")?, ty("Point")?]),
+        ("rectangle", vec![ty("Point")?, ty("Size")?]),
+        ("rounded_rectangle", vec![ty("Point")?, ty("Size")?, f64_()]),
+    ] {
+        builder.item(item::Definition::associated_function(
+            format!("widget::canvas::Path::{name}"),
+            signature(inputs, path()?),
+        )?)?;
+    }
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::path::Builder::new",
+        signature(Vec::new(), builder_ty()?),
+    )?)?;
+    for (name, inputs) in [
+        ("move_to", vec![ty("Point")?]),
+        ("line_to", vec![ty("Point")?]),
+        ("circle", vec![ty("Point")?, f64_()]),
+        ("rectangle", vec![ty("Point")?, ty("Size")?]),
+        ("rounded_rectangle", vec![ty("Point")?, ty("Size")?, f64_()]),
+        ("arc_to", vec![ty("Point")?, ty("Point")?, f64_()]),
+        ("quadratic_curve_to", vec![ty("Point")?, ty("Point")?]),
+        ("bezier_curve_to", vec![ty("Point")?, ty("Point")?, ty("Point")?]),
+        ("close", Vec::new()),
+    ] {
+        builder.item(item::Definition::method(
+            format!("widget::canvas::path::Builder::{name}"),
+            receiver::Mode::Shared,
+            signature(inputs, unit()?),
+        )?)?;
+    }
+    builder.item(item::Definition::method(
+        "widget::canvas::path::Builder::build",
+        receiver::Mode::Owned,
+        signature(Vec::new(), path()?),
+    )?)?;
+
+    // `Frame::new(renderer, size)`, its drawing and its transforms.
+    let frame = || ty("widget::canvas::Frame");
+    let geometry = || ty("widget::canvas::Geometry");
+    let stroke = || ty("widget::canvas::Stroke");
+    let fill = || ty("widget::canvas::Fill");
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Frame::new",
+        signature(vec![ty("widget::Renderer")?, ty("Size")?], frame()?),
+    )?)?;
+    let mut frame_methods = vec![
+        ("width", Vec::new(), f64_()),
+        ("height", Vec::new(), f64_()),
+        ("size", Vec::new(), ty("Size")?),
+        ("center", Vec::new(), ty("Point")?),
+        ("stroke", vec![path()?, stroke()?], unit()?),
+        ("stroke_rectangle", vec![ty("Point")?, ty("Size")?, stroke()?], unit()?),
+        ("fill_text", vec![ty("widget::canvas::Text")?], unit()?),
+        ("fill_text", vec![type_ref::Type::builtin(type_ref::Builtin::String)], unit()?),
+        ("translate", vec![ty("Vector")?], unit()?),
+        ("rotate", vec![f64_()], unit()?),
+        ("scale", vec![f64_()], unit()?),
+        ("scale_nonuniform", vec![ty("Vector")?], unit()?),
+        ("push_transform", Vec::new(), unit()?),
+        ("pop_transform", Vec::new(), unit()?),
+    ];
+    // `impl Into<Fill>`: a `Fill`, or a `Color` filled solid.
+    for paint in [fill()?, ty("Color")?] {
+        frame_methods.push(("fill", vec![path()?, paint.clone()], unit()?));
+        frame_methods.push(("fill_rectangle", vec![ty("Point")?, ty("Size")?, paint], unit()?));
+    }
+    for (name, inputs, output) in frame_methods {
+        builder.item(item::Definition::method(
+            format!("widget::canvas::Frame::{name}"),
+            receiver::Mode::Shared,
+            signature(inputs, output),
+        )?)?;
+    }
+    let mut with_save = signature::Builder::new();
+    with_save.type_parameter("R", &[])?;
+    with_save.parameter(type_ref::Type::callable(frame()?, type_ref::Type::parameter("R")?));
+    with_save.output(type_ref::Type::parameter("R")?);
+    builder.item(item::Definition::method(
+        "widget::canvas::Frame::with_save",
+        receiver::Mode::Shared,
+        with_save.finish(),
+    )?)?;
+    builder.item(item::Definition::method(
+        "widget::canvas::Frame::into_geometry",
+        receiver::Mode::Owned,
+        signature(Vec::new(), geometry()?),
+    )?)?;
+
+    // `Cache::new()`, `clear()` and `draw(renderer, size, |frame| ..)`.
+    let cache = || ty("widget::canvas::Cache");
+    for name in ["new", "default"] {
+        builder.item(item::Definition::associated_function(
+            format!("widget::canvas::Cache::{name}"),
+            signature(Vec::new(), cache()?),
+        )?)?;
+    }
+    builder.item(item::Definition::method(
+        "widget::canvas::Cache::clear",
+        receiver::Mode::Shared,
+        signature(Vec::new(), unit()?),
+    )?)?;
+    builder.item(item::Definition::method(
+        "widget::canvas::Cache::draw",
+        receiver::Mode::Shared,
+        signature(
+            vec![
+                ty("widget::Renderer")?,
+                ty("Size")?,
+                type_ref::Type::callable(frame()?, unit()?),
+            ],
+            geometry()?,
+        ),
+    )?)?;
+    // What `draw` reads and keeps: Rawr runs its closure itself.
+    builder.item(item::Definition::method(
+        "widget::canvas::Cache::__rawr_cached",
+        receiver::Mode::Shared,
+        signature(vec![ty("Size")?], type_ref::Type::option(geometry()?)),
+    )?)?;
+    builder.item(item::Definition::method(
+        "widget::canvas::Cache::__rawr_store",
+        receiver::Mode::Shared,
+        signature(vec![geometry()?], geometry()?),
+    )?)?;
+
+    // `Stroke { width, style, line_cap, .. }` and its `with_*` builders.
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Stroke::default",
+        signature(Vec::new(), stroke()?),
+    )?)?;
+    for (name, field) in [
+        ("width", f64_()),
+        ("style", ty("widget::canvas::Style")?),
+        ("line_cap", ty("widget::canvas::LineCap")?),
+        ("line_join", ty("widget::canvas::LineJoin")?),
+    ] {
+        builder.item(item::Definition::method(
+            format!("widget::canvas::Stroke::{name}"),
+            receiver::Mode::Shared,
+            signature(Vec::new(), field.clone()),
+        )?)?;
+        builder.item(item::Definition::method(
+            format!("widget::canvas::Stroke::{name}"),
+            receiver::Mode::Owned,
+            signature(vec![field], stroke()?),
+        )?)?;
+    }
+    for (name, input) in [
+        ("with_width", f64_()),
+        ("with_color", ty("Color")?),
+        ("with_line_cap", ty("widget::canvas::LineCap")?),
+        ("with_line_join", ty("widget::canvas::LineJoin")?),
+    ] {
+        builder.item(item::Definition::method(
+            format!("widget::canvas::Stroke::{name}"),
+            receiver::Mode::Owned,
+            signature(vec![input], stroke()?),
+        )?)?;
+    }
+    // `Fill { style, rule }`, and `Style::Solid(color)`.
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Fill::default",
+        signature(Vec::new(), fill()?),
+    )?)?;
+    for (name, field) in [
+        ("style", ty("widget::canvas::Style")?),
+        ("rule", ty("widget::canvas::fill::Rule")?),
+    ] {
+        builder.item(item::Definition::method(
+            format!("widget::canvas::Fill::{name}"),
+            receiver::Mode::Shared,
+            signature(Vec::new(), field.clone()),
+        )?)?;
+        builder.item(item::Definition::method(
+            format!("widget::canvas::Fill::{name}"),
+            receiver::Mode::Owned,
+            signature(vec![field], fill()?),
+        )?)?;
+    }
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Style::Solid",
+        signature(vec![ty("Color")?], ty("widget::canvas::Style")?),
+    )?)?;
+    for name in ["NonZero", "EvenOdd"] {
+        builder.item(item::Definition::associated_value(
+            format!("widget::canvas::fill::Rule::{name}"),
+            ty("widget::canvas::fill::Rule")?,
+        )?)?;
+    }
+    for name in ["Butt", "Square", "Round"] {
+        builder.item(item::Definition::associated_value(
+            format!("widget::canvas::LineCap::{name}"),
+            ty("widget::canvas::LineCap")?,
+        )?)?;
+    }
+    for name in ["Miter", "Round", "Bevel"] {
+        builder.item(item::Definition::associated_value(
+            format!("widget::canvas::LineJoin::{name}"),
+            ty("widget::canvas::LineJoin")?,
+        )?)?;
+    }
+    for name in ["LineCap", "LineJoin"] {
+        let owner = format!("widget::canvas::{name}");
+        builder.item(item::Definition::associated_function(
+            format!("{owner}::default"),
+            signature(Vec::new(), type_ref::Type::registered(owner)?),
+        )?)?;
+    }
+
+    // `canvas::Text { content, position, color, size, .. }`.
+    let text = || ty("widget::canvas::Text");
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Text::default",
+        signature(Vec::new(), text()?),
+    )?)?;
+    for (name, field) in [
+        ("content", type_ref::Type::builtin(type_ref::Builtin::String)),
+        ("position", ty("Point")?),
+        ("max_width", f64_()),
+        ("color", ty("Color")?),
+        ("size", f64_()),
+        ("font", ty("Font")?),
+        ("align_x", ty("widget::text::Alignment")?),
+        ("align_y", ty("alignment::Vertical")?),
+    ] {
+        builder.item(item::Definition::method(
+            format!("widget::canvas::Text::{name}"),
+            receiver::Mode::Shared,
+            signature(Vec::new(), field.clone()),
+        )?)?;
+        builder.item(item::Definition::method(
+            format!("widget::canvas::Text::{name}"),
+            receiver::Mode::Owned,
+            signature(vec![field], text()?),
+        )?)?;
+    }
+    for name in ["Default", "Left", "Center", "Right", "Justified"] {
+        builder.item(item::Definition::associated_value(
+            format!("widget::text::Alignment::{name}"),
+            ty("widget::text::Alignment")?,
+        )?)?;
+    }
+
+    // `mouse::Cursor`, as a canvas reads it.
+    builder.item(item::Definition::associated_value(
+        "mouse::Cursor::Unavailable",
+        ty("mouse::Cursor")?,
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "mouse::Cursor::Available",
+        signature(vec![ty("Point")?], ty("mouse::Cursor")?),
+    )?)?;
+    for (name, inputs, output) in [
+        ("position", Vec::new(), type_ref::Type::option(ty("Point")?)),
+        ("position_in", vec![ty("Rectangle")?], type_ref::Type::option(ty("Point")?)),
+        ("position_over", vec![ty("Rectangle")?], type_ref::Type::option(ty("Point")?)),
+        ("position_from", vec![ty("Point")?], type_ref::Type::option(ty("Point")?)),
+        ("is_over", vec![ty("Rectangle")?], type_ref::Type::builtin(type_ref::Builtin::Bool)),
+    ] {
+        builder.item(item::Definition::method(
+            format!("mouse::Cursor::{name}"),
+            receiver::Mode::Shared,
+            signature(inputs, output),
+        )?)?;
+    }
+
+    // What a canvas reads of its bounds: `bounds.size()`, `center()` and
+    // `contains(point)`, and `Point::ORIGIN`.
+    for (name, inputs, output) in [
+        ("size", Vec::new(), ty("Size")?),
+        ("center", Vec::new(), ty("Point")?),
+        ("position", Vec::new(), ty("Point")?),
+        ("contains", vec![ty("Point")?], type_ref::Type::builtin(type_ref::Builtin::Bool)),
+    ] {
+        builder.item(item::Definition::method(
+            format!("Rectangle::{name}"),
+            receiver::Mode::Shared,
+            signature(inputs, output),
+        )?)?;
+    }
+    builder.item(item::Definition::method(
+        "Point::distance",
+        receiver::Mode::Shared,
+        signature(vec![ty("Point")?], f64_()),
+    )?)?;
+    builder.item(item::Definition::associated_value("Point::ORIGIN", ty("Point")?)?)?;
+    builder.item(item::Definition::associated_function(
+        "mouse::Interaction::default",
+        signature(Vec::new(), ty("mouse::Interaction")?),
+    )?)?;
     Ok(())
 }
 
@@ -3782,6 +4321,7 @@ mod tests {
                     width: iced::Length::Fit,
                     height: None,
                     align_x: iced::advanced::text::Alignment::Default,
+                    align_y: None,
                     style: None,
                     color: None,
                     font: None,
@@ -4078,6 +4618,7 @@ mod tests {
             width: iced::Length::Fit,
             height: None,
             align_x: iced::advanced::text::Alignment::Default,
+            align_y: None,
             style: None,
             color: None,
             font: None,
