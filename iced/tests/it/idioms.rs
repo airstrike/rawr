@@ -1212,3 +1212,17 @@ pub fn main() -> iced::Result {
     adapter.refresh_view().unwrap();
     find(&adapter, "loaded 3");
 }
+
+#[test]
+fn a_struct_derives_debug_over_an_image_handle() {
+    let adapter = boot_with(
+        r#"text(format!("{:?}", Picture { sun: iced::widget::image::Handle::from_path("sun.png") }).contains("sun.png").to_string())"#,
+        r#"
+#[derive(Debug)]
+struct Picture {
+    sun: iced::widget::image::Handle,
+}
+"#,
+    );
+    find(&adapter, "true");
+}

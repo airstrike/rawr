@@ -110,6 +110,8 @@ fn register_debug() {
     register::<iced::widget::text::LineHeight>();
     register::<iced::widget::text::Shaping>();
     register::<iced::widget::image::FilterMethod>();
+    register::<iced::widget::image::Handle>();
+    register::<iced::widget::svg::Handle>();
     register::<iced::Event>();
     register::<iced::Font>();
     register::<iced::keyboard::Event>();
@@ -422,7 +424,13 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.value_type::<iced::widget::image::Handle>(
         "widget::image::Handle",
         &[],
-        &[capability::Kind::Clone, capability::Kind::PartialEq, capability::Kind::Send, capability::Kind::Static],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
     )?;
     builder.value_type::<iced::widget::svg::Handle>(
         "widget::svg::Handle",
