@@ -61,6 +61,8 @@ const STD_TRAIT_FUNCTIONS: &[(&str, &[&str])] = &[
 const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
 const TASK_PERFORM_PATH: &str = "iced::Task::perform";
 const WIDGET_TEXT_PATH: &str = "iced::widget::text";
+const WIDGET_SPAN_PATH: &str = "iced::widget::span";
+const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
 const WIDGET_VOID_PATH: &str = "iced::widget::void";
 
 type OperationSelector = (
@@ -30298,6 +30300,20 @@ impl<'a> Parser<'a> {
             && let Some(items) = self.models.host_items(WIDGET_TEXT_PATH).map(<[_]>::to_vec)
         {
             let owner = self.models.item_owner(WIDGET_TEXT_PATH).cloned();
+            let call = value.span;
+            let placeholder = self.operator_expr(origin::Fragment::default(), Ty::Unit, call);
+            let string = std::mem::replace(value, placeholder);
+            *value = self.call_host_function(&items, owner, vec![string], call)?;
+            return self.coerce_expr(&target, value);
+        }
+        // iced's `impl From<&str> for Span`: a string where a span is
+        // expected is its `span`, as `rich_text!["a ", span("b")]` takes.
+        if matches!(&source, Ty::String)
+            && let Ty::Host { proof, .. } = &target
+            && proof.definition.path().as_str() == WIDGET_SPAN_TYPE
+            && let Some(items) = self.models.host_items(WIDGET_SPAN_PATH).map(<[_]>::to_vec)
+        {
+            let owner = self.models.item_owner(WIDGET_SPAN_PATH).cloned();
             let call = value.span;
             let placeholder = self.operator_expr(origin::Fragment::default(), Ty::Unit, call);
             let string = std::mem::replace(value, placeholder);

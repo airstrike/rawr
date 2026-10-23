@@ -430,6 +430,34 @@ pub(crate) struct Image {
     pub(crate) scale: Option<f32>,
 }
 
+/// iced's `span(text)`: a fragment of rich text, its link a Message-like
+/// value that `on_link_click` maps.
+#[derive(Clone)]
+pub(crate) struct Span {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) text: String,
+    pub(crate) size: Option<f32>,
+    pub(crate) font: Option<iced::Font>,
+    pub(crate) color: Option<iced::Color>,
+    pub(crate) link: Option<Dynamic>,
+    pub(crate) underline: bool,
+    pub(crate) strikethrough: bool,
+}
+
+/// iced's `rich_text(spans)` and `rich_text![..]`.
+#[derive(Clone)]
+pub(crate) struct Rich {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) spans: Vec<Span>,
+    pub(crate) on_link_click: Option<item::Value>,
+    pub(crate) size: Option<f32>,
+    pub(crate) font: Option<iced::Font>,
+    pub(crate) color: Option<iced::Color>,
+    pub(crate) width: Option<iced::Length>,
+    pub(crate) height: Option<iced::Length>,
+}
+
 /// iced's `svg(handle)`.
 #[derive(Clone)]
 pub(crate) struct Svg {

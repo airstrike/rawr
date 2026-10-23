@@ -350,6 +350,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.type_::<marker::Svg>("widget::Svg", &[], &[])?;
     builder.project_with("widget::Svg", "Element", &[host::type_def::Argument::fresh()])?;
     builder.type_::<marker::QrCode>("widget::QRCode", &[], &[])?;
+    builder.type_::<marker::Span>("widget::text::Span", &["Link"], &[])?;
+    builder.type_::<marker::Rich>("widget::text::Rich", &["Link", "Message"], &[])?;
+    builder.project("widget::text::Rich", "Element", &["Message"])?;
     builder.project_with("widget::QRCode", "Element", &[host::type_def::Argument::fresh()])?;
     builder.type_::<marker::Pin>("widget::Pin", &["Message"], &[])?;
     builder.project("widget::Pin", "Element", &["Message"])?;
@@ -876,6 +879,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_native_tasks(&mut builder)?;
     declare_wrappers(&mut builder)?;
     declare_media(&mut builder)?;
+    declare_rich_text(&mut builder)?;
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
@@ -2041,6 +2045,93 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
     builder.item(item::Definition::function("widget::qr_code", qr_code.finish())?)?;
     pixels_builders(builder, "widget::QRCode", "cell_size")?;
     pixels_builders(builder, "widget::QRCode", "total_size")?;
+    Ok(())
+}
+
+/// iced's `span(text)`, `rich_text(spans)` and `rich_text![..]`. A span's
+/// `Link` is any value; `on_link_click` maps a clicked link to a Message.
+fn declare_rich_text(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let link = || type_ref::Type::parameter("Link");
+    let span = || type_ref::Type::applied("widget::text::Span", [type_ref::Type::parameter("Link")?]);
+    let rich = || {
+        type_ref::Type::applied(
+            "widget::text::Rich",
+            [type_ref::Type::parameter("Link")?, type_ref::Type::parameter("Message")?],
+        )
+    };
+    let mut function = signature::Builder::new();
+    function.type_parameter("Link", &[])?;
+    function.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    function.output(span()?);
+    builder.item(item::Definition::function("widget::span", function.finish())?)?;
+    let span_builder = |input: type_ref::Type| -> Result<signature::Definition, host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("Link", &[])?;
+        signature.parameter(input);
+        signature.output(span()?);
+        Ok(signature.finish())
+    };
+    let color = || type_ref::Type::registered("Color");
+    let font = || type_ref::Type::registered("Font");
+    let bool_ = || type_ref::Type::builtin(type_ref::Builtin::Bool);
+    let mut span_inputs = vec![
+        ("color", color()?),
+        ("color_maybe", type_ref::Type::option(color()?)),
+        ("font", font()?),
+        ("font_maybe", type_ref::Type::option(font()?)),
+        ("link", link()?),
+        ("link_maybe", type_ref::Type::option(link()?)),
+        ("underline", bool_()),
+        ("strikethrough", bool_()),
+    ];
+    span_inputs.extend(PIXELS.map(|pixels| ("size", type_ref::Type::builtin(pixels))));
+    for (name, input) in span_inputs {
+        builder.item(item::Definition::method(
+            format!("widget::text::Span::{name}"),
+            receiver::Mode::Owned,
+            span_builder(input)?,
+        )?)?;
+    }
+
+    let rich_signature = |input: Option<type_ref::Type>| -> Result<signature::Definition, host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("Link", &[])?;
+        signature.type_parameter("Message", &[])?;
+        if let Some(input) = input {
+            signature.parameter(input);
+        }
+        signature.output(rich()?);
+        Ok(signature.finish())
+    };
+    builder.item(item::Definition::function(
+        "widget::rich_text",
+        rich_signature(Some(type_ref::Type::slice(span()?)))?,
+    )?)?;
+    builder.item(item::Definition::intrinsic_macro(
+        "widget::rich_text",
+        rich_signature(Some(span()?))?,
+    )?)?;
+    let mut rich_inputs = vec![
+        ("color", color()?),
+        ("color_maybe", type_ref::Type::option(color()?)),
+        ("font", font()?),
+        (
+            "on_link_click",
+            type_ref::Type::callable(link()?, type_ref::Type::parameter("Message")?),
+        ),
+    ];
+    rich_inputs.extend(PIXELS.map(|pixels| ("size", type_ref::Type::builtin(pixels))));
+    for name in ["width", "height"] {
+        rich_inputs.push((name, type_ref::Type::registered("Length")?));
+        rich_inputs.extend(PIXELS.map(|pixels| (name, type_ref::Type::builtin(pixels))));
+    }
+    for (name, input) in rich_inputs {
+        builder.item(item::Definition::method(
+            format!("widget::text::Rich::{name}"),
+            receiver::Mode::Owned,
+            rich_signature(Some(input))?,
+        )?)?;
+    }
     Ok(())
 }
 

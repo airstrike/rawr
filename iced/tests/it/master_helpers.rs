@@ -546,3 +546,54 @@ fn master_closure_parameters_take_the_types_of_the_other_arguments() {
     find(&adapter, "BETA");
     find(&adapter, "version 1");
 }
+
+const RICH: &str = r#"
+use iced::widget::{column, rich_text, span, text};
+use iced::{Color, Font, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+
+#[derive(Default)]
+struct State {
+    opened: i64,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    OpenTrunk,
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::OpenTrunk => self.opened += 1,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            rich_text![
+                "Run it with ",
+                span("trunk")
+                    .color(Color::from_rgb(0.5, 0.5, 1.0))
+                    .underline(true)
+                    .font(Font::MONOSPACE)
+                    .link(Message::OpenTrunk),
+                "."
+            ]
+            .on_link_click(|link| link),
+            rich_text([span("plain"), span(" spans").size(12).link(Message::OpenTrunk)])
+                .on_link_click(|link| link),
+            text(self.opened),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_rich_text_takes_strings_and_spans_with_links() {
+    let adapter = boot(RICH);
+    find(&adapter, "0");
+}
