@@ -5,7 +5,6 @@ Cargo.lock
 benches/results
 clippy.toml
 Rawr.toml
-!tests/fixtures/rust-import-zero/rawr.toml
 **/*.bat
 **/*.exe
 doc/rawr-sync.json

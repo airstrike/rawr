@@ -4,7 +4,7 @@ use rawr_iced::{control, preview};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut host = preview::Compiler::new()?
-        .check_named_source("control-example.rawr", source())?
+        .check_named_source("control-example.rs", source())?
         .prepare()?
         .into_control();
 

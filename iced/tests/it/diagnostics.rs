@@ -6,7 +6,7 @@ use rawr::project;
 #[test]
 fn runtime_view_failure_retains_canonical_source_report_and_overlay() {
     let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/diagnostics/view_error.rawr");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/diagnostics/view_error.rs");
     let target = project::Target::discover(&path).unwrap();
     let prepared = rawr_iced::application::Compiler::new()
         .unwrap()
@@ -22,7 +22,7 @@ fn runtime_view_failure_retains_canonical_source_report_and_overlay() {
     assert_eq!(report.message(), "runtime error: initial view failed");
     assert_eq!(report.labels().len(), 1);
     assert_eq!(report.labels()[0].kind(), LabelKind::Primary);
-    assert_eq!(report.labels()[0].span().start().line(), Some(19));
+    assert_eq!(report.labels()[0].span().start().line(), Some(20));
     assert_eq!(
         report.labels()[0].source().identity(),
         path.to_string_lossy()

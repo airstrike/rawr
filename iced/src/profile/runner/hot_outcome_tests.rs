@@ -14,7 +14,7 @@ fn superseded_error_reports_leave_transport_ready_for_next_reload() {
         std::thread::current().id()
     ));
     std::fs::create_dir(&root).unwrap();
-    let path = root.join("main.rawr");
+    let path = root.join("main.rs");
     std::fs::write(&path, "let value = 1;").unwrap();
     let target = rawr::project::Target::discover(&path).unwrap();
     let engine = rawr::Shared::new(rawr::Engine::new());
@@ -223,7 +223,7 @@ fn hot_observation_is_single_use_owner_bound_and_does_not_refresh_revision() {
     ));
     std::fs::create_dir(&root).unwrap();
     let root = std::fs::canonicalize(root).unwrap();
-    let path = root.join("main.rawr");
+    let path = root.join("main.rs");
     std::fs::write(&path, "let value = 1;").unwrap();
     let target = rawr::project::Target::discover(&path).unwrap();
     let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target).unwrap();

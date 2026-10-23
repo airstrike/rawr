@@ -53,7 +53,7 @@ fn every_builtin_style_binds_and_lowers_through_an_application() {
 fn preview_boot_accepts_conditional_private_style_values() {
     let mut prepared = preview::Compiler::new()
         .unwrap()
-        .check_named_source("styled-preview.rawr", preview_source())
+        .check_named_source("styled-preview.rs", preview_source())
         .unwrap()
         .prepare()
         .unwrap();

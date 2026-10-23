@@ -421,7 +421,7 @@ mod tests {
     fn checked_counter_prepares_without_opening_a_window() {
         let checked = Compiler::new()
             .unwrap()
-            .check_source_observed(include_str!("../examples/application_counter.rawr"))
+            .check_source_observed(include_str!("../examples/scripts/application_counter.rs"))
             .into_result()
             .unwrap();
         let prepared = checked.prepare().unwrap();
@@ -450,7 +450,7 @@ mod tests {
     fn ordinary_check_and_view_paths_do_not_start_an_observation_session() {
         let checked = Compiler::new()
             .unwrap()
-            .check_source(include_str!("../examples/application_counter.rawr"))
+            .check_source(include_str!("../examples/scripts/application_counter.rs"))
             .unwrap();
         assert!(checked.timing().attempts().is_empty());
 
@@ -463,7 +463,7 @@ mod tests {
     fn observed_compile_records_the_single_pipeline_in_semantic_order() {
         let observed = Compiler::new()
             .unwrap()
-            .check_source_observed(include_str!("../examples/application_counter.rawr"));
+            .check_source_observed(include_str!("../examples/scripts/application_counter.rs"));
 
         assert!(observed.outcome().is_ok());
         let attempts = observed.timing().attempts();

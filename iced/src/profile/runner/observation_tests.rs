@@ -17,9 +17,7 @@ impl Fixture {
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         let root = fs::canonicalize(root).unwrap();
-        fs::write(
-            root.join("src/main.rawr"),
-            r#"
+        crate::write_marked(&root, "src/main.rs", r#"
 use iced::Element;
 use iced::widget::text;
 #[derive(Default)] struct State;
@@ -29,9 +27,7 @@ impl State {
     fn view(&self) -> Element<Message> { text("Observed") }
 }
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
-"#,
-        )
-        .unwrap();
+"#);
         let mut engine = rawr::Engine::new();
         crate::install(&mut engine).unwrap();
         let target = rawr::project::Target::discover(&root).unwrap();
@@ -115,7 +111,7 @@ fn child_startup_revalidates_rawr_bytes_and_requires_exact_coverage() {
     assert!(bound
         .observe(&inputs.encode_observation().unwrap())
         .is_err());
-    fs::write(fixture.root.join("src/main.rawr"), "changed").unwrap();
+    crate::write_marked(&fixture.root, "src/main.rs", "changed");
     assert!(bound
         .start(fixture.engine.clone(), Box::default(), runtime)
         .is_err());
@@ -154,6 +150,7 @@ fn generated_transport_retains_and_drains_healthy_refresh_intent() {
         .unwrap();
     let service = match &running.live {
         LiveGeneration::Application(_, service) | LiveGeneration::Preview(_, service) => service,
+        LiveGeneration::Main(_) => unreachable!("the fixture is an application"),
     };
     for _ in 0..3 {
         assert!(!transport.take_refresh());
@@ -181,6 +178,7 @@ fn generated_retirement_waits_for_ui_exit_and_transfers_refresh_once() {
         .unwrap();
     let service = match &mut running.live {
         LiveGeneration::Application(_, service) | LiveGeneration::Preview(_, service) => service,
+        LiveGeneration::Main(_) => unreachable!("the fixture is an application"),
     };
     std::thread::scope(|scope| {
         let retirement = scope.spawn(move || {

@@ -524,9 +524,7 @@ mod tests {
                 std::thread::current().id()
             ));
             std::fs::create_dir_all(root.join("src")).unwrap();
-            std::fs::write(
-                root.join("src/main.rawr"),
-                format!(
+            crate::write_marked(&root, "src/main.rs", format!(
                     r#"
 use iced::Element;
 use iced::widget::text;
@@ -539,9 +537,7 @@ impl State {{
 }}
 pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
 "#
-                ),
-            )
-            .unwrap();
+                ));
             let mut engine = rawr::Engine::new();
             crate::install(&mut engine).unwrap();
             let engine = rawr::Shared::new(engine);

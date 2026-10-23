@@ -4,8 +4,8 @@ use rawr_import::profile::runtime::Runtime as _;
 fn rejected_or_stale_candidate_does_not_poison_the_next_prepare() {
     let limits = rawr_import::cargo::Limits::standard();
     let mut snapshot = rawr_import::surface::Snapshot::builder(&limits);
-    snapshot.entry("application.rawr").unwrap();
-    snapshot.file("application.rawr", b"last good").unwrap();
+    snapshot.entry("application.rs").unwrap();
+    snapshot.file("application.rs", b"last good").unwrap();
     let snapshot = snapshot.seal().unwrap();
     let key = rawr_import::supervisor::GenerationKey::fixture([0x11; 32]);
     let route = rawr_import::profile::activation::Route::fixture(key, [0x22; 32]);

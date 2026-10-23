@@ -1,3 +1,4 @@
+// rawr
 pub mod dial;
 
 use crate::dial::App;
@@ -33,7 +34,7 @@ use crate::dial::App;
 
 
 
-// Same line number as the layout hook declaration in dial.rawr.
+// Same line number as the layout hook declaration in dial.rs.
 
 pub fn main() -> iced::Result {
     iced::run(App::update, App::view)

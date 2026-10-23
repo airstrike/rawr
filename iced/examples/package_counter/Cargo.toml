@@ -1,0 +1,11 @@
+[package]
+name = "package-counter"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

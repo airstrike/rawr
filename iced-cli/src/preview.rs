@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn preview_preparation_binds_and_boots_without_opening_a_window() {
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../iced/examples/preview_metadata.rawr");
+            .join("../iced/examples/scripts/preview_metadata.rs");
         let source = std::fs::canonicalize(source).unwrap();
         assert_eq!(
             super::split(Some(PathBuf::from("kit/dial")), None),

@@ -11,14 +11,9 @@ static NEXT_PROJECT: AtomicUsize = AtomicUsize::new(0);
 #[test]
 fn candidate_retains_one_exact_generation_proof_bundle() {
     let project = Project::new("proof-bundle");
-    project.write(
-        "rawr.toml",
-        "[package]\nname = \"reload-app\"\n\n[dependencies]\npalette = { path = \"palette\" }\n",
-    );
-    project.write("src/main.rawr", source("self.value += 1"));
-    project.write("palette/rawr.toml", "[package]\nname = \"palette-pack\"\n");
-    project.write("palette/src/lib.rawr", "");
-
+    project.write("Cargo.toml", "[package]\nname = \"reload-app\"\n");
+    project.write("src/main.rs", &format!("mod palette;\n{}", source("self.value += 1")));
+    project.write("src/palette.rs", "");
     let engine = compiler();
     let first = compile(&engine, &project);
 
@@ -28,29 +23,15 @@ fn candidate_retains_one_exact_generation_proof_bundle() {
     assert!(first.callbacks().application().is_some());
     assert!(!first.callbacks().items().is_empty());
     assert!(first.callbacks().widgets().is_empty());
-    assert_eq!(first.source().packages().len(), 2);
+    assert_eq!(first.source().packages().len(), 1);
     assert_eq!(first.source().sources().len(), 2);
-    assert_eq!(first.source().entry_package().name(), "reload-app");
-    assert_eq!(first.source().entry_package().dependencies().len(), 1);
-    assert_eq!(
-        first.source().entry_package().dependencies()[0].alias(),
-        "palette"
-    );
-    assert_eq!(
-        first.source().entry_package().dependencies()[0].package(),
-        "palette-pack"
-    );
-    let manifest = fs::canonicalize(project.path().join("rawr.toml")).unwrap();
-    assert_eq!(
-        first.source().entry_package().manifest(),
-        Some(manifest.as_path())
-    );
+    assert_eq!(first.source().entry_package().name(), "main");
     assert_eq!(
         first.source().entry_source().text(),
-        source("self.value += 1")
+        format!("// rawr\nmod palette;\n{}", source("self.value += 1"))
     );
 
-    project.write("src/main.rawr", source("self.value += 2"));
+    project.write("src/main.rs", &format!("mod palette;\n{}", source("self.value += 2")));
     let second = compile(&engine, &project);
 
     assert_ne!(first.id(), second.id());
@@ -58,7 +39,7 @@ fn candidate_retains_one_exact_generation_proof_bundle() {
     assert_eq!(first.callbacks(), second.callbacks());
     assert_eq!(
         second.source().entry_source().text(),
-        source("self.value += 2")
+        format!("// rawr\nmod palette;\n{}", source("self.value += 2"))
     );
 }
 
@@ -66,7 +47,7 @@ fn candidate_retains_one_exact_generation_proof_bundle() {
 fn compatibility_plan_owns_the_candidate_without_mutating_current() {
     let project = Project::new("atomic-current");
     let first_source = source("self.value += 1").replace("    #[preview]\n", "");
-    project.write("src/main.rawr", &first_source);
+    project.write("src/main.rs", &first_source);
     let engine = compiler();
     let first = compile(&engine, &project).generation().clone();
     assert!(first.previews().is_empty());
@@ -74,7 +55,7 @@ fn compatibility_plan_owns_the_candidate_without_mutating_current() {
     let snapshot = first.clone();
 
     let second_source = source("self.value += 2").replace("    #[preview]\n", "");
-    project.write("src/main.rawr", &second_source);
+    project.write("src/main.rs", &second_source);
     let second = compile(&engine, &project);
     let second_id = second.id();
     let second_text = second.source().entry_source().text().to_owned();
@@ -82,20 +63,20 @@ fn compatibility_plan_owns_the_candidate_without_mutating_current() {
 
     assert_eq!(plan.evidence_set()[0].action(), Action::Retain);
     assert!(Arc::ptr_eq(&snapshot, &first));
-    assert_eq!(snapshot.source().entry_source().text(), first_source);
+    assert_eq!(snapshot.source().entry_source().text(), format!("// rawr\n{first_source}"));
     assert_eq!(plan.evidence_set()[0].current(), first.id());
     assert_eq!(plan.evidence_set()[0].candidate(), second_id);
-    assert_eq!(second_text, second_source);
+    assert_eq!(second_text, format!("// rawr\n{second_source}"));
 }
 
 #[test]
 fn body_and_formatting_only_changes_retain_application_state() {
     let project = Project::new("body-formatting");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let first = compile(&engine, &project).generation().clone();
 
-    project.write("src/main.rawr", SOURCE_TWO);
+    project.write("src/main.rs", SOURCE_TWO);
     let body = compare(
         first.clone(),
         compile(&engine, &project),
@@ -113,7 +94,7 @@ fn body_and_formatting_only_changes_retain_application_state() {
             "enum Message { Increment }",
             "enum Message {\n    Increment,\n}",
         );
-    project.write("src/main.rawr", &formatted);
+    project.write("src/main.rs", &formatted);
     let formatted = compare(first, compile(&engine, &project), Owner::Application);
     assert_eq!(formatted.evidence_set()[0].action(), Action::Retain);
     assert!(formatted.evidence_set()[0].reasons().is_empty());
@@ -122,27 +103,27 @@ fn body_and_formatting_only_changes_retain_application_state() {
 #[test]
 fn reachable_nested_schema_and_callback_drift_reset_state() {
     let project = Project::new("nested-schema");
-    project.write("src/main.rawr", &nested_source("i64"));
+    project.write("src/main.rs", &nested_source("i64"));
     let engine = compiler();
     let first = compile(&engine, &project).generation().clone();
 
-    project.write("src/main.rawr", &nested_source("bool"));
+    project.write("src/main.rs", &nested_source("bool"));
     let schema = compare(first, compile(&engine, &project), Owner::Application);
     assert_eq!(schema.evidence_set()[0].action(), Action::Reset);
     assert!(schema.evidence_set()[0].reasons().contains(&Reason::Schema));
 
-    project.write("src/main.rawr", &callback_source(false));
+    project.write("src/main.rs", &callback_source(false));
     let first = compile(&engine, &project).generation().clone();
-    project.write("src/main.rawr", &callback_source(true));
+    project.write("src/main.rs", &callback_source(true));
     let callback = compare(first, compile(&engine, &project), Owner::Application);
     assert_eq!(callback.evidence_set()[0].action(), Action::Reset);
     assert!(callback.evidence_set()[0]
         .reasons()
         .contains(&Reason::Callback));
 
-    project.write("src/main.rawr", &message_source(false));
+    project.write("src/main.rs", &message_source(false));
     let first = compile(&engine, &project).generation().clone();
-    project.write("src/main.rawr", &message_source(true));
+    project.write("src/main.rs", &message_source(true));
     let message = compare(first, compile(&engine, &project), Owner::Application);
     assert_eq!(message.evidence_set()[0].action(), Action::Reset);
     assert!(message.evidence_set()[0]
@@ -156,13 +137,8 @@ fn reachable_nested_schema_and_callback_drift_reset_state() {
 #[test]
 fn unrelated_package_and_preview_changes_keep_the_selected_owner() {
     let project = Project::new("owner-separation");
-    project.write(
-        "rawr.toml",
-        "[package]\nname = \"owner-app\"\n\n[dependencies]\nextra = { path = \"extra\" }\n",
-    );
-    project.write("src/main.rawr", &preview_source("i64"));
-    project.write("extra/rawr.toml", "[package]\nname = \"extra\"\n");
-    project.write("extra/src/lib.rawr", "pub struct Extra { value: i64 }");
+    project.write("src/main.rs", &format!("mod extra;\n{}", preview_source("i64")));
+    project.write("src/extra.rs", "pub struct Extra { value: i64 }");
     let engine = compiler();
     let first = compile(&engine, &project).generation().clone();
     let selected = first
@@ -180,8 +156,8 @@ fn unrelated_package_and_preview_changes_keep_the_selected_owner() {
         .key()
         .clone();
 
-    project.write("extra/src/lib.rawr", "pub struct Extra { value: bool }");
-    project.write("src/main.rawr", &preview_source("bool"));
+    project.write("src/extra.rs", "pub struct Extra { value: bool }");
+    project.write("src/main.rs", &format!("mod extra;\n{}", preview_source("bool")));
     let candidate = compile(&engine, &project);
     let application = compare(first.clone(), candidate, Owner::Application);
     assert_eq!(application.evidence_set()[0].action(), Action::Retain);
@@ -197,24 +173,13 @@ fn unrelated_package_and_preview_changes_keep_the_selected_owner() {
 }
 
 #[test]
-fn package_identity_widget_protocol_and_opaque_content_reset_conservatively() {
-    let project = Project::new("identity-widget-opaque");
-    project.write("rawr.toml", "[package]\nname = \"before\"\n");
-    project.write("src/main.rawr", &nested_source("i64"));
+fn widget_protocol_and_opaque_content_reset_conservatively() {
+    let project = Project::new("widget-opaque");
     let engine = compiler();
-    let first = compile(&engine, &project).generation().clone();
-    project.write("rawr.toml", "[package]\nname = \"after\"\n");
-    let renamed = compare(first, compile(&engine, &project), Owner::Application);
-    assert_eq!(renamed.evidence_set()[0].action(), Action::Reset);
-    assert!(renamed.evidence_set()[0]
-        .reasons()
-        .contains(&Reason::Schema));
-
-    project.write("rawr.toml", "[package]\nname = \"widget\"\n");
-    project.write("src/main.rawr", &widget_source("i64", "0"));
+    project.write("src/main.rs", &widget_source("i64", "0"));
     let first = compile(&engine, &project).generation().clone();
     let widget_body = widget_source("i64", "0").replace("throw \"size\"", "throw \"changed\"");
-    project.write("src/main.rawr", &widget_body);
+    project.write("src/main.rs", &widget_body);
     let compatible = compare(
         first.clone(),
         compile(&engine, &project),
@@ -222,15 +187,15 @@ fn package_identity_widget_protocol_and_opaque_content_reset_conservatively() {
     );
     assert_eq!(compatible.evidence_set()[0].action(), Action::Retain);
 
-    project.write("src/main.rawr", &widget_source("bool", "false"));
+    project.write("src/main.rs", &widget_source("bool", "false"));
     let widget = compare(first, compile(&engine, &project), Owner::Application);
     assert_eq!(widget.evidence_set()[0].action(), Action::Reset);
     assert!(widget.evidence_set()[0].reasons().contains(&Reason::Widget));
 
-    project.write("src/main.rawr", &opaque_source("i64"));
+    project.write("src/main.rs", &opaque_source("i64"));
     let first = compile(&engine, &project).generation().clone();
     let task_body = opaque_source("i64").replace("button(\"Tick\")", "button(\"Changed\")");
-    project.write("src/main.rawr", &task_body);
+    project.write("src/main.rs", &task_body);
     let compatible = compare(
         first.clone(),
         compile(&engine, &project),
@@ -239,7 +204,7 @@ fn package_identity_widget_protocol_and_opaque_content_reset_conservatively() {
     assert_eq!(compatible.evidence_set()[0].action(), Action::Retain);
     assert!(compatible.evidence_set()[0].is_opaque());
 
-    project.write("src/main.rawr", &opaque_source("bool"));
+    project.write("src/main.rs", &opaque_source("bool"));
     let opaque = compare(first, compile(&engine, &project), Owner::Application);
     assert_eq!(opaque.evidence_set()[0].action(), Action::Reset);
     assert!(opaque.evidence_set()[0].is_opaque());
@@ -258,11 +223,11 @@ fn owner_sets_reject_invalid_scope_and_order_multi_owner_evidence() {
     );
 
     let project = Project::new("owner-set");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let current = compile(&engine, &project).generation().clone();
     let preview = current.previews()[0].key().clone();
-    project.write("src/main.rawr", SOURCE_TWO);
+    project.write("src/main.rs", SOURCE_TWO);
     let owners = Owners::new([Owner::Preview(preview.clone()), Owner::Application]).unwrap();
     assert_eq!(
         owners.iter().cloned().collect::<Vec<_>>(),
@@ -285,7 +250,7 @@ fn owner_sets_reject_invalid_scope_and_order_multi_owner_evidence() {
 #[test]
 fn binding_rejects_wrong_engine_origin_and_missing_runtime_facades() {
     let project = Project::new("binding-rejection");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let wrong = compiler();
     let candidate = compile(&engine, &project);
@@ -311,22 +276,18 @@ fn binding_rejects_wrong_engine_origin_and_missing_runtime_facades() {
 #[test]
 fn staged_inputs_cover_candidate_additions_and_withdraw_on_drop() {
     let project = Project::new("staged-input-union");
-    project.write("rawr.toml", "[package]\nname = \"staged-inputs\"\n");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("Cargo.toml", "[package]\nname = \"staged-inputs\"\n");
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let first = compile(&engine, &project);
     let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
         rawr::reload::source::Inputs::from_graph(first.source()),
     ));
 
-    project.write(
-        "rawr.toml",
-        "[package]\nname = \"staged-inputs\"\n\n[dependencies]\nextra = { path = \"extra\" }\n",
-    );
-    project.write("extra/rawr.toml", "[package]\nname = \"extra\"\n");
-    project.write("extra/src/lib.rawr", "pub struct Added;");
+    project.write("src/main.rs", &format!("mod extra;\n{SOURCE_ONE}"));
+    project.write("src/extra.rs", "pub struct Added;");
     let candidate = compile(&engine, &project);
-    let added = fs::canonicalize(project.path().join("extra/src/lib.rawr")).unwrap();
+    let added = fs::canonicalize(project.path().join("src/extra.rs")).unwrap();
     let (_gate, candidate) = scheduled((
         (),
         rawr::reload::source::Snapshot::from_graph(candidate.source()),
@@ -346,35 +307,35 @@ fn staged_inputs_cover_candidate_additions_and_withdraw_on_drop() {
 #[test]
 fn staged_snapshot_revalidation_rejects_source_and_manifest_drift() {
     let project = Project::new("snapshot-revalidation");
-    project.write("rawr.toml", "[package]\nname = \"snapshot\"\n");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("Cargo.toml", "[package]\nname = \"snapshot\"\n");
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let candidate = compile(&engine, &project);
     let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
         rawr::reload::source::Inputs::from_graph(candidate.source()),
     ));
-    let source = fs::canonicalize(project.path().join("src/main.rawr")).unwrap();
-    let manifest = fs::canonicalize(project.path().join("rawr.toml")).unwrap();
+    let source = fs::canonicalize(project.path().join("src/main.rs")).unwrap();
+    let manifest = fs::canonicalize(project.path().join("Cargo.toml")).unwrap();
 
     let (_gate, source_stage) = scheduled((
         (),
         rawr::reload::source::Snapshot::from_graph(candidate.source()),
     ));
     let source_stage = source_stage.stage_inputs(&publication);
-    project.write("src/main.rawr", SOURCE_TWO);
+    project.write("src/main.rs", SOURCE_TWO);
     assert!(matches!(
         source_stage.try_map(|(_, stage)| stage.revalidate()),
         Err(rawr::reload::source::Error::Changed { path }) if path == source
     ));
     assert_eq!(publication.read().staged(), 0);
 
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("src/main.rs", SOURCE_ONE);
     let (_gate, manifest_stage) = scheduled((
         (),
         rawr::reload::source::Snapshot::from_graph(candidate.source()),
     ));
     let manifest_stage = manifest_stage.stage_inputs(&publication);
-    project.write("rawr.toml", "[package]\nname = \"snapshot-renamed\"\n");
+    project.write("Cargo.toml", "[package]\nname = \"snapshot-renamed\"\n");
     assert!(matches!(
         manifest_stage.try_map(|(_, stage)| stage.revalidate()),
         Err(rawr::reload::source::Error::Changed { path }) if path == manifest
@@ -385,8 +346,8 @@ fn staged_snapshot_revalidation_rejects_source_and_manifest_drift() {
 #[test]
 fn gate_admits_host_and_exact_inputs_as_one_structural_replacement() {
     let project = Project::new("dual-admission");
-    project.write("rawr.toml", "[package]\nname = \"dual\"\n");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("Cargo.toml", "[package]\nname = \"dual\"\n");
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let first = compile(&engine, &project);
     let initial_inputs = rawr::reload::source::Inputs::from_graph(first.source());
@@ -397,15 +358,10 @@ fn gate_admits_host_and_exact_inputs_as_one_structural_replacement() {
         initial_inputs,
     ));
 
-    project.write(
-        "rawr.toml",
-        "[package]\nname = \"dual\"\n\n[dependencies]\nextra = { path = \"extra\" }\n",
-    );
-    project.write("extra/rawr.toml", "[package]\nname = \"extra\"\n");
-    project.write("extra/src/lib.rawr", "pub struct Added;");
-    project.write("src/main.rawr", SOURCE_TWO);
+    project.write("src/extra.rs", "pub struct Added;");
+    project.write("src/main.rs", &format!("mod extra;\n{SOURCE_TWO}"));
     let candidate = compile(&engine, &project);
-    let added = fs::canonicalize(project.path().join("extra/src/lib.rawr")).unwrap();
+    let added = fs::canonicalize(project.path().join("src/extra.rs")).unwrap();
     let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());
     let prepared = Plan::compare(retained.clone(), candidate, Owners::one(Owner::Application))
         .bind(&engine, registry())
@@ -436,8 +392,8 @@ fn gate_admits_host_and_exact_inputs_as_one_structural_replacement() {
 #[test]
 fn cross_publication_proof_rejects_without_changing_host_or_inputs() {
     let project = Project::new("cross-publication");
-    project.write("rawr.toml", "[package]\nname = \"cross-publication\"\n");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("Cargo.toml", "[package]\nname = \"cross-publication\"\n");
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let first = compile(&engine, &project);
     let inputs = rawr::reload::source::Inputs::from_graph(first.source());
@@ -449,7 +405,7 @@ fn cross_publication_proof_rejects_without_changing_host_or_inputs() {
     ));
     let foreign_publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(inputs));
 
-    project.write("src/main.rawr", SOURCE_TWO);
+    project.write("src/main.rs", SOURCE_TWO);
     let candidate = compile(&engine, &project);
     let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());
     let prepared = Plan::compare(retained.clone(), candidate, Owners::one(Owner::Application))
@@ -481,8 +437,8 @@ fn cross_publication_proof_rejects_without_changing_host_or_inputs() {
 #[test]
 fn obsolete_dual_candidate_withdraws_staged_inputs_after_gate_return() {
     let project = Project::new("obsolete-publication");
-    project.write("rawr.toml", "[package]\nname = \"obsolete-publication\"\n");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("Cargo.toml", "[package]\nname = \"obsolete-publication\"\n");
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let first = compile(&engine, &project);
     let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
@@ -492,7 +448,7 @@ fn obsolete_dual_candidate_withdraws_staged_inputs_after_gate_return() {
     let mut slot = bootstrap.install(1_u8);
     let retained = slot.generation();
 
-    project.write("src/main.rawr", SOURCE_TWO);
+    project.write("src/main.rs", SOURCE_TWO);
     let candidate = compile(&engine, &project);
     let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());
     let prepared = Plan::compare(retained.clone(), candidate, Owners::one(Owner::Application))
@@ -523,7 +479,7 @@ fn obsolete_dual_candidate_withdraws_staged_inputs_after_gate_return() {
 #[test]
 fn slot_rejects_the_second_preparation_from_one_live_epoch() {
     let project = Project::new("slot-double-preparation");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let bootstrap = compile(&engine, &project)
         .bind(&engine, registry())
@@ -531,7 +487,7 @@ fn slot_rejects_the_second_preparation_from_one_live_epoch() {
     let mut slot = bootstrap.install(0_u8);
     let current = slot.generation();
 
-    project.write("src/main.rawr", SOURCE_TWO);
+    project.write("src/main.rs", SOURCE_TWO);
     let first = Plan::compare(
         current.clone(),
         compile(&engine, &project),
@@ -587,7 +543,7 @@ fn retired_state_drop_panics_only_after_the_slot_is_current() {
     }
 
     let project = Project::new("slot-retired-drop");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let drops = Arc::new(AtomicUsize::new(0));
     let bootstrap = compile(&engine, &project)
@@ -599,7 +555,7 @@ fn retired_state_drop_panics_only_after_the_slot_is_current() {
     });
     let retained = slot.generation();
 
-    project.write("src/main.rawr", SOURCE_TWO);
+    project.write("src/main.rs", SOURCE_TWO);
     let prepared = Plan::compare(
         retained.clone(),
         compile(&engine, &project),
@@ -642,7 +598,7 @@ fn rejected_state_drop_cannot_change_the_live_slot() {
     }
 
     let project = Project::new("slot-rejected-drop");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let bootstrap = compile(&engine, &project)
         .bind(&engine, registry())
@@ -651,7 +607,7 @@ fn rejected_state_drop_cannot_change_the_live_slot() {
     let retained = slot.generation();
     let drops = Arc::new(AtomicUsize::new(0));
 
-    project.write("src/main.rawr", SOURCE_TWO);
+    project.write("src/main.rs", SOURCE_TWO);
     let prepared = Plan::compare(
         retained.clone(),
         compile(&engine, &project),
@@ -693,7 +649,7 @@ fn obsolete_state_drop_runs_only_after_the_revision_gate_returns() {
     }
 
     let project = Project::new("slot-obsolete-drop");
-    project.write("src/main.rawr", SOURCE_ONE);
+    project.write("src/main.rs", SOURCE_ONE);
     let engine = compiler();
     let bootstrap = compile(&engine, &project)
         .bind(&engine, registry())
@@ -702,7 +658,7 @@ fn obsolete_state_drop_runs_only_after_the_revision_gate_returns() {
     let retained = slot.generation();
     let drops = Arc::new(AtomicUsize::new(0));
 
-    project.write("src/main.rawr", SOURCE_TWO);
+    project.write("src/main.rs", SOURCE_TWO);
     let prepared = Plan::compare(
         retained.clone(),
         compile(&engine, &project),
@@ -1030,6 +986,7 @@ impl Project {
             std::process::id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
         Self { root }
     }
 
@@ -1039,6 +996,14 @@ impl Project {
 
     fn write(&self, path: &str, source: &str) {
         let path = self.root.join(path);
+        // A `.rs` file is a Rawr file: it starts with `// rawr`.
+        let marked;
+        let source = if path.extension().is_some_and(|extension| extension == "rs") {
+            marked = format!("// rawr\n{}", source);
+            marked.as_str()
+        } else {
+            source
+        };
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).unwrap();
         }

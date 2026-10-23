@@ -1,4 +1,4 @@
-//! iced master's own examples, as written there, check and run as `.rawr`:
+//! iced master's own examples, as written there, check and run in Rawr:
 //! `impl Widget<Message>` views, `.boxed()` where arms or values erase,
 //! `.map(..)` on any widget, and no `.into()` into `Element`.
 
@@ -709,7 +709,7 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 /// `view` over a `bool` State booted by a closure, `Option<W>` as a widget,
 /// and a script type implementing `component::Component` whose `sensor`
 /// shows "hi" once its `on_show` Event has reached its `update`.
-const COMPONENT: &str = include_str!("../fixtures/master/component.rawr");
+const COMPONENT: &str = include_str!("../fixtures/master/component.rs");
 
 #[test]
 fn master_component_keeps_its_state_and_consumes_its_events() {

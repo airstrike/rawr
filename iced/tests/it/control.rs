@@ -7,7 +7,7 @@ use rawr_iced::preview::Compiler;
 fn prepared_host_exposes_only_stable_control_data_and_operations() {
     let mut host = Compiler::new()
         .unwrap()
-        .check_named_source("public-control.rawr", source())
+        .check_named_source("public-control.rs", source())
         .unwrap()
         .prepare()
         .unwrap()

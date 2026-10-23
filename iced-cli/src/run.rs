@@ -142,7 +142,7 @@ mod tests {
         let source = temporary_source();
         fs::write(
             &source,
-            include_str!("../../iced/examples/application_counter.rawr"),
+            include_str!("../../iced/examples/scripts/application_counter.rs"),
         )
         .unwrap();
 

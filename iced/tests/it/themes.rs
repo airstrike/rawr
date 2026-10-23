@@ -45,7 +45,7 @@ fn standalone_preview_evaluates_a_palette_only_custom_theme() {
     rawr_iced::install(&mut engine).unwrap();
     let catalog = engine
         .compile_preview_catalog_source(
-            rawr_diagnostic::Source::new("palette-preview.rawr", preview_source()).unwrap(),
+            rawr_diagnostic::Source::new("palette-preview.rs", preview_source()).unwrap(),
         )
         .unwrap();
     let engine = Shared::new(engine);

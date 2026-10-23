@@ -300,7 +300,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rawr"), source("Retiring")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Retiring"));
         let mut compiler = rawr::Engine::new();
         crate::install(&mut compiler).unwrap();
         let engine = rawr::Shared::new(compiler);
@@ -352,7 +352,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rawr"), source("Old")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Old"));
 
         let mut compiler = rawr::Engine::new();
         crate::install(&mut compiler).unwrap();
@@ -432,7 +432,7 @@ mod tests {
             before_batch + 1
         );
 
-        fs::write(root.join("src/main.rawr"), source("New")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("New"));
         let target = rawr::project::Target::discover(&root).unwrap();
         let candidate = engine
             .compile_package_generation_observed(&target, &timing)
@@ -579,7 +579,7 @@ mod tests {
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         let root = fs::canonicalize(root).unwrap();
-        fs::write(root.join("src/main.rawr"), source("Before")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Before"));
         let mut compiler = rawr::Engine::new();
         crate::install(&mut compiler).unwrap();
         let engine = rawr::Shared::new(compiler);
@@ -597,7 +597,7 @@ mod tests {
         let now = Instant::now();
         gate.observe(now).unwrap();
         let request = gate.start(now).unwrap();
-        fs::write(root.join("src/main.rawr"), source("After")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("After"));
         let candidate = engine.compile_package_generation(&target).unwrap();
         let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());
         let native = root.join("missing/native.rs");
@@ -635,7 +635,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rawr"), source("Retained")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Retained"));
 
         let mut compiler = rawr::Engine::new();
         crate::install(&mut compiler).unwrap();
@@ -656,7 +656,7 @@ mod tests {
         let retained = host.generation().unwrap();
         let instance = host.application.as_ref().unwrap().instance();
 
-        fs::write(root.join("src/main.rawr"), source("Rejected")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Rejected"));
         let target = rawr::project::Target::discover(&root).unwrap();
         let candidate = engine.compile_package_generation(&target).unwrap();
         let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());

@@ -207,7 +207,7 @@ mod tests {
         let open = || {
             Compiler::new()
                 .unwrap()
-                .check_named_source("control-app.rawr", app_source())
+                .check_named_source("control-app.rs", app_source())
                 .unwrap()
                 .prepare()
                 .unwrap()
@@ -243,7 +243,7 @@ mod tests {
     fn app_catalog_lists_and_controls_an_optional_preview() {
         let mut prepared = Compiler::new()
             .unwrap()
-            .check_named_source("control-app.rawr", app_source())
+            .check_named_source("control-app.rs", app_source())
             .unwrap()
             .prepare()
             .unwrap();
@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(report.code(), rawr::diagnostic::code::RUNTIME_THROW);
         assert!(report.message().contains("broken candidate"));
         assert_eq!(report.labels().len(), 1);
-        assert_eq!(report.labels()[0].source().identity(), "control-app.rawr");
+        assert_eq!(report.labels()[0].source().identity(), "control-app.rs");
         assert_eq!(
             report.labels()[0].span().start(),
             rawr::Position::new(17, 8)
@@ -317,7 +317,7 @@ mod tests {
     fn preview_only_fallback_recovers_then_close_and_reset_reuse_the_same_owner() {
         let mut control = Compiler::new()
             .unwrap()
-            .check_named_source("control-standalone.rawr", standalone_source())
+            .check_named_source("control-standalone.rs", standalone_source())
             .unwrap()
             .prepare()
             .unwrap()
@@ -356,7 +356,7 @@ mod tests {
     fn rootless_control_rejects_snapshot_requests() {
         let control = Compiler::new()
             .unwrap()
-            .check_named_source("control-rootless.rawr", snapshot_source())
+            .check_named_source("control-rootless.rs", snapshot_source())
             .unwrap()
             .prepare()
             .unwrap()
@@ -398,11 +398,11 @@ mod tests {
                 std::env::temp_dir().join(format!("rawr-control-{}-{id}", std::process::id()));
             fs::create_dir_all(root.join("src")).unwrap();
             fs::write(
-                root.join("rawr.toml"),
+                root.join("Cargo.toml"),
                 "[package]\nname = \"control-fixture\"\n",
             )
             .unwrap();
-            fs::write(root.join("src/main.rawr"), source).unwrap();
+            crate::write_marked(&root, "src/main.rs", source);
             Self { root }
         }
 

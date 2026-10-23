@@ -1,5 +1,7 @@
+// rawr
+use rawr::preview;
 use iced::Theme;
-use iced::Element;
+use iced::{Element, Widget};
 use iced::widget::{button, column, text};
 
 #[derive(Default)]
@@ -27,7 +29,7 @@ impl Counter {
         Theme::Light
     }
 
-    fn dark() -> Theme {
+    fn dark(&self) -> Theme {
         Theme::Dark
     }
 
@@ -42,6 +44,7 @@ impl Counter {
             increment,
         ]
         .padding(12)
+        .boxed()
     }
 }
 

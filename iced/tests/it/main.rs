@@ -42,3 +42,19 @@ mod task_plan;
 mod themes;
 mod widget_descriptor;
 mod widget_protocol;
+
+/// Writes `relative` in the Cargo crate at `root`, marked `// rawr`, and
+/// the crate's `Cargo.toml` when it has none.
+pub fn write_marked(root: &std::path::Path, relative: &str, source: impl AsRef<str>) {
+    let manifest = root.join("Cargo.toml");
+    if !manifest.exists() {
+        std::fs::write(
+            manifest,
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+    }
+    let path = root.join(relative);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, format!("// rawr\n{}", source.as_ref())).unwrap();
+}

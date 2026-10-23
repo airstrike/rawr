@@ -1055,8 +1055,8 @@ mod tests {
         let [label] = report.labels() else {
             panic!("layout validation must retain one positioned hook label");
         };
-        assert!(label.source().identity().ends_with("src/dial.rawr"));
-        assert_eq!(label.span().start().line(), Some(37));
+        assert!(label.source().identity().ends_with("src/dial.rs"));
+        assert_eq!(label.span().start().line(), Some(38));
 
         let second = fixture::node(&mut element, &mut tree, &renderer);
         assert_eq!(second.size(), Size::ZERO);
@@ -1224,7 +1224,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("rawr-widget-reload-{}-{id}", std::process::id()));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rawr"), fixture::ready(5, false, false)).unwrap();
+        crate::write_marked(&root, "src/main.rs", fixture::ready(5, false, false));
         let target = project::Target::discover(&root).unwrap();
         let first = engine.compile_package_generation(&target).unwrap();
         let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
@@ -1248,7 +1248,7 @@ mod tests {
         drop(first_element);
 
         let source = fixture::ready(17, false, false).replace("state.value", "state.value + 1");
-        fs::write(root.join("src/main.rawr"), source).unwrap();
+        crate::write_marked(&root, "src/main.rs", source);
         let second = engine.compile_package_generation(&target).unwrap();
         let mut registry = host::runtime::Registry::new();
         crate::install_test_runtime(&mut registry);

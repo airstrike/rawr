@@ -5,8 +5,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = Engine::new();
     rawr_iced::install(&mut engine)?;
     let descriptor =
-        engine.compile_application_descriptor(include_str!("preview_metadata.rawr"))?;
-    let repeated = engine.compile_application_descriptor(include_str!("preview_metadata.rawr"))?;
+        engine.compile_application_descriptor(include_str!("scripts/preview_metadata.rs"))?;
+    let repeated = engine.compile_application_descriptor(include_str!("scripts/preview_metadata.rs"))?;
 
     println!(
         "deterministic application + preview proof: {}",

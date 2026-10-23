@@ -81,7 +81,7 @@ fn projection_and_nested_type_dependencies_are_exact_and_deduplicated() {
     let mut exact = Engine::new();
     rawr_iced::install(&mut exact).unwrap();
     let exact = exact
-        .compile_application_descriptor(include_str!("../../examples/application_counter.rawr"))
+        .compile_application_descriptor(include_str!("../../examples/scripts/application_counter.rs"))
         .unwrap();
     assert_eq!(roots(&exact), ["iced"]);
 }

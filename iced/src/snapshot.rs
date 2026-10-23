@@ -434,7 +434,7 @@ mod tests {
             names,
             [("snapshot", "Default", true), ("snapshot", "Ignored", false)]
         );
-        assert_eq!(listed[0].subject, "snapshot-fixture::State::view");
+        assert_eq!(listed[0].subject, "main::State::view");
         assert_eq!(listed[0].themes, ["State::dark"]);
         assert_eq!(listed[0].size, (96, 64));
 
@@ -564,11 +564,11 @@ mod tests {
                 std::env::temp_dir().join(format!("rawr-snapshot-{}-{id}", std::process::id()));
             fs::create_dir_all(root.join("src")).unwrap();
             fs::write(
-                root.join("rawr.toml"),
+                root.join("Cargo.toml"),
                 "[package]\nname = \"snapshot-fixture\"\n",
             )
             .unwrap();
-            fs::write(root.join("src/main.rawr"), source).unwrap();
+            crate::write_marked(&root, "src/main.rs", source);
             Self { root }
         }
     }

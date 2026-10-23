@@ -45,7 +45,7 @@ fn proof_and_snapshot() -> (rawr_import::profile::Proof, rawr_import::surface::S
     let demand = rawr_import::profile::demand(&definition, &contract, &checked, &limits).unwrap();
     let proof = rawr_import::profile::Proof::generate(&definition, &demand, &limits).unwrap();
     let mut snapshot = rawr_import::surface::Snapshot::builder(&limits);
-    snapshot.entry("application.rawr").unwrap();
-    snapshot.file("application.rawr", b"view").unwrap();
+    snapshot.entry("application.rs").unwrap();
+    snapshot.file("application.rs", b"view").unwrap();
     (proof, snapshot.seal().unwrap())
 }

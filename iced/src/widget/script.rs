@@ -371,7 +371,7 @@ mod tests {
     }
 
     fn catalog(engine: &Shared<Engine>, source: String) -> Arc<preview::BoundCatalog> {
-        let source = diagnostic::Source::new("main.rawr", source).unwrap();
+        let source = diagnostic::Source::new("main.rs", source).unwrap();
         let catalog = engine.compile_preview_catalog_source(source).unwrap();
         let launch = engine.launch_previews(catalog).unwrap();
         let mut registry = host::runtime::Registry::new();

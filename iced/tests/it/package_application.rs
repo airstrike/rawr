@@ -49,16 +49,8 @@ fn package_contract_failures_retain_the_callback_module_source() {
             .as_nanos()
     ));
     fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(
-        root.join("src/main.rawr"),
-        "pub mod counter;\nuse crate::counter::Counter;\npub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("src/counter.rawr"),
-        "#[derive(Default)] pub struct Counter;\n#[derive(Clone)] enum Message { Tick }\nimpl Counter { pub fn update(&mut self, message: Message) {} pub fn view(&self) -> i64 { 42 } }\n",
-    )
-    .unwrap();
+    crate::write_marked(&root, "src/main.rs", "pub mod counter;\nuse crate::counter::Counter;\npub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }\n");
+    crate::write_marked(&root, "src/counter.rs", "#[derive(Default)] pub struct Counter;\n#[derive(Clone)] enum Message { Tick }\nimpl Counter { pub fn update(&mut self, message: Message) {} pub fn view(&self) -> i64 { 42 } }\n");
     let target = project::Target::discover(&root).unwrap();
 
     let Err(error) = rawr_iced::application::Compiler::new()
@@ -72,7 +64,7 @@ fn package_contract_failures_retain_the_callback_module_source() {
     assert!(report.labels()[0]
         .source()
         .identity()
-        .ends_with("src/counter.rawr"));
+        .ends_with("src/counter.rs"));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -87,11 +79,7 @@ fn split_title_contract_failure_uses_the_exact_title_declaration_source() {
             .as_nanos()
     ));
     fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(
-        root.join("src/main.rawr"),
-        "pub mod app;\nuse crate::app::State;\npub fn main() -> iced::Result { iced::application(State::new, State::update, State::view).title(State::title).run() }\n",
-    )
-    .unwrap();
+    crate::write_marked(&root, "src/main.rs", "pub mod app;\nuse crate::app::State;\npub fn main() -> iced::Result { iced::application(State::new, State::update, State::view).title(State::title).run() }\n");
     let title_source = r#"use iced::Element;
 use iced::widget::text;
 
@@ -105,7 +93,7 @@ impl State {
     pub fn title(&self) -> bool { false }
 }
 "#;
-    fs::write(root.join("src/app.rawr"), title_source).unwrap();
+    crate::write_marked(&root, "src/app.rs", title_source);
     let target = project::Target::discover(&root).unwrap();
 
     let Err(error) = rawr_iced::application::Compiler::new()
@@ -125,12 +113,12 @@ impl State {
         .find("bool")
         .expect("the title declaration must retain its invalid output type");
     let expected = rawr::Span::new(
-        rawr::Position::new((line + 1) as u16, (column + 1) as u16),
-        rawr::Position::new((line + 1) as u16, (column + "bool".len() + 1) as u16),
+        rawr::Position::new((line + 2) as u16, (column + 1) as u16),
+        rawr::Position::new((line + 2) as u16, (column + "bool".len() + 1) as u16),
     );
 
-    assert!(label.source().identity().ends_with("src/app.rawr"));
-    assert_eq!(label.source().text(), title_source);
+    assert!(label.source().identity().ends_with("src/app.rs"));
+    assert_eq!(label.source().text(), format!("// rawr\n{title_source}"));
     assert_eq!(label.span(), expected);
     fs::remove_dir_all(root).unwrap();
 }
@@ -161,9 +149,7 @@ fn modules_and_imports_resolve_as_rust_across_files() {
             .as_nanos()
     ));
     fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(
-        root.join("src/main.rawr"),
-        r#"use iced::widget::{button::{self, Status}, column};
+    crate::write_marked(&root, "src/main.rs", r#"use iced::widget::{button::{self, Status}, column};
 use iced::keyboard;
 use std::fmt::Write as _;
 
@@ -200,13 +186,9 @@ fn update(state: &mut State, message: Message) {
         }
     }
 }
-"#,
-    )
-    .unwrap();
-    fs::write(root.join("src/circle.rawr"), "pub fn circle(r: i64) -> i64 {\n    3 * r * r\n}\n").unwrap();
-    fs::write(
-        root.join("src/shapes.rawr"),
-        r#"pub trait Area {
+"#);
+    crate::write_marked(&root, "src/circle.rs", "pub fn circle(r: i64) -> i64 {\n    3 * r * r\n}\n");
+    crate::write_marked(&root, "src/shapes.rs", r#"pub trait Area {
     fn area(&self) -> i64;
 }
 
@@ -227,12 +209,8 @@ pub mod inner {
         x * 3
     }
 }
-"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join("src/view.rawr"),
-        r#"use iced::widget::{button, column, text};
+"#);
+    crate::write_marked(&root, "src/view.rs", r#"use iced::widget::{button, column, text};
 use iced::Widget;
 use crate::shapes::Area;
 use crate::{Message, State};
@@ -243,9 +221,7 @@ pub fn view(state: &State) -> impl Widget<Message> {
         button("Add").on_press(Message::Add),
     ]
 }
-"#,
-    )
-    .unwrap();
+"#);
 
     let target = project::Target::discover(&root).unwrap();
     let prepared = rawr_iced::application::Compiler::new()

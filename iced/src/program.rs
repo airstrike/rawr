@@ -1847,7 +1847,7 @@ mod tests {
         crate::install(&mut engine).unwrap();
         let engine = Shared::new(engine);
         let descriptor = engine
-            .compile_application_descriptor(include_str!("../examples/application_counter.rawr"))
+            .compile_application_descriptor(include_str!("../examples/scripts/application_counter.rs"))
             .unwrap();
         let launch = engine.launch_application(descriptor).unwrap();
         bind(launch)
@@ -1858,7 +1858,7 @@ mod tests {
         crate::install(&mut engine).unwrap();
         let engine = Shared::new(engine);
         let descriptor = engine
-            .compile_application_descriptor(include_str!("../examples/application_counter.rawr"))
+            .compile_application_descriptor(include_str!("../examples/scripts/application_counter.rs"))
             .unwrap();
         let launch = engine.launch_application(descriptor).unwrap();
         Adapter::boot_observed(bind(launch)).unwrap()

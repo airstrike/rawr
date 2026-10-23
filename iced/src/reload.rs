@@ -822,7 +822,7 @@ mod tests {
                 std::thread::current().id()
             ));
             fs::create_dir_all(root.join("src")).unwrap();
-            fs::write(root.join("src/main.rawr"), source()).unwrap();
+            crate::write_marked(&root, "src/main.rs", source());
             let target = rawr::project::Target::discover(&root).unwrap();
             let mut compiler = rawr::Engine::new();
             crate::install(&mut compiler).unwrap();

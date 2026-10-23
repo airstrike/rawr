@@ -179,9 +179,9 @@ impl State {
 #[test]
 fn package_local_method_preview_uses_imported_stable_items() {
     let project = Project::new("package-preview");
-    project.write("rawr.toml", "[package]\nname = \"preview-app\"\n");
+    project.write("Cargo.toml", "[package]\nname = \"preview-app\"\n");
     project.write(
-        "src/main.rawr",
+        "src/main.rs",
         r#"
 pub mod component;
 use crate::component::State;
@@ -189,7 +189,7 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 "#,
     );
     project.write(
-        "src/component.rawr",
+        "src/component.rs",
         &package_component("crate::component::State::seed"),
     );
     let target = rawr::project::Target::discover(project.path()).unwrap();
@@ -200,7 +200,7 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 
     assert_eq!(descriptor.previews().len(), 1);
     let preview = &descriptor.previews()[0];
-    assert_eq!(preview.key().subject().package(), "preview-app");
+    assert_eq!(preview.key().subject().package(), "main");
     assert_eq!(preview.key().subject().modules(), ["component"]);
     assert_eq!(
         preview.seed().callback().unwrap().item().key().name(),
@@ -211,9 +211,9 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 #[test]
 fn package_callback_failure_reports_primary_and_related_sources() {
     let project = Project::new("package-preview-error");
-    project.write("rawr.toml", "[package]\nname = \"preview-app\"\n");
+    project.write("Cargo.toml", "[package]\nname = \"preview-app\"\n");
     project.write(
-        "src/main.rawr",
+        "src/main.rs",
         r#"
 pub mod component;
 pub mod fixtures;
@@ -222,11 +222,11 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 "#,
     );
     project.write(
-        "src/component.rawr",
+        "src/component.rs",
         &package_component("crate::fixtures::bad_seed"),
     );
     project.write(
-        "src/fixtures.rawr",
+        "src/fixtures.rs",
         "pub fn bad_seed(value: i64) -> i64 { value }\n",
     );
     let target = rawr::project::Target::discover(project.path()).unwrap();
@@ -241,68 +241,11 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
     assert!(report.labels()[0]
         .source()
         .identity()
-        .ends_with("src/component.rawr"));
+        .ends_with("src/component.rs"));
     assert!(report.labels()[1]
         .source()
         .identity()
-        .ends_with("src/fixtures.rawr"));
-}
-
-#[test]
-fn dependency_qualified_preview_paths_use_manifest_aliases() {
-    let workspace = Project::new("dependency-preview");
-    workspace.write(
-        "app/rawr.toml",
-        "[package]\nname = \"preview-app\"\n[dependencies]\nui = { path = \"../pieces\" }\n",
-    );
-    workspace.write(
-        "app/src/main.rawr",
-        r#"
-use ui::{Message, State};
-use iced::Element;
-use iced::widget::text;
-
-#[preview(seed = ui::seed, update = ui::State::update, themes = [ui::dark])]
-pub fn card(state: State) -> Element<'_, Message> { text("dependency") }
-
-pub fn main() -> iced::Result { iced::run(State::update, State::view) }
-"#,
-    );
-    workspace.write("pieces/rawr.toml", "[package]\nname = \"pieces\"\n");
-    workspace.write(
-        "pieces/src/lib.rawr",
-        r#"
-use iced::Theme;
-use iced::Element;
-use iced::widget::text;
-#[derive(Default, Clone)] pub struct State;
-#[derive(Debug, Clone, Copy)] pub enum Message { Tick }
-pub fn seed() -> State { State {} }
-pub fn dark() -> Theme { Theme::Dark }
-impl State {
-    pub fn update(&mut self, message: Message) {}
-    pub fn view(&self) -> Element<'_, Message> { text("app") }
-}
-"#,
-    );
-    let target = rawr::project::Target::discover(workspace.path().join("app")).unwrap();
-
-    let descriptor = compiler()
-        .compile_package_application_descriptor(&target)
-        .unwrap();
-
-    let preview = &descriptor.previews()[0];
-    assert_eq!(
-        preview.seed().callback().unwrap().item().key().package(),
-        "pieces"
-    );
-    assert_eq!(preview.update().unwrap().item().key().package(), "pieces");
-    assert_eq!(
-        preview.themes()[0].callback().item().key().package(),
-        "pieces"
-    );
-    let seed = preview.locations().seed().unwrap();
-    assert!(!seed.reference().same_source(seed.declaration()));
+        .ends_with("src/fixtures.rs"));
 }
 
 #[test]
@@ -353,9 +296,9 @@ fn malformed_size_and_module_subject_are_compile_errors() {
     );
 
     let project = Project::new("module-preview");
-    project.write("rawr.toml", "[package]\nname = \"preview-app\"\n");
-    project.write("src/main.rawr", "#[preview]\nmod component;\n");
-    project.write("src/component.rawr", "");
+    project.write("Cargo.toml", "[package]\nname = \"preview-app\"\n");
+    project.write("src/main.rs", "#[preview]\nmod component;\n");
+    project.write("src/component.rs", "");
     let target = rawr::project::Target::discover(project.path()).unwrap();
     let error = compiler().compile_package_executable(&target).unwrap_err();
     assert!(error.to_string().contains("only on functions and methods"));
@@ -374,7 +317,7 @@ fn assert_preview_error(source: &str, expected: &str) {
     );
     assert!(error.to_string().contains(expected), "{error}");
     let report = diagnostic::Report::from_parse(
-        diagnostic::Source::new("preview.rawr", source).unwrap(),
+        diagnostic::Source::new("preview.rs", source).unwrap(),
         &error,
     )
     .unwrap();
@@ -513,6 +456,7 @@ impl Project {
         let root =
             std::env::temp_dir().join(format!("rawr-preview-{}-{id}-{name}", std::process::id()));
         fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
         Self { root }
     }
 
@@ -522,6 +466,14 @@ impl Project {
 
     fn write(&self, path: &str, source: &str) {
         let path = self.root.join(path);
+        // A `.rs` file is a Rawr file: it starts with `// rawr`.
+        let marked;
+        let source = if path.extension().is_some_and(|extension| extension == "rs") {
+            marked = format!("// rawr\n{}", source);
+            marked.as_str()
+        } else {
+            source
+        };
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).unwrap();
         }

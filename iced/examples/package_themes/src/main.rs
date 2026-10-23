@@ -1,7 +1,10 @@
+// rawr
+mod midnight;
+
+use crate::midnight::midnight;
 use iced::Theme;
-use iced::Element;
+use iced::{Element, Widget};
 use iced::widget::{button, column, text};
-use midnight::midnight;
 
 struct Counter {
     value: i64,
@@ -32,6 +35,7 @@ impl Counter {
             count,
             increment,
         ]
+        .boxed()
     }
 
     fn theme(&self) -> Theme {

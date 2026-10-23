@@ -2120,7 +2120,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
             );
             let error = Compiler::new()
                 .unwrap()
-                .check_named_source("bind.rawr", source)
+                .check_named_source("bind.rs", source)
                 .err()
                 .unwrap_or_else(|| panic!("`{attribute}` must be refused"));
             assert!(
@@ -2489,8 +2489,8 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn fallback_renders_every_canonical_report_field() {
         let mut host = host(failing_application_boot_source());
-        let primary = rawr::diagnostic::Source::new("child.rawr", "broken\n").unwrap();
-        let related = rawr::diagnostic::Source::new("related.rawr", "first\n").unwrap();
+        let primary = rawr::diagnostic::Source::new("child.rs", "broken\n").unwrap();
+        let related = rawr::diagnostic::Source::new("related.rs", "first\n").unwrap();
         let primary_span = Span::new(Position::new(1, 1), Position::new(1, 7));
         let related_span = Span::new(Position::new(1, 1), Position::new(1, 6));
         host.apply(|state, _catalog, _context| {
@@ -2516,11 +2516,11 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         assert_text(&host, "complete canonical report");
         assert_text(
             &host,
-            &format!("primary: child.rawr:{primary_span} — primary callback"),
+            &format!("primary: child.rs:{primary_span} — primary callback"),
         );
         assert_text(
             &host,
-            &format!("secondary: related.rawr:{related_span} — related callback"),
+            &format!("secondary: related.rs:{related_span} — related callback"),
         );
         assert_text(&host, "help: repair the callback");
         assert_text(&host, "note: retained source evidence");
@@ -2681,7 +2681,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     fn public_and_native_controls_share_the_same_transactions() {
         let mut control = Compiler::new()
             .unwrap()
-            .check_named_source("preview-host.rawr", full_source())
+            .check_named_source("preview-host.rs", full_source())
             .unwrap()
             .prepare()
             .unwrap()
@@ -2742,7 +2742,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         assert!(host.application.is_none());
         assert!(host.preview.is_none());
         assert_eq!(report.code(), rawr::diagnostic::code::RUNTIME_THROW);
-        assert_eq!(report.labels()[0].source().identity(), "preview-host.rawr");
+        assert_eq!(report.labels()[0].source().identity(), "preview-host.rs");
         assert_text(&host, report.message());
         assert_text(&host, "preview host · runtime · error[RAWR-RUNTIME-THROW]");
     }
@@ -2750,14 +2750,14 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn child_module_app_failures_keep_each_callback_source() {
         for (failure, expected, line) in [
-            ("boot", "broken child boot", 10),
-            ("view", "broken child view", 12),
-            ("theme", "broken child theme", 13),
+            ("boot", "broken child boot", 11),
+            ("view", "broken child view", 13),
+            ("theme", "broken child theme", 14),
         ] {
             let project = Project::new(failure);
-            project.write("rawr.toml", "[package]\nname = \"preview-child\"\n");
-            project.write("src/main.rawr", child_application_root());
-            project.write("src/app.rawr", &child_application(failure));
+            project.write("Cargo.toml", "[package]\nname = \"preview-child\"\n");
+            project.write("src/main.rs", child_application_root());
+            project.write("src/app.rs", &child_application(failure));
             let target = rawr::project::Target::discover(project.path()).unwrap();
             let prepared = Compiler::new()
                 .unwrap()
@@ -2774,7 +2774,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
             assert!(report.labels()[0]
                 .source()
                 .identity()
-                .ends_with("src/app.rawr"));
+                .ends_with("src/app.rs"));
             assert_eq!(report.labels()[0].span().start().line(), Some(line));
             assert_text(&host, report.message());
         }
@@ -2783,9 +2783,9 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn child_module_update_failure_keeps_original_source_position() {
         let project = Project::new("update");
-        project.write("rawr.toml", "[package]\nname = \"preview-child\"\n");
-        project.write("src/main.rawr", child_application_root());
-        project.write("src/app.rawr", &child_application("update"));
+        project.write("Cargo.toml", "[package]\nname = \"preview-child\"\n");
+        project.write("src/main.rs", child_application_root());
+        project.write("src/app.rs", &child_application("update"));
         let target = rawr::project::Target::discover(project.path()).unwrap();
         let prepared = Compiler::new()
             .unwrap()
@@ -2806,8 +2806,8 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         assert!(report.labels()[0]
             .source()
             .identity()
-            .ends_with("src/app.rawr"));
-        assert_eq!(report.labels()[0].span().start().line(), Some(11));
+            .ends_with("src/app.rs"));
+        assert_eq!(report.labels()[0].span().start().line(), Some(12));
     }
 
     #[test]
@@ -3015,7 +3015,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn reload_retains_selected_preview_and_rebinds_hidden_application() {
         let project = Project::new("reload-preview");
-        project.write("src/main.rawr", full_source());
+        project.write("src/main.rs", full_source());
         let engine = reload_engine();
         let mut host = reload_host(&engine, reload_candidate(&engine, &project));
         let hidden = host.application.as_ref().unwrap().instance();
@@ -3028,7 +3028,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         let changed = full_source()
             .replace("self.value += 1", "self.value += 2")
             .replace("button(\"Increment\")", "button(\"Reloaded\")");
-        project.write("src/main.rawr", &changed);
+        project.write("src/main.rs", &changed);
         let plan = reload_plan(&host, reload_candidate(&engine, &project));
         let replacement = plan.bind(&engine, reload_registry()).unwrap();
         let retained = host.generation().unwrap();
@@ -3068,7 +3068,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     fn retained_application_drops_old_generation_mapper_failure_before_diagnostic() {
         let project = Project::new("reload-stale-form-mapper");
         project.write(
-            "src/main.rawr",
+            "src/main.rs",
             &reload_throwing_control_source("Old generation"),
         );
         let engine = reload_engine();
@@ -3083,7 +3083,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         assert!(stale_message.mapping_error().is_some());
 
         project.write(
-            "src/main.rawr",
+            "src/main.rs",
             &reload_throwing_control_source("New generation"),
         );
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
@@ -3112,7 +3112,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     fn retained_application_drops_old_generation_slider_mapper_failure_before_diagnostic() {
         let project = Project::new("reload-stale-slider-mapper");
         project.write(
-            "src/main.rawr",
+            "src/main.rs",
             &reload_throwing_slider_source("Old generation"),
         );
         let engine = reload_engine();
@@ -3131,7 +3131,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         assert!(stale_message.mapping_error().is_some());
 
         project.write(
-            "src/main.rawr",
+            "src/main.rs",
             &reload_throwing_slider_source("New generation"),
         );
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
@@ -3159,12 +3159,12 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn reload_candidate_added_application_boots_only_when_selected() {
         let project = Project::new("reload-added-application");
-        project.write("src/main.rawr", standalone_source());
+        project.write("src/main.rs", standalone_source());
         let engine = reload_engine();
         let mut host = reload_host(&engine, reload_candidate(&engine, &project));
         let preview = host.preview.as_ref().unwrap().instance;
 
-        project.write("src/main.rawr", &added_application_source("App {}"));
+        project.write("src/main.rs", &added_application_source("App {}"));
         let plan = host
             .plan_for_test(reload_candidate(&engine, &project))
             .unwrap();
@@ -3184,12 +3184,12 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         assert!(host.preview.is_none());
         assert_text(&host, "added application");
 
-        project.write("src/main.rawr", standalone_source());
+        project.write("src/main.rs", standalone_source());
         let mut host = reload_host(&engine, reload_candidate(&engine, &project));
         let selected = host.selection.clone();
         let preview = host.preview.as_ref().unwrap().instance;
         project.write(
-            "src/main.rawr",
+            "src/main.rs",
             &added_application_source("throw \"added application boot failed\""),
         );
         let replacement = host
@@ -3213,7 +3213,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn reload_proves_each_hidden_and_selected_owner_before_one_commit() {
         let project = Project::new("reload-owner-set");
-        project.write("src/main.rawr", &owners_source("i64", "i64", "", ""));
+        project.write("src/main.rs", &owners_source("i64", "i64", "", ""));
         let engine = reload_engine();
         let mut host = reload_host(&engine, reload_candidate(&engine, &project));
         let selected = first_preview_selection(&host);
@@ -3230,7 +3230,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
                 "i64"
             };
             project.write(
-                "src/main.rawr",
+                "src/main.rs",
                 &owners_source(application_type, preview_type, "", ""),
             );
             let replacement = reload_plan(&host, reload_candidate(&engine, &project))
@@ -3259,7 +3259,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
             let previous_preview = host.preview.as_ref().unwrap().instance;
             preview_type = if preview_type == "i64" { "bool" } else { "i64" };
             project.write(
-                "src/main.rawr",
+                "src/main.rs",
                 &owners_source(application_type, preview_type, "", ""),
             );
             let replacement = reload_plan(&host, reload_candidate(&engine, &project))
@@ -3289,7 +3289,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn reload_owner_failure_preserves_the_whole_preview_host() {
         let project = Project::new("reload-owner-failure");
-        project.write("src/main.rawr", &owners_source("i64", "i64", "", ""));
+        project.write("src/main.rs", &owners_source("i64", "i64", "", ""));
         let engine = reload_engine();
         let mut host = reload_host(&engine, reload_candidate(&engine, &project));
         let selected = first_preview_selection(&host);
@@ -3299,7 +3299,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         let preview = host.preview.as_ref().unwrap().instance;
 
         project.write(
-            "src/main.rawr",
+            "src/main.rs",
             &owners_source("i64", "i64", "throw \"app failed\"", ""),
         );
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
@@ -3311,7 +3311,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         assert_eq!(host.preview.as_ref().unwrap().instance, preview);
 
         project.write(
-            "src/main.rawr",
+            "src/main.rs",
             &owners_source("i64", "i64", "", "throw \"preview failed\""),
         );
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
@@ -3326,7 +3326,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn reload_missing_any_retained_owner_preserves_the_whole_preview_host() {
         let project = Project::new("reload-missing-owner");
-        project.write("src/main.rawr", &owners_source("i64", "i64", "", ""));
+        project.write("src/main.rs", &owners_source("i64", "i64", "", ""));
         let engine = reload_engine();
         let mut host = reload_host(&engine, reload_candidate(&engine, &project));
         let selected = first_preview_selection(&host);
@@ -3335,7 +3335,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         let application = host.application.as_ref().unwrap().instance();
         let preview = host.preview.as_ref().unwrap().instance;
 
-        project.write("src/main.rawr", preview_only_owner_source());
+        project.write("src/main.rs", preview_only_owner_source());
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
             .bind(&engine, reload_registry())
             .unwrap();
@@ -3347,7 +3347,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         assert_eq!(host.application.as_ref().unwrap().instance(), application);
         assert_eq!(host.preview.as_ref().unwrap().instance, preview);
 
-        project.write("src/main.rawr", application_only_owner_source());
+        project.write("src/main.rs", application_only_owner_source());
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
             .bind(&engine, reload_registry())
             .unwrap();
@@ -3363,7 +3363,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn reload_aborts_old_tasks_and_drops_delayed_envelopes() {
         let project = Project::new("reload-task-retirement");
-        project.write("src/main.rawr", application_task_source());
+        project.write("src/main.rs", application_task_source());
         let engine = reload_engine();
         let mut host = reload_host(&engine, reload_candidate(&engine, &project));
         let (pending, ready) = host.take_boot();
@@ -3376,7 +3376,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
 
         let changed =
             application_task_source().replace("text(self.value)", "text(\"new generation\")");
-        project.write("src/main.rawr", &changed);
+        project.write("src/main.rs", &changed);
         let plan = reload_plan(&host, reload_candidate(&engine, &project));
         let replacement = plan.bind(&engine, reload_registry()).unwrap();
         let outcome = host.install_replacement_for_test(replacement).unwrap();
@@ -3396,7 +3396,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn reload_retires_subscription_identity_and_drops_old_stream_output() {
         let project = Project::new("reload-subscription-retirement");
-        project.write("src/main.rawr", subscription_source());
+        project.write("src/main.rs", subscription_source());
         let starts = Arc::new(AtomicUsize::new(0));
         let events = stream_facade();
         let mut engine = Engine::new();
@@ -3413,7 +3413,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         let delayed = one_subscription_message(Host::subscription_native(&host));
 
         let changed = subscription_source().replace("value + 1", "value + 2");
-        project.write("src/main.rawr", &changed);
+        project.write("src/main.rs", &changed);
         let plan = reload_plan(&host, reload_candidate(&engine, &project));
         let replacement = plan
             .bind(&engine, stream_registry(events, starts.clone()))
@@ -3438,12 +3438,12 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn application_update_between_prepare_and_admission_is_stale() {
         let project = Project::new("reload-stale-application-update");
-        project.write("src/main.rawr", full_source());
+        project.write("src/main.rs", full_source());
         let engine = reload_engine();
         let mut host = reload_host(&engine, reload_candidate(&engine, &project));
 
         let changed = full_source().replace("button(\"Increment\")", "button(\"Candidate\")");
-        project.write("src/main.rawr", &changed);
+        project.write("src/main.rs", &changed);
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
             .bind(&engine, reload_registry())
             .unwrap();
@@ -3474,7 +3474,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
                 Mutation::Reset => "reset",
             };
             let project = Project::new(name);
-            project.write("src/main.rawr", full_source());
+            project.write("src/main.rs", full_source());
             let engine = reload_engine();
             let mut host = reload_host(&engine, reload_candidate(&engine, &project));
             let Selection::Preview(selected) = selection(&host, "counter / Default") else {
@@ -3486,7 +3486,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
 
             let changed =
                 full_source().replace("button(\"Increment\")", "button(\"Prepared candidate\")");
-            project.write("src/main.rawr", &changed);
+            project.write("src/main.rs", &changed);
             let replacement = reload_plan(&host, reload_candidate(&engine, &project))
                 .bind(&engine, reload_registry())
                 .unwrap();
@@ -3507,12 +3507,12 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn cross_host_admission_rejects_a_distinct_slot_identity() {
         let project = Project::new("reload-cross-host");
-        project.write("src/main.rawr", full_source());
+        project.write("src/main.rs", full_source());
         let engine = reload_engine();
         let first = reload_host(&engine, reload_candidate(&engine, &project));
         let mut second = reload_host(&engine, reload_candidate(&engine, &project));
         project.write(
-            "src/main.rawr",
+            "src/main.rs",
             &full_source().replace("button(\"Increment\")", "button(\"Candidate\")"),
         );
         let replacement = reload_plan(&first, reload_candidate(&engine, &project))
@@ -3532,7 +3532,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     #[test]
     fn stale_prepared_operation_never_starts_its_factory() {
         let project = Project::new("reload-stale-prepared-operation");
-        project.write("src/main.rawr", full_source());
+        project.write("src/main.rs", full_source());
         let effects = effects_facade();
         let mut engine = Engine::new();
         crate::install(&mut engine).unwrap();
@@ -3545,7 +3545,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
             operation_registry(effects.clone(), starts.clone()),
         );
 
-        project.write("src/main.rawr", application_operation_source());
+        project.write("src/main.rs", application_operation_source());
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
             .bind(&engine, operation_registry(effects, starts.clone()))
             .unwrap();
@@ -3564,7 +3564,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     fn multi_owner_operation_and_subscription_activate_only_after_admission() {
         let project = Project::new("reload-multi-owner-activation");
         project.write(
-            "src/main.rawr",
+            "src/main.rs",
             &multi_owner_activation_source("i64", "0", "Task::none()"),
         );
         let effects = effects_facade();
@@ -3590,7 +3590,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         assert!(host.select(selected, None).is_some());
 
         project.write(
-            "src/main.rawr",
+            "src/main.rs",
             &multi_owner_activation_source("bool", "false", "Task::perform(load(1), loaded)"),
         );
         let replacement = reload_plan(&host, reload_candidate(&engine, &project))
@@ -3667,7 +3667,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     fn host(source: &str) -> Host {
         let prepared = Compiler::new()
             .unwrap()
-            .check_named_source("preview-host.rawr", source)
+            .check_named_source("preview-host.rs", source)
             .unwrap()
             .prepare()
             .unwrap();
@@ -3715,7 +3715,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
     fn booted_host(source: &str) -> (Host, iced::Task<Message>) {
         let prepared = Compiler::new()
             .unwrap()
-            .check_named_source("preview-host.rawr", source)
+            .check_named_source("preview-host.rs", source)
             .unwrap()
             .prepare()
             .unwrap();
@@ -3727,7 +3727,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         let mut engine = Engine::new();
         crate::install(&mut engine).unwrap();
         engine.register_host_facade(effects.clone()).unwrap();
-        let source = rawr::diagnostic::Source::new("preview-operation.rawr", source).unwrap();
+        let source = rawr::diagnostic::Source::new("preview-operation.rs", source).unwrap();
         let engine = Shared::new(engine);
         let descriptor = engine
             .compile_preview_catalog_source(source.clone())
@@ -3772,7 +3772,7 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
         let mut engine = Engine::new();
         crate::install(&mut engine).unwrap();
         engine.register_host_facade(events.clone()).unwrap();
-        let source = rawr::diagnostic::Source::new("preview-stream.rawr", source).unwrap();
+        let source = rawr::diagnostic::Source::new("preview-stream.rs", source).unwrap();
         let engine = Shared::new(engine);
         let descriptor = engine
             .compile_preview_catalog_source(source.clone())
@@ -4834,6 +4834,7 @@ impl State {{
                 std::process::id()
             ));
             fs::create_dir_all(root.join("src")).unwrap();
+            fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
             Self { root }
         }
 
@@ -4843,6 +4844,14 @@ impl State {{
 
         fn write(&self, path: &str, source: &str) {
             let path = self.root.join(path);
+            // A `.rs` file is a Rawr file: it starts with `// rawr`.
+            let marked;
+            let source = if path.extension().is_some_and(|extension| extension == "rs") {
+                marked = format!("// rawr\n{}", source);
+                marked.as_str()
+            } else {
+                source
+            };
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).unwrap();
             }

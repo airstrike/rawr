@@ -1,3 +1,4 @@
+// rawr
 pub mod counter;
 
 use crate::counter::Counter;

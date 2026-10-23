@@ -1,5 +1,8 @@
-use controls::{ControlsMessage, controls};
-use iced::Element;
+// rawr
+mod controls;
+
+use crate::controls::{ControlsMessage, controls};
+use iced::{Element, Widget};
 use iced::widget::{column, text};
 
 #[derive(Default)]
@@ -26,6 +29,7 @@ impl Counter {
             child,
             current,
         ]
+        .boxed()
     }
 }
 

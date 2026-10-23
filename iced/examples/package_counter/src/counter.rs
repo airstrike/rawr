@@ -1,26 +1,27 @@
+// rawr
 use iced::Center;
-use iced::widget::{Column, button, column, text};
+use iced::widget::{Widget, button, column, text};
 
 #[derive(Default)]
-struct Counter {
+pub struct Counter {
     value: i64,
 }
 
 #[derive(Debug, Clone, Copy)]
-enum Message {
+pub enum Message {
     Increment,
     Decrement,
 }
 
 impl Counter {
-    fn update(&mut self, message: Message) {
+    pub fn update(&mut self, message: Message) {
         match message {
             Message::Increment => self.value += 1,
             Message::Decrement => self.value -= 1,
         }
     }
 
-    fn view(&self) -> Column<'_, Message> {
+    pub fn view(&self) -> impl Widget<Message> {
         column![
             button("Increment").on_press(Message::Increment),
             text(self.value).size(50),
@@ -29,8 +30,4 @@ impl Counter {
         .padding(20)
         .align_x(Center)
     }
-}
-
-pub fn main() -> iced::Result {
-    iced::run(Counter::update, Counter::view)
 }

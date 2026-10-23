@@ -112,7 +112,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(
             root.join("src/main.rawr"),
-            include_str!("../../iced/examples/application_counter.rawr"),
+            include_str!("../../iced/examples/scripts/application_counter.rs"),
         )
         .unwrap();
         let layered = || match crate::base::layer(Some(&root)) {

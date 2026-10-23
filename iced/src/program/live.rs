@@ -407,7 +407,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rawr"), source("Retiring")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Retiring"));
         let mut compiler = rawr::Engine::new();
         crate::install(&mut compiler).unwrap();
         let engine = rawr::Shared::new(compiler);
@@ -464,7 +464,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rawr"), form_source()).unwrap();
+        crate::write_marked(&root, "src/main.rs", form_source());
 
         let mut compiler = rawr::Engine::new();
         crate::install(&mut compiler).unwrap();
@@ -587,7 +587,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rawr"), source("Old")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Old"));
 
         let mut compiler = rawr::Engine::new();
         crate::install(&mut compiler).unwrap();
@@ -704,7 +704,7 @@ mod tests {
 
         let mut wake = None;
         for index in 0..12 {
-            fs::write(root.join("src/main.rawr"), source(&format!("New {index}"))).unwrap();
+            crate::write_marked(&root, "src/main.rs", source(&format!("New {index}")));
             let target = rawr::project::Target::discover(&root).unwrap();
             let candidate = engine
                 .compile_package_generation_observed(&target, &timing)
@@ -796,11 +796,7 @@ mod tests {
             Ok(reload::Feedback::Failed(_))
         ));
 
-        fs::write(
-            root.join("src/main.rawr"),
-            failing_source("candidate view failed"),
-        )
-        .unwrap();
+        crate::write_marked(&root, "src/main.rs", failing_source("candidate view failed"));
         let target = rawr::project::Target::discover(&root).unwrap();
         let failing = engine
             .compile_package_generation_observed(&target, &timing)
@@ -830,7 +826,7 @@ mod tests {
             .find(prepare_report.message())
             .unwrap();
 
-        fs::write(root.join("src/main.rawr"), source("Obsolete")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Obsolete"));
         let target = rawr::project::Target::discover(&root).unwrap();
         let obsolete = engine
             .compile_package_generation_observed(&target, &timing)
@@ -868,7 +864,7 @@ mod tests {
             reset_instance = state.host.adapter().instance();
         }
 
-        fs::write(root.join("src/main.rawr"), source("Recovered")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Recovered"));
         let target = rawr::project::Target::discover(&root).unwrap();
         let recovered = engine
             .compile_package_generation_observed(&target, &timing)
@@ -906,7 +902,7 @@ mod tests {
         .enumerate()
         {
             let retained = state.host.generation();
-            fs::write(root.join("src/main.rawr"), invalid_source).unwrap();
+            crate::write_marked(&root, "src/main.rs", invalid_source);
             let target = rawr::project::Target::discover(&root).unwrap();
             let invalid = engine
                 .compile_package_generation_observed(&target, &timing)
@@ -930,7 +926,7 @@ mod tests {
             ));
 
             let label = format!("Recovery cycle {cycle}");
-            fs::write(root.join("src/main.rawr"), source(&label)).unwrap();
+            crate::write_marked(&root, "src/main.rs", source(&label));
             let target = rawr::project::Target::discover(&root).unwrap();
             let recovered = engine
                 .compile_package_generation_observed(&target, &timing)
@@ -1068,7 +1064,7 @@ mod tests {
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         let root = fs::canonicalize(root).unwrap();
-        fs::write(root.join("src/main.rawr"), source("Before")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Before"));
         let mut compiler = rawr::Engine::new();
         crate::install(&mut compiler).unwrap();
         let engine = rawr::Shared::new(compiler);
@@ -1088,7 +1084,7 @@ mod tests {
         let now = Instant::now();
         gate.observe(now).unwrap();
         let request = gate.start(now).unwrap();
-        fs::write(root.join("src/main.rawr"), source("After")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("After"));
         let candidate = engine.compile_package_generation(&target).unwrap();
         let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());
         let native = root.join("missing/native.rs");
@@ -1126,7 +1122,7 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rawr"), source("Retained")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Retained"));
 
         let mut compiler = rawr::Engine::new();
         crate::install(&mut compiler).unwrap();
@@ -1149,7 +1145,7 @@ mod tests {
         let retained = host.generation();
         let instance = host.adapter().instance();
 
-        fs::write(root.join("src/main.rawr"), source("Rejected")).unwrap();
+        crate::write_marked(&root, "src/main.rs", source("Rejected"));
         let target = rawr::project::Target::discover(&root).unwrap();
         let candidate = engine.compile_package_generation(&target).unwrap();
         let snapshot = rawr::reload::source::Snapshot::from_graph(candidate.source());

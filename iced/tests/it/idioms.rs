@@ -315,19 +315,12 @@ fn panel(theme: &Theme) -> Style {
 fn style_functions_pass_by_module_path() {
     let root = std::env::temp_dir().join(format!("rawr-idioms-style-path-{}", std::process::id()));
     std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(root.join("rawr.toml"), "[package]\nname = \"styled\"\n").unwrap();
-    std::fs::write(
-        root.join("src/theme.rawr"),
-        r#"
+    crate::write_marked(&root, "src/theme.rs", r#"
 use iced::Theme;
 use iced::widget::container::Style;
 pub fn rule(theme: &Theme) -> Style { Style::default().background(theme.palette().primary.base.color) }
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("src/main.rawr"),
-        r#"
+"#);
+    crate::write_marked(&root, "src/main.rs", r#"
 mod theme;
 use iced::Element;
 use iced::widget::{container, text};
@@ -341,9 +334,7 @@ impl State {
 pub fn main() -> iced::Result {
     iced::application(State::new, State::update, State::view).run()
 }
-"#,
-    )
-    .unwrap();
+"#);
     let target = rawr::project::Target::discover(&root).unwrap();
     let checked = rawr_iced::application::Compiler::new().unwrap().check(&target);
     std::fs::remove_dir_all(&root).ok();

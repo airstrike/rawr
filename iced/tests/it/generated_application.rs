@@ -4,7 +4,7 @@ use rawr_import::profile;
 fn checked_application_seals_the_isolated_generated_profile() {
     let checked = rawr_iced::application::Compiler::new()
         .unwrap()
-        .check_source(include_str!("../../examples/application_counter.rawr"))
+        .check_source(include_str!("../../examples/scripts/application_counter.rs"))
         .unwrap();
     let checked_profile = rawr_iced::profile::Checked::from_application(&checked);
     let limits = rawr_import::cargo::Limits::standard();

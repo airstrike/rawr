@@ -10,7 +10,7 @@ static NEXT_PROJECT: AtomicUsize = AtomicUsize::new(0);
 fn one_catalog_binds_its_optional_application_and_executes_previews() {
     let engine = compiler();
     let catalog = engine
-        .compile_preview_catalog_source(source("catalog.rawr", catalog_source()))
+        .compile_preview_catalog_source(source("catalog.rs", catalog_source()))
         .unwrap();
     assert!(catalog.has_application());
     assert_eq!(catalog.previews().len(), 1);
@@ -34,7 +34,7 @@ fn one_catalog_binds_its_optional_application_and_executes_previews() {
 fn standalone_preview_catalog_has_no_synthetic_application() {
     let engine = compiler();
     let catalog = engine
-        .compile_preview_catalog_source(source("standalone.rawr", standalone_source()))
+        .compile_preview_catalog_source(source("standalone.rs", standalone_source()))
         .unwrap();
 
     assert!(!catalog.has_application());
@@ -51,7 +51,7 @@ fn standalone_preview_catalog_has_no_synthetic_application() {
 fn catalog_keeps_one_engine_generation_and_rejects_foreign_source_locations() {
     let first = compiler();
     let first_catalog = first
-        .compile_preview_catalog_source(source("first.rawr", standalone_source()))
+        .compile_preview_catalog_source(source("first.rs", standalone_source()))
         .unwrap();
     let first_location = first_catalog.previews()[0].locations().attribute();
     let first_generation = first_catalog.generation();
@@ -63,12 +63,12 @@ fn catalog_keeps_one_engine_generation_and_rejects_foreign_source_locations() {
     assert_eq!(first_bound.generation(), first_generation);
     assert_eq!(
         first_bound.source(first_location).unwrap().identity(),
-        "first.rawr"
+        "first.rs"
     );
 
     let second = compiler();
     let second_catalog = second
-        .compile_preview_catalog_source(source("second.rawr", standalone_source()))
+        .compile_preview_catalog_source(source("second.rs", standalone_source()))
         .unwrap();
     let second_bound = second
         .launch_previews(second_catalog)
@@ -81,7 +81,7 @@ fn catalog_keeps_one_engine_generation_and_rejects_foreign_source_locations() {
     ));
 
     let foreign_catalog = first
-        .compile_preview_catalog_source(source("foreign.rawr", standalone_source()))
+        .compile_preview_catalog_source(source("foreign.rs", standalone_source()))
         .unwrap();
     assert!(second.launch_previews(foreign_catalog).is_err());
 }
@@ -89,24 +89,23 @@ fn catalog_keeps_one_engine_generation_and_rejects_foreign_source_locations() {
 #[test]
 fn catalog_reports_from_retained_source_after_the_package_file_is_deleted() {
     let project = Project::new("retained-catalog-source");
-    project.write("rawr.toml", "[package]\nname = \"retained\"\n");
-    project.write("src/main.rawr", standalone_source());
+    project.write("src/main.rs", standalone_source());
     let target = rawr::project::Target::discover(project.path()).unwrap();
     let engine = compiler();
     let catalog = engine.compile_package_preview_catalog(&target).unwrap();
     let location = catalog.previews()[0].locations().attribute();
 
-    fs::remove_file(project.path().join("src/main.rawr")).unwrap();
+    fs::remove_file(project.path().join("src/main.rs")).unwrap();
 
     let bound = engine
         .launch_previews(catalog)
         .unwrap()
         .bind(registry())
         .unwrap();
-    assert_eq!(bound.package(), "retained");
+    assert_eq!(bound.package(), "main");
     let retained = bound.source(location).unwrap();
-    assert_eq!(retained.text(), standalone_source());
-    assert!(retained.identity().ends_with("src/main.rawr"));
+    assert_eq!(retained.text(), format!("// rawr\n{}", standalone_source()));
+    assert!(retained.identity().ends_with("src/main.rs"));
 }
 
 #[test]
@@ -125,7 +124,7 @@ fn preview_only_boundary_is_not_an_application_obligation_but_is_a_catalog_oblig
     application.bind(registry()).unwrap();
 
     let catalog = engine
-        .compile_preview_catalog_source(source("adversarial.rawr", adversarial_source()))
+        .compile_preview_catalog_source(source("adversarial.rs", adversarial_source()))
         .unwrap();
     let launch = engine.launch_previews(catalog).unwrap();
     let error = launch.bind(registry()).unwrap_err();
@@ -241,6 +240,7 @@ impl Project {
             std::process::id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
         Self { root }
     }
 
@@ -250,6 +250,14 @@ impl Project {
 
     fn write(&self, path: &str, source: &str) {
         let path = self.root.join(path);
+        // A `.rs` file is a Rawr file: it starts with `// rawr`.
+        let marked;
+        let source = if path.extension().is_some_and(|extension| extension == "rs") {
+            marked = format!("// rawr\n{}", source);
+            marked.as_str()
+        } else {
+            source
+        };
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).unwrap();
         }

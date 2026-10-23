@@ -929,7 +929,7 @@ mod tests {
             at: None,
             drawn: false,
         };
-        let source = rawr::diagnostic::Source::new("src/main.rawr", "fn main() {}\n").unwrap();
+        let source = rawr::diagnostic::Source::new("src/main.rs", "fn main() {}\n").unwrap();
         let report = rawr::diagnostic::Report::error(
             rawr::diagnostic::code::FRAMEWORK_NATIVE,
             "Type mismatch: expected 'i64', found 'String' (line 215, position 27)",
@@ -940,7 +940,7 @@ mod tests {
         let answer = receiver.recv().unwrap();
         assert!(answer.starts_with("error\n"), "{answer}");
         assert!(
-            answer.contains("diagnostic\tsrc/main.rawr\t215\t27\t"),
+            answer.contains("diagnostic\tsrc/main.rs\t215\t27\t"),
             "{answer}"
         );
     }

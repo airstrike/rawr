@@ -55,10 +55,10 @@ fn emit_live_runner_for_real_api_typecheck() {
         .unwrap();
     let facade = surface::facade::Plan::encode(&contract, &limits).unwrap();
     let mut snapshot = surface::Snapshot::builder(&limits);
-    snapshot.entry("/generated-fixture/main.rawr").unwrap();
+    snapshot.entry("/generated-fixture/main.rs").unwrap();
     snapshot
         .file(
-            "/generated-fixture/main.rawr",
+            "/generated-fixture/main.rs",
             b"#[preview] pub fn sample() -> iced::Element<()> { throw \"compile-only fixture\" }",
         )
         .unwrap();

@@ -2,10 +2,10 @@
 fn handwritten_preview_owner_remains_operational_during_profile_isolation() {
     let checked = rawr_iced::preview::Compiler::new()
         .unwrap()
-        .check_named_source("generated-preview.rawr", SOURCE)
+        .check_named_source("generated-preview.rs", SOURCE)
         .unwrap();
     let prepared = checked.prepare().unwrap();
-    assert_eq!(prepared.source().identity(), "generated-preview.rawr");
+    assert_eq!(prepared.source().identity(), "generated-preview.rs");
 
     let limits = rawr_import::cargo::Limits::standard();
     let definition = rawr_iced::profile::Definition::new(&limits).unwrap();

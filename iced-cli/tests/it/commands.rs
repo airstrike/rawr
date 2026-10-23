@@ -10,7 +10,7 @@ fn check_accepts_a_one_file_zero_config_counter() {
     let source = temporary_source("counter");
     fs::write(
         &source,
-        include_str!("../../../iced/examples/application_counter.rawr"),
+        include_str!("../../../iced/examples/scripts/application_counter.rs"),
     )
     .unwrap();
 
@@ -200,7 +200,7 @@ fn new_resolves_nested_relative_paths_and_the_result_checks() {
 fn packaged_starter_cannot_drift_from_the_runnable_golden_counter() {
     assert_eq!(
         rawr_iced_cli::new::COUNTER_SOURCE,
-        include_str!("../../../iced/examples/application_counter.rawr")
+        include_str!("../../../iced/examples/scripts/application_counter.rs")
     );
 }
 
@@ -211,7 +211,7 @@ fn snapshot_update_check_and_missing_baseline_are_end_to_end() {
     fs::create_dir_all(project.join("src")).unwrap();
     fs::write(
         project.join("src/main.rawr"),
-        include_str!("../../../iced/examples/package_snapshots/src/main.rawr"),
+        include_str!("../../../iced/examples/package_snapshots/src/main.rs"),
     )
     .unwrap();
     fs::write(
@@ -583,7 +583,7 @@ fn an_iced_program_handed_from_rawr_to_rawr_iced_is_parsed_once() {
         root.join("src/main.rawr"),
         format!(
             "mod parts;\n{}",
-            include_str!("../../../iced/examples/application_counter.rawr")
+            include_str!("../../../iced/examples/scripts/application_counter.rs")
         ),
     )
     .unwrap();
