@@ -282,7 +282,22 @@ pub(crate) fn resolve(items: &[item::Shell]) -> Result<BTreeMap<type_def::Id, Se
                 &item.name.text,
                 item.name.span,
                 type_def::Kind::Struct,
-                item.fields.iter().map(|field| field.ty.clone()).collect(),
+                item.fields
+                    .iter()
+                    .map(|field| {
+                        // A `&str` field is a shared reference: `Copy`.
+                        if field.shared_str {
+                            type_ref::Type::Reference {
+                                mutable: false,
+                                lifetime: None,
+                                target: Box::new(field.ty.clone()),
+                                span: field.span,
+                            }
+                        } else {
+                            field.ty.clone()
+                        }
+                    })
+                    .collect(),
             )
             .map_err(|error| LocatedError::primary(shell.source, error))?,
             item::Kind::Enum(item) => Request::new(

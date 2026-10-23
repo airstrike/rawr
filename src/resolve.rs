@@ -1382,7 +1382,14 @@ fn resolve_item(
                         previous_declaration,
                     });
                 }
+                let shared_str = matches!(
+                    &field.ty,
+                    crate::item::type_ref::Type::Reference { mutable: false, target, .. }
+                        if matches!(&**target, crate::item::type_ref::Type::Path(path)
+                            if path.segments.len() == 1 && path.segments[0].name.text == "str")
+                );
                 fields.push(item::Field {
+                    shared_str,
                     name: field.name,
                     ty: type_ref::resolve(
                         field.ty,

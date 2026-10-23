@@ -7607,7 +7607,7 @@ fn language_matches_inside_an_if_inside_some() {
 fn language_derives_over_function_pointer_fields() {
     let value = run(r#"
         fn seven() -> i64 { 7 }
-        #[derive(Debug, Clone, Eq)]
+        #[derive(Debug, Clone, Copy, Eq)]
         struct Example { title: &'static str, view: fn() -> i64 }
         impl PartialEq for Example {
             fn eq(&self, other: &Self) -> bool { self.title == other.title }
@@ -7615,7 +7615,10 @@ fn language_derives_over_function_pointer_fields() {
         #[derive(Debug)]
         struct Layout { example: Example }
         pub fn run() -> i64 {
-            let layout = Layout { example: Example { title: "a", view: seven } };
+            let example = Example { title: "a", view: seven };
+            let copied = example;
+            let layout = Layout { example };
+            let _ = copied.title;
             let text = format!("{:?}", layout);
             let same = if layout.example == layout.example { 100 } else { 0 };
             (layout.example.view)() + same + if text.starts_with("Layout") { 1000 } else { 0 }
@@ -7623,6 +7626,7 @@ fn language_derives_over_function_pointer_fields() {
         run()
     "#);
     assert_eq!(value, 1107);
+    rejected("#[derive(Clone, Copy)] struct S { s: String } pub fn run() -> i64 { 0 } run()");
 }
 
 #[test]

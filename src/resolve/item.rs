@@ -150,6 +150,9 @@ pub(crate) struct Field {
     pub name: crate::item::Name,
     pub ty: type_ref::Type,
     pub span: Span,
+    /// The field is written `&str`, which `ty` reads as `String`: `Copy`,
+    /// as a shared reference is.
+    pub shared_str: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
