@@ -63,3 +63,13 @@ pub mod widget {
         }
     }
 }
+
+/// A type whose `to_string` comes from std's blanket
+/// `impl<T: Display> ToString for T`.
+pub struct Label(pub i64);
+
+impl std::fmt::Display for Label {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "label {}", self.0)
+    }
+}

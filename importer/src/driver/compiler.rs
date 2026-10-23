@@ -2407,8 +2407,13 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         id.def_path_hash = key.clone();
         let mut obligations = BTreeMap::new();
         obligations.insert(self.associated_obligation_order_key(obligation), obligation);
-        let associated =
-            self.expand_associated_obligations(implementation, identity, &obligations, &id)?;
+        let associated = self.expand_associated_obligations(
+            implementation,
+            identity,
+            &obligations,
+            &id,
+            true,
+        )?;
         if let Some(existing) = self.applications.get_mut(&key) {
             existing.associated.extend(associated);
             existing.associated.sort_unstable();
@@ -2417,10 +2422,13 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         }
         self.ensure(adt, Namespace::Type)?;
         self.ensure(instantiated.def_id, Namespace::Type)?;
-        let relevance = vec![
+        // The ledger keeps relevance in identity order.
+        let mut relevance = vec![
             self.id(adt, Namespace::Type)?,
             self.id(instantiated.def_id, Namespace::Type)?,
         ];
+        relevance.sort_unstable();
+        relevance.dedup();
         let header = tcx.impl_trait_header(implementation);
         let record = Implementation {
             key: key.clone(),
@@ -2521,7 +2529,10 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         if let Some(existing) = self.scheduler.entries.get(&key)
             && existing.value.owner != owner
         {
-            return Err("stable definition owner traversal identity collision".to_owned());
+            return Err(format!(
+                "stable definition owner traversal identity collision at `{}`",
+                self.tcx.def_path_str(def_id)
+            ));
         }
         self.scheduler.request(
             key,
@@ -3424,6 +3435,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 compiler_trait_ref,
                 &requested_associated,
                 &implementation_id,
+                false,
             )?;
             if existing.relevance.len().saturating_add(relevance.len()) > MAX_EDGES {
                 return Err("implementation relevance edge limit exceeded".to_owned());
@@ -3490,6 +3502,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             compiler_trait_ref,
             &requested_associated,
             &implementation_id,
+            false,
         )?;
         let (impl_safety, polarity, const_impl) = match compiler_trait_ref {
             Some(_) => {
@@ -3571,6 +3584,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         compiler_trait_ref: Option<ty::TraitRef<'tcx>>,
         obligations: &BTreeMap<AssociatedObligationOrderKey, AssociatedObligation<'tcx>>,
         implementation_id: &Id,
+        application: bool,
     ) -> Result<Vec<Id>, String> {
         let mut selected = BTreeMap::new();
         match compiler_trait_ref {
@@ -3632,7 +3646,18 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             .try_reserve_exact(selected.len())
             .map_err(|error| format!("associated item allocation failed: {error}"))?;
         for definition_id in selected.into_values() {
-            let item = self.tcx.associated_item(definition_id);
+            let mut definition_id = definition_id;
+            let mut item = self.tcx.associated_item(definition_id);
+            if application && item.container_id(self.tcx) == impl_id {
+                // A blanket implementation's own member (`ToString::to_string`
+                // in `impl<T: Display> ToString for T`) is one definition that
+                // every type it applies to shares. The application names the
+                // trait's declaration instead, which dispatches to it.
+                definition_id = item.trait_item_def_id().ok_or_else(|| {
+                    "blanket application member has no trait declaration".to_owned()
+                })?;
+                item = self.tcx.associated_item(definition_id);
+            }
             let item_namespace = namespace(item.namespace());
             let parent = item.container_id(self.tcx);
             let owner = if parent == impl_id {

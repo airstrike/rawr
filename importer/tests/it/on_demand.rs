@@ -164,6 +164,28 @@ fn a_demanded_type_keeps_its_cross_crate_from_impls() {
     );
 }
 
+/// A member a blanket implementation defines itself (`to_string` in std's
+/// `impl<T: Display> ToString for T`) applies to the demanded type through
+/// the trait's declaration, which every such application shares.
+#[test]
+fn a_blanket_implementation_member_applies_through_its_trait() {
+    let _turn = rawr_import::store::test_turn();
+    let project = Project::new();
+    let graph = extract(&project, &[&["app", "Label", "to_string"]]);
+    let label = imported(&graph, &["Label"]).expect("the named type is exported");
+    let label = definition(&graph, label.target()).id();
+    let to_string = implementations_of(&graph, label)
+        .filter(|implementation| trait_named(&graph, implementation, "ToString"))
+        .flat_map(model::Implementation::associated)
+        .map(|id| definition(&graph, id))
+        .find(|definition| definition.display_path().last() == Some("to_string"))
+        .expect("the blanket ToString applies to Label with its to_string");
+    assert!(
+        matches!(to_string.owner(), model::Owner::Definition(_)),
+        "the applied member is the trait's declaration"
+    );
+}
+
 /// A demanded dependency publishes its complete name index (every
 /// public path, extracted or not), and a glob demand selects every public
 /// child of its module.
