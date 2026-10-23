@@ -305,6 +305,9 @@ pub fn run_claimed(
 /// Check, evaluate, and render one iced snippet to a PNG.
 pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
     validate(options)?;
+    // A snippet reads no file on the server: each image or svg path is
+    // missing.
+    rawr_iced::widget::deny_files();
     let program = wrap(source, options)?;
     let deadline = Instant::now() + options.limits.time;
     let canvas = rawr_iced::snapshot::Canvas {
@@ -1425,5 +1428,27 @@ fn view() -> impl Widget<()> {
         assert!(is_png(&missing.bytes));
         let svg = image(r#"svg("Ivan the Terrible.svg")"#);
         assert!(is_png(&svg.bytes));
+    }
+
+    #[test]
+    fn play_reads_no_file() {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../site/public/img/counter.png")
+            .canonicalize()
+            .unwrap();
+        assert!(file.is_absolute() && file.is_file());
+        let path = file.display().to_string().replace('\\', "/");
+        let missing = image(r#"image("67.png")"#);
+        for source in [
+            format!("image({path:?})"),
+            format!("image(image::Handle::from_path({path:?}))"),
+        ] {
+            assert_eq!(image(&source).bytes, missing.bytes, "{source} draws blank");
+        }
+        let svg = image(r#"svg("Ivan the Terrible.svg")"#);
+        let favicon = file.parent().unwrap().with_file_name("favicon.svg");
+        assert!(favicon.is_file());
+        let favicon = favicon.display().to_string();
+        assert_eq!(image(&format!("svg({favicon:?})")).bytes, svg.bytes);
     }
 }
