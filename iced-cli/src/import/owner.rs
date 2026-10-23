@@ -56,7 +56,7 @@ pub(crate) fn run(
 ) -> Result<bool, diagnostic::Report> {
     let source = fallback(target)?;
     let target_path = project(target)
-        .ok_or_else(|| framework("a `[rust]` owner requires a Rawr project", source.clone()))?
+        .ok_or_else(|| framework("a native owner requires a Rawr crate", source.clone()))?
         .to_path_buf();
     rawr_import::progress::begin(&target_path);
     let initial = initial_watched(
@@ -356,7 +356,7 @@ pub(crate) fn cell(
     let source = fallback(target)?;
     let (mut lane, _watched) = if started {
         let target_path = project(target)
-            .ok_or_else(|| framework("a `[rust]` owner requires a Rawr project", source.clone()))?;
+            .ok_or_else(|| framework("a native owner requires a Rawr crate", source.clone()))?;
         let (lane, adapter, manifests, native_baseline) =
             initial_watched(target, None, target_path, lifecycle, profile)?;
         // Keep the same registered observer and native baseline as the ordinary
@@ -541,7 +541,7 @@ fn open_lane(
 ) -> Result<Lane, diagnostic::Report> {
     let project = project(target).ok_or_else(|| {
         framework(
-            "a `[rust]` owner requires a discovered Rawr project",
+            "a native owner requires a discovered Rawr crate",
             source.clone(),
         )
     })?;

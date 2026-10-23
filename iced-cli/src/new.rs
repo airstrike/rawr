@@ -738,6 +738,13 @@ mod tests {
             rawr::project::Target::discover(&target).unwrap(),
             rawr::project::Target::Project(_)
         ));
+        // `rawr check` passes on it; `cargo build` is checked by hand, as it
+        // fetches iced.
+        #[cfg(feature = "native-runner")]
+        assert_eq!(
+            crate::check::execute(Some(target.clone())).unwrap(),
+            target.join("src/main.rs")
+        );
         std::fs::remove_dir_all(&sandbox).unwrap();
     }
 
