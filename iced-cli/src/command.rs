@@ -134,7 +134,17 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Request, E
             }
         }
         Some("doctor") => optional_path(&mut arguments, |path| Command::Doctor { path }),
-        Some("mcp") => terminal(Request::Execute(Command::Mcp), &mut arguments),
+        Some("mcp") => {
+            let mut arguments = arguments.peekable();
+            if arguments
+                .next_if(|argument| argument == "-h" || argument == "--help")
+                .is_some()
+            {
+                terminal(Request::Help, &mut arguments)
+            } else {
+                terminal(Request::Execute(Command::Mcp), &mut arguments)
+            }
+        }
         Some("init") => init(&mut arguments),
         Some("new") => required_path("new", "<name-or-path>", &mut arguments),
         Some("cache") => match (arguments.next(), arguments.next()) {
@@ -486,6 +496,8 @@ mod tests {
             ["check", "-h"].as_slice(),
             ["new", "--help"].as_slice(),
             ["doctor", "-h"].as_slice(),
+            ["mcp", "--help"].as_slice(),
+            ["mcp", "-h"].as_slice(),
         ] {
             assert_eq!(parse(arguments).unwrap(), Request::Help);
         }
