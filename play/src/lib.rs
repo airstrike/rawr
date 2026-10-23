@@ -1437,7 +1437,12 @@ fn view() -> impl Widget<()> {
 
     #[test]
     fn play_includes_no_file() {
-        for source in [r#"text(include_str!("Cargo.toml"))"#, r#"text(include_bytes!("Cargo.toml").len())"#] {
+        for source in [
+            r#"text(include_str!("Cargo.toml"))"#,
+            r#"text(include_bytes!("Cargo.toml").len())"#,
+            r#"svg(concat!(env!("CARGO_MANIFEST_DIR"), "/tiger.svg"))"#,
+            r#"text(env!("HOME"))"#,
+        ] {
             let Err(PlayError::Compile(error)) = render(source, &Options::default()) else {
                 panic!("{source} reads no file");
             };

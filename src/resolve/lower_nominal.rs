@@ -30153,6 +30153,17 @@ impl<'a> Parser<'a> {
                         operation: at,
                     });
                 };
+                // ?play's server environment is not the snippet's.
+                if let Some(reason) = crate::resolve::files_denied() {
+                    return Err(Error::InvalidHostOperation {
+                        item: "env!".into(),
+                        reason: format!(
+                            "{reason}. It has no environment variable `{variable}` either"
+                        )
+                        .into(),
+                        operation: at,
+                    });
+                }
                 match self.environment_variable(variable) {
                     Some(value) => value,
                     None => {
