@@ -5367,9 +5367,9 @@ fn language_references_in_locals_patterns_and_parameters() {
     // A moved borrow is still the place.
     let moved = run("pub fn run() -> i64 { let mut v = vec![1]; let r = &mut v; let s = r; s.push(3); v.len() as i64 } run()");
     assert_eq!(moved, 2);
-    // Not provided: `ref mut` in `match`/`if let` arms.
-    let arm = rejected("pub fn run() -> i64 { let mut o = Some(1); match o { Some(ref mut x) => *x += 1, None => {} } 0 } run()");
-    assert!(arm.contains("`ref mut x` in a `match`"), "{arm}");
+    // `ref mut` in a `match` arm changes the matched place.
+    let arm = run("pub fn run() -> i64 { let mut o = Some(1); match o { Some(ref mut x) => *x += 1, None => {} } o.unwrap() } run()");
+    assert_eq!(arm, 2);
 }
 
 #[test]
@@ -7364,6 +7364,29 @@ fn language_slice_patterns_on_mut_places_write_back() {
         run()
     "#);
     assert_eq!(value, 5 * 1000000 + 12 * 10000 + 23 * 100 + 9);
+}
+
+#[test]
+fn language_ref_mut_in_match_and_if_let_writes_back() {
+    let value = run(r#"
+        struct H { o: Option<i64>, pair: (i64, i64) }
+        impl H {
+            fn f(&mut self) {
+                if let Some(ref mut x) = self.o { *x = 8; }
+                match self.pair { (ref mut a, _) => *a += 1 }
+            }
+        }
+        pub fn run() -> i64 {
+            let mut h = H { o: Some(1), pair: (4, 0) };
+            h.f();
+            let mut o = Some(1);
+            match o { Some(ref mut x) => *x += 2, None => {} }
+            h.o.unwrap() * 100 + h.pair.0 * 10 + o.unwrap()
+        }
+        run()
+    "#);
+    assert_eq!(value, 8 * 100 + 5 * 10 + 3);
+    rejected("pub fn run() -> i64 { let o = Some(1); match o { Some(ref mut x) => *x += 2, None => {} } 0 } run()");
 }
 
 #[test]

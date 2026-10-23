@@ -17023,10 +17023,12 @@ impl<'a> Parser<'a> {
         bindings: &[PatternBinding],
         scrutinee: &str,
     ) -> Result<Option<WriteBack>, Error> {
-        if !matches!(
+        // A `&mut` place, or a place whose pattern binds `ref mut`.
+        let borrowed = matches!(
             self.inference.resolve(&subject.ty),
             Ty::Reference { mutable: true, .. }
-        ) {
+        );
+        if !borrowed && subject.lvalue.is_none() {
             return Ok(None);
         }
         let bound = bindings
@@ -17984,19 +17986,17 @@ impl<'a> Parser<'a> {
             ));
         }
         match syntax {
-            PatternSyntax::Ref {
-                name,
-                span,
-                mutable: true,
-            } => Err(Error::UnsupportedNominalSyntax {
-                construct: format!("`ref mut {name}` in a `match` or `if let` pattern").into(),
-                source: *span,
-            }),
-            PatternSyntax::Ref { name, span, .. } => {
+            // `ref mut x` binds `&mut` to the part, which the pattern's
+            // place takes back after each statement that uses it.
+            PatternSyntax::Ref { name, span, mutable } => {
                 let expected = match expected {
-                    Ty::Reference { .. } => expected,
+                    Ty::Reference { .. } if !*mutable => expected,
+                    Ty::Reference { target, .. } => Ty::Reference {
+                        mutable: true,
+                        target,
+                    },
                     target => Ty::Reference {
-                        mutable: false,
+                        mutable: *mutable,
                         target: Box::new(target),
                     },
                 };
