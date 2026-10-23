@@ -209,7 +209,7 @@ fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
 </div>
 
 <h2 id="rust-crates">Importing your own Rust crates</h2>
-<p>An app can <code>use</code> items from your own Rust crates without bindings. List each crate under <code>[dependencies]</code> in the crate&rsquo;s <code>Cargo.toml</code>. List <code>iced</code> there too. Use the revision that <code>rawr doctor</code> prints. Importing your own Rust crates currently works only on Apple Silicon Macs.</p>
+<p>An app can <code>use</code> items from your own Rust crates without bindings. List each crate under <code>[dependencies]</code> in the crate&rsquo;s <code>Cargo.toml</code>. List <code>iced</code> there too. Use the revision that <code>rawr doctor</code> prints. Importing your own Rust crates needs a Unix system. It has only been tested on Apple Silicon Macs so far.</p>
 <div class="block">
   <div class="file"><b>Cargo.toml</b></div>
   <pre><code data-lang="toml">[dependencies]

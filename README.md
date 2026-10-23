@@ -165,9 +165,10 @@ cargo install --locked --git https://github.com/airstrike/rawr rawr-cli
 works too. A program without iced runs once and exits. It doesn't hot reload.
 
 rawr-iced adds iced support. Install it and `rawr` hands programs that use
-iced to it. Importing your own Rust crates currently works only on Apple
-Silicon Macs. The rest of rawr-iced should work wherever iced runs, but it has
-only been tested on macOS. It needs one pinned Rust nightly, `nightly-2026-07-11`, with the `rustc-dev` and `rust-src`
+iced to it. Importing your own Rust crates builds them for the host of the
+pinned toolchain. It needs a Unix system. It has only been tested on Apple
+Silicon Macs so far. The rest of rawr-iced should work wherever iced runs. It
+has only been tested on macOS. It needs one pinned Rust nightly, `nightly-2026-07-11`, with the `rustc-dev` and `rust-src`
 components. Rawr builds iced and your own crates with that toolchain too.
 
 ```sh
@@ -264,7 +265,7 @@ To add the bot to a server, use the
 ## How far along is it?
 
 Pre-alpha. The `rawr` command builds on stable Rust. Importing your own Rust
-crates works only on Apple Silicon Macs for now. rawr-iced follows iced master
+crates has only been tested on Apple Silicon Macs. rawr-iced follows iced master
 and pins one nightly. APIs,
 commands, file formats and error codes will change without notice.
 

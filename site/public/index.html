@@ -341,7 +341,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
       <h2>Install from git</h2>
       <p><strong>The language</strong> is an ordinary crate. It builds on stable Rust 1.95 or newer.</p>
       <p><strong>The <code>rawr</code> command</strong> builds on stable Rust too. It runs programs that don&rsquo;t use iced.</p>
-      <p><strong>rawr-iced</strong> needs more. It needs <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr also builds your own crates with that toolchain. Importing your own Rust crates currently works only on Apple Silicon Macs. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far.</p>
+      <p><strong>rawr-iced</strong> needs more. It needs <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr also builds your own crates with that toolchain. Importing your own Rust crates builds them for the host of the pinned toolchain. It needs a Unix system. It has only been tested on Apple Silicon Macs so far. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far.</p>
     </div>
     <div>
       <div class="group">
@@ -604,7 +604,7 @@ use iced::widget::{Widget, button, column, text};
       <h2>Pre-alpha</h2>
     </div>
     <div>
-      <p class="status">The language crate and the <code>rawr</code> command build on stable Rust. They have no platform-specific code. Importing your own Rust crates currently works only on Apple Silicon Macs. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far. rawr-iced follows iced master and pins one nightly. APIs, commands, file formats and error codes will change without notice.</p>
+      <p class="status">The language crate and the <code>rawr</code> command build on stable Rust. They have no platform-specific code. Importing your own Rust crates builds them for the host of the pinned toolchain. It needs a Unix system. It has only been tested on Apple Silicon Macs so far. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far. rawr-iced follows iced master and pins one nightly. APIs, commands, file formats and error codes will change without notice.</p>
       <p class="status">Rawr doesn&rsquo;t cover all of Rust yet. <a href="/docs/language#not-supported">The language docs</a> list what is missing. If it rejects valid Rust that it claims to support, that&rsquo;s a bug. Please report it with a small reproduction.</p>
     </div>
   </div>
