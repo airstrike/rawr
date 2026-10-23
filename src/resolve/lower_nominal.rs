@@ -14291,6 +14291,44 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Rewrite the call arguments ahead, `(f)`, into `((f)())`: the one
+    /// argument called with no arguments. `false` leaves the tokens alone.
+    fn splice_immediate_call(&mut self) -> bool {
+        let mut ahead = self.input.clone();
+        let Some((Token::LeftParen, open)) = ahead.next() else {
+            return false;
+        };
+        let mut depth = 1_usize;
+        let mut inner = Vec::new();
+        let close = loop {
+            let Some((token, at)) = ahead.next() else {
+                return false;
+            };
+            match token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => depth -= 1,
+                Token::Comma if depth == 1 => return false,
+                _ => {}
+            }
+            if depth == 0 {
+                break at;
+            }
+            inner.push((token, at));
+        };
+        for _ in 0..inner.len() + 2 {
+            self.next();
+        }
+        let mut tokens = vec![(Token::LeftParen, open), (Token::LeftParen, open)];
+        tokens.extend(inner);
+        tokens.extend([
+            (Token::RightParen, close),
+            (Token::Unit, close),
+            (Token::RightParen, close),
+        ]);
+        self.splice_tokens(tokens);
+        true
+    }
+
     /// Whether the tokens ahead name an imported symbolic host operation,
     /// which `Task::perform` seals itself. Anything else is a future.
     fn operation_selector_ahead(&mut self) -> bool {
@@ -14722,6 +14760,18 @@ impl<'a> Parser<'a> {
         let alias = resolved.host_alias().cloned();
         let Some(definition) = alias else {
             return Err(self.unsupported("host method receiver type"));
+        };
+        // iced's `button.on_press_with(f)` builds its message with `f` on
+        // press. Rawr builds it with the view, which gives the same message
+        // for a closure without side effects: `.on_press((f)())`.
+        let member = if member.as_str() == "on_press_with"
+            && definition.path() == "iced::widget::Button"
+            && self.pending_arguments.is_none()
+            && self.splice_immediate_call()
+        {
+            ImmutableString::from("on_press")
+        } else {
+            member
         };
         let path = format!("{}::{member}", definition.path());
         // `value.clone()` of a library type that is `Clone`: the value, as

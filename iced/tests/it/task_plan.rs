@@ -86,6 +86,30 @@ impl Counter {
 }
 
 #[test]
+fn on_press_with_builds_its_message_from_the_closure() {
+    let mut adapter = boot(
+        r#"
+use iced::widget::{button, column, text, Column};
+#[derive(Debug, Clone, Copy)] enum Message { Add(i64) }
+#[derive(Default)] struct Counter { value: i64 }
+pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
+impl Counter {
+    fn update(&mut self, message: Message) {
+        match message { Message::Add(amount) => self.value += amount }
+    }
+    fn view(&self) -> Column<'_, Message> {
+        let amount = 4;
+        column![button("Add").on_press_with(move || Message::Add(amount)), text(self.value)]
+    }
+}
+"#,
+    );
+    let message = click(&adapter, "Add");
+    adapter.update(message).unwrap();
+    assert_text(&adapter, "4");
+}
+
+#[test]
 fn update_none_lowers_to_an_empty_native_task() {
     let adapter = boot(&explicit_source("Counter", "Task<Message>"));
     let application = program::Application::from_adapter(adapter);
