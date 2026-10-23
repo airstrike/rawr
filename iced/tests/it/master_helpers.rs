@@ -1202,3 +1202,91 @@ fn master_angles_convert_and_combine() {
     find(&adapter, "true");
     find(&adapter, "Degrees(45.0)");
 }
+
+const SCROLLABLE_DIRECTION: &str = r#"
+use iced::widget::{button, column, radio, row, scrollable, space, text};
+use iced::{Fill, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+
+#[derive(Default)]
+struct State {
+    anchor: scrollable::Anchor,
+    both: bool,
+    offset: scrollable::RelativeOffset,
+    last_source: Option<scrollable::Source>,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    AlignmentChanged(scrollable::Anchor),
+    Scrolled(scrollable::Scroll),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::AlignmentChanged(anchor) => {
+                self.anchor = anchor;
+                self.both = true;
+            }
+            Message::Scrolled(scroll) => {
+                self.offset = scroll.viewport.relative_offset();
+                self.last_source = Some(scroll.source);
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let scrollbar = scrollable::Scrollbar::new()
+            .width(10)
+            .margin(2)
+            .padding(1)
+            .scroller_width(8)
+            .anchor(self.anchor);
+        let content = scrollable(column![text("Beginning!"), space().height(1200), text("End!")])
+            .direction(if self.both {
+                scrollable::Direction::Both {
+                    horizontal: scrollbar,
+                    vertical: scrollbar,
+                }
+            } else {
+                scrollable::Direction::Vertical(scrollbar)
+            })
+            .width(Fill)
+            .height(200)
+            .spacing(4)
+            .on_scroll(Message::Scrolled)
+            .auto_scroll(true);
+        let source = match self.last_source {
+            Some(source) => text(format!("Source: {source:?}")),
+            None => text("Source: ?"),
+        };
+        column![
+            row![
+                radio("Start", scrollable::Anchor::Start, Some(self.anchor), Message::AlignmentChanged),
+                radio("End", scrollable::Anchor::End, Some(self.anchor), Message::AlignmentChanged),
+                button("flip").on_press(Message::AlignmentChanged(scrollable::Anchor::End)),
+            ],
+            content,
+            source,
+            text(format!("{:?} {}", self.anchor, self.offset.y)),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_scrollable_takes_a_direction_and_reports_scrolls() {
+    let mut adapter = boot(SCROLLABLE_DIRECTION);
+    find(&adapter, "Start 0");
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("flip").unwrap();
+    for message in simulator.into_messages() {
+        adapter.update(message).unwrap();
+    }
+    find(&adapter, "End 0");
+    find(&adapter, "Beginning!");
+}

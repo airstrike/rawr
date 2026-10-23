@@ -17,6 +17,7 @@ pub mod layout;
 mod mapped;
 mod media;
 mod rich;
+mod scroll;
 pub mod mouse;
 pub mod operation;
 pub mod overlay;

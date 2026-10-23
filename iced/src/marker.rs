@@ -169,6 +169,27 @@ pub(crate) struct Scrollable {
     pub(crate) height: Option<iced::Length>,
     pub(crate) style: Option<Source<scrollable::Status, scrollable::Style>>,
     pub(crate) id: Option<iced::widget::Id>,
+    pub(crate) direction: Option<scrollable::Direction>,
+    pub(crate) spacing: Option<f32>,
+    pub(crate) auto_scroll: Option<bool>,
+    pub(crate) on_scroll: Option<item::Value>,
+}
+
+/// iced's `scrollable::Direction::Both { horizontal, vertical }`, written
+/// as a struct literal.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ScrollBoth {
+    pub(crate) horizontal: scrollable::Scrollbar,
+    pub(crate) vertical: scrollable::Scrollbar,
+}
+
+impl From<ScrollBoth> for scrollable::Direction {
+    fn from(both: ScrollBoth) -> Self {
+        Self::Both {
+            horizontal: both.horizontal,
+            vertical: both.vertical,
+        }
+    }
 }
 
 #[derive(Clone)]

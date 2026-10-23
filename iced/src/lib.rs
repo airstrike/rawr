@@ -95,6 +95,13 @@ fn register_debug() {
     register::<iced::Border>();
     register::<iced::Color>();
     register::<iced::ContentFit>();
+    register::<iced::widget::scrollable::Anchor>();
+    register::<iced::widget::scrollable::Direction>();
+    register::<iced::widget::scrollable::Scroll>();
+    register::<iced::widget::scrollable::Scrollbar>();
+    register::<iced::widget::scrollable::Source>();
+    register::<iced::widget::scrollable::Viewport>();
+    register::<marker::ScrollBoth>();
     register::<iced::Degrees>();
     register::<iced::Radians>();
     register::<iced::widget::checkbox::Icon>();
@@ -344,6 +351,46 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         &[],
         OWNED_DEFAULT_VALUE_CAPABILITIES,
     )?;
+    builder.default_value_type::<iced::widget::scrollable::Anchor>(
+        "widget::scrollable::Anchor",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::widget::scrollable::Scrollbar>(
+        "widget::scrollable::Scrollbar",
+        &[],
+        OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::widget::scrollable::Direction>(
+        "widget::scrollable::Direction",
+        &[],
+        OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<marker::ScrollBoth>(
+        "widget::scrollable::Direction::Both",
+        &[],
+        OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.value_type::<iced::widget::scrollable::Source>(
+        "widget::scrollable::Source",
+        &[],
+        OWNED_EQ_VALUE_CAPABILITIES,
+    )?;
+    for path in ["widget::scrollable::Scroll", "widget::scrollable::Viewport"] {
+        let capabilities = &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ];
+        match path {
+            "widget::scrollable::Scroll" => {
+                builder.type_::<iced::widget::scrollable::Scroll>(path, &[], capabilities)?
+            }
+            _ => builder.type_::<iced::widget::scrollable::Viewport>(path, &[], capabilities)?,
+        };
+    }
     builder.value_type::<iced::Event>("Event", &[], DEBUG_VALUE_CAPABILITIES)?;
     builder.alias("event::Event", "Event")?;
     builder.value_type::<iced::window::Event>("window::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
@@ -967,6 +1014,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_font(&mut builder)?;
     declare_checkbox_icon(&mut builder)?;
     declare_angles(&mut builder)?;
+    declare_scrollable(&mut builder)?;
 
     builder.finish()
 }
@@ -3264,6 +3312,131 @@ fn declare_font(builder: &mut facade::Builder) -> Result<(), host::Error> {
     }
     Ok(())
 }
+
+/// iced's `scrollable::Anchor`, `Scrollbar` and `Direction`, written as
+/// in Rust (`Direction::Both { horizontal, vertical }` is a struct
+/// literal), the `Scroll` that `on_scroll` hands over with its `Viewport`
+/// and `Source`, and the `direction`, `spacing` and `auto_scroll` builders.
+fn declare_scrollable(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let ty = type_ref::Type::registered;
+    let anchor = || ty("widget::scrollable::Anchor");
+    let scrollbar = || ty("widget::scrollable::Scrollbar");
+    let direction = || ty("widget::scrollable::Direction");
+    let both = || ty("widget::scrollable::Direction::Both");
+    for name in SCROLLABLE_ANCHORS {
+        builder.item(item::Definition::associated_value(
+            format!("widget::scrollable::Anchor::{name}"),
+            anchor()?,
+        )?)?;
+    }
+    for name in SCROLLABLE_SOURCES {
+        builder.item(item::Definition::associated_value(
+            format!("widget::scrollable::Source::{name}"),
+            ty("widget::scrollable::Source")?,
+        )?)?;
+    }
+    for owner in [
+        "widget::scrollable::Anchor",
+        "widget::scrollable::Scrollbar",
+        "widget::scrollable::Direction",
+        "widget::scrollable::Direction::Both",
+    ] {
+        builder.item(item::Definition::associated_function(
+            format!("{owner}::default"),
+            output_signature(owner)?,
+        )?)?;
+    }
+    for name in ["new", "hidden"] {
+        builder.item(item::Definition::associated_function(
+            format!("widget::scrollable::Scrollbar::{name}"),
+            output_signature("widget::scrollable::Scrollbar")?,
+        )?)?;
+    }
+    let mut inputs = vec![("anchor", anchor()?)];
+    for name in ["width", "margin", "scroller_width", "spacing", "padding"] {
+        inputs.extend(PIXELS.map(|pixels| (name, type_ref::Type::builtin(pixels))));
+    }
+    for (name, input) in inputs {
+        let mut setter = signature::Builder::new();
+        setter.parameter(input).output(scrollbar()?);
+        builder.item(item::Definition::method(
+            format!("widget::scrollable::Scrollbar::{name}"),
+            receiver::Mode::Owned,
+            setter.finish(),
+        )?)?;
+    }
+    for name in ["Vertical", "Horizontal"] {
+        let mut variant = signature::Builder::new();
+        variant.parameter(scrollbar()?).output(direction()?);
+        builder.item(item::Definition::associated_function(
+            format!("widget::scrollable::Direction::{name}"),
+            variant.finish(),
+        )?)?;
+    }
+    for field in ["horizontal", "vertical"] {
+        let mut reader = signature::Builder::new();
+        reader.output(scrollbar()?);
+        builder.item(item::Definition::method(
+            format!("widget::scrollable::Direction::Both::{field}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+        let mut setter = signature::Builder::new();
+        setter.parameter(scrollbar()?).output(both()?);
+        builder.item(item::Definition::method(
+            format!("widget::scrollable::Direction::Both::{field}"),
+            receiver::Mode::Owned,
+            setter.finish(),
+        )?)?;
+    }
+    // The literal is made the `Direction` by its `into` where it ends.
+    builder.item(item::Definition::method(
+        "widget::scrollable::Direction::Both::into",
+        receiver::Mode::Owned,
+        output_signature("widget::scrollable::Direction")?,
+    )?)?;
+    builders(builder, "widget::Scrollable", "direction", [direction()?])?;
+    pixels_builders(builder, "widget::Scrollable", "spacing")?;
+    builders(
+        builder,
+        "widget::Scrollable",
+        "auto_scroll",
+        [type_ref::Type::builtin(type_ref::Builtin::Bool)],
+    )?;
+    builder.item(item::Definition::method(
+        "widget::Scrollable::on_scroll",
+        receiver::Mode::Owned,
+        message_mapper_signature("widget::Scrollable", ty("widget::scrollable::Scroll")?)?,
+    )?)?;
+    for (owner, field, output) in [
+        ("widget::scrollable::Scroll", "viewport", "widget::scrollable::Viewport"),
+        ("widget::scrollable::Scroll", "source", "widget::scrollable::Source"),
+        ("widget::scrollable::Viewport", "relative_offset", "widget::scrollable::RelativeOffset"),
+        ("widget::scrollable::Viewport", "absolute_offset", "widget::scrollable::AbsoluteOffset"),
+    ] {
+        builder.item(item::Definition::method(
+            format!("{owner}::{field}"),
+            receiver::Mode::Shared,
+            output_signature(output)?,
+        )?)?;
+    }
+    Ok(())
+}
+
+/// iced's `scrollable::Anchor` variants.
+pub(crate) const SCROLLABLE_ANCHORS: [&str; 2] = ["Start", "End"];
+
+/// iced's `scrollable::Source` variants.
+pub(crate) const SCROLLABLE_SOURCES: [&str; 8] = [
+    "Wheel",
+    "Touch",
+    "Scrollbar",
+    "AutoScroll",
+    "Operation",
+    "Action",
+    "Content",
+    "Resize",
+];
 
 /// iced's `Degrees` and `Radians`: `Degrees(90.0)`, `Radians::PI`,
 /// `Radians::from(degrees)` and their operators, the methods named for `std::ops`' traits.

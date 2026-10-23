@@ -448,6 +448,19 @@ impl widget::Descriptor for marker::Scrollable {
         if let Some(height) = self.height {
             scrollable = scrollable.height(height);
         }
+        if let Some(direction) = self.direction {
+            scrollable = scrollable.direction(direction);
+        }
+        if let Some(spacing) = self.spacing {
+            scrollable = scrollable.spacing(spacing);
+        }
+        if let Some(auto_scroll) = self.auto_scroll {
+            scrollable = scrollable.auto_scroll(auto_scroll);
+        }
+        if let Some(mapper) = &self.on_scroll {
+            let mapper = context.message_mapper(mapper.clone());
+            scrollable = scrollable.on_scroll(move |scroll| mapper.map(Dynamic::from(scroll)));
+        }
         match style::lower(
             &self.style,
             context,
@@ -1132,6 +1145,10 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 height: None,
                 style: None,
                 id: None,
+                direction: None,
+                spacing: None,
+                auto_scroll: None,
+                on_scroll: None,
             }))
         })
         .expect("the iced facade must retain the exact scrollable item");
