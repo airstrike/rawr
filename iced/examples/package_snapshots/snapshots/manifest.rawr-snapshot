@@ -5,8 +5,8 @@ iced	be88873d38544455e26c7a104eb757da2cbbac6b
 renderer	tiny-skia
 font	%46ira%20%53ans%20%52egular%20%28iced%20embedded%29
 scale	1.0
-artifact	main%3A%3A%43ounter%3A%3Aview%23default	6ab3e5acdfdea0ed472f6b23770ec5e8	native	iced%3A%3A%54heme%3A%3A%4Cight	240	140	240	140	%43ounter-718a1fe2/view/default/native.png
-artifact	main%3A%3A%43ounter%3A%3Aview%23default	6ab3e5acdfdea0ed472f6b23770ec5e8	explicit	dark	240	140	240	140	%43ounter-718a1fe2/view/default/dark.png
-artifact	main%3A%3A%43ounter%3A%3Aview%23default	6ab3e5acdfdea0ed472f6b23770ec5e8	explicit	light	240	140	240	140	%43ounter-718a1fe2/view/default/light.png
-artifact	main%3A%3A%43ounter%3A%3Aview%23forty-two	ae20e883c4fa5a924b21be4d439f0418	native	iced%3A%3A%54heme%3A%3A%4Cight	180	100	180	100	%43ounter-718a1fe2/view/forty-two/native.png
-artifact	main%3A%3A%43ounter%3A%3Aview%23forty-two	ae20e883c4fa5a924b21be4d439f0418	explicit	dark	180	100	180	100	%43ounter-718a1fe2/view/forty-two/dark.png
+artifact	snapshot_counter%3A%3A%43ounter%3A%3Aview%23default	f7a594a54ea5697f904fc26569d13852	native	iced%3A%3A%54heme%3A%3A%4Cight	240	140	240	140	%43ounter-36cf4b6a/view/default/native.png
+artifact	snapshot_counter%3A%3A%43ounter%3A%3Aview%23default	f7a594a54ea5697f904fc26569d13852	explicit	dark	240	140	240	140	%43ounter-36cf4b6a/view/default/dark.png
+artifact	snapshot_counter%3A%3A%43ounter%3A%3Aview%23default	f7a594a54ea5697f904fc26569d13852	explicit	light	240	140	240	140	%43ounter-36cf4b6a/view/default/light.png
+artifact	snapshot_counter%3A%3A%43ounter%3A%3Aview%23forty-two	8fb32f27cc236f7d7770e4692c6214f8	native	iced%3A%3A%54heme%3A%3A%4Cight	180	100	180	100	%43ounter-36cf4b6a/view/forty-two/native.png
+artifact	snapshot_counter%3A%3A%43ounter%3A%3Aview%23forty-two	8fb32f27cc236f7d7770e4692c6214f8	explicit	dark	180	100	180	100	%43ounter-36cf4b6a/view/forty-two/dark.png
