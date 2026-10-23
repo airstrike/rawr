@@ -2,7 +2,9 @@
 //! reached only through the Worker): a JSON body read into the same
 //! [`Request`] a `?play` message makes.
 //!
-//! `{"code": "...", "theme": "dark" | "light", "size": "WxH" | "", "messages": ["Message::Increment"]}`
+//! `{"code": "...", "theme": "dark" | "light", "size": "WxH" | "", "messages": ["Message::Increment"], "still": true}`
+//!
+//! `still` asks for the last frame as a PNG, never a GIF (a share's preview).
 
 use crate::message::Request;
 use crate::Options;
@@ -58,6 +60,9 @@ pub fn parse_render(body: &[u8], defaults: &Options) -> Result<Request, String> 
             }
         }
     }
+    if let Some(still) = value.get("still").and_then(serde_json::Value::as_bool) {
+        options.still = still;
+    }
     Ok(Request {
         code: code.to_owned(),
         options,
@@ -79,6 +84,9 @@ mod tests {
         assert_ne!(request.options.theme, defaults.theme);
         let plain = parse_render(br#"{"code":"x","size":""}"#, &defaults).unwrap();
         assert_eq!(plain.options, defaults);
+        let still = parse_render(br#"{"code":"x","still":true}"#, &defaults).unwrap();
+        assert!(still.options.still);
+        assert!(still.args(crate::Format::Png, 64).contains(&"--still".to_owned()));
     }
 
     #[test]

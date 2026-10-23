@@ -1,5 +1,6 @@
-//! Run untrusted Rawr snippets: render an iced snippet to PNG, or run a
-//! plain program and return its output as text.
+//! Run untrusted Rawr snippets: render an iced snippet to PNG, or to a GIF
+//! when a full app's view changes over time, or run a plain program and
+//! return its output as text.
 //!
 //! [`run`] parses a snippet once and asks rawr-iced's own claims (its
 //! manifest) whether it is iced's: it names `iced`, or uses a name of the
@@ -15,6 +16,9 @@
 //! - a stateless `fn view() -> impl Widget<()>`
 //! - a full app: a type with `fn view(&self)` and `fn update(&mut self, ..)`
 //!
+//! A full app runs on a simulated clock (see [`motion`]): a view that
+//! changes, after its boot or a message, renders as a GIF.
+//!
 //! A source that declares its own `#[preview]` is refused: its size would
 //! bypass [`MAX_SIDE`].
 //!
@@ -25,6 +29,7 @@
 #[cfg(feature = "bot")]
 pub mod channels;
 pub mod message;
+pub mod motion;
 pub mod plain;
 pub mod server;
 #[cfg(feature = "bot")]
@@ -36,6 +41,7 @@ use std::fmt;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+pub use motion::{Gif, Image, Picture};
 pub use plain::Output;
 
 /// A rendered PNG.
@@ -182,6 +188,8 @@ pub struct Options {
     pub messages: Vec<String>,
     /// Per-render limits.
     pub limits: Limits,
+    /// Render the last frame as a still image, never an animation.
+    pub still: bool,
 }
 
 /// Parse `WxH` (e.g. `400x300`) into a size.
@@ -214,6 +222,7 @@ impl Default for Options {
             theme: Theme::default(),
             messages: Vec::new(),
             limits: Limits::default(),
+            still: false,
         }
     }
 }
@@ -254,12 +263,12 @@ impl std::error::Error for PlayError {}
 /// Identity used for the wrapped source in diagnostics.
 pub const SOURCE_NAME: &str = "play.rs";
 
-/// What a snippet gave: the first frame of an iced snippet, or a plain
-/// program's output.
+/// What a snippet gave: an iced snippet's image, or a plain program's
+/// output.
 #[derive(Clone, Debug)]
 pub enum Outcome {
-    /// The rendered PNG.
-    Image(Png),
+    /// The rendered image.
+    Image(Image),
     /// The text a plain program wrote, and how it ended.
     Text(Output),
 }
@@ -298,7 +307,7 @@ pub fn run_claimed(
     let parsed = plain::Parsed::new(source, &options.limits, deadline)?;
     if parsed.claimed(claims) {
         drop(parsed);
-        return render(source, options).map(Outcome::Image);
+        return animate(source, options).map(Outcome::Image);
     }
     // Messages drive an iced app; a plain program runs without them.
     let mut output = parsed.run(source, &options.limits)?;
@@ -309,19 +318,66 @@ pub fn run_claimed(
     Ok(Outcome::Text(output))
 }
 
-/// Check, evaluate, and render one iced snippet to a PNG.
-pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
+/// Check, evaluate, and render one iced snippet: a full app on a simulated
+/// clock, as [`motion`] decides, and anything else (or any snippet when
+/// [`Options::still`] is set) as a still PNG.
+pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
+    if options.still || shape(source) != Shape::App {
+        return render(source, options).map(|png| Image {
+            picture: Picture::Still(png),
+            note: None,
+        });
+    }
     validate(options)?;
     rawr::resolve::deny_files(NO_FILES);
     let program = wrap(source, options)?;
     let deadline = Instant::now() + options.limits.time;
-    let canvas = rawr_iced::snapshot::Canvas {
+    let canvas = canvas(options);
+    // The app boots on the simulated clock, so the times it reads are on it.
+    let _clock = rawr_iced::snapshot::clock::freeze();
+    let (mut adapter, messages) = application(&program, source, options, deadline)?;
+    let theme = app_theme(source).is_none().then(|| options.theme.variant());
+    let bound = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
+    let motion = rawr_iced::snapshot::Motion {
+        step: motion::STEP,
+        frames: motion::FRAMES,
+        phase: motion::PHASE,
+        span: motion::SPAN,
+        deadline,
+    };
+    let mut loops = motion::Loops::default();
+    let recording = rawr_iced::snapshot::record_application(
+        &mut adapter,
+        messages,
+        canvas,
+        bound,
+        theme,
+        motion,
+        &mut |frames| loops.check(frames),
+    )
+    .map_err(|error| classify(&error.to_string(), &options.limits))?;
+    motion::picture(recording, &loops)
+}
+
+/// How a render sizes and scales its image.
+fn canvas(options: &Options) -> rawr_iced::snapshot::Canvas {
+    rawr_iced::snapshot::Canvas {
         fit: options.size.is_none(),
         fallback: FALLBACK_SIZE,
         margin: if options.size.is_none() { MARGIN } else { 0 },
         scale: options.scale as f32,
         max_pixels: MAX_SIDE,
-    };
+    }
+}
+
+/// Check, evaluate, and render one iced snippet to a PNG: a full app once
+/// its view settles after its boot and messages.
+pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
+    validate(options)?;
+    rawr::resolve::deny_files(NO_FILES);
+    let program = wrap(source, options)?;
+    let deadline = Instant::now() + options.limits.time;
+    let canvas = canvas(options);
     let rendered = if shape(source) == Shape::App {
         render_application(&program, source, options, canvas, deadline)
     } else {
@@ -351,6 +407,21 @@ fn render_application(
     canvas: rawr_iced::snapshot::Canvas,
     deadline: Instant,
 ) -> Result<Png, PlayError> {
+    let (mut adapter, messages) = application(program, source, options, deadline)?;
+    // The app's own `.theme(f)` wins over the built-in theme.
+    let theme = app_theme(source).is_none().then(|| options.theme.variant());
+    let bound = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
+    rawr_iced::snapshot::render_application(&mut adapter, messages, canvas, bound, theme)
+        .map_err(|error| classify(&error.to_string(), &options.limits))
+}
+
+/// A full app checked and booted, and the options' messages for it.
+fn application(
+    program: &str,
+    source: &str,
+    options: &Options,
+    deadline: Instant,
+) -> Result<(rawr_iced::program::Adapter, Vec<rawr_iced::runtime::Message>), PlayError> {
     let compiler = rawr_iced::application::Compiler::configured(sandbox(&options.limits, deadline))
         .map_err(|error| PlayError::Render(error.to_string()))?;
     let compile = |error: rawr_iced::application::Error| {
@@ -363,7 +434,7 @@ fn render_application(
     } else {
         compiler.check_named_source(SOURCE_NAME, program)
     };
-    let mut adapter = checked
+    let adapter = checked
         .and_then(rawr_iced::application::Checked::prepare)
         .map_err(compile)?
         .into_adapter();
@@ -375,11 +446,7 @@ fn render_application(
                 .map_err(|error| classify(&error.to_string(), &options.limits))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    // The app's own `.theme(f)` wins over the built-in theme.
-    let theme = app_theme(source).is_none().then(|| options.theme.variant());
-    let bound = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
-    rawr_iced::snapshot::render_application(&mut adapter, messages, canvas, bound, theme)
-        .map_err(|error| classify(&error.to_string(), &options.limits))
+    Ok((adapter, messages))
 }
 
 /// The untrusted-snippet limits on an Engine.
@@ -1220,7 +1287,11 @@ fn view() -> impl Widget<()> {
 
     fn image(source: &str) -> super::Png {
         match super::run(source, &Options::default()).unwrap() {
-            super::Outcome::Image(png) => png,
+            super::Outcome::Image(super::Image {
+                picture: super::Picture::Still(png),
+                ..
+            }) => png,
+            super::Outcome::Image(_) => panic!("{source} rendered an animation"),
             super::Outcome::Text(output) => panic!("{source} ran as text: {output:?}"),
         }
     }

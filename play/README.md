@@ -1,6 +1,7 @@
 # rawr-play
 
-Run a Rawr snippet. A snippet that uses iced renders to a PNG. A plain
+Run a Rawr snippet. A snippet that uses iced renders to a PNG. A full app
+whose view changes over time renders to a GIF (see `src/motion.rs`). A plain
 program runs and returns its output as text. One long-running process links
 `rawr` and `rawr-iced` as libraries. It runs no rustc and no importer per request. A
 snippet is checked as Rawr, its view is evaluated headlessly, and the result
@@ -47,7 +48,10 @@ echo 'text("hi")' | cargo run -p rawr-play -- - --format webp -o - > target/play
 ```
 
 The format follows `--format png|jpg|webp`, else the output extension, else
-PNG. A plain program writes JSON where an image would go. The JSON is one
+PNG. An animated render is always a GIF. A file named `.png`, `.jpg` or
+`.webp` is then written with a `.gif` extension instead. `--still` writes
+the last frame as a still image. A note on the image goes to stderr as a
+`note: ` line when the result goes to stdout. A plain program writes JSON where an image would go. The JSON is one
 object that starts with `{`, and no image does:
 
 ```json
@@ -243,7 +247,8 @@ rendered once (concurrent first requests share the render; a share warms
 it), kept in the Durable Object's SQLite (at most 1 MiB) and in the edge
 cache, and served `immutable`, since an id is a content hash. A snippet that
 does not render gets an error card (`public/og/play-error.png`, drawn from
-`og/error.rs`), kept too. A plain program's share keeps its output. Its
+`og/error.rs`), kept too. The preview asks for `still`, so an animated
+snippet's preview is its last frame as a PNG. A plain program's share keeps its output. Its
 link shows the site's card (`site/public/og/card.png`), and its first line
 of output is the description; a busy or unreachable renderer is retried after
 ten minutes. Uncached previews are limited per IP (10 a minute, 60 an hour),
@@ -256,7 +261,8 @@ counter.
 Renders go Worker → Durable Object → the bot's HTTP port (`PLAY_HTTP_PORT`,
 8080, reachable only through the Durable Object) → the same child-process
 renderer as `?play`, with the same limits. The bot's `POST /render` answers
-with `image/png`, or with `application/json` for a plain program's output.
+with `image/png` or `image/gif`, or with `application/json` for a plain
+program's output. A note on an animation comes in the `x-play-note` header.
 Playground renders share the pool
 but run one at a time and never ahead of a waiting Discord render. Each IP
 (kept only as an HMAC) gets 6 runs a minute and 60 an hour, and 10 shares a

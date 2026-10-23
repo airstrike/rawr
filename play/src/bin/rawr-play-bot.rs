@@ -316,7 +316,7 @@ impl EventHandler for Handler {
             Reply::Image(image, note) => {
                 let builder = builder.add_file(self.attachment(image));
                 match note {
-                    Some(note) => builder.content(format!("-# {note}")),
+                    Some(note) => builder.content(subtext(&note)),
                     None => builder,
                 }
             }
@@ -362,7 +362,7 @@ impl EventHandler for Handler {
         }
         let builder = match self.reply(request, event.guild_id).await {
             Reply::Image(image, note) => EditMessage::new()
-                .content(note.map_or_else(String::new, |note| format!("-# {note}")))
+                .content(note.map_or_else(String::new, |note| subtext(&note)))
                 .remove_all_attachments()
                 .new_attachment(self.attachment(image)),
             Reply::Text(text) => EditMessage::new().content(text).remove_all_attachments(),
@@ -634,7 +634,12 @@ impl Handler {
     }
 
     fn attachment(&self, image: Vec<u8>) -> CreateAttachment {
-        CreateAttachment::bytes(image, format!("play.{}", self.format.extension()))
+        let extension = if message::is_gif(&image) {
+            "gif"
+        } else {
+            self.format.extension()
+        };
+        CreateAttachment::bytes(image, format!("play.{extension}"))
     }
 
     fn remember(&self, request: MessageId, reply: MessageId) {
@@ -666,7 +671,14 @@ impl Handler {
         };
         self.shared.record(rendered.outcome, rendered.millis, guild);
         match rendered.result {
-            Ok(Done::Image(image)) => Reply::Image(image, message::image_note(&request.code)),
+            Ok(Done::Image(image, note)) => {
+                let notes: Vec<String> = message::image_note(&request.code)
+                    .map(str::to_owned)
+                    .into_iter()
+                    .chain(note)
+                    .collect();
+                Reply::Image(image, (!notes.is_empty()).then(|| notes.join("\n")))
+            }
             Ok(Done::Text(output)) => Reply::Text(message::output_text(&output)),
             Err(text) => Reply::Text(message::error_text(&text)),
         }
@@ -745,7 +757,20 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                                 .unwrap()
                                 .record_web(rendered.outcome, rendered.millis);
                             match rendered.result {
-                                Ok(Done::Image(image)) => reply(StatusCode::OK, "image/png", image),
+                                Ok(Done::Image(image, note)) => {
+                                    let kind = if rawr_play::message::is_gif(&image) {
+                                        "image/gif"
+                                    } else {
+                                        "image/png"
+                                    };
+                                    let mut response = Response::builder()
+                                        .status(StatusCode::OK)
+                                        .header("content-type", kind);
+                                    if let Some(note) = note {
+                                        response = response.header("x-play-note", note.replace('\n', " "));
+                                    }
+                                    response.body(Full::new(Bytes::from(image)))
+                                }
                                 Ok(Done::Text(output)) => reply(
                                     StatusCode::OK,
                                     "application/json",
@@ -764,6 +789,14 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                 .await;
         });
     }
+}
+
+/// `note` as Discord subtext, one `-# ` line per line.
+fn subtext(note: &str) -> String {
+    note.lines()
+        .map(|line| format!("-# {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Read every file in `dir` once and drop the bytes: the kernel keeps them

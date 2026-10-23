@@ -19,6 +19,8 @@ rawr = { path = "..", features = ["sync"] }
 # Reads rawr-iced's manifest (its claims and prelude) as `rawr` does.
 rawr-cli = { path = "../cli" }
 rawr-iced = { path = "../iced" }
+# An animated render, as a GIF.
+gif = "0.13"
 image-webp = "0.2.4"
 jpeg-encoder = "0.6"
 png = "0.18.1"
