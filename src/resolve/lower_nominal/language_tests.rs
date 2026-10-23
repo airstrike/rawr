@@ -7615,3 +7615,19 @@ fn language_derives_over_function_pointer_fields() {
     "#);
     assert_eq!(value, 1107);
 }
+
+#[test]
+fn language_builtin_to_string_as_a_value_takes_a_reference() {
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let value: Option<i32> = Some(42);
+            let shown = value.as_ref().map(i32::to_string).unwrap_or_default();
+            let all: Vec<String> = vec![1i64, 2].iter().map(i64::to_string).collect();
+            format!("{shown} {}", all.join(","))
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "42 1,2");
+}

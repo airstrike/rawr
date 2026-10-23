@@ -30184,8 +30184,11 @@ impl<'a> Parser<'a> {
                     return self.function_value_closure(&path, 1, None, name_span);
                 }
                 (_, member) if member.starts_with(|c: char| c.is_ascii_lowercase()) => {
+                    // `to_string` and `clone` take `&self`, as `i32::to_string`
+                    // is a `fn(&i32) -> String`.
                     let annotation = match builtin {
                         Ty::String => "&str".to_string(),
+                        _ if matches!(member, "to_string" | "clone") => format!("&{name}"),
                         _ => name.to_string(),
                     };
                     return self.function_value_closure(member, 1, Some(Some(annotation)), name_span);
