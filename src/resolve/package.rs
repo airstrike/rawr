@@ -1035,11 +1035,13 @@ impl<'a> Resolver<'a> {
                 let mut active = BTreeSet::new();
                 let target = self.resolve_any_path(context, &path, name.span, &mut active)?;
                 // An item of a `.rs` module keeps its crate spelling.
-                let qualified: ImmutableString = self
-                    .rust_spelling(context, &path)
-                    .unwrap_or_else(|| path.to_vec())
-                    .join("::")
-                    .into();
+                let qualified = super::std_reexport(
+                    &self
+                        .rust_spelling(context, &path)
+                        .unwrap_or_else(|| path.to_vec())
+                        .join("::"),
+                    self.host,
+                );
                 let import = match target {
                     Target::Module | Target::Trait => item::Import::Module,
                     Target::HostModuleItem { definitions, owner } => {
@@ -1771,7 +1773,7 @@ fn host_target(
     reference: Span,
     #[cfg(feature = "rust-import")] native: Option<super::native::Site<'_>>,
 ) -> Result<Target, Error> {
-    let qualified: ImmutableString = path.join("::").into();
+    let qualified = super::std_reexport(&path.join("::"), host);
     match host.entry(&qualified) {
         Some(host::Entry::Module) => Ok(Target::Module),
         Some(host::Entry::ModuleItem(definitions)) => Ok(Target::HostModuleItem {

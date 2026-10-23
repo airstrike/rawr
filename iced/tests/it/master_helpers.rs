@@ -930,3 +930,36 @@ fn master_application_takes_a_theme_value() {
     find(&adapter, "right");
 }
 
+
+const STD_TIME: &str = r#"
+use std::time::{Duration, Instant};
+use iced::widget::text;
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let started = Instant::now();
+        let tick = Duration::from_millis(1500);
+        text(format!("{:?} {}", tick, started.elapsed().as_secs() < 5))
+    }
+}
+"#;
+
+#[test]
+fn master_std_time_is_iced_time() {
+    // iced's `time` re-exports std's `Duration` and `Instant`.
+    let adapter = boot(STD_TIME);
+    find(&adapter, "1.5s true");
+}
