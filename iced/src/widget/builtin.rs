@@ -135,6 +135,9 @@ impl widget::Descriptor for marker::Checkbox {
         if let Some(spacing) = self.spacing {
             checkbox = checkbox.spacing(spacing);
         }
+        if let Some(icon) = &self.icon {
+            checkbox = checkbox.icon(icon.clone());
+        }
         match style::lower(
             &self.style,
             context,
@@ -1201,6 +1204,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 size: None,
                 width: None,
                 spacing: None,
+                icon: None,
             }))
         })
         .expect("the iced facade must retain the exact checkbox item");
@@ -2199,6 +2203,13 @@ fn bind_intrinsic_control_builders(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(checkbox))
         })
         .expect("the iced facade must retain the exact Checkbox::spacing item");
+    builder
+        .bind("iced::widget::Checkbox::icon", |args| {
+            let mut checkbox = take_checkbox(args, "Checkbox::icon")?;
+            checkbox.icon = Some(take(args[1], "iced::widget::checkbox::Icon")?);
+            Ok(Dynamic::from(checkbox))
+        })
+        .expect("the iced facade must retain the exact Checkbox::icon item");
     for (path, set) in [
         (
             "iced::widget::Slider::width",

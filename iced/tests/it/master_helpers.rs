@@ -1103,3 +1103,61 @@ fn master_image_takes_a_filter_method() {
     }
     find(&adapter, "Nearest");
 }
+
+const CHECKBOX_ICON: &str = r#"
+use iced::widget::{checkbox, column, text};
+use iced::{Font, Widget};
+
+const ICON_FONT: Font = Font::new("icons");
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view).run()
+}
+
+#[derive(Default)]
+struct State {
+    custom: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    CustomToggled(bool),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::CustomToggled(custom) => self.custom = custom,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let icon = checkbox::Icon {
+            font: ICON_FONT,
+            code_point: '\u{e901}',
+            size: None,
+            line_height: Some(text::LineHeight::Relative(1.0)),
+            shaping: text::Shaping::Basic,
+        };
+        column![
+            text(format!("{}", icon.code_point == '\u{e901}')),
+            checkbox(self.custom)
+                .label("Custom")
+                .on_toggle(Message::CustomToggled)
+                .icon(icon),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_checkbox_takes_a_custom_icon() {
+    let mut adapter = boot(CHECKBOX_ICON);
+    find(&adapter, "true");
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("Custom").unwrap();
+    for message in simulator.into_messages() {
+        adapter.update(message).unwrap();
+    }
+    find(&adapter, "Custom");
+}

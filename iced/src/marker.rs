@@ -206,6 +206,7 @@ pub(crate) struct Checkbox {
     pub(crate) size: Option<f32>,
     pub(crate) width: Option<iced::Length>,
     pub(crate) spacing: Option<f32>,
+    pub(crate) icon: Option<iced::widget::checkbox::Icon>,
 }
 
 #[derive(Clone)]

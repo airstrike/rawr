@@ -10,6 +10,7 @@ pub(crate) mod diagnostic;
 pub mod draw;
 pub mod event;
 mod helpers;
+mod icon;
 pub(crate) mod key;
 pub mod layout;
 mod mapped;

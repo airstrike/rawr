@@ -95,6 +95,9 @@ fn register_debug() {
     register::<iced::Border>();
     register::<iced::Color>();
     register::<iced::ContentFit>();
+    register::<iced::widget::checkbox::Icon>();
+    register::<iced::widget::text::LineHeight>();
+    register::<iced::widget::text::Shaping>();
     register::<iced::widget::image::FilterMethod>();
     register::<iced::Event>();
     register::<iced::Font>();
@@ -363,6 +366,27 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         ],
     )?;
     builder.default_value_type::<iced::ContentFit>("ContentFit", &[], OWNED_EQ_DEFAULT_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::widget::text::Shaping>(
+        "widget::text::Shaping",
+        &[],
+        OWNED_EQ_VALUE_CAPABILITIES,
+    )?;
+    builder.value_type::<iced::widget::text::LineHeight>(
+        "widget::text::LineHeight",
+        &[],
+        OWNED_VALUE_CAPABILITIES,
+    )?;
+    builder.value_type::<iced::widget::checkbox::Icon>(
+        "widget::checkbox::Icon",
+        &[],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
     builder.default_value_type::<iced::widget::image::FilterMethod>(
         "widget::image::FilterMethod",
         &[],
@@ -925,6 +949,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
+    declare_checkbox_icon(&mut builder)?;
 
     builder.finish()
 }
@@ -3220,6 +3245,72 @@ fn declare_font(builder: &mut facade::Builder) -> Result<(), host::Error> {
             method.finish(),
         )?)?;
     }
+    Ok(())
+}
+
+/// iced's `text::Shaping` variants.
+pub(crate) const TEXT_SHAPINGS: [&str; 3] = ["Auto", "Basic", "Advanced"];
+
+/// The fields of iced's `checkbox::Icon` and their types.
+pub(crate) const CHECKBOX_ICON_FIELDS: [(&str, &str); 5] = [
+    ("font", "Font"),
+    ("code_point", "char"),
+    ("size", "Option<f64>"),
+    ("line_height", "Option<widget::text::LineHeight>"),
+    ("shaping", "widget::text::Shaping"),
+];
+
+/// `text::Shaping`, `text::LineHeight` and `checkbox::Icon`, whose struct
+/// literal starts from `Icon::default()` and sets each field through its
+/// builder. `Checkbox::icon` takes one.
+fn declare_checkbox_icon(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    for name in TEXT_SHAPINGS {
+        builder.item(item::Definition::associated_value(
+            format!("widget::text::Shaping::{name}"),
+            type_ref::Type::registered("widget::text::Shaping")?,
+        )?)?;
+    }
+    for name in ["Relative", "Absolute"] {
+        for input in PIXELS {
+            let mut variant = signature::Builder::new();
+            variant.parameter(type_ref::Type::builtin(input));
+            variant.output(type_ref::Type::registered("widget::text::LineHeight")?);
+            builder.item(item::Definition::associated_function(
+                format!("widget::text::LineHeight::{name}"),
+                variant.finish(),
+            )?)?;
+        }
+    }
+    let icon = || type_ref::Type::registered("widget::checkbox::Icon");
+    builder.item(item::Definition::associated_function(
+        "widget::checkbox::Icon::default",
+        output_signature("widget::checkbox::Icon")?,
+    )?)?;
+    for (field, ty) in CHECKBOX_ICON_FIELDS {
+        let ty = match ty {
+            "char" => type_ref::Type::builtin(type_ref::Builtin::Char),
+            "Option<f64>" => type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::F64)),
+            "Option<widget::text::LineHeight>" => {
+                type_ref::Type::option(type_ref::Type::registered("widget::text::LineHeight")?)
+            }
+            ty => type_ref::Type::registered(ty)?,
+        };
+        let mut reader = signature::Builder::new();
+        reader.output(ty.clone());
+        builder.item(item::Definition::method(
+            format!("widget::checkbox::Icon::{field}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+        let mut setter = signature::Builder::new();
+        setter.parameter(ty).output(icon()?);
+        builder.item(item::Definition::method(
+            format!("widget::checkbox::Icon::{field}"),
+            receiver::Mode::Owned,
+            setter.finish(),
+        )?)?;
+    }
+    builders(builder, "widget::Checkbox", "icon", [icon()?])?;
     Ok(())
 }
 
