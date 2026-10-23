@@ -3691,6 +3691,7 @@ fn late_binders_lend_strings(signature: &model::Signature) -> bool {
         }
     ));
     signature.binders().len() > receiver_binders
+        && signature.inputs().any(is_str_reference)
         && signature.inputs().all(|input| match input {
             model::Type::Reference { .. } => is_str_reference(input),
             _ => true,
