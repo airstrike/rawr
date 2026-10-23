@@ -171,7 +171,7 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                 items.extend(parse_item(input, &tokenizer_control)?);
             }
             (Token::Identifier(name), _)
-                if scan.delimiter_depth == 0 && name.as_str() == "trait" =>
+                if scan.delimiter_depth == 0 && matches!(name.as_str(), "trait" | "type") =>
             {
                 items.extend(parse_item(input, &tokenizer_control)?);
             }
@@ -311,6 +311,7 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
                 }
             }
             Parsed::Function(item) => function(item)?,
+            Parsed::TypeAlias(item) => visit(&mut item.target, &lengths)?,
             Parsed::Module(_) | Parsed::Use(_) | Parsed::LegacyFunction(_) => {}
         }
     }
@@ -489,6 +490,10 @@ fn parse_enabled_item(
             parse_trait(input, tokenizer_control, attributes, visibility, start)
                 .map(crate::item::Parsed::Trait)
         }
+        (Token::Identifier(name), _) if name.as_str() == "type" => {
+            parse_type_alias(input, attributes, visibility, start)
+                .map(crate::item::Parsed::TypeAlias)
+        }
         #[cfg(not(feature = "no_function"))]
         (Token::Fn, _) => parse_function(
             input,
@@ -532,6 +537,34 @@ fn parse_enabled_item(
         )
         .into_err(*position)),
     }
+}
+
+/// `type Name<T> = Type;`.
+fn parse_type_alias(
+    input: &mut TokenStream,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<crate::item::TypeAlias> {
+    input.next();
+    let name = parse_name(input, "after 'type'")?;
+    let mut generics = parse_generic_params(input)?;
+    parse_where_clause(input, &mut generics, None)?;
+    expect(input, Token::Equals, "after a type alias name")?;
+    let target = parse_type(input)?;
+    let semicolon = expect(input, Token::SemiColon, "to terminate a type alias")?;
+    let end = after(semicolon, 1);
+    Ok(crate::item::TypeAlias {
+        header: crate::item::Header {
+            attributes,
+            visibility,
+            span: Span::new(start, end),
+        },
+        name,
+        generics: generics.into_boxed_slice(),
+        target,
+        span: Span::new(start, end),
+    })
 }
 
 /// `static NAME: T = value;`: an immutable static is read as a `const`,

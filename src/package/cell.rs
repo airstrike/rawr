@@ -26,7 +26,7 @@ use crate::{parse, preview, source, ImmutableString, Position, Span, AST};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 3;
+const FORMAT: u32 = 4;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`) and the
@@ -456,6 +456,7 @@ record! {
         body_syntax, constant, span,
     }
     item::LegacyFunction { name, parameter_count, body_span, body_syntax, span }
+    item::TypeAlias { header, name, generics, target, span }
     item::Parameter { name, ty, span, pattern }
     type_ref::Path { segments, span }
     type_ref::Segment { name, arguments, span }
@@ -478,6 +479,7 @@ impl Codec for item::Parsed {
             Self::Trait(item) => (writer.byte(5), item.put(writer)),
             Self::Function(item) => (writer.byte(6), item.put(writer)),
             Self::LegacyFunction(item) => (writer.byte(7), item.put(writer)),
+            Self::TypeAlias(item) => (writer.byte(8), item.put(writer)),
         };
     }
     fn get(reader: &mut Reader) -> Option<Self> {
@@ -490,6 +492,7 @@ impl Codec for item::Parsed {
             5 => Self::Trait(Codec::get(reader)?),
             6 => Self::Function(Codec::get(reader)?),
             7 => Self::LegacyFunction(Codec::get(reader)?),
+            8 => Self::TypeAlias(Codec::get(reader)?),
             _ => return None,
         })
     }

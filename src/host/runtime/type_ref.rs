@@ -781,7 +781,7 @@ impl Type {
                 "f64" => Ok(Self::builtin("f64", TypeId::of::<crate::FLOAT>())),
                 name => Err(Error::Unsupported { ty: name.into() }),
             },
-            Target::Parameter | Target::Projection(..) => Err(Error::Unsupported {
+            Target::Parameter | Target::Projection(..) | Target::Alias(_) => Err(Error::Unsupported {
                 ty: path.name.clone(),
             }),
             Target::Script { identity, .. } => {

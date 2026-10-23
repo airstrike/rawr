@@ -291,6 +291,10 @@ impl Names {
             item::Parsed::Module(item) => {
                 self.declared.insert(item.name.text.clone());
             }
+            item::Parsed::TypeAlias(item) => {
+                self.declared.insert(item.name.text.clone());
+                self.ty(&item.target);
+            }
         }
     }
 

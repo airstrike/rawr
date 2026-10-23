@@ -1795,6 +1795,8 @@ struct Tables {
     qualified_owners: BTreeMap<(crate::program::source::Id, Span), type_def::Identity>,
     qualified_pattern_owners: BTreeMap<(crate::program::source::Id, Span), type_def::Identity>,
     qualified_rust: BTreeMap<(crate::program::source::Id, Span), Box<[ImmutableString]>>,
+    /// The type aliases each source names, resolved once with the headers.
+    aliases: BTreeMap<(crate::program::source::Id, ImmutableString), type_ref::Alias>,
     methods: BTreeMap<(type_def::Id, ImmutableString), method::Definition>,
     /// Each type's `impl From<T>` functions, by the type converted to.
     conversions: BTreeMap<type_def::Id, Vec<method::Definition>>,
@@ -2069,7 +2071,8 @@ impl Models {
                     | item::Import::ModuleItem { .. }
                     | item::Import::Endpoint { .. }
                     | item::Import::Type { .. }
-                    | item::Import::Item { .. } => {}
+                    | item::Import::Item { .. }
+                    | item::Import::Alias => {}
                 }
             }
         }
@@ -2202,6 +2205,20 @@ impl Models {
             }
         }
 
+        // An alias of a script type names it in expressions too:
+        // `Alias { .. }` and `Alias::new()`.
+        for ((source, name), alias) in &program.aliases {
+            if let Some(target) = &alias.target
+                && let type_ref::Type::Path(path) = &**target
+                && let type_ref::Target::Script { definition, .. } = &path.target
+                && path.arguments.is_empty()
+                && let Some(nominal) = by_definition.get(definition)
+            {
+                by_name
+                    .entry((*source, name.clone()))
+                    .or_insert_with(|| Nominal::clone(nominal));
+            }
+        }
         let tables = Tables {
             runtime,
             host,
@@ -2213,6 +2230,7 @@ impl Models {
             qualified_owners: program.qualified_owners.clone(),
             qualified_pattern_owners: program.qualified_pattern_owners.clone(),
             qualified_rust: program.qualified_rust.clone(),
+            aliases: program.aliases.clone(),
             methods,
             conversions,
             trait_methods,
@@ -2274,6 +2292,10 @@ impl Models {
 
     fn get(&self, name: &str) -> Option<&Nominal> {
         self.by_name.get(&(self.context, name.into()))
+    }
+
+    fn alias(&self, name: &str) -> Option<&type_ref::Alias> {
+        self.aliases.get(&(self.context, name.into()))
     }
 
     fn qualified_owner(&self, span: Span) -> Option<&Nominal> {
@@ -5431,6 +5453,8 @@ impl Ty {
                     trait_name.clone().unwrap_or_default(),
                     path.name.clone(),
                 ),
+                // A resolved header names an alias's target, never the alias.
+                type_ref::Target::Alias(_) => Self::Unknown,
             },
         }
     }
@@ -29656,6 +29680,43 @@ impl<'a> Parser<'a> {
                 }
             }
             return Ok(ty);
+        }
+        // A type alias: its target, resolved once with the item headers.
+        if !matches!(self.peek(), Token::DoubleColon)
+            && !self.generics.contains_key(name.as_str())
+            && let Some(alias) = self.models.alias(&name).cloned()
+        {
+            let mut arguments = Vec::new();
+            if matches!(self.peek(), Token::LessThan) {
+                self.next();
+                while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                    if !self.skip_lifetime() {
+                        arguments.push(self.parse_local_type()?);
+                    }
+                    if matches!(self.peek(), Token::Comma) {
+                        self.next();
+                    } else if !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                        return Err(self.unsupported("generic arguments"));
+                    }
+                }
+                self.expect_close_angle("'>' after generic arguments")?;
+            }
+            if arguments.len() != alias.params.len() {
+                return Err(Error::InvalidTypeArguments {
+                    ty: name,
+                    expected: alias.params.len(),
+                    actual: arguments.len(),
+                    reference: name_span,
+                });
+            }
+            let Some(target) = &alias.target else {
+                return Err(Error::UnknownType {
+                    name,
+                    reference: name_span,
+                });
+            };
+            let substitution = alias.params.iter().cloned().zip(arguments).collect();
+            return Ok(instantiate(&Ty::from_resolved(target), &substitution));
         }
         let mut qualified = None;
         // `T::Output`, `Self::Output`, `Square::Output`: an associated type.

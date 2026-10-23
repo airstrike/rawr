@@ -73,6 +73,8 @@ pub(crate) enum Import {
         contract: crate::host::endpoint::Contract,
         owner: crate::host::facade::Dependency,
     },
+    /// A type alias, which the importing module's types name.
+    Alias,
 }
 
 /// A generic type parameter and its bounds: built-in derivable traits as

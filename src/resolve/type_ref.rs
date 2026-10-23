@@ -50,6 +50,64 @@ pub(crate) enum Target {
     /// the trait declaring it: written (`<T as Shape>::Output`) or found
     /// once every item is resolved.
     Projection(Box<Type>, Option<ImmutableString>),
+    /// A type alias, which a header reads as its target.
+    Alias(Alias),
+}
+
+/// A type alias's parameters and its target, resolved once in the module
+/// that declares it. The target is `None` until it resolves.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Alias {
+    pub params: Box<[ImmutableString]>,
+    pub target: Option<Box<Type>>,
+}
+
+impl Alias {
+    /// The alias's target with `arguments` for its parameters, written at
+    /// `span`.
+    pub(crate) fn expand(&self, arguments: &[Type], span: Span) -> Option<Type> {
+        let mut ty = (**self.target.as_ref()?).clone();
+        substitute(&mut ty, &self.params, arguments, span);
+        Some(ty)
+    }
+}
+
+/// Replace each parameter of `params` in `ty` with its argument, and give
+/// every node the span where the alias is written.
+fn substitute(ty: &mut Type, params: &[ImmutableString], arguments: &[Type], at: Span) {
+    match ty {
+        Type::Unit(span) => *span = at,
+        Type::Tuple { members, span } => {
+            *span = at;
+            for member in members.iter_mut() {
+                substitute(member, params, arguments, at);
+            }
+        }
+        Type::Reference { target, span, .. } => {
+            *span = at;
+            substitute(target, params, arguments, at);
+        }
+        Type::Path(path) => {
+            if path.target == Target::Parameter
+                && path.arguments.is_empty()
+                && let Some(index) = params.iter().position(|param| *param == path.name)
+                && let Some(argument) = arguments.get(index)
+            {
+                *ty = argument.clone();
+                return;
+            }
+            path.span = at;
+            if let Target::Projection(base, _) = &mut path.target {
+                substitute(base, params, arguments, at);
+            }
+            for argument in path.arguments.iter_mut() {
+                match argument {
+                    Argument::Type(ty) => substitute(ty, params, arguments, at),
+                    Argument::Lifetime(span) => *span = at,
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,14 +145,51 @@ pub(super) fn resolve(
                 .into_boxed_slice(),
             span,
         }),
-        item::type_ref::Type::Path(path) => resolve_path(
-            path,
-            types,
-            host,
-            #[cfg(feature = "rust-import")]
-            native,
-        )
-        .map(Type::Path),
+        item::type_ref::Type::Path(path) => {
+            let written = path
+                .segments
+                .iter()
+                .map(|segment| segment.name.text.as_str())
+                .collect::<Vec<_>>()
+                .join("::");
+            if let Some(Target::Alias(alias)) = types.get(written.as_str()) {
+                let span = path.span;
+                let mut arguments = Vec::new();
+                for segment in path.segments {
+                    for argument in segment.arguments {
+                        if let item::type_ref::Argument::Type(ty) = argument {
+                            arguments.push(resolve(
+                                ty,
+                                types,
+                                host,
+                                #[cfg(feature = "rust-import")]
+                                native,
+                            )?);
+                        }
+                    }
+                }
+                if arguments.len() != alias.params.len() {
+                    return Err(Error::InvalidTypeArguments {
+                        ty: written.into(),
+                        expected: alias.params.len(),
+                        actual: arguments.len(),
+                        reference: span,
+                    });
+                }
+                return alias.expand(&arguments, span).ok_or(Error::UnknownType {
+                    name: written.into(),
+                    reference: span,
+                });
+            }
+            resolve_path(
+                path,
+                types,
+                host,
+                #[cfg(feature = "rust-import")]
+                native,
+            )
+            .map(Type::Path)
+        }
         // `&str` is Rawr's `String`, which every string value is.
         item::type_ref::Type::Reference {
             mutable: false,

@@ -241,7 +241,7 @@ fn write_type(encoder: &mut Encoder, ty: &type_ref::Type) {
                     encoder.marker(Marker::Builtin);
                     encoder.text(path.name.clone());
                 }
-                type_ref::Target::Parameter | type_ref::Target::Projection(..) => {
+                type_ref::Target::Parameter | type_ref::Target::Projection(..) | type_ref::Target::Alias(_) => {
                     encoder.marker(Marker::Builtin);
                     encoder.text(ImmutableString::from(format!("<{}>", path.name)));
                 }

@@ -82,6 +82,9 @@ pub struct Program {
     /// Qualified expression paths into a `.rs` module, by path span,
     /// spelled through the app's crate name.
     qualified_rust: BTreeMap<(program::source::Id, Span), Box<[ImmutableString]>>,
+    /// The type aliases each source names, declared or imported, which a
+    /// body reads as the item headers do.
+    aliases: BTreeMap<(program::source::Id, ImmutableString), type_ref::Alias>,
     scripts: Box<[Script]>,
     #[cfg(feature = "rust-import")]
     native: Option<std::sync::Arc<native::Capture>>,
@@ -281,6 +284,7 @@ fn resolve_with_evidence_and_namespace(
         | crate::item::Parsed::Impl(_)
         | crate::item::Parsed::Trait(_)
         | crate::item::Parsed::Function(_)
+        | crate::item::Parsed::TypeAlias(_)
         | crate::item::Parsed::LegacyFunction(_) => None,
     }) {
         return Err(Error::UnsupportedNominalSyntax {
@@ -291,7 +295,11 @@ fn resolve_with_evidence_and_namespace(
     let symbols = Symbols::predeclare(&parsed_items, namespace, allocation_order, host)?;
     let mut items = Vec::with_capacity(parsed_items.len());
 
+    let aliases = source_aliases(program::source::Id::ROOT, &symbols.types);
     for (source_index, parsed) in parsed_items.into_vec().into_iter().enumerate() {
+        if matches!(parsed, crate::item::Parsed::TypeAlias(_)) {
+            continue;
+        }
         items.push(resolve_item(
             symbols.item_id(source_index),
             program::source::Id::ROOT,
@@ -328,6 +336,7 @@ fn resolve_with_evidence_and_namespace(
         qualified_owners: BTreeMap::new(),
         qualified_pattern_owners: BTreeMap::new(),
         qualified_rust: BTreeMap::new(),
+        aliases,
         scripts: vec![Script {
             source: program::source::Id::ROOT,
             ast: legacy_script,
@@ -456,7 +465,7 @@ fn invocation_path(ty: &type_ref::Type) -> Option<String> {
                 | type_ref::Target::Host { .. }
                 | type_ref::Target::Script { .. }
                 | type_ref::Target::Parameter
-                | type_ref::Target::Projection(..) => {}
+                | type_ref::Target::Projection(..) | type_ref::Target::Alias(_) => {}
             }
             path.arguments.iter().find_map(|argument| match argument {
                 type_ref::Argument::Type(ty) => invocation_path(ty),
@@ -628,6 +637,21 @@ impl Symbols {
 
             declarations.insert(name.text.clone(), name.span);
         }
+        for parsed in items {
+            let crate::item::Parsed::TypeAlias(alias) = parsed else {
+                continue;
+            };
+            let name = &alias.name;
+            if let Some(previous_declaration) = declarations.get(name.text.as_str()) {
+                return Err(Error::DuplicateItem {
+                    name: name.text.clone(),
+                    declaration: name.span,
+                    previous_declaration: *previous_declaration,
+                });
+            }
+            declarations.insert(name.text.clone(), name.span);
+            types.insert(name.text.clone(), unresolved_alias(alias));
+        }
 
         let mut source_indices: Vec<_> = (0..items.len()).collect();
 
@@ -668,6 +692,9 @@ impl Symbols {
 
         let uses = resolve_imports(items, host, &declarations, &mut types)?;
         module_header_types(items, &uses, host, &mut types);
+        if let Some(error) = resolve_aliases(items, &mut types, host) {
+            return Err(error);
+        }
 
         Ok(Self {
             item_ids: item_ids
@@ -781,6 +808,7 @@ fn named_declaration(
         | crate::item::Parsed::Use(_)
         | crate::item::Parsed::Impl(_)
         | crate::item::Parsed::Trait(_)
+        | crate::item::Parsed::TypeAlias(_)
         | crate::item::Parsed::LegacyFunction(_) => None,
         crate::item::Parsed::Struct(item) => Some((
             &item.name,
@@ -795,6 +823,91 @@ fn named_declaration(
         crate::item::Parsed::Function(item) => {
             Some((&item.name, None, crate::item::Kind::Function))
         }
+    }
+}
+
+/// The type aliases `types` names, for the bodies of `source`.
+fn source_aliases(
+    source: program::source::Id,
+    types: &BTreeMap<ImmutableString, type_ref::Target>,
+) -> BTreeMap<(program::source::Id, ImmutableString), type_ref::Alias> {
+    types
+        .iter()
+        .filter_map(|(name, target)| match target {
+            type_ref::Target::Alias(alias) => Some(((source, name.clone()), alias.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A type alias before its target resolves.
+fn unresolved_alias(alias: &crate::item::TypeAlias) -> type_ref::Target {
+    type_ref::Target::Alias(type_ref::Alias {
+        params: alias
+            .generics
+            .iter()
+            .map(|generic| generic.name.text.clone())
+            .collect(),
+        target: None,
+    })
+}
+
+/// Resolve the target of each type alias `items` declare, in `types`, which
+/// names them. An alias may name another alias declared after it, so the
+/// targets resolve until none is left or none more resolves. Returns the
+/// first error of an alias that does not resolve.
+fn resolve_aliases(
+    items: &[crate::item::Parsed],
+    types: &mut BTreeMap<ImmutableString, type_ref::Target>,
+    host: &host::Registry,
+) -> Option<Error> {
+    let mut pending = items
+        .iter()
+        .filter_map(|parsed| match parsed {
+            crate::item::Parsed::TypeAlias(alias) => Some(alias),
+            _ => None,
+        })
+        .filter(|alias| {
+            matches!(types.get(&alias.name.text),
+                Some(type_ref::Target::Alias(type_ref::Alias { target: None, .. })))
+        })
+        .collect::<Vec<_>>();
+    loop {
+        let count = pending.len();
+        let mut failed = Vec::new();
+        let mut first = None;
+        for alias in pending {
+            let mut scope = types.clone();
+            for generic in alias.generics.iter() {
+                scope.insert(generic.name.text.clone(), type_ref::Target::Parameter);
+            }
+            match type_ref::resolve(
+                alias.target.clone(),
+                &scope,
+                host,
+                #[cfg(feature = "rust-import")]
+                None,
+            ) {
+                Ok(target) => {
+                    if let Some(type_ref::Target::Alias(declared)) =
+                        types.get_mut(&alias.name.text)
+                    {
+                        declared.target = Some(Box::new(target));
+                    }
+                }
+                Err(error) => {
+                    first.get_or_insert(error);
+                    failed.push(alias);
+                }
+            }
+        }
+        if failed.is_empty() {
+            return None;
+        }
+        if failed.len() == count {
+            return first;
+        }
+        pending = failed;
     }
 }
 
@@ -1192,6 +1305,14 @@ fn resolve_item(
 ) -> Result<item::Shell, Error> {
     let span = parsed.span();
     let kind = match parsed {
+        crate::item::Parsed::TypeAlias(alias) => {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "a type alias read as an item; its target is resolved with the \
+                            module's types"
+                    .into(),
+                source: alias.span,
+            });
+        }
         crate::item::Parsed::Module(module) => {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: "file modules require project/package compilation".into(),
@@ -4278,7 +4399,7 @@ fn declared_type(
         type_ref::Target::Builtin
         | type_ref::Target::Host { .. }
         | type_ref::Target::Parameter
-        | type_ref::Target::Projection(..)
+        | type_ref::Target::Projection(..) | type_ref::Target::Alias(_)
         | type_ref::Target::Script {
             identity: type_def::Identity::Host(_),
             ..
@@ -4864,6 +4985,7 @@ mod tests {
                     nominal_value(program, key.name())
                 }
                 Target::Host { .. } => panic!("test schemas contain no host values"),
+                Target::Alias(_) => panic!("test schemas contain no aliases"),
             },
         }
     }

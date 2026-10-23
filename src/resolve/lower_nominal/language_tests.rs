@@ -7137,3 +7137,32 @@ fn language_registered_rust_functions_are_typed() {
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(value, 44);
 }
+
+#[test]
+fn language_type_aliases() {
+    let value = run(r#"
+        use std::collections::HashMap;
+        type Pair = (i64, i64);
+        type Grid<T> = Vec<Vec<T>>;
+        type Totals = HashMap<String, Total>;
+        type Total = i64;
+        type Res<T> = Result<T, String>;
+        type At = Point;
+        struct Point { x: i64, y: i64 }
+        fn sum(pair: Pair) -> Total { pair.0 + pair.1 }
+        fn corner(grid: &Grid<i64>) -> i64 { grid[0][0] }
+        fn half(n: i64) -> Res<i64> { if n % 2 == 0 { Ok(n / 2) } else { Err("odd".to_string()) } }
+        pub fn run() -> i64 {
+            let pair: Pair = (2, 3);
+            let mut totals: Totals = HashMap::new();
+            totals.insert("a".to_string(), sum(pair));
+            let grid: Grid<i64> = vec![vec![10]];
+            let at: At = At { x: 100, y: 0 };
+            totals["a"] + corner(&grid) + half(8).unwrap() + at.x + at.y
+        }
+        run()
+    "#);
+    assert_eq!(value, 5 + 10 + 4 + 100);
+    rejected("type Pair = (i64, i64); pub fn run() -> i64 { let p: Pair = (1, true); p.0 } run()");
+    rejected("type Grid<T> = Vec<T>; pub fn run() -> i64 { let g: Grid = vec![1]; g[0] } run()");
+}
