@@ -202,7 +202,7 @@ fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
   <div class="file"><b>rawr snapshot --check</b><span>exit 1</span></div>
   <pre><code><span class="h">Snapshot check found 1 mismatch(es) across 1 artifact(s):</span>
 
-<span class="e">[pixel drift]</span> main::Clock::view#busy (native)
+<span class="e">[pixel drift]</span> clock::Clock::view#busy (native)
   expected: snapshots/Clock-6c008925/view/busy/native.png
   actual:   target/rawr/snapshots/Clock-6c008925/view/busy/native.png
   first changed pixel (38, 31): baseline [255, 255, 255, 255], actual [137, 137, 137, 255]</code></pre>

@@ -275,7 +275,7 @@ fn snapshot_update_check_and_missing_baseline_are_end_to_end() {
     assert!(drift.stderr.is_empty());
     let drift_stdout = String::from_utf8_lossy(&drift.stdout);
     assert!(drift_stdout.contains("[missing baseline]"));
-    assert!(drift_stdout.contains("main::Counter::view#default"));
+    assert!(drift_stdout.contains("snapshot_counter::Counter::view#default"));
     assert!(drift_stdout.contains("expected:"));
     assert!(drift_stdout.contains("actual:"));
     assert!(drift_stdout.contains("expected: snapshots/"));

@@ -458,9 +458,9 @@ fn the_rawr_attribute_crate_builds_under_cargo_and_means_nothing_to_rawr() {
     assert_eq!(
         previews,
         [
-            ("greeting".into(), "main::greeting".into()),
-            ("seeded".into(), "main::shown".into()),
-            ("three".into(), "main::label::label".into()),
+            ("greeting".into(), "rs_marker_attributes::greeting".into()),
+            ("seeded".into(), "rs_marker_attributes::shown".into()),
+            ("three".into(), "rs_marker_attributes::label::label".into()),
         ]
     );
 

@@ -384,7 +384,23 @@ impl<'a> Builder<'a> {
 
     fn load_package(&mut self, request: Request) -> Result<Id, Error> {
         let root = self.canonical_directory(request.root)?;
-        let name: ImmutableString = "main".into();
+        let cargo = self.load_cargo(&root)?;
+        // The crate name rustc gives this target, so item paths read as
+        // Rust's do. A file outside a Cargo package is `main`.
+        let library = request
+            .source
+            .file_name()
+            .is_some_and(|name| name == "lib.rs");
+        let name: ImmutableString = cargo.as_ref().map_or_else(
+            || "main".into(),
+            |(cargo, _)| {
+                if library {
+                    cargo.crate_name.as_str().into()
+                } else {
+                    cargo.package.replace('-', "_").into()
+                }
+            },
+        );
         let package = Id::from_index(self.packages.len());
         self.packages.push(Package {
             id: package,
@@ -412,7 +428,9 @@ impl<'a> Builder<'a> {
             None,
         )?;
         self.packages[package.0].source = root_source;
-        self.load_cargo(package, &root)?;
+        if let Some(cargo) = cargo {
+            self.attach_cargo(package, cargo);
+        }
         self.check_native_direction(package)?;
         Ok(package)
     }
@@ -870,11 +888,14 @@ impl<'a> Builder<'a> {
     /// The crate's root `Cargo.toml`, when it is a package. Its
     /// `[dependencies]` are the Rust dependencies, and its native modules
     /// import under its crate name.
-    fn load_cargo(&mut self, package: Id, root: &Path) -> Result<(), Error> {
+    fn load_cargo(
+        &mut self,
+        root: &Path,
+    ) -> Result<Option<(manifest::cargo::Cargo, diagnostic::Source)>, Error> {
         let path = root.join("Cargo.toml");
         let text = match self.read_to_string(&path) {
             Ok(text) => text,
-            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(source) => {
                 return Err(Error::resource(
                     self.evidence.clone(),
@@ -884,21 +905,35 @@ impl<'a> Builder<'a> {
                 ));
             }
         };
-        let evidence = self.push_evidence(
-            diagnostic::Source::new(path.to_string_lossy().into_owned(), text.clone())
-                .map_err(Error::diagnostic)?,
-        );
+        let source = diagnostic::Source::new(path.to_string_lossy().into_owned(), text.clone())
+            .map_err(Error::diagnostic)?;
         #[cfg(feature = "rust-import")]
         let ask_cargo = self.snapshot.is_none();
         #[cfg(not(feature = "rust-import"))]
         let ask_cargo = true;
-        let cargo =
-            manifest::cargo::Cargo::parse(path, text, root, ask_cargo).map_err(|error| {
-                Error::manifest(self.evidence.clone(), evidence, error.message, error.span)
-            })?;
-        let Some(cargo) = cargo else {
-            return Ok(());
-        };
+        match manifest::cargo::Cargo::parse(path, text, root, ask_cargo) {
+            Ok(cargo) => Ok(cargo.map(|cargo| (cargo, source))),
+            Err(error) => {
+                let evidence = self.push_evidence(source);
+                Err(Error::manifest(
+                    self.evidence.clone(),
+                    evidence,
+                    error.message,
+                    error.span,
+                ))
+            }
+        }
+    }
+
+    /// Attach the crate's parsed `Cargo.toml` once its module tree is read,
+    /// since its native modules decide whether the crate imports Rust. Its
+    /// evidence follows the module sources'.
+    fn attach_cargo(
+        &mut self,
+        package: Id,
+        (cargo, source): (manifest::cargo::Cargo, diagnostic::Source),
+    ) {
+        self.push_evidence(source);
         {
             let package = &mut self.packages[package.0];
             // A marked crate that uses only crates a built-in facade
@@ -916,7 +951,6 @@ impl<'a> Builder<'a> {
             }
         }
         self.packages[package.0].cargo = Some(cargo);
-        Ok(())
     }
 
     fn is_file(&self, path: &Path) -> bool {

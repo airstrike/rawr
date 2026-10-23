@@ -23,7 +23,7 @@ fn declared_modules_form_the_only_source_graph() {
     let graph = Graph::load(&Engine::new(), &target).unwrap();
 
     assert_eq!(graph.packages().len(), 1);
-    assert_eq!(graph.entry_package().name(), "main");
+    assert_eq!(graph.entry_package().name(), "declared");
     assert_eq!(graph.sources().len(), 4);
     assert!(graph.sources().iter().any(|source| source.modules() == ["controls", "icon"]));
     assert!(!graph.sources().iter().any(|source| source.path().ends_with("unreferenced.rs")));
@@ -102,7 +102,7 @@ fn legacy_string_compilation_never_loads_file_modules() {
 
 #[test]
 fn aggregate_compile_resolves_module_types_and_stable_item_keys() {
-    let project = Project::new("aggregate-types");
+    let project = Project::new("aggregate_types");
     project.write("src/main.rs", "pub mod controls;\nuse crate::controls::Button;\npub fn accept(value: Button) {}\n");
     project.write("src/controls.rs", "pub struct Button;\n");
     let target = rawr::project::Target::discover(project.path()).unwrap();
@@ -111,7 +111,7 @@ fn aggregate_compile_resolves_module_types_and_stable_item_keys() {
     let accept = executable.items().find(|item| item.key().name() == "accept").unwrap();
 
     assert_eq!(executable.type_count(), 1);
-    assert_eq!(accept.key().package(), "main");
+    assert_eq!(accept.key().package(), "aggregate_types");
     assert!(accept.key().modules().is_empty());
 }
 
