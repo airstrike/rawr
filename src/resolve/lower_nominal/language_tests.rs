@@ -532,6 +532,24 @@ fn language_associated_functions_are_values() {
     assert_eq!(value, 6 + 14 * 100 + 14 * 10000 + 6 * 1000000 + 5 * 100000000);
 }
 
+#[test]
+fn language_vec_repeat_takes_any_count() {
+    // `vec![x; n]` takes any `usize` expression; the value comes first.
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let code = vec![1, 2, 3];
+            let a = 4;
+            let jump = vec![0usize; code.len()];
+            let more = vec![a; code.len() * 2];
+            let fixed = [7; 2];
+            (jump.len() + more.len() * 10) as i64 + more[5] * 100 + fixed[1] * 1000
+        }
+        run()
+    "#);
+    assert_eq!(value, 3 + 60 + 400 + 7000);
+    rejected("pub fn run() -> i64 { let n = 2; let a = [0; n]; a[0] } run()");
+}
+
 /// `Button::style` takes a two-parameter host callable, as iced's
 /// `fn(&Theme, Status) -> Style`.
 fn style_facade() -> crate::host::facade::Definition {

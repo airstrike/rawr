@@ -24907,6 +24907,8 @@ impl<'a> Parser<'a> {
             .filter(|_| !self.postfix_after_literal());
         let mut elements = Vec::<ParsedExpr>::new();
         let mut repeat = None;
+        // `vec![x; n]` takes any `usize` count; an array's is a constant.
+        let mut counted = None;
         while self.peek() != close {
             let outer = std::mem::replace(&mut self.no_struct, false);
             let element = self.parse_expr();
@@ -24914,7 +24916,16 @@ impl<'a> Parser<'a> {
             elements.push(element?);
             if matches!(self.peek(), Token::SemiColon) && elements.len() == 1 {
                 self.next();
-                repeat = Some(self.parse_array_length("repeat count")?);
+                if array.is_some() {
+                    repeat = Some(self.parse_array_length("repeat count")?);
+                } else {
+                    let outer = std::mem::replace(&mut self.no_struct, false);
+                    let count = self.parse_expr();
+                    self.no_struct = outer;
+                    let mut count = count?;
+                    self.coerce_expr(&Ty::Int(Int::Usize), &mut count)?;
+                    counted = Some(count);
+                }
                 break;
             }
             if matches!(self.peek(), Token::Comma) {
@@ -24932,17 +24943,31 @@ impl<'a> Parser<'a> {
         for value in elements.iter_mut().skip(skip) {
             self.coerce_expr(&element, value)?;
         }
-        let source = match repeat {
-            Some(count) => {
+        let source = match (repeat, counted) {
+            (Some(count), _) => {
                 let value = elements.pop().expect("a repeat array has its value");
-                let mut source = origin::Fragment::plain("{ let a = []; a.pad(");
+                let items = self.temporary("repeat");
+                let mut source = origin::Fragment::plain(format!("{{ let {items} = []; {items}.pad("));
                 source.push_text(format!("{count}, "));
                 source.push(value.rendered_source());
-                source.push_text("); a }");
+                source.push_text(format!("); {items} }}"));
                 source
             }
-            None => origin::Fragment::join(elements.iter().map(ParsedExpr::rendered_source), ", ")
-                .surrounded("[", "]"),
+            (None, Some(count)) => {
+                // Rust evaluates the value, then the count.
+                let value = elements.pop().expect("a repeat vector has its value");
+                let (item, items) = (self.temporary("repeat"), self.temporary("repeat"));
+                let mut source = origin::Fragment::plain(format!("{{ let {item} = "));
+                source.push(value.rendered_source());
+                source.push_text(format!("; let {items} = []; {items}.pad("));
+                source.push(count.rendered_source());
+                source.push_text(format!(", {item}); {items} }}"));
+                source
+            }
+            (None, None) => {
+                origin::Fragment::join(elements.iter().map(ParsedExpr::rendered_source), ", ")
+                    .surrounded("[", "]")
+            }
         };
         let length = array.map(|_| repeat.unwrap_or(elements.len()));
         Ok(self.operator_expr(
