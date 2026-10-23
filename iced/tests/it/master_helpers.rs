@@ -1425,3 +1425,63 @@ fn master_font_fields_read_as_fields() {
     let adapter = boot(FONT_FIELDS);
     find(&adapter, "true true");
 }
+
+const STRING_IDS: &str = r#"
+use iced::widget::{button, column, operation, scrollable, text, text_input};
+use iced::widget::scrollable::RelativeOffset;
+use iced::{Task, Widget};
+
+const LIST: &str = "list";
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    input: String,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Bottom,
+    Focus,
+    Input(String),
+}
+
+impl State {
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Bottom => {
+                operation::scrollable::snap_to(LIST, RelativeOffset::END, operation::Animation::Auto)
+            }
+            Message::Focus => operation::focus("input"),
+            Message::Input(input) => {
+                self.input = input;
+                Task::none()
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            button("bottom").on_press(Message::Bottom),
+            button("focus").on_press(Message::Focus),
+            text_input("Type", &self.input).id("input").on_input(Message::Input),
+            scrollable(text("contents")).id(LIST),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_widget_ids_take_strings() {
+    let mut adapter = boot(STRING_IDS);
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("bottom").unwrap();
+    simulator.click("focus").unwrap();
+    for message in simulator.into_messages() {
+        let _ = adapter.update(message).unwrap();
+    }
+    find(&adapter, "contents");
+}

@@ -3191,8 +3191,12 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
         "widget::Id::unique",
         output_signature("widget::Id")?,
     )?)?;
+    // iced's `impl Into<Id>`: an `Id`, or a string.
+    let ids = || -> Result<[type_ref::Type; 2], host::Error> {
+        Ok([id()?, type_ref::Type::builtin(type_ref::Builtin::String)])
+    };
     for owner in ["widget::Container", "widget::Scrollable", "widget::TextInput"] {
-        builders(builder, owner, "id", [id()?])?;
+        builders(builder, owner, "id", ids()?)?;
     }
     for name in OPERATION_ANIMATIONS {
         builder.item(item::Definition::associated_value(
@@ -3234,17 +3238,21 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
     }
     let task = || type_ref::Type::applied("Task", [type_ref::Type::parameter("Message")?]);
     let animation = || type_ref::Type::registered("widget::operation::Animation");
-    let mut focus = signature::Builder::new();
-    focus.type_parameter("Message", &[])?;
-    focus.parameter(id()?);
-    focus.output(task()?);
-    builder.item(item::Definition::function("widget::operation::focus", focus.finish())?)?;
+    for input in ids()? {
+        let mut focus = signature::Builder::new();
+        focus.type_parameter("Message", &[])?;
+        focus.parameter(input);
+        focus.output(task()?);
+        builder.item(item::Definition::function("widget::operation::focus", focus.finish())?)?;
+    }
     // `selector::find(id)`: the widget with that id, once iced lays it out.
     let target = || type_ref::Type::registered("widget::selector::Target");
-    let mut find = signature::Builder::new();
-    find.parameter(id()?);
-    find.output(type_ref::Type::applied("Task", [type_ref::Type::option(target()?)])?);
-    builder.item(item::Definition::function("widget::selector::find", find.finish())?)?;
+    for input in ids()? {
+        let mut find = signature::Builder::new();
+        find.parameter(input);
+        find.output(type_ref::Type::applied("Task", [type_ref::Type::option(target()?)])?);
+        builder.item(item::Definition::function("widget::selector::find", find.finish())?)?;
+    }
     for (name, output) in [
         ("bounds", type_ref::Type::registered("Rectangle")?),
         ("visible_bounds", type_ref::Type::option(type_ref::Type::registered("Rectangle")?)),
@@ -3263,18 +3271,20 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
         ("scroll_to", Some("widget::scrollable::AbsoluteOffset")),
         ("scroll_by", Some("widget::scrollable::AbsoluteOffset")),
     ] {
-        let mut signature = signature::Builder::new();
-        signature.type_parameter("Message", &[])?;
-        signature.parameter(id()?);
-        if let Some(offset) = offset {
-            signature.parameter(type_ref::Type::registered(offset)?);
+        for input in ids()? {
+            let mut signature = signature::Builder::new();
+            signature.type_parameter("Message", &[])?;
+            signature.parameter(input);
+            if let Some(offset) = offset {
+                signature.parameter(type_ref::Type::registered(offset)?);
+            }
+            signature.parameter(animation()?);
+            signature.output(task()?);
+            builder.item(item::Definition::function(
+                format!("widget::operation::scrollable::{name}"),
+                signature.finish(),
+            )?)?;
         }
-        signature.parameter(animation()?);
-        signature.output(task()?);
-        builder.item(item::Definition::function(
-            format!("widget::operation::scrollable::{name}"),
-            signature.finish(),
-        )?)?;
     }
     Ok(())
 }

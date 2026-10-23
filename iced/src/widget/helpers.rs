@@ -353,7 +353,7 @@ fn bind_operations(builder: &mut host::runtime::Builder) {
                 return Err(arity("Container::id", 2, args.len()));
             }
             let mut container = take::<marker::Container>(args[0], "iced::widget::Container")?;
-            container.id = Some(take(args[1], "iced::widget::Id")?);
+            container.id = Some(crate::task::take_id(args[1])?);
             Ok(Dynamic::from(container))
         })
         .expect("the iced facade must retain Container::id");
@@ -363,7 +363,7 @@ fn bind_operations(builder: &mut host::runtime::Builder) {
                 return Err(arity("Scrollable::id", 2, args.len()));
             }
             let mut scrollable = take::<marker::Scrollable>(args[0], "iced::widget::Scrollable")?;
-            scrollable.id = Some(take(args[1], "iced::widget::Id")?);
+            scrollable.id = Some(crate::task::take_id(args[1])?);
             Ok(Dynamic::from(scrollable))
         })
         .expect("the iced facade must retain Scrollable::id");
@@ -373,7 +373,7 @@ fn bind_operations(builder: &mut host::runtime::Builder) {
                 return Err(arity("TextInput::id", 2, args.len()));
             }
             let mut input = take::<marker::TextInput>(args[0], "iced::widget::TextInput")?;
-            input.id = Some(take(args[1], "iced::widget::Id")?);
+            input.id = Some(crate::task::take_id(args[1])?);
             Ok(Dynamic::from(input))
         })
         .expect("the iced facade must retain TextInput::id");

@@ -593,7 +593,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             let [id] = args else {
                 return Err(arity("operation::focus", 1, args.len()));
             };
-            native_task(call, Native::Focus(take_value(id, "widget::Id")?))
+            native_task(call, Native::Focus(take_id(id)?))
         })
         .expect("the iced facade must retain operation::focus");
     builder
@@ -601,7 +601,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             let [id] = args else {
                 return Err(arity("selector::find", 1, args.len()));
             };
-            native_task(call, Native::Find(take_value(id, "widget::Id")?))
+            native_task(call, Native::Find(take_id(id)?))
         })
         .expect("the iced facade must retain selector::find");
     for name in ["bounds", "visible_bounds"] {
@@ -634,7 +634,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
                 if args.len() != expected {
                     return Err(arity(&path, expected, args.len()));
                 }
-                let id = take_value::<iced::widget::Id>(args[0], "widget::Id")?;
+                let id = take_id(args[0])?;
                 let animation = take_value::<iced::widget::operation::Animation>(
                     args[expected - 1],
                     "operation::Animation",
@@ -864,6 +864,15 @@ fn native_task(
         kind: Kind::Native(native),
         witness: Some(call.output_witness().map_err(witness_error)?),
     }))
+}
+
+/// iced's `impl Into<Id>`: an `Id`, or a string.
+pub(crate) fn take_id(value: &mut Dynamic) -> Result<iced::widget::Id, Box<EvalAltResult>> {
+    if value.is_string() {
+        let id = value.take().into_string().unwrap_or_default();
+        return Ok(iced::widget::Id::from(id));
+    }
+    take_value(value, "widget::Id")
 }
 
 fn take_value<T: Clone + 'static>(
