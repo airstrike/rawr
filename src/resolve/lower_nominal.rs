@@ -63,6 +63,8 @@ const TASK_PERFORM_PATH: &str = "iced::Task::perform";
 const WIDGET_TEXT_PATH: &str = "iced::widget::text";
 const WIDGET_SPAN_PATH: &str = "iced::widget::span";
 const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
+/// The iced types whose first parameter is a Link that defaults to `()`.
+const LINK_DEFAULT_TYPES: [&str; 2] = [WIDGET_SPAN_TYPE, "iced::widget::text::Rich"];
 const WIDGET_VOID_PATH: &str = "iced::widget::void";
 
 type OperationSelector = (
@@ -11741,9 +11743,21 @@ impl<'a> Parser<'a> {
             Ty::Script(id, ..) => script_type(&self.models, id),
             Ty::Host { proof, arguments } => {
                 let definition = &proof.definition;
+                // iced's `Span<'a, Link = ()>`: a span no `.link(..)` gave a
+                // Link has the default one, and so has its `Rich`.
+                let linked = LINK_DEFAULT_TYPES.contains(&definition.path().as_str());
                 let arguments = arguments
                     .iter()
-                    .map(|argument| self.proven_type(argument, operation, span))
+                    .enumerate()
+                    .map(|(index, argument)| {
+                        if linked
+                            && index == 0
+                            && matches!(self.inference.resolve(argument), Ty::Infer(_))
+                        {
+                            return Ok(intrinsic::Type::unit());
+                        }
+                        self.proven_type(argument, operation, span)
+                    })
                     .collect::<Result<Vec<_>, _>>()?
                     .into_boxed_slice();
                 if let Some(native) = definition.native_identity() {

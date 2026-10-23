@@ -818,3 +818,40 @@ impl State {
     find(&adapter, "pushed");
     find(&adapter, "right");
 }
+
+const RICH_UNLINKED: &str = r#"
+use iced::widget::{center, column, rich_text, span, text};
+use iced::{Color, Element, Font};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    roars: u32,
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> Element<'_, Message> {
+        let pink = Color::from_rgb8(0xff, 0x2e, 0x93);
+        center(column![rich_text![
+            span("RAW").color(pink).size(56).font(Font::MONOSPACE),
+            span(format!("{} dB", 60 + self.roars * 10)).size(20),
+        ], text(self.roars)])
+        .boxed()
+    }
+}
+"#;
+
+#[test]
+fn master_spans_without_links_take_the_default_link() {
+    // iced's `Span<'a, Link = ()>`: no `.link(..)` leaves the default.
+    let adapter = boot(RICH_UNLINKED);
+    find(&adapter, "0");
+}
