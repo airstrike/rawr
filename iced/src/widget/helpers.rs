@@ -894,7 +894,7 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                 .read_lock::<marker::Instant>()
                 .map(|instant| instant.0)
                 .ok_or_else(|| runtime_error("`Instant::elapsed` read a value of another type".to_string()))?;
-            Ok(Dynamic::from(instant.elapsed()))
+            Ok(Dynamic::from(marker::Instant::now().0.saturating_duration_since(instant)))
         })
         .expect("the iced facade must retain Instant::elapsed");
     builder
