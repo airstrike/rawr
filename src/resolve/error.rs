@@ -26,6 +26,8 @@ pub enum Category {
     DuplicateMember,
     /// A nominal field or enum variant does not exist.
     UnknownMember,
+    /// A call names no function in scope.
+    UnknownFunction,
     /// A nominal constructor has the wrong field or payload shape.
     InvalidConstruction,
     /// A statically known expression type does not match its declaration.
@@ -74,6 +76,7 @@ impl fmt::Display for Category {
             Self::InvalidDerive => formatter.write_str("invalid derive"),
             Self::DuplicateMember => formatter.write_str("duplicate member"),
             Self::UnknownMember => formatter.write_str("unknown member"),
+            Self::UnknownFunction => formatter.write_str("unknown function"),
             Self::InvalidConstruction => formatter.write_str("invalid construction"),
             Self::TypeMismatch => formatter.write_str("type mismatch"),
             Self::ImmutableBinding => formatter.write_str("immutable binding"),
@@ -173,6 +176,15 @@ pub enum Error {
         declaration: Span,
         /// Secondary span on the first name.
         previous_declaration: Span,
+    },
+    /// A call names no function in scope.
+    UnknownFunction {
+        /// The name as written.
+        name: ImmutableString,
+        /// A library function of that name, to import: `iced::widget::center`.
+        import: Option<ImmutableString>,
+        /// Exact source reference.
+        reference: Span,
     },
     /// A struct field or enum variant reference cannot be resolved.
     UnknownMember {
@@ -345,6 +357,7 @@ impl Error {
             Self::InvalidDerive { .. } => Category::InvalidDerive,
             Self::DuplicateMember { .. } => Category::DuplicateMember,
             Self::UnknownMember { .. } => Category::UnknownMember,
+            Self::UnknownFunction { .. } => Category::UnknownFunction,
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
             Self::TypeMismatch { .. } => Category::TypeMismatch,
             Self::ImmutableBinding { .. } => Category::ImmutableBinding,
@@ -369,7 +382,9 @@ impl Error {
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
-            Self::DuplicateItem { name, .. } | Self::UnknownType { name, .. } => name.as_str(),
+            Self::DuplicateItem { name, .. }
+            | Self::UnknownType { name, .. }
+            | Self::UnknownFunction { name, .. } => name.as_str(),
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
             Self::LoweringUnavailable { item, .. } => item.as_str(),
@@ -410,6 +425,7 @@ impl Error {
             Self::InvalidDerive { attribute, .. } => *attribute,
             Self::DuplicateMember { declaration, .. } => *declaration,
             Self::UnknownMember { reference, .. } => *reference,
+            Self::UnknownFunction { reference, .. } => *reference,
             Self::InvalidConstruction { construction, .. } => *construction,
             Self::TypeMismatch { expression, .. } => *expression,
             Self::ImmutableBinding { mutation, .. } => *mutation,
@@ -455,6 +471,7 @@ impl Error {
             | Self::InvalidTypeArguments { .. }
             | Self::LoweringUnavailable { .. } => None,
             Self::UnknownMember { .. }
+            | Self::UnknownFunction { .. }
             | Self::InvalidConstruction { .. }
             | Self::TypeMismatch { .. }
             | Self::MissingCapability { .. }
@@ -546,6 +563,9 @@ impl fmt::Display for Written<'_> {
                 member,
                 reference,
             } => write!(formatter, "unknown member `{owner}::{member}` at {reference}"),
+            Error::UnknownFunction {
+                name, reference, ..
+            } => write!(formatter, "unknown function `{name}` at {reference}"),
             Error::InvalidConstruction {
                 owner,
                 reason,

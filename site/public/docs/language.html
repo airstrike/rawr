@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The language | Rawr docs</title>
+<meta name="description" content="The Rust that Rawr supports today. Items, types, generics, traits, patterns, closures, modules, macros and the std surface. What is not supported yet, and where Rawr differs from cargo run.">
+<meta property="og:title" content="The language | Rawr docs">
+<meta property="og:description" content="The Rust that Rawr supports today. Items, types, generics, traits, patterns, closures, modules, macros and the std surface. What is not supported yet, and where Rawr differs from cargo run.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/language">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/language">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="cap"><span class="slash">//</span>Docs</p>
+  <ol>
+    <li><a href="/docs">Overview</a></li>
+    <li><a href="/docs/start">Getting started</a></li>
+    <li><a href="/docs/language" aria-current="page">The language</a><ol><li><a href="#overview">How a program runs</a></li><li><a href="#items">Items</a></li><li><a href="#types">Types</a></li><li><a href="#generics-traits">Generics and traits</a></li><li><a href="#patterns">Patterns and control flow</a></li><li><a href="#closures">Closures</a></li><li><a href="#macros">Macros</a></li><li><a href="#std">The standard library</a></li><li><a href="#not-supported">Not supported yet</a></li><li><a href="#differences">Differences from cargo run</a></li></ol></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">rawr-iced</a></li>
+    <li><a href="/docs/play">?play and the playground</a></li>
+    <li><a href="/docs/cli">Commands</a></li>
+    <li><a href="/docs/faq">FAQ</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<p class="cap"><span class="slash">//</span>The language</p>
+<h1>The language</h1>
+<p class="lede">Rawr is written in Rust syntax and checked before it runs. This page lists the Rust that works today, what doesn&rsquo;t work yet and where a program behaves differently from the same code built by cargo.</p>
+
+<h2 id="overview">How a program runs</h2>
+<p>Rawr checks a whole program before any of it runs. The check resolves names and types, traits and method calls. It also checks that every <code>match</code> covers every case. A program that fails the check doesn&rsquo;t start.</p>
+<p>A program is one file or a project directory. In a project, the entry file is <code>src/main.rawr</code>. A file can hold items, top-level statements, or both. Rawr runs the top-level statements first and then calls <code>fn main</code> if there is one.</p>
+<p>This program uses <code>?</code>, a <code>Result</code> from <code>main</code> and a closure. It prints the same output as the Rust binary and exits with the same status.</p>
+<div class="block">
+  <div class="file"><b>parse.rawr</b></div>
+  <pre><code data-lang="rust" data-run="parse.rawr" id="src-parse">fn parse(s: &amp;str) -&gt; Result&lt;i64, String&gt; {
+    s.parse::&lt;i64&gt;().map_err(|e| format!("{s:?}: {e}"))
+}
+
+fn main() -&gt; Result&lt;(), String&gt; {
+    let n = parse("42")?;
+    println!("n = {n}");
+    let m = parse("forty")?;
+    println!("m = {m}");
+    Ok(())
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-parse" data-out="out-parse" aria-label="Run parse.rawr" hidden></button><b>rawr run parse.rawr</b><span id="out-parse" aria-live="polite">n = 42
+Error: "\"forty\": invalid digit found in string"
+<span class="exit">exit status 1</span></span></div>
+</div>
+<p>The exit status is 1. A panic exits with status 101. Rust uses the same statuses.</p>
+
+<h2 id="items">Items</h2>
+<ul>
+  <li><code>fn</code>. A function can be nested inside another function.</li>
+  <li><code>struct</code> with named fields, tuple structs and unit structs.</li>
+  <li><code>enum</code> with unit, tuple and struct variants.</li>
+  <li><code>impl</code> blocks with methods, associated functions and associated consts.</li>
+  <li><code>trait</code> with default methods, associated types and static functions. Traits can be implemented for your own types and for built-in types such as <code>i64</code>.</li>
+  <li><code>const</code> and <code>static</code> items.</li>
+  <li><code>mod</code>. A <code>mod util;</code> declaration loads <code>util.rawr</code> beside the file that declares it. An inline <code>mod m { .. }</code> works too.</li>
+  <li><code>use</code> with paths and groups, such as <code>use std::collections::{HashMap, HashSet};</code>.</li>
+  <li><code>#[derive]</code> of <code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. Rawr checks a derive the way rustc does. Deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</li>
+</ul>
+
+<h2 id="types">Types</h2>
+<ul>
+  <li>Integers: <code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code>, <code>isize</code>, <code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code> and <code>usize</code>. Overflow panics as it does in a Rust debug build. The <code>wrapping_*</code>, <code>checked_*</code>, <code>saturating_*</code> and <code>overflowing_*</code> methods work.</li>
+  <li>Floats: <code>f32</code> and <code>f64</code>. Methods such as <code>sqrt</code>, <code>powi</code>, <code>floor</code>, <code>round</code> and <code>trunc</code> work.</li>
+  <li><code>bool</code>, <code>char</code>, <code>String</code> and <code>&amp;str</code>.</li>
+  <li>Tuples and <code>Vec</code>.</li>
+  <li>Arrays such as <code>[0; 3]</code> and slices such as <code>&amp;v[1..3]</code>.</li>
+  <li><code>Option</code> and <code>Result</code> with their usual methods and the <code>?</code> operator.</li>
+  <li><code>Box&lt;T&gt;</code> and <code>Box&lt;dyn Trait&gt;</code>.</li>
+  <li><code>impl Trait</code> in argument and return position. This covers <code>impl Fn(i64) -&gt; i64</code> and <code>impl Iterator&lt;Item = i64&gt;</code>.</li>
+  <li>Function pointers such as <code>fn(i64) -&gt; i64</code>.</li>
+  <li><code>as</code> casts between numbers. They truncate and saturate as Rust&rsquo;s do. <code>u8 as char</code> works too.</li>
+</ul>
+<p>Mixing numeric types without a cast is an error in Rawr too. <code>i32 + i64</code> doesn&rsquo;t pass the check. Indexing a <code>Vec</code> takes a <code>usize</code>.</p>
+
+<h2 id="generics-traits">Generics and traits</h2>
+<p>Functions, structs, enums and impl blocks can be generic. Bounds work inline and in <code>where</code> clauses. A generic type without the bound it needs fails the check. rustc rejects it too.</p>
+<div class="block">
+  <div class="file"><b>generics.rawr</b></div>
+  <pre><code data-lang="rust" data-run="generics.rawr" id="src-generics">use std::fmt;
+use std::ops::Add;
+
+struct Stack&lt;T&gt; {
+    items: Vec&lt;T&gt;,
+}
+
+impl&lt;T: Clone&gt; Stack&lt;T&gt; {
+    fn new() -&gt; Self {
+        Stack { items: Vec::new() }
+    }
+
+    fn push(&amp;mut self, item: T) {
+        self.items.push(item);
+    }
+
+    fn top(&amp;self) -&gt; Option&lt;T&gt; {
+        self.items.last().cloned()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Meters(f64);
+
+impl Add for Meters {
+    type Output = Meters;
+
+    fn add(self, other: Meters) -&gt; Meters {
+        Meters(self.0 + other.0)
+    }
+}
+
+impl fmt::Display for Meters {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter) -&gt; fmt::Result {
+        write!(f, "{} m", self.0)
+    }
+}
+
+fn largest&lt;T: PartialOrd + Copy&gt;(items: &amp;[T]) -&gt; T {
+    let mut max = items[0];
+    for &amp;item in items {
+        if item &gt; max {
+            max = item;
+        }
+    }
+    max
+}
+
+fn main() {
+    let mut stack = Stack::new();
+    stack.push(Meters(1.5) + Meters(2.0));
+    println!("{}", stack.top().unwrap());
+    println!("{}", largest(&amp;[3, 9, 2]));
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-generics" data-out="out-generics" aria-label="Run generics.rawr" hidden></button><b>rawr run generics.rawr</b><span id="out-generics" aria-live="polite">3.5 m
+9</span></div>
+</div>
+<p>Trait objects work through <code>Box&lt;dyn Trait&gt;</code>. A <code>Vec&lt;Box&lt;dyn Shape&gt;&gt;</code> can hold different types that implement <code>Shape</code>. Implementing <code>Iterator</code> for your own type gives it <code>map</code>, <code>filter</code>, <code>collect</code> and the other adapters. Operator traits from <code>std::ops</code> such as <code>Add</code> work.</p>
+
+<h2 id="patterns">Patterns and control flow</h2>
+<ul>
+  <li><code>match</code> with literals, ranges such as <code>3..=9</code>, alternatives with <code>|</code>, guards and <code>name @ pattern</code> bindings.</li>
+  <li>Struct, tuple and enum patterns. <code>..</code> matches the rest.</li>
+  <li>Slice patterns such as <code>[first, .., last]</code>.</li>
+  <li><code>if let</code>, <code>while let</code> and <code>let .. else</code>.</li>
+  <li><code>loop</code>, <code>while</code> and <code>for</code>. Loop labels work. <code>break</code> can carry a value.</li>
+  <li>Blocks are expressions. <code>let x = { .. };</code> works.</li>
+  <li>Patterns on <code>&amp;mut</code> places write their bindings back. <code>for p in &amp;mut points { p.x += 1; }</code> changes the elements.</li>
+</ul>
+
+<h2 id="closures">Closures</h2>
+<p>Closures capture their environment. <code>move</code> closures work. A closure that mutates what it captures is <code>FnMut</code>. Functions can take closures as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. They can return them as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>.</p>
+<div class="block">
+  <div class="file"><b>closures.rawr</b></div>
+  <pre><code data-lang="rust" data-run="closures.rawr" id="src-closures">fn apply(f: impl Fn(i64) -&gt; i64, x: i64) -&gt; i64 {
+    f(x)
+}
+
+fn scale(k: i64) -&gt; impl Fn(i64) -&gt; i64 {
+    move |x| x * k
+}
+
+fn main() {
+    let mut log = Vec::new();
+    let mut add = |line: &amp;str| log.push(line.to_string());
+    add("first");
+    add("second");
+    println!("{:?}", log);
+    println!("{} {}", apply(|x| x + 1, 1), scale(3)(2));
+    let odd_squares: Vec&lt;i64&gt; = (1..=10).filter(|x| x % 2 == 1).map(|x| x * x).collect();
+    println!("{:?}", odd_squares);
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-closures" data-out="out-closures" aria-label="Run closures.rawr" hidden></button><b>rawr run closures.rawr</b><span id="out-closures" aria-live="polite">["first", "second"]
+2 6
+[1, 9, 25, 49, 81]</span></div>
+</div>
+
+<h2 id="macros">Macros</h2>
+<p>Rawr has a fixed set of built-in macros. You can&rsquo;t define your own with <code>macro_rules!</code>.</p>
+<table>
+  <tr><th>Macro</th><th>Notes</th></tr>
+  <tr><td><code>println!</code> <code>print!</code></td><td>Write to stdout.</td></tr>
+  <tr><td><code>eprintln!</code> <code>eprint!</code></td><td>Write to stderr.</td></tr>
+  <tr><td><code>format!</code></td><td>Builds a <code>String</code>. Takes the same format strings as the print macros.</td></tr>
+  <tr><td><code>write!</code></td><td>Writes to a <code>Formatter</code> inside a <code>Display</code> or <code>Debug</code> impl.</td></tr>
+  <tr><td><code>panic!</code></td><td>Stops the program with exit status 101.</td></tr>
+  <tr><td><code>assert!</code> <code>assert_eq!</code> <code>assert_ne!</code></td><td>Panic when the condition fails. They take an optional message.</td></tr>
+  <tr><td><code>debug_assert!</code> <code>debug_assert_eq!</code></td><td>Behave as in a Rust debug build.</td></tr>
+  <tr><td><code>unreachable!</code> <code>todo!</code> <code>unimplemented!</code></td><td>Panic when reached.</td></tr>
+  <tr><td><code>vec!</code></td><td>Both forms: <code>vec![1, 2]</code> and <code>vec![0; n]</code>.</td></tr>
+  <tr><td><code>matches!</code></td><td>Takes a guard: <code>matches!(x, Some(n) if n &gt; 2)</code>.</td></tr>
+  <tr><td><code>concat!</code> <code>stringify!</code></td><td>Expand to a string literal.</td></tr>
+  <tr><td><code>env!</code></td><td>Reads an environment variable when the program is checked.</td></tr>
+  <tr><td><code>include_str!</code> <code>include_bytes!</code></td><td>Read a file relative to the source file.</td></tr>
+</table>
+
+<h3 id="format">Format strings</h3>
+<p>Format strings follow Rust&rsquo;s rules. All of these work:</p>
+<ul>
+  <li>Positional, numbered and named arguments.</li>
+  <li>Captured variables such as <code>{name}</code>.</li>
+  <li>Fill, alignment, width and precision: <code>{:&gt;8}</code>, <code>{:^7}</code>, <code>{:08.3}</code>, <code>{:.2}</code>.</li>
+  <li>Width and precision from an argument: <code>{:&gt;w$}</code>, <code>{:&gt;1$}</code>, <code>{:.*}</code>.</li>
+  <li>Signs and radix: <code>{:+}</code>, <code>{:#x}</code>, <code>{:X}</code>, <code>{:#b}</code>, <code>{:o}</code>, <code>{:e}</code>.</li>
+  <li><code>{:?}</code> and <code>{:#?}</code>. Strings and chars are escaped as Rust escapes them.</li>
+</ul>
+<p>Hex debug output (<code>{:x?}</code>) is not supported yet.</p>
+
+<h2 id="std">The standard library</h2>
+<p>Rawr provides part of <code>std</code>. These work today:</p>
+<ul>
+  <li><code>String</code> and <code>&amp;str</code>: <code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes as Rust&rsquo;s does.</li>
+  <li><code>Vec</code> and slices: <code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>Vec::with_capacity</code> and more.</li>
+  <li>Iterators: <code>map</code>, <code>filter</code>, <code>enumerate</code>, <code>zip</code>, <code>skip</code>, <code>take</code>, <code>step_by</code>, <code>rev</code>, <code>any</code>, <code>all</code>, <code>position</code>, <code>fold</code>, <code>sum</code>, <code>max</code>, <code>min</code>, <code>count</code>, <code>collect</code> and more.</li>
+  <li><code>std::collections</code>: <code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>.</li>
+  <li><code>std::mem::swap</code>, <code>replace</code> and <code>take</code>.</li>
+  <li><code>std::fmt</code> for <code>Display</code> and <code>Debug</code> impls, <code>std::ops</code> for operator traits and <code>std::cmp::Ordering</code>.</li>
+  <li><code>From</code> and <code>Into</code> between your own types.</li>
+  <li><code>TryFrom</code> between integer types.</li>
+</ul>
+<p><code>Duration</code> and <code>Instant</code> are available to iced apps as <code>iced::time::Duration</code> and <code>iced::time::Instant</code>. <code>std::time</code> is not available in plain programs yet.</p>
+
+<h2 id="not-supported">Not supported yet</h2>
+<p>These are valid Rust that Rawr rejects today. Each one fails the check with an error that names the construct.</p>
+<h3 id="missing-syntax">Syntax and items</h3>
+<ul>
+  <li>Type aliases (<code>type Id = i64;</code>).</li>
+  <li>Glob imports (<code>use std::collections::*;</code>, <code>use Enum::*;</code>).</li>
+  <li>Restricted visibility such as <code>pub(crate)</code> and <code>pub(super)</code>.</li>
+  <li><code>const fn</code>.</li>
+  <li>Explicit enum discriminants (<code>Red = 1</code>) and casting an enum with <code>as</code>.</li>
+  <li>Byte literals (<code>b'a'</code>, <code>b"ab"</code>) and <code>char</code> ranges such as <code>'a'..='e'</code>.</li>
+  <li><code>macro_rules!</code>, <code>async</code> and <code>.await</code>.</li>
+  <li>A <code>const</code> captured in a format string (<code>"{LIMIT}"</code>). Pass it as an argument instead.</li>
+</ul>
+<h3 id="missing-types">Types and borrowing</h3>
+<ul>
+  <li><code>i128</code> and <code>u128</code>.</li>
+  <li>Returning <code>&amp;mut</code> from a function or method.</li>
+  <li>Borrowing two fields of one struct mutably at once. <code>swap(&amp;mut p.x, &amp;mut p.y)</code> is one example.</li>
+  <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
+  <li>Dereferencing twice (<code>**x</code>) inside a closure such as the one passed to <code>min_by_key</code>.</li>
+  <li>Comparing an untyped <code>None</code> with <code>&lt;</code>. Comparing typed <code>Option</code> values works.</li>
+  <li><code>impl Drop</code>.</li>
+</ul>
+<h3 id="missing-std">Standard library</h3>
+<ul>
+  <li><code>Rc</code>, <code>RefCell</code> and <code>Cell</code>.</li>
+  <li><code>VecDeque</code> and <code>BinaryHeap</code>.</li>
+  <li><code>std::time</code> in plain programs. iced apps get <code>Duration</code> and <code>Instant</code> from <code>iced::time</code>.</li>
+  <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
+  <li><code>write!</code> into a <code>String</code> through <code>std::fmt::Write</code>.</li>
+  <li><code>Formatter::pad</code>.</li>
+  <li><code>f64::NAN</code>, <code>f64::INFINITY</code>, <code>f64::MAX</code>, <code>f64::EPSILON</code>, <code>std::f64::consts</code> and <code>f64::rem_euclid</code>.</li>
+  <li><code>char::from(u8)</code> and <code>char::from_u32</code>. <code>byte as char</code> works.</li>
+  <li><code>Vec::binary_search</code>.</li>
+  <li>The <code>dbg!</code>, <code>line!</code>, <code>file!</code>, <code>column!</code> and <code>module_path!</code> macros.</li>
+</ul>
+<p>Rawr reports one error per check. A file with several unsupported constructs shows them one at a time.</p>
+
+<h2 id="differences">Differences from <code>cargo run</code></h2>
+<p>A program that passes both <code>rawr check</code> and rustc usually prints the same output. These are the known cases where it doesn&rsquo;t.</p>
+<ul>
+  <li><strong><code>HashMap</code> iteration order.</strong> Rawr iterates a <code>HashMap</code> in key order. Rust uses a random order that changes from run to run. Code shouldn&rsquo;t depend on either.</li>
+  <li><strong><code>f32 as f64</code>.</strong> Rawr keeps the short decimal value. <code>0.1f32 as f64</code> prints <code>0.1</code> in Rawr and <code>0.10000000149011612</code> in Rust. Other <code>f32</code> arithmetic and printing match.</li>
+  <li><strong>Width on your own <code>Display</code>.</strong> Rawr pads the output of a user <code>Display</code> impl to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
+  <li><strong><code>TryFrom</code> errors.</strong> <code>u8::try_from(300i64)</code> prints <code>Err(())</code> with <code>{:?}</code>. Rust prints <code>Err(TryFromIntError(PosOverflow))</code>.</li>
+  <li><strong>Panic messages.</strong> A panic exits with status 101 in both. Rawr writes the message to stderr as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
+</ul>
+<h3 id="lenient">Code that Rawr accepts and rustc rejects</h3>
+<p>Rawr&rsquo;s check is not rustc. Some code passes <code>rawr check</code> and fails <code>cargo build</code>. Run <code>rawr check --as-rust</code> to find these cases in a project. <a href="/docs/cli#check-as-rust">Commands</a> says what it needs.</p>
+<ul>
+  <li>There is no borrow checker beyond rejecting two live <code>&amp;mut</code> borrows of one value. Use after move, a shared borrow held across a mutation, and returning a reference to a local are all accepted.</li>
+  <li><code>String</code> and <code>&amp;str</code> are one type to the checker. Passing <code>"x"</code> where a <code>String</code> is expected is accepted.</li>
+  <li>Lifetimes are not checked. A missing lifetime on <code>fn f(a: &amp;str, b: &amp;str) -&gt; &amp;str</code> is accepted.</li>
+  <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
+  <li>Private struct fields can be read and set from another module. Private functions are rejected. rustc rejects them too.</li>
+  <li><code>HashMap</code> can be used without a <code>use</code> line.</li>
+  <li>Out-of-range literals such as <code>let x: u8 = 300</code> are accepted.</li>
+  <li>Top-level statements are accepted. Rust allows only items at the top level.</li>
+  <li>In iced code, a concrete widget is accepted where an <code>Element</code> is expected.</li>
+</ul>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Getting started</b></a><a class="next" href="/docs/embedding">Next<b>Embedding</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
+</body>
+</html>

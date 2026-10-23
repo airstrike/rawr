@@ -694,6 +694,7 @@ fn resolve_callback(
                 | item::Kind::Function(_) => None,
             }),
         [owner, name] => {
+            let module = owner;
             let owner = items
                 .iter()
                 .filter(|shell| source.is_none_or(|source| shell.source == source))
@@ -715,8 +716,8 @@ fn resolve_callback(
                     | item::Kind::Struct(_)
                     | item::Kind::Enum(_) => None,
                 });
-            owner.and_then(|owner| {
-                methods
+            match owner {
+                Some(owner) => methods
                     .iter()
                     .find(|method| {
                         method.owner() == owner
@@ -724,8 +725,21 @@ fn resolve_callback(
                             && (source.is_none_or(|source| method.source() == source)
                                 || method.is_public())
                     })
-                    .map(|method| method.key().clone())
-            })
+                    .map(|method| method.key().clone()),
+                // `view::view`: a function of the crate's module `view`.
+                None => items.iter().find_map(|shell| match &shell.kind {
+                    item::Kind::Function(function)
+                        if function.name.text == *name
+                            && shell
+                                .key
+                                .as_ref()
+                                .is_some_and(|key| key.modules().last() == Some(module)) =>
+                    {
+                        shell.key.clone()
+                    }
+                    _ => None,
+                }),
+            }
         }
         _ => None,
     };

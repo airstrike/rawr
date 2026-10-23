@@ -28,6 +28,7 @@ pub use debugger::{
 pub use eval_context::{EvalContext, EvalContextFrameGuard};
 
 pub use global_state::GlobalRuntimeState;
+pub(crate) use stmt::restore_nominal_root;
 #[cfg(not(feature = "no_module"))]
 #[cfg(not(feature = "no_function"))]
 pub use global_state::SharedGlobalConstants;

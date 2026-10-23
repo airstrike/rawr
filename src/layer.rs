@@ -188,7 +188,15 @@ impl Sheet {
         let mut recomputed = 0;
         let mut cells = BTreeMap::new();
         for (source, items) in graph.parsed_sources() {
-            let cell = match self.cells.remove(source.path()) {
+            // An inline module shares its file's path: its module path
+            // tells the two apart.
+            let mut key = source.path().as_os_str().to_owned();
+            for module in source.modules() {
+                key.push("#");
+                key.push(module.as_str());
+            }
+            let key = PathBuf::from(key);
+            let cell = match self.cells.remove(&key) {
                 Some(cell) if cell.source.text() == source.text() => cell,
                 _ => {
                     recomputed += 1;
@@ -198,7 +206,7 @@ impl Sheet {
                     }
                 }
             };
-            cells.insert(source.path().to_path_buf(), cell);
+            cells.insert(key, cell);
         }
         let dropped = !self.cells.is_empty();
         self.cells = cells;

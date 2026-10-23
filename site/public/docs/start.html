@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started | Rawr docs</title>
+<meta name="description" content="Install the rawr crate, the rawr command and rawr-iced. Run a plain Rawr program and start an iced app that reloads when you save.">
+<meta property="og:title" content="Getting started | Rawr docs">
+<meta property="og:description" content="Install the rawr crate, the rawr command and rawr-iced. Run a plain Rawr program and start an iced app that reloads when you save.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/start">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/start">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="cap"><span class="slash">//</span>Docs</p>
+  <ol>
+    <li><a href="/docs">Overview</a></li>
+    <li><a href="/docs/start" aria-current="page">Getting started</a><ol><li><a href="#install">Install</a></li><li><a href="#first-program">A first program</a></li><li><a href="#first-app">A first iced app</a></li><li><a href="#hot-reload">Hot reload</a></li><li><a href="#next">Next steps</a></li></ol></li>
+    <li><a href="/docs/language">The language</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">rawr-iced</a></li>
+    <li><a href="/docs/play">?play and the playground</a></li>
+    <li><a href="/docs/cli">Commands</a></li>
+    <li><a href="/docs/faq">FAQ</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<p class="cap"><span class="slash">//</span>Getting started</p>
+<h1>Getting started</h1>
+<p class="lede">Install what you need. Run a plain program. Then start an iced app and edit it while it runs.</p>
+
+<h2 id="install">Install</h2>
+<p>Rawr installs from git. There are three things you can install. You only need the ones you use.</p>
+
+<h3 id="install-crate">The crate</h3>
+<p>To embed the language in a Rust program, add the crate. It builds on stable Rust 1.95 or newer.</p>
+<div class="block"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre></div>
+<p><a href="/docs/embedding">Embedding</a> shows how to compile a script and call its functions.</p>
+
+<h3 id="install-command">The <code>rawr</code> command</h3>
+<p>The <code>rawr</code> command runs Rawr programs. It builds on stable Rust too.</p>
+<div class="block"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre></div>
+<p>The <code>rawr-cli</code> package installs the <code>rawr</code> binary. A program without iced runs once and exits. It doesn&rsquo;t build anything or hot reload.</p>
+
+<h3 id="install-iced">rawr-iced</h3>
+<p>rawr-iced adds iced support. Install it and <code>rawr</code> hands every program that uses iced to it.</p>
+<div class="note"><p>Importing your own Rust crates currently works only on Apple Silicon Macs. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far. rawr-iced needs the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr builds iced and your own crates with that toolchain too.</p></div>
+<div class="block"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
+cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli
+cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre></div>
+<p>The <code>rawr-iced-cli</code> package installs <code>rawr-iced</code>. The <code>rawr-import</code> package installs <code>rawr-import-driver</code> in the same directory. The driver reads your Rust crates when a program imports them. <code>rawr</code> looks for <code>rawr-iced</code> next to itself and then on <code>PATH</code>.</p>
+<p><code>cargo install</code> builds iced into <code>rawr-iced</code>, so the install takes a few minutes. After that, an iced app opens in seconds. A project with its own Rust crates compiles them on its first run.</p>
+<p>Run <code>rawr doctor</code> to see what is installed and where. Run <code>rawr --help</code> to see which commands each binary provides.</p>
+
+<h2 id="first-program">A first program</h2>
+<p>A plain program is one that doesn&rsquo;t use iced. Save this as <code>cart.rawr</code>.</p>
+<div class="block">
+  <div class="file"><b>cart.rawr</b></div>
+  <pre><code data-lang="rust" data-run="cart.rawr" id="src-cart">enum Item {
+    Book { price: f64 },
+    Coffee { cups: i64 },
+}
+
+trait Priced {
+    fn price(&amp;self) -&gt; f64;
+}
+
+impl Priced for Item {
+    fn price(&amp;self) -&gt; f64 {
+        match self {
+            Item::Book { price } =&gt; *price,
+            Item::Coffee { cups } =&gt; 3.5 * (*cups as f64),
+        }
+    }
+}
+
+fn total(items: &amp;[Item]) -&gt; f64 {
+    let mut sum = 0.0;
+    for item in items {
+        sum += item.price();
+    }
+    sum
+}
+
+fn main() {
+    let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
+    println!("total: {}", total(&amp;cart));
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rawr" hidden></button><b>rawr run cart.rawr</b><span id="out-cart" aria-live="polite">total: 27</span></div>
+</div>
+<p><code>rawr run</code> checks the whole file first. If the check passes, it runs the file&rsquo;s top-level statements and then <code>fn main</code>. A file can be only statements. It can also be only items and a <code>main</code>, as in Rust.</p>
+<p><code>rawr check cart.rawr</code> runs the check without running the program. It prints <code>Checked</code> and the path when the file is valid.</p>
+
+<h3 id="errors">Errors</h3>
+<p>Rawr reports one error at a time. Each error has a code, a message and the source span. Change <code>item.price()</code> to <code>item.cost()</code> and run it again:</p>
+<div class="block diag">
+  <div class="file"><b>rawr run cart.rawr</b><span>exit 1</span></div>
+  <pre><code><span class="e">error[RAWR-RESOLVE-UNKNOWN-MEMBER]</span><span class="h">: unknown member `Item::cost`</span>
+ <span class="c">--&gt;</span> cart.rawr:22:21
+ <span class="c">22 |</span>         sum += item.cost();
+    <span class="c">|</span>                     <span class="e">^</span></code></pre>
+</div>
+<p>The program doesn&rsquo;t start, so nothing is printed before the error.</p>
+
+<h2 id="first-app">A first iced app</h2>
+<p>With rawr-iced installed, <code>rawr new</code> writes a starter project.</p>
+<div class="block">
+  <pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre>
+</div>
+<p><code>rawr new hello</code> creates the <code>hello</code> directory. Its only file is <code>src/main.rawr</code>. That file is a counter app with two buttons. You don&rsquo;t need a manifest until you add Rust crates. <code>rawr run</code> opens the app in a window.</p>
+<p>This is iced&rsquo;s own counter example. <code>rawr check</code> accepts it unchanged.</p>
+<div class="block">
+  <div class="file"><b>src/main.rawr</b></div>
+  <pre><code data-lang="rust">use iced::Center;
+use iced::widget::{Widget, button, column, text};
+
+pub fn main() -&gt; iced::Result {
+    iced::run(Counter::update, Counter::view)
+}
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+    Decrement,
+}
+
+impl Counter {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Increment =&gt; {
+                self.value += 1;
+            }
+            Message::Decrement =&gt; {
+                self.value -= 1;
+            }
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        column![
+            button("Increment").on_press(Message::Increment),
+            text(self.value).size(50),
+            button("Decrement").on_press(Message::Decrement)
+        ]
+        .padding(20)
+        .align_x(Center)
+    }
+}</code></pre>
+</div>
+
+<h2 id="hot-reload">Hot reload</h2>
+<p>Keep the window open and edit <code>src/main.rawr</code>. When you save, <code>rawr run</code> reloads the app in about 0.2&nbsp;s. The window stays open. The app keeps its state, so the counter keeps its value.</p>
+<p>Saving a <code>.rawr</code> file never rebuilds native code. Changing one of your own Rust crates does. <code>rawr run</code> rebuilds that crate natively and then reloads the app.</p>
+<p>If a save doesn&rsquo;t pass the check, the last good version keeps running. The window shows the error until you fix it.</p>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="/docs/language">The language</a> lists the Rust that Rawr supports today.</li>
+  <li><a href="/docs/iced">rawr-iced</a> covers app shapes, previews, snapshots and Rust imports.</li>
+  <li><a href="/docs/cli">Commands</a> lists every command and flag.</li>
+  <li><a href="/play">The playground</a> runs snippets in a browser without installing anything.</li>
+</ul>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs">Previous<b>Overview</b></a><a class="next" href="/docs/language">Next<b>The language</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
+</body>
+</html>

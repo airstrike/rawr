@@ -369,8 +369,11 @@ pub struct Module {
     pub header: Header,
     /// Declared module name.
     pub name: Name,
-    /// Complete item span, including the semicolon.
+    /// Complete item span, including the semicolon or the closing brace.
     pub span: Span,
+    /// `mod name { .. }`: the span inside its braces, whose items are the
+    /// module's, read as a file module of their own.
+    pub inline: Option<Span>,
 }
 
 /// A compile-time import.
@@ -543,6 +546,8 @@ pub struct Variant {
     pub fields: Option<Box<[Name]>>,
     /// `#[default]`: the variant a derived `Default` builds.
     pub default: Option<Span>,
+    /// `V = 5`: the explicit discriminant an `as` cast reads.
+    pub discriminant: Option<crate::INT>,
     /// Complete variant span.
     pub span: Span,
 }

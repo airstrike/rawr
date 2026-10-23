@@ -15,6 +15,10 @@ pub enum Builtin {
     F64,
     /// `i64`.
     I64,
+    /// `u64`, an integer at runtime.
+    U64,
+    /// `u32`, an integer at runtime.
+    U32,
     /// `RangeInclusive<i64>`.
     InclusiveRange,
     /// `RangeInclusive<f64>`.
@@ -33,10 +37,6 @@ pub enum Builtin {
     U8,
     /// `u16`.
     U16,
-    /// `u32`.
-    U32,
-    /// `u64`.
-    U64,
     /// `usize`.
     Usize,
     /// `f32`.

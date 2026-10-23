@@ -67,6 +67,7 @@ codes!(Resolve;
     (RESOLVE_DERIVE, "RAWR-RESOLVE-DERIVE", "Invalid derived capability."),
     (RESOLVE_DUPLICATE_MEMBER, "RAWR-RESOLVE-DUPLICATE-MEMBER", "Duplicate nominal member."),
     (RESOLVE_UNKNOWN_MEMBER, "RAWR-RESOLVE-UNKNOWN-MEMBER", "Unknown nominal member."),
+    (RESOLVE_UNKNOWN_FUNCTION, "RAWR-RESOLVE-UNKNOWN-FUNCTION", "Unknown function."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),
     (RESOLVE_TYPE_MISMATCH, "RAWR-RESOLVE-TYPE-MISMATCH", "Resolved type mismatch."),
     (RESOLVE_IMMUTABLE_BINDING, "RAWR-RESOLVE-IMMUTABLE-BINDING", "Mutation of an immutable binding."),

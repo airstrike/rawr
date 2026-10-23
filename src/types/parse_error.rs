@@ -316,6 +316,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnknownMember { owner, member, .. } => {
                     write!(f, "Unknown member '{owner}::{member}'")
                 }
+                crate::resolve::Error::UnknownFunction { name, .. } => {
+                    write!(f, "Unknown function '{name}'")
+                }
                 crate::resolve::Error::InvalidConstruction { owner, reason, .. } => {
                     write!(f, "Invalid construction of '{owner}': {reason}")
                 }

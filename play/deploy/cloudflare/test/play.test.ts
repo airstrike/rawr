@@ -190,11 +190,12 @@ test("days and the purge selection", () => {
 
 test("the landing page's runnable sources are its files, exactly", async () => {
   const { readFileSync } = await import("node:fs");
-  const { decodeHtml, runnable, sha256 } = await import("../src/play.ts");
+  const { decodeHtml, runBlocks, runnable, sha256 } = await import("../src/play.ts");
   const root = new URL("../../../../", import.meta.url);
   const html = readFileSync(new URL("site/public/index.html", root), "utf8");
   const sources = runnable(html);
   assert.equal(sources.length, 2, "cart.rawr and the counter");
+  assert.deepEqual(runBlocks(html).map((block) => block.name), ["cart.rawr", "main.rawr"]);
   // What the page shows (and its Run button sends) is examples/cart.rawr.
   assert.equal(sources[0], readFileSync(new URL("examples/cart.rawr", root), "utf8").trimEnd());
   assert.match(sources[1], /^use iced::Center;\n/);
@@ -205,6 +206,40 @@ test("the landing page's runnable sources are its files, exactly", async () => {
   assert.ok(allowed.has(await sha256(sources[0])));
   assert.ok(!allowed.has(await sha256(sources[0] + " ")));
   assert.equal(await sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+});
+
+test("the allow-list covers every page's run blocks, the docs included", async () => {
+  const { allowList, sitePages } = await import("../allowlist.mjs");
+  const { sha256 } = await import("../src/play.ts");
+  const pages = sitePages(new URL("../../../../site/public", import.meta.url).pathname);
+  const { hashes, blocks } = await allowList(pages);
+  const at = (page: string) => blocks.filter((block: { page: string }) => block.page === page).map((block: { name: string }) => block.name);
+  assert.deepEqual(at("index.html"), ["cart.rawr", "main.rawr"]);
+  assert.deepEqual(at("docs/index.html"), ["cart.rawr"]);
+  assert.deepEqual(at("docs/start.html"), ["cart.rawr"]);
+  assert.deepEqual(at("docs/language.html"), ["parse.rawr", "generics.rawr", "closures.rawr"]);
+  assert.deepEqual(at("docs/play.html"), [""]);
+  // The docs' cart.rawr is the landing page's, so it is one entry.
+  assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
+  assert.equal(hashes.length, blocks.length - 2);
+  assert.ok(hashes.includes(await sha256("let xs = vec![3, 1, 2];\nxs.iter().sum::<i64>()")));
+  assert.ok(!hashes.includes(await sha256("println!(\"hi\");")));
+});
+
+test("the allow-list build fails on empty, marked-up or disagreeing blocks", async () => {
+  const { allowList } = await import("../allowlist.mjs");
+  const fails = (pages: Record<string, string>, message: RegExp) =>
+    assert.rejects(allowList(new Map(Object.entries(pages))), message);
+  await fails({ "a.html": "<p>no snippets</p>" }, /no <code data-run> blocks/);
+  await fails({ "a.html": '<code data-run="x.rawr">  \n</code>' }, /a\.html \(data-run="x\.rawr"\) is empty/);
+  await fails({ "a.html": '<code data-run><span class="k">fn</span> main() {}</code>' }, /holds markup/);
+  await fails(
+    { "a.html": '<code data-run="x.rawr">fn main() {}</code>', "b.html": '<code data-run="x.rawr">fn main() { }</code>' },
+    /b\.html \(data-run="x\.rawr"\) differs from the block of the same name in a\.html/,
+  );
+  const ok = await allowList(new Map([["a.html", '<code data-run="x.rawr">1 &lt; 2</code>'], ["b.html", '<code data-run="x.rawr">1 &lt; 2</code>']]));
+  assert.equal(ok.hashes.length, 1);
+  assert.equal(ok.blocks[0].code, "1 < 2");
 });
 
 test("text results are read back, and give a preview line", async () => {

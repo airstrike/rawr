@@ -212,7 +212,7 @@ ${events || '<tr><td colspan="4" class="note">No events yet.</td></tr>'}
 </table></div>
 </section>
 </main>
-<footer><span>Aggregate only · no messages, users or server names</span><span>${when(d.now)}</span></footer>
+<footer><span>Aggregate only · no messages, users or server names</span><span>${when(d.now)}</span><a href="https://airstrike.fyi">airstrike.fyi</a></footer>
 </body>
 </html>
 `;

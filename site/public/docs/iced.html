@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rawr-iced | Rawr docs</title>
+<meta name="description" content="Write iced apps in Rawr. App shapes, impl Widget, boxed elements, components, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
+<meta property="og:title" content="rawr-iced | Rawr docs">
+<meta property="og:description" content="Write iced apps in Rawr. App shapes, impl Widget, boxed elements, components, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/iced">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="cap"><span class="slash">//</span>Docs</p>
+  <ol>
+    <li><a href="/docs">Overview</a></li>
+    <li><a href="/docs/start">Getting started</a></li>
+    <li><a href="/docs/language">The language</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced" aria-current="page">rawr-iced</a><ol><li><a href="#when">When rawr-iced is used</a></li><li><a href="#shapes">App shapes</a></li><li><a href="#views">Views and elements</a></li><li><a href="#hot-reload">Hot reload</a></li><li><a href="#previews">Previews and snapshots</a></li><li><a href="#rust-crates">Importing your own Rust crates</a></li><li><a href="#diagnostics">Diagnostics</a></li><li><a href="#available">What of iced is available</a></li></ol></li>
+    <li><a href="/docs/play">?play and the playground</a></li>
+    <li><a href="/docs/cli">Commands</a></li>
+    <li><a href="/docs/faq">FAQ</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<p class="cap"><span class="slash">//</span>rawr-iced</p>
+<h1>rawr-iced</h1>
+<p class="lede">rawr-iced runs <a href="https://github.com/iced-rs/iced">iced</a> apps written in Rawr. The app is a native iced app. Saving a <code>.rawr</code> file reloads it while the window stays open.</p>
+
+<h2 id="when">When rawr-iced is used</h2>
+<p>The <code>rawr</code> command reads a program once and decides who runs it. A program goes to rawr-iced when it names the <code>iced</code> crate. It also goes there when its <code>rawr.toml</code> has a <code>[rust]</code> table. Every other program runs on the base language. Set <code>RAWR_VERBOSE=1</code> to see which way a program went.</p>
+<p>rawr-iced follows iced master. It is built against one iced revision. <code>rawr doctor</code> prints that revision. Install rawr-iced as described in <a href="/docs/start#install-iced">Getting started</a>.</p>
+
+<h2 id="shapes">App shapes</h2>
+<p>An app starts from <code>main</code> with one of iced&rsquo;s own entry points.</p>
+<h3 id="iced-run"><code>iced::run</code></h3>
+<p><code>iced::run(State::update, State::view)</code> boots <code>State::default()</code>. The state type needs <code>#[derive(Default)]</code>. The counter on <a href="/docs/start#first-app">Getting started</a> has this shape.</p>
+<h3 id="application">The application builder</h3>
+<p><code>iced::application(boot, update, view)</code> takes a boot function such as <code>State::default</code>. It accepts these builders before <code>.run()</code>:</p>
+<ul>
+  <li><code>.title(..)</code> with a method of the state or a string literal.</li>
+  <li><code>.theme(..)</code> with a method that returns a <code>Theme</code>.</li>
+  <li><code>.subscription(..)</code> with a method that returns a <code>Subscription</code>.</li>
+  <li><code>.centered()</code>.</li>
+</ul>
+<p>Window and renderer settings such as <code>.window_size(..)</code>, <code>.font(..)</code> and <code>.style(..)</code> are accepted. rawr-iced doesn&rsquo;t apply them yet.</p>
+<p><code>update</code> can return nothing or a <code>Task&lt;Message&gt;</code>. This app uses the builder, a <code>Task</code>, a text input and a list built at run time:</p>
+<div class="block">
+  <div class="file"><b>src/main.rawr</b></div>
+  <pre><code data-lang="rust">use iced::widget::{Column, Widget, button, column, row, text, text_input};
+use iced::{Element, Fill, Task};
+
+pub fn main() -&gt; iced::Result {
+    iced::application(Todos::default, Todos::update, Todos::view)
+        .title("Todos")
+        .run()
+}
+
+#[derive(Default)]
+struct Todos {
+    draft: String,
+    items: Vec&lt;String&gt;,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Edit(String),
+    Add,
+    Remove(usize),
+}
+
+impl Todos {
+    fn sample() -&gt; Todos {
+        Todos {
+            draft: String::new(),
+            items: vec!["Write the docs".to_string(), "Ship them".to_string()],
+        }
+    }
+
+    fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
+        match message {
+            Message::Edit(draft) =&gt; self.draft = draft,
+            Message::Add =&gt; {
+                if !self.draft.is_empty() {
+                    self.items.push(self.draft.clone());
+                    self.draft.clear();
+                }
+            }
+            Message::Remove(index) =&gt; {
+                self.items.remove(index);
+            }
+        }
+        Task::none()
+    }
+
+    #[preview(name = "two items", seed = Todos::sample, size = (360, 180))]
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        let items: Vec&lt;Element&lt;'_, Message&gt;&gt; = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                row![text(item).width(Fill), button("x").on_press(Message::Remove(index))]
+                    .spacing(8)
+                    .boxed()
+            })
+            .collect();
+        column![
+            text_input("What needs doing?", &amp;self.draft)
+                .on_input(Message::Edit)
+                .on_submit(Message::Add),
+            Column::with_children(items).spacing(4),
+        ]
+        .spacing(12)
+        .padding(16)
+    }
+}</code></pre>
+</div>
+<figure class="shot">
+  <img src="/img/docs-todos.png" width="360" height="180" alt="The Todos app with an empty text input and two items, Write the docs and Ship them, each with an x button">
+  <figcaption>The <code>two items</code> preview as <code>rawr snapshot</code> renders it.</figcaption>
+</figure>
+
+<h2 id="views">Views and elements</h2>
+<p>A view returns <code>impl Widget&lt;Message&gt;</code> as views do in iced master. It can also return <code>Element&lt;'_, Message&gt;</code>.</p>
+<p>To turn a widget into an <code>Element</code>, call <code>.boxed()</code>. The list above uses it to collect its rows into a <code>Vec&lt;Element&gt;</code>. <code>.into()</code> into an <code>Element</code> is not supported yet. The error says to use <code>.boxed()</code> instead.</p>
+<p>Helper functions that build part of a view work when they name the app&rsquo;s own <code>Message</code> type. A helper that is generic over the message type, such as <code>fn padded&lt;Message&gt;(..)</code>, is not supported yet.</p>
+<h3 id="components">Components</h3>
+<p>A type can implement iced&rsquo;s <code>component::Component</code> trait. Its state lives in the widget tree. Its events reach its own <code>update</code>. <code>component(value)</code> puts it in a view.</p>
+<h3 id="subscriptions">Subscriptions</h3>
+<p>A <code>.subscription(..)</code> method returns a <code>Subscription&lt;Message&gt;</code>. <code>iced::time::every</code>, <code>iced::keyboard::listen</code>, <code>iced::event::listen</code> and <code>iced::window::frames</code> work. Subscriptions combine with <code>map</code> and <code>filter_map</code>.</p>
+<div class="block">
+  <pre><code data-lang="rust">use iced::Subscription;
+use iced::time::{self, Duration};
+
+fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
+    if self.running {
+        time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+    } else {
+        Subscription::none()
+    }
+}</code></pre>
+</div>
+
+<h2 id="hot-reload">Hot reload</h2>
+<p><code>rawr run</code> opens the app and watches the project. Saving a <code>.rawr</code> file reloads the app in about 0.2&nbsp;s. The window stays open and the app keeps its state.</p>
+<p>A save that doesn&rsquo;t pass the check doesn&rsquo;t replace the running app. A bar in the window says <code>Last good still running</code> and shows the error. Its buttons retry, copy the error or reset the app.</p>
+<p>Changing a Rust crate the app imports rebuilds that crate natively. The app reloads when the build finishes.</p>
+<p>Press Cmd+Shift+S in the window to save a PNG of it.</p>
+
+<h2 id="previews">Previews and snapshots</h2>
+<p><code>#[preview]</code> marks a view function to render on its own. A view can have several. <code>rawr check --as-rust</code> leaves the attribute out, so a file with previews still compiles as Rust.</p>
+<table>
+  <tr><th>Option</th><th>Meaning</th></tr>
+  <tr><td><code>name = ".."</code></td><td>The preview&rsquo;s name.</td></tr>
+  <tr><td><code>group = ".."</code></td><td>Groups previews. <code>rawr preview</code> steps through a group with the arrow keys.</td></tr>
+  <tr><td><code>seed = path</code></td><td>A function that builds the state to render, such as <code>Todos::sample</code>. Without it the state is <code>Default</code>.</td></tr>
+  <tr><td><code>update = path</code></td><td>The update function to use in the preview window.</td></tr>
+  <tr><td><code>theme = path</code></td><td>A function that returns the <code>Theme</code> to render with.</td></tr>
+  <tr><td><code>themes = [..]</code></td><td>Several theme functions. Each one gets its own snapshot.</td></tr>
+  <tr><td><code>size = (w, h)</code></td><td>The canvas size in logical pixels.</td></tr>
+  <tr><td><code>snapshot = false</code></td><td>Leaves the preview out of <code>rawr snapshot</code>.</td></tr>
+  <tr><td><code>bind = (..)</code></td><td>Arguments for a free view function that takes parameters.</td></tr>
+</table>
+<p><code>rawr preview</code> opens one preview in a window. It takes the preview&rsquo;s name or <code>group/name</code>. Without a name it opens the last one you picked. The preview window reloads on save as <code>rawr run</code> does.</p>
+<p><code>rawr snapshot --update</code> renders every preview to a PNG under <code>snapshots/</code>. Commit those files. <code>rawr snapshot --check</code> renders them again and compares pixels. It exits with status 1 and names the first changed pixel when an image differs. The new images go under <code>target/rawr/snapshots/</code> so you can compare them.</p>
+<div class="block diag">
+  <div class="file"><b>rawr snapshot --check</b><span>exit 1</span></div>
+  <pre><code><span class="h">Snapshot check found 1 mismatch(es) across 1 artifact(s):</span>
+
+<span class="e">[pixel drift]</span> main::Clock::view#busy (native)
+  expected: snapshots/Clock-6c008925/view/busy/native.png
+  actual:   target/rawr/snapshots/Clock-6c008925/view/busy/native.png
+  first changed pixel (38, 31): baseline [255, 255, 255, 255], actual [137, 137, 137, 255]</code></pre>
+</div>
+
+<h2 id="rust-crates">Importing your own Rust crates</h2>
+<p>An app can <code>use</code> items from your own Rust crates without bindings. List each crate under <code>[rust.dependencies]</code> in <code>rawr.toml</code> at the project root. List <code>iced</code> there too. Use the revision that <code>rawr doctor</code> prints. Importing your own Rust crates currently works only on Apple Silicon Macs.</p>
+<div class="block">
+  <div class="file"><b>rawr.toml</b></div>
+  <pre><code data-lang="toml">[rust.dependencies]
+mathx = { path = "rust/mathx" }
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }</code></pre>
+</div>
+<div class="block">
+  <div class="file"><b>rust/mathx/src/lib.rs</b></div>
+  <pre><code data-lang="rust">pub fn double(x: i64) -&gt; i64 {
+    x * 2
+}</code></pre>
+</div>
+<div class="block">
+  <div class="file"><b>src/main.rawr</b></div>
+  <pre><code data-lang="rust">use iced::widget::{Widget, button, column, text};
+use mathx::double;
+
+pub fn main() -&gt; iced::Result {
+    iced::run(App::update, App::view)
+}
+
+#[derive(Default)]
+struct App {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Bump,
+}
+
+impl App {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Bump =&gt; self.value += 1,
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        column![
+            text(double(self.value)),
+            button("Bump").on_press(Message::Bump),
+        ]
+    }
+}</code></pre>
+</div>
+<p>A dependency is an inline table. It takes the keys Cargo uses: <code>path</code>, <code>git</code>, <code>rev</code>, <code>version</code>, <code>package</code>, <code>features</code> and <code>default-features</code>. Use <code>package</code> when the crate&rsquo;s name differs from the name you import, as in <code>gallery_ui = { package = "gallery-ui", path = "rust/gallery-ui" }</code>. The <code>[rust]</code> table can also set <code>cargo-authority</code> to a <code>Cargo.toml</code>. Rawr then uses that workspace and its lock file.</p>
+<p>Rawr reads only the items your code uses. A custom iced widget written in Rust is imported like any other item. The crates compile with the pinned nightly on the first run, so that run takes longer.</p>
+<p>A Rust type imported this way doesn&rsquo;t provide derives to Rawr types yet. A Rawr struct with a field of an imported type can&rsquo;t <code>#[derive(Default)]</code>.</p>
+<p>A <code>rawr.toml</code> can also list Rawr packages under <code>[dependencies]</code> with a <code>path</code>. The package&rsquo;s own <code>rawr.toml</code> gives its name under <code>[package]</code>.</p>
+
+<h2 id="diagnostics">Diagnostics</h2>
+<p><code>rawr check</code> checks an app without opening a window. Errors look like rustc&rsquo;s. Delete the <code>Decrement</code> arm from the counter and it reports the missing arm:</p>
+<div class="block diag">
+  <div class="file"><b>rawr check</b><span>exit 1</span></div>
+  <pre><code><span class="e">error[RAWR-RESOLVE-MATCH]</span><span class="h">: invalid match for `Message`: non-exhaustive patterns; missing Message::Decrement</span>
+ <span class="c">--&gt;</span> src/main.rawr:20:9-22:9
+ <span class="c">20 |</span>         match message {
+    <span class="c">|</span>         <span class="e">^^^^^^^^^^^^^^^</span>
+    <span class="c">| ...</span>
+ <span class="c">22 |</span>         }
+    <span class="c">|</span> <span class="e">^^^^^^^^</span></code></pre>
+</div>
+<p>The error code names the stage that failed and the kind of error. Codes will change while Rawr is pre-alpha.</p>
+
+<h2 id="available">What of iced is available</h2>
+<p>Most of iced&rsquo;s everyday widgets and modules work. A missing one fails the check with <code>unknown import</code>.</p>
+<h3 id="available-widgets">Available</h3>
+<ul>
+  <li>Layout: <code>column!</code>, <code>row!</code>, <code>Column</code>, <code>Row</code>, <code>container</code>, <code>center</code>, <code>stack</code>, <code>space</code>, <code>scrollable</code>, <code>responsive</code>, <code>pin</code> and <code>lazy</code>.</li>
+  <li>Controls: <code>button</code>, <code>checkbox</code>, <code>toggler</code>, <code>radio</code>, <code>slider</code>, <code>vertical_slider</code>, <code>pick_list</code>, <code>combo_box</code>, <code>text_input</code> and <code>progress_bar</code>.</li>
+  <li>Display: <code>text</code>, <code>image</code>, <code>svg</code>, <code>qr_code</code>, <code>rule</code> and <code>tooltip</code>.</li>
+  <li>Interaction: <code>mouse_area</code>, <code>opaque</code>, <code>hover</code>, <code>sensor</code>, <code>component</code> and <code>widget::operation</code>.</li>
+  <li>Modules: <code>iced::time</code>, <code>iced::keyboard</code>, <code>iced::event</code>, <code>iced::window</code>, <code>iced::mouse</code>, <code>iced::font</code>, <code>iced::border</code> and <code>iced::theme</code>. <code>Color</code>, <code>color!</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code> and the other alignment names work.</li>
+</ul>
+<p>An available widget may still miss some of its methods. For example, <code>Checkbox::icon</code> and <code>Svg::style</code> are not there yet.</p>
+<h3 id="not-available">Not available yet</h3>
+<ul>
+  <li><code>canvas</code> and <code>iced::advanced</code>. Without them you can&rsquo;t write a custom widget in Rawr. Write it in Rust and import it instead.</li>
+  <li><code>pane_grid</code>, <code>rich_text</code>, <code>text_editor</code>, <code>markdown</code>, <code>table</code>, <code>grid</code>, <code>float</code>, <code>keyed_column</code> and <code>selector</code>.</li>
+  <li><code>iced::gradient</code>, <code>Radians</code>, <code>Degrees</code>, <code>iced::clipboard</code>, <code>iced::task</code> streams and the <code>Function</code> trait.</li>
+  <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
+  <li><code>async fn</code> and <code>.await</code>.</li>
+</ul>
+<h3 id="examples">iced&rsquo;s own examples</h3>
+<p>iced master has 56 examples. Seven of them pass <code>rawr check</code> unchanged with their files renamed from <code>.rs</code> to <code>.rawr</code>: <code>combo_box</code>, <code>counter</code>, <code>exit</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>slider</code> and <code>tooltip</code>. The biggest gap is <code>canvas</code>, which 13 examples use. About 20 examples need crates outside iced such as <code>reqwest</code>, <code>tokio</code> or <code>rand</code>. Some need native features such as file dialogs. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/embedding">Previous<b>Embedding</b></a><a class="next" href="/docs/play">Next<b>?play and the playground</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+</body>
+</html>

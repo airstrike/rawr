@@ -101,6 +101,13 @@ impl Path {
         Ok(Self(segments.into_boxed_slice()))
     }
 
+    /// This path with its leading `from` segments replaced by `to`, when it
+    /// starts with them: a re-exported path's canonical spelling.
+    pub(crate) fn rebase(&self, from: &Self, to: &Self) -> Option<Self> {
+        let rest = self.0.strip_prefix(&*from.0)?;
+        Some(Self(to.0.iter().chain(rest).cloned().collect()))
+    }
+
     pub(crate) fn parent(&self) -> Option<Self> {
         (self.0.len() > 1).then(|| Self(self.0[..self.0.len() - 1].into()))
     }

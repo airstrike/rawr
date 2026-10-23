@@ -13,23 +13,48 @@ pub(super) type ParsedFile = (Box<[crate::item::Parsed]>, Vec<Span>);
 
 #[cfg(not(feature = "no_std"))]
 std::thread_local! {
-    /// The `fn` items declared inside function bodies of the file being
-    /// parsed. They join the file's items, as Rawr hoists them.
-    static NESTED: core::cell::RefCell<Vec<crate::item::Function>> =
+    /// The `fn` items and `use` imports declared inside function bodies of
+    /// the file being parsed. They join the file's items, as Rawr hoists them.
+    static NESTED: core::cell::RefCell<Vec<crate::item::Parsed>> =
         const { core::cell::RefCell::new(Vec::new()) };
+    /// The spans of the items a `#[cfg(..)]` left out of the file being
+    /// parsed, which the legacy script does not see either.
+    static SKIPPED: core::cell::RefCell<Vec<Span>> = const { core::cell::RefCell::new(Vec::new()) };
 }
 
 pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     #[cfg(not(feature = "no_std"))]
     let outer = NESTED.take();
+    #[cfg(not(feature = "no_std"))]
+    let outer_skipped = SKIPPED.take();
     let parsed = parse_items(engine, source);
     #[cfg(not(feature = "no_std"))]
     let nested = NESTED.replace(outer);
-    let (mut items, inner) = parsed?;
+    #[cfg(not(feature = "no_std"))]
+    let skipped = SKIPPED.replace(outer_skipped);
+    let (mut items, mut inner) = parsed?;
+    #[cfg(not(feature = "no_std"))]
+    inner.extend(skipped);
     #[cfg(not(feature = "no_std"))]
     if !nested.is_empty() {
         let mut all = items.into_vec();
-        all.extend(nested.into_iter().map(crate::item::Parsed::Function));
+        for item in nested {
+            // One import written in several bodies is hoisted once.
+            let key = |used: &crate::item::Use| {
+                used.bindings()
+                    .into_iter()
+                    .map(|(name, path)| (name.text, path))
+                    .collect::<Vec<_>>()
+            };
+            if let crate::item::Parsed::Use(used) = &item
+                && all.iter().any(|existing| {
+                    matches!(existing, crate::item::Parsed::Use(other) if key(other) == key(used))
+                })
+            {
+                continue;
+            }
+            all.push(item);
+        }
         items = all.into_boxed_slice();
     }
     Ok((items, inner))
@@ -77,9 +102,11 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                     .expect("peeked attribute marker must exist");
 
                 if matches!(input.peek(), Some((Token::LeftBracket, _))) {
-                    let item =
-                        parse_item_after_attribute_marker(input, &tokenizer_control, position)?;
-                    bind_previews(item, &mut items)?;
+                    if let Some(item) =
+                        parse_item_after_attribute_marker(input, &tokenizer_control, position)?
+                    {
+                        bind_previews(item, &mut items)?;
+                    }
                 }
             }
             #[cfg(not(feature = "no_function"))]
@@ -111,13 +138,31 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                     }
                 }
             }
+            (Token::Identifier(text), position)
+                if scan.delimiter_depth == 0 && text.as_str() == "unsafe" =>
+            {
+                return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+                    "unsafe".into(),
+                    "`unsafe` items are not supported in Rawr yet".into(),
+                ))
+                .into_err(*position));
+            }
+            (Token::Reserved(text), position)
+                if scan.delimiter_depth == 0 && text.as_str() == "async" =>
+            {
+                return Err(async_unsupported(*position));
+            }
+            (Token::Reserved(text), _) if scan.delimiter_depth == 0 && text.as_str() == "static" => {
+                let start = input.peek().expect("peeked static").1;
+                items.push(parse_static(input, &tokenizer_control, Box::default(), None, start)?);
+            }
             (token, _) if scan.delimiter_depth == 0 && begins_item(token) => {
-                items.push(parse_item(input, &tokenizer_control)?);
+                items.extend(parse_item(input, &tokenizer_control)?);
             }
             (Token::Identifier(name), _)
                 if scan.delimiter_depth == 0 && name.as_str() == "trait" =>
             {
-                items.push(parse_item(input, &tokenizer_control)?);
+                items.extend(parse_item(input, &tokenizer_control)?);
             }
             _ => {
                 scan.next(input, &tokenizer_control);
@@ -361,7 +406,7 @@ fn is_attribute_marker(token: &Token) -> bool {
 fn parse_item(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
-) -> ParseResult<crate::item::Parsed> {
+) -> ParseResult<Option<crate::item::Parsed>> {
     let (attributes, visibility, start) = parse_leading(input)?;
     parse_item_with_leading(input, tokenizer_control, attributes, visibility, start)
 }
@@ -370,7 +415,7 @@ fn parse_item_after_attribute_marker(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     hash: Position,
-) -> ParseResult<crate::item::Parsed> {
+) -> ParseResult<Option<crate::item::Parsed>> {
     let mut attributes = vec![parse_attribute_after_marker(input, hash)?];
 
     while input
@@ -380,12 +425,7 @@ fn parse_item_after_attribute_marker(
         attributes.push(parse_attribute(input)?);
     }
 
-    let visibility = if matches!(input.peek(), Some((Token::Pub, _))) {
-        let (_, position) = input.next().expect("peeked visibility must exist");
-        Some(token_span(position, "pub"))
-    } else {
-        None
-    };
+    let visibility = parse_item_visibility(input);
 
     parse_item_with_leading(
         input,
@@ -397,6 +437,22 @@ fn parse_item_after_attribute_marker(
 }
 
 fn parse_item_with_leading(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<Option<crate::item::Parsed>> {
+    if cfg_disabled(&attributes) {
+        let end = skip_item(input)?;
+        #[cfg(not(feature = "no_std"))]
+        SKIPPED.with_borrow_mut(|skipped| skipped.push(Span::new(start, end)));
+        return Ok(None);
+    }
+    parse_enabled_item(input, tokenizer_control, attributes, visibility, start).map(Some)
+}
+
+fn parse_enabled_item(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
@@ -449,11 +505,61 @@ fn parse_item_with_leading(
             )
             .map(crate::item::Parsed::Function)
         }
+        (Token::Reserved(text), _) if text.as_str() == "static" => {
+            parse_static(input, tokenizer_control, attributes, visibility, start)
+        }
+        (Token::Identifier(text), position) if text.as_str() == "unsafe" => {
+            Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+                "unsafe".into(),
+                "`unsafe` items are not supported in Rawr yet".into(),
+            ))
+            .into_err(*position))
+        }
         (_, position) => Err(PERR::MissingToken(
             "item".into(),
             "after item attributes or visibility".into(),
         )
         .into_err(*position)),
+    }
+}
+
+/// `static NAME: T = value;`: an immutable static is read as a `const`,
+/// whose value it always has. A `static mut` is not supported yet.
+fn parse_static(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<crate::item::Parsed> {
+    input.next();
+    if let Some((Token::Mut, position)) = input.peek() {
+        return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+            "static mut".into(),
+            "a `static mut` is not supported in Rawr yet; keep the value in your state".into(),
+        ))
+        .into_err(*position));
+    }
+    #[cfg(not(feature = "no_function"))]
+    {
+        let name = parse_name(input, "after 'static'")?;
+        parse_const_rest(
+            input,
+            tokenizer_control,
+            crate::item::Header {
+                attributes,
+                visibility,
+                span: Span::NONE,
+            },
+            start,
+            name,
+        )
+        .map(crate::item::Parsed::Function)
+    }
+    #[cfg(feature = "no_function")]
+    {
+        let _ = (tokenizer_control, attributes, visibility);
+        Err(PERR::MissingToken("item".into(), "after 'static'".into()).into_err(start))
     }
 }
 
@@ -465,8 +571,35 @@ fn parse_module(
 ) -> ParseResult<crate::item::Module> {
     expect(input, Token::Mod, "to start a file module")?;
     let name = parse_name(input, "after 'mod'")?;
-    let semicolon = expect(input, Token::SemiColon, "after a file module name")?;
-    let end = after(semicolon, 1);
+    // `mod name { .. }`: its items are read as a module of their own, so
+    // its tokens are passed over here.
+    let (end, inline) = if matches!(input.peek(), Some((Token::LeftBrace, _))) {
+        let (_, open) = input.next().expect("peeked brace must exist");
+        let mut depth = 1usize;
+        let close = loop {
+            match input.next().expect("token streams always end with EOF") {
+                (Token::LeftBrace | Token::MapStart, _) => depth += 1,
+                (Token::RightBrace, position) => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break position;
+                    }
+                }
+                (Token::EOF, position) => {
+                    return Err(PERR::MissingToken(
+                        Token::RightBrace.into(),
+                        "to close an inline module".into(),
+                    )
+                    .into_err(position));
+                }
+                _ => {}
+            }
+        };
+        (after(close, 1), Some(Span::new(after(open, 1), close)))
+    } else {
+        let semicolon = expect(input, Token::SemiColon, "after a file module name")?;
+        (after(semicolon, 1), None)
+    };
 
     Ok(crate::item::Module {
         header: crate::item::Header {
@@ -476,6 +609,7 @@ fn parse_module(
         },
         name,
         span: Span::new(start, end),
+        inline,
     })
 }
 
@@ -492,14 +626,105 @@ fn parse_leading(
         attributes.push(parse_attribute(input)?);
     }
 
-    let visibility = if matches!(input.peek(), Some((Token::Pub, _))) {
-        let (_, position) = input.next().expect("peeked visibility must exist");
-        Some(token_span(position, "pub"))
-    } else {
-        None
-    };
+    let visibility = parse_item_visibility(input);
 
     Ok((attributes.into_boxed_slice(), visibility, start))
+}
+
+/// An item's `pub`, `pub(crate)`, `pub(super)`, `pub(self)` or `pub(in path)`.
+/// Rawr reads a restricted visibility as `pub`. Rust's own check of the
+/// restriction is left to rustc.
+fn parse_item_visibility(input: &mut TokenStream) -> Option<Span> {
+    if !matches!(input.peek(), Some((Token::Pub, _))) {
+        return None;
+    }
+    let (_, position) = input.next().expect("peeked visibility must exist");
+    if matches!(input.peek(), Some((Token::LeftParen, _))) {
+        input.next();
+        while !matches!(
+            input.next(),
+            Some((Token::RightParen | Token::EOF, _)) | None
+        ) {}
+    }
+    Some(token_span(position, "pub"))
+}
+
+/// The attribute path a `#[cfg(..)]` that does not hold is read as.
+const CFG_DISABLED: &str = "cfg(false)";
+
+/// Whether an item's attributes leave it out of the build: a `#[cfg(..)]`
+/// that does not hold.
+fn cfg_disabled(attributes: &[crate::item::Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path.segments.len() == 1 && attribute.path.segments[0].name.text == CFG_DISABLED
+    })
+}
+
+/// One `cfg` predicate: `test` (false: Rawr builds as rustc does without
+/// `--test`), `debug_assertions` (true), `not(..)`, `all(..)`, `any(..)`;
+/// any other option, as `feature = "x"`, does not hold.
+fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
+    let name = parse_name(input, "in a `cfg` predicate")?;
+    match name.text.as_str() {
+        operator @ ("not" | "all" | "any") => {
+            expect(input, Token::LeftParen, "after a `cfg` operator")?;
+            let mut values = Vec::new();
+            while !matches!(input.peek(), Some((Token::RightParen, _))) {
+                values.push(parse_cfg_predicate(input)?);
+                if matches!(input.peek(), Some((Token::Comma, _))) {
+                    input.next();
+                }
+            }
+            expect(input, Token::RightParen, "to close a `cfg` operator")?;
+            Ok(match operator {
+                "not" => !values.first().copied().unwrap_or(false),
+                "all" => values.iter().all(|value| *value),
+                _ => values.iter().any(|value| *value),
+            })
+        }
+        name => {
+            if matches!(input.peek(), Some((Token::Equals, _))) {
+                input.next();
+                input.next();
+                return Ok(false);
+            }
+            Ok(name == "debug_assertions")
+        }
+    }
+}
+
+/// Pass over one item's tokens: up to a `;` or the `}` closing its body.
+/// Returns where the item ends.
+fn skip_item(input: &mut TokenStream) -> ParseResult<Position> {
+    let mut depth = 0usize;
+    loop {
+        match input.next().expect("token streams always end with EOF") {
+            (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
+                depth += 1;
+            }
+            (Token::RightParen | Token::RightBracket, _) => depth = depth.saturating_sub(1),
+            (Token::RightBrace, position) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some((Token::SemiColon, position)) = input.peek() {
+                        let end = after(*position, 1);
+                        input.next();
+                        return Ok(end);
+                    }
+                    return Ok(after(position, 1));
+                }
+            }
+            (Token::SemiColon, position) if depth == 0 => return Ok(after(position, 1)),
+            (Token::EOF, position) => {
+                return Err(PERR::MissingToken(
+                    Token::SemiColon.into(),
+                    "to end an item".into(),
+                )
+                .into_err(position));
+            }
+            _ => {}
+        }
+    }
 }
 
 fn parse_attribute(input: &mut TokenStream) -> ParseResult<crate::item::Attribute> {
@@ -541,6 +766,25 @@ fn parse_attribute_after_marker(
     }
 
     let mut arguments = Vec::new();
+
+    // `#[cfg(predicate)]`: Rawr builds as rustc does without `--test`.
+    if path.segments.len() == 1 && path.segments[0].name.text == "cfg" {
+        expect(input, Token::LeftParen, "after `cfg`")?;
+        let enabled = parse_cfg_predicate(input)?;
+        expect(input, Token::RightParen, "to close `cfg`")?;
+        let close = expect(input, Token::RightBracket, "to close an attribute")?;
+        let mut path = path;
+        if !enabled {
+            // A disabled item is passed over; its attribute says so.
+            path.segments[0].name.text = CFG_DISABLED.into();
+        }
+        return Ok(crate::item::Attribute {
+            path,
+            arguments: Box::default(),
+            span: Span::new(hash, after(close, 1)),
+            preview: None,
+        });
+    }
 
     if matches!(input.peek(), Some((Token::LeftParen, _))) {
         input.next();
@@ -875,6 +1119,7 @@ fn parse_use(
     }];
     let mut grouped = false;
     let mut glob = None;
+    let mut extra_uses = Vec::new();
 
     while matches!(input.peek(), Some((Token::DoubleColon, _))) {
         input.next();
@@ -920,61 +1165,55 @@ fn parse_use(
             prefix: path,
         }
     } else if grouped {
+        // `use a::{b, c::{d, e}, f::*}`: the paths that go on inside the
+        // group are imports of their own, hoisted beside this one.
         let open = expect(input, Token::LeftBrace, "to start an import group")?;
-        let mut members = Vec::new();
-
-        while !matches!(input.peek(), Some((Token::RightBrace, _))) {
-            let name = match input.peek() {
-                Some((Token::SelfValue, position)) => {
-                    let span = token_span(*position, "self");
-                    input.next();
-                    crate::item::Name {
-                        span,
-                        text: "self".into(),
-                    }
-                }
-                _ => parse_name(input, "inside an import group")?,
-            };
-            let alias = parse_use_alias(input)?;
-            members.push(crate::item::UseMember { name, alias });
-
-            match input.peek().expect("token streams always end with EOF") {
-                (Token::Comma, _) => {
-                    input.next();
-                    if matches!(input.peek(), Some((Token::RightBrace, _))) {
-                        break;
-                    }
-                }
-                (Token::RightBrace, _) => break,
-                (_, position) => {
-                    return Err(PERR::MissingToken(
-                        Token::Comma.into(),
-                        "between grouped imports".into(),
-                    )
-                    .into_err(*position));
-                }
-            }
-        }
-
-        let close = expect(input, Token::RightBrace, "to close an import group")?;
-        crate::item::UseTree::Group {
+        let mut nested = Vec::new();
+        let (members, close) = parse_use_members(input, &path.segments, &mut nested)?;
+        let group = crate::item::UseTree::Group {
             prefix: path,
             members: members.into_boxed_slice(),
             span: Span::new(open, after(close, 1)),
-        }
+        };
+        let mut trees = nested.into_iter();
+        let tree = if matches!(&group, crate::item::UseTree::Group { members, .. } if members.is_empty()) {
+            trees.next().unwrap_or(group)
+        } else {
+            group
+        };
+        extra_uses.extend(trees);
+        tree
     } else {
         crate::item::UseTree::Path(path, parse_use_alias(input)?)
     };
 
     let semicolon = expect(input, Token::SemiColon, "to terminate an import")?;
     let end = after(semicolon, 1);
+    let header = crate::item::Header {
+        attributes,
+        visibility,
+        span: Span::new(start, end),
+    };
+    #[cfg(not(feature = "no_std"))]
+    for tree in extra_uses {
+        let used = crate::item::Use {
+            header: header.clone(),
+            tree,
+            span: Span::new(start, end),
+        };
+        NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Use(used)));
+    }
+    #[cfg(feature = "no_std")]
+    if !extra_uses.is_empty() {
+        return Err(PERR::MissingToken(
+            Token::Comma.into(),
+            "between grouped imports".into(),
+        )
+        .into_err(start));
+    }
 
     Ok(crate::item::Use {
-        header: crate::item::Header {
-            attributes,
-            visibility,
-            span: Span::new(start, end),
-        },
+        header,
         tree,
         span: Span::new(start, end),
     })
@@ -1130,7 +1369,8 @@ fn skip_field_visibility(input: &mut TokenStream) -> ParseResult<Option<Position
         let (_, position) = input.next().expect("peeked `(` must exist");
         match input.peek() {
             Some((Token::SelfValue | Token::In, _)) => {}
-            Some((Token::Identifier(name), _)) if matches!(name.as_str(), "crate" | "super") => {}
+            Some((Token::Identifier(name) | Token::Reserved(name), _))
+                if matches!(name.as_str(), "crate" | "super") => {}
             _ => return Ok(Some(position)),
         }
         while !matches!(
@@ -1211,12 +1451,37 @@ fn parse_enum(
             fields = Some(names.into_boxed_slice());
         }
 
+        // `Green = 5`, `Low = -1`: an explicit discriminant.
+        let mut discriminant = None;
+        if matches!(input.peek(), Some((Token::Equals, _))) {
+            input.next();
+            let negative = matches!(input.peek(), Some((Token::Minus | Token::UnaryMinus, _)));
+            if negative {
+                input.next();
+            }
+            match input.next() {
+                Some((Token::IntegerConstant(value), position)) => {
+                    discriminant = Some(if negative { -value } else { value });
+                    end = after(position, value.to_string().len());
+                }
+                other => {
+                    let position = other.map_or(Position::NONE, |(_, position)| position);
+                    return Err(PERR::MissingToken(
+                        "an integer".into(),
+                        "as an enum discriminant".into(),
+                    )
+                    .into_err(position));
+                }
+            }
+        }
+
         variants.push(crate::item::Variant {
             span: Span::new(variant_name.span.start(), end),
             name: variant_name,
             payload: payload.into_boxed_slice(),
             fields,
             default,
+            discriminant,
         });
 
         consume_comma_or_end(input, Token::RightBrace, "between enum variants")?;
@@ -1288,6 +1553,10 @@ fn parse_impl(
         #[cfg(not(feature = "no_function"))]
         {
             let (attributes, visibility, function_start) = parse_leading(input)?;
+            if cfg_disabled(&attributes) {
+                skip_item(input)?;
+                continue;
+            }
 
             // `type Output = i64;`
             if is_associated_type(input) {
@@ -1323,7 +1592,11 @@ fn parse_impl(
             }
         }
 
-        let position = input.peek().expect("token streams always end with EOF").1;
+        let (token, position) = input.peek().expect("token streams always end with EOF");
+        if matches!(token, Token::Reserved(text) if text.as_str() == "async") {
+            return Err(async_unsupported(*position));
+        }
+        let position = *position;
         return Err(PERR::MissingToken(
             "fn".into(),
             "for an associated function inside an impl block".into(),
@@ -1358,9 +1631,20 @@ fn parse_impl(
             span: Span::new(start, header_end),
         },
         generics: generics.into_boxed_slice(),
+        // `impl Hash for T { fn hash<H: Hasher>(..) }`: Rawr hashes a value
+        // by its contents, so the impl only marks `T` as `Hash`.
+        functions: if trait_
+            .as_ref()
+            .and_then(|path| path.segments.last())
+            .is_some_and(|last| last.name.text == "Hash")
+            && hashes_as_rust(&functions)
+        {
+            Box::default()
+        } else {
+            functions.into_boxed_slice()
+        },
         trait_,
         owner,
-        functions: functions.into_boxed_slice(),
         associated: associated.into_boxed_slice(),
         span: Span::new(start, end),
     })
@@ -1466,6 +1750,10 @@ fn parse_trait(
         #[cfg(not(feature = "no_function"))]
         {
             let (attributes, visibility, function_start) = parse_leading(input)?;
+            if cfg_disabled(&attributes) {
+                skip_item(input)?;
+                continue;
+            }
             // `type Output;`
             if is_associated_type(input) {
                 input.next();
@@ -1839,6 +2127,36 @@ fn parse_generic_params(input: &mut TokenStream) -> ParseResult<Vec<crate::item:
 
 /// `Bound + Bound`: trait paths; lifetime bounds are erased. Associated
 /// type equalities (`Shape<Output = i64>`) go to `projections`.
+/// `async fn`, which Rawr does not run yet.
+fn async_unsupported(position: Position) -> crate::ParseError {
+    PERR::BadInput(crate::LexError::ImproperSymbol(
+        "async".into(),
+        "`async` functions are not supported in Rawr yet".into(),
+    ))
+    .into_err(position)
+}
+
+/// `use<'a, T>` among `impl Trait` bounds: Rust's precise capturing, which
+/// Rawr's types need no record of. Where it ends, when it was there.
+fn skip_precise_capture(input: &mut TokenStream) -> ParseResult<Option<Position>> {
+    if !matches!(input.peek(), Some((Token::Use, _))) {
+        return Ok(None);
+    }
+    input.next();
+    expect(input, Token::LessThan, "after `use` in a bound")?;
+    loop {
+        match input.next() {
+            Some((Token::GreaterThan, position)) => return Ok(Some(after(position, 1))),
+            Some((Token::EOF, position)) => {
+                return Err(PERR::MissingToken(">".into(), "to close `use<..>`".into())
+                    .into_err(position));
+            }
+            None => unreachable!("token streams always end with EOF"),
+            Some(_) => {}
+        }
+    }
+}
+
 fn parse_bounds(
     input: &mut TokenStream,
     projections: &mut Vec<(crate::item::Name, crate::item::Name, type_ref::Type)>,
@@ -1848,6 +2166,7 @@ fn parse_bounds(
     loop {
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             parse_lifetime(input)?;
+        } else if skip_precise_capture(input)?.is_some() {
         } else if let Some((Token::Identifier(name) | Token::Reserved(name), position)) =
             input.peek()
             && is_fn_trait(name)
@@ -2426,7 +2745,8 @@ fn parse_type_split(
             && is_fn_trait(name)
         {
             input.next();
-            return parse_fn_signature(input, start).map(type_ref::Type::Path);
+            let path = parse_fn_signature(input, start)?;
+            return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
         // `dyn Shape<Output = i64>`: each binding is the argument
         // `=Output<i64>` of the trait's segment.
@@ -2469,6 +2789,10 @@ fn parse_type_split(
             if matches!(input.peek(), Some((Token::Apostrophe, _))) {
                 let lifetime = parse_lifetime(input)?;
                 path.span = Span::new(start, lifetime.span.end());
+                continue;
+            }
+            if let Some(end) = skip_precise_capture(input)? {
+                path.span = Span::new(start, end);
                 continue;
             }
             let extra = parse_path_split(input, split)?;
@@ -2536,7 +2860,8 @@ fn parse_type_split(
     // function type; `impl Iterator<Item = T>`.
     match fn_type_start(input)? {
         Some(ImplStart::Fn(start)) => {
-            return parse_fn_signature(input, start).map(type_ref::Type::Path)
+            let path = parse_fn_signature(input, start)?;
+            return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
         Some(ImplStart::Iterator(name, start)) => {
             return parse_iterator_type(input, split, name, start)
@@ -2546,6 +2871,63 @@ fn parse_type_split(
     }
 
     parse_path_split(input, split).map(type_ref::Type::Path)
+}
+
+/// `impl Fn(A) -> B + 'a + Send`: the lifetimes and auto traits after a
+/// function type, which Rawr's one function type needs no record of.
+fn skip_fn_bounds(
+    input: &mut TokenStream,
+    split: &mut Option<Position>,
+    mut path: type_ref::Path,
+) -> ParseResult<type_ref::Path> {
+    let start = path.span.start();
+    while split.is_none() && matches!(input.peek(), Some((Token::Plus | Token::UnaryPlus, _))) {
+        input.next();
+        if matches!(input.peek(), Some((Token::Apostrophe, _))) {
+            let lifetime = parse_lifetime(input)?;
+            path.span = Span::new(start, lifetime.span.end());
+            continue;
+        }
+        if let Some(end) = skip_precise_capture(input)? {
+            path.span = Span::new(start, end);
+            continue;
+        }
+        let extra = parse_path_split(input, split)?;
+        if !is_auto_trait(&extra) {
+            return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+                "+".into(),
+                "only lifetimes and auto traits (`Send`, `Sync`, `Unpin`) can be added to a \
+                 function trait"
+                    .into(),
+            ))
+            .into_err(extra.span.start()));
+        }
+        path.span = Span::new(start, extra.span.end());
+    }
+    Ok(path)
+}
+
+/// Whether an `impl Hash` declares Rust's one method,
+/// `fn hash<H: Hasher>(&self, state: &mut H)`.
+fn hashes_as_rust(functions: &[crate::item::Function]) -> bool {
+    let [function] = functions else {
+        return false;
+    };
+    let [generic] = &*function.generics else {
+        return false;
+    };
+    let [parameter] = &*function.parameters else {
+        return false;
+    };
+    function.name.text == "hash"
+        && matches!(function.receiver, Some(crate::item::Receiver::Shared(_)))
+        && function.output.is_none()
+        && matches!(
+            &parameter.ty,
+            type_ref::Type::Reference { mutable: true, target, .. }
+                if matches!(&**target, type_ref::Type::Path(path)
+                    if matches!(&path.segments[..], [segment] if segment.name.text == generic.name.text))
+        )
 }
 
 /// What a type starting with `fn` or `impl` is.
@@ -2597,15 +2979,26 @@ fn parse_impl_bounds(
     split: &mut Option<Position>,
     start: Position,
 ) -> ParseResult<type_ref::Type> {
+    // `impl Shape<Output = i64>`: each equality is the argument
+    // `=Shape=Output<i64>` after the bounds, which a parameter's lifted
+    // generic takes as its projection.
     let mut projections = Vec::new();
     let bounds = parse_bounds(input, &mut projections, Some(split))?;
-    if let Some((_, name, _)) = projections.first() {
-        return Err(PERR::MissingToken(
-            "a trait without associated type equalities".into(),
-            "in `impl Trait` (write a generic `T: Trait<Name = U>`)".into(),
-        )
-        .into_err(name.span.start()));
-    }
+    let bindings = projections.into_iter().map(|(owner, name, ty)| {
+        let span = Span::new(name.span.start(), ty.span().end());
+        type_ref::Path {
+            segments: Box::new([type_ref::Segment {
+                name: crate::item::Name {
+                    text: format!("{}{}={}", type_ref::BINDING_PREFIX, owner.text, name.text).into(),
+                    span: owner.span,
+                },
+                arguments: Box::new([type_ref::Argument::Type(ty)]),
+                span,
+            }]),
+            span,
+        }
+    });
+    let bounds = bounds.into_iter().chain(bindings).collect::<Vec<_>>();
     let end = bounds.last().map_or(start, |bound| bound.span.end());
     let span = Span::new(start, end);
     Ok(type_ref::Type::Path(type_ref::Path {
@@ -2637,11 +3030,26 @@ fn lift_impl_parameters(
                 if matches!(&path.segments[..], [segment] if segment.name.text == type_ref::IMPL_TYPE) =>
             {
                 let segment = &path.segments[0];
+                let mut projections = Vec::new();
                 let bounds = segment
                     .arguments
                     .iter()
                     .filter_map(|argument| match argument {
                         type_ref::Argument::Type(type_ref::Type::Path(bound)) => {
+                            // `=Shape=Output<i64>`: a projection.
+                            if let [binding] = &bound.segments[..]
+                                && let Some(rest) =
+                                    binding.name.text.strip_prefix(type_ref::BINDING_PREFIX)
+                                && let Some((owner, name)) = rest.split_once('=')
+                                && let [type_ref::Argument::Type(ty)] = &binding.arguments[..]
+                            {
+                                let named = |text: &str| crate::item::Name {
+                                    text: text.into(),
+                                    span: binding.name.span,
+                                };
+                                projections.push((named(owner), named(name), ty.clone()));
+                                return None;
+                            }
                             Some(bound.clone())
                         }
                         _ => None,
@@ -2665,7 +3073,7 @@ fn lift_impl_parameters(
                 generics.push(crate::item::GenericParam {
                     name: name.clone(),
                     bounds,
-                    projections: Box::default(),
+                    projections: projections.into_boxed_slice(),
                     default: None,
                 });
                 *ty = type_ref::Type::Path(type_ref::Path {
@@ -2764,6 +3172,10 @@ fn parse_iterator_type(
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             let lifetime = parse_lifetime(input)?;
             span = Span::new(start, lifetime.span.end());
+            continue;
+        }
+        if let Some(end) = skip_precise_capture(input)? {
+            span = Span::new(start, end);
             continue;
         }
         let extra = parse_path_split(input, split)?;
@@ -3108,7 +3520,14 @@ fn parse_body_syntax(
             let position = *position;
             let function =
                 parse_function(input, tokenizer_control, Box::default(), None, position, false)?;
-            NESTED.with_borrow_mut(|nested| nested.push(function));
+            NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(function)));
+            continue;
+        }
+        #[cfg(not(feature = "no_std"))]
+        if boundary && let Some((Token::Use, position)) = input.peek() {
+            let position = *position;
+            let used = parse_use(input, Box::default(), None, position)?;
+            NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Use(used)));
             continue;
         }
         if let Some((token, _)) = input.peek() {
@@ -3414,7 +3833,121 @@ fn parse_use_alias(input: &mut TokenStream) -> ParseResult<Option<crate::item::N
         return Ok(None);
     }
     input.next();
+    // `use Trait as _;` brings the trait's methods in scope and binds no
+    // name: a name no code can write.
+    if let Some((Token::Underscore, position)) = input.peek() {
+        let position = *position;
+        input.next();
+        return Ok(Some(crate::item::Name {
+            span: token_span(position, "_"),
+            text: format!("_ {position:?}").into(),
+        }));
+    }
     parse_name(input, "after `as` in an import").map(Some)
+}
+
+/// The rest of an import tree inside a group after its member path
+/// `prefix`: `::name`, `::{..}` or `::*` again, then an optional `as`.
+/// Each complete path, group or glob joins `trees`.
+fn parse_use_subtree(
+    input: &mut TokenStream,
+    mut segments: Vec<type_ref::Segment>,
+    trees: &mut Vec<crate::item::UseTree>,
+) -> ParseResult<()> {
+    let path_of = |segments: &[type_ref::Segment]| {
+        let span = Span::new(
+            segments.first().expect("a path segment").span.start(),
+            segments.last().expect("a path segment").span.end(),
+        );
+        type_ref::Path {
+            segments: segments.to_vec().into_boxed_slice(),
+            span,
+        }
+    };
+    while matches!(input.peek(), Some((Token::DoubleColon, _))) {
+        input.next();
+        if let Some((Token::Multiply, position)) = input.peek() {
+            let star = token_span(*position, "*");
+            input.next();
+            let prefix = path_of(&segments);
+            trees.push(crate::item::UseTree::Glob {
+                span: Span::new(prefix.span.start(), star.end()),
+                prefix,
+            });
+            return Ok(());
+        }
+        if matches!(input.peek(), Some((Token::LeftBrace, _))) {
+            let open = expect(input, Token::LeftBrace, "to start an import group")?;
+            let (members, close) = parse_use_members(input, &segments, trees)?;
+            if !members.is_empty() {
+                trees.push(crate::item::UseTree::Group {
+                    prefix: path_of(&segments),
+                    members: members.into_boxed_slice(),
+                    span: Span::new(open, after(close, 1)),
+                });
+            }
+            return Ok(());
+        }
+        let name = parse_use_segment(input, "after '::' in an import path")?;
+        segments.push(type_ref::Segment {
+            span: name.span,
+            name,
+            arguments: Box::default(),
+        });
+    }
+    trees.push(crate::item::UseTree::Path(path_of(&segments), parse_use_alias(input)?));
+    Ok(())
+}
+
+/// The members of an import group after its `{`, through its `}`: each
+/// `name` or `self` (renamed or not) of `prefix`; a member path that goes on
+/// (`b::{c, d}`, `b::*`) joins `trees` whole.
+fn parse_use_members(
+    input: &mut TokenStream,
+    prefix: &[type_ref::Segment],
+    trees: &mut Vec<crate::item::UseTree>,
+) -> ParseResult<(Vec<crate::item::UseMember>, Position)> {
+    let mut members = Vec::new();
+    while !matches!(input.peek(), Some((Token::RightBrace, _))) {
+        let name = match input.peek() {
+            Some((Token::SelfValue, position)) => {
+                let span = token_span(*position, "self");
+                input.next();
+                crate::item::Name {
+                    span,
+                    text: "self".into(),
+                }
+            }
+            _ => parse_use_segment(input, "inside an import group")?,
+        };
+        if matches!(input.peek(), Some((Token::DoubleColon, _))) {
+            let mut segments = prefix.to_vec();
+            segments.push(type_ref::Segment {
+                span: name.span,
+                name,
+                arguments: Box::default(),
+            });
+            parse_use_subtree(input, segments, trees)?;
+        } else {
+            let alias = parse_use_alias(input)?;
+            members.push(crate::item::UseMember { name, alias });
+        }
+        match input.peek().expect("token streams always end with EOF") {
+            (Token::Comma, _) => {
+                input.next();
+            }
+            (Token::RightBrace, _) => break,
+            (_, position) => {
+                return Err(PERR::MissingToken(
+                    Token::Comma.into(),
+                    "between grouped imports".into(),
+                )
+                .into_err(*position));
+            }
+        }
+    }
+    let close = expect(input, Token::RightBrace, "to close an import group")?;
+    Ok((members, close))
 }
 
 /// An import path segment: a name, or `super` for the parent module.

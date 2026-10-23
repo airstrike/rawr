@@ -94,6 +94,8 @@ pub struct Instantiation<'a> {
 enum Namespace {
     Value,
     Macro,
+    /// The reader of a tuple variant's field, beside its constructor.
+    Reader,
 }
 
 struct Plain<F>(F);
@@ -897,6 +899,18 @@ impl Builder {
         )
     }
 
+    /// Bind the reader of a tuple variant's field that shares its path
+    /// with the variant's constructor: `Key::Named` in a pattern.
+    pub fn bind_variant_reader(
+        &mut self,
+        path: impl Into<ImmutableString>,
+        callback: impl Fn(&mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>
+            + SendSync
+            + 'static,
+    ) -> Result<&mut Self, Error> {
+        self.bind_callback(path.into(), Namespace::Reader, Shared::new(Plain(callback)))
+    }
+
     /// Bind the macro a path names, beside any function of the same name.
     pub fn bind_macro(
         &mut self,
@@ -936,13 +950,26 @@ impl Builder {
                 facade: self.definition.root().into(),
                 item: path.clone(),
             })?;
-        // A path in one namespace binds whatever it names; a path in both
+        // A path in one namespace binds whatever it names; a path in several
         // binds the namespace asked for.
-        let mixed = items.iter().any(|item| item.kind().is_macro())
-            && items.iter().any(|item| !item.kind().is_macro());
+        let constructor = items
+            .iter()
+            .any(|item| item.kind() == host::item::Kind::AssociatedFunction);
+        let namespace_of = |item: &host::item::Definition| {
+            if item.kind().is_macro() {
+                Namespace::Macro
+            } else if constructor && item.kind() == host::item::Kind::Method {
+                Namespace::Reader
+            } else {
+                Namespace::Value
+            }
+        };
+        let mixed = items
+            .iter()
+            .any(|item| namespace_of(item) != namespace_of(&items[0]));
         let fingerprints = items
             .iter()
-            .filter(|item| !mixed || item.kind().is_macro() == (namespace == Namespace::Macro))
+            .filter(|item| !mixed || namespace_of(item) == namespace)
             .map(host::item::Definition::fingerprint)
             .collect::<Vec<_>>();
         if fingerprints.is_empty() {

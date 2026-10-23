@@ -23,6 +23,163 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     super::media::bind(builder);
     bind_operations(builder);
     bind_keyboard(builder);
+    bind_events(builder);
+}
+
+/// The readers that match `iced::Event`, `window::Event`, `mouse::Event`,
+/// `touch::Event` and `Key`'s tuple variants as facade enums.
+fn bind_events(builder: &mut host::runtime::Builder) {
+    use iced::{keyboard, mouse, touch, window, Event};
+
+    fn read<T: Clone + Send + Sync + 'static>(
+        builder: &mut host::runtime::Builder,
+        path: &'static str,
+        read: fn(&T) -> Dynamic,
+    ) {
+        builder
+            .bind(path, move |args| read_value(path, args, read))
+            .expect("the iced facade must retain every event reader");
+    }
+    fn read_value<T: Clone + Send + Sync + 'static>(
+        path: &'static str,
+        args: &mut [&mut Dynamic],
+        read: fn(&T) -> Dynamic,
+    ) -> Result<Dynamic, Box<EvalAltResult>> {
+        let [value] = args else {
+            return Err(arity(path, 1, args.len()));
+        };
+        let value = value
+            .read_lock::<T>()
+            .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+        Ok(read(&value))
+    }
+    read::<Event>(builder, "iced::Event::Keyboard", |event| match event {
+        Event::Keyboard(event) => rawr::option::some(Dynamic::from(event.clone())),
+        _ => rawr::option::none(),
+    });
+    read::<Event>(builder, "iced::Event::Mouse", |event| match event {
+        Event::Mouse(event) => rawr::option::some(Dynamic::from(*event)),
+        _ => rawr::option::none(),
+    });
+    read::<Event>(builder, "iced::Event::Window", |event| match event {
+        Event::Window(event) => rawr::option::some(Dynamic::from(event.clone())),
+        _ => rawr::option::none(),
+    });
+    read::<Event>(builder, "iced::Event::Touch", |event| match event {
+        Event::Touch(event) => rawr::option::some(Dynamic::from(*event)),
+        _ => rawr::option::none(),
+    });
+    read::<Event>(builder, "iced::Event::InputMethod", |event| {
+        Dynamic::from(matches!(event, Event::InputMethod(_)))
+    });
+    read::<Event>(builder, "iced::Event::Clipboard", |event| {
+        Dynamic::from(matches!(event, Event::Clipboard(_)))
+    });
+    read::<Event>(builder, "iced::Event::Waken", |event| {
+        Dynamic::from(matches!(event, Event::Waken))
+    });
+
+    macro_rules! test {
+        ($ty:ty, $path:literal, $pattern:pat) => {
+            read::<$ty>(builder, $path, |event| Dynamic::from(matches!(event, $pattern)));
+        };
+    }
+    test!(window::Event, "iced::window::Event::Opened", window::Event::Opened { .. });
+    test!(window::Event, "iced::window::Event::Closed", window::Event::Closed);
+    test!(window::Event, "iced::window::Event::CloseRequested", window::Event::CloseRequested);
+    test!(window::Event, "iced::window::Event::Focused", window::Event::Focused);
+    test!(window::Event, "iced::window::Event::Unfocused", window::Event::Unfocused);
+    test!(window::Event, "iced::window::Event::FileHovered", window::Event::FileHovered(_));
+    test!(window::Event, "iced::window::Event::FileDropped", window::Event::FileDropped(_));
+    test!(window::Event, "iced::window::Event::FilesHoveredLeft", window::Event::FilesHoveredLeft);
+    read::<window::Event>(builder, "iced::window::Event::Moved", |event| match event {
+        window::Event::Moved(point) => rawr::option::some(Dynamic::from(*point)),
+        _ => rawr::option::none(),
+    });
+    read::<window::Event>(builder, "iced::window::Event::Resized", |event| match event {
+        window::Event::Resized(size) => rawr::option::some(Dynamic::from(*size)),
+        _ => rawr::option::none(),
+    });
+    read::<window::Event>(builder, "iced::window::Event::Rescaled", |event| match event {
+        window::Event::Rescaled(scale) => rawr::option::some(Dynamic::from(f64::from(*scale))),
+        _ => rawr::option::none(),
+    });
+    read::<window::Event>(builder, "iced::window::Event::RedrawRequested", |event| match event {
+        window::Event::RedrawRequested(now) => rawr::option::some(Dynamic::from(marker::Instant(*now))),
+        _ => rawr::option::none(),
+    });
+    read::<window::Event>(builder, "iced::window::Event::position", |event| match event {
+        window::Event::Opened { position, .. } => {
+            position.map_or_else(rawr::option::none, |point| rawr::option::some(Dynamic::from(point)))
+        }
+        _ => rawr::option::none(),
+    });
+    read::<window::Event>(builder, "iced::window::Event::size", |event| match event {
+        window::Event::Opened { size, .. } => Dynamic::from(*size),
+        _ => Dynamic::from(iced::Size::ZERO),
+    });
+    read::<window::Event>(builder, "iced::window::Event::scale_factor", |event| match event {
+        window::Event::Opened { scale_factor, .. } => Dynamic::from(f64::from(*scale_factor)),
+        _ => Dynamic::from(1.0_f64),
+    });
+
+    test!(mouse::Event, "iced::mouse::Event::CursorEntered", mouse::Event::CursorEntered);
+    test!(mouse::Event, "iced::mouse::Event::CursorLeft", mouse::Event::CursorLeft);
+    test!(mouse::Event, "iced::mouse::Event::CursorMoved", mouse::Event::CursorMoved { .. });
+    test!(mouse::Event, "iced::mouse::Event::WheelScrolled", mouse::Event::WheelScrolled { .. });
+    read::<mouse::Event>(builder, "iced::mouse::Event::ButtonPressed", |event| match event {
+        mouse::Event::ButtonPressed(button) => rawr::option::some(Dynamic::from(*button)),
+        _ => rawr::option::none(),
+    });
+    read::<mouse::Event>(builder, "iced::mouse::Event::ButtonReleased", |event| match event {
+        mouse::Event::ButtonReleased(button) => rawr::option::some(Dynamic::from(*button)),
+        _ => rawr::option::none(),
+    });
+    read::<mouse::Event>(builder, "iced::mouse::Event::position", |event| match event {
+        mouse::Event::CursorMoved { position } => Dynamic::from(*position),
+        _ => Dynamic::from(iced::Point::ORIGIN),
+    });
+    for (name, button) in [
+        ("Left", mouse::Button::Left),
+        ("Right", mouse::Button::Right),
+        ("Middle", mouse::Button::Middle),
+        ("Back", mouse::Button::Back),
+        ("Forward", mouse::Button::Forward),
+    ] {
+        builder
+            .bind(format!("iced::mouse::Button::{name}"), move |_| Ok(Dynamic::from(button)))
+            .expect("the iced facade must retain every mouse::Button");
+    }
+
+    test!(touch::Event, "iced::touch::Event::FingerPressed", touch::Event::FingerPressed { .. });
+    test!(touch::Event, "iced::touch::Event::FingerMoved", touch::Event::FingerMoved { .. });
+    test!(touch::Event, "iced::touch::Event::FingerLifted", touch::Event::FingerLifted { .. });
+    test!(touch::Event, "iced::touch::Event::FingerLost", touch::Event::FingerLost { .. });
+    read::<touch::Event>(builder, "iced::touch::Event::position", |event| match event {
+        touch::Event::FingerPressed { position, .. }
+        | touch::Event::FingerMoved { position, .. }
+        | touch::Event::FingerLifted { position, .. }
+        | touch::Event::FingerLost { position, .. } => Dynamic::from(*position),
+    });
+
+    builder
+        .bind_variant_reader("iced::keyboard::Key::Named", |args| {
+            read_value::<keyboard::Key>("iced::keyboard::Key::Named", args, |key| match key {
+                keyboard::Key::Named(named) => rawr::option::some(Dynamic::from(*named)),
+                _ => rawr::option::none(),
+            })
+        })
+        .expect("the iced facade must retain Key::Named's reader");
+    builder
+        .bind_variant_reader("iced::keyboard::Key::Character", |args| {
+            read_value::<keyboard::Key>("iced::keyboard::Key::Character", args, |key| match key {
+                keyboard::Key::Character(text) => {
+                    rawr::option::some(Dynamic::from(text.to_string()))
+                }
+                _ => rawr::option::none(),
+            })
+        })
+        .expect("the iced facade must retain Key::Character's reader");
 }
 
 /// `keyboard::Event`'s variants and fields, `Key`, `key::Named` and
@@ -633,6 +790,128 @@ fn bind_values(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Duration reader");
     }
+    // `Duration`'s operators and sub-second readers, and `Instant`'s.
+    fn pair<A: Clone + Send + Sync + 'static, B: Clone + Send + Sync + 'static>(
+        path: &str,
+        args: &mut [&mut Dynamic],
+    ) -> Result<Option<(A, B)>, Box<EvalAltResult>> {
+        let [lhs, rhs] = args else {
+            return Err(arity(path, 2, args.len()));
+        };
+        Ok(lhs
+            .read_lock::<A>()
+            .map(|lhs| lhs.clone())
+            .zip(rhs.read_lock::<B>().map(|rhs| rhs.clone())))
+    }
+    for (name, apply) in [
+        ("add", Duration::checked_add as fn(Duration, Duration) -> Option<Duration>),
+        ("sub", Duration::checked_sub),
+    ] {
+        let path = format!("iced::time::Duration::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let (lhs, rhs) = pair::<Duration, Duration>(&path, args)?
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                apply(lhs, rhs).map(Dynamic::from).ok_or_else(|| {
+                    runtime_error(format!("overflow when computing `Duration::{name}`"))
+                })
+            })
+            .expect("the iced facade must retain every Duration operator");
+    }
+    for (name, apply) in [
+        ("mul", Duration::checked_mul as fn(Duration, u32) -> Option<Duration>),
+        ("div", Duration::checked_div),
+    ] {
+        let path = format!("iced::time::Duration::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let [lhs, rhs] = args else {
+                    return Err(arity(&path, 2, args.len()));
+                };
+                let duration = lhs
+                    .read_lock::<Duration>()
+                    .map(|duration| *duration)
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                let factor = rhs
+                    .as_int()
+                    .ok()
+                    .and_then(|factor| u32::try_from(factor).ok())
+                    .ok_or_else(|| runtime_error(format!("`Duration::{name}` expects a `u32`")))?;
+                apply(duration, factor).map(Dynamic::from).ok_or_else(|| {
+                    runtime_error(format!("overflow or division by zero in `Duration::{name}`"))
+                })
+            })
+            .expect("the iced facade must retain every Duration operator");
+    }
+    for (name, read) in [
+        ("subsec_millis", (|d: &Duration| Dynamic::from(i64::from(d.subsec_millis()))) as fn(&Duration) -> Dynamic),
+        ("subsec_micros", |d| Dynamic::from(i64::from(d.subsec_micros()))),
+        ("subsec_nanos", |d| Dynamic::from(i64::from(d.subsec_nanos()))),
+        ("is_zero", |d| Dynamic::from(d.is_zero())),
+    ] {
+        let path = format!("iced::time::Duration::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let [value] = args else {
+                    return Err(arity(&path, 1, args.len()));
+                };
+                let duration = value
+                    .read_lock::<Duration>()
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                Ok(read(&duration))
+            })
+            .expect("the iced facade must retain every Duration reader");
+    }
+    builder
+        .bind("iced::time::Duration::ZERO", |_| Ok(Dynamic::from(Duration::ZERO)))
+        .expect("the iced facade must retain Duration::ZERO");
+    builder
+        .bind("iced::time::Instant::now", |_| Ok(Dynamic::from(marker::Instant::now())))
+        .expect("the iced facade must retain Instant::now");
+    builder
+        .bind("iced::time::Instant::elapsed", |args| {
+            let [value] = args else {
+                return Err(arity("Instant::elapsed", 1, args.len()));
+            };
+            let instant = value
+                .read_lock::<marker::Instant>()
+                .map(|instant| instant.0)
+                .ok_or_else(|| runtime_error("`Instant::elapsed` read a value of another type".to_string()))?;
+            Ok(Dynamic::from(instant.elapsed()))
+        })
+        .expect("the iced facade must retain Instant::elapsed");
+    builder
+        .bind("iced::time::Instant::duration_since", |args| {
+            let (lhs, rhs) = pair::<marker::Instant, marker::Instant>("Instant::duration_since", args)?
+                .ok_or_else(|| runtime_error("`Instant::duration_since` read a value of another type".to_string()))?;
+            Ok(Dynamic::from(lhs.0.saturating_duration_since(rhs.0)))
+        })
+        .expect("the iced facade must retain Instant::duration_since");
+    // `a - b` of two instants is a `Duration`; `instant ± duration` an
+    // `Instant`.
+    builder
+        .bind("iced::time::Instant::sub", |args| {
+            if let Some((lhs, rhs)) = pair::<marker::Instant, marker::Instant>("Instant::sub", args)? {
+                return Ok(Dynamic::from(lhs.0.saturating_duration_since(rhs.0)));
+            }
+            let (lhs, rhs) = pair::<marker::Instant, Duration>("Instant::sub", args)?
+                .ok_or_else(|| runtime_error("`Instant::sub` read a value of another type".to_string()))?;
+            lhs.0
+                .checked_sub(rhs)
+                .map(|instant| Dynamic::from(marker::Instant(instant)))
+                .ok_or_else(|| runtime_error("overflow when subtracting a duration from an instant".to_string()))
+        })
+        .expect("the iced facade must retain Instant::sub");
+    builder
+        .bind("iced::time::Instant::add", |args| {
+            let (lhs, rhs) = pair::<marker::Instant, Duration>("Instant::add", args)?
+                .ok_or_else(|| runtime_error("`Instant::add` read a value of another type".to_string()))?;
+            lhs.0
+                .checked_add(rhs)
+                .map(|instant| Dynamic::from(marker::Instant(instant)))
+                .ok_or_else(|| runtime_error("overflow when adding a duration to an instant".to_string()))
+        })
+        .expect("the iced facade must retain Instant::add");
     builder
         .bind_macro("iced::color", |args| {
             let channels = args
@@ -699,6 +978,72 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
     reader::<iced::Rectangle>(builder, "iced::Rectangle::y", |bounds| bounds.y);
     reader::<iced::Rectangle>(builder, "iced::Rectangle::width", |bounds| bounds.width);
     reader::<iced::Rectangle>(builder, "iced::Rectangle::height", |bounds| bounds.height);
+    // A channel read (`color.a`), or set by a literal (`Color { a: 0.8, ..base }`).
+    fn channel<'a>(color: &'a mut iced::Color, name: &str) -> &'a mut f32 {
+        match name {
+            "r" => &mut color.r,
+            "g" => &mut color.g,
+            "b" => &mut color.b,
+            _ => &mut color.a,
+        }
+    }
+    for name in ["r", "g", "b", "a"] {
+        let path = format!("iced::Color::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let mut color = args
+                    .first()
+                    .and_then(|color| color.read_lock::<iced::Color>().map(|color| *color))
+                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                match args {
+                    [_] => Ok(Dynamic::from(f64::from(*channel(&mut color, name)))),
+                    [_, value] => {
+                        let value = value.as_float().map_err(|actual| {
+                            runtime_error(format!("`{path}` expects a float, found `{actual}`"))
+                        })?;
+                        *channel(&mut color, name) = value as f32;
+                        Ok(Dynamic::from(color))
+                    }
+                    _ => Err(arity(&path, 2, args.len())),
+                }
+            })
+            .expect("the iced facade must retain every Color channel");
+    }
+    builder
+        .bind("iced::Color::scale_alpha", |args| {
+            let [color, factor] = args else {
+                return Err(arity("Color::scale_alpha", 2, args.len()));
+            };
+            let color = color
+                .read_lock::<iced::Color>()
+                .map(|color| *color)
+                .ok_or_else(|| runtime_error("`Color::scale_alpha` read a value of another type".into()))?;
+            let factor = factor
+                .as_float()
+                .map_err(|actual| runtime_error(format!("`Color::scale_alpha` expects a float, found `{actual}`")))?;
+            Ok(Dynamic::from(color.scale_alpha(factor as f32)))
+        })
+        .expect("the iced facade must retain Color::scale_alpha");
+    builder
+        .bind("iced::Color::inverse", |args| {
+            let [color] = args else {
+                return Err(arity("Color::inverse", 1, args.len()));
+            };
+            let color = color
+                .read_lock::<iced::Color>()
+                .map(|color| *color)
+                .ok_or_else(|| runtime_error("`Color::inverse` read a value of another type".into()))?;
+            Ok(Dynamic::from(color.inverse()))
+        })
+        .expect("the iced facade must retain Color::inverse");
+    builder
+        .bind("iced::time::Duration::default", |args| {
+            if !args.is_empty() {
+                return Err(arity("Duration::default", 0, args.len()));
+            }
+            Ok(Dynamic::from(std::time::Duration::default()))
+        })
+        .expect("the iced facade must retain Duration::default");
 }
 
 fn bind_font(builder: &mut host::runtime::Builder) {

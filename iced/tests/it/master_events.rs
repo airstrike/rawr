@@ -150,3 +150,109 @@ fn master_keyboard_and_event_subscriptions_deliver_messages() {
     let mut simulator = iced_test::simulator(view);
     simulator.find("3").unwrap();
 }
+
+const PATTERNS: &str = r#"
+use iced::event::{self, Event};
+use iced::keyboard;
+use iced::keyboard::key;
+use iced::widget::text;
+use iced::window;
+use iced::{Subscription, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view)
+        .subscription(State::subscription)
+        .run()
+}
+
+#[derive(Default)]
+struct State {
+    tabs: i64,
+    named: i64,
+    resets: i64,
+    chars: String,
+    closes: i64,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Event(Event),
+    Key(keyboard::Event),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Event(Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(key::Named::Tab),
+                modifiers,
+                ..
+            })) => {
+                if !modifiers.shift() {
+                    self.tabs += 1;
+                }
+            }
+            Message::Event(event) => {
+                if let Event::Window(window::Event::CloseRequested) = event {
+                    self.closes += 1;
+                }
+            }
+            Message::Key(event) => {
+                let keyboard::Event::KeyPressed { modified_key, .. } = event else {
+                    return;
+                };
+                match modified_key.as_ref() {
+                    keyboard::Key::Named(key::Named::Space) => self.named += 1,
+                    keyboard::Key::Character("r") => self.resets += 1,
+                    keyboard::Key::Character(c) => self.chars = format!("{}{}", self.chars, c),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        text(format!("{} {} {} {} {}", self.tabs, self.named, self.chars, self.resets, self.closes))
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        Subscription::batch(vec![
+            event::listen().map(Message::Event),
+            keyboard::listen().map(Message::Key),
+        ])
+    }
+}
+"#;
+
+#[test]
+fn master_event_patterns_match_library_enums() {
+    let adapter = boot(PATTERNS);
+    let application = program::Application::from_adapter(adapter);
+    let (mut state, _) = <program::Application as iced::Program>::boot(&application);
+    let subscription = <program::Application as iced::Program>::subscription(&application, &state);
+    let recipes = iced::advanced::subscription::into_recipes(subscription);
+    let events = || {
+        Box::pin(iced::futures::stream::iter([
+            press(iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab)),
+            press(iced::keyboard::Key::Named(iced::keyboard::key::Named::Space)),
+            press(iced::keyboard::Key::Character("r".into())),
+            press(iced::keyboard::Key::Character("x".into())),
+        ])) as iced::advanced::subscription::EventStream
+    };
+    let mut messages: Vec<runtime::Message> = Vec::new();
+    for recipe in recipes {
+        let stream = recipe.stream(events());
+        messages.extend(iced::futures::executor::block_on(stream.collect::<Vec<_>>()));
+    }
+    assert_eq!(messages.len(), 8);
+    for message in messages {
+        let _ = <program::Application as iced::Program>::update(&application, &mut state, message);
+    }
+    let view = <program::Application as iced::Program>::view(
+        &application,
+        &state,
+        iced::window::Id::unique(),
+    );
+    let mut simulator = iced_test::simulator(view);
+    simulator.find("1 1 x 1 0").unwrap();
+}

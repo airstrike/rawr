@@ -35,7 +35,7 @@ const TEXT_ENDPOINT_DISPOSITION: &[u8] =
 const COMPATIBILITY_PROJECTIONS: usize = 28;
 const COMPATIBILITY_ABI: u32 = 16;
 const COMPATIBILITY_DIGEST: [u8; 16] = [
-    63, 227, 61, 40, 201, 23, 55, 76, 36, 1, 125, 18, 247, 17, 158, 85,
+    31, 92, 189, 182, 143, 63, 84, 178, 139, 77, 199, 248, 77, 91, 219, 191,
 ];
 
 /// One exact target-argument substitution sealed into a generated projection table.
@@ -2813,14 +2813,20 @@ impl<'proof> Decoration<'proof> {
             return false;
         }
 
+        // Five `text(..)` forms; `text!` beside them is a macro.
         let text_item_count = semantic
             .items()
-            .filter(|item| item.path() == "iced::widget::text")
+            .filter(|item| {
+                item.path() == "iced::widget::text" && item.kind() != host::item::Kind::IntrinsicMacro
+            })
             .count();
         if text_item_count != 5
             || !semantic
                 .items()
-                .filter(|item| item.path() == "iced::widget::text")
+                .filter(|item| {
+                    item.path() == "iced::widget::text"
+                        && item.kind() != host::item::Kind::IntrinsicMacro
+                })
                 .all(|item| item.kind() == host::item::Kind::Function && item.receiver().is_none())
         {
             return false;
@@ -3794,7 +3800,7 @@ pub fn view() -> Element<Message> { label("generated") }
 "#,
             )
             .expect_err("a module without an endpoint remains an unresolved call");
-        assert!(absent.to_string().contains("<dynamic>"));
+        assert!(absent.to_string().contains("nknown function 'label'"), "{absent}");
 
         let wrong_arity =
             engine.compile(r#"use iced::widget::text; pub fn invalid() { text("one", "two") }"#);

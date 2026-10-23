@@ -268,7 +268,7 @@ fn language_print_macros_format_like_format() {
     );
     rejected(r#"pub fn run() -> i64 { println!("{}", 1, 2); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { print!("{}"); 0 } run()"#);
-    rejected(r#"pub fn run() -> i64 { eprintln!("{:+}", "x"); 0 } run()"#);
+    rejected(r#"pub fn run() -> i64 { eprintln!("{:x}", "x"); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { print!(); 0 } run()"#);
     rejected(r#"pub fn run() -> i64 { let x: i64 = println!("a"); x } run()"#);
 }
@@ -306,7 +306,7 @@ fn language_format_specs() {
             n, -n, n, n, n, n, s, s, n, s, 'c', true
         )
     );
-    rejected(r#"pub fn run() -> i64 { let s = format!("{:+}", "x"); 0 } run()"#);
+    rejected(r#"pub fn run() -> i64 { let s = format!("{:e}", "x"); 0 } run()"#);
 }
 
 #[test]
@@ -3934,7 +3934,7 @@ fn language_format_floats_radixes_and_pretty_debug() {
          Dot(\n    Point {\n        x: 1,\n        label: \"{a}, (b)\",\n    },\n)"
     );
     rejected(r#"pub fn run() -> i64 { let s = format!("{:x}", 1.5); 0 } run()"#);
-    rejected(r#"pub fn run() -> i64 { let s = format!("{:+}", "a"); 0 } run()"#);
+    rejected(r#"pub fn run() -> i64 { let s = format!("{:z}", 1); 0 } run()"#);
 }
 
 #[test]
@@ -6501,4 +6501,598 @@ fn language_every_accepted_float_method_runs() {
             }
         }
     }
+}
+
+/// Every placeholder of std::fmt's grammar prints Rust's text: the table
+/// is checked against the same program built by cargo.
+#[test]
+fn language_format_specs_match_rust() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+pub fn run() -> String {
+    let digits: usize = 5;
+    let width: usize = 8;
+    let x: f64 = 3.14159;
+    let n: i32 = 255;
+    let neg: i32 = -42;
+    let big: u64 = u64::MAX;
+    let s = "hello";
+    let c = 'z';
+    let b = true;
+    let v = vec![1, 2, 3];
+    let f: f32 = 1.5;
+    let name = "Rawr";
+    let mut out = String::new();
+    out = out + &format!("{:0digits$}", 1, digits = 5) + "\n";
+    out = out + &format!("{:*^10}", "mid") + "\n";
+    out = out + &format!("{:<8}|", "ab") + "\n";
+    out = out + &format!("{:>8}|", "ab") + "\n";
+    out = out + &format!("{:^9}|", "ab") + "\n";
+    out = out + &format!("{:+}", 5) + "\n";
+    out = out + &format!("{:+}", -5) + "\n";
+    out = out + &format!("{:+.2}", x) + "\n";
+    out = out + &format!("{:#x}", n) + "\n";
+    out = out + &format!("{:#X}", n) + "\n";
+    out = out + &format!("{:#o}", n) + "\n";
+    out = out + &format!("{:#b}", 5u8) + "\n";
+    out = out + &format!("{:x}", neg) + "\n";
+    out = out + &format!("{:08.3}", x) + "\n";
+    out = out + &format!("{:#010x}", n) + "\n";
+    out = out + &format!("{:1$}|", 7, 4) + "\n";
+    out = out + &format!("{:width$}|", 7) + "\n";
+    out = out + &format!("{:>width$.prec$}", x, prec = 2) + "\n";
+    out = out + &format!("{:.*}", 3, x) + "\n";
+    out = out + &format!("{:.1$}", x, 1) + "\n";
+    out = out + &format!("{0} {1} {0}", "a", "b") + "\n";
+    out = out + &format!("{1:?} {0}", "a", "b") + "\n";
+    out = out + &format!("{name} {digits}") + "\n";
+    out = out + &format!("{x:>10.2}") + "\n";
+    out = out + &format!("{:e}", 1234.5) + "\n";
+    out = out + &format!("{:E}", 0.00012) + "\n";
+    out = out + &format!("{:.2e}", 1234.5) + "\n";
+    out = out + &format!("{:e}", 1500) + "\n";
+    out = out + &format!("{:x?}", 255) + "\n";
+    out = out + &format!("{:X?}", 255) + "\n";
+    out = out + &format!("{:#?}", v) + "\n";
+    out = out + &format!("{:?}", s) + "\n";
+    out = out + &format!("{:>8?}|", s) + "\n";
+    out = out + &format!("{:5}|", c) + "\n";
+    out = out + &format!("{:>6}|", b) + "\n";
+    out = out + &format!("{:.3}", "abcdef") + "\n";
+    out = out + &format!("{:>8.3}|", "abcdef") + "\n";
+    out = out + &format!("{:?}", x) + "\n";
+    out = out + &format!("{:?}", f) + "\n";
+    out = out + &format!("{}", big) + "\n";
+    out = out + &format!("{:x}", big) + "\n";
+    out = out + &format!("{:05}", -42) + "\n";
+    out = out + &format!("{:<05}", 7) + "\n";
+    out = out + &format!("{:^+9.1}|", x) + "\n";
+    out = out + &format!("{:#b}", 0) + "\n";
+    out = out + &format!("{{}} {}", 1) + "\n";
+    out = out + &format!("{:-^7}", "") + "\n";
+    out = out + &format!("{:.0}", 2.5) + "\n";
+    out = out + &format!("{:10.3e}|", 123456.0) + "\n";
+    out = out + &format!("{:05}|", "ab") + "\n";
+    out = out + &format!("{:#x?}", 255) + "\n";
+    out = out + &format!("{:+e}", 1234.5) + "\n";
+    out = out + &format!("{:?} {}", s, s) + "\n";
+    out
+}
+run()
+"#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let expected = r#"00001
+***mid****
+ab      |
+      ab|
+   ab    |
++5
+-5
++3.14
+0xff
+0xFF
+0o377
+0b101
+ffffffd6
+0003.142
+0x000000ff
+   7|
+       7|
+    3.14
+3.142
+3.1
+a b a
+"b" a
+Rawr 5
+      3.14
+1.2345e3
+1.2E-4
+1.23e3
+1.5e3
+ff
+FF
+[
+    1,
+    2,
+    3,
+]
+"hello"
+"hello"|
+z    |
+  true|
+abc
+     abc|
+3.14159
+1.5
+18446744073709551615
+ffffffffffffffff
+-0042
+00007
+  +3.1   |
+0b0
+{} 1
+-------
+2
+   1.235e5|
+ab   |
+0xff
++1.2345e3
+"hello" hello
+"#;
+    for (line, (actual, expected)) in value.lines().zip(expected.lines()).enumerate() {
+        assert_eq!(actual, expected, "line {}", line + 1);
+    }
+    assert_eq!(value, expected);
+}
+
+#[test]
+fn language_format_strings_are_checked_as_rustc_does() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            pub fn run() -> String {
+                println!("{:0digits$}", 1, digits = 5);
+                let width: usize = 6;
+                let y = 2.5;
+                format!("{:0digits$}|{y:>width$}|{:>1$}|{:.*}", 1, 7, 3, y, digits = 5)
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (width, y) = (6usize, 2.5);
+    assert_eq!(value, format!("{:0digits$}|{y:>width$}|{:>1$}|{:.*}", 1, 7, 3, y, digits = 5));
+    for source in [
+        r#"format!("{} {}", 1)"#,
+        r#"format!("{}", 1, 2)"#,
+        r#"format!("{a}", b = 1)"#,
+        r#"format!("{missing}")"#,
+        r#"format!("{:1$}", 7)"#,
+        r#"format!("{:.*}", 2.5)"#,
+        r#"format!("{:x}", 2.5)"#,
+        r#"format!("{:o}", "s")"#,
+        r#"format!("{:e}", true)"#,
+        r#"format!("{:width$}", 1, width = 2.5)"#,
+        r#"format!("{:q}", 1)"#,
+        r#"format!("{")"#,
+        r#"format!("}")"#,
+    ] {
+        rejected(&format!("pub fn run() -> i64 {{ let s = {source}; 0 }} run()"));
+    }
+}
+
+#[test]
+fn language_builtin_functions_as_values() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            #[derive(Debug)]
+            enum Word { Named(String) }
+            pub fn run() -> String {
+                let words: Vec<String> = vec!["a", "b"].into_iter().map(String::from).collect();
+                let roots: Vec<f64> = vec![4.0, 9.0].into_iter().map(f64::sqrt).collect();
+                let ones: Vec<i64> = vec![true, false].into_iter().map(i64::from).collect();
+                let named: Vec<Word> = words.clone().into_iter().map(Word::Named).collect();
+                let upper: Vec<char> = "ab".chars().map(char::to_ascii_uppercase).collect();
+                format!("{:?} {:?} {:?} {:?} {:?}", words, roots, ones, named, upper)
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(value, r#"["a", "b"] [2.0, 3.0] [1, 0] [Named("a"), Named("b")] ['A', 'B']"#);
+}
+
+#[test]
+fn language_fn_traits_with_lifetimes_and_auto_traits() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            fn apply<'a>(f: impl Fn(i64) -> i64 + 'a, x: i64) -> i64 {
+                f(x)
+            }
+            fn twice(f: &dyn Fn(i64) -> i64, x: i64) -> i64 {
+                f(f(x))
+            }
+            fn count(mut f: impl FnMut() -> i64 + Send) -> i64 {
+                f() + f()
+            }
+            fn adder<'a>(n: &'a i64) -> impl Fn(i64) -> i64 + 'a {
+                move |x| x + *n
+            }
+            fn boxed(n: i64) -> Box<dyn Fn(i64) -> i64 + Send + 'static> {
+                Box::new(move |x| x * n)
+            }
+            pub fn run() -> String {
+                let n = 5;
+                let mut calls = 0;
+                let a = apply(|x| x + 1, 1);
+                let b = twice(&|x| x * 3, 2);
+                let c = count(|| { calls += 1; calls });
+                let d = adder(&n)(10);
+                let e = boxed(3)(4);
+                format!("{a} {b} {c} {d} {e}")
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    // The same program built by rustc prints `2 18 3 15 12`.
+    assert_eq!(value, "2 18 3 15 12");
+    rejected("fn f(g: impl Fn(i64) -> i64 + Clone) -> i64 { g(1) } pub fn run() -> i64 { f(|x| x) } run()");
+}
+
+#[test]
+fn language_ranges_as_types_and_hand_written_hash() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+use std::collections::HashSet;
+use std::hash::Hash;
+use std::ops::{Range, RangeInclusive};
+
+struct Bounds {
+    span: RangeInclusive<i64>,
+    half: Range<usize>,
+    unit: RangeInclusive<f64>,
+}
+
+fn width(range: &RangeInclusive<i64>) -> i64 {
+    range.end() - range.start()
+}
+
+fn make(n: i64) -> RangeInclusive<i64> {
+    0..=n
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct Tag {
+    name: String,
+}
+
+impl Hash for Tag {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct Pair(i64, i64);
+
+pub fn run() -> String {
+    let b = Bounds { span: 2..=9, half: 0..4, unit: 0.0..=1.0 };
+    let copy = b.span.clone();
+    let total: i64 = make(4).sum();
+    let mut tags = HashSet::new();
+    tags.insert(Tag { name: String::from("a") });
+    tags.insert(Tag { name: String::from("a") });
+    tags.insert(Tag { name: String::from("b") });
+    let mut pairs = HashSet::new();
+    pairs.insert(Pair(1, 2));
+    pairs.insert(Pair(1, 2));
+    format!(
+        "{} {} {} {} {} {} {} {} {}",
+        width(&b.span),
+        b.half.len(),
+        copy.contains(&5),
+        total,
+        *b.span.start(),
+        b.unit.contains(&0.5),
+        b.unit.end(),
+        tags.len(),
+        pairs.len()
+    )
+}
+run()
+"#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    // The same program built by rustc prints this.
+    assert_eq!(value, "7 4 true 10 2 true 1 2 1");
+}
+
+#[test]
+fn language_float_constants_and_compile_time_text() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            use std::f32::consts::TAU;
+            use std::f64::consts;
+            pub fn run() -> String {
+                let text = concat!("ra", "wr", '-', 1, 2.5, true, stringify!(a + b));
+                format!("{:.5} {:.5} {:.5} {}", std::f64::consts::PI, consts::E, TAU, text)
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        value,
+        format!(
+            "{:.5} {:.5} {:.5} {}",
+            std::f64::consts::PI,
+            std::f64::consts::E,
+            std::f32::consts::TAU,
+            concat!("ra", "wr", '-', 1, 2.5, true, stringify!(a + b))
+        )
+    );
+    // Without a file on disk there is no project for `env!` or a path for
+    // `include_str!` to name.
+    let error = rejected(r#"pub fn run() -> i64 { let p = env!("CARGO_MANIFEST_DIR"); 0 } run()"#);
+    assert!(error.contains("env!"), "{error}");
+    let error = rejected(r#"pub fn run() -> i64 { let p = include_str!("x.txt"); 0 } run()"#);
+    assert!(error.contains("not in one"), "{error}");
+}
+
+#[test]
+fn language_impl_trait_with_associated_type_equalities() {
+    let value = run(r#"
+        trait Shape {
+            type Output;
+            fn area(&self) -> Self::Output;
+        }
+        struct Square(i64);
+        impl Shape for Square {
+            type Output = i64;
+            fn area(&self) -> i64 { self.0 * self.0 }
+        }
+        fn total(shape: impl Shape<Output = i64>, extra: i64) -> i64 {
+            shape.area() + extra
+        }
+        fn evens() -> impl Iterator<Item = i64> {
+            vec![2, 4].into_iter()
+        }
+        pub fn run() -> i64 {
+            total(Square(3), evens().sum::<i64>())
+        }
+        run()
+    "#);
+    assert_eq!(value, 15);
+}
+
+#[test]
+fn language_statics_and_unsafe_blocks() {
+    let value = Engine::new()
+        .eval::<String>(
+            r#"
+            static LIMIT: i64 = 40;
+            pub static NAMES: [&str; 2] = ["a", "b"];
+            pub fn run() -> String {
+                let doubled = unsafe { LIMIT * 2 };
+                format!("{} {} {}", LIMIT + 2, NAMES[1], doubled)
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    // The same program built by rustc prints `42 b 80`.
+    assert_eq!(value, "42 b 80");
+    let error = rejected("static mut COUNT: i64 = 0; pub fn run() -> i64 { 0 } run()");
+    assert!(error.contains("static mut"), "{error}");
+    let error = rejected("unsafe fn f() {} pub fn run() -> i64 { 0 } run()");
+    assert!(error.contains("not supported in Rawr yet"), "{error}");
+}
+
+#[test]
+fn language_range_bounds_take_the_element_kind() {
+    let value = Engine::new()
+        .eval::<f64>(
+            r#"
+            use std::ops::RangeInclusive;
+            const SIZE: RangeInclusive<f32> = 200.0..=400.0;
+            pub fn run() -> f32 {
+                let middle: Option<f32> = true.then_some(SIZE.start() + (SIZE.end() - SIZE.start()) / 2.0);
+                middle.unwrap()
+            }
+            run()
+        "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(value, 300.0);
+}
+
+#[test]
+fn language_mut_methods_through_field_and_element_places() {
+    let value = run(r#"
+        struct Counter { n: i64 }
+        impl Counter { fn bump(&mut self) { self.n += 1; } }
+        struct Inner { log: Vec<i64>, name: String, items: Vec<Counter> }
+        struct State { text: String, inner: Inner, rows: Vec<String> }
+        impl State {
+            fn change(&mut self, x: &str) {
+                self.text.push_str(&x);
+                self.text.push('!');
+                self.inner.name.push_str(x);
+                self.inner.log.push(3);
+                self.inner.log.sort();
+                self.inner.log.sort_by_key(|n| -*n);
+                self.rows[0].push_str("z");
+                self.inner.items[0].bump();
+                self.inner.items.iter_mut().for_each(|c| c.n *= 10);
+            }
+        }
+        pub fn run() -> i64 {
+            let mut s = State {
+                text: String::new(),
+                inner: Inner { log: vec![5, 1], name: String::from("n"), items: vec![Counter { n: 1 }] },
+                rows: vec![String::from("a")],
+            };
+            s.change("ab");
+            let mut v = vec![String::from("q")];
+            v[0].push_str("rs");
+            let ok = s.text == "ab!" && s.inner.name == "nab" && s.rows[0] == "az" && v[0] == "qrs";
+            if ok { s.inner.log[0] * 100 + s.inner.log[2] * 10 + s.inner.items[0].n } else { -1 }
+        }
+        run()
+    "#);
+    assert_eq!(value, 5 * 100 + 1 * 10 + 20);
+    let error = rejected(
+        r#"
+        struct S { text: String }
+        impl S { fn f(&self) { self.text.push_str("x"); } }
+        pub fn run() -> i64 { 0 }
+        run()
+    "#,
+    );
+    assert!(error.contains("self"), "{error}");
+}
+
+#[test]
+fn language_patterns_on_mut_places_write_their_bindings_back() {
+    let value = run(r#"
+        enum Mode { Preview, Stream { content: String, offset: usize } }
+        enum State { Idle, Ticking { last: i64, ticks: i64 } }
+        struct App { mode: Mode, out: String, state: State, total: i64 }
+        impl App {
+            fn next(&mut self) {
+                match &mut self.mode {
+                    Mode::Preview => {}
+                    Mode::Stream { content, offset } => {
+                        if *offset >= content.len() {
+                            self.mode = Mode::Preview;
+                        } else if let Some(token) = content[*offset..].chars().next() {
+                            self.out.push(token);
+                            *offset += token.len_utf8();
+                        }
+                    }
+                }
+            }
+            fn tick(&mut self, now: i64) -> i64 {
+                if let State::Ticking { last, ticks } = &mut self.state {
+                    self.total += now - *last;
+                    *last = now;
+                    *ticks += 1;
+                    if *ticks == 2 { return 1; }
+                }
+                0
+            }
+        }
+        fn grow(slots: &mut Vec<Option<i64>>) -> i64 {
+            let mut total = 0;
+            for slot in slots.iter_mut() {
+                if let Some(n) = slot { *n *= 2; total += *n; }
+            }
+            match &mut slots[0] { Some(n) if *n > 100 => *n = 0, Some(n) => *n += 1, None => {} }
+            total
+        }
+        pub fn run() -> i64 {
+            let mut app = App {
+                mode: Mode::Stream { content: String::from("héy"), offset: 0 },
+                out: String::new(),
+                state: State::Ticking { last: 1, ticks: 0 },
+                total: 0,
+            };
+            for _ in 0..5 { app.next(); }
+            let early = app.tick(5) * 10 + app.tick(9);
+            let ticks = match &app.state { State::Ticking { ticks, .. } => *ticks, State::Idle => -1 };
+            let mut slots = vec![Some(1), None, Some(5)];
+            let doubled = grow(&mut slots);
+            let mut opt = Some(0);
+            while let Some(n) = &mut opt {
+                *n += 1;
+                if *n > 3 { break; }
+            }
+            let mut x = Some(1);
+            match &mut x { Some(v) => *v += 1, None => {} }
+            let preview = matches!(app.mode, Mode::Preview) && app.out == "héy";
+            if !preview { return -1; }
+            app.total * 1000000 + early * 10000 + ticks * 1000 + doubled * 10
+                + slots[0].unwrap() + opt.unwrap() * 100 + x.unwrap() * 100000
+        }
+        run()
+    "#);
+    assert_eq!(value, 8 * 1000000 + 1 * 10000 + 2 * 1000 + 12 * 10 + 3 + 4 * 100 + 2 * 100000);
+}
+
+#[test]
+fn language_a_call_of_no_function_names_it() {
+    let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
+    assert!(error.contains("nknown function") && error.contains("centre"), "{error}");
+}
+
+#[test]
+fn language_precise_capture_bounds_and_async_functions() {
+    let value = run(r#"
+        fn nums(limit: i64) -> impl Iterator<Item = i64> + use<> { (1..limit).map(|n| n * 2) }
+        pub fn run() -> i64 { nums(4).sum::<i64>() }
+        run()
+    "#);
+    assert_eq!(value, 12);
+    for source in [
+        "async fn go() -> i64 { 1 } pub fn run() -> i64 { 0 } run()",
+        "struct S; impl S { async fn go(&self) -> i64 { 1 } } pub fn run() -> i64 { 0 } run()",
+    ] {
+        let error = rejected(source);
+        assert!(error.contains("not supported in Rawr yet"), "{error}");
+    }
+}
+
+#[test]
+fn language_restricted_item_visibility() {
+    let value = run(r#"
+        pub(crate) struct Point { pub(crate) x: i64, pub(super) y: i64 }
+        pub(crate) fn sum(p: &Point) -> i64 { p.x + p.y }
+        pub(in crate) fn twice(n: i64) -> i64 { n * 2 }
+        pub(self) fn one() -> i64 { 1 }
+        pub fn run() -> i64 { twice(sum(&Point { x: 2, y: 3 })) + one() }
+        run()
+    "#);
+    assert_eq!(value, 11);
+}
+
+#[test]
+fn language_fieldless_enum_casts() {
+    let value = run(r#"
+        #[derive(Clone, Copy)]
+        enum Level { Low, Mid = 10, High, Negative = -3, After }
+        pub fn run() -> i64 {
+            let high = Level::High;
+            (Level::Low as i64) + (Level::Mid as i32) as i64 * 100 + high as i64 * 10000
+                + (Level::Negative as i64) * 1000000 + (Level::After as u8) as i64 * 100000000
+        }
+        run()
+    "#);
+    assert_eq!(value, 0 + 10 * 100 + 11 * 10000 + -3 * 1000000 + 254 * 100000000);
+    rejected("enum E { A(i64) } pub fn run() -> i64 { E::A(1) as i64 } run()");
+}
+
+#[test]
+fn language_fn_pointer_casts_and_trait_function_values() {
+    let value = run(r#"
+        struct Item(String);
+        impl From<&str> for Item { fn from(s: &str) -> Self { Item(s.to_string()) } }
+        fn double(x: i64) -> i64 { x * 2 }
+        pub fn run() -> i64 {
+            let f = double as fn(i64) -> i64;
+            let g: fn(i64) -> i64 = From::from;
+            let items: Vec<Item> = ["a", "bb"].into_iter().map(From::from).collect();
+            let s: Vec<String> = vec![1, 2].iter().map(ToString::to_string).collect();
+            let t: Vec<String> = ["a", "b"].into_iter().map(Into::into).collect();
+            f(4) + g(3) + items[1].0.len() as i64 + s.len() as i64 + t.len() as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 17);
 }

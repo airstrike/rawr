@@ -93,12 +93,12 @@ fn master_helpers_check_and_render() {
     find(&adapter, "0");
 }
 
-/// `examples/exit/src/main.rs`, with `and_then(window::close)` written as a
-/// closure: Rawr does not yet take a library function as a value.
+/// `examples/exit/src/main.rs` as written: `window::close` is a function
+/// value.
 const EXIT: &str = r#"
-use iced::widget::{button, center, column};
+use iced::widget::{button, center, column, text};
 use iced::window;
-use iced::{Center, Task, Widget};
+use iced::{Center, Task, Theme, Widget};
 
 pub fn main() -> iced::Result {
     iced::run(Exit::update, Exit::view)
@@ -118,7 +118,7 @@ enum Message {
 impl Exit {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Confirm => window::latest().and_then(|id| window::close(id)),
+            Message::Confirm => window::latest().and_then(window::close),
             Message::Exit => {
                 self.show_confirm = true;
 
@@ -136,7 +136,9 @@ impl Exit {
                     .on_press(Message::Confirm),
             ]
         } else {
+            let themes: Vec<String> = Theme::ALL.iter().map(Theme::to_string).collect();
             column![
+                text(themes[0].clone()),
                 "Click the button to exit",
                 button("Exit").padding([10, 20]).on_press(Message::Exit),
             ]
@@ -152,6 +154,7 @@ impl Exit {
 #[test]
 fn master_exit_checks_and_closes_through_a_window_task() {
     let mut adapter = boot(EXIT);
+    find(&adapter, "Light");
     let mut simulator = iced_test::simulator(adapter.view());
     simulator.click("Exit").unwrap();
     let exit = simulator.into_messages().next().expect("the button emits");
@@ -448,4 +451,98 @@ fn master_operations_take_widget_ids() {
         let message = simulator.into_messages().next().expect("the button emits");
         adapter.update(message).unwrap();
     }
+}
+
+/// `Duration`'s and `Instant`'s operators as stopwatch writes them, and
+/// `.clone()` of a library value that is `Clone`.
+const TIME: &str = r#"
+use iced::time::{Duration, Instant};
+use iced::widget::{self, column, text};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    total: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {}
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let mut total = self.total;
+        total += Duration::from_millis(1500) + Duration::from_millis(250) - Duration::from_millis(50);
+        let twice = total * 2;
+        let start = Instant::now();
+        let later = start + Duration::from_secs(1);
+        let gap = later - start;
+        let quick = start.elapsed().as_secs() < 5;
+        let id = widget::Id::new("field");
+        let same = id.clone() == id;
+        column![
+            text(format!("{} {} {}", twice.as_millis(), twice.subsec_millis(), gap.as_secs())),
+            text(format!("{quick} {same}")),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_duration_and_instant_operators_compute_as_rust() {
+    let adapter = boot(TIME);
+    find(&adapter, "3400 400 1");
+    find(&adapter, "true true");
+}
+
+/// Closure parameters take their types from the library function's other
+/// arguments, as Rust infers them.
+const INFERRED: &str = r#"
+use iced::widget::{column, lazy, pick_list, text};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    version: u64,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Selected(String),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Selected(_) => self.version += 1,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let options = vec![String::from("alpha"), String::from("beta")];
+        column![
+            pick_list(Some(String::from("beta")), options, |name| name.to_uppercase())
+                .on_select(|name| Message::Selected(name)),
+            lazy(self.version, |version| text(format!("version {}", version + 1))),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_closure_parameters_take_the_types_of_the_other_arguments() {
+    let adapter = boot(INFERRED);
+    find(&adapter, "BETA");
+    find(&adapter, "version 1");
 }

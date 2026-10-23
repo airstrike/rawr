@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedding | Rawr docs</title>
+<meta name="description" content="Embed Rawr in a Rust program with rawr::Engine. Compile a script, call its functions with call_fn, capture its output with on_output, and set limits.">
+<meta property="og:title" content="Embedding | Rawr docs">
+<meta property="og:description" content="Embed Rawr in a Rust program with rawr::Engine. Compile a script, call its functions with call_fn, capture its output with on_output, and set limits.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/embedding">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/embedding">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="cap"><span class="slash">//</span>Docs</p>
+  <ol>
+    <li><a href="/docs">Overview</a></li>
+    <li><a href="/docs/start">Getting started</a></li>
+    <li><a href="/docs/language">The language</a></li>
+    <li><a href="/docs/embedding" aria-current="page">Embedding</a><ol><li><a href="#add">Add the crate</a></li><li><a href="#example">A complete example</a></li><li><a href="#call-fn">Calling functions</a></li><li><a href="#boundary">What crosses the boundary</a></li><li><a href="#output">Capturing output</a></li><li><a href="#errors">Errors</a></li><li><a href="#limits">Limits</a></li></ol></li>
+    <li><a href="/docs/iced">rawr-iced</a></li>
+    <li><a href="/docs/play">?play and the playground</a></li>
+    <li><a href="/docs/cli">Commands</a></li>
+    <li><a href="/docs/faq">FAQ</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<p class="cap"><span class="slash">//</span>Embedding</p>
+<h1>Embedding Rawr</h1>
+<p class="lede">The <code>rawr</code> crate is the language. A Rust program creates an <code>Engine</code>, compiles Rawr source and calls the functions it defines.</p>
+
+<h2 id="add">Add the crate</h2>
+<p>The crate builds on stable Rust 1.95 or newer. It doesn&rsquo;t depend on iced.</p>
+<div class="block"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre></div>
+
+<h2 id="example">A complete example</h2>
+<p>This is <code>examples/cart.rs</code> in the repository. It compiles <code>cart.rawr</code> from the <a href="/docs/start#first-program">getting started page</a> and calls its <code>main</code>.</p>
+<div class="block">
+  <div class="file"><b>examples/cart.rs</b></div>
+  <pre><code data-lang="rust">use rawr::{Engine, Scope};
+
+fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
+    let engine = Engine::new();
+    let ast = engine.compile(include_str!("cart.rawr"))?;
+    engine.call_fn::&lt;()&gt;(&amp;mut Scope::new(), &amp;ast, "main", ())
+}</code></pre>
+  <div class="run"><b>cargo run --example cart</b><span>total: 27</span></div>
+</div>
+<p><code>Engine::compile</code> parses and checks the source. It returns an <code>AST</code>. If the source doesn&rsquo;t pass the check, it returns an error. <code>call_fn</code> runs a function from that <code>AST</code> and converts its result to the type you name. A <code>Scope</code> holds variables that live across calls.</p>
+
+<h2 id="call-fn">Calling functions</h2>
+<p>Arguments go in a tuple. A function with one argument takes a one-element tuple such as <code>(x,)</code>. A function with none takes <code>()</code>. The type parameter of <code>call_fn</code> is the return type.</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">use rawr::{Engine, Scope};
+
+const SCRIPT: &amp;str = r#"
+fn add(a: i64, b: i64) -&gt; i64 {
+    a + b
+}
+
+fn greet(name: String) -&gt; String {
+    format!("hello, {name}")
+}
+
+fn mean(xs: Vec&lt;f64&gt;) -&gt; f64 {
+    let mut sum = 0.0;
+    for x in &amp;xs {
+        sum += *x;
+    }
+    sum / (xs.len() as f64)
+}
+"#;
+
+fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
+    let engine = Engine::new();
+    let ast = engine.compile(SCRIPT)?;
+    let mut scope = Scope::new();
+
+    let n = engine.call_fn::&lt;i64&gt;(&amp;mut scope, &amp;ast, "add", (2_i64, 40_i64))?;
+    let s = engine.call_fn::&lt;String&gt;(&amp;mut scope, &amp;ast, "greet", ("Rust".to_string(),))?;
+    let xs: rawr::Array = vec![1.0_f64.into(), 2.0_f64.into(), 4.5_f64.into()];
+    let m = engine.call_fn::&lt;f64&gt;(&amp;mut scope, &amp;ast, "mean", (xs,))?;
+
+    println!("{n} {s} {m}");
+    Ok(())
+}</code></pre>
+  <div class="run"><b>cargo run</b><span>42 hello, Rust 2.5</span></div>
+</div>
+<p>Calling a function that doesn&rsquo;t exist returns an error (<code>Function not found: nope</code>). So does asking for the wrong return type (<code>Output type incorrect: string (expecting i64)</code>).</p>
+
+<h2 id="boundary">What crosses the boundary</h2>
+<table class="wide">
+  <tr><th>Rust</th><th>Rawr</th></tr>
+  <tr><td><code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code></td><td>The same types. Pass integers as <code>i64</code> and floats as <code>f64</code>.</td></tr>
+  <tr><td><code>String</code>, <code>&amp;str</code></td><td>Either one can be passed for a <code>String</code> or <code>&amp;str</code> parameter. A returned string comes back as <code>String</code>.</td></tr>
+  <tr><td><code>rawr::Array</code></td><td>A <code>Vec</code>. Build one from values converted with <code>.into()</code>.</td></tr>
+  <tr><td><code>()</code></td><td>The unit return of a function such as <code>main</code>.</td></tr>
+  <tr><td><code>rawr::Dynamic</code></td><td>Any value. A struct or enum defined in Rawr comes back as a <code>Dynamic</code>. Rust code can hold it and pass it back. It can&rsquo;t read the fields.</td></tr>
+</table>
+<p>Typed Rawr code can&rsquo;t call Rust functions registered with <code>Engine::register_fn</code> yet. The check doesn&rsquo;t know their types. To use Rust types and functions from Rawr today, use rawr-iced&rsquo;s <a href="/docs/iced#rust-crates">Rust imports</a>.</p>
+
+<h2 id="output">Capturing output</h2>
+<p>By default <code>println!</code> and <code>print!</code> write to the process&rsquo;s stdout. <code>eprintln!</code> and <code>eprint!</code> write to stderr. <code>Engine::on_output</code> sends that text to a callback instead. The callback gets the stream and the exact text. <code>println!</code> text includes its newline.</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">use std::sync::{Arc, Mutex};
+use rawr::{Engine, Output, Scope};
+
+fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
+    let mut engine = Engine::new();
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let sink = lines.clone();
+    engine.on_output(move |output, text| {
+        sink.lock().unwrap().push((output == Output::Stderr, text.to_string()));
+    });
+
+    let ast = engine.compile(r#"
+        fn main() {
+            println!("to stdout");
+            eprintln!("to stderr");
+        }
+    "#)?;
+    engine.call_fn::&lt;()&gt;(&amp;mut Scope::new(), &amp;ast, "main", ())?;
+    println!("{:?}", lines.lock().unwrap());
+    Ok(())
+}</code></pre>
+  <div class="run"><b>cargo run</b><span>[(false, "to stdout\n"), (true, "to stderr\n")]</span></div>
+</div>
+
+<h2 id="errors">Errors</h2>
+<p>Both <code>compile</code> and <code>call_fn</code> return <code>Box&lt;rawr::EvalAltResult&gt;</code> on failure. Its <code>Display</code> output names the problem and the position.</p>
+<div class="block diag">
+  <div class="file"><b>engine.compile("fn f() -&gt; i64 { \"no\" }")</b></div>
+  <pre><code><span class="h">Type mismatch: expected 'i64', found 'String' (line 1, position 17)</span></code></pre>
+</div>
+
+<h2 id="limits">Limits</h2>
+<p>An <code>Engine</code> can bound what a script may do. Set the limits on the engine before running a script.</p>
+<ul>
+  <li><code>set_max_operations</code> stops a script after a number of steps. An endless loop then fails with <code>Too many operations</code>.</li>
+  <li><code>set_max_call_levels</code> bounds recursion depth.</li>
+  <li><code>set_max_string_size</code>, <code>set_max_array_size</code> and <code>set_max_map_size</code> bound the size of values.</li>
+  <li><code>on_progress</code> runs a callback as the script runs. Returning <code>Some(value)</code> from it stops the script. A host can use it for a wall-clock deadline.</li>
+</ul>
+<p>The <a href="/docs/play#limits">?play runner</a> uses these limits for untrusted snippets.</p>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/language">Previous<b>The language</b></a><a class="next" href="/docs/iced">Next<b>rawr-iced</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+</body>
+</html>

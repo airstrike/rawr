@@ -273,3 +273,33 @@ impl State { fn new() -> State { State {} } fn update(&mut self, message: Messag
 pub fn main() -> iced::Result { iced::application(State::new, State::update, State::view).theme(State::theme).run() }
 "#
 }
+
+#[test]
+fn an_optional_theme_selects_its_theme_or_keeps_the_default() {
+    let source = |dark: bool| {
+        format!(
+            r#"
+use iced::Theme;
+use iced::Element;
+use iced::widget::text;
+struct State {{ dark: bool }}
+#[derive(Debug, Clone, Copy)] enum Message {{ Tick }}
+impl State {{
+    fn new() -> State {{ State {{ dark: {dark} }} }}
+    fn update(&mut self, message: Message) {{}}
+    fn view(&self) -> Element<'_, Message> {{ text("optional") }}
+    fn theme(&self) -> Option<Theme> {{ if self.dark {{ Some(Theme::Dark) }} else {{ None }} }}
+}}
+pub fn main() -> iced::Result {{
+    iced::application(State::new, State::update, State::view).theme(State::theme).run()
+}}
+"#
+        )
+    };
+    let dark = boot_source(&source(true));
+    assert_eq!(dark.theme().native(), &iced::Theme::Dark);
+    assert!(dark.diagnostics().is_empty());
+    let default = boot_source(&source(false));
+    assert_eq!(default.theme().native(), &iced::Theme::Light);
+    assert!(default.diagnostics().is_empty(), "{:?}", default.diagnostics());
+}

@@ -89,8 +89,36 @@ const OWNED_EQ_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Static,
 ];
 
+/// `{:?}` of the facade's value types prints Rust's `Debug` text.
+fn register_debug() {
+    use rawr::host::debug::register;
+    register::<iced::Border>();
+    register::<iced::Color>();
+    register::<iced::ContentFit>();
+    register::<iced::Event>();
+    register::<iced::Font>();
+    register::<iced::keyboard::Event>();
+    register::<iced::keyboard::Key>();
+    register::<iced::keyboard::key::Named>();
+    register::<iced::keyboard::Modifiers>();
+    register::<iced::Length>();
+    register::<iced::mouse::Button>();
+    register::<iced::mouse::Event>();
+    register::<iced::mouse::Interaction>();
+    register::<iced::Padding>();
+    register::<iced::Point>();
+    register::<iced::Rectangle>();
+    register::<iced::Size>();
+    register::<iced::touch::Event>();
+    register::<iced::Vector>();
+    register::<iced::window::Event>();
+    register::<iced::window::Id>();
+    register::<std::time::Duration>();
+}
+
 /// Build the validated compile-time `iced` facade contract.
 pub fn facade() -> Result<facade::Definition, host::Error> {
+    register_debug();
     let mut builder = facade::Builder::new("iced", facade::Abi::new(16)?)?;
     builder.module("alignment")?;
     builder.module("animation")?;
@@ -118,6 +146,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("event")?;
     builder.module("keyboard")?;
     builder.module("keyboard::key")?;
+    builder.module("touch")?;
     builder.module("widget::scrollable")?;
     builder.module("widget::slider")?;
     builder.module("widget::text")?;
@@ -269,6 +298,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         OWNED_DEFAULT_VALUE_CAPABILITIES,
     )?;
     builder.value_type::<iced::Event>("Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.alias("event::Event", "Event")?;
+    builder.value_type::<iced::window::Event>("window::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::mouse::Event>("mouse::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::mouse::Button>("mouse::Button", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::touch::Event>("touch::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::keyboard::Event>("keyboard::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::keyboard::Key>("keyboard::Key", &[], DEBUG_EQ_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::keyboard::key::Named>(
@@ -562,6 +596,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             text_signature(input)?,
         )?)?;
     }
+    // `text!("{} items", n)`: `text(format!(..))`.
+    builder.item(item::Definition::intrinsic_macro(
+        "widget::text",
+        text_signature(type_ref::Builtin::String)?,
+    )?)?;
     builder.item(item::Definition::function(
         "widget::text_input",
         text_input_signature()?,
@@ -838,6 +877,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_wrappers(&mut builder)?;
     declare_media(&mut builder)?;
     declare_events(&mut builder)?;
+    declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
 
     builder.finish()
@@ -1759,7 +1799,7 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         )?)?;
     }
     for (name, output) in [
-        ("as_secs", type_ref::Builtin::I64),
+        ("as_secs", type_ref::Builtin::U64),
         ("as_millis", type_ref::Builtin::I64),
         ("as_micros", type_ref::Builtin::I64),
         ("as_nanos", type_ref::Builtin::I64),
@@ -1774,12 +1814,67 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
             reader.finish(),
         )?)?;
     }
+    // `a + b`, `a - b` of durations and `d * n`, `d / n`: their operators,
+    // the methods named for `std::ops`' traits.
+    let duration = || type_ref::Type::registered("time::Duration");
+    let instant = || type_ref::Type::registered("time::Instant");
+    for (owner, name, input, output) in [
+        ("time::Duration", "add", duration()?, duration()?),
+        ("time::Duration", "sub", duration()?, duration()?),
+        ("time::Duration", "mul", type_ref::Type::builtin(type_ref::Builtin::I64), duration()?),
+        ("time::Duration", "div", type_ref::Type::builtin(type_ref::Builtin::I64), duration()?),
+        ("time::Instant", "sub", instant()?, duration()?),
+        ("time::Instant", "sub", duration()?, instant()?),
+        ("time::Instant", "add", duration()?, instant()?),
+    ] {
+        let mut operator = signature::Builder::new();
+        operator.parameter(input);
+        operator.output(output);
+        builder.item(item::Definition::method(
+            format!("{owner}::{name}"),
+            receiver::Mode::Owned,
+            operator.finish(),
+        )?)?;
+    }
+    for (name, output) in [
+        ("subsec_millis", type_ref::Type::builtin(type_ref::Builtin::U32)),
+        ("subsec_micros", type_ref::Type::builtin(type_ref::Builtin::U32)),
+        ("subsec_nanos", type_ref::Type::builtin(type_ref::Builtin::U32)),
+        ("is_zero", type_ref::Type::builtin(type_ref::Builtin::Bool)),
+    ] {
+        let mut reader = signature::Builder::new();
+        reader.output(output);
+        builder.item(item::Definition::method(
+            format!("time::Duration::{name}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+    }
+    builder.item(item::Definition::associated_value("time::Duration::ZERO", duration()?)?)?;
+    builder.item(item::Definition::associated_function(
+        "time::Instant::now",
+        output_signature("time::Instant")?,
+    )?)?;
+    builder.item(item::Definition::method(
+        "time::Instant::elapsed",
+        receiver::Mode::Shared,
+        output_signature("time::Duration")?,
+    )?)?;
+    let mut since = signature::Builder::new();
+    since.parameter(instant()?);
+    since.output(duration()?);
+    builder.item(item::Definition::method(
+        "time::Instant::duration_since",
+        receiver::Mode::Shared,
+        since.finish(),
+    )?)?;
     // `size.width`, `point.x` and kin, read as fields.
     for (owner, fields) in [
         ("Size", &["width", "height"][..]),
         ("Point", &["x", "y"][..]),
         ("Vector", &["x", "y"][..]),
         ("Rectangle", &["x", "y", "width", "height"][..]),
+        ("Color", &["r", "g", "b", "a"][..]),
     ] {
         for field in fields {
             let mut reader = signature::Builder::new();
@@ -1794,6 +1889,35 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
     builder.item(item::Definition::intrinsic_macro(
         "color",
         repeated_builtin_signature(type_ref::Builtin::I64, 1, "Color")?,
+    )?)?;
+    // A literal's channels: `Color { a: 0.8, ..Color::BLACK }`.
+    for name in ["r", "g", "b", "a"] {
+        let mut setter = signature::Builder::new();
+        setter.parameter(type_ref::Type::builtin(type_ref::Builtin::F64));
+        setter.output(type_ref::Type::registered("Color")?);
+        builder.item(item::Definition::method(
+            format!("Color::{name}"),
+            receiver::Mode::Owned,
+            setter.finish(),
+        )?)?;
+    }
+    // `color.scale_alpha(0.5)` and `color.inverse()`.
+    let mut scale_alpha = signature::Builder::new();
+    scale_alpha.parameter(type_ref::Type::builtin(type_ref::Builtin::F64));
+    scale_alpha.output(type_ref::Type::registered("Color")?);
+    builder.item(item::Definition::method(
+        "Color::scale_alpha",
+        receiver::Mode::Owned,
+        scale_alpha.finish(),
+    )?)?;
+    builder.item(item::Definition::method(
+        "Color::inverse",
+        receiver::Mode::Owned,
+        output_signature("Color")?,
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "time::Duration::default",
+        output_signature("time::Duration")?,
     )?)?;
     Ok(())
 }
@@ -2044,6 +2168,103 @@ fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
     Ok(())
 }
 
+/// `iced::Event`, `window::Event`, `mouse::Event` and `touch::Event` as
+/// facade enums, matched as in Rust: `Event::Keyboard(keyboard::Event::KeyPressed
+/// { key, .. })`. A unit or struct variant is a shared `bool` reader named for
+/// it; a tuple variant of one field is a shared reader named for it that
+/// returns the field when the value is that variant. Struct fields are shared
+/// readers. `Key::Named(..)` and `Key::Character(..)` are tuple variants too.
+fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    fn reader(
+        builder: &mut facade::Builder,
+        path: String,
+        output: type_ref::Type,
+    ) -> Result<(), host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.output(output);
+        builder.item(item::Definition::method(path, receiver::Mode::Shared, signature.finish())?)?;
+        Ok(())
+    }
+    let bool_ = || type_ref::Type::builtin(type_ref::Builtin::Bool);
+    let some = |path: &str| -> Result<type_ref::Type, host::Error> {
+        Ok(type_ref::Type::option(type_ref::Type::registered(path)?))
+    };
+    // A tuple variant whose field the facade does not name is tested only:
+    // `Event::InputMethod(_)`.
+    for (variant, payload) in [
+        ("Keyboard", Some("keyboard::Event")),
+        ("Mouse", Some("mouse::Event")),
+        ("Window", Some("window::Event")),
+        ("Touch", Some("touch::Event")),
+        ("InputMethod", None),
+        ("Clipboard", None),
+        ("Waken", None),
+    ] {
+        let output = match payload {
+            Some(payload) => some(payload)?,
+            None => bool_(),
+        };
+        reader(builder, format!("Event::{variant}"), output)?;
+    }
+    for (variant, payload) in [
+        ("Opened", None),
+        ("Closed", None),
+        ("Moved", Some(some("Point")?)),
+        ("Resized", Some(some("Size")?)),
+        ("Rescaled", Some(type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::F64)))),
+        ("RedrawRequested", Some(some("time::Instant")?)),
+        ("CloseRequested", None),
+        ("Focused", None),
+        ("Unfocused", None),
+        ("FileHovered", None),
+        ("FileDropped", None),
+        ("FilesHoveredLeft", None),
+    ] {
+        reader(builder, format!("window::Event::{variant}"), payload.unwrap_or_else(bool_))?;
+    }
+    reader(
+        builder,
+        "window::Event::position".into(),
+        type_ref::Type::option(type_ref::Type::registered("Point")?),
+    )?;
+    reader(builder, "window::Event::size".into(), type_ref::Type::registered("Size")?)?;
+    reader(
+        builder,
+        "window::Event::scale_factor".into(),
+        type_ref::Type::builtin(type_ref::Builtin::F64),
+    )?;
+    for (variant, payload) in [
+        ("CursorEntered", None),
+        ("CursorLeft", None),
+        ("CursorMoved", None),
+        ("ButtonPressed", Some(some("mouse::Button")?)),
+        ("ButtonReleased", Some(some("mouse::Button")?)),
+        ("WheelScrolled", None),
+    ] {
+        reader(builder, format!("mouse::Event::{variant}"), payload.unwrap_or_else(bool_))?;
+    }
+    reader(builder, "mouse::Event::position".into(), type_ref::Type::registered("Point")?)?;
+    for name in ["Left", "Right", "Middle", "Back", "Forward"] {
+        builder.item(item::Definition::associated_value(
+            format!("mouse::Button::{name}"),
+            type_ref::Type::registered("mouse::Button")?,
+        )?)?;
+    }
+    for variant in ["FingerPressed", "FingerMoved", "FingerLifted", "FingerLost"] {
+        reader(builder, format!("touch::Event::{variant}"), bool_())?;
+    }
+    reader(builder, "touch::Event::position".into(), type_ref::Type::registered("Point")?)?;
+    // `Key::Named(named)` and `Key::Character(c)` in a pattern: beside
+    // their constructors, the readers of their fields.
+    reader(builder, "keyboard::Key::Named".into(), some("keyboard::key::Named")?)?;
+    reader(
+        builder,
+        "keyboard::Key::Character".into(),
+        type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::String)),
+    )?;
+    Ok(())
+}
+
 /// The `keyboard::key::Named` keys the facade names.
 pub(crate) const KEY_NAMES: [&str; 40] = [
     "Alt", "Control", "Shift", "Super", "Meta", "Enter", "Tab", "Space", "ArrowDown", "ArrowLeft",
@@ -2092,6 +2313,16 @@ fn declare_native_tasks(builder: &mut facade::Builder) -> Result<(), host::Error
         [type_ref::Type::option(type_ref::Type::registered("window::Id")?)],
     )?);
     builder.item(item::Definition::function("window::latest", latest.finish())?)?;
+    let mut scale_factor = signature::Builder::new();
+    scale_factor.parameter(type_ref::Type::registered("window::Id")?);
+    scale_factor.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::builtin(type_ref::Builtin::F64)],
+    )?);
+    builder.item(item::Definition::function(
+        "window::scale_factor",
+        scale_factor.finish(),
+    )?)?;
     declare_operations(builder)?;
     let mut close = signature::Builder::new();
     close.type_parameter("Message", &[])?;

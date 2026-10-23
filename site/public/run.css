@@ -1,0 +1,24 @@
+/* Run buttons on terminal strips (run.js), for the landing page and the docs. */
+/* The button floats at the strip's top-right corner and takes no layout space: */
+/* its negative margins leave it a zero-size footprint. It is the strip's first */
+/* child. Sticky keeps it in view when the strip is wider than its scroller. */
+.run.has-run { padding-right: 44px; }
+.runbtn { float: right; position: sticky; right: 6px; width: 26px; height: 26px; margin: -4px -38px -26px -26px; display: grid; place-items: center; padding: 0; border: 1px solid var(--pink); background: var(--bg); color: var(--pink); cursor: pointer; }
+.runbtn[hidden] { display: none; }
+.runbtn:hover { background: var(--pink); color: var(--bg); }
+.runbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.runbtn svg { display: block; width: 12px; height: 12px; }
+.runbtn .stop { display: none; }
+.runbtn[aria-disabled="true"] { cursor: progress; }
+.runbtn[aria-disabled="true"] .play { display: none; }
+.runbtn[aria-disabled="true"] .stop { display: block; animation: runbtn-pulse 0.8s ease-in-out infinite alternate; }
+@keyframes runbtn-pulse { from { opacity: 1; } to { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .runbtn[aria-disabled="true"] .stop { animation: none; } }
+
+/* Before Run the static output keeps its rows but is hidden. */
+.run .pending { visibility: hidden; }
+/* A live result: stdout, stderr and the exit status inline; a frame as an image. */
+.run .live span, .run span span { display: inline; }
+.run span.err { color: #ff8fc4; }
+.run span.exit { color: var(--dim); }
+.run img.frame { display: block; margin: 6px 0 2px; max-width: 100%; height: auto; }

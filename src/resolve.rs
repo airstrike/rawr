@@ -930,6 +930,9 @@ fn resolve_import_binding(
     qualified: ImmutableString,
     host: &host::Registry,
 ) -> Result<item::Binding, Error> {
+    // A facade re-export binds the path it names: `iced::event::Event` is
+    // `iced::Event`.
+    let qualified = host.canonical_str(&qualified);
     let target = match host.entry(&qualified) {
         Some(host::Entry::Module) => item::Import::Module,
         Some(host::Entry::ModuleItem(definitions)) => item::Import::ModuleItem {
@@ -987,6 +990,7 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "fmt::Debug"
                 | "fmt::Display"
                 | "fmt::Formatter"
+                | "fmt::Write"
                 | "cmp"
                 | "cmp::Ordering"
                 | "cmp::PartialOrd"
@@ -1012,15 +1016,60 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "mem::take"
         )
     ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
+        || rest.is_some_and(|rest| {
+            matches!(rest, "f32::consts" | "f64::consts") || float_constant(path).is_some()
+        })
         || rest
         .and_then(|rest| rest.strip_prefix("ops"))
         .is_some_and(|rest| {
             rest.is_empty()
                 || rest.strip_prefix("::").is_some_and(|name| {
                     OPERATOR_TRAITS.iter().any(|(_, trait_name, _)| *trait_name == name)
-                        || matches!(name, "Index" | "IndexMut")
+                        || matches!(name, "Index" | "IndexMut" | "Range" | "RangeInclusive")
                 })
         })
+}
+
+/// `std::ops::RangeInclusive` and `std::ops::Range` as a type path is
+/// written: the name, or one of its `ops::`, `std::ops::` or `core::ops::`
+/// spellings. A `Range` is an iterator in Rawr; a `RangeInclusive` of
+/// numbers is its own type.
+pub(crate) fn std_range(path: &str) -> Option<&'static str> {
+    let name = path
+        .strip_prefix("std::ops::")
+        .or_else(|| path.strip_prefix("core::ops::"))
+        .or_else(|| path.strip_prefix("ops::"))
+        .unwrap_or(path);
+    match name {
+        "RangeInclusive" => Some("RangeInclusive"),
+        "Range" => Some(crate::item::type_ref::ITER_TYPE),
+        _ => None,
+    }
+}
+
+/// `std::f64::consts::PI` and kin as a path is written (`f32::consts::TAU`,
+/// `core::f64::consts::E`): its value, as an `f64`, and whether it is an
+/// `f32`'s.
+pub(crate) fn float_constant(path: &str) -> Option<(f64, bool)> {
+    let rest = path
+        .strip_prefix("std::")
+        .or_else(|| path.strip_prefix("core::"))
+        .unwrap_or(path);
+    let (kind, name) = rest.split_once("::consts::")?;
+    macro_rules! constants {
+        ($($name:ident),*) => {
+            match (kind, name) {
+                $(("f64", stringify!($name)) => Some((std::f64::consts::$name, false)),)*
+                $(("f32", stringify!($name)) => Some((f64::from(std::f32::consts::$name), true)),)*
+                _ => None,
+            }
+        };
+    }
+    constants!(
+        PI, TAU, E, SQRT_2, FRAC_1_SQRT_2, LN_2, LN_10, LOG2_E, LOG10_E, LOG2_10, LOG10_2,
+        FRAC_PI_2, FRAC_PI_3, FRAC_PI_4, FRAC_PI_6, FRAC_PI_8, FRAC_1_PI, FRAC_2_PI,
+        FRAC_2_SQRT_PI
+    )
 }
 
 /// `std::cmp::Reverse` as a type path is written: `Reverse` (imported, or
@@ -1205,6 +1254,7 @@ fn resolve_item(
                     payload: payload.into_boxed_slice(),
                     fields: variant.fields,
                     default: variant.default,
+                    discriminant: variant.discriminant,
                     span: variant.span,
                 });
             }
@@ -1646,7 +1696,12 @@ fn resolve_methods(
                         if matches!(path.target, type_ref::Target::Script { .. })
                 )
             });
-            let builtin = builtin_owner(&item.owner)
+            // A facade type (`impl From<Shade> for iced::Color`) owns impls
+            // under the same rule.
+            let outside = builtin_owner(&item.owner)
+                .map(|(code, name)| (Some(code), name))
+                .or_else(|| foreign_owner(&item.owner).map(|path| (None, path)));
+            let builtin = outside
                 .map(|(code, owner_name)| {
                     if declared.name.span == Span::NONE && !local_argument {
                         return Err(Error::InvalidImplOwner {
@@ -1658,12 +1713,19 @@ fn resolve_methods(
                             reference: type_span(&item.owner),
                         });
                     }
-                    Ok(type_def::Definition::builtin(
-                        code,
-                        &owner_name,
-                        shell.id,
-                        type_span(&item.owner),
-                    ))
+                    Ok(match code {
+                        Some(code) => type_def::Definition::builtin(
+                            code,
+                            &owner_name,
+                            shell.id,
+                            type_span(&item.owner),
+                        ),
+                        None => type_def::Definition::foreign(
+                            &owner_name,
+                            shell.id,
+                            type_span(&item.owner),
+                        ),
+                    })
                 })
                 .transpose()
                 .map_err(|error| LocatedError::primary(shell.source, error))?;
@@ -1865,6 +1927,17 @@ fn resolve_methods(
 
 /// The first id of the methods of impls for builtin types.
 const BUILTIN_METHOD_IDS: usize = 1 << 30;
+
+/// A facade type as a trait impl owner: its path.
+fn foreign_owner(ty: &type_ref::Type) -> Option<ImmutableString> {
+    match ty {
+        type_ref::Type::Path(path) => match &path.target {
+            type_ref::Target::Host { definition, .. } => Some(definition.path().into()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 
 /// A builtin type as a trait impl owner: its witness code
 /// and name. `Box<T>` is not one: it is `T` at runtime.
@@ -2392,8 +2465,9 @@ fn trait_table(
 /// The std traits a crate may implement by hand: the derivable ones,
 /// `Display` for `{}`, the prelude's `From<T>` and `Into<T>`, and
 /// `PartialOrd` and `Ord`, which compare to a `std::cmp::Ordering`.
-pub(crate) const BUILTIN_TRAITS: [&str; 37] = [
+pub(crate) const BUILTIN_TRAITS: [&str; 38] = [
     "Clone",
+    "Hash",
     "Copy",
     "PartialEq",
     "Eq",
@@ -2472,6 +2546,7 @@ fn std_trait(segments: &[crate::item::type_ref::Segment]) -> Option<crate::item:
                 && matches!(
                     module.name.text.as_str(),
                     "std" | "core" | "fmt" | "clone" | "cmp" | "default" | "marker" | "iter" | "ops"
+                        | "hash"
                 )
         }))
     .then(|| last.name.clone())
@@ -2579,7 +2654,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
                 Some(output),
             )]
         }
-        "Copy" | "Eq" | "IntoFragment" => Vec::new(),
+        "Copy" | "Eq" | "Hash" | "IntoFragment" => Vec::new(),
         // `trait Index<Idx> { type Output; fn index(&self, index: Idx) ->
         // &Self::Output; }` and `IndexMut<Idx>`'s `index_mut(&mut self, ..)
         // -> &mut Self::Output`.

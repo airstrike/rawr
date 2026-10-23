@@ -365,3 +365,96 @@ impl Sandbox {
             .unwrap()
     }
 }
+
+#[test]
+fn inline_modules_and_cfg_test_items_build_as_rustc_does() {
+    let sandbox = Sandbox::new("inline-modules");
+    let project = sandbox.work().join("shapes");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(
+        project.join("src/main.rawr"),
+        r#"const BASE: i64 = 40;
+
+fn main() {
+    use shapes::inner::double;
+    println!("{} {}", double(shapes::area(2)), shapes::label());
+}
+
+mod shapes {
+    use super::*;
+
+    pub fn area(side: i64) -> i64 {
+        side * side + BASE
+    }
+
+    #[cfg(not(test))]
+    pub fn label() -> String {
+        String::from("built")
+    }
+
+    #[cfg(test)]
+    pub fn label() -> String {
+        String::from("tested")
+    }
+
+    pub mod inner {
+        pub fn double(x: i64) -> i64 {
+            x * 2
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use not_a_dependency::Anything;
+
+    #[test]
+    fn area() { assert_eq!(shapes::area(1), 41); }
+}
+"#,
+    )
+    .unwrap();
+
+    let output = sandbox.rawr(&["run", "shapes"]);
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "88 built\n");
+}
+
+#[test]
+fn compile_time_macros_read_the_project_as_rustc_does() {
+    let sandbox = Sandbox::new("compile-time");
+    let project = sandbox.work().join("macros");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(project.join("src/greeting.txt"), "hello\n").unwrap();
+    fs::write(
+        project.join("src/main.rawr"),
+        r#"use std::f32::consts::TAU;
+use std::f64::consts;
+
+const NAME: &str = concat!("ra", "wr", '-', 1, 2.5, true);
+
+fn main() {
+    let greeting = include_str!("greeting.txt");
+    let bytes = include_bytes!("greeting.txt");
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/greeting.txt");
+    println!("{} {} {} {}", NAME, greeting.trim(), bytes.len(), bytes[0]);
+    println!("{} {}", path.ends_with("/src/greeting.txt"), path.starts_with(manifest));
+    println!("{:.5} {:.5} {:.5} {:.3}", std::f64::consts::PI, consts::E, TAU, core::f64::consts::SQRT_2);
+    println!("{}", stringify!(a + b));
+}
+"#,
+    )
+    .unwrap();
+
+    let output = sandbox.rawr(&["run", "macros"]);
+
+    assert_success(&output);
+    // The same program built by cargo prints this.
+    assert_eq!(
+        stdout(&output),
+        "rawr-12.5true hello 6 104\ntrue true\n3.14159 2.71828 6.28319 1.414\na + b\n"
+    );
+}

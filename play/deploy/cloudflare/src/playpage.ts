@@ -110,7 +110,7 @@ footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wr
 </style>
 </head>
 <body>
-<header class="bar"><a class="brand" href="/" aria-label="Rawr home, playground"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span>Playground</span></a><span class="links"><a class="status" href="/bot">Status</a><a href="/bot/invite">Add to Discord</a></span></header>
+<header class="bar"><a class="brand" href="/" aria-label="Rawr home, playground"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span>Playground</span></a><span class="links"><a href="/docs/play">Docs</a><a class="status" href="/bot">Status</a><a href="/bot/invite">Add to Discord</a></span></header>
 <div class="tools">
 <select id="examples" aria-label="Examples"><option value="">Examples</option>${options}<option value="reset">Reset</option></select>
 <span class="seg">${theme("dark")}${theme("light")}</span>
@@ -132,6 +132,7 @@ ${sitekey ? '<div id="ts"></div>' : ""}
 <div class="out" id="out" aria-live="polite"><p class="note">Run (Ctrl/Cmd + Enter). iced code shows its first frame. Other programs show their output.</p></div>
 </section>
 </main>
+<footer><span>MIT or Apache-2.0</span><a href="https://airstrike.fyi">airstrike.fyi</a></footer>
 <script type="application/json" id="example-data">${scriptJson(examples)}</script>
 <script>
 (() => {

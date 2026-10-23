@@ -2,6 +2,7 @@
 
 Rust Augmented With Rust.
 Site: <https://rawr.airstrike.fyi>
+Docs: <https://rawr.airstrike.fyi/docs>
 
 ## What is Rawr?
 
@@ -158,8 +159,9 @@ cargo install --locked --git https://github.com/airstrike/rawr rawr-cli
 doesn't build anything or hot reload.
 
 rawr-iced adds iced support. Install it and `rawr` hands programs that use
-iced to it. It runs on Apple Silicon Macs for now. It needs one pinned Rust
-nightly, `nightly-2026-07-11`, with the `rustc-dev` and `rust-src`
+iced to it. Importing your own Rust crates currently works only on Apple
+Silicon Macs. The rest of rawr-iced should work wherever iced runs, but it has
+only been tested on macOS. It needs one pinned Rust nightly, `nightly-2026-07-11`, with the `rustc-dev` and `rust-src`
 components. Rawr builds iced and your own crates with that toolchain too.
 
 ```sh
@@ -240,16 +242,19 @@ To add the bot to a server, use the
 
 ## How far along is it?
 
-Pre-alpha. The `rawr` command builds on stable Rust. rawr-iced runs only on
-Apple Silicon Macs. It follows iced master and pins one nightly. APIs,
+Pre-alpha. The `rawr` command builds on stable Rust. Importing your own Rust
+crates works only on Apple Silicon Macs for now. rawr-iced follows iced master
+and pins one nightly. APIs,
 commands, file formats and error codes will change without notice.
 
 Rawr doesn't cover all of Rust yet. Known gaps include:
 
-- nested `fn` items and `let .. else`;
-- `impl Fn(..) -> T + 'a` and a few other closure and `fn`-value shapes;
+- type aliases, glob imports and `pub(crate)` or `pub(super)` visibility;
 - generic functions over iced types, such as a `fn padded<Message>(..)` helper;
-- parts of iced not yet exposed, such as `rule`, `rich_text!` and canvas.
+- `std::time` outside iced apps;
+- parts of iced not yet exposed, such as canvas.
+
+The [docs](https://rawr.airstrike.fyi/docs/language) keep the full list.
 
 If Rawr rejects valid Rust that it claims to support, that's a bug. Please
 report it with a small reproduction.

@@ -37,6 +37,9 @@ struct Declaration {
 #[derive(Clone)]
 enum Target {
     Module,
+    /// A crate trait: Rawr's traits are known by name in the whole crate,
+    /// so importing one binds nothing new.
+    Trait,
     HostModuleItem {
         definitions: Box<[host::item::Definition]>,
         owner: Option<host::facade::Dependency>,
@@ -229,6 +232,17 @@ impl<'a> Resolver<'a> {
                     continue;
                 }
 
+                if let crate::item::Parsed::Trait(declared) = parsed {
+                    self.insert_declaration(
+                        context.address(&declared.name.text),
+                        Declaration {
+                            source: context.source,
+                            span: declared.name.span,
+                            public: declared.header.visibility.is_some(),
+                            target: Target::Trait,
+                        },
+                    )?;
+                }
                 let id = crate::item::Id::from_index(next_item);
                 next_item += 1;
                 let mut slot = Slot { id, key: None };
@@ -412,7 +426,10 @@ impl<'a> Resolver<'a> {
                                 resolved.owners.insert((source, call.owner_span), identity);
                                 continue;
                             }
-                            Target::Module | Target::HostModuleItem { .. } | Target::Item(_) => {}
+                            Target::Module
+                            | Target::Trait
+                            | Target::HostModuleItem { .. }
+                            | Target::Item(_) => {}
                             Target::HostItem { .. }
                             | Target::HostEndpoint { .. }
                             | Target::Type(
@@ -468,6 +485,7 @@ impl<'a> Resolver<'a> {
                             );
                         }
                         Target::Module
+                        | Target::Trait
                         | Target::HostModuleItem { .. }
                         | Target::Item(_)
                         | Target::HostItem { .. }
@@ -508,7 +526,7 @@ impl<'a> Resolver<'a> {
                             .clone(),
                     });
                 }
-                Target::Module => {}
+                Target::Module | Target::Trait => {}
                 Target::Type(
                     type_ref::Target::Builtin
                     | type_ref::Target::Host { .. }
@@ -539,6 +557,7 @@ impl<'a> Resolver<'a> {
         match self.resolve_path(context, segments, reference, &mut active)? {
             Target::Item(key) => Ok(crate::preview::PathTarget::Item(key)),
             Target::Module
+            | Target::Trait
             | Target::Type(_)
             | Target::HostItem { .. }
             | Target::HostEndpoint { .. }
@@ -740,6 +759,34 @@ impl<'a> Resolver<'a> {
         };
         let segments = path_segments(prefix);
         let module: ImmutableString = segments.join("::").into();
+        // `use super::*;`, `use crate::shapes::*;`: every item that module
+        // of this crate declares.
+        if let Some(modules) = self.local_glob_module(context, &segments) {
+            let mut names = self
+                .declarations
+                .keys()
+                .filter(|address| {
+                    address.package == context.namespace.package && *address.modules == *modules
+                })
+                .map(|address| address.name.clone())
+                .filter(|name| !occupied.contains_key(name))
+                .collect::<Vec<_>>();
+            names.dedup();
+            return Ok(names
+                .into_iter()
+                .map(|name| {
+                    let mut path = segments.to_vec();
+                    path.push(name.clone());
+                    (
+                        crate::item::Name {
+                            span: *span,
+                            text: name,
+                        },
+                        path.into_boxed_slice(),
+                    )
+                })
+                .collect());
+        }
         if parsed.header.visibility.is_some() {
             return Err(Failure {
                 primary: context.source,
@@ -784,6 +831,37 @@ impl<'a> Resolver<'a> {
             .collect())
     }
 
+    /// The modules of this crate a glob import's prefix names: `super`,
+    /// `super::super`, `crate`, `crate::a`, `self::a` or a child module.
+    fn local_glob_module(
+        &self,
+        context: &Context,
+        segments: &[ImmutableString],
+    ) -> Option<Vec<ImmutableString>> {
+        let first = segments.first()?;
+        let modules = context.namespace.modules.as_ref();
+        let supers = segments
+            .iter()
+            .take_while(|segment| *segment == "super")
+            .count();
+        let mut absolute = Vec::new();
+        if supers > 0 {
+            absolute.extend_from_slice(&modules[..modules.len().checked_sub(supers)?]);
+            absolute.extend_from_slice(&segments[supers..]);
+        } else if first == "crate" {
+            absolute.extend_from_slice(&segments[1..]);
+        } else if first == "self" {
+            absolute.extend_from_slice(modules);
+            absolute.extend_from_slice(&segments[1..]);
+        } else if self.is_child_module(context, first) {
+            absolute.extend_from_slice(modules);
+            absolute.extend_from_slice(segments);
+        } else {
+            return None;
+        }
+        Some(absolute)
+    }
+
     fn resolve_unit_bindings(
         &self,
         context: &Context,
@@ -792,10 +870,18 @@ impl<'a> Resolver<'a> {
         let mut occupied = BTreeMap::<ImmutableString, (source::Id, Span)>::new();
         let mut types = BTreeMap::new();
 
+        // A module is in Rust's type namespace: a function or value of its
+        // name may be imported beside it (`mod circle;` and
+        // `use circle::circle;`).
+        let mut modules = BTreeMap::<ImmutableString, (source::Id, Span)>::new();
         for (address, declaration) in &self.declarations {
             if address.package == context.namespace.package
                 && address.modules == context.namespace.modules
             {
+                if matches!(declaration.target, Target::Module) {
+                    modules.insert(address.name.clone(), (declaration.source, declaration.span));
+                    continue;
+                }
                 occupied.insert(address.name.clone(), (declaration.source, declaration.span));
                 if let Target::Type(target) = &declaration.target {
                     types.insert(address.name.clone(), target.clone());
@@ -822,6 +908,32 @@ impl<'a> Resolver<'a> {
 
             let globbed = self.glob_paths(context, parsed, &occupied)?;
             for (name, path) in use_paths(parsed).into_iter().chain(globbed) {
+                // `use keyboard::key;` after `use iced::keyboard;`: a path
+                // through a library module this unit imported, as Rust's
+                // paths start at a name in scope.
+                let path = match path.split_first() {
+                    Some((first, rest)) if !rest.is_empty() => uses
+                        .iter()
+                        .flatten()
+                        .flat_map(|used: &item::Use| used.bindings.iter())
+                        .find(|binding| {
+                            binding.name.text == *first
+                                && matches!(
+                                    binding.target,
+                                    item::Import::Module | item::Import::ModuleItem { .. }
+                                )
+                                && self.host.entry(&binding.qualified).is_some()
+                        })
+                        .map_or(path.clone(), |binding| {
+                            binding
+                                .qualified
+                                .split("::")
+                                .map(ImmutableString::from)
+                                .chain(rest.iter().cloned())
+                                .collect()
+                        }),
+                    _ => path,
+                };
                 let mut active = BTreeSet::new();
                 let target = self.resolve_any_path(context, &path, name.span, &mut active)?;
                 // An item of a `.rs` module keeps its crate spelling.
@@ -831,7 +943,7 @@ impl<'a> Resolver<'a> {
                     .join("::")
                     .into();
                 let import = match target {
-                    Target::Module => item::Import::Module,
+                    Target::Module | Target::Trait => item::Import::Module,
                     Target::HostModuleItem { definitions, owner } => {
                         item::Import::ModuleItem { definitions, owner }
                     }
@@ -885,9 +997,20 @@ impl<'a> Resolver<'a> {
                         item::Import::Endpoint { contract, owner }
                     }
                 };
-                if let Some((previous_source, previous_span)) =
+                let value = matches!(
+                    import,
+                    item::Import::ScriptItem { .. }
+                        | item::Import::Item { .. }
+                        | item::Import::Endpoint { .. }
+                );
+                let previous = if value {
                     occupied.insert(name.text.clone(), (context.source, name.span))
-                {
+                } else {
+                    occupied
+                        .insert(name.text.clone(), (context.source, name.span))
+                        .or_else(|| modules.get(&name.text).copied())
+                };
+                if let Some((previous_source, previous_span)) = previous {
                     return Err(Failure {
                         primary: context.source,
                         secondary: Some(previous_source),
@@ -912,6 +1035,9 @@ impl<'a> Resolver<'a> {
             });
         }
         super::module_header_types(parsed_items, &uses, self.host, &mut types);
+        for (name, declaration) in modules {
+            occupied.entry(name).or_insert(declaration);
+        }
         Ok((uses, types, occupied))
     }
 
@@ -936,6 +1062,7 @@ impl<'a> Resolver<'a> {
                     types.insert(segments.join("::").into(), target);
                 }
                 Target::Module
+                | Target::Trait
                 | Target::HostModuleItem { .. }
                 | Target::Item(_)
                 | Target::HostItem { .. } => {}

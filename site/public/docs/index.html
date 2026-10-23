@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rawr docs</title>
+<meta name="description" content="Documentation for Rawr. Rawr is a scripting language that reads like Rust. The rawr crate embeds it in any Rust program, and rawr-iced runs iced apps that reload when you save.">
+<meta property="og:title" content="Rawr docs">
+<meta property="og:description" content="Documentation for Rawr. Rawr is a scripting language that reads like Rust. The rawr crate embeds it in any Rust program, and rawr-iced runs iced apps that reload when you save.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+<link rel="stylesheet" href="/run.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="cap"><span class="slash">//</span>Docs</p>
+  <ol>
+    <li><a href="/docs" aria-current="page">Overview</a><ol><li><a href="#what">What Rawr is</a></li><li><a href="#parts">The parts</a></li><li><a href="#status">Status</a></li><li><a href="#pages">Pages</a></li></ol></li>
+    <li><a href="/docs/start">Getting started</a></li>
+    <li><a href="/docs/language">The language</a></li>
+    <li><a href="/docs/embedding">Embedding</a></li>
+    <li><a href="/docs/iced">rawr-iced</a></li>
+    <li><a href="/docs/play">?play and the playground</a></li>
+    <li><a href="/docs/cli">Commands</a></li>
+    <li><a href="/docs/faq">FAQ</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<p class="cap"><span class="slash">//</span>Docs</p>
+<h1>Rawr documentation</h1>
+<p class="lede">Rawr is a scripting language that reads like Rust. These pages say what it supports today and how to use it.</p>
+
+<h2 id="what">What Rawr is</h2>
+<p>Rawr is a language first. It has Rust&rsquo;s structs, enums, traits, generics, closures and <code>match</code>. It checks a program before running it. It reports errors the way rustc does. Each error has a code and points at the code at fault.</p>
+<p>Rawr code runs on an interpreter. Everything it calls into is native Rust. A <code>Vec</code> or a <code>HashMap</code> in Rawr is backed by native code. An iced widget in Rawr is the real iced widget.</p>
+<p>A Rawr program is meant to stay valid Rust. The cart example below compiles with rustc unchanged and prints the same line.</p>
+<div class="block">
+  <div class="file"><b>cart.rawr</b><span>Rawr</span></div>
+  <pre><code data-lang="rust" data-run="cart.rawr" id="src-cart">enum Item {
+    Book { price: f64 },
+    Coffee { cups: i64 },
+}
+
+trait Priced {
+    fn price(&amp;self) -&gt; f64;
+}
+
+impl Priced for Item {
+    fn price(&amp;self) -&gt; f64 {
+        match self {
+            Item::Book { price } =&gt; *price,
+            Item::Coffee { cups } =&gt; 3.5 * (*cups as f64),
+        }
+    }
+}
+
+fn total(items: &amp;[Item]) -&gt; f64 {
+    let mut sum = 0.0;
+    for item in items {
+        sum += item.price();
+    }
+    sum
+}
+
+fn main() {
+    let cart = vec![Item::Book { price: 20.0 }, Item::Coffee { cups: 2 }];
+    println!("total: {}", total(&amp;cart));
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rawr" hidden></button><b>rawr run cart.rawr</b><span id="out-cart" aria-live="polite">total: 27</span></div>
+</div>
+
+<h2 id="parts">The parts</h2>
+<table class="wide">
+  <tr><th>Part</th><th>What it does</th></tr>
+  <tr><td><code>rawr</code> crate</td><td>The language. Any Rust program can embed it. It builds on stable Rust 1.95 or newer. It knows nothing about windows or widgets.</td></tr>
+  <tr><td><code>rawr</code> command</td><td>Runs and checks Rawr programs. It builds on stable Rust. A program that doesn&rsquo;t use iced runs once and exits.</td></tr>
+  <tr><td><code>rawr-iced</code></td><td>Adds support for <a href="https://github.com/iced-rs/iced">iced</a> apps. Install it and the <code>rawr</code> command hands every program that uses iced to it. It reloads a running app in about 0.2&nbsp;s when you save. It imports your own Rust crates without bindings. It renders <code>#[preview]</code> views to PNG.</td></tr>
+  <tr><td><code>?play</code> and the playground</td><td>Run a snippet from Discord or from a browser. A snippet that uses iced replies with its rendered frame. A plain program replies with its output.</td></tr>
+</table>
+<p>The <code>rawr</code> command parses a program once. If the program uses iced, rawr-iced reads that parse and does not parse the file again.</p>
+
+<h2 id="status">Status</h2>
+<p>Rawr is pre-alpha. The crate and the <code>rawr</code> command build on stable Rust. They have no platform-specific code. Importing your own Rust crates currently works only on Apple Silicon Macs. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far. rawr-iced follows iced master and pins one Rust nightly. APIs, commands, file formats and error codes will change without notice.</p>
+<p>Rawr doesn&rsquo;t cover all of Rust yet. <a href="/docs/language#not-supported">The language page</a> lists what is missing today. If Rawr rejects valid Rust that it claims to support, that&rsquo;s a bug. Please report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
+
+<h2 id="pages">Pages</h2>
+<div class="cards">
+  <a href="/docs/start">Getting started<span>Install Rawr. Run a plain program. Start an iced app.</span></a>
+  <a href="/docs/language">The language<span>The Rust that Rawr supports, what is missing, and where it differs from <code>cargo run</code>.</span></a>
+  <a href="/docs/embedding">Embedding<span>Run Rawr from your own Rust program with <code>rawr::Engine</code>.</span></a>
+  <a href="/docs/iced">rawr-iced<span>iced apps, hot reload, previews, snapshots and Rust imports.</span></a>
+  <a href="/docs/play">?play and the playground<span>Run snippets in Discord and in a browser.</span></a>
+  <a href="/docs/cli">Commands<span>Every command of <code>rawr</code> and <code>rawr-iced</code>.</span></a>
+  <a href="/docs/faq">FAQ<span>Answers to common questions about how Rawr works.</span></a>
+</div>
+<nav class="pager" aria-label="Next and previous pages"><a class="next" href="/docs/start">Next<b>Getting started</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+<script src="/run.js"></script>
+</body>
+</html>

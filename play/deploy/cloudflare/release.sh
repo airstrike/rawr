@@ -6,7 +6,7 @@
 # since `wrangler deploy` ships the working tree. It retries the deploy when
 # Cloudflare answers 100146 (wrangler only waits 2 s for a new image version),
 # waits for the bot to report the new image, runs the landing page's own
-# snippets through /play/run, and commits the image bump.
+# snippets and the docs' through /play/run, and commits the image bump.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(git -C "$here" rev-parse --show-toplevel)"
@@ -31,10 +31,10 @@ npm test >"$logs/release-test.log" 2>&1 || { echo "npm test failed; see $logs/re
 
 attempt=1
 until npx wrangler deploy >"$logs/release-deploy.log" 2>&1; do
-  if grep -q 100146 "$logs/release-deploy.log" && [ "$attempt" -lt 5 ]; then
-    echo "Cloudflare answered 100146; retrying in 15 s (attempt $attempt)."
+  if grep -q -e 100146 -e "Internal Server Error" "$logs/release-deploy.log" && [ "$attempt" -lt 5 ]; then
+    echo "Cloudflare answered 100146 or a 500; retrying in 30 s (attempt $attempt)."
     attempt=$((attempt + 1))
-    sleep 15
+    sleep 30
   else
     echo "wrangler deploy failed; see $logs/release-deploy.log" >&2
     exit 1
@@ -52,16 +52,20 @@ until curl -fsS "$site/bot" 2>/dev/null | grep -q "$want"; do
 done
 echo "The bot runs image $want."
 
-# Smoke test: the landing page's runnable snippets must still run.
+# Smoke test: the runnable snippets on the landing page and in the docs must still run.
 node --input-type=module -e '
-  const page = await (await fetch(process.argv[1] + "/")).text();
-  const blocks = [...page.matchAll(/<code[^>]*data-run[^>]*>([\s\S]*?)<\/code>/g)];
-  if (!blocks.length) throw new Error("no runnable snippets on the page");
+  const blocks = [];
+  for (const path of ["/", "/docs", "/docs/start", "/docs/language", "/docs/play"]) {
+    const page = await (await fetch(process.argv[1] + path)).text();
+    const found = [...page.matchAll(/<code[^>]*data-run[^>]*>([\s\S]*?)<\/code>/g)];
+    if (!found.length) throw new Error("no runnable snippets on " + path);
+    blocks.push(...found);
+  }
   const text = (h) => h.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "\x27").replace(/&amp;/g, "&");
   for (const [, html] of blocks) {
     const response = await fetch(process.argv[1] + "/play/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: text(html) }) });
     if (!response.ok) throw new Error("run failed: " + response.status + " " + (await response.text()).slice(0, 200));
-    console.log("ran a page snippet:", response.headers.get("content-type"));
+    console.log("ran a site snippet:", response.headers.get("content-type"));
   }
 ' "$site"
 
@@ -69,4 +73,9 @@ if ! git -C "$repo" diff --quiet -- play/deploy/cloudflare/wrangler.jsonc; then
   git -C "$repo" add play/deploy/cloudflare/wrangler.jsonc
   git -C "$repo" commit -q -m "Deploy the ?play image built from $want"
   echo "Committed the image bump."
+fi
+
+# What the bot runs is also what GitHub shows.
+if [ "$(git -C "$repo" rev-parse --abbrev-ref HEAD)" = main ]; then
+  git -C "$repo" push -q origin main:main && echo "Pushed main to origin."
 fi

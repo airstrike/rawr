@@ -751,10 +751,16 @@ impl Contract {
                         .receiver_span
                         .unwrap_or(theme.signature.declaration),
                 )?;
-                if !theme.signature.output.matches_host(contract, &[]) {
+                // `-> Option<Theme>`: `None` keeps the default theme.
+                let output = theme
+                    .signature
+                    .output
+                    .option_element()
+                    .unwrap_or(&theme.signature.output);
+                if !output.matches_host(contract, &[]) {
                     return Err(application::Error::InvalidOutput {
                         role: "theme",
-                        expected: "`iced::Theme`".into(),
+                        expected: "`iced::Theme` or `Option<iced::Theme>`".into(),
                         actual: theme.signature.output.display_name().into(),
                         signature: theme.signature.output_span,
                     });

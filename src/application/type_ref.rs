@@ -24,6 +24,9 @@ enum Shape {
     Unit,
     Tuple(Box<[Type]>),
     Builtin(ImmutableString),
+    /// `Option<T>`: a builtin generic whose argument a callback's output
+    /// keeps (`theme() -> Option<Theme>`).
+    Option(Box<Type>),
     Host {
         contract: host::type_def::Contract,
         arguments: Box<[Type]>,
@@ -68,6 +71,7 @@ impl Type {
 
         match &mut self.0 {
             Shape::Unit | Shape::Builtin(_) => 0,
+            Shape::Option(value) => value.normalize_profile(profile),
             Shape::Tuple(values) => types(values, profile),
             Shape::Host {
                 contract,
@@ -164,7 +168,7 @@ impl Type {
                     .collect(),
             )),
             resolve::type_ref::Type::Path(path) => {
-                let arguments = path
+                let arguments: Box<[Self]> = path
                     .arguments
                     .iter()
                     .filter_map(|argument| match argument {
@@ -175,6 +179,14 @@ impl Type {
                     })
                     .collect();
                 match &path.target {
+                    resolve::type_ref::Target::Builtin
+                        if path.name.as_str() == "Option" && arguments.len() == 1 =>
+                    {
+                        let mut arguments = arguments.into_vec();
+                        Self(Shape::Option(Box::new(
+                            arguments.pop().expect("one Option argument"),
+                        )))
+                    }
                     resolve::type_ref::Target::Builtin
                     | resolve::type_ref::Target::Parameter
                     | resolve::type_ref::Target::Projection(..) => {
@@ -224,6 +236,7 @@ impl Type {
             Shape::Unit
             | Shape::Tuple(_)
             | Shape::Builtin(_)
+            | Shape::Option(_)
             | Shape::Host { .. }
             | Shape::Reference { .. } => None,
         }
@@ -237,6 +250,7 @@ impl Type {
             Shape::Unit
             | Shape::Tuple(_)
             | Shape::Builtin(_)
+            | Shape::Option(_)
             | Shape::Host { .. }
             | Shape::Reference { .. } => None,
         }
@@ -249,6 +263,7 @@ impl Type {
             Shape::Unit => true,
             Shape::Tuple(members) => members.iter().all(|member| member.provides(capability)),
             Shape::Builtin(name) => builtin_provides(name, capability),
+            Shape::Option(_) => builtin_provides("Option", capability),
             Shape::Host { contract, .. } => contract.capabilities().contains(capability),
             Shape::Script { capabilities, .. } => capabilities.contains(capability),
             Shape::Reference { .. } => false,
@@ -269,6 +284,7 @@ impl Type {
                     .join(", ")
             ),
             Shape::Builtin(name) => name.to_string(),
+            Shape::Option(value) => format!("Option<{}>", value.display_name()),
             Shape::Host {
                 contract,
                 arguments,
@@ -296,6 +312,7 @@ impl Type {
             Shape::Unit
             | Shape::Tuple(_)
             | Shape::Builtin(_)
+            | Shape::Option(_)
             | Shape::Host { .. }
             | Shape::Script { .. } => None,
         }
@@ -311,15 +328,25 @@ impl Type {
             Shape::Unit
             | Shape::Tuple(_)
             | Shape::Builtin(_)
+            | Shape::Option(_)
             | Shape::Host { .. }
             | Shape::Script { .. }
             | Shape::Reference { .. } => None,
         }
     }
 
+    /// `T` of `Option<T>`.
+    pub(crate) fn option_element(&self) -> Option<&Self> {
+        match &self.0 {
+            Shape::Option(value) => Some(value),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_tuple_free(&self) -> bool {
         match &self.0 {
             Shape::Unit | Shape::Builtin(_) => true,
+            Shape::Option(value) => value.is_tuple_free(),
             Shape::Tuple(_) => false,
             Shape::Host { arguments, .. } => arguments.iter().all(Self::is_tuple_free),
             Shape::Script { tuple_free, .. } => *tuple_free,
@@ -340,6 +367,7 @@ impl Type {
             Shape::Tuple(members) => Self(Shape::Tuple(
                 members.iter().map(Self::dereferenced).collect(),
             )),
+            Shape::Option(value) => Self(Shape::Option(Box::new(value.dereferenced()))),
             Shape::Unit | Shape::Builtin(_) | Shape::Host { .. } | Shape::Script { .. } => {
                 self.clone()
             }
@@ -351,6 +379,7 @@ impl Type {
             Shape::Tuple(members) => Some(members),
             Shape::Unit
             | Shape::Builtin(_)
+            | Shape::Option(_)
             | Shape::Host { .. }
             | Shape::Script { .. }
             | Shape::Reference { .. } => None,
@@ -454,6 +483,9 @@ impl Type {
             Shape::Unit => Some(host::runtime::type_ref::Type::unit()),
             Shape::Builtin(name) => builtin_runtime(name)
                 .map(|(name, runtime)| host::runtime::type_ref::Type::builtin(name, runtime)),
+            Shape::Option(value) => Some(host::runtime::type_ref::Type::option(
+                value.exact_runtime_type()?,
+            )),
             Shape::Host {
                 contract,
                 arguments,
@@ -497,6 +529,7 @@ impl Type {
     ) {
         match &self.0 {
             Shape::Unit | Shape::Builtin(_) => {}
+            Shape::Option(value) => value.collect_dependencies(dependencies),
             Shape::Tuple(members) => {
                 for member in members {
                     member.collect_dependencies(dependencies);
@@ -521,6 +554,7 @@ impl Type {
     pub(crate) fn collect_schema_roots(&self, roots: &mut BTreeSet<type_def::Identity>) {
         match &self.0 {
             Shape::Unit | Shape::Builtin(_) => {}
+            Shape::Option(value) => value.collect_schema_roots(roots),
             Shape::Tuple(members) => {
                 for member in members {
                     member.collect_schema_roots(roots);
@@ -541,6 +575,7 @@ impl Type {
     pub(crate) fn retained_root_is_opaque(&self) -> bool {
         match &self.0 {
             Shape::Unit | Shape::Builtin(_) | Shape::Script { .. } => false,
+            Shape::Option(value) => value.retained_root_is_opaque(),
             Shape::Tuple(members) => members.iter().any(Self::retained_root_is_opaque),
             Shape::Host { .. } => true,
             Shape::Reference { target, .. } => target.retained_root_is_opaque(),
@@ -564,6 +599,12 @@ impl crate::preview::digest::Write for Type {
             Shape::Builtin(name) => {
                 writer.tag(0x2003);
                 writer.text(name);
+            }
+            // As `Option` was written before it kept its argument, so
+            // preview digests stay.
+            Shape::Option(_) => {
+                writer.tag(0x2003);
+                writer.text("Option");
             }
             Shape::Host {
                 contract,

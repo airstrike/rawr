@@ -145,3 +145,120 @@ fn click(adapter: &program::Adapter, label: &str) -> runtime::Message {
     simulator.click(label).unwrap();
     simulator.into_messages().next().unwrap()
 }
+
+/// Rust's module and import forms across files: a module and a function of
+/// one name, a trait imported from another module, nested import groups,
+/// `use Trait as _`, an import in a function body through an imported
+/// library module, and `view::view` as the application's view.
+#[test]
+fn modules_and_imports_resolve_as_rust_across_files() {
+    let root = std::env::temp_dir().join(format!(
+        "rawr-package-imports-{}-{}",
+        std::process::id(),
+        time::SystemTime::now()
+            .duration_since(time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/main.rawr"),
+        r#"use iced::widget::{button::{self, Status}, column};
+use iced::keyboard;
+use std::fmt::Write as _;
+
+mod circle;
+mod shapes;
+mod view;
+
+use circle::circle;
+use shapes::{inner::{double, triple}, Area};
+
+pub fn main() -> iced::Result {
+    iced::run(update, view::view)
+}
+
+#[derive(Default)]
+pub struct State {
+    pub count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    Add,
+}
+
+fn named(event: keyboard::Key) -> bool {
+    use keyboard::key;
+    event == keyboard::Key::Named(key::Named::Enter)
+}
+
+fn update(state: &mut State, message: Message) {
+    match message {
+        Message::Add => {
+            state.count += circle(2) + shapes::Square(3).area() + double(1) + triple(1);
+        }
+    }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(root.join("src/circle.rawr"), "pub fn circle(r: i64) -> i64 {\n    3 * r * r\n}\n").unwrap();
+    fs::write(
+        root.join("src/shapes.rawr"),
+        r#"pub trait Area {
+    fn area(&self) -> i64;
+}
+
+pub struct Square(pub i64);
+
+impl Area for Square {
+    fn area(&self) -> i64 {
+        self.0 * self.0
+    }
+}
+
+pub mod inner {
+    pub fn double(x: i64) -> i64 {
+        x * 2
+    }
+
+    pub fn triple(x: i64) -> i64 {
+        x * 3
+    }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/view.rawr"),
+        r#"use iced::widget::{button, column, text};
+use iced::Widget;
+use crate::shapes::Area;
+use crate::{Message, State};
+
+pub fn view(state: &State) -> impl Widget<Message> {
+    column![
+        text(format!("count {} {}", state.count, crate::shapes::Square(2).area())),
+        button("Add").on_press(Message::Add),
+    ]
+}
+"#,
+    )
+    .unwrap();
+
+    let target = project::Target::discover(&root).unwrap();
+    let prepared = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check(&target)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .prepare()
+        .unwrap();
+    let mut adapter = prepared.into_adapter();
+    assert_text(&adapter, "count 0 4");
+    let message = click(&adapter, "Add");
+    assert_eq!(adapter.update(message).unwrap(), program::Delivery::Applied);
+    // 12 + 9 + 2 + 3, as the same crate built by cargo computes.
+    assert_text(&adapter, "count 26 4");
+    let _ = fs::remove_dir_all(root);
+}

@@ -248,7 +248,7 @@ impl widget::Descriptor for marker::Transition {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut arguments = [
             Dynamic::from(marker::Animation(self.value)),
-            Dynamic::from(marker::Instant),
+            Dynamic::from(marker::Instant::now()),
         ];
         match context.invoke(&self.view, &mut arguments) {
             None => iced::widget::space().boxed(),
@@ -958,24 +958,31 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             .bind(path, move |_| Ok(Dynamic::from(style)))
             .expect("the iced facade must retain every exact built-in container style item");
     }
+    fn new_text(
+        call: &host::runtime::Call<'_>,
+        args: &mut [&mut Dynamic],
+    ) -> Result<Dynamic, Box<rawr::EvalAltResult>> {
+        let content = display_content(args.first().ok_or_else(|| arity("text", 1, 0))?)?;
+        Ok(Dynamic::from(marker::Text {
+            witness: call.output_witness().map_err(witness_error)?,
+            identity: widget::Identity::unique(),
+            content,
+            size: None,
+            width: iced::Length::Fit,
+            height: None,
+            align_x: iced::advanced::text::Alignment::Default,
+            style: None,
+            color: None,
+            font: None,
+            line_height: None,
+        }))
+    }
     builder
-        .bind_with_context("iced::widget::text", |call, args| {
-            let content = display_content(args.first().ok_or_else(|| arity("text", 1, 0))?)?;
-            Ok(Dynamic::from(marker::Text {
-                witness: call.output_witness().map_err(witness_error)?,
-                identity: widget::Identity::unique(),
-                content,
-                size: None,
-                width: iced::Length::Fit,
-                height: None,
-                align_x: iced::advanced::text::Alignment::Default,
-                style: None,
-                color: None,
-                font: None,
-                line_height: None,
-            }))
-        })
+        .bind_with_context("iced::widget::text", |call, args| new_text(call, args))
         .expect("the iced facade must retain the exact text item");
+    builder
+        .bind_macro_with_context("iced::widget::text", |call, args| new_text(call, args))
+        .expect("the iced facade must retain the exact text macro");
     builder
         .bind_with_context("iced::widget::button", |call, args| {
             let content = args.first_mut().ok_or_else(|| arity("button", 1, 0))?;

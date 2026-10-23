@@ -38,6 +38,7 @@ pub struct Definition {
     supports: Box<[host::support::SignatureContract]>,
     endpoints: Box<[host::endpoint::Contract]>,
     items: Box<[host::item::Definition]>,
+    aliases: Box<[(host::path::Path, host::path::Path)]>,
     fingerprint: Fingerprint,
 }
 
@@ -48,6 +49,7 @@ pub(crate) struct RegistryParts {
     pub(crate) supports: Box<[host::support::SignatureContract]>,
     pub(crate) endpoints: Box<[host::endpoint::Contract]>,
     pub(crate) items: Box<[host::item::Definition]>,
+    pub(crate) aliases: Box<[(host::path::Path, host::path::Path)]>,
     pub(crate) fingerprint: Fingerprint,
 }
 
@@ -140,6 +142,7 @@ pub struct Builder {
     #[cfg(feature = "rust-import")]
     profile_items: Vec<host::item::Definition>,
     projections: Vec<ProjectionDeclaration>,
+    aliases: Vec<(host::path::Path, host::path::Path)>,
 }
 
 #[derive(Debug)]
@@ -174,6 +177,7 @@ impl Builder {
             #[cfg(feature = "rust-import")]
             profile_items: Vec::new(),
             projections: Vec::new(),
+            aliases: Vec::new(),
         })
     }
 
@@ -198,6 +202,7 @@ impl Builder {
             items: Vec::new(),
             profile_items: Vec::new(),
             projections: Vec::new(),
+            aliases: Vec::new(),
         })
     }
 
@@ -280,6 +285,30 @@ impl Builder {
             .try_reserve(1)
             .map_err(|_| host::Error::Allocation)?;
         self.modules.insert(index, path);
+        Ok(self)
+    }
+
+    /// Re-export this facade's type `target` at `path`, as Rust's `pub use`:
+    /// iced's `iced::Event` is also `iced::event::Event`. Both are relative.
+    pub fn alias(
+        &mut self,
+        path: impl Into<ImmutableString>,
+        target: impl Into<ImmutableString>,
+    ) -> Result<&mut Self, host::Error> {
+        let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
+        let target = host::path::Path::qualify(&self.root, &host::path::Path::parse(target)?);
+        self.ensure_vacant(&path, "re-export")?;
+        if self.aliases.iter().any(|(alias, _)| *alias == path) {
+            return Err(host::Error::DuplicateFacadeEntry {
+                path: path.to_string().into(),
+                existing: "re-export",
+                incoming: "re-export",
+            });
+        }
+        self.aliases
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.aliases.push((path, target));
         Ok(self)
     }
 
@@ -1142,11 +1171,31 @@ impl Builder {
         #[cfg(feature = "rust-import")]
         append_profile_items(&mut items, self.profile_items)?;
         let items = items.into_boxed_slice();
+        // A re-export names one of this facade's types at another path.
+        for (alias, target) in &self.aliases {
+            if self
+                .types
+                .binary_search_by(|definition| definition.path_ref().cmp(target))
+                .is_err()
+            {
+                return Err(host::Error::DuplicateFacadeEntry {
+                    path: alias.to_string().into(),
+                    existing: "re-export of an unknown type",
+                    incoming: "re-export",
+                });
+            }
+        }
+        self.aliases.sort();
+        let mut modules = self.modules.clone();
+        for (alias, target) in &self.aliases {
+            // Re-exports join the proof under a spelling no module has.
+            modules.push(host::path::Path::parse(format!("{alias}::{target}"))?);
+        }
         let fingerprint = fingerprint(
             &self.root,
             self.abi,
             self.compatibility,
-            &self.modules,
+            &modules,
             &self.types,
             &self.supports,
             &self.endpoints,
@@ -1160,6 +1209,7 @@ impl Builder {
             supports: self.supports.into_boxed_slice(),
             endpoints: self.endpoints.into_boxed_slice(),
             items,
+            aliases: self.aliases.into_boxed_slice(),
             fingerprint,
         })
     }
@@ -1251,6 +1301,7 @@ impl Builder {
             supports: self.supports.into_boxed_slice(),
             endpoints: self.endpoints.into_boxed_slice(),
             items,
+            aliases: Box::default(),
             fingerprint,
         })
     }
@@ -1388,7 +1439,8 @@ fn same_namespace(left: &host::item::Definition, right: &host::item::Definition)
 /// both a value and callable: `button::primary` names the value,
 /// `button::primary(theme, status)` calls. A field reader (a shared method
 /// without parameters) may share its name with owned builder methods, as
-/// iced's `style.border` and `style.border(..)`.
+/// iced's `style.border` and `style.border(..)`. A tuple variant's
+/// constructor may share its name with the shared reader of its field.
 fn compatible_overload(existing: &host::item::Definition, item: &host::item::Definition) -> bool {
     debug_assert!(same_namespace(existing, item));
     use host::item::Kind;
@@ -1402,11 +1454,16 @@ fn compatible_overload(existing: &host::item::Definition, item: &host::item::Def
     let builder = |item: &host::item::Definition| {
         item.kind() == Kind::Method && item.receiver() == Some(crate::receiver::Mode::Owned)
     };
+    // A tuple variant's constructor and the reader of its field in a
+    // pattern, as iced's `Key::Named`.
+    let constructor = |item: &host::item::Definition| item.kind() == Kind::AssociatedFunction;
     existing.kind() == item.kind() && existing.receiver() == item.receiver()
         || value(existing) && function(item)
         || function(existing) && value(item)
         || reader(existing) && builder(item)
         || builder(existing) && reader(item)
+        || constructor(existing) && reader(item)
+        || reader(existing) && constructor(item)
 }
 
 impl Definition {
@@ -1501,6 +1558,7 @@ impl Definition {
             supports: self.supports,
             endpoints: self.endpoints,
             items: self.items,
+            aliases: self.aliases,
             fingerprint: self.fingerprint,
         }
     }

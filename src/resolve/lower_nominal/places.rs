@@ -460,8 +460,26 @@ impl Parser<'_> {
             Some(Lvalue::Place { binding, place, .. }) => {
                 (place.as_str().to_string(), binding.clone())
             }
+            // A field or a nested place: its fields copied out around the
+            // statement and stored back, as a mutable loop over it is.
+            Some(Lvalue::Field(field)) => {
+                let nested = NestedLvalue {
+                    binding: field.binding.clone(),
+                    base: origin::Fragment::plain(field.binding.to_string()),
+                    steps: vec![PlaceStep::Field {
+                        definition: field.definition.clone(),
+                        slot: field.slot,
+                    }],
+                    ty: field.ty.clone(),
+                };
+                (self.nested_place(&nested).as_str().to_string(), field.binding.clone())
+            }
+            Some(Lvalue::Nested(nested)) => {
+                let nested = (**nested).clone();
+                (self.nested_place(&nested).as_str().to_string(), nested.binding.clone())
+            }
             _ => {
-                return Err(self.unsupported("`iter_mut` on a value that is not a local"));
+                return Err(self.unsupported("`iter_mut` on a value that is not a place"));
             }
         };
         let mut ahead = self.input.clone();

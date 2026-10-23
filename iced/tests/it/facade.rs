@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [63, 227, 61, 40, 201, 23, 55, 76, 36, 1, 125, 18, 247, 17, 158, 85]
+        [31, 92, 189, 182, 143, 63, 84, 178, 139, 77, 199, 248, 77, 91, 219, 191]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
@@ -380,7 +380,9 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     );
     let mut text = second
         .items()
-        .filter(|item| item.path() == "iced::widget::text")
+        .filter(|item| {
+            item.path() == "iced::widget::text" && item.kind() == host::item::Kind::Function
+        })
         .map(|item| item.signature().parameters()[0].clone())
         .collect::<Vec<_>>();
     text.sort();
@@ -921,4 +923,66 @@ fn inputs_of(facade: &host::facade::Definition, path: &str) -> Vec<host::type_re
         })
         .map(|item| item.signature().parameters()[0].clone())
         .collect()
+}
+
+/// The names under `iced::widget` a snippet host imports for a snippet
+/// with no `use` of its own: every free function, macro and type.
+fn widget_prelude_names() -> Vec<String> {
+    let facade = rawr_iced::facade().unwrap();
+    let direct = |path: &str| {
+        path.strip_prefix("iced::widget::")
+            .is_some_and(|name| !name.contains("::"))
+    };
+    let mut names = facade
+        .items()
+        .filter(|item| {
+            matches!(
+                item.kind(),
+                host::item::Kind::Function
+                    | host::item::Kind::IntrinsicFunction
+                    | host::item::Kind::IntrinsicMacro
+            )
+        })
+        .map(host::item::Definition::path)
+        .chain(facade.types().map(host::type_def::Definition::path))
+        .filter(|path| direct(path))
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Widget names the prelude leaves out: `iced` would hide the crate, and
+/// `Widget` comes from `iced::Widget`.
+const NOT_IN_PRELUDE: [&str; 3] = [
+    "iced::widget::iced",
+    "iced::widget::Renderer",
+    "iced::widget::Widget",
+];
+
+#[test]
+fn the_snippet_prelude_names_every_widget_helper() {
+    let manifest = rawr_iced::MANIFEST;
+    let missing = widget_prelude_names()
+        .into_iter()
+        .filter(|path| !NOT_IN_PRELUDE.contains(&path.as_str()))
+        .filter(|path| !manifest.contains(&format!("\"{path}\"")))
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "add these to `prelude` in iced/manifest.toml: {missing:?}"
+    );
+    // Each prelude name is one the facade declares.
+    let facade = rawr_iced::facade().unwrap();
+    let block = &manifest[manifest.find("prelude = [").unwrap()..];
+    let block = &block[..block.find(']').unwrap()];
+    let prelude = block.split('"').skip(1).step_by(2).collect::<Vec<_>>();
+    let unknown = prelude
+        .iter()
+        .filter(|path| {
+            !facade.types().any(|ty| ty.path() == **path)
+                && !facade.items().any(|item| item.path() == **path)
+        })
+        .collect::<Vec<_>>();
+    assert!(unknown.is_empty(), "the facade declares no {unknown:?}");
 }

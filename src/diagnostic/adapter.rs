@@ -372,6 +372,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::InvalidDerive => code::RESOLVE_DERIVE,
         resolve::Category::DuplicateMember => code::RESOLVE_DUPLICATE_MEMBER,
         resolve::Category::UnknownMember => code::RESOLVE_UNKNOWN_MEMBER,
+        resolve::Category::UnknownFunction => code::RESOLVE_UNKNOWN_FUNCTION,
         resolve::Category::InvalidConstruction => code::RESOLVE_CONSTRUCTION,
         resolve::Category::TypeMismatch => code::RESOLVE_TYPE_MISMATCH,
         resolve::Category::ImmutableBinding => code::RESOLVE_IMMUTABLE_BINDING,
@@ -411,6 +412,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnknownImport { path, .. } => builder.help(format!(
             "`{path}` isn't available in Rawr yet, or the path is misspelled"
         )),
+        resolve::Error::UnknownFunction {
+            import: Some(path), ..
+        } => builder.help(format!("import it with `use {path};`")),
+        resolve::Error::UnknownFunction { name, .. } => {
+            builder.help(format!("declare `fn {name}`, or import it with `use`"))
+        }
         resolve::Error::MissingCapability {
             owner, capability, ..
         } => builder.help(format!("derive `{capability}` for `{owner}`")),
@@ -590,6 +597,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::UnknownMember { owner, member, .. } => {
             format!("unknown member `{owner}::{member}`")
         }
+        resolve::Error::UnknownFunction { name, .. } => format!("unknown function `{name}`"),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }

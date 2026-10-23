@@ -1,5 +1,7 @@
 //! Host metadata consulted while resolving Rawr source.
 
+#[cfg(not(feature = "no_std"))]
+pub mod debug;
 pub(crate) mod endpoint;
 pub mod value;
 mod error;
@@ -137,6 +139,8 @@ pub struct Registry {
     structural: Vec<structural::Definition>,
     items: Vec<item::Definition>,
     facades: Vec<facade::Dependency>,
+    /// Facade re-exports, sorted: a path and the canonical path it names.
+    aliases: Vec<(path::Path, path::Path)>,
 }
 
 #[cfg(feature = "rust-import")]
@@ -191,6 +195,7 @@ impl Registry {
             structural: Vec::new(),
             items: Vec::new(),
             facades: Vec::new(),
+            aliases: Vec::new(),
         }
     }
 
@@ -305,6 +310,13 @@ impl Registry {
             .map_err(|_| rawr_import::surface::Error::Allocation)?;
         for facade in &self.facades {
             clone.facades.push(facade.try_clone()?);
+        }
+        clone
+            .aliases
+            .try_reserve_exact(self.aliases.len())
+            .map_err(|_| rawr_import::surface::Error::Allocation)?;
+        for (alias, target) in &self.aliases {
+            clone.aliases.push((alias.try_clone()?, target.try_clone()?));
         }
         Ok(clone)
     }
@@ -439,6 +451,11 @@ impl Registry {
                 .partition_point(|existing| existing.path_ref() <= item.path_ref());
             self.items.insert(index, item);
         }
+        self.aliases
+            .try_reserve(parts.aliases.len())
+            .map_err(|_| Error::Allocation)?;
+        self.aliases.extend(parts.aliases);
+        self.aliases.sort();
         let facade_index = self
             .facades
             .binary_search_by(|facade| facade.root().cmp(dependency.root()))
@@ -581,6 +598,21 @@ impl Registry {
             return None;
         };
         Some(item)
+    }
+
+    /// The paths of the free functions and macros named `name`, in any
+    /// module: `iced::widget::center` for `center`.
+    pub(crate) fn functions_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = String> + 'a {
+        self.items
+            .iter()
+            .filter(move |item| {
+                item.path_ref().name() == name
+                    && matches!(
+                        item.kind(),
+                        item::Kind::Function | item::Kind::IntrinsicFunction
+                    )
+            })
+            .map(item::Definition::path)
     }
 
     /// Items declared directly under `owner`, such as a type's methods.
@@ -887,10 +919,29 @@ impl Registry {
     }
 
     fn type_by_path(&self, path: &path::Path) -> Option<&type_def::Definition> {
-        self.types
-            .binary_search_by(|definition| definition.path_ref().cmp(path))
+        let found = |path: &path::Path| {
+            self.types
+                .binary_search_by(|definition| definition.path_ref().cmp(path))
+                .ok()
+                .map(|index| &self.types[index])
+        };
+        found(path).or_else(|| found(&self.canonical(path)?))
+    }
+
+    /// The canonical spelling of a path through a facade re-export:
+    /// `iced::event::Event::Keyboard` is `iced::Event::Keyboard`.
+    pub(crate) fn canonical(&self, path: &path::Path) -> Option<path::Path> {
+        self.aliases
+            .iter()
+            .find_map(|(alias, target)| path.rebase(alias, target))
+    }
+
+    /// [`Self::canonical`] of a written path, or the path itself.
+    pub(crate) fn canonical_str(&self, qualified: &str) -> ImmutableString {
+        path::Path::parse(qualified)
             .ok()
-            .map(|index| &self.types[index])
+            .and_then(|path| self.canonical(&path))
+            .map_or_else(|| qualified.into(), |path| path.to_string().into())
     }
 
     pub(crate) fn support_by_path(&self, path: &path::Path) -> Option<&support::SignatureContract> {
