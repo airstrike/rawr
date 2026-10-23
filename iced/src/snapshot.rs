@@ -181,6 +181,9 @@ pub struct Motion {
     /// Where `deadline` moves once a frame differs from the first: an
     /// animation's longer budget. No later than `deadline` keeps it.
     pub extended: std::time::Instant,
+    /// Set from outside to stop recording before the next frame, keeping
+    /// the frames so far: someone else is waiting for the renderer.
+    pub cut: Option<&'static std::sync::atomic::AtomicBool>,
 }
 
 /// One frame of a [`Recording`].
@@ -224,6 +227,8 @@ pub enum Ending {
     /// The wall clock reached [`Motion::deadline`], moved to
     /// [`Motion::extended`] when the view changed.
     Deadline,
+    /// [`Motion::cut`] was set.
+    Cut,
 }
 
 /// The frames an application drew on a simulated clock.
@@ -293,6 +298,9 @@ pub fn record_application(
             loop {
                 if motion.deadline.past() {
                     break 'record Ending::Deadline;
+                }
+                if motion.cut.is_some_and(|cut| cut.load(std::sync::atomic::Ordering::Relaxed)) {
+                    break 'record Ending::Cut;
                 }
                 let capped = frames.len() >= motion.frames;
                 if capped && phase < last {

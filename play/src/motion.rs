@@ -107,6 +107,10 @@ pub fn stopped_note(budget: Duration, shown: Duration) -> String {
     )
 }
 
+/// The sentence added to [`stopped_note`] when the bot cut the render
+/// because someone else was waiting.
+pub const WAITING: &str = "It was cut short because someone else was waiting.";
+
 /// Where a recording's frames repeat, as `stop` sees them: the first `k`
 /// whose frame equals an earlier frame `j` that is not part of a still
 /// stretch, with the next frames and their timing matching too.
@@ -158,7 +162,7 @@ fn cycle(hashes: &[u64], times: &[Duration]) -> Option<(usize, usize)> {
 }
 
 /// The image a recording gives. `budget` is the wall-clock time it had
-/// once its view changed.
+/// once its view changed, or the time it ran when it was cut.
 pub fn picture(recording: Recording, loops: &Loops, budget: Duration) -> Result<Image, PlayError> {
     let Recording {
         frames,
@@ -205,6 +209,7 @@ pub fn picture(recording: Recording, loops: &Loops, budget: Duration) -> Result<
             let note = match ending {
                 Ending::Settled => None,
                 Ending::Deadline => Some(stopped_note(budget, played)),
+                Ending::Cut => Some(format!("{} {WAITING}", stopped_note(budget, played))),
                 _ => Some(cut_note(played)),
             };
             (shown, false, note)

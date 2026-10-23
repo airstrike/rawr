@@ -35,7 +35,7 @@ hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 serenity = { version = "0.12.5", default-features = false, features = ["cache", "client", "gateway", "model", "rustls_backend"], optional = true }
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"], optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [lib]

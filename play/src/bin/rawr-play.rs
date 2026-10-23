@@ -23,6 +23,9 @@
 //! A result starting with `{` is text; no image starts with it. Errors
 //! (diagnostics, bad options) go to stderr with exit status 1, as before.
 //!
+//! `SIGUSR1` stops an animation's recording before its next frame. The
+//! frames so far are kept, and the note says someone else was waiting.
+//!
 //! `rawr-play decrypt-server <token>...` prints the guild ID behind each
 //! server token on the bot's dashboard, and `rawr-play encrypt-server <id>...`
 //! the token for a guild ID, both with the key in `~/.config/rawr-play/log-key`
@@ -69,6 +72,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     if let Some(command @ ("decrypt-server" | "encrypt-server")) = args.first().map(String::as_str) {
         return server_tokens(command == "decrypt-server", &args[1..]);
     }
+    stop_on_signal();
     let mut input = None;
     let mut output = None;
     let mut format = None;
@@ -178,6 +182,23 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Set [`rawr_play::CUT`] on `SIGUSR1`: the bot asks a long animation to
+/// stop and keep its frames.
+#[cfg(unix)]
+fn stop_on_signal() {
+    extern "C" fn cut(_: libc::c_int) {
+        rawr_play::CUT.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    // SAFETY: the handler only stores to an atomic, which is
+    // async-signal-safe.
+    unsafe {
+        libc::signal(libc::SIGUSR1, cut as extern "C" fn(libc::c_int) as libc::sighandler_t);
+    }
+}
+
+#[cfg(not(unix))]
+fn stop_on_signal() {}
 
 /// Cap this process's address space, so an allocation past it fails and the
 /// process aborts instead of exhausting the host.

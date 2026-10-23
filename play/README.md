@@ -126,7 +126,8 @@ Object's storage), else the file `PLAY_CONFIG_FILE`, else
 | `PLAY_WORKERS` | 2 | Renders running at once |
 | `PLAY_TIME_MS` | 2000 | Script time budget per render (engine deadline) |
 | `PLAY_ANIMATION_TIME_MS` | 15000 | An animation's time budget, once its view changes |
-| `PLAY_ANIMATION_ALLOWANCE_S` | 45 | Animation time per user in each window |
+| `PLAY_IDLE_ANIMATION_TIME_MS` | 60000 | An animation's time budget when no other render is queued or running |
+| `PLAY_ANIMATION_ALLOWANCE_S` | 90 | Animation time per user in each window |
 | `PLAY_ANIMATION_WINDOW_S` | 600 | The rolling window for the allowance |
 | `PLAY_TIMEOUT_MS` | 10000 | Whole render; the render process is killed after it |
 | `PLAY_MEMORY_MB` | 1024 | Address-space cap per render process (Linux) |
@@ -176,20 +177,31 @@ Cloudflare). A full app whose view changes may record up to
 `PLAY_ANIMATION_TIME_MS` (15 s). The switch happens at the second distinct
 frame. The app's scripts and the recording share that deadline. The
 simulated clock is unchanged, so the same snippet gives the same frames.
-`PLAY_TIMEOUT_MS` (25 s on Cloudflare) leaves room for 15 s plus the start
-and the GIF's encoding.
+`PLAY_TIMEOUT_MS` (80 s on Cloudflare) leaves room for the idle budget's
+60 s plus the start and the GIF's encoding. The bot shows Discord's typing
+indicator while a render runs.
 
-The longer budget has two limits (`src/budget.rs`):
+The longer budget has three limits (`src/budget.rs`):
 
-- Each user gets 45 s of animation time in any 10 minutes. A Discord user
+- Each user gets 90 s of animation time in any 10 minutes. A Discord user
   is keyed by ID. A playground caller is keyed by its IP's hash, which the
   Worker sends in `x-play-user`. A render that runs past the still budget
-  counts its whole time. A user with less than the still budget left gets
-  the still budget.
+  counts its whole time. It may take the allowance to zero but not below.
+  A user with less than the still budget left gets the still budget.
 - One render at a time holds the longer budget, across Discord and the
   playground. Others get the still budget while it runs.
+- A render that starts with no other render queued or running may use
+  `PLAY_IDLE_ANIMATION_TIME_MS` (60 s) instead, as far as its user's
+  allowance reaches. The allowance fits one full idle render.
 
-The CLI takes the budgets as `--time-ms` and `--animation-ms`.
+A newcomer does not wait for an idle render. When a request arrives, the
+bot sends the idle render's process `SIGUSR1`. It sends it at once when the
+render is past `PLAY_ANIMATION_TIME_MS`, and otherwise when the render gets
+there. The process stops recording before its next frame and keeps the
+frames so far.
+
+The CLI takes the budgets as `--time-ms` and `--animation-ms`. `SIGUSR1`
+cuts its recording the same way.
 
 The notes on an animated reply:
 
@@ -199,6 +211,8 @@ The notes on an animated reply:
 | The wall clock cut it | `Rendering stopped after 15 s, so the animation shows its first 2.3 s.` |
 | …and the user's allowance was used up | adds `Your animation time is used up for now. It frees up in 4 minutes.` |
 | …and another render held the longer budget | adds `Another animation was rendering at the same time. Run it again shortly for up to 15 s.` |
+| Someone else was waiting for an idle render | `Rendering stopped after 21.4 s, so the animation shows its first 2.3 s. It was cut short because someone else was waiting.` |
+| An idle render ran past 15 s otherwise | adds `The bot was otherwise idle, so this animation could render for up to 60 s.` |
 
 The landing page's Run results are not cached when the clock cut them.
 

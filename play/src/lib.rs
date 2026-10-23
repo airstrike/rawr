@@ -39,12 +39,19 @@ pub mod stats;
 pub mod web;
 
 use std::fmt;
+use std::sync::atomic::AtomicBool;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 pub use motion::{Gif, Image, Picture};
 use rawr_iced::snapshot::Deadline;
 pub use plain::Output;
+
+/// Set to stop an animation's recording before its next frame. The
+/// `rawr-play` binary sets it on `SIGUSR1`, which the bot sends when
+/// someone else is waiting for a render that has run past the normal
+/// animation budget.
+pub static CUT: AtomicBool = AtomicBool::new(false);
 
 /// A rendered PNG.
 pub type Png = rawr_iced::snapshot::Png;
@@ -364,6 +371,7 @@ pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
         span: motion::SPAN,
         deadline,
         extended: start + budget,
+        cut: Some(&CUT),
     };
     let mut loops = motion::Loops::default();
     let recording = rawr_iced::snapshot::record_application(
@@ -376,7 +384,13 @@ pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
         &mut |frames| loops.check(frames),
     )
     .map_err(|error| classify(&error.to_string(), &options.limits))?;
-    motion::picture(recording, &loops, budget)
+    // A cut recording stopped before its budget ran out.
+    let stopped = if recording.ending == rawr_iced::snapshot::Ending::Cut {
+        start.elapsed()
+    } else {
+        budget
+    };
+    motion::picture(recording, &loops, stopped)
 }
 
 /// How a render sizes and scales its image.

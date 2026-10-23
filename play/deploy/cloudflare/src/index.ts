@@ -134,6 +134,7 @@ interface Env {
   PLAY_TIMEOUT_MS: string;
   PLAY_TIME_MS: string;
   PLAY_ANIMATION_TIME_MS: string;
+  PLAY_IDLE_ANIMATION_TIME_MS: string;
   PLAY_ANIMATION_ALLOWANCE_S: string;
   PLAY_ANIMATION_WINDOW_S: string;
   PLAY_VERSION: string;
@@ -169,6 +170,7 @@ export class PlayBot extends Container<Env> {
       PLAY_TIMEOUT_MS: env.PLAY_TIMEOUT_MS,
       PLAY_TIME_MS: env.PLAY_TIME_MS,
       PLAY_ANIMATION_TIME_MS: env.PLAY_ANIMATION_TIME_MS,
+      PLAY_IDLE_ANIMATION_TIME_MS: env.PLAY_IDLE_ANIMATION_TIME_MS,
       PLAY_ANIMATION_ALLOWANCE_S: env.PLAY_ANIMATION_ALLOWANCE_S,
       PLAY_ANIMATION_WINDOW_S: env.PLAY_ANIMATION_WINDOW_S,
       PLAY_CONFIG_URL: `http://${CONFIG_HOST}/channels`,
@@ -437,7 +439,7 @@ export class PlayBot extends Container<Env> {
     const e = this.env;
     return (
       `${e.PLAY_VERSION} workers=${e.PLAY_WORKERS},memory=${e.PLAY_MEMORY_MB},timeout=${e.PLAY_TIMEOUT_MS},time=${e.PLAY_TIME_MS},` +
-      `animation=${e.PLAY_ANIMATION_TIME_MS},allowance=${e.PLAY_ANIMATION_ALLOWANCE_S}/${e.PLAY_ANIMATION_WINDOW_S}`
+      `animation=${e.PLAY_ANIMATION_TIME_MS},idle=${e.PLAY_IDLE_ANIMATION_TIME_MS},allowance=${e.PLAY_ANIMATION_ALLOWANCE_S}/${e.PLAY_ANIMATION_WINDOW_S}`
     );
   }
 
