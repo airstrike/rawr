@@ -2989,6 +2989,17 @@ impl<'proof> Decoration<'proof> {
 
 impl rawr::package::import::runner::Profile for Decoration<'_> {
     fn ready(&self, facade: &facade::Facade, installed: &[host::facade::Definition]) -> bool {
+        // A crate that returns a Rust future or sipper names iced's types,
+        // so it waits for the iced facade.
+        if facade.root() != ROOT
+            && !installed.iter().any(|definition| definition.root() == ROOT)
+            && facade.items().any(|item| {
+                item.signature().inputs().iter().any(names_projected)
+                    || names_projected(item.signature().output())
+            })
+        {
+            return false;
+        }
         self.projections.iter().all(|projection| {
             let Some((source, _)) = self.source_site(&projection.source) else {
                 return false;
@@ -3084,6 +3095,7 @@ impl rawr::package::import::runner::Profile for Decoration<'_> {
     fn semantic_type(
         &self,
         facade: &facade::Facade,
+        installed: &[host::facade::Definition],
         identity: &[u8; 32],
         arguments: Box<[host::type_ref::Type]>,
     ) -> Result<Option<host::type_ref::Type>, host::Error> {
@@ -3097,11 +3109,18 @@ impl rawr::package::import::runner::Profile for Decoration<'_> {
             None
         };
         if let Some(path) = projected {
-            return if facade.root() == ROOT {
-                host::type_ref::Type::applied(path, arguments).map(Some)
-            } else {
-                host::type_ref::Type::external(self.semantic.export_type(path)?, arguments).map(Some)
-            };
+            if facade.root() == ROOT {
+                return host::type_ref::Type::applied(path, arguments).map(Some);
+            }
+            // Another crate's facade names the installed iced facade's type.
+            let iced = installed
+                .iter()
+                .find(|definition| definition.root() == ROOT)
+                .ok_or_else(|| host::Error::UnknownFacadeType {
+                    item: "a Rust future or sipper".into(),
+                    ty: format!("iced::{path}").into(),
+                })?;
+            return host::type_ref::Type::external(iced.export_type(path)?, arguments).map(Some);
         }
         let Some(path) = self.semantic_type_path(facade, identity) else {
             return Ok(None);
@@ -3859,6 +3878,24 @@ mod hot_outcome_tests;
 
 #[cfg(all(test, unix))]
 mod observation_tests;
+
+/// Whether `ty` names a Rust future or sipper, which iced's facade declares.
+fn names_projected(ty: &facade::Type) -> bool {
+    match ty {
+        facade::Type::Nominal {
+            identity,
+            arguments,
+        } => {
+            rawr_import::surface::identity::Definition::is_projected(identity)
+                || arguments.iter().any(names_projected)
+        }
+        facade::Type::FunctionItem { input, output } | facade::Type::Result(input, output) => {
+            names_projected(input) || names_projected(output)
+        }
+        facade::Type::Option(element) => names_projected(element),
+        _ => false,
+    }
+}
 
 #[cfg(test)]
 mod digest_tests {
