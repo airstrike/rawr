@@ -105,11 +105,23 @@ impl Arrival {
     /// Validate the item and run the mapper chain. Call this on the thread
     /// that owns the script runtime. `None` means a `filter_map` dropped it.
     pub fn finish(self) -> Result<Option<Dynamic>, Error> {
+        // A Rust value becomes a Rawr value here, on the script thread.
+        let value = match self
+            .value
+            .try_cast_result::<host::runtime::Deferred>()
+        {
+            Ok(deferred) => deferred
+                .resolve()
+                .map_err(|message| Error::Native {
+                    message: message.into(),
+                })?,
+            Err(value) => value,
+        };
         let mut mapper = self
             .mapper
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (mapper)(self.value)
+        (mapper)(value)
     }
 }
 
@@ -172,6 +184,11 @@ pub enum Error {
     /// The issuing application or preview Message lacks an exact runtime proof.
     MessageContract {
         /// Human-readable Message contract.
+        message: ImmutableString,
+    },
+    /// A Rust stream's item could not become a Rawr value.
+    Native {
+        /// Why the item could not cross.
         message: ImmutableString,
     },
 }
@@ -641,6 +658,9 @@ impl fmt::Display for Error {
                 formatter,
                 "stream issuer Message contract `{message}` has no exact runtime representation"
             ),
+            Self::Native { message } => {
+                write!(formatter, "a Rust stream's item could not cross into Rawr: {message}")
+            }
         }
     }
 }
@@ -656,7 +676,7 @@ impl std::error::Error for Error {
             Self::IdentityEncoding { source, .. } => Some(source),
             Self::IdentityProof(error) => Some(error),
             Self::Mapper(error) => Some(error),
-            Self::Arity { .. } | Self::MessageContract { .. } => None,
+            Self::Arity { .. } | Self::MessageContract { .. } | Self::Native { .. } => None,
         }
     }
 }
@@ -672,7 +692,7 @@ impl core_error::Error for Error {
             Self::IdentityEncoding { source, .. } => Some(source),
             Self::IdentityProof(error) => Some(error),
             Self::Mapper(error) => Some(error),
-            Self::Arity { .. } | Self::MessageContract { .. } => None,
+            Self::Arity { .. } | Self::MessageContract { .. } | Self::Native { .. } => None,
         }
     }
 }

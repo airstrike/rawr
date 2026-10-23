@@ -10,6 +10,8 @@ const DEFINITION_DOMAIN: &[u8] = b"rawr.identity.definition/v1";
 const EXPORT_DOMAIN: &[u8] = b"rawr.identity.export/v1";
 const IMPLEMENTATION_DOMAIN: &[u8] = b"rawr.identity.implementation/v1";
 const OPERATION_DOMAIN: &[u8] = b"rawr.identity.operation/v3";
+const SIPPER_DOMAIN: &[u8] = b"rawr.identity.sipper/v1";
+const FUTURE_DOMAIN: &[u8] = b"rawr.identity.future/v1";
 
 /// Canonical generic extension slot; Phase 2 has no constructor.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -189,6 +191,28 @@ impl Definition {
         let mut framed = Framed::new(DEFINITION_DOMAIN);
         framed.definition(definition);
         Self(framed.finish())
+    }
+
+    /// The type a Rust `impl Sipper<Output, Progress>` crosses as. Sipper is
+    /// a trait, so no Rust definition names it; iced's facade declares it as
+    /// `task::Sipper<Output, Progress>`.
+    #[must_use]
+    pub fn sipper() -> Self {
+        Self(Framed::new(SIPPER_DOMAIN).finish())
+    }
+
+    /// The type a Rust future of `T` crosses as: iced's `Task<T>`. Any
+    /// crate may return one, so no crate's own types declare it.
+    #[must_use]
+    pub fn future() -> Self {
+        Self(Framed::new(FUTURE_DOMAIN).finish())
+    }
+
+    /// Whether these bytes name a type the iced facade gives a Rust value
+    /// that has no type of its own: a future or a sipper.
+    #[must_use]
+    pub fn is_projected(bytes: &[u8; 32]) -> bool {
+        *bytes == Self::future().0 || *bytes == Self::sipper().0
     }
 
     /// Reconstitute one semantic definition digest carried by an authenticated

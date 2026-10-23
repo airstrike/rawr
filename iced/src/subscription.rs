@@ -392,6 +392,37 @@ fn bind_events(builder: &mut host::runtime::Builder) {
             unit,
         )
         .expect("the iced facade must retain time::every");
+    // iced's `Subscription::run(builder)`: the progress of the sipper a Rust
+    // function returns. Its identity is the function's path.
+    builder
+        .bind_stream_operation(
+            &definition("iced::subscription::run"),
+            |index, value, writer| match index {
+                0 => {
+                    writer.text("sipper");
+                    Ok(())
+                }
+                1 => {
+                    let path = value.read_lock::<rawr::ImmutableString>().ok_or_else(|| {
+                        host::stream::identity::Error::new("expected the builder's path")
+                    })?;
+                    writer.text(path.as_str());
+                    Ok(())
+                }
+                _ => Err(host::stream::identity::Error::new("unexpected argument")),
+            },
+            |arguments| {
+                let progress = arguments
+                    .get(0)
+                    .and_then(|value| value.read_lock::<crate::task::Sip>().and_then(|sip| sip.progress()));
+                match progress {
+                    Some(progress) => progress.map(Ok).boxed(),
+                    None => stream::empty().boxed(),
+                }
+            },
+            unit,
+        )
+        .expect("the iced facade must retain Subscription::run");
 }
 
 /// A tick every `duration`, from a timer thread that ends with the stream.

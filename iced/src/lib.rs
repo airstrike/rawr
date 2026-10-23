@@ -116,6 +116,7 @@ fn register_debug() {
     register::<iced::widget::image::Handle>();
     register::<iced::widget::svg::Handle>();
     register::<iced::Event>();
+    register::<task::Handle>();
     register::<iced::Font>();
     register::<iced::keyboard::Event>();
     register::<iced::keyboard::Key>();
@@ -161,6 +162,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("theme")?;
     builder.module("theme::palette")?;
     builder.module("time")?;
+    builder.module("task")?;
+    builder.module("subscription")?;
     builder.module("widget")?;
     builder.module("widget::button")?;
     builder.module("widget::checkbox")?;
@@ -191,6 +194,13 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
 
     builder.type_::<marker::Result>("Result", &[], &[])?;
     builder.required_type::<task::Plan>("Task", &["Message"], &[])?;
+    // A Rust `impl Sipper<Output, Progress>`, and iced's `task::Handle`.
+    builder.type_::<task::Sip>("task::Sipper", &["Output", "Progress"], &[])?;
+    builder.type_::<task::Handle>(
+        "task::Handle",
+        &[],
+        &[capability::Kind::Debug, capability::Kind::Clone],
+    )?;
     builder.stream_plan_type("Subscription", "Message")?;
     builder.value_type::<theme::Value>(
         "Theme",
@@ -629,6 +639,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         receiver::Mode::Owned,
         task_discard_signature()?,
     )?)?;
+    declare_sippers(&mut builder)?;
     builder.item(item::Definition::method(
         "Task::chain",
         receiver::Mode::Owned,
@@ -1567,6 +1578,80 @@ fn task_perform_signature() -> Result<signature::Definition, host::Error> {
         [type_ref::Type::parameter("Message")?],
     )?);
     Ok(signature.finish())
+}
+
+/// iced's `Task::sip(sipper, on_progress, on_output)`, `Task::abortable()`
+/// with its `task::Handle`, and `Subscription::run(builder)` over a Rust
+/// function that returns a sipper.
+fn declare_sippers(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let parameter = |name: &str| type_ref::Type::parameter(name);
+    let task = |message: &str| type_ref::Type::applied("Task", [parameter(message)?]);
+    let sipper = || type_ref::Type::applied("task::Sipper", [parameter("Output")?, parameter("Progress")?]);
+    let handle = || type_ref::Type::registered("task::Handle");
+
+    let mut sip = signature::Builder::new();
+    sip.type_parameter("Output", &[])?;
+    sip.type_parameter("Progress", &[])?;
+    sip.type_parameter("Message", &[])?;
+    sip.parameter(sipper()?);
+    sip.parameter(type_ref::Type::callable(parameter("Progress")?, parameter("Message")?));
+    sip.parameter(type_ref::Type::callable(parameter("Output")?, parameter("Message")?));
+    sip.output(task("Message")?);
+    builder.item(item::Definition::associated_function("Task::sip", sip.finish())?)?;
+
+    let mut abortable = signature::Builder::new();
+    abortable.type_parameter("Message", &[])?;
+    abortable.output(type_ref::Type::tuple([task("Message")?, handle()?])?);
+    builder.item(item::Definition::method(
+        "Task::abortable",
+        receiver::Mode::Owned,
+        abortable.finish(),
+    )?)?;
+
+    let mut abort_on_drop = signature::Builder::new();
+    abort_on_drop.output(handle()?);
+    builder.item(item::Definition::method(
+        "task::Handle::abort_on_drop",
+        receiver::Mode::Owned,
+        abort_on_drop.finish(),
+    )?)?;
+    let mut abort = signature::Builder::new();
+    abort.output(type_ref::Type::unit());
+    builder.item(item::Definition::method(
+        "task::Handle::abort",
+        receiver::Mode::Shared,
+        abort.finish(),
+    )?)?;
+    let mut is_aborted = signature::Builder::new();
+    is_aborted.output(type_ref::Type::builtin(type_ref::Builtin::Bool));
+    builder.item(item::Definition::method(
+        "task::Handle::is_aborted",
+        receiver::Mode::Shared,
+        is_aborted.finish(),
+    )?)?;
+
+    // `Subscription::run(builder)`: the compiler passes the sipper the
+    // Rust function returns and the function's path, which is the
+    // subscription's identity, as iced's is the function pointer.
+    // The source name the compiler routes to the stream operation.
+    let mut source = signature::Builder::new();
+    source.type_parameter("Output", &[])?;
+    source.type_parameter("Progress", &[])?;
+    source.parameter(sipper()?);
+    source.output(type_ref::Type::applied("Subscription", [parameter("Progress")?])?);
+    builder.item(item::Definition::associated_function("Subscription::run", source.finish())?)?;
+    let mut run = signature::Builder::new();
+    run.type_parameter("Output", &[])?;
+    run.type_parameter("Progress", &[])?;
+    run.parameter(sipper()?);
+    run.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    run.output(parameter("Progress")?);
+    builder.item(item::Definition::stream_operation(
+        "subscription::run",
+        run.finish(),
+        host::stream::Version::new(1),
+    )?)?;
+    Ok(())
 }
 
 /// `Task::future(future)`. A Rust future crosses into Rawr as a `Task` of
@@ -2557,7 +2642,7 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     for name in ["C", "S", "Message"] {
         new.type_parameter(name, &[])?;
     }
-    let parameter = type_ref::Type::parameter;
+    let parameter = |name: &str| type_ref::Type::parameter(name);
     new.parameter(parameter("C")?);
     new.parameter(type_ref::Type::callable(
         type_ref::Type::tuple([
@@ -3541,7 +3626,7 @@ fn declare_scrollable(builder: &mut facade::Builder) -> Result<(), host::Error> 
 /// iced's `table(columns, rows)` and `table::column(header, view)`, whose
 /// view makes each row's cell.
 fn declare_table(builder: &mut facade::Builder) -> Result<(), host::Error> {
-    let parameter = type_ref::Type::parameter;
+    let parameter = |name: &str| type_ref::Type::parameter(name);
     let element = || type_ref::Type::applied("Element", [parameter("Message")?]);
     let column = || {
         type_ref::Type::applied("widget::table::Column", [parameter("T")?, parameter("Message")?])
@@ -3814,7 +3899,7 @@ fn component_instance_signature() -> Result<signature::Definition, host::Error> 
     for name in ["C", "S", "E", "Message"] {
         signature.type_parameter(name, &[])?;
     }
-    let parameter = type_ref::Type::parameter;
+    let parameter = |name: &str| type_ref::Type::parameter(name);
     signature.parameter(parameter("C")?);
     signature.parameter(type_ref::Type::callable(
         type_ref::Type::tuple([

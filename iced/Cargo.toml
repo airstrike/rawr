@@ -9,7 +9,7 @@ repository = "https://github.com/airstrike/rawr"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced", "canvas", "crisp", "fira-sans", "image-without-codecs", "qr_code", "selector", "svg", "thread-pool", "tiny-skia", "web-colors", "wgpu"] }
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced", "canvas", "crisp", "fira-sans", "image-without-codecs", "qr_code", "selector", "sipper", "svg", "thread-pool", "tiny-skia", "web-colors", "wgpu"] }
 iced_runtime = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
 # The codecs the `image` widget decodes: PNG and JPEG only.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

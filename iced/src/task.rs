@@ -51,6 +51,15 @@ enum PreparedKind {
     },
     Imported(Imported),
     Discard(Box<Prepared>),
+    Sip {
+        sipper: Sip,
+        on_progress: item::Value,
+        on_output: item::Value,
+    },
+    Abortable {
+        plan: Box<Prepared>,
+        abort: Arc<Abort>,
+    },
 }
 
 /// One value a Rust task yields, turned into a Rawr value on the UI thread.
@@ -125,6 +134,157 @@ where
 {
     fn into_task(&self) -> iced::Task<F::Output> {
         iced::Task::future(self.take())
+    }
+}
+
+/// One step of a Rust sipper: a progress value, or its output.
+#[doc(hidden)]
+pub enum Step {
+    Progress(Materialize),
+    Output(Materialize),
+}
+
+/// A Rust `impl Sipper<Output, Progress>`, which the facade names
+/// `task::Sipper<Output, Progress>`. It runs once, as Rust's does.
+#[derive(Clone)]
+pub struct Sip {
+    task: Arc<Mutex<Option<iced::Task<Step>>>>,
+    witness: Option<host::runtime::Witness>,
+}
+
+impl Sip {
+    fn take(&self) -> Option<iced::Task<Step>> {
+        self.task.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+
+    /// The witness of the sipper's `Output` (0) or `Progress` (1).
+    fn witness(&self, index: usize) -> Option<host::runtime::Witness> {
+        self.witness
+            .as_ref()
+            .and_then(|witness| witness.argument_witness(index))
+    }
+
+    /// The sipper's progress as a stream, for `Subscription::run`. Each
+    /// value becomes a Rawr value on the UI thread. Its output ends it.
+    pub(crate) fn progress(
+        &self,
+    ) -> Option<iced::futures::stream::BoxStream<'static, Dynamic>> {
+        use iced::futures::StreamExt as _;
+        let stream = iced_runtime::task::into_stream(self.take()?)?;
+        let witness = self.witness(1);
+        Some(
+            stream
+                .filter_map(move |action| {
+                    let witness = witness.clone();
+                    async move {
+                        match action {
+                            iced_runtime::Action::Output(Step::Progress(materialize)) => {
+                                Some(Dynamic::from(host::runtime::Deferred::new(move || {
+                                    materialize(witness.as_ref())
+                                })))
+                            }
+                            _ => None,
+                        }
+                    }
+                })
+                .boxed(),
+        )
+    }
+}
+
+impl fmt::Debug for Sip {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Sipper(<native>)")
+    }
+}
+
+/// Project a Rust sipper into the facade's `task::Sipper`, as iced's
+/// `Task::sip` runs one. The bridge stamps it with the call's witness.
+#[doc(hidden)]
+#[must_use]
+pub fn sipper<S, O, P>(
+    sipper: S,
+    mut on_progress: impl FnMut(P) -> Materialize + Send + 'static,
+    on_output: impl FnOnce(O) -> Materialize + Send + 'static,
+) -> Dynamic
+where
+    S: iced::task::Sipper<O, P> + Send + 'static,
+    O: Send + 'static,
+    P: Send + 'static,
+{
+    let task = iced::Task::sip(
+        sipper,
+        move |progress| Step::Progress(on_progress(progress)),
+        move |output| Step::Output(on_output(output)),
+    );
+    let task = Arc::new(Mutex::new(Some(task)));
+    Dynamic::from(host::runtime::Unwitnessed::new(move |witness| {
+        Dynamic::from(Sip {
+            task,
+            witness: Some(witness),
+        })
+    }))
+}
+
+/// iced's `task::Handle`: aborts the task `Task::abortable` returned it
+/// with. `abort_on_drop` gives one that aborts when its last copy drops.
+#[derive(Clone)]
+pub struct Handle {
+    abort: Arc<Abort>,
+    guard: Option<Arc<Guard>>,
+}
+
+/// The native abort handle of one abortable plan, once it is lowered.
+#[derive(Default)]
+pub(crate) struct Abort {
+    aborted: std::sync::atomic::AtomicBool,
+    native: Mutex<Option<iced::task::Handle>>,
+}
+
+struct Guard(Arc<Abort>);
+
+impl Abort {
+    fn abort(&self) {
+        self.aborted.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(handle) = self.native.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            handle.abort();
+        }
+    }
+
+    fn is_aborted(&self) -> bool {
+        self.aborted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Make a lowered task abortable through this handle.
+    fn attach(&self, task: iced::Task<runtime::Message>) -> iced::Task<runtime::Message> {
+        let (task, handle) = task.abortable();
+        if self.is_aborted() {
+            handle.abort();
+        } else {
+            *self.native.lock().unwrap_or_else(PoisonError::into_inner) = Some(handle);
+        }
+        task
+    }
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl fmt::Debug for Handle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Handle")
+            .field("aborted", &self.abort.is_aborted())
+            .finish()
+    }
+}
+
+impl fmt::Debug for Abort {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Abort")
     }
 }
 
@@ -241,6 +401,17 @@ enum Kind {
     Imported(Imported),
     /// iced's `Task::discard`: the plan runs, and its outputs go nowhere.
     Discard(Box<Plan>),
+    /// iced's `Task::sip`: a Rust sipper's progress and output, each mapped.
+    Sip {
+        sipper: Sip,
+        on_progress: item::Value,
+        on_output: item::Value,
+    },
+    /// iced's `Task::abortable`: the plan, abortable through its `Handle`.
+    Abortable {
+        plan: Box<Plan>,
+        abort: Arc<Abort>,
+    },
 }
 
 /// Current executable authority used only while a symbolic plan is lowered.
@@ -357,7 +528,9 @@ impl Plan {
             | Kind::Native(_)
             | Kind::AndThen { .. }
             | Kind::Imported(_)
-            | Kind::Discard(_) => None,
+            | Kind::Discard(_)
+            | Kind::Sip { .. }
+            | Kind::Abortable { .. } => None,
             Kind::Done(payload) => Some(payload),
         }
     }
@@ -419,6 +592,19 @@ impl Plan {
             },
             Kind::Imported(task) => PreparedKind::Imported(task),
             Kind::Discard(plan) => PreparedKind::Discard(Box::new(plan.prepare_application(authority)?)),
+            Kind::Sip {
+                sipper,
+                on_progress,
+                on_output,
+            } => PreparedKind::Sip {
+                sipper,
+                on_progress,
+                on_output,
+            },
+            Kind::Abortable { plan, abort } => PreparedKind::Abortable {
+                plan: Box::new(plan.prepare_application(authority)?),
+                abort,
+            },
         };
         Ok(Prepared { kind, witness })
     }
@@ -460,6 +646,12 @@ impl Plan {
             }
             Kind::Imported(task) => lowering.imported(&task, output, next),
             Kind::Discard(plan) => plan.lower_with(lowering, discard())?,
+            Kind::Sip {
+                sipper,
+                on_progress,
+                on_output,
+            } => lowering.sip(&sipper, on_progress, on_output, next),
+            Kind::Abortable { plan, abort } => abort.attach(plan.lower_with(lowering, next)?),
         })
     }
 }
@@ -572,6 +764,43 @@ impl Lowering {
         })
     }
 
+    /// iced's `Task::sip`: run a Rust sipper natively. Each progress value and
+    /// its output become Rawr values on the UI thread, where their mappers
+    /// run before `next`.
+    fn sip(
+        &self,
+        sipper: &Sip,
+        on_progress: item::Value,
+        on_output: item::Value,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
+        let Some(task) = sipper.take() else {
+            return self.fail(Error::Spent);
+        };
+        let witnesses = Arc::new((sipper.witness(1), sipper.witness(0)));
+        let mappers = Arc::new((on_progress, on_output));
+        let lowering = self.clone();
+        task.then(move |step| {
+            let next = next.clone();
+            let lowering = lowering.clone();
+            let witnesses = witnesses.clone();
+            let mappers = mappers.clone();
+            dispatch::on_ui(lowering.owner, move || {
+                let (materialize, witness, mapper) = match step {
+                    Step::Progress(materialize) => (materialize, &witnesses.0, &mappers.0),
+                    Step::Output(materialize) => (materialize, &witnesses.1, &mappers.1),
+                };
+                let payload = materialize(witness.as_ref())
+                    .map_err(Error::Imported)
+                    .and_then(|payload| lowering.authority.map(payload, mapper));
+                match payload {
+                    Ok(payload) => next(payload),
+                    Err(error) => lowering.fail(error),
+                }
+            })
+        })
+    }
+
     /// Await an issued operation natively, then validate its output and run
     /// its mapper on the UI thread.
     fn operation(&self, pending: host::operation::Pending, next: Next) -> iced::Task<runtime::Message> {
@@ -642,6 +871,14 @@ impl Prepared {
             }
             PreparedKind::Imported(task) => lowering.imported(&task, output, next),
             PreparedKind::Discard(plan) => plan.lower_with(context, lowering, discard()),
+            PreparedKind::Sip {
+                sipper,
+                on_progress,
+                on_output,
+            } => lowering.sip(&sipper, on_progress, on_output, next),
+            PreparedKind::Abortable { plan, abort } => {
+                abort.attach(plan.lower_with(context, lowering, next))
+            }
         }
     }
 }
@@ -710,6 +947,20 @@ impl Authority {
 impl Default for Plan {
     fn default() -> Self {
         Self::none()
+    }
+}
+
+#[cfg(test)]
+impl Plan {
+    /// A Rust task whose outputs go nowhere, as `Task::discard` of one.
+    pub(crate) fn discarded_rust_task(task: iced::Task<Materialize>) -> Self {
+        Self {
+            kind: Kind::Discard(Box::new(Self {
+                kind: Kind::Imported(Imported::new(task)),
+                witness: None,
+            })),
+            witness: None,
+        }
     }
 }
 
@@ -1062,6 +1313,92 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
         })
         .expect("the iced facade must retain Task::discard");
     builder
+        .bind_with_context("iced::Task::sip", |call, args| {
+            let [sipper, on_progress, on_output] = args else {
+                return Err(arity("Task::sip", 3, args.len()));
+            };
+            let sipper = take_value::<Sip>(sipper, "task::Sipper")?;
+            let on_progress = take_value::<item::Value>(on_progress, "a symbolic function")?;
+            let on_output = take_value::<item::Value>(on_output, "a symbolic function")?;
+            Ok(Dynamic::from(Plan {
+                kind: Kind::Sip {
+                    sipper,
+                    on_progress,
+                    on_output,
+                },
+                witness: Some(call.output_witness().map_err(witness_error)?),
+            }))
+        })
+        .expect("the iced facade must retain Task::sip");
+    builder
+        .bind_type_attestation("iced::task::Sipper", |value, expected| {
+            let sipper = value.read_lock::<Sip>()?;
+            expected.attest_witness(sipper.witness.as_ref())
+        })
+        .expect("the iced facade must declare task::Sipper exactly once");
+    builder
+        .bind_with_context("iced::Task::abortable", |_call, args| {
+            let [plan] = args else {
+                return Err(arity("Task::abortable", 1, args.len()));
+            };
+            let plan = take(plan, "Task::abortable")?;
+            // The abortable task has the receiver's own type and witness.
+            let witness = plan.witness.clone();
+            let abort = Arc::new(Abort::default());
+            let handle = Handle {
+                abort: abort.clone(),
+                guard: None,
+            };
+            let plan = Plan {
+                kind: Kind::Abortable {
+                    plan: Box::new(plan),
+                    abort,
+                },
+                witness,
+            };
+            Ok(Dynamic::from_array(vec![
+                Dynamic::from(plan),
+                Dynamic::from(handle),
+            ]))
+        })
+        .expect("the iced facade must retain Task::abortable");
+    builder
+        .bind("iced::task::Handle::abort_on_drop", |args| {
+            let [handle] = args else {
+                return Err(arity("task::Handle::abort_on_drop", 1, args.len()));
+            };
+            let handle = take_value::<Handle>(handle, "task::Handle")?;
+            let guard = Arc::new(Guard(handle.abort.clone()));
+            Ok(Dynamic::from(Handle {
+                abort: handle.abort,
+                guard: Some(guard),
+            }))
+        })
+        .expect("the iced facade must retain task::Handle::abort_on_drop");
+    builder
+        .bind("iced::task::Handle::abort", |args| {
+            let [handle] = args else {
+                return Err(arity("task::Handle::abort", 1, args.len()));
+            };
+            let handle = handle.read_lock::<Handle>().ok_or_else(|| {
+                EvalAltResult::ErrorRuntime("expected a `task::Handle`".into(), Position::NONE)
+            })?;
+            handle.abort.abort();
+            Ok(Dynamic::UNIT)
+        })
+        .expect("the iced facade must retain task::Handle::abort");
+    builder
+        .bind("iced::task::Handle::is_aborted", |args| {
+            let [handle] = args else {
+                return Err(arity("task::Handle::is_aborted", 1, args.len()));
+            };
+            let handle = handle.read_lock::<Handle>().ok_or_else(|| {
+                EvalAltResult::ErrorRuntime("expected a `task::Handle`".into(), Position::NONE)
+            })?;
+            Ok(Dynamic::from(handle.abort.is_aborted()))
+        })
+        .expect("the iced facade must retain task::Handle::is_aborted");
+    builder
         .bind_with_context("iced::Task::map", |call, args| {
             if args.len() != 2 {
                 return Err(arity("Task::map", 2, args.len()));
@@ -1161,6 +1498,63 @@ mod tests {
     use rawr::{host, Dynamic, Engine, Shared};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn a_rust_task_crosses_as_itself_and_a_future_through_task_future() {
+        use super::{Project, ViaFuture as _, ViaTask as _};
+
+        let task = (&Project::new(iced::Task::done(1_i64))).into_task();
+        assert_eq!(outputs(task), [1]);
+        let future = (&Project::new(async { 2_i64 })).into_task();
+        assert_eq!(outputs(future), [2]);
+    }
+
+    #[test]
+    fn a_handle_aborts_its_task_before_or_after_lowering() {
+        use super::Abort;
+        use std::sync::Arc;
+
+        let pending = || iced::Task::future(std::future::pending::<i64>()).map(|_| unreachable!());
+        let after = Arc::new(Abort::default());
+        let task: iced::Task<crate::runtime::Message> = after.attach(pending());
+        after.abort();
+        assert!(outputs(task).is_empty());
+
+        let before = Arc::new(Abort::default());
+        before.abort();
+        let task: iced::Task<crate::runtime::Message> = before.attach(pending());
+        assert!(outputs(task).is_empty());
+    }
+
+    #[test]
+    fn abort_on_drop_aborts_when_its_last_copy_drops() {
+        use super::{Abort, Guard, Handle};
+        use std::sync::Arc;
+
+        let abort = Arc::new(Abort::default());
+        let handle = Handle {
+            abort: abort.clone(),
+            guard: Some(Arc::new(Guard(abort.clone()))),
+        };
+        let copy = handle.clone();
+        drop(handle);
+        assert!(!abort.is_aborted());
+        drop(copy);
+        assert!(abort.is_aborted());
+    }
+
+    fn outputs<T: Send + 'static>(task: iced::Task<T>) -> Vec<T> {
+        let Some(stream) = iced_test::runtime::task::into_stream(task) else {
+            return Vec::new();
+        };
+        iced_test::futures::futures::executor::block_on(stream.collect::<Vec<_>>())
+            .into_iter()
+            .filter_map(|action| match action {
+                iced_test::runtime::Action::Output(output) => Some(output),
+                _ => None,
+            })
+            .collect()
+    }
 
     #[test]
     fn plan_round_trips_through_dynamic_without_losing_its_payload() {

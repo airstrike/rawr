@@ -806,6 +806,43 @@ impl Adapter {
         }
     }
 
+    /// Apply `message` here when it is a script step a task handed back,
+    /// through [`Adapter::update`]; otherwise return it. For host tests that
+    /// step a task's stream by hand.
+    #[doc(hidden)]
+    pub fn take_script_step(&mut self, message: runtime::Message) -> Option<runtime::Message> {
+        if message.resumption().is_some() {
+            let _ = self.update(message);
+            None
+        } else {
+            Some(message)
+        }
+    }
+
+    /// Drive `task` to its end on this thread, as iced's runtime would with
+    /// this adapter. Script steps the task hands back run through
+    /// [`Adapter::update`], after its instance and generation check. Every
+    /// other output is returned in order. For host tests.
+    #[doc(hidden)]
+    pub fn drain(&mut self, task: iced::Task<runtime::Message>) -> Option<Vec<runtime::Message>> {
+        use iced::futures::StreamExt as _;
+
+        let mut stream = iced_runtime::task::into_stream(task)?;
+        let mut outputs = Vec::new();
+        iced::futures::executor::block_on(async {
+            while let Some(action) = stream.next().await {
+                if let iced_runtime::Action::Output(message) = action {
+                    if message.resumption().is_some() {
+                        let _ = self.update(message);
+                    } else {
+                        outputs.push(message);
+                    }
+                }
+            }
+        });
+        Some(outputs)
+    }
+
     fn ready(&mut self, plan: task::Plan) -> std::collections::VecDeque<runtime::Message> {
         use iced::futures::{FutureExt as _, StreamExt as _};
 

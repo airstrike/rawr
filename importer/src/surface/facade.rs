@@ -283,7 +283,11 @@ impl Type {
             Self::Nominal {
                 identity,
                 arguments,
-            } => declared.contains(identity) && arguments.iter().all(|ty| ty.declared(declared)),
+            } => {
+                (declared.contains(identity)
+                    || crate::surface::identity::Definition::is_projected(identity))
+                    && arguments.iter().all(|ty| ty.declared(declared))
+            }
             Self::FunctionItem { input, output } | Self::Result(input, output) => {
                 input.declared(declared) && output.declared(declared)
             }

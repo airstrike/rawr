@@ -2329,6 +2329,10 @@ fn type_nameable(
             if !nameable {
                 return (false, assumed);
             }
+            // iced's facade names a future or a sipper; no Rust definition does.
+            if crate::surface::identity::Definition::is_projected(definition.as_bytes()) {
+                return (true, assumed);
+            }
             let (nameable, leaned) = definition_nameable(*definition, root, names);
             (nameable, assumed | leaned)
         }
@@ -3322,6 +3326,11 @@ impl<P: api::Phase> Context<'_, P> {
     /// a type that implements `Future`, is iced's `Task<T>`: the bridge
     /// runs it natively and the facade's `Task` carries it.
     fn convert_output(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        if let model::Type::ImplTrait { bounds, .. } = ty
+            && let Some(sipper) = self.sipper_bound(bounds)
+        {
+            return sipper;
+        }
         let output = match ty {
             model::Type::ImplTrait { bounds, .. } => self.future_bound_output(bounds),
             model::Type::Definition { id, arguments } if arguments.is_empty() => {
@@ -3332,13 +3341,83 @@ impl<P: api::Phase> Context<'_, P> {
         let Some(output) = output else {
             return self.convert(ty);
         };
-        let task = self
-            .iced_task()
-            .ok_or(representability::reject::Kind::OpaqueType)?;
         Ok(representability::convert::Type::Nominal {
-            definition: crate::surface::identity::Definition::of(&task),
+            definition: crate::surface::identity::Definition::future(),
             arguments: Box::from([self.convert(output)?]),
         })
+    }
+
+    /// An `impl Sipper<Output, Progress>`, or an `impl Straw<T, Progress,
+    /// Error>`, which is a sipper of `Result<T, Error>`. It crosses as iced's
+    /// `task::Sipper<Output, Progress>`. `Never`, sipper's `Infallible`, is
+    /// `()` there, since such a sipper never finishes.
+    fn sipper_bound(
+        &self,
+        bounds: &[model::Predicate],
+    ) -> Option<Result<representability::convert::Type, Failure>> {
+        use representability::convert::Type;
+        bounds.iter().find_map(|predicate| {
+            let model::Predicate::Bound {
+                bound:
+                    model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        ..
+                    },
+                ..
+            } = predicate
+            else {
+                return None;
+            };
+            let definition = self
+                .graph
+                .definition_index(trait_id)
+                .and_then(|index| self.graph.definitions().nth(index))?;
+            if trait_id.unit().crate_name() != "sipper" {
+                return None;
+            }
+            let name = definition.display_path().last()?;
+            let types = arguments
+                .iter()
+                .filter_map(|argument| match argument {
+                    model::Argument::Type(ty) => Some(ty),
+                    model::Argument::Lifetime(_) | model::Argument::Const(_) => None,
+                })
+                .collect::<Vec<_>>();
+            let converted = (|| match (name, types.as_slice()) {
+                ("Sipper", [.., output, progress]) => {
+                    Ok((self.convert_never(output)?, self.convert(progress)?))
+                }
+                ("Straw", [.., output, progress, error]) => Ok((
+                    Type::Result(
+                        Box::new(self.convert_never(output)?),
+                        Box::new(self.convert_never(error)?),
+                    ),
+                    self.convert(progress)?,
+                )),
+                _ => Err(representability::reject::Kind::OpaqueType.into()),
+            })();
+            Some(converted.map(|(output, progress)| Type::Nominal {
+                definition: crate::surface::identity::Definition::sipper(),
+                arguments: Box::from([output, progress]),
+            }))
+        })
+    }
+
+    /// `()` for `Never`, `core::convert::Infallible`, which has no values.
+    fn convert_never(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        if let model::Type::Definition { id, .. } = ty
+            && id.unit().crate_name() == "core"
+            && self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .is_some_and(|definition| definition.display_path().last() == Some("Infallible"))
+        {
+            return Ok(representability::convert::Type::Unit);
+        }
+        self.convert(ty)
     }
 
     /// `T` of an `impl Future<Output = T>` bound list.
@@ -3399,16 +3478,6 @@ impl<P: api::Phase> Context<'_, P> {
                 .definition_index(id)
                 .and_then(|index| self.graph.definitions().nth(index))
                 .is_some_and(|definition| definition.display_path().last() == Some(name))
-    }
-
-    /// iced's `Task`, when the crate's graph holds it.
-    fn iced_task(&self) -> Option<api::identity::Definition> {
-        self.graph.definitions().find_map(|definition| {
-            (definition.id().unit().crate_name() == "iced_runtime"
-                && matches!(definition.kind(), model::Kind::Struct { .. })
-                && definition.display_path().last() == Some("Task"))
-            .then(|| definition.id().clone())
-        })
     }
 
     fn convert_input(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
@@ -4477,13 +4546,17 @@ mod tests {
         );
         let function_cases = [
             (unsafe_signature, Kind::UnsafeFunction),
+            // A free `async fn` crosses as a `Task`; a method borrows its
+            // receiver across the await and does not.
             (
                 safe(
                     true,
                     false,
                     "\"Rust\"",
                     Box::default(),
-                    model::Receiver::None,
+                    model::Receiver::Value {
+                        ty: model::Type::Tuple(Box::default()),
+                    },
                 ),
                 Kind::AsyncFunction,
             ),

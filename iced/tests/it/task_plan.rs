@@ -53,6 +53,39 @@ fn explicit_done_boot_is_delivered_once_with_current_provenance() {
 }
 
 #[test]
+fn perform_over_a_task_maps_it_and_discard_drops_its_outputs() {
+    // A Rust future crosses as a `Task` of its output, so `Task::perform`
+    // over one is iced's own `Task::future(future).map(f)`.
+    let adapter = boot(
+        r#"
+use iced::Task;
+use iced::widget::{column, text, Column};
+#[derive(Debug, Clone, Copy)] enum Message { Loaded(i64) }
+struct Counter { value: i64 }
+pub fn main() -> iced::Result {
+    iced::application(Counter::boot, Counter::update, Counter::view).run()
+}
+impl Counter {
+    fn boot() -> (Counter, Task<Message>) {
+        let quiet: Task<Message> = Task::future(Task::done(3)).discard();
+        (Counter { value: 0 }, Task::batch([Task::perform(Task::done(5), Message::Loaded), quiet]))
+    }
+    fn update(&mut self, message: Message) {
+        match message { Message::Loaded(value) => self.value += value }
+    }
+    fn view(&self) -> Column<'_, Message> { column![text(self.value)] }
+}
+"#,
+    );
+    let application = program::Application::from_adapter(adapter);
+    let (mut state, startup) = <program::Application as iced::Program>::boot(&application);
+
+    let message = one_message(&mut state, startup).expect("the performed task emits once");
+    let _ = <program::Application as iced::Program>::update(&application, &mut state, message);
+    assert_text(&state, "5");
+}
+
+#[test]
 fn update_none_lowers_to_an_empty_native_task() {
     let adapter = boot(&explicit_source("Counter", "Task<Message>"));
     let application = program::Application::from_adapter(adapter);
@@ -551,7 +584,7 @@ fn one_message(
     state: &mut program::Adapter,
     task: iced::Task<runtime::Message>,
 ) -> Option<runtime::Message> {
-    let outputs = task_outputs(task)?;
+    let outputs = state.drain(task)?;
     exact_script_outputs(state, outputs, 1).pop()
 }
 
@@ -560,27 +593,11 @@ fn messages(
     task: iced::Task<runtime::Message>,
     expected: usize,
 ) -> Vec<runtime::Message> {
-    let Some(outputs) = task_outputs(task) else {
+    let Some(outputs) = state.drain(task) else {
         assert_eq!(expected, 0, "task emitted no native output stream");
         return Vec::new();
     };
     exact_script_outputs(state, outputs, expected)
-}
-
-fn task_outputs(task: iced::Task<runtime::Message>) -> Option<Vec<runtime::Message>> {
-    let mut stream = iced_test::runtime::task::into_stream(task)?;
-    Some(iced_test::futures::futures::executor::block_on(
-        async move {
-            let mut outputs = Vec::new();
-            while let Some(action) = stream.next().await {
-                match action {
-                    iced_test::runtime::Action::Output(message) => outputs.push(message),
-                    action => panic!("expected message output, found {action:?}"),
-                }
-            }
-            outputs
-        },
-    ))
 }
 
 fn exact_script_outputs(

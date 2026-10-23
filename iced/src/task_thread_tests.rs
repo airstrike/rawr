@@ -60,6 +60,34 @@ fn a_stale_continuation_never_runs_and_ends_its_task() {
     assert!(probes.lock().unwrap().is_empty(), "an old continuation ran");
 }
 
+#[test]
+fn a_rust_task_s_values_become_rawr_values_on_the_update_thread() {
+    let probes = Probes::default();
+    let starts = Arc::new(AtomicUsize::new(0));
+    let mut adapter = adapter(SOURCE, probes.clone(), starts);
+    let crossed = Probes::default();
+    let recorded = crossed.clone();
+    let rust = iced::Task::future(async { 7_i64 }).map(move |value| {
+        let recorded = recorded.clone();
+        Box::new(move |_: Option<&host::runtime::Witness>| {
+            recorded.lock().unwrap().push(thread::current().id());
+            Ok(Dynamic::from(value))
+        }) as crate::task::Materialize
+    });
+    let plan = crate::task::Plan::discarded_rust_task(rust);
+    let task = plan
+        .lower(
+            adapter.instance(),
+            adapter.generation(),
+            &adapter.task_authority(),
+        )
+        .unwrap();
+
+    drive_elsewhere(task, |message| adapter.update(message).unwrap().delivery());
+
+    assert_eq!(*crossed.lock().unwrap(), [thread::current().id()]);
+}
+
 /// Poll `task` on another thread and apply each message it yields here,
 /// as iced's runtime does. Returns what each application did.
 fn drive_elsewhere(

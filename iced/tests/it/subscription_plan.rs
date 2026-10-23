@@ -149,11 +149,11 @@ fn facade_exposes_only_the_iced_shaped_subscription_composition_surface() {
     assert!(extension
         .items()
         .any(|item| item.path() == "rawr_iced::subscription::batch"));
-    for alias in [
-        "iced::Subscription::run",
-        "iced::Subscription::run_with",
-        "iced::subscription",
-    ] {
+    // `Subscription::run` takes a Rust function that returns a sipper.
+    assert!(facade
+        .items()
+        .any(|item| item.path() == "iced::Subscription::run"));
+    for alias in ["iced::Subscription::run_with", "iced::subscription"] {
         assert!(facade.items().all(|item| item.path() != alias));
     }
 }

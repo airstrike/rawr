@@ -18,6 +18,8 @@ const SEMANTIC_TYPES: &[&str] = &[
     "Subscription",
     "Task",
     "Theme",
+    "task::Handle",
+    "task::Sipper",
 ];
 const SEMANTIC_ITEMS: &[&str] = &["Length::Fill", "Length::Fixed"];
 const SEMANTIC_ITEM_ROOTS: &[&str] = &[
@@ -35,7 +37,7 @@ const TEXT_ENDPOINT_DISPOSITION: &[u8] =
 const COMPATIBILITY_PROJECTIONS: usize = 32;
 const COMPATIBILITY_ABI: u32 = 16;
 const COMPATIBILITY_DIGEST: [u8; 16] = [
-    211, 30, 87, 178, 171, 249, 93, 47, 175, 254, 120, 83, 24, 204, 55, 152,
+    32, 128, 18, 119, 46, 187, 240, 235, 102, 151, 87, 212, 162, 31, 165, 111,
 ];
 
 /// One exact target-argument substitution sealed into a generated projection table.
@@ -3085,6 +3087,22 @@ impl rawr::package::import::runner::Profile for Decoration<'_> {
         identity: &[u8; 32],
         arguments: Box<[host::type_ref::Type]>,
     ) -> Result<Option<host::type_ref::Type>, host::Error> {
+        // A Rust future or sipper has no Rust type to name, and any crate
+        // may return one. The importer names it; iced's facade declares it.
+        let projected = if identity == rawr_import::surface::identity::Definition::future().as_bytes() {
+            Some("Task")
+        } else if identity == rawr_import::surface::identity::Definition::sipper().as_bytes() {
+            Some("task::Sipper")
+        } else {
+            None
+        };
+        if let Some(path) = projected {
+            return if facade.root() == ROOT {
+                host::type_ref::Type::applied(path, arguments).map(Some)
+            } else {
+                host::type_ref::Type::external(self.semantic.export_type(path)?, arguments).map(Some)
+            };
+        }
         let Some(path) = self.semantic_type_path(facade, identity) else {
             return Ok(None);
         };

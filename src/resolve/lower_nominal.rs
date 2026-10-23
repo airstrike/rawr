@@ -60,6 +60,10 @@ const STD_TRAIT_FUNCTIONS: &[(&str, &[&str])] = &[
 ];
 const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
 const TASK_PERFORM_PATH: &str = "iced::Task::perform";
+const SUBSCRIPTION_RUN_PATH: &str = "iced::Subscription::run";
+/// The stream operation behind `Subscription::run`, which takes the
+/// sipper the builder returns and the builder's path.
+const SUBSCRIPTION_RUN_STREAM: &str = "iced::subscription::run";
 const WIDGET_TEXT_PATH: &str = "iced::widget::text";
 const WIDGET_SPAN_PATH: &str = "iced::widget::span";
 const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
@@ -13382,6 +13386,19 @@ impl<'a> Parser<'a> {
         if item.kind() == crate::host::item::Kind::StreamOperation {
             return self.parse_stream_operation(items, owner, name_span);
         }
+        if item.path() == SUBSCRIPTION_RUN_PATH {
+            let stream = self
+                .models
+                .host_items(SUBSCRIPTION_RUN_STREAM)
+                .map(<[_]>::to_vec)
+                .ok_or_else(|| Error::InvalidHostOperation {
+                    item: SUBSCRIPTION_RUN_STREAM.into(),
+                    reason: "the facade lacks this item".into(),
+                    operation: name_span,
+                })?;
+            let owner = self.models.item_owner(SUBSCRIPTION_RUN_STREAM).cloned();
+            return self.parse_stream_operation(stream.into_boxed_slice(), owner, name_span);
+        }
         if matches!(
             item.kind(),
             crate::host::item::Kind::Operation | crate::host::item::Kind::StreamOperation
@@ -14013,6 +14030,9 @@ impl<'a> Parser<'a> {
                 (Token::LeftParen, at),
             ]);
         }
+        if first.path() == SUBSCRIPTION_RUN_STREAM {
+            self.splice_subscription_builder()?;
+        }
         let (mut arguments, end) = self.parse_call_arguments("stream operation arguments")?;
         let call = span(name_span.start(), end);
         let (selected_item, signature) =
@@ -14217,6 +14237,58 @@ impl<'a> Parser<'a> {
             evaluation: item.evaluation(),
         }
         .retain_origin())
+    }
+
+    /// iced's `Subscription::run(builder)` takes a function, and its
+    /// identity is that function. Rawr calls the Rust function here and
+    /// passes its path: `Subscription::run(echo::connect)` reads as
+    /// `Subscription::run(echo::connect(), "echo::connect")`.
+    fn splice_subscription_builder(&mut self) -> Result<(), Error> {
+        let mut ahead = self.input.clone();
+        let mut path = Vec::new();
+        let mut text = String::new();
+        let Some((Token::LeftParen, open)) = ahead.next() else {
+            return Err(self.unsupported("`Subscription::run` takes a function's path"));
+        };
+        loop {
+            match ahead.next() {
+                Some((Token::Identifier(name), at)) => {
+                    text.push_str(name.as_str());
+                    path.push((Token::Identifier(name), at));
+                }
+                _ => {
+                    return Err(self.unsupported(
+                        "`Subscription::run` takes the path of a Rust function that returns a sipper",
+                    ))
+                }
+            }
+            match ahead.next() {
+                Some((Token::DoubleColon, at)) => {
+                    text.push_str("::");
+                    path.push((Token::DoubleColon, at));
+                }
+                Some((Token::RightParen, close)) => {
+                    for _ in 0..path.len() + 2 {
+                        self.next();
+                    }
+                    let mut tokens = vec![(Token::LeftParen, open)];
+                    tokens.extend(path);
+                    tokens.extend([
+                        (Token::Unit, close),
+                        (Token::Comma, close),
+                        (Token::StringConstant(Box::new(text.as_str().into())), close),
+                        (Token::RightParen, close),
+                    ]);
+                    self.splice_tokens(tokens);
+                    return Ok(());
+                }
+                _ => {
+                    return Err(self.unsupported(
+                        "`Subscription::run` takes the path of a Rust function that returns a sipper",
+                    ))
+                }
+            }
+        }
     }
 
     /// Whether the tokens ahead name an imported symbolic host operation,

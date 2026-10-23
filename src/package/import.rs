@@ -1729,7 +1729,11 @@ fn ty_ok(
         Type::Nominal {
             definition,
             arguments,
-        } => declared.contains(definition) && arguments.iter().all(|ty| ty_ok(ty, declared)),
+        } => {
+            (declared.contains(definition)
+                || rawr_import::surface::identity::Definition::is_projected(definition.as_bytes()))
+                && arguments.iter().all(|ty| ty_ok(ty, declared))
+        }
         Type::FunctionItem { input, output } | Type::Result(input, output) => {
             ty_ok(input, declared) && ty_ok(output, declared)
         }
