@@ -27,9 +27,17 @@
   "vars": {
     "PLAY_WORKERS": "1",
     "PLAY_MEMORY_MB": "256",
-    "PLAY_TIMEOUT_MS": "10000",
+    // Whole render, killed after it: the animation's 15 s, plus the start
+    // and the GIF's encoding.
+    "PLAY_TIMEOUT_MS": "25000",
     // Script time per render; 2 s was too tight for large canvases on lite.
     "PLAY_TIME_MS": "5000",
+    // An animation's time per render, once its view changes. One render at
+    // a time gets it, and each user (or playground IP) gets 45 s of it in
+    // any 10 minutes; others get PLAY_TIME_MS.
+    "PLAY_ANIMATION_TIME_MS": "15000",
+    "PLAY_ANIMATION_ALLOWANCE_S": "45",
+    "PLAY_ANIMATION_WINDOW_S": "600",
     // The image's commit (push-image.sh writes it): a running bot started
     // from another image is restarted by the next cron or /health.
     // Turnstile's public site key for /play (the secret is TURNSTILE_SECRET).

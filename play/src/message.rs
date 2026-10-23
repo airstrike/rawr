@@ -94,6 +94,8 @@ impl Request {
             format.extension().to_owned(),
             "--time-ms".to_owned(),
             options.limits.time.as_millis().to_string(),
+            "--animation-ms".to_owned(),
+            options.limits.animation_budget().as_millis().to_string(),
             "--memory-mb".to_owned(),
             memory_mb.to_string(),
             "-o".to_owned(),
@@ -412,7 +414,8 @@ mod tests {
         let args = request.args(Format::Webp, 512);
         assert_eq!(
             args.join(" "),
-            "- --size 320x200 --theme light --format webp --time-ms 2000 --memory-mb 512 -o - \
+            "- --size 320x200 --theme light --format webp --time-ms 2000 --animation-ms 2000 \
+             --memory-mb 512 -o - \
              --message Message::Increment"
         );
     }

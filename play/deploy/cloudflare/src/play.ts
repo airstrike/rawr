@@ -92,6 +92,21 @@ export async function checkPass(key: string, value: string | null, nowMs: number
   return same(match[2], await hmac(key, `pass ${expires}`));
 }
 
+/** The header that names a render's caller to the bot, for its animation allowance. */
+export const USER_HEADER = "x-play-user";
+
+/**
+ * The bot's render request for `body`, naming its caller `user` (a hash of
+ * the IP). The bot counts an animation's longer time against it.
+ */
+export function renderRequest(body: string, user: string): Request {
+  return new Request("http://container/render", {
+    method: "POST",
+    headers: { "content-type": "application/json", [USER_HEADER]: user },
+    body,
+  });
+}
+
 /** The named cookie's value in a Cookie header, or null. */
 export function cookie(header: string | null, name: string): string | null {
   for (const part of (header ?? "").split(";")) {

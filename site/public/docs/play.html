@@ -220,7 +220,8 @@ impl Fill {
 <p>Snippets are untrusted. Each one runs in its own process with these limits on the hosted bot and playground:</p>
 <table>
   <tr><th>Limit</th><th>Value</th></tr>
-  <tr><td>Script time</td><td>5 seconds. The whole run is stopped after 10 seconds.</td></tr>
+  <tr><td>Script time</td><td>5 seconds. The whole run is stopped after 25 seconds.</td></tr>
+  <tr><td>Animation time</td><td>15 seconds, once the view changes. Each user gets 45 seconds of it in any 10 minutes. One animation at a time gets it. Others get 5 seconds.</td></tr>
   <tr><td>Memory</td><td>256 MB per run.</td></tr>
   <tr><td>Operations</td><td>1,000,000 per evaluation.</td></tr>
   <tr><td>Call depth</td><td>32.</td></tr>
@@ -229,6 +230,7 @@ impl Fill {
   <tr><td>Canvas</td><td>2048 logical pixels per side.</td></tr>
 </table>
 <p>A limit gets a plain reply such as <code>time limit exceeded</code>. Snippets have no filesystem, network or environment access.</p>
+<p>An animation cut by its time says so, as in <code>Rendering stopped after 15 s, so the animation shows its first 2.3 s.</code> When it had only 5 seconds, a second line says why. Either your animation time is used up for now, or another animation was rendering at the same time.</p>
 
 <h3 id="no-files">Images without files</h3>
 <p>?play has no files. An image or svg path draws as a missing file. <code>include_str!</code> and <code>include_bytes!</code> fail with an error that says so. <code>env!</code> fails the same way, since ?play has no environment variables either. A snippet can still draw an image from bytes it holds. <code>svg::Handle::from_memory</code> takes svg text as bytes. <code>image::Handle::from_bytes</code> takes the bytes of a PNG or JPEG file. <code>image::Handle::from_rgba</code> takes a width, a height and 4 bytes for each pixel.</p>

@@ -75,16 +75,36 @@ pub struct Image {
     pub note: Option<String>,
 }
 
-/// The note on an animation cut after `shown` of simulated time.
+/// `time` in seconds, to a tenth, without a trailing `.0`.
 #[must_use]
-pub fn cut_note(shown: Duration) -> String {
-    let tenths = (shown.as_millis() + 50) / 100;
-    let seconds = if tenths % 10 == 0 {
+pub fn seconds(time: Duration) -> String {
+    let tenths = (time.as_millis() + 50) / 100;
+    if tenths % 10 == 0 {
         format!("{}", tenths / 10)
     } else {
         format!("{}.{}", tenths / 10, tenths % 10)
-    };
-    format!("Animation shown for the first {seconds} s.")
+    }
+}
+
+/// The note on an animation cut by [`FRAMES`] or [`SPAN`] after `shown` of
+/// simulated time.
+#[must_use]
+pub fn cut_note(shown: Duration) -> String {
+    format!("Animation shown for the first {} s.", seconds(shown))
+}
+
+/// How a note on an animation the wall clock cut starts.
+pub const STOPPED: &str = "Rendering stopped after ";
+
+/// The note on an animation the wall clock cut after `budget`, when it had
+/// shown `shown` of simulated time.
+#[must_use]
+pub fn stopped_note(budget: Duration, shown: Duration) -> String {
+    format!(
+        "{STOPPED}{} s, so the animation shows its first {} s.",
+        seconds(budget),
+        seconds(shown)
+    )
 }
 
 /// Where a recording's frames repeat, as `stop` sees them: the first `k`
@@ -137,8 +157,9 @@ fn cycle(hashes: &[u64], times: &[Duration]) -> Option<(usize, usize)> {
     None
 }
 
-/// The image a recording gives.
-pub fn picture(recording: Recording, loops: &Loops) -> Result<Image, PlayError> {
+/// The image a recording gives. `budget` is the wall-clock time it had
+/// once its view changed.
+pub fn picture(recording: Recording, loops: &Loops, budget: Duration) -> Result<Image, PlayError> {
     let Recording {
         frames,
         background,
@@ -180,10 +201,12 @@ pub fn picture(recording: Recording, loops: &Loops) -> Result<Image, PlayError> 
                     (frame, delay)
                 })
                 .collect();
-            let note = (ending != Ending::Settled).then(|| {
-                let start = frames[first].time;
-                cut_note(last.time + STEP - start)
-            });
+            let played = last.time + STEP - frames[first].time;
+            let note = match ending {
+                Ending::Settled => None,
+                Ending::Deadline => Some(stopped_note(budget, played)),
+                _ => Some(cut_note(played)),
+            };
             (shown, false, note)
         }
     };
@@ -312,7 +335,7 @@ fn changed(previous: &[u8], next: &[u8], columns: usize, rows: usize) -> (usize,
 
 #[cfg(test)]
 mod tests {
-    use super::{cut_note, cycle};
+    use super::{cut_note, cycle, stopped_note};
     use std::time::Duration;
 
     fn times(count: usize) -> Vec<Duration> {
@@ -336,5 +359,13 @@ mod tests {
     fn notes_round_to_tenths() {
         assert_eq!(cut_note(Duration::from_secs(5)), "Animation shown for the first 5 s.");
         assert_eq!(cut_note(Duration::from_millis(1250)), "Animation shown for the first 1.3 s.");
+    }
+
+    #[test]
+    fn a_clock_cut_says_rendering_stopped() {
+        assert_eq!(
+            stopped_note(Duration::from_secs(15), Duration::from_millis(2300)),
+            "Rendering stopped after 15 s, so the animation shows its first 2.3 s."
+        );
     }
 }

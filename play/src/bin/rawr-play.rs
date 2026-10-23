@@ -1,5 +1,9 @@
 //! `rawr-play <file.rs|-> [--size WxH] [--theme dark|light] [--message M]...
-//! [--format png|jpg|webp] [--still] [--time-ms N] [--memory-mb N] [--fonts DIR] -o <out|->`
+//! [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->`
+//!
+//! `--time-ms N` is the wall-clock budget for a render. `--animation-ms N`
+//! is a full app's budget once its view changes (never less than
+//! `--time-ms`).
 //!
 //! `--fonts DIR` draws with iced's embedded faces and the fonts in `DIR`
 //! only, never the system's (the `?play` container's fonts; tests use it so
@@ -28,7 +32,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: rawr-play <file.rs|-> [--size WxH] [--theme dark|light] \
-[--message EXPR]... [--format png|jpg|webp] [--still] [--time-ms N] [--memory-mb N] [--fonts DIR] -o <out|->";
+[--message EXPR]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->";
 
 /// Print the guild ID behind each token, or the token for each guild ID.
 fn server_tokens(decrypt: bool, values: &[String]) -> Result<(), String> {
@@ -88,6 +92,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--still" => options.still = true,
             "--time-ms" => {
                 options.limits.time = std::time::Duration::from_millis(number(value("--time-ms")?)?);
+            }
+            "--animation-ms" => {
+                options.limits.animation =
+                    std::time::Duration::from_millis(number(value("--animation-ms")?)?);
             }
             "--memory-mb" => limit_memory(number(value("--memory-mb")?)?)?,
             "--fonts" => {

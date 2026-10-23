@@ -125,6 +125,9 @@ Object's storage), else the file `PLAY_CONFIG_FILE`, else
 | `DISCORD_TOKEN` | — | Bot token; else read from `DISCORD_TOKEN_FILE`, else `~/.config/rawr-play/token` |
 | `PLAY_WORKERS` | 2 | Renders running at once |
 | `PLAY_TIME_MS` | 2000 | Script time budget per render (engine deadline) |
+| `PLAY_ANIMATION_TIME_MS` | 15000 | An animation's time budget, once its view changes |
+| `PLAY_ANIMATION_ALLOWANCE_S` | 45 | Animation time per user in each window |
+| `PLAY_ANIMATION_WINDOW_S` | 600 | The rolling window for the allowance |
 | `PLAY_TIMEOUT_MS` | 10000 | Whole render; the render process is killed after it |
 | `PLAY_MEMORY_MB` | 1024 | Address-space cap per render process (Linux) |
 | `PLAY_FORMAT` | png | Reply image: png, webp (lossless) or jpg; PNG is shown unchanged by Discord |
@@ -165,6 +168,39 @@ that render only and the bot replies "out of memory".
 
 A plain program runs under the same process limits. Its Engine has the same
 limits as a render. Its output is capped at 64 KiB.
+
+### Animation time
+
+Every render starts on the still budget, `PLAY_TIME_MS` (5 s on
+Cloudflare). A full app whose view changes may record up to
+`PLAY_ANIMATION_TIME_MS` (15 s). The switch happens at the second distinct
+frame. The app's scripts and the recording share that deadline. The
+simulated clock is unchanged, so the same snippet gives the same frames.
+`PLAY_TIMEOUT_MS` (25 s on Cloudflare) leaves room for 15 s plus the start
+and the GIF's encoding.
+
+The longer budget has two limits (`src/budget.rs`):
+
+- Each user gets 45 s of animation time in any 10 minutes. A Discord user
+  is keyed by ID. A playground caller is keyed by its IP's hash, which the
+  Worker sends in `x-play-user`. A render that runs past the still budget
+  counts its whole time. A user with less than the still budget left gets
+  the still budget.
+- One render at a time holds the longer budget, across Discord and the
+  playground. Others get the still budget while it runs.
+
+The CLI takes the budgets as `--time-ms` and `--animation-ms`.
+
+The notes on an animated reply:
+
+| Case | Note |
+| --- | --- |
+| Frame or span cap | `Animation shown for the first 5 s.` |
+| The wall clock cut it | `Rendering stopped after 15 s, so the animation shows its first 2.3 s.` |
+| …and the user's allowance was used up | adds `Your animation time is used up for now. It frees up in 4 minutes.` |
+| …and another render held the longer budget | adds `Another animation was rendering at the same time. Run it again shortly for up to 15 s.` |
+
+The landing page's Run results are not cached when the clock cut them.
 
 Inside, a fresh Engine has: 1,000,000 operations per evaluation, call depth
 of at most 32, 64 KiB strings, 65,536-element arrays, 10,000-element maps, and a

@@ -5,6 +5,10 @@
 //! `{"code": "...", "theme": "dark" | "light", "size": "WxH" | "", "messages": ["Message::Increment"], "still": true}`
 //!
 //! `still` asks for the last frame as a PNG, never a GIF (a share's preview).
+//!
+//! The Worker names the caller in [`USER_HEADER`]: a hash of its IP. An
+//! animation's longer budget is counted against it (see
+//! [`crate::budget`]). A request without it gets the still budget.
 
 use crate::message::Request;
 use crate::Options;
@@ -15,6 +19,17 @@ pub const MAX_CODE: usize = 16 * 1024;
 pub const MAX_MESSAGES: usize = 32;
 /// Longest message expression, in bytes.
 pub const MAX_MESSAGE: usize = 256;
+
+/// The header that names the playground's caller.
+pub const USER_HEADER: &str = "x-play-user";
+
+/// The budget key for the caller [`USER_HEADER`] names: `web:` and the
+/// name, or `None` when it is missing, empty or longer than 64 bytes.
+#[must_use]
+pub fn user(header: Option<&str>) -> Option<String> {
+    let name = header?.trim();
+    (!name.is_empty() && name.len() <= 64).then(|| format!("web:{name}"))
+}
 
 /// The render request in a playground body, over `defaults`.
 pub fn parse_render(body: &[u8], defaults: &Options) -> Result<Request, String> {
@@ -87,6 +102,14 @@ mod tests {
         let still = parse_render(br#"{"code":"x","still":true}"#, &defaults).unwrap();
         assert!(still.options.still);
         assert!(still.args(crate::Format::Png, 64).contains(&"--still".to_owned()));
+    }
+
+    #[test]
+    fn play_web_user() {
+        assert_eq!(user(Some("ab12")).as_deref(), Some("web:ab12"));
+        assert_eq!(user(Some(" ")), None);
+        assert_eq!(user(None), None);
+        assert_eq!(user(Some(&"a".repeat(65))), None);
     }
 
     #[test]

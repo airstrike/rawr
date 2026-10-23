@@ -119,8 +119,53 @@ pub fn render_application(
     })
 }
 
+/// A wall-clock deadline that can move later, shared by its clones: a
+/// recording moves it once the view changes, and an engine's progress
+/// callback reads the same one.
+#[derive(Clone, Debug)]
+pub struct Deadline {
+    base: std::time::Instant,
+    /// Nanoseconds from `base`.
+    after: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Deadline {
+    /// A deadline at `at`.
+    #[must_use]
+    pub fn new(at: std::time::Instant) -> Self {
+        let base = std::time::Instant::now();
+        let deadline = Self {
+            base,
+            after: std::sync::Arc::default(),
+        };
+        deadline.extend(at);
+        deadline
+    }
+
+    /// The instant it is at.
+    #[must_use]
+    pub fn at(&self) -> std::time::Instant {
+        let after = self.after.load(std::sync::atomic::Ordering::Relaxed);
+        self.base + std::time::Duration::from_nanos(after)
+    }
+
+    /// Whether the wall clock has reached it.
+    #[must_use]
+    pub fn past(&self) -> bool {
+        std::time::Instant::now() >= self.at()
+    }
+
+    /// Move it to `at`, if that is later.
+    pub fn extend(&self, at: std::time::Instant) {
+        let after = at.saturating_duration_since(self.base).as_nanos();
+        let after = u64::try_from(after).unwrap_or(u64::MAX);
+        self.after
+            .fetch_max(after, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// How [`record_application`] runs an application on its simulated clock.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Motion {
     /// Simulated time between frames.
     pub step: std::time::Duration,
@@ -132,7 +177,10 @@ pub struct Motion {
     /// Longest simulated time recorded after the last message.
     pub span: std::time::Duration,
     /// The wall-clock instant recording stops at.
-    pub deadline: std::time::Instant,
+    pub deadline: Deadline,
+    /// Where `deadline` moves once a frame differs from the first: an
+    /// animation's longer budget. No later than `deadline` keeps it.
+    pub extended: std::time::Instant,
 }
 
 /// One frame of a [`Recording`].
@@ -151,6 +199,14 @@ pub struct Frame {
     pub phase: usize,
 }
 
+impl Frame {
+    /// Whether `other` has the same size and pixels.
+    #[must_use]
+    pub fn same_image(&self, other: &Frame) -> bool {
+        (self.width, self.height) == (other.width, other.height) && self.rgba == other.rgba
+    }
+}
+
 /// Why a [`Recording`] ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ending {
@@ -165,7 +221,8 @@ pub enum Ending {
     /// The frames ran out before every message was applied. The last frame
     /// is drawn after all of them.
     Messages,
-    /// The wall clock reached [`Motion::deadline`].
+    /// The wall clock reached [`Motion::deadline`], moved to
+    /// [`Motion::extended`] when the view changed.
     Deadline,
 }
 
@@ -225,7 +282,7 @@ pub fn record_application(
     let last = messages.len();
     let mut messages = messages.into_iter();
     let mut now: Instant = start;
-    let past = |deadline| std::time::Instant::now() >= deadline;
+    let mut changed = false;
     let ending = 'record: {
         for phase in 0..=last {
             if phase > 0 {
@@ -234,7 +291,7 @@ pub fn record_application(
             let first = frames.len();
             let began = now;
             loop {
-                if past(motion.deadline) {
+                if motion.deadline.past() {
                     break 'record Ending::Deadline;
                 }
                 let capped = frames.len() >= motion.frames;
@@ -254,16 +311,22 @@ pub fn record_application(
                 };
                 let (image, request) =
                     renderer.frame(&mut view, &mut trees, declared, now, &theme, &mut scale)?;
-                if past(motion.deadline) {
+                if motion.deadline.past() {
                     break 'record Ending::Deadline;
                 }
-                frames.push(Frame {
+                let frame = Frame {
                     width: image.width(),
                     height: image.height(),
                     rgba: image.into_bytes(),
                     time: now - start,
                     phase: if capped { last } else { phase },
-                });
+                };
+                // The view changed: an animation gets the longer budget.
+                if !changed && frames.first().is_some_and(|first| !first.same_image(&frame)) {
+                    changed = true;
+                    motion.deadline.extend(motion.extended);
+                }
+                frames.push(frame);
                 if capped {
                     break 'record Ending::Messages;
                 }

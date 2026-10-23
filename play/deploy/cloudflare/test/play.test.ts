@@ -23,6 +23,8 @@ import {
   previewHeaders,
   purgeSelection,
   parseSnippet,
+  renderRequest,
+  USER_HEADER,
   same,
   shareId,
   type Snippet,
@@ -322,4 +324,13 @@ test("the playground shows text results as a terminal", () => {
 test("a share preview asks for a still image", () => {
   const body = JSON.parse(stillBody(JSON.stringify({ code: "x", messages: ["Message::A"] })));
   assert.deepEqual(body, { code: "x", messages: ["Message::A"], still: true });
+});
+
+test("a render request names its caller for the animation allowance", async () => {
+  const request = renderRequest('{"code":"x"}', "abc123");
+  assert.equal(request.method, "POST");
+  assert.equal(request.url, "http://container/render");
+  assert.equal(request.headers.get(USER_HEADER), "abc123");
+  assert.equal(request.headers.get("content-type"), "application/json");
+  assert.equal(await request.text(), '{"code":"x"}');
 });
