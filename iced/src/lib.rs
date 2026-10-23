@@ -1743,6 +1743,13 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         receiver::Mode::Owned,
         fixed_builder_signature("widget::Text", type_ref::Type::registered("alignment::Horizontal")?)?,
     )?)?;
+    for input in ["alignment::Vertical", "Alignment"] {
+        builder.item(item::Definition::method(
+            "widget::Text::align_y",
+            receiver::Mode::Owned,
+            fixed_builder_signature("widget::Text", type_ref::Type::registered(input)?)?,
+        )?)?;
+    }
     for owner in ["widget::Row", "widget::Container"] {
         builder.item(item::Definition::method(
             format!("{owner}::align_y"),
@@ -3760,6 +3767,7 @@ mod tests {
                     width: iced::Length::Fit,
                     height: None,
                     align_x: iced::advanced::text::Alignment::Default,
+                    align_y: None,
                     style: None,
                     color: None,
                     font: None,
@@ -4056,6 +4064,7 @@ mod tests {
             width: iced::Length::Fit,
             height: None,
             align_x: iced::advanced::text::Alignment::Default,
+            align_y: None,
             style: None,
             color: None,
             font: None,

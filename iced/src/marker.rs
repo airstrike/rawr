@@ -153,6 +153,7 @@ pub(crate) struct Text {
     pub(crate) width: iced::Length,
     pub(crate) height: Option<iced::Length>,
     pub(crate) align_x: iced::advanced::text::Alignment,
+    pub(crate) align_y: Option<iced::alignment::Vertical>,
     pub(crate) style: Option<text::Style>,
     pub(crate) color: Option<iced::Color>,
     pub(crate) font: Option<iced::Font>,

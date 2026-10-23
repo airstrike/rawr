@@ -29108,8 +29108,11 @@ impl<'a> Parser<'a> {
         }
 
         // A facade function named in full or through an imported module:
-        // `iced::widget::slider::default(..)`, `widget::slider::default(..)`.
-        if qualified_model.is_none() && segments.len() > 1 {
+        // `iced::widget::slider::default(..)`, `widget::slider::default(..)`,
+        // and a facade root's own item, as `iced::Center`.
+        if qualified_model.is_none()
+            && (segments.len() > 1 || self.models.import(&segments[0].0).is_none())
+        {
             let path = match self.models.import(&segments[0].0) {
                 Some(binding)
                     if matches!(

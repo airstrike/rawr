@@ -855,3 +855,44 @@ fn master_spans_without_links_take_the_default_link() {
     let adapter = boot(RICH_UNLINKED);
     find(&adapter, "0");
 }
+
+const ROOT_SHORTHANDS: &str = r#"
+use iced::widget::{column, container, row, text};
+use iced::Element;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> Element<'_, Message> {
+        container(
+            column![
+                row![text("a"), text("b")].align_y(iced::Center),
+                text("left").align_x(iced::Left).align_y(iced::Top).width(iced::Fill),
+                text("right").align_x(iced::Right).align_y(iced::Bottom).height(iced::Shrink),
+                text("portion").width(iced::FillPortion(2)).height(iced::Fit),
+            ]
+            .align_x(iced::Center),
+        )
+        .center_x(iced::Fill)
+        .boxed()
+    }
+}
+"#;
+
+#[test]
+fn master_root_shorthands_read_by_their_full_paths() {
+    // iced master's `pub use Alignment::Center` and kin, named as
+    // `iced::Center` without a `use`.
+    let adapter = boot(ROOT_SHORTHANDS);
+    find(&adapter, "portion");
+}
