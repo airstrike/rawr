@@ -1632,3 +1632,55 @@ fn master_families_and_fits_label_themselves() {
     let adapter = boot(DISPLAY_LABELS);
     find(&adapter, "Scale Down");
 }
+
+const ROTATION: &str = r#"
+use iced::widget::{column, image, text};
+use iced::{Degrees, Radians, Rotation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    rotation: Rotation,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Turned(Degrees),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Turned(rotation) => {
+                self.rotation = match self.rotation {
+                    Rotation::Floating(_) => Rotation::Floating(rotation.into()),
+                    Rotation::Solid(_) => Rotation::Solid(rotation.into()),
+                };
+            }
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let solid = Rotation::Solid(Radians::PI);
+        let label = match solid {
+            Rotation::Floating(_) => "floating",
+            Rotation::Solid(_) => "solid",
+        };
+        column![
+            text(label),
+            text(format!("{}", solid.degrees() == Degrees(180.0))),
+            image("ferris.png").rotation(self.rotation).width(100),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_rotations_match_and_turn_images() {
+    let adapter = boot(ROTATION);
+    find(&adapter, "solid");
+    find(&adapter, "true");
+}

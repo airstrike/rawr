@@ -72,6 +72,9 @@ impl widget::Descriptor for marker::Image {
         if let Some(method) = self.filter_method {
             image = image.filter_method(method);
         }
+        if let Some(rotation) = self.rotation {
+            image = image.rotation(rotation);
+        }
         image.boxed()
     }
 
@@ -159,10 +162,19 @@ fn bind_image(builder: &mut host::runtime::Builder) {
                 opacity: None,
                 scale: None,
                 filter_method: None,
+                rotation: None,
             }))
         })
         .expect("the iced facade must retain image");
-    for name in ["width", "height", "content_fit", "opacity", "scale", "filter_method"] {
+    for name in [
+        "width",
+        "height",
+        "content_fit",
+        "opacity",
+        "scale",
+        "filter_method",
+        "rotation",
+    ] {
         let path = format!("iced::widget::Image::{name}");
         builder
             .bind(path.clone(), move |args| {
@@ -176,6 +188,7 @@ fn bind_image(builder: &mut host::runtime::Builder) {
                     "content_fit" => {
                         image.content_fit = Some(take(args[1], "iced::ContentFit")?);
                     }
+                    "rotation" => image.rotation = Some(super::angle::rotation(args[1])?),
                     "filter_method" => {
                         image.filter_method =
                             Some(take(args[1], "iced::widget::image::FilterMethod")?);

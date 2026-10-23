@@ -104,6 +104,7 @@ fn register_debug() {
     register::<iced::widget::scrollable::Viewport>();
     register::<marker::ScrollBoth>();
     register::<iced::Degrees>();
+    register::<iced::Rotation>();
     register::<iced::Radians>();
     register::<iced::widget::checkbox::Icon>();
     register::<iced::widget::text::LineHeight>();
@@ -251,6 +252,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.default_value_type::<iced::Rectangle>("Rectangle", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::Size>("Size", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::Vector>("Vector", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
+    builder.default_value_type::<iced::Rotation>("Rotation", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     for path in ["Degrees", "Radians"] {
         let capabilities = &[
             capability::Kind::Debug,
@@ -3557,6 +3559,38 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let mut from = signature::Builder::new();
     from.parameter(degrees()?).output(radians()?);
     builder.item(item::Definition::associated_function("Radians::from", from.finish())?)?;
+    // `Rotation::Floating(angle)` and `Rotation::Solid(angle)`, matched as
+    // in Rust, with the angle read in radians or degrees.
+    let rotation = || type_ref::Type::registered("Rotation");
+    for variant in ["Floating", "Solid"] {
+        for input in [radians()?, degrees()?] {
+            let mut constructor = signature::Builder::new();
+            constructor.parameter(input).output(rotation()?);
+            builder.item(item::Definition::associated_function(
+                format!("Rotation::{variant}"),
+                constructor.finish(),
+            )?)?;
+        }
+        builder.item(item::Definition::method(
+            format!("Rotation::{variant}"),
+            receiver::Mode::Shared,
+            output_signature_of(type_ref::Type::option(radians()?)),
+        )?)?;
+    }
+    builder.item(item::Definition::associated_function(
+        "Rotation::default",
+        output_signature("Rotation")?,
+    )?)?;
+    for (name, output) in [("radians", "Radians"), ("degrees", "Degrees")] {
+        builder.item(item::Definition::method(
+            format!("Rotation::{name}"),
+            receiver::Mode::Owned,
+            output_signature(output)?,
+        )?)?;
+    }
+    for input in [rotation()?, radians()?, degrees()?] {
+        builders(builder, "widget::Image", "rotation", [input])?;
+    }
     builder.item(item::Definition::associated_value("Radians::PI", radians()?)?)?;
     for (owner, name, input, output) in [
         ("Degrees", "mul", f64(), degrees()?),
@@ -4488,6 +4522,12 @@ fn repeated_builtin_signature(
     }
     signature.output(type_ref::Type::registered(output)?);
     Ok(signature.finish())
+}
+
+fn output_signature_of(output: type_ref::Type) -> signature::Definition {
+    let mut signature = signature::Builder::new();
+    signature.output(output);
+    signature.finish()
 }
 
 fn output_signature(output: &str) -> Result<signature::Definition, host::Error> {

@@ -502,6 +502,7 @@ pub(crate) struct Image {
     pub(crate) opacity: Option<f32>,
     pub(crate) scale: Option<f32>,
     pub(crate) filter_method: Option<iced::widget::image::FilterMethod>,
+    pub(crate) rotation: Option<iced::Rotation>,
 }
 
 /// iced's `span(text)`: a fragment of rich text, its link a Message-like
