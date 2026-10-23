@@ -431,7 +431,8 @@ fn a_marked_workspace_member_inherits_its_dependencies() {
 /// The `rawr` attribute crate: Rawr reads `#[preview]` and
 /// `#[rawr::preview]` itself, binds nothing for `use rawr::preview;` and
 /// imports nothing from the crate. rustc accepts the same files through the
-/// crate, which leaves each item as written.
+/// crate without a warning. A function only previews call is not dead code,
+/// and neither is a function a preview names as its seed.
 #[test]
 fn the_rawr_attribute_crate_builds_under_cargo_and_means_nothing_to_rawr() {
     let Some(cargo) = std::env::var_os("CARGO") else {
@@ -462,6 +463,7 @@ fn the_rawr_attribute_crate_builds_under_cargo_and_means_nothing_to_rawr() {
         previews,
         [
             ("greeting".into(), "main::greeting".into()),
+            ("seeded".into(), "main::shown".into()),
             ("three".into(), "main::label::label".into()),
         ]
     );
@@ -470,6 +472,7 @@ fn the_rawr_attribute_crate_builds_under_cargo_and_means_nothing_to_rawr() {
         .args(["run", "--quiet", "--offline"])
         .current_dir(&root)
         .env("CARGO_TARGET_DIR", sandbox.path.join("target"))
+        .env("RUSTFLAGS", "--deny warnings")
         .output()
         .unwrap();
     assert_success(&output);
