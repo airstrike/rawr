@@ -15005,6 +15005,12 @@ impl<'a> Parser<'a> {
         if self.imported.is_some() {
             self.looks_nominal = true;
         }
+        // A facade member is named as in Rust, `go` among them, which the
+        // script spells `__rawr_go` (`tokenizer::RUST_NAMES`).
+        let member: ImmutableString = match crate::tokenizer::demangle_names(&member) {
+            std::borrow::Cow::Borrowed(_) => member,
+            std::borrow::Cow::Owned(name) => name.into(),
+        };
 
         let resolved = self.inference.resolve(&receiver.ty);
         // `value.to_string()` of an imported type: Rust's blanket

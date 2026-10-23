@@ -2010,3 +2010,51 @@ impl State {
     );
     find(&adapter, "resizes 0");
 }
+
+/// iced master's gallery and markdown examples start an animation with
+/// `.go(true, now)` at the end of its builders.
+#[test]
+fn master_animation_go_builds_a_started_animation() {
+    let adapter = boot(
+        r#"
+use iced::animation;
+use iced::time::{Instant, milliseconds};
+use iced::widget::text;
+use iced::{Animation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct State {
+    fade_in: Animation<bool>,
+    now: Instant,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let now = Instant::now();
+        Self {
+            fade_in: Animation::new(false)
+                .duration(milliseconds(700))
+                .easing(animation::Easing::EaseIn)
+                .go(true, now),
+            now,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        text(format!("{} {}", self.fade_in.value(), self.fade_in.is_animating(self.now)))
+    }
+}
+"#,
+    );
+    find(&adapter, "true true");
+}
