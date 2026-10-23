@@ -181,6 +181,7 @@ fn main() {
 
 <h2 id="closures">Closures</h2>
 <p>Closures capture their environment. <code>move</code> closures work. A closure that mutates what it captures is <code>FnMut</code>. Functions can take closures as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. They can return them as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>.</p>
+<p>A closure in a variable is a value. It can be passed to a function or to <code>map</code>, copied to another variable, or called from inside another closure. A parameter can be <code>_</code> or another pattern.</p>
 <div class="block">
   <div class="file"><b>closures.rawr</b></div>
   <pre><code data-lang="rust" data-run="closures.rawr" id="src-closures">fn apply(f: impl Fn(i64) -&gt; i64, x: i64) -&gt; i64 {
@@ -218,7 +219,7 @@ fn main() {
   <tr><td><code>assert!</code> <code>assert_eq!</code> <code>assert_ne!</code></td><td>Panic when the condition fails. They take an optional message.</td></tr>
   <tr><td><code>debug_assert!</code> <code>debug_assert_eq!</code></td><td>Behave as in a Rust debug build.</td></tr>
   <tr><td><code>unreachable!</code> <code>todo!</code> <code>unimplemented!</code></td><td>Panic when reached.</td></tr>
-  <tr><td><code>vec!</code></td><td>Both forms: <code>vec![1, 2]</code> and <code>vec![0; n]</code>.</td></tr>
+  <tr><td><code>vec!</code></td><td>Both forms: <code>vec![1, 2]</code> and <code>vec![0; n]</code>, where <code>n</code> is any <code>usize</code> expression. An array&rsquo;s <code>[0; N]</code> takes a literal or a <code>const</code>.</td></tr>
   <tr><td><code>matches!</code></td><td>Takes a guard: <code>matches!(x, Some(n) if n &gt; 2)</code>.</td></tr>
   <tr><td><code>concat!</code> <code>stringify!</code></td><td>Expand to a string literal.</td></tr>
   <tr><td><code>env!</code></td><td>Reads an environment variable when the program is checked.</td></tr>
@@ -242,15 +243,18 @@ fn main() {
 <ul>
   <li><code>String</code> and <code>&amp;str</code>: <code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes as Rust&rsquo;s does.</li>
   <li><code>Vec</code> and slices: <code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>Vec::with_capacity</code> and more.</li>
-  <li>Iterators: <code>map</code>, <code>filter</code>, <code>enumerate</code>, <code>zip</code>, <code>skip</code>, <code>take</code>, <code>step_by</code>, <code>rev</code>, <code>any</code>, <code>all</code>, <code>position</code>, <code>fold</code>, <code>sum</code>, <code>max</code>, <code>min</code>, <code>count</code>, <code>collect</code> and more.</li>
+  <li>Iterators: <code>map</code>, <code>filter</code>, <code>enumerate</code>, <code>zip</code>, <code>skip</code>, <code>take</code>, <code>step_by</code>, <code>rev</code>, <code>any</code>, <code>all</code>, <code>position</code>, <code>fold</code>, <code>sum</code>, <code>max</code>, <code>min</code>, <code>count</code>, <code>collect</code> and more. <code>std::iter::once</code> and <code>std::iter::empty</code> start one.</li>
+  <li>Arrays: <code>[T; N]::map</code> gives a <code>[U; N]</code>.</li>
+  <li>Numbers: <code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>powi</code>, <code>powf</code>, <code>floor</code>, <code>round</code> and kin. Floats also have <code>sin</code>, <code>cos</code>, <code>tan</code>, their inverses and hyperbolic forms, <code>atan2</code>, <code>hypot</code>, <code>exp</code>, <code>ln</code>, <code>log</code>, <code>log10</code>, <code>to_degrees</code> and <code>to_radians</code>.</li>
+  <li><code>std::time::Duration</code> and <code>Instant</code>: <code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code>, <code>duration_since</code>, and the operators <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>{:?}</code> prints Rust&rsquo;s text, such as <code>1.5s</code>.</li>
   <li><code>std::collections</code>: <code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>.</li>
   <li><code>std::mem::swap</code>, <code>replace</code> and <code>take</code>.</li>
   <li><code>std::fmt</code> for <code>Display</code> and <code>Debug</code> impls, <code>std::ops</code> for operator traits and <code>std::cmp::Ordering</code>.</li>
-  <li><code>From</code> and <code>Into</code> between your own types.</li>
-  <li><code>From::from</code>, <code>Into::into</code>, <code>Clone::clone</code> and <code>ToString::to_string</code> as values. <code>.map(String::from)</code> is one example. A method of <code>Option</code> or <code>Result</code> works as a value too, as in <code>.map(Result::ok)</code>.</li>
+  <li><code>From</code> and <code>Into</code> between your own types, and from your own type into a number type such as <code>impl From&lt;Roar&gt; for u32</code>.</li>
+  <li><code>From::from</code>, <code>Into::into</code>, <code>Clone::clone</code> and <code>ToString::to_string</code> as values. <code>.map(String::from)</code> is one example. A method of <code>Option</code> or <code>Result</code> works as a value too, as in <code>.map(Result::ok)</code>. So does an associated function of your own type, as in <code>.map(Db::from)</code> or <code>let make = Db::new;</code>.</li>
   <li><code>TryFrom</code> between integer types.</li>
 </ul>
-<p><code>Duration</code> and <code>Instant</code> are available to iced apps as <code>iced::time::Duration</code> and <code>iced::time::Instant</code>. <code>std::time</code> is not available in plain programs yet.</p>
+<p>In an iced app, <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>, which are std&rsquo;s own in iced.</p>
 
 <h2 id="not-supported">Not supported yet</h2>
 <p>These are valid Rust that Rawr rejects today. Each one fails the check with an error that names the construct.</p>
@@ -276,7 +280,6 @@ fn main() {
 <ul>
   <li><code>Rc</code>, <code>RefCell</code> and <code>Cell</code>.</li>
   <li><code>VecDeque</code> and <code>BinaryHeap</code>.</li>
-  <li><code>std::time</code> in plain programs. iced apps get <code>Duration</code> and <code>Instant</code> from <code>iced::time</code>.</li>
   <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
   <li><code>write!</code> into a <code>String</code> through <code>std::fmt::Write</code>.</li>
   <li><code>Formatter::pad</code>.</li>

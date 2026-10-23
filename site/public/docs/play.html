@@ -88,7 +88,7 @@ column![text("hi"), button("go")]
 <p>Expressions and views without <code>use</code> lines get those iced names imported for them. Messages are refused for expressions and views. Only an app takes them.</p>
 
 <h3 id="app">An app</h3>
-<p>A type with <code>fn view(&amp;self)</code> and <code>fn update(&amp;mut self, message)</code> is an app. The snippet can have its own <code>main</code> with <code>iced::run</code> or <code>iced::application</code>. Without one, the bot boots <code>State::default()</code>. It applies each <code>msg=</code> in order and then renders the view. An app doesn&rsquo;t get imports for free. Write its <code>use</code> lines as you would in a file.</p>
+<p>A type with <code>fn view(&amp;self)</code> and <code>fn update(&amp;mut self, message)</code> is an app. The snippet can have its own <code>main</code> with <code>iced::run</code> or <code>iced::application</code>. Without one, the bot boots <code>State::default()</code>. It applies each <code>msg=</code> in order and then renders the view. A <code>main</code> whose <code>iced::run</code> takes closures, such as <code>iced::run(|n: &amp;mut u32, _: Message| *n += 1, |n: &amp;u32| text(n))</code>, is an app too, with no <code>fn view</code>. An app doesn&rsquo;t get imports for free. Write its <code>use</code> lines as you would in a file.</p>
 <div class="block">
   <div class="file"><b>?play light msg=Message::Increment msg=Message::Increment</b></div>
   <pre><code data-lang="rust">use iced::widget::{Widget, button, column, text};
