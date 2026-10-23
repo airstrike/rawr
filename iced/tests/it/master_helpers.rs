@@ -690,3 +690,50 @@ fn master_svg_takes_a_style_function() {
     let adapter = boot(SVG_STYLE);
     find(&adapter, "tiger");
 }
+
+const FONT_LIST: &str = r#"
+use iced::font;
+use iced::widget::text;
+use iced::{Task, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::new, State::update, State::view).run()
+}
+
+struct State {
+    families: Vec<font::Family>,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    FontsListed(Vec<font::Family>),
+}
+
+impl State {
+    fn new() -> (Self, Task<Message>) {
+        (
+            Self { families: font::Family::VARIANTS.to_vec() },
+            font::list()
+                .map(Result::ok)
+                .and_then(Task::done)
+                .map(Message::FontsListed),
+        )
+    }
+
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::FontsListed(families) => self.families = families,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        text(format!("{} families", self.families.len()))
+    }
+}
+"#;
+
+#[test]
+fn master_font_list_is_a_task_of_families() {
+    let adapter = boot(FONT_LIST);
+    find(&adapter, "5 families");
+}

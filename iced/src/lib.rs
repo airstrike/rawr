@@ -388,6 +388,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         &[],
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
+    builder.value_type::<iced::font::Error>("font::Error", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::font::Family>(
         "font::Family",
         &[],
@@ -2419,6 +2420,16 @@ fn declare_native_tasks(builder: &mut facade::Builder) -> Result<(), host::Error
         [type_ref::Type::option(type_ref::Type::registered("window::Id")?)],
     )?);
     builder.item(item::Definition::function("window::latest", latest.finish())?)?;
+    // `font::list()`: the system's font families.
+    let mut list = signature::Builder::new();
+    list.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::result(
+            type_ref::Type::slice(type_ref::Type::registered("font::Family")?),
+            type_ref::Type::registered("font::Error")?,
+        )],
+    )?);
+    builder.item(item::Definition::function("font::list", list.finish())?)?;
     let mut scale_factor = signature::Builder::new();
     scale_factor.parameter(type_ref::Type::registered("window::Id")?);
     scale_factor.output(type_ref::Type::applied(

@@ -49,6 +49,7 @@ pub(crate) enum Native {
     CloseWindow(iced::window::Id),
     FocusNext,
     FocusPrevious,
+    FontList,
     Focus(iced::widget::Id),
     Find(iced::widget::Id),
     SnapTo(
@@ -81,6 +82,14 @@ impl Native {
             }
             Self::CloseWindow(id) => iced::window::close(id),
             Self::FocusNext => iced::widget::operation::focus_next(),
+            Self::FontList => iced::font::list().map(|families| {
+                Ok(match families {
+                    Ok(families) => rawr::result::ok(Dynamic::from_array(
+                        families.into_iter().map(Dynamic::from).collect(),
+                    )),
+                    Err(error) => rawr::result::err(Dynamic::from(error)),
+                })
+            }),
             Self::FocusPrevious => iced::widget::operation::focus_previous(),
             Self::Focus(id) => iced::widget::operation::focus(id),
             Self::Find(id) => {
@@ -546,6 +555,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
         ("iced::window::latest", Native::LatestWindow),
         ("iced::widget::operation::focus_next", Native::FocusNext),
         ("iced::widget::operation::focus_previous", Native::FocusPrevious),
+        ("iced::font::list", Native::FontList),
     ] {
         builder
             .bind_with_context(path, move |call, args| {

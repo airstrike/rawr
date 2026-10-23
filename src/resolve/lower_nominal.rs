@@ -9628,6 +9628,27 @@ impl<'a> Parser<'a> {
         Ok(types)
     }
 
+    /// `::ok` after `Result` where it is not called: the method named as a
+    /// value. A variant (`Option::Some`) or a call is not one.
+    fn std_method_value(&self) -> Option<ImmutableString> {
+        let mut ahead = self.input.clone();
+        if !matches!(ahead.next(), Some((Token::DoubleColon, _))) {
+            return None;
+        }
+        let Some((Token::Identifier(member), _)) = ahead.next() else {
+            return None;
+        };
+        if !member.starts_with(|c: char| c.is_ascii_lowercase())
+            || matches!(
+                ahead.peek(),
+                Some((Token::LeftParen | Token::Unit | Token::DoubleColon | Token::LessThan, _))
+            )
+        {
+            return None;
+        }
+        Some((*member).as_str().into())
+    }
+
     /// `Default::default`, `From::from`, `std::convert::Into::into`: a std
     /// or prelude trait's function by path, after its first segment
     /// `first`, with the number of tokens up to its arguments. A
@@ -23561,6 +23582,28 @@ impl<'a> Parser<'a> {
                 Ty::Ordering,
                 Span::new(name_span.start(), end),
             ));
+        }
+        // `.map(Result::ok)`, `.and_then(Option::as_ref)`: a method of
+        // `Option` or `Result` named as a value is the closure that calls it.
+        if matches!(name.as_str(), "Option" | "Result")
+            && self.models.get(&name).is_none()
+            && self.models.import(&name).is_none()
+            && !self.bindings.contains_key(name.as_str())
+            && let Some(member) = self.std_method_value()
+        {
+            self.next();
+            self.next();
+            let at = name_span.start();
+            let argument = || (Token::Identifier(Box::new("__rawr_method_value".into())), at);
+            self.splice_tokens(vec![
+                argument(),
+                (Token::Pipe, at),
+                argument(),
+                (Token::Period, at),
+                (Token::Identifier(Box::new(member.as_str().into())), at),
+                (Token::Unit, at),
+            ]);
+            return self.parse_closure(Token::Pipe, point_span(at), false);
         }
         // `Default::default()`, `From::from(x)`, `std::convert::Into::into(x)`:
         // a std or prelude trait's function called by path.
