@@ -773,3 +773,48 @@ impl State {
     );
     find(&adapter, "alpha 0");
 }
+
+/// iced master's `Row<W>` and `Column<W>` take their child type.
+#[test]
+fn master_rows_and_columns_take_their_child_type() {
+    let adapter = boot(
+        r#"
+use iced::widget::{Column, Row, column, row, text};
+use iced::{Element, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    count: i64,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Add,
+}
+
+fn header() -> Row<Element<'static, Message>> {
+    row![text("left"), text("right")]
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn body(&self) -> Column<Element<'_, Message>> {
+        let mut items: Row<Element<'static, Message>> = Row::new();
+        items = items.push(text("pushed"));
+        column![header(), items, text(self.count)]
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        self.body()
+    }
+}
+"#,
+    );
+    find(&adapter, "pushed");
+    find(&adapter, "right");
+}

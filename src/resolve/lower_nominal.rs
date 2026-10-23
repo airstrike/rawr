@@ -29813,6 +29813,9 @@ impl<'a> Parser<'a> {
                     _ => None,
                 })
         });
+        if let Some((definition, _)) = &host {
+            self.content_messages(definition, &mut arguments);
+        }
         match host {
             Some((definition, owner)) if generic || !definition.parameters().is_empty() => {
                 if arguments.len() != definition.parameters().len() {
@@ -29874,6 +29877,70 @@ impl<'a> Parser<'a> {
             }
             _ => self.resolve_type(&name, name_span),
         }
+    }
+
+    /// iced master's widgets are generic over their content, as
+    /// `Row<Element<'static, Message>>`; a facade widget is generic over its
+    /// Message. A content argument names its Message, a content without one
+    /// (`String`) is dropped when the arguments overflow, as an item header
+    /// reads them (`type_ref::content_messages`).
+    fn content_messages(
+        &self,
+        definition: &crate::host::type_def::Definition,
+        arguments: &mut Vec<Ty>,
+    ) {
+        let erased = self
+            .models
+            .host
+            .trait_types()
+            .filter(|(definition, _)| {
+                !matches!(definition.shape(), crate::host::type_def::Shape::Trait(_))
+            })
+            .flat_map(|(definition, _)| definition.projections().iter().map(|p| p.target()))
+            .collect::<Vec<_>>();
+        let widget = |definition: &crate::host::type_def::Definition| {
+            definition
+                .projections()
+                .iter()
+                .any(|projection| erased.contains(&projection.target()))
+        };
+        if !widget(definition) {
+            return;
+        }
+        let content = |argument: &Ty| -> Option<Option<Ty>> {
+            match argument {
+                Ty::Host { proof, arguments }
+                    if widget(&proof.definition) || erased.contains(&proof.definition.path()) =>
+                {
+                    Some(
+                        proof
+                            .definition
+                            .parameters()
+                            .iter()
+                            .position(|parameter| parameter == "Message")
+                            .and_then(|index| arguments.get(index).cloned()),
+                    )
+                }
+                Ty::String => Some(None),
+                _ => None,
+            }
+        };
+        if arguments.len() == definition.parameters().len()
+            && !arguments
+                .iter()
+                .any(|argument| content(argument).is_some_and(|message| message.is_some()))
+        {
+            return;
+        }
+        let limit = definition.parameters().len();
+        *arguments = std::mem::take(arguments)
+            .into_iter()
+            .filter_map(|argument| match content(&argument) {
+                Some(message) => message,
+                None => Some(argument),
+            })
+            .take(limit)
+            .collect();
     }
 
     /// `(A, ..) -> B` after `fn` or `dyn Fn` in a local type.
