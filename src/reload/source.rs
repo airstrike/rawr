@@ -344,7 +344,12 @@ impl Snapshot {
         }));
         // The imported snapshot is keyed by path bytes, not path components:
         // `src/theme.rs` sorts after `src/theme/button.rs`.
-        files.sort_unstable_by(|left, right| left.path.as_os_str().cmp(right.path.as_os_str()));
+        files.sort_by(|left, right| left.path.as_os_str().cmp(right.path.as_os_str()));
+        // An inline `mod name { .. }` is a source of its own with its file's
+        // path and only its braces' text. Its file comes first in source
+        // order, and the stable sort keeps it first, so the file's whole text
+        // is the one kept.
+        files.dedup_by(|later, first| later.path == first.path);
         Self {
             inputs: Arc::new(Inputs::from_graph(graph)),
             files: files.into_boxed_slice(),
@@ -632,6 +637,39 @@ mod tests {
         let snapshot = Snapshot::from_graph(&super::Graph::from_package(&graph));
         let limits = rawr_import::cargo::Limits::standard();
         snapshot.imported(&limits).unwrap();
+    }
+
+    #[test]
+    fn imported_snapshot_keeps_one_whole_file_for_an_inline_module() {
+        let root = std::env::temp_dir().join(format!(
+            "rawr-inline-module-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(root.join("src")).unwrap();
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"inline\"\n").unwrap();
+        let main = "// rawr\nmod toast {\n    pub fn edge() -> i64 { 1 }\n}\npub fn main() {}\n";
+        fs::write(root.join("src/main.rs"), main).unwrap();
+        let target = crate::project::Target::discover(&root).unwrap();
+        let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
+        let snapshot = Snapshot::from_graph(&super::Graph::from_package(&graph));
+        let limits = rawr_import::cargo::Limits::standard();
+        snapshot.imported(&limits).unwrap();
+        let mains = snapshot
+            .files
+            .iter()
+            .filter(|file| file.path.ends_with("src/main.rs"))
+            .collect::<Vec<_>>();
+        assert_eq!(mains.len(), 1);
+        assert_eq!(mains[0].contents.as_ref(), main.as_bytes());
+        snapshot.revalidate().unwrap();
     }
 
     #[test]
