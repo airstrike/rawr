@@ -1,6 +1,5 @@
 //! iced's `image`, `svg` and `qr_code` widgets.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use iced::advanced::widget::{tree, Tree};
@@ -15,19 +14,14 @@ use super::builtin::{
 use crate::{marker, runtime, widget};
 
 /// Whether scripts in this process may read the files that image and svg
-/// paths name.
-static FILES: AtomicBool = AtomicBool::new(true);
-
-/// Stop scripts in this process from reading files: every image or svg
-/// path is missing, and draws as a missing file does. `?play` calls it,
-/// since its scripts run on a server whose files are not theirs.
-pub fn deny_files() {
-    FILES.store(false, Ordering::Relaxed);
+/// paths name (`rawr::resolve::deny_files`).
+fn files() -> bool {
+    rawr::resolve::files_denied().is_none()
 }
 
 /// `image::Handle::from_path`, unless files are denied.
 fn image_from_path(path: &str) -> iced::widget::image::Handle {
-    if FILES.load(Ordering::Relaxed) {
+    if files() {
         iced::widget::image::Handle::from_path(path)
     } else {
         blank()
@@ -37,11 +31,50 @@ fn image_from_path(path: &str) -> iced::widget::image::Handle {
 /// `svg::Handle::from_path`, unless files are denied: then no bytes,
 /// which draw as a missing file does.
 fn svg_from_path(path: &str) -> iced::widget::svg::Handle {
-    if FILES.load(Ordering::Relaxed) {
+    if files() {
         iced::widget::svg::Handle::from_path(path)
     } else {
         iced::widget::svg::Handle::from_memory(Vec::<u8>::new())
     }
+}
+
+/// `image::Handle::from_bytes`, or a blank pixel when `bytes` do not
+/// start like a PNG or JPEG file. iced's tiny-skia renderer panics on an
+/// image it cannot decode (see [`drawable`]), so this reads the header.
+fn image_from_bytes(bytes: Vec<u8>) -> iced::widget::image::Handle {
+    let header = image::ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.into_dimensions().ok());
+    match header {
+        Some(_) => iced::widget::image::Handle::from_bytes(bytes),
+        None => blank(),
+    }
+}
+
+/// The bytes of a `Vec<u8>`, a `&[u8]` or a `&[u8; N]`: an array of
+/// integers at runtime.
+fn bytes(value: &mut Dynamic, operation: &str) -> Result<Vec<u8>, Box<EvalAltResult>> {
+    let expected = || runtime_error(format!("{operation} expects bytes"));
+    let array = value.take().into_array().map_err(|_| expected())?;
+    array
+        .iter()
+        .map(|byte| {
+            byte.as_int()
+                .ok()
+                .and_then(|byte| u8::try_from(byte).ok())
+                .ok_or_else(expected)
+        })
+        .collect()
+}
+
+/// A `u32` operand of `operation`.
+fn dimension(value: &Dynamic, operation: &str) -> Result<u32, Box<EvalAltResult>> {
+    value
+        .as_int()
+        .ok()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| runtime_error(format!("{operation} expects a u32")))
 }
 
 /// A transparent pixel, one handle for the process.
@@ -122,7 +155,8 @@ impl widget::Descriptor for marker::Image {
     }
 }
 
-/// `handle`, or a blank pixel when it names a file that does not exist.
+/// `handle`, or a blank pixel when it names a file that does not exist or
+/// holds too few pixels.
 ///
 /// iced's wgpu renderer draws an image it cannot load as nothing, 1 pixel
 /// square. iced's tiny-skia renderer panics instead: it measures the image
@@ -131,6 +165,13 @@ impl widget::Descriptor for marker::Image {
 fn drawable(handle: &iced::widget::image::Handle) -> iced::widget::image::Handle {
     match handle {
         iced::widget::image::Handle::Path(_, path) if !path.is_file() => blank(),
+        // Fewer pixels than `width * height * 4` bytes do not load.
+        iced::widget::image::Handle::Rgba {
+            width,
+            height,
+            pixels,
+            ..
+        } if (pixels.len() as u64) < u64::from(*width) * u64::from(*height) * 4 => blank(),
         _ => handle.clone(),
     }
 }
@@ -194,6 +235,27 @@ fn bind_image(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(image_from_path(&path)))
         })
         .expect("the iced facade must retain image::Handle::from_path");
+    builder
+        .bind("iced::widget::image::Handle::from_bytes", |args| {
+            let [bytes_] = args else {
+                return Err(arity("image::Handle::from_bytes", 1, args.len()));
+            };
+            Ok(Dynamic::from(image_from_bytes(bytes(bytes_, "image::Handle::from_bytes")?)))
+        })
+        .expect("the iced facade must retain image::Handle::from_bytes");
+    builder
+        .bind("iced::widget::image::Handle::from_rgba", |args| {
+            let [width, height, pixels] = args else {
+                return Err(arity("image::Handle::from_rgba", 3, args.len()));
+            };
+            let operation = "image::Handle::from_rgba";
+            Ok(Dynamic::from(iced::widget::image::Handle::from_rgba(
+                dimension(width, operation)?,
+                dimension(height, operation)?,
+                bytes(pixels, operation)?,
+            )))
+        })
+        .expect("the iced facade must retain image::Handle::from_rgba");
     builder
         .bind_with_context("iced::widget::image", |call, args| {
             let [handle] = args else {
@@ -265,6 +327,17 @@ fn bind_svg(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(svg_from_path(&path)))
         })
         .expect("the iced facade must retain svg::Handle::from_path");
+    builder
+        .bind("iced::widget::svg::Handle::from_memory", |args| {
+            let [memory] = args else {
+                return Err(arity("svg::Handle::from_memory", 1, args.len()));
+            };
+            Ok(Dynamic::from(iced::widget::svg::Handle::from_memory(bytes(
+                memory,
+                "svg::Handle::from_memory",
+            )?)))
+        })
+        .expect("the iced facade must retain svg::Handle::from_memory");
     builder
         .bind_with_context("iced::widget::svg", |call, args| {
             let [handle] = args else {

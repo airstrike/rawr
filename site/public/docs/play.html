@@ -154,11 +154,23 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
   <tr><td>Memory</td><td>256 MB per run.</td></tr>
   <tr><td>Operations</td><td>1,000,000 per evaluation.</td></tr>
   <tr><td>Call depth</td><td>32.</td></tr>
-  <tr><td>Values</td><td>Strings up to 64 KiB. Arrays and maps up to 10,000 elements.</td></tr>
+  <tr><td>Values</td><td>Strings up to 64 KiB. Arrays up to 65,536 elements. Maps up to 10,000 entries.</td></tr>
   <tr><td>Output</td><td>64 KiB. Longer output ends with <code>&hellip; output truncated</code>. Discord replies are also cut to fit a message.</td></tr>
   <tr><td>Canvas</td><td>2048 logical pixels per side.</td></tr>
 </table>
 <p>A limit gets a plain reply such as <code>time limit exceeded</code>. Snippets have no filesystem, network or environment access.</p>
+
+<h3 id="no-files">Images without files</h3>
+<p>?play has no files. An image or svg path draws as a missing file. <code>include_str!</code> and <code>include_bytes!</code> fail with an error that says so. A snippet can still draw an image from bytes it holds. <code>svg::Handle::from_memory</code> takes svg text as bytes. <code>image::Handle::from_bytes</code> takes the bytes of a PNG or JPEG file. <code>image::Handle::from_rgba</code> takes a width, a height and 4 bytes for each pixel.</p>
+<div class="block">
+  <div class="file"><b>circle.rs</b></div>
+  <pre><code data-lang="rust" data-run="circle.rs" id="src-circle">let circle = r#"&lt;svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"&gt;
+  &lt;circle cx="50" cy="50" r="40" fill="hotpink"/&gt;
+&lt;/svg&gt;"#;
+
+svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-circle" data-out="out-circle" data-alt="A pink circle, drawn by rawr-iced on the server" aria-label="Run circle.rs" hidden></button><span class="quiet" id="out-circle" aria-live="polite">(draws a pink circle)</span></div>
+</div>
 <p>The bot also limits how often it runs. Each user gets 4 runs a minute. Each channel gets 12. A run over the limit gets an hourglass reaction instead of a reply.</p>
 
 <h2 id="playground">The playground</h2>

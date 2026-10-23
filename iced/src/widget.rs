@@ -27,7 +27,6 @@ pub(crate) mod script;
 pub(crate) mod style;
 mod value;
 
-pub use media::deny_files;
 pub use value::{Error, Value};
 
 use std::fmt;

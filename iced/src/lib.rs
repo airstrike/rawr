@@ -2203,13 +2203,30 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
         ("widget::image", "widget::image::Handle", "widget::image", "widget::Image"),
         ("widget::svg", "widget::svg::Handle", "widget::svg", "widget::Svg"),
     ] {
-        let mut from_path = signature::Builder::new();
-        from_path.parameter(string());
-        from_path.output(type_ref::Type::registered(handle)?);
-        builder.item(item::Definition::associated_function(
-            format!("{handle}::from_path"),
-            from_path.finish(),
-        )?)?;
+        // `from_path`, and `impl Into<Bytes>` for the rest: a `Vec<u8>`, a
+        // `&[u8]` or a byte string.
+        let bytes = || type_ref::Type::slice(type_ref::Type::builtin(type_ref::Builtin::U8));
+        let u32_ = || type_ref::Type::builtin(type_ref::Builtin::U32);
+        let constructors = if handle == "widget::image::Handle" {
+            vec![
+                ("from_path", vec![string()]),
+                ("from_bytes", vec![bytes()]),
+                ("from_rgba", vec![u32_(), u32_(), bytes()]),
+            ]
+        } else {
+            vec![("from_path", vec![string()]), ("from_memory", vec![bytes()])]
+        };
+        for (name, parameters) in constructors {
+            let mut signature = signature::Builder::new();
+            for parameter in parameters {
+                signature.parameter(parameter);
+            }
+            signature.output(type_ref::Type::registered(handle)?);
+            builder.item(item::Definition::associated_function(
+                format!("{handle}::{name}"),
+                signature.finish(),
+            )?)?;
+        }
         // `impl Into<Handle>`: a handle, or a path.
         for input in [type_ref::Type::registered(handle)?, string()] {
             let mut signature = signature::Builder::new();

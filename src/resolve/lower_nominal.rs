@@ -12575,6 +12575,16 @@ impl<'a> Parser<'a> {
                     })
             })
         };
+        let slice = |index: usize| {
+            items.iter().any(|item| {
+                item.signature().parameters().get(index).is_some_and(|parameter| {
+                    matches!(
+                        parameter.shape(),
+                        crate::host::type_ref::Shape::Array { length: None, .. }
+                    )
+                })
+            })
+        };
         // A facade takes `&str`, slices and borrowed facade values, such as
         // iced's `&Theme`, as their owned types. Its `f64` and `i64` inputs stand
         // for iced's `f32` and `u16`/`u32` (`impl Into<Pixels>`, `Padding`):
@@ -12586,7 +12596,17 @@ impl<'a> Parser<'a> {
                     mutable: false,
                     target,
                 } if matches!(*target, Ty::String | Ty::Host { .. } | Ty::Array { .. }) => {
-                    argument.ty = *target;
+                    argument.ty = match *target {
+                        // `&[T; N]`, as `b"…"`, where the facade takes a slice.
+                        Ty::Array {
+                            element,
+                            length: Some(_),
+                        } if slice(index) => Ty::Array {
+                            element,
+                            length: None,
+                        },
+                        target => target,
+                    };
                 }
                 ty @ (Ty::Int(Int::I64) | Ty::Float(Float::F64)) if narrow(index) => {
                     let (found, expected) = if ty == Ty::Int(Int::I64) {
@@ -30214,6 +30234,9 @@ impl<'a> Parser<'a> {
             reason: reason.into(),
             operation: at,
         };
+        if let Some(reason) = crate::resolve::files_denied() {
+            return Err(error(reason.into()));
+        }
         #[cfg(not(feature = "no_std"))]
         {
             let Some(file) = self.source_file() else {
