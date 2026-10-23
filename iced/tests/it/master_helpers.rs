@@ -1007,3 +1007,39 @@ impl State {
     );
     find(&adapter, "level 5 5 0");
 }
+
+const TEXT_CENTER: &str = r#"
+use iced::widget::{button, column, text};
+use iced::{Color, Element, Fill};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> Element<'_, Message> {
+        let color: Option<Color> = None;
+        column![
+            button(text("centered").width(Fill).center()).padding(10),
+            text("tinted").color_maybe(Some(Color::BLACK)),
+            text("plain").color_maybe(color),
+        ]
+        .boxed()
+    }
+}
+"#;
+
+#[test]
+fn master_text_centers_and_takes_an_optional_color() {
+    let adapter = boot(TEXT_CENTER);
+    find(&adapter, "centered");
+    find(&adapter, "plain");
+}

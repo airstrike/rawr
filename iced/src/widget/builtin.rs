@@ -1514,6 +1514,27 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
         })
         .expect("the iced facade must retain the exact Text::align_y item");
     builder
+        .bind("iced::widget::Text::center", |args| {
+            if args.len() != 1 {
+                return Err(arity("Text::center", 1, args.len()));
+            }
+            let mut text = take::<marker::Text>(args[0], "iced::widget::Text")?;
+            text.align_x = iced::alignment::Horizontal::Center.into();
+            text.align_y = Some(iced::alignment::Vertical::Center);
+            Ok(Dynamic::from(text))
+        })
+        .expect("the iced facade must retain the exact Text::center item");
+    builder
+        .bind("iced::widget::Text::color_maybe", |args| {
+            if args.len() != 2 {
+                return Err(arity("Text::color_maybe", 2, args.len()));
+            }
+            let mut text = take::<marker::Text>(args[0], "iced::widget::Text")?;
+            text.color = super::rich::maybe::<iced::Color>(args[1], "iced::Color")?;
+            Ok(Dynamic::from(text))
+        })
+        .expect("the iced facade must retain the exact Text::color_maybe item");
+    builder
         .bind("iced::widget::Text::style", |args| {
             if args.len() != 2 {
                 return Err(arity("Text::style", 2, args.len()));

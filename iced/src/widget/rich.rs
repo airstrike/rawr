@@ -145,7 +145,7 @@ fn new_rich(
     }))
 }
 
-fn maybe<T: Clone + Send + Sync + 'static>(
+pub(super) fn maybe<T: Clone + Send + Sync + 'static>(
     value: &mut Dynamic,
     expected: &str,
 ) -> Result<Option<T>, Box<EvalAltResult>> {

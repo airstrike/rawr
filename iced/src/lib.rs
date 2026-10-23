@@ -1792,6 +1792,21 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
             fixed_builder_signature("widget::Text", type_ref::Type::registered(input)?)?,
         )?)?;
     }
+    // iced's `Text::center`: centered on both axes.
+    builder.item(item::Definition::method(
+        "widget::Text::center",
+        receiver::Mode::Owned,
+        output_signature("widget::Text")?,
+    )?)?;
+    // iced's `Text::color_maybe` takes `Option<impl Into<Color>>`.
+    builder.item(item::Definition::method(
+        "widget::Text::color_maybe",
+        receiver::Mode::Owned,
+        fixed_builder_signature(
+            "widget::Text",
+            type_ref::Type::option(type_ref::Type::registered("Color")?),
+        )?,
+    )?)?;
     for owner in ["widget::Row", "widget::Container"] {
         builder.item(item::Definition::method(
             format!("{owner}::align_y"),
