@@ -3293,12 +3293,16 @@ fn witness_mode(plan: &Plan) -> u8 {
     }
 }
 
-/// Whether `ty` is Copy as the compiler sees it: a scalar, or an `Option`
-/// or `Result` of scalars, as a `cpu_cores: Option<usize>` field is.
+/// Whether `ty` is Copy as the compiler sees it: a scalar, an imported
+/// Copy type, or an `Option` or `Result` of them, as a `cpu_cores:
+/// Option<usize>` field is.
 fn copy_scalar(ty: &convert::Type) -> bool {
     match ty {
         convert::Type::Unit => true,
         convert::Type::Builtin(builtin) => builtin.rust_name().is_some(),
+        convert::Type::Nominal { definition, .. } => {
+            COPY_TYPES.with_borrow(|copy| copy.contains(definition.as_bytes()))
+        }
         convert::Type::Option(inner) => copy_scalar(inner),
         convert::Type::Result(ok, err) => copy_scalar(ok) && copy_scalar(err),
         _ => false,
@@ -5352,6 +5356,10 @@ thread_local! {
     /// finds has its exact type (`chrono::DateTime<chrono::Local>`).
     static TYPE_PATHS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], String>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The imported types that are Copy, by identity, as the compiler reads
+    /// a field of one through a shared borrow.
+    static COPY_TYPES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 /// Fills `TYPE_PATHS` for one generation and empties it when dropped.
@@ -5369,6 +5377,12 @@ impl TypePaths {
                 }
             }
         });
+        COPY_TYPES.with_borrow_mut(|copy| {
+            copy.clear();
+            for owner in facade.into_iter().flat_map(crate::surface::facade::Plan::facades) {
+                copy.extend(owner.types().filter(|ty| ty.copy()).map(|ty| *ty.identity()));
+            }
+        });
         Self
     }
 }
@@ -5376,6 +5390,7 @@ impl TypePaths {
 impl Drop for TypePaths {
     fn drop(&mut self) {
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
+        COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
     }
 }
 
@@ -5937,6 +5952,19 @@ mod tests {
     };
     use crate::classify::representability::convert::{Builtin, Constant, Type};
     use crate::classify::representability::signature::{Kind, Parameter, Signature};
+
+    #[test]
+    fn an_imported_copy_type_is_read_as_a_copy() {
+        let nominal = |byte| Type::Nominal {
+            definition: crate::surface::identity::Definition::authenticated([byte; 32]),
+            arguments: Box::default(),
+        };
+        super::COPY_TYPES.with_borrow_mut(|copy| copy.insert([3; 32]));
+        assert!(super::copy_scalar(&nominal(3)));
+        assert!(super::copy_scalar(&Type::Option(Box::new(nominal(3)))));
+        assert!(!super::copy_scalar(&nominal(4)));
+        super::COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
+    }
 
     #[test]
     fn an_option_of_a_scalar_is_read_as_a_copy() {
