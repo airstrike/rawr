@@ -7443,6 +7443,15 @@ fn language_block_like_statement_as_a_method_receiver() {
                 .fmt(f)
             }
         }
+        enum Color { Red, Blue }
+        impl fmt::Display for Color {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(match self {
+                    Color::Red => "red",
+                    Color::Blue => "blue",
+                })
+            }
+        }
         struct Name(String);
         impl fmt::Debug for Name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -7453,12 +7462,12 @@ fn language_block_like_statement_as_a_method_receiver() {
             if true { plan.to_string() } else { String::new() }.len()
         }
         pub fn run() -> String {
-            format!("{} {} {} {:?}", Plan::Basic, Plan::Pro, size(Plan::Pro), Name("a".into()))
+            format!("{} {} {} {:?} {}{}", Plan::Basic, Plan::Pro, size(Plan::Pro), Name("a".into()), Color::Red, Color::Blue)
         }
         run()
     "#,
     );
-    assert_eq!(value, "Basic Pro 3 \"a\"");
+    assert_eq!(value, "Basic Pro 3 \"a\" redblue");
 }
 
 #[test]

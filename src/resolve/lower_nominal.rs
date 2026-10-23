@@ -23208,6 +23208,40 @@ impl<'a> Parser<'a> {
                 value = self.parse_value_fmt(value, formatter)?;
                 continue;
             }
+            // `f.write_str(text)` into a `fmt` body's formatter.
+            if member == "write_str"
+                && matches!(self.peek(), Token::LeftParen)
+                && self
+                    .formatter
+                    .as_ref()
+                    .is_some_and(|formatter| value.source.as_str() == formatter.as_str())
+            {
+                let (mut arguments, end) = self.parse_call_arguments("`write_str` arguments")?;
+                let [text] = arguments.as_mut_slice() else {
+                    return Err(Error::InvalidMethodCall {
+                        owner: "Formatter".into(),
+                        method: member,
+                        reason: format!("expects 1 argument(s), found {}", arguments.len())
+                            .into(),
+                        call: span(value.span.start(), end),
+                    });
+                };
+                self.strip_string_reference(text);
+                self.require_type(&Ty::String, &text.ty, text.span)?;
+                let mut source = origin::Fragment::plain("{ ");
+                source.push(value.rendered_source());
+                source.push_text(" += (");
+                source.push(text.rendered_source());
+                source.push_text("); ");
+                source.push(self.prelude_op(PreludeOp::Ok, ["()".into()]));
+                source.push_text(" }");
+                value = self.operator_expr(
+                    source,
+                    Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Unit)),
+                    span(value.span.start(), end),
+                );
+                continue;
+            }
             let builtin = self.inference.resolve(&value.ty);
             // `a.min(b)`, `a.max(b)`, `a.clamp(lo, hi)` through `Ord`, unless
             // the type has its own method of that name.
