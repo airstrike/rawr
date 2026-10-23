@@ -8664,6 +8664,7 @@ impl<'a> Parser<'a> {
                 }
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
+                _ if self.nested_item_ahead() => self.skip_nested_item()?,
                 _ => self.parse_statement()?,
             }
         }
@@ -8765,6 +8766,7 @@ impl<'a> Parser<'a> {
                 }
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
+                _ if self.nested_item_ahead() => self.skip_nested_item()?,
                 _ => self.parse_statement()?,
             }
         }
@@ -15206,6 +15208,77 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether a `struct`, `enum`, `impl`, `trait` or `type` item, or an
+    /// attribute, starts here in a body.
+    fn nested_item_ahead(&mut self) -> bool {
+        if self.attribute_ahead() {
+            return true;
+        }
+        match self.peek() {
+            Token::Struct | Token::Enum | Token::Impl => true,
+            Token::Identifier(name) => {
+                matches!(name.as_str(), "trait" | "type")
+                    && matches!(self.peek_second(), Token::Identifier(_))
+            }
+            _ => false,
+        }
+    }
+
+    fn attribute_ahead(&mut self) -> bool {
+        match self.peek() {
+            Token::Hash => true,
+            #[cfg(not(feature = "no_custom_syntax"))]
+            Token::Custom(symbol) => symbol.as_str() == "#",
+            _ => false,
+        }
+    }
+
+    /// A `struct`, `enum`, `impl`, `trait` or `type` item inside a body,
+    /// with its attributes: the item parser hoisted it to the file's items,
+    /// so its tokens are passed over here. A statement's attributes have no
+    /// effect and are passed over too.
+    fn skip_nested_item(&mut self) -> Result<(), Error> {
+        let start = self.position();
+        let unclosed = |position| Error::UnsupportedNominalSyntax {
+            construct: "an item inside a body without its end".into(),
+            source: span(start, position),
+        };
+        while self.attribute_ahead() {
+            self.next();
+            let mut depth = 0usize;
+            loop {
+                match self.next() {
+                    (Token::LeftBracket, _) => depth += 1,
+                    (Token::RightBracket, _) if depth == 1 => break,
+                    (Token::RightBracket, _) => depth = depth.saturating_sub(1),
+                    (Token::EOF, position) => return Err(unclosed(position)),
+                    _ => {}
+                }
+            }
+        }
+        if !self.nested_item_ahead() {
+            return Ok(());
+        }
+        let mut depth = 0usize;
+        loop {
+            match self.next() {
+                (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
+                    depth += 1;
+                }
+                (Token::RightParen | Token::RightBracket, _) => depth = depth.saturating_sub(1),
+                (Token::RightBrace, _) => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Ok(());
+                    }
+                }
+                (Token::SemiColon, _) if depth == 0 => return Ok(()),
+                (Token::EOF, position) => return Err(unclosed(position)),
+                _ => {}
+            }
+        }
+    }
+
     /// A `fn` item inside a body: the item parser hoisted it to the file's
     /// items, so its tokens are passed over here.
     fn skip_nested_fn(&mut self) -> Result<(), Error> {
@@ -19744,6 +19817,7 @@ impl<'a> Parser<'a> {
                     Token::Const => self.parse_binding(false)?,
                     Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
+                _ if self.nested_item_ahead() => self.skip_nested_item()?,
                     _ => self.parse_statement()?,
                 }
             }

@@ -7541,3 +7541,37 @@ fn language_closure_mutates_through_self() {
     "#);
     assert_eq!(value, 30000 + 2000 + 32);
 }
+
+#[test]
+fn language_items_declared_in_a_function_body() {
+    let value = run_string(
+        r#"
+        use std::fmt;
+        fn square(size: i64) -> String {
+            #[derive(Debug, Clone, Copy)]
+            struct Square { size: i64 }
+
+            impl Square {
+                fn area(&self) -> i64 { self.size * self.size }
+            }
+
+            impl fmt::Display for Square {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    write!(f, "square {}", self.area())
+                }
+            }
+
+            enum Shade { Light, Dark }
+
+            let shade = if size > 2 { Shade::Dark } else { Shade::Light };
+            let name = match shade { Shade::Light => "light", Shade::Dark => "dark" };
+            format!("{} {}", Square { size }, name)
+        }
+        pub fn run() -> String {
+            square(3)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "square 9 dark");
+}

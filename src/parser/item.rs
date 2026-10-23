@@ -433,6 +433,16 @@ fn begins_item(token: &Token) -> bool {
     )
 }
 
+/// Whether `token` starts an item that a function body may declare and
+/// Rawr hoists: `struct`, `enum`, `impl`, `trait` or `type`.
+fn begins_body_item(token: &Token) -> bool {
+    match token {
+        Token::Struct | Token::Enum | Token::Impl => true,
+        Token::Identifier(name) => matches!(name.as_str(), "trait" | "type"),
+        _ => false,
+    }
+}
+
 fn is_attribute_marker(token: &Token) -> bool {
     match token {
         Token::Hash => true,
@@ -3675,6 +3685,39 @@ fn parse_body_syntax(
                 parse_function(input, tokenizer_control, Box::default(), None, position, false)?;
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(function)));
             continue;
+        }
+        // `struct`, `enum`, `impl`, `trait` and `type` items inside a body,
+        // with their attributes, join the file's items as `fn` items do.
+        #[cfg(not(feature = "no_std"))]
+        if boundary
+            && let Some((token, position)) = input.peek()
+            && (is_attribute_marker(token) || begins_body_item(token))
+        {
+            let start = *position;
+            let mut attributes = Vec::new();
+            while input
+                .peek()
+                .is_some_and(|(token, _)| is_attribute_marker(token))
+            {
+                attributes.push(parse_attribute(input)?);
+            }
+            if input.peek().is_some_and(|(token, _)| begins_body_item(token)) {
+                let item = parse_item_with_leading(
+                    input,
+                    tokenizer_control,
+                    attributes.into_boxed_slice(),
+                    None,
+                    start,
+                )?;
+                if let Some(item) = item {
+                    NESTED.with_borrow_mut(|nested| nested.push(item));
+                }
+                continue;
+            }
+            // A statement's attribute, as `#[allow(..)]`, has no effect.
+            if !attributes.is_empty() {
+                continue;
+            }
         }
         #[cfg(not(feature = "no_std"))]
         if boundary && let Some((Token::Use, position)) = input.peek() {
