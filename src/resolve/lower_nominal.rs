@@ -22982,6 +22982,19 @@ impl<'a> Parser<'a> {
             };
             // `*v = x` through a `&mut` local or place (a map's entry, an
             // `and_modify` value) writes it.
+            // `*self = x` in a `&mut self` method replaces the receiver.
+            let receiver = operand.lvalue.is_none()
+                && self.closures.is_empty()
+                && operand.source.as_str() == "this"
+                && self.bindings.get("this").is_some_and(|binding| {
+                    binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
+                });
+            if receiver {
+                operand.lvalue = Some(Lvalue::Binding {
+                    binding: "this".into(),
+                    ty: Ty::Unknown,
+                });
+            }
             operand.lvalue = match (resolved, operand.lvalue.take()) {
                 (Ty::Reference { mutable: true, .. }, Some(Lvalue::Binding { binding, .. })) => {
                     Some(Lvalue::Binding {

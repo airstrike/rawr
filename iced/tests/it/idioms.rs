@@ -1166,3 +1166,49 @@ fn spaced() -> bool {
     );
     find(&adapter, "space");
 }
+
+#[test]
+fn update_replaces_the_state_through_deref_self() {
+    let source = r#"
+use iced::widget::{button, text, column};
+use iced::Widget;
+#[derive(Default)]
+enum Screen { #[default] Loading, Loaded { count: i64 } }
+#[derive(Debug, Clone)]
+enum Message { Load }
+impl Screen {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Load => {
+                let next = Screen::Loaded { count: 3 };
+                *self = next;
+            }
+        }
+    }
+    fn view(&self) -> impl Widget<Message> {
+        match self {
+            Screen::Loading => column![button("Load").on_press(Message::Load)],
+            Screen::Loaded { count } => column![text(format!("loaded {count}"))],
+        }
+    }
+}
+pub fn main() -> iced::Result {
+    iced::application(Screen::default, Screen::update, Screen::view).run()
+}
+"#;
+    let mut adapter = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check_source(source)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .prepare()
+        .unwrap()
+        .into_adapter();
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("Load").unwrap();
+    let messages: Vec<_> = simulator.into_messages().collect();
+    for message in messages {
+        adapter.update(message).unwrap();
+    }
+    adapter.refresh_view().unwrap();
+    find(&adapter, "loaded 3");
+}
