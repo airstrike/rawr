@@ -2528,6 +2528,11 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     builder.type_::<marker::PathBuilder>("widget::canvas::path::Builder", &[], cloned)?;
     builder.type_::<marker::Frame>("widget::canvas::Frame", &[], cloned)?;
     builder.type_::<marker::Geometry>("widget::canvas::Geometry", &[], debug)?;
+    builder.value_type::<marker::CacheGroup>(
+        "widget::canvas::Group",
+        &[],
+        OWNED_VALUE_CAPABILITIES,
+    )?;
     builder.default_type::<marker::Cache>(
         "widget::canvas::Cache",
         &[],
@@ -2765,6 +2770,16 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
             signature(Vec::new(), cache()?),
         )?)?;
     }
+    // `Group::unique()` and `Cache::with_group(group)`: iced batches the
+    // caches of a group, which Rawr draws one by one.
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Group::unique",
+        signature(Vec::new(), ty("widget::canvas::Group")?),
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Cache::with_group",
+        signature(vec![ty("widget::canvas::Group")?], cache()?),
+    )?)?;
     builder.item(item::Definition::method(
         "widget::canvas::Cache::clear",
         receiver::Mode::Shared,

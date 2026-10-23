@@ -635,6 +635,10 @@ pub(crate) struct Geometry {
 #[derive(Clone, Default)]
 pub(crate) struct Cache(pub(crate) std::sync::Arc<std::sync::Mutex<Option<Geometry>>>);
 
+/// `canvas::Group`: caches iced draws together, which Rawr draws one by one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CacheGroup;
+
 impl std::fmt::Debug for Cache {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("Cache")

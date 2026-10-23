@@ -29142,6 +29142,50 @@ impl<'a> Parser<'a> {
                 let source = self.mutation_call(&value, member.as_str(), operands)?;
                 (source.surrounded("{ ", "; }"), Ty::Unit)
             }
+            // `resize(n, value)` and `resize_with(n, f)`: the new items made
+            // first, then one change of the `Vec` (`splice`), which drops the
+            // items past `n` or adds the new ones.
+            ("resize" | "resize_with", [length, argument]) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), length)?;
+                let with = member.as_str() == "resize_with";
+                let expected = if with {
+                    Ty::Fn {
+                        inputs: Box::default(),
+                        output: Box::new(element.clone()),
+                    }
+                } else {
+                    element.clone()
+                };
+                self.coerce_expr(&expected, argument)?;
+                let (n, len, extra, made) = (
+                    self.temporary("length"),
+                    self.temporary("len"),
+                    self.temporary("extra"),
+                    self.temporary("made"),
+                );
+                let item = if with {
+                    format!("{made}.call()")
+                } else {
+                    made.clone()
+                };
+                let mut source = origin::Fragment::plain(format!("{{ let {n} = "));
+                source.push(length.rendered_source());
+                source.push_text(format!("; let {len} = "));
+                source.push(receiver.clone());
+                source.push_text(format!(".len(); let {extra} = []; let {made} = "));
+                source.push(argument.rendered_source());
+                source.push_text(format!(
+                    "; while {len} + {extra}.len() < {n} {{ {extra}.push({item}); }} "
+                ));
+                let operands = vec![
+                    origin::Fragment::plain(format!("if {n} < {len} {{ {n} }} else {{ {len} }}")),
+                    origin::Fragment::plain(len.clone()),
+                    origin::Fragment::plain(extra.clone()),
+                ];
+                source.push(self.mutation_call(&value, "splice", operands)?);
+                source.push_text("; }");
+                (source, Ty::Unit)
+            }
             // `extend` from an iterable of `T`, or of `&T` for a `Copy` `T`.
             ("extend" | "extend_from_slice", [argument]) => {
                 let Some((items, item)) = self.collected_items(argument) else {

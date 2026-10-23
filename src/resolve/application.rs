@@ -1151,15 +1151,22 @@ fn resolve_callback(
                     | item::Kind::Enum(_) => None,
                 });
             match owner {
-                Some(owner) => methods
-                    .iter()
-                    .find(|method| {
+                // An inherent method before a trait's of the same name, as
+                // Rust resolves `State::update` when State is also a canvas
+                // Program.
+                Some(owner) => {
+                    let candidates = methods.iter().filter(|method| {
                         method.owner() == owner
                             && method.name() == name.as_str()
                             && (source.is_none_or(|source| method.source() == source)
                                 || method.is_public())
-                    })
-                    .map(|method| method.key().clone()),
+                    });
+                    candidates
+                        .clone()
+                        .find(|method| method.trait_name().is_none())
+                        .or_else(|| candidates.clone().next())
+                        .map(|method| method.key().clone())
+                }
                 // `view::view`: a function of the crate's module `view`.
                 None => items.iter().find_map(|shell| match &shell.kind {
                     item::Kind::Function(function)
