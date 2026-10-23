@@ -1684,3 +1684,46 @@ fn master_rotations_match_and_turn_images() {
     find(&adapter, "solid");
     find(&adapter, "true");
 }
+
+/// iced master's delineate example matches `Some(Point { x, y })`.
+#[test]
+fn master_facade_struct_patterns_bind_their_fields() {
+    let adapter = boot(
+        r#"
+use iced::widget::{column, text};
+use iced::{Point, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct State {
+    at: Option<Point>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self { at: Some(Point::new(3.0, 4.0)) }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let at = match self.at {
+            Some(Point { x, y }) => format!("at {x} {y}"),
+            None => "unknown".to_string(),
+        };
+        let Point { x, .. } = Point::ORIGIN;
+        column![text(at), text(format!("origin {x}"))]
+    }
+}
+"#,
+    );
+    find(&adapter, "at 3 4");
+    find(&adapter, "origin 0");
+}

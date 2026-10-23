@@ -6983,6 +6983,9 @@ struct EnumPatternSyntax {
     /// `V { x, y: p, .. }`: the field each of `payload` names, in written
     /// order, and whether `..` ends it.
     named: Option<(Box<[(ImmutableString, Span)]>, bool)>,
+    /// `Point { x, y }` on a facade struct: `owner` is the whole path and
+    /// `variant` its last name.
+    host_struct: bool,
 }
 
 /// One constructor of a matched type: an enum variant, or a prelude
@@ -15712,6 +15715,33 @@ impl<'a> Parser<'a> {
                 self.binding_mode.set(mode);
                 destructured
             }
+            // `let Point { x, .. } = point;` on a facade struct: each field
+            // read and bound.
+            PatternSyntax::Enum(pattern)
+                if pattern.host_struct
+                    && matches!(self.inference.resolve(ty), Ty::Host { .. }) =>
+            {
+                let ty = self.inference.resolve(ty);
+                let mut out = HostPattern::default();
+                self.host_pattern(syntax, origin::Fragment::plain(path), &ty, &mut out)?;
+                if !out.tests.is_empty() {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a refutable pattern in a binding; use `if let` or `match`"
+                            .into(),
+                        source: pattern.owner_span,
+                    });
+                }
+                for (binding, value) in out.binds.into_iter().zip(out.values) {
+                    let value = value.as_str().to_string();
+                    let binding_pattern = PatternSyntax::Binding {
+                        name: binding.name.clone(),
+                        span: binding.span,
+                        mutable: binding.mutable,
+                    };
+                    self.destructure_into(&binding_pattern, &value, &binding.ty, statements)?;
+                }
+                Ok(())
+            }
             other => Err(Error::UnsupportedNominalSyntax {
                 construct: "a refutable pattern in a binding; use `if let` or `match`".into(),
                 source: other.span(),
@@ -16574,6 +16604,40 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        // `Point { x, y }` on a facade struct, which a script struct's
+        // pattern above did not take.
+        if !mutable
+            && matches!(self.peek(), Token::LeftBrace)
+            && segments
+                .last()
+                .is_some_and(|(name, _)| name.starts_with(char::is_uppercase))
+            && matches!(
+                self.models.host.entry(&self.host_pattern_owner(&segments)),
+                Some(crate::host::Entry::Type(_))
+            )
+        {
+            let (variant, variant_span) = segments.last().cloned().expect("a pattern path");
+            let owner_span = Span::new(
+                segments[0].1.start(),
+                text_end(variant_span.start(), &variant),
+            );
+            let (fields, rest, _) = self.parse_field_patterns()?;
+            let mut names = Vec::with_capacity(fields.len());
+            let mut payload = Vec::with_capacity(fields.len());
+            for (name, name_span, pattern) in fields {
+                names.push((name, name_span));
+                payload.push(pattern);
+            }
+            return Ok(PatternSyntax::Enum(EnumPatternSyntax {
+                owner: segments.into_boxed_slice(),
+                owner_span,
+                variant,
+                variant_span,
+                payload: payload.into_boxed_slice(),
+                named: Some((names.into_boxed_slice(), rest)),
+                host_struct: true,
+            }));
+        }
         if segments.len() == 1 {
             let (name, span) = segments
                 .pop()
@@ -16628,6 +16692,7 @@ impl<'a> Parser<'a> {
             variant_span,
             payload: payload.into_boxed_slice(),
             named,
+            host_struct: false,
         }))
     }
 
@@ -19340,6 +19405,15 @@ impl<'a> Parser<'a> {
                 actual: written.into(),
                 expression: pattern.owner_span,
             });
+        }
+        // A facade struct's fields, each read and matched on its type.
+        if pattern.host_struct {
+            let names = pattern.named.as_ref().map(|(names, _)| names.as_ref()).unwrap_or_default();
+            for ((field, field_span), member) in names.iter().zip(pattern.payload.iter()) {
+                let field_value = self.host_read(value.clone(), ty, field.clone(), *field_span)?;
+                self.host_pattern(member, field_value.rendered_source(), &field_value.ty, out)?;
+            }
+            return Ok(());
         }
         let variant = pattern.variant.clone();
         let at = pattern.variant_span;
