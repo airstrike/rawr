@@ -102,9 +102,9 @@ impl Failure {
             || self.cli != cli
             || self.executable.digest != challenge.executable_digest
             || self.counters.runner.is_some()
-            || self.counters.nodes.len() != 44
-            || self.counters.processes.len() != 13
-            || self.counters.milestones.len() != 6
+            || self.counters.nodes.len() != crate::metrics::recorder::NODE_COUNT
+            || self.counters.processes.len() != crate::metrics::recorder::PROCESS_KINDS.len()
+            || self.counters.milestones.len() != crate::metrics::recorder::MILESTONES.len()
             || !self.reason.valid()
         {
             return Err(Error::Binding("startup failure"));
@@ -333,9 +333,9 @@ impl Payload {
                 != (Identity::Measured {
                     digest: runner.artifact,
                 })
-            || self.counters.nodes.len() != 44
-            || self.counters.processes.len() != 13
-            || self.counters.milestones.len() != 6
+            || self.counters.nodes.len() != crate::metrics::recorder::NODE_COUNT
+            || self.counters.processes.len() != crate::metrics::recorder::PROCESS_KINDS.len()
+            || self.counters.milestones.len() != crate::metrics::recorder::MILESTONES.len()
         {
             return Err(Error::Binding("capsule"));
         }

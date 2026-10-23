@@ -866,9 +866,9 @@ fn validate_capsule(
         || owner_return_ns < owner_entry_ns
         || owner_return_ns.saturating_sub(owner_entry_ns)
             > expected_request.core.bounds.owner_deadline_ns
-        || counters.nodes.len() != 44
-        || counters.processes.len() != 13
-        || counters.milestones.len() != 6
+        || counters.nodes.len() != crate::metrics::recorder::NODE_COUNT
+        || counters.processes.len() != crate::metrics::recorder::PROCESS_KINDS.len()
+        || counters.milestones.len() != crate::metrics::recorder::MILESTONES.len()
         || !counters.accounting.valid()
         || !pipeline_matches
         || !runner_matches

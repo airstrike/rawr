@@ -3,7 +3,7 @@
 use super::{Milestone, NodeEvent, NodeKind, ProcessKind, Scope, ScopeError, Sink};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-const NODE_KINDS: [NodeKind; 11] = [
+pub(crate) const NODE_KINDS: [NodeKind; 11] = [
     NodeKind::Toolchain,
     NodeKind::Resolution,
     NodeKind::Api,
@@ -16,13 +16,13 @@ const NODE_KINDS: [NodeKind; 11] = [
     NodeKind::Overlay,
     NodeKind::Runner,
 ];
-const NODE_EVENTS: [NodeEvent; 4] = [
+pub(crate) const NODE_EVENTS: [NodeEvent; 4] = [
     NodeEvent::ValidatedHit,
     NodeEvent::ExecutedMiss,
     NodeEvent::RejectedHit,
     NodeEvent::Published,
 ];
-const PROCESS_KINDS: [ProcessKind; 12] = [
+pub(crate) const PROCESS_KINDS: [ProcessKind; 12] = [
     ProcessKind::RustupWhich,
     ProcessKind::RustcVersion,
     ProcessKind::RustdocVersion,
@@ -36,7 +36,10 @@ const PROCESS_KINDS: [ProcessKind; 12] = [
     ProcessKind::CargoRunner,
     ProcessKind::Runner,
 ];
-const MILESTONES: [Milestone; 6] = [
+/// The node counters a snapshot holds: each node kind's events.
+pub(crate) const NODE_COUNT: usize = NODE_KINDS.len() * NODE_EVENTS.len();
+
+pub(crate) const MILESTONES: [Milestone; 6] = [
     Milestone::RunnerSpawned,
     Milestone::Prepared,
     Milestone::Activated,
