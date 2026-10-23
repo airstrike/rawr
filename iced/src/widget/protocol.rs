@@ -173,6 +173,22 @@ fn bind_canonical(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::B
             )?)))
         })
         .expect("the iced facade must retain Length::Fixed");
+    for (path, bound) in [
+        (
+            "iced::Length::min",
+            (|length: iced::Length, pixels: f32| length.min(pixels))
+                as fn(iced::Length, f32) -> iced::Length,
+        ),
+        ("iced::Length::max", |length, pixels| length.max(pixels)),
+    ] {
+        builder
+            .bind(path, move |args| {
+                expect_arity(path, args, 2)?;
+                let length = take::<iced::Length>(args[0], "iced::Length")?;
+                Ok(Dynamic::from(bound(length, pixels(args[1], path)?)))
+            })
+            .expect("the iced facade must retain every Length bound");
+    }
     for path in ["iced::Length::FillPortion", "iced::FillPortion"] {
         builder
             .bind(path, |args| {

@@ -4267,6 +4267,20 @@ fn declare_canonical_values(builder: &mut facade::Builder) -> Result<(), host::E
         "Length::FillPortion",
         integer_signature("Length", 1)?,
     )?)?;
+    // `Fit.max(600)`: a length with a bound, as iced's `Length::min` and
+    // `Length::max`.
+    for name in ["min", "max"] {
+        for input in PIXELS {
+            let mut bound = signature::Builder::new();
+            bound.parameter(type_ref::Type::builtin(input));
+            bound.output(type_ref::Type::registered("Length")?);
+            builder.item(item::Definition::method(
+                format!("Length::{name}"),
+                receiver::Mode::Owned,
+                bound.finish(),
+            )?)?;
+        }
+    }
     builder.item(item::Definition::associated_value(
         "Padding::ZERO",
         type_ref::Type::registered("Padding")?,

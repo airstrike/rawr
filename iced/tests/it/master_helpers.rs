@@ -1290,3 +1290,36 @@ fn master_scrollable_takes_a_direction_and_reports_scrolls() {
     find(&adapter, "End 0");
     find(&adapter, "Beginning!");
 }
+
+const LENGTH_BOUNDS: &str = r#"
+use iced::widget::{column, container, text};
+use iced::{Fill, Fit, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            container(text("bounded")).width(Fit.max(600)),
+            container(text("floored")).width(Fill.min(20.5)),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_lengths_take_bounds() {
+    let adapter = boot(LENGTH_BOUNDS);
+    find(&adapter, "bounded");
+    find(&adapter, "floored");
+}
