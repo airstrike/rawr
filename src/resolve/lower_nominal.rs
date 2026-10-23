@@ -33662,11 +33662,8 @@ fn rewrite_expr(
         // A closure carries its own function definition.
         #[cfg(not(feature = "no_function"))]
         ast::Expr::DynamicConstant(value, ..) => {
-            if let Some(pointer) = value.downcast_mut::<crate::FnPtr>()
-                && let crate::types::fn_ptr::FnPtrType::Script(definition) = &mut pointer.typ
-            {
-                let definition = crate::func::shared_make_mut(definition);
-                rewrite_statements(definition.body.statements_mut(), rewrites, patterns);
+            if let Some(pointer) = value.downcast_mut::<crate::FnPtr>() {
+                rewrite_pointer(pointer, rewrites, patterns);
             }
         }
         #[cfg(feature = "no_function")]
@@ -33680,6 +33677,25 @@ fn rewrite_expr(
         | ast::Expr::Property(..) => {}
         #[cfg(not(feature = "no_float"))]
         ast::Expr::FloatConstant(..) => {}
+    }
+}
+
+/// A closure's definition, and those of the closures it captured, which
+/// the optimizer folds into its curried values.
+#[cfg(not(feature = "no_function"))]
+fn rewrite_pointer(
+    pointer: &mut crate::FnPtr,
+    rewrites: &BTreeMap<ImmutableString, ImmutableString>,
+    patterns: &BTreeMap<ImmutableString, NominalPattern>,
+) {
+    if let crate::types::fn_ptr::FnPtrType::Script(definition) = &mut pointer.typ {
+        let definition = crate::func::shared_make_mut(definition);
+        rewrite_statements(definition.body.statements_mut(), rewrites, patterns);
+    }
+    for value in pointer.curry.iter_mut() {
+        if let Some(captured) = value.downcast_mut::<crate::FnPtr>() {
+            rewrite_pointer(captured, rewrites, patterns);
+        }
     }
 }
 

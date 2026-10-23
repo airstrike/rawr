@@ -484,6 +484,29 @@ fn language_closures_and_function_values() {
     rejected("pub fn run() -> i64 { let f = |a: i64| a; f(true) } run()");
 }
 
+#[test]
+fn language_closures_in_variables_are_values() {
+    // A closure in a local is a value: passed to a function or an adaptor,
+    // copied to another local, and called from inside another closure.
+    let value = run(r#"
+        struct Db(i64);
+        impl From<i64> for Db {
+            fn from(r: i64) -> Db { Db(r * 2) }
+        }
+        fn apply(f: impl Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+        pub fn run() -> i64 {
+            let sq = |x: i64| x * x;
+            let g = sq;
+            let loud = |r: i64| Db::from(r);
+            let v: Vec<i64> = vec![1, 2, 3].into_iter().map(sq).collect();
+            let w: Vec<i64> = v.iter().map(|x| loud(*x).0).collect();
+            apply(sq, 4) + g(5) * 100 + w[2] * 10000
+        }
+        run()
+    "#);
+    assert_eq!(value, 16 + 25 * 100 + 18 * 10000);
+}
+
 /// `Button::style` takes a two-parameter host callable, as iced's
 /// `fn(&Theme, Status) -> Style`.
 fn style_facade() -> crate::host::facade::Definition {
