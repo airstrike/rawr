@@ -12283,6 +12283,45 @@ impl<'a> Parser<'a> {
         Ok((item, signature))
     }
 
+    /// The closure `move |a, ..| name(a, ..)` over the local function
+    /// pointer `name` of `arity` inputs.
+    fn eta_expand(&mut self, name: &str, arity: usize, at: Span) -> Result<ParsedExpr, Error> {
+        let position = at.start();
+        let identifier = |text: &str| (Token::Identifier(Box::new(text.into())), position);
+        let parameters = (0..arity)
+            .map(|_| self.temporary("eta"))
+            .collect::<Vec<_>>();
+        let mut tokens = Vec::new();
+        for (index, parameter) in parameters.iter().enumerate() {
+            if index > 0 {
+                tokens.push((Token::Comma, position));
+            }
+            tokens.push(identifier(parameter));
+        }
+        tokens.extend([
+            (Token::Pipe, position),
+            (Token::LeftBrace, position),
+            identifier(name),
+            (Token::LeftParen, position),
+        ]);
+        for (index, parameter) in parameters.iter().enumerate() {
+            if index > 0 {
+                tokens.push((Token::Comma, position));
+            }
+            tokens.push(identifier(parameter));
+        }
+        tokens.extend([(Token::RightParen, position), (Token::RightBrace, position)]);
+        self.splice_tokens(tokens);
+        let hint = self.closure_hint.take();
+        let output = self.closure_output.take();
+        let closure = self.parse_closure(Token::Pipe, at, true);
+        self.closure_hint = hint;
+        self.closure_output = output;
+        let mut closure = closure?;
+        closure.span = at;
+        Ok(closure)
+    }
+
     fn select_host_signature_form(
         &mut self,
         items: &[crate::host::item::Definition],
@@ -12310,6 +12349,15 @@ impl<'a> Parser<'a> {
         // number inputs do (`deref_facade_strings`).
         let facade = items.iter().all(|item| item.imported_identity().is_none());
         for argument in arguments.iter_mut() {
+            // A local `fn` pointer, as `message: fn(f32) -> _`, is passed
+            // as the closure that calls it.
+            if facade
+                && let Ty::Fn { inputs, .. } = self.inference.resolve(&argument.ty)
+                && let Some(name) = variable_name(argument.source.as_str())
+                && self.bindings.contains_key(name.as_str())
+            {
+                *argument = self.eta_expand(&name, inputs.len(), argument.span)?;
+            }
             self.host_callable(argument)?;
             self.option_host_callable(argument)?;
             if facade

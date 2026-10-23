@@ -1773,3 +1773,49 @@ impl State {
     );
     find(&adapter, "0 0px");
 }
+
+/// iced master's vectorial_text example: a closure whose parameters a
+/// slider and an `fn(f32)` message settle.
+#[test]
+fn master_slider_closures_take_f32_messages() {
+    let adapter = boot(
+        r#"
+use iced::widget::{column, row, slider, text};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    size: f32,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    SizeChanged(f32),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::SizeChanged(size) => self.size = size,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let slider_with_label = |label, range, value, message: fn(f32) -> _| {
+            column![
+                row![text(label), text!("{:.2}", value)],
+                slider(range, value, message).step(0.01)
+            ]
+            .spacing(2)
+        };
+        slider_with_label("Size", 2.0..=80.0, self.size, Message::SizeChanged)
+    }
+}
+"#,
+    );
+    find(&adapter, "0.00");
+}
