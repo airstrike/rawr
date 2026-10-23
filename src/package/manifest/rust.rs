@@ -299,6 +299,9 @@ fn parse_dependencies(
     Ok(dependencies.into_boxed_slice())
 }
 
+/// The package of the `rawr` attribute crate (`#[rawr::preview]`).
+const ATTRIBUTE_CRATE: &str = "rawr-attributes";
+
 /// A Cargo `[dependencies]` table in Rawr's Rust dependency form. A
 /// version string is `{ version = "..." }`; a `-` in a key becomes `_` in the
 /// alias with the key kept as the package; a path wins over a version as it
@@ -344,6 +347,12 @@ pub(super) fn cargo_dependencies(
             }
         };
         if inline.get("optional").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        // The `rawr` attribute crate is for rustc. Rawr reads its
+        // attributes itself, so it imports nothing from it.
+        let package = inline.get("package").and_then(Value::as_str).unwrap_or(key);
+        if package == ATTRIBUTE_CRATE {
             continue;
         }
         inline.remove("optional");

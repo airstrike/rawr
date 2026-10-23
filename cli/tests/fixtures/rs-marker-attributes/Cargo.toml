@@ -1,0 +1,11 @@
+[package]
+name = "rs-marker-attributes"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rawr-attributes = { path = "../../../../attributes" }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

@@ -1,0 +1,16 @@
+[package]
+name = "rawr-attributes"
+version = "0.1.0"
+rust-version = "1.95.0"
+edition = "2024"
+description = "Rawr's attributes for cargo builds: #[rawr::preview] and #[rawr::widget] leave the item as written"
+repository = "https://github.com/airstrike/rawr"
+license = "MIT OR Apache-2.0"
+keywords = ["rawr", "iced", "preview"]
+categories = ["development-tools"]
+
+# Code names the crate `rawr`: `#[rawr::preview]`.
+[lib]
+name = "rawr"
+path = "src/lib.rs"
+proc-macro = true

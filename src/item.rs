@@ -298,6 +298,15 @@ pub struct Header {
     pub span: Span,
 }
 
+/// Whether `path` names a Rawr attribute: `preview`, or `rawr::preview`.
+pub(crate) fn is_attribute_path(path: &type_ref::Path, name: &str) -> bool {
+    match path.segments.as_ref() {
+        [only] => only.name.text == name,
+        [krate, only] => krate.name.text == "rawr" && only.name.text == name,
+        _ => false,
+    }
+}
+
 /// A parsed source attribute.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Attribute {
@@ -316,7 +325,7 @@ impl Attribute {
     }
 
     pub(crate) fn is_widget(&self) -> bool {
-        self.path.segments.len() == 1 && self.path.segments[0].name.text == "widget"
+        is_attribute_path(&self.path, "widget")
     }
 }
 

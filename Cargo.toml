@@ -12,6 +12,7 @@ members = [
     "importer",
     "location",
     "toml",
+    "attributes",
     "watch",
 ]
 resolver = "3"

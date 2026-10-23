@@ -57,7 +57,34 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
         }
         items = all.into_boxed_slice();
     }
+    // `use rawr::preview;` names the attribute for rustc. Rawr knows the
+    // attribute already, so the import binds nothing.
+    if items.iter().any(is_attribute_import) {
+        items = items
+            .into_vec()
+            .into_iter()
+            .filter(|item| !is_attribute_import(item))
+            .collect();
+    }
     Ok((items, inner))
+}
+
+/// The attributes of the `rawr` crate, which marked `.rs` files name so
+/// that rustc accepts them: `#[preview]` and `#[widget]`.
+const ATTRIBUTES: [&str; 2] = ["preview", "widget"];
+
+/// Whether `item` is a `use` of the `rawr` crate's attributes and nothing
+/// else: `use rawr::preview;` or `use rawr::{preview, widget};`.
+fn is_attribute_import(item: &crate::item::Parsed) -> bool {
+    let crate::item::Parsed::Use(used) = item else {
+        return false;
+    };
+    let bindings = used.bindings();
+    !bindings.is_empty()
+        && bindings.iter().all(|(_, path)| {
+            matches!(path.as_ref(), [krate, name]
+                if krate.as_str() == "rawr" && ATTRIBUTES.contains(&name.as_str()))
+        })
 }
 
 fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
@@ -746,7 +773,7 @@ fn parse_attribute_after_marker(
 ) -> ParseResult<crate::item::Attribute> {
     expect(input, Token::LeftBracket, "after '#' in an attribute")?;
     let path = parse_path(input)?;
-    let is_preview = path.segments.len() == 1 && path.segments[0].name.text == "preview";
+    let is_preview = crate::item::is_attribute_path(&path, "preview");
 
     if is_preview {
         let mut preview = if matches!(input.peek(), Some((Token::LeftParen, _))) {

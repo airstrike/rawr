@@ -427,3 +427,51 @@ fn a_marked_workspace_member_inherits_its_dependencies() {
     assert!(graph.declares_rust_import());
     assert!(graph.entry_package().is_marked());
 }
+
+/// The `rawr` attribute crate: Rawr reads `#[preview]` and
+/// `#[rawr::preview]` itself, binds nothing for `use rawr::preview;` and
+/// imports nothing from the crate. rustc accepts the same files through the
+/// crate, which leaves each item as written.
+#[test]
+fn the_rawr_attribute_crate_builds_under_cargo_and_means_nothing_to_rawr() {
+    let Some(cargo) = std::env::var_os("CARGO") else {
+        panic!("run under cargo: $CARGO names the cargo to test with");
+    };
+    let sandbox = Sandbox::new("marked-attributes");
+    let root = copy("rs-marker-attributes", &sandbox.work());
+    let attributes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../attributes");
+    let manifest = root.join("Cargo.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        text.replace(
+            "\"../../../../attributes\"",
+            &format!("{:?}", attributes.display().to_string()),
+        ),
+    )
+    .unwrap();
+
+    let graph = graph(&root, None).unwrap();
+    assert!(!graph.declares_rust_import());
+    let previews = graph
+        .previews()
+        .into_iter()
+        .map(|preview| (preview.name, preview.subject))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        previews,
+        [
+            ("greeting".into(), "main::greeting".into()),
+            ("three".into(), "main::label::label".into()),
+        ]
+    );
+
+    let output = Command::new(&cargo)
+        .args(["run", "--quiet", "--offline"])
+        .current_dir(&root)
+        .env("CARGO_TARGET_DIR", sandbox.path.join("target"))
+        .output()
+        .unwrap();
+    assert_success(&output);
+    assert_eq!(stdout(&output), "hello 3 items\n");
+}

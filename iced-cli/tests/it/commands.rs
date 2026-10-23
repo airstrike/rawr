@@ -644,3 +644,51 @@ fn a_marked_iced_crate_is_served_by_rawr_iced() {
     assert!(prepared.adapter().last_good_output().is_some());
     assert!(prepared.adapter().diagnostics().is_empty());
 }
+
+/// Previews written for rustc through the `rawr` attribute crate:
+/// `#[preview]` after `use rawr::preview;`, and `#[rawr::preview(..)]`.
+/// rawr-iced serves both, and the crate's dependency imports nothing.
+#[test]
+fn a_marked_iced_crate_writes_previews_through_the_rawr_crate() {
+    let sandbox = Sandbox::new("marked-previews");
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/tests/fixtures/rs-marker-counter");
+    let root = sandbox.path().join("counter");
+    fs::create_dir_all(root.join("src")).unwrap();
+    for file in ["Cargo.toml", "src/main.rs", "src/ui.rs"] {
+        let text = fs::read_to_string(fixture.join(file)).unwrap();
+        let text = text
+            .replace("mod theme;\n", "")
+            .replace("use crate::theme::format_count;\n", "use rawr::preview;\n")
+            .replace("format_count(counter.value)", "counter.value")
+            .replace("    fn update(", "    pub fn update(")
+            .replace(
+                "[dependencies]\n",
+                "[dependencies]\nrawr-attributes = { path = \"../attributes\" }\n",
+            )
+            .replace(
+                "pub fn view(",
+                "#[preview]\n#[rawr::preview(name = \"seven\", seed = seven, size = (200, 160))]\npub fn view(",
+            );
+        fs::write(root.join(file), text).unwrap();
+    }
+    let ui = root.join("src/ui.rs");
+    let mut text = fs::read_to_string(&ui).unwrap();
+    text.push_str("\nfn seven() -> Counter {\n    Counter { value: 7 }\n}\n");
+    fs::write(&ui, text).unwrap();
+
+    let loaded = rawr_cli::base::load(Some(&root)).unwrap();
+    assert!(!loaded.graph.declares_rust_import());
+    let names = loaded
+        .graph
+        .previews()
+        .into_iter()
+        .map(|preview| preview.name)
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["view", "seven"]);
+    drop(loaded);
+
+    let prepared = rawr_iced_cli::run::prepare(Some(root)).unwrap();
+    assert!(prepared.adapter().diagnostics().is_empty());
+    assert!(prepared.adapter().last_good_output().is_some());
+}
