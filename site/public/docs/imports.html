@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cargo dependencies | rawr docs</title>
+<meta name="description" content="Use the crates in your Cargo.toml and native modules from code rawr interprets. Install rawr-import, add the two project files and use a dependency without bindings.">
+<meta property="og:title" content="Cargo dependencies | rawr docs">
+<meta property="og:description" content="Use the crates in your Cargo.toml and native modules from code rawr interprets. Install rawr-import, add the two project files and use a dependency without bindings.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/imports">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/imports">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="cap"><span class="slash">//</span>docs</p>
+  <p class="grp" data-here>Develop with rawr</p>
+  <ol data-here>
+    <li><a href="/docs">Overview</a></li>
+    <li><a href="/docs/start">Get started</a></li>
+    <li><a href="/docs/run">Run Rust with rawr</a></li>
+    <li><a href="/docs/imports" aria-current="page">Cargo dependencies</a><ol><li><a href="#install">Install rawr-import</a></li><li><a href="#project">Project setup</a></li><li><a href="#use">Use a dependency</a></li><li><a href="#native">Native modules</a></li><li><a href="#values">Imported values</a></li><li><a href="#gaps">Known gaps</a></li></ol></li>
+  </ol>
+  <p class="grp">Embed rawr</p>
+  <ol>
+    <li><a href="/docs/embedding">Embedding</a></li>
+  </ol>
+  <p class="grp">Reference</p>
+  <ol>
+    <li><a href="/docs/language">Supported Rust</a></li>
+    <li><a href="/docs/cli">Commands</a></li>
+    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How rawr works</a></li>
+  </ol>
+  <p class="grp">rawr-iced</p>
+  <ol>
+    <li><a href="/docs/iced">Overview and setup</a></li>
+    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
+    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
+    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
+  </ol>
+  <p class="grp">Playground and Discord</p>
+  <ol>
+    <li><a href="/docs/play">Use the playground</a></li>
+    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
+    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<p class="cap"><span class="slash">//</span>develop with rawr</p>
+<h1>Cargo dependencies</h1>
+<p class="lede">Use the crates in your <code>Cargo.toml</code> and your native modules from marked code. rawr-import compiles them with Cargo.</p>
+<h2 id="install">Install rawr-import</h2>
+<p>rawr-import runs programs whose <code>Cargo.toml</code> lists dependencies, or which have native modules. Install it and <code>rawr</code> hands those programs to it.</p>
+<div class="note"><p>rawr-import needs a Unix system and the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. It has been tested on Apple Silicon Macs.</p></div>
+<div class="block"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
+cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import-cli
+cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre></div>
+<p>The <code>rawr-import-cli</code> package installs <code>rawr-import</code>. The <code>rawr-import</code> package installs <code>rawr-import-driver</code> in the same directory. The driver reads the API of your dependencies with the pinned nightly.</p>
+<p>rawr-iced imports an iced app&rsquo;s dependencies the same way. It doesn&rsquo;t need rawr-import installed.</p>
+
+<h2 id="project">Project setup</h2>
+<p>rawr-import builds a runner that links the <code>rawr</code> crate and your dependencies. It builds them in the project&rsquo;s <code>target/</code>, with the same compiled units <code>cargo build</code> uses. The project needs two files for that:</p>
+<div class="block">
+  <div class="file"><b>rust-toolchain.toml</b></div>
+  <pre><code data-lang="toml">[toolchain]
+channel = "nightly-2026-07-11"
+components = ["rust-src", "rustfmt", "clippy"]</code></pre>
+</div>
+<div class="block">
+  <div class="file"><b>.cargo/config.toml</b></div>
+  <pre><code data-lang="toml">[build]
+target = "host-tuple"</code></pre>
+</div>
+<p><code>rust-toolchain.toml</code> pins the nightly, so <code>cargo build</code> uses the same compiler. <code>.cargo/config.toml</code> sets <code>build.target</code> to <code>"host-tuple"</code>, so builds go in <code>target/&lt;host&gt;/debug</code>. Then <code>rawr run</code> and <code>cargo build</code> compile each dependency once and share it.</p>
+<p>Without the files, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and prints the files to add. A crate with no dependencies doesn&rsquo;t need them.</p>
+
+<h2 id="use">Use a dependency</h2>
+<p>Declare the dependency in <code>Cargo.toml</code>. Import its items with <code>use</code>. You don&rsquo;t write bindings.</p>
+<div class="block">
+  <div class="file"><b>Cargo.toml</b></div>
+  <pre><code data-lang="toml">[dependencies]
+mathx = { path = "mathx" }</code></pre>
+</div>
+<div class="block">
+  <div class="file"><b>mathx/src/lib.rs</b></div>
+  <pre><code data-lang="rust">pub fn double(x: i64) -&gt; i64 {
+    x * 2
+}</code></pre>
+</div>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">// rawr
+use mathx::double;
+
+fn main() {
+    for n in 1..=3 {
+        println!("{n} doubled is {}", double(n));
+    }
+}</code></pre>
+  <div class="run"><b>rawr run</b><span>1 doubled is 2
+2 doubled is 4
+3 doubled is 6</span></div>
+</div>
+<p>The first run compiles the dependencies and the runner. On an Apple Silicon Mac that took about 80&nbsp;s for this crate. A later run reuses that build. After an edit to <code>src/main.rs</code>, it ran again in about 2.4&nbsp;s.</p>
+<p>rawr uses the dependencies as Cargo resolves them. Workspace inheritance works. A crate under <code>[target.'cfg(..)'.dependencies]</code> counts when its <code>cfg</code> holds on your machine. rawr reads only the items your code uses.</p>
+
+<h2 id="native">Native modules</h2>
+<p>A module of your crate whose first line isn&rsquo;t <code>// rawr</code> is native Rust. rawr-import compiles it with Cargo, and marked code calls it as it calls a dependency. Native code must not use code from marked files yet. rawr reports an error if it does.</p>
+
+<h2 id="values">Imported values</h2>
+<p>A struct in a marked file can hold a value of an imported type. It can <code>#[derive(Default)]</code> when the crate implements <code>Default</code> for that type. The field then takes the crate&rsquo;s <code>default()</code>, as in Rust. It can also derive <code>Debug</code>, <code>Clone</code> and <code>Copy</code> when the crate implements them for that type. <code>==</code> and <code>!=</code> compare two imported values when the crate implements <code>PartialEq</code> for their type. An imported value can key a <code>HashMap</code> or a <code>HashSet</code> when the crate implements <code>Hash</code> and <code>Eq</code> for its type. <code>{:?}</code> of an imported value prints the crate&rsquo;s <code>Debug</code> text. <code>to_string()</code> and <code>{}</code> of an imported value print its <code>Display</code> text. A Message can hold an imported value, and a <code>match</code> can bind it.</p>
+<p>A Rust method that takes a <code>&amp;str</code> takes a string from interpreted code. A method whose result rawr cannot hold returns that result&rsquo;s <code>Display</code> text instead, when its type has one. So chrono&rsquo;s <code>now.format(&quot;%H:%M:%S&quot;)</code> is a <code>String</code>.</p>
+<p>An imported type written without its defaulted type arguments takes their defaults, as in Rust. So palette&rsquo;s <code>Hsl</code> is <code>Hsl&lt;Srgb, f32&gt;</code>. A default that rawr cannot name, such as iced&rsquo;s renderer in <code>text_editor::Content</code>, still has to be written.</p>
+<p>A Rust function or method that returns a <code>Vec</code>, a slice or a tuple gives a rawr <code>Vec</code> or tuple. An immutable <code>static</code> of a slice or a number reads as its value, as <code>preset::ALL</code> does for <code>pub static ALL: &amp;[Preset] = &amp;[..]</code>. Its elements are cloned out of the slice. Rust functions still cannot take a <code>Vec</code>, a slice or a tuple from rawr.</p>
+<p>A field of an imported type that is <code>Copy</code> reads as a copy, as in Rust. <code>.clone()</code> of an imported value leaves the original usable, as in Rust.</p>
+<p>A <code>match</code> or <code>if let</code> can match a variant of an imported enum, as in <code>echo::Event::Connected(connection) =&gt; ..</code>. The pattern takes the variant&rsquo;s fields as clones. A path through a native module, such as <code>download::Progress</code> in a field, names the type even beside a function called <code>download</code>.</p>
+
+<h2 id="gaps">Known gaps</h2>
+<ul>
+  <li>A program that rawr-import runs exits with status 1 when it fails, a panic included. Rust would exit with 101.</li>
+  <li>rawr-import runs a program once. It doesn&rsquo;t watch for saves yet.</li>
+  <li>A method that is generic over a sealed trait, such as <code>itoa::Buffer::format</code>, can&rsquo;t be called yet.</li>
+</ul>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/run">Previous<b>Run Rust with rawr</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+</body>
+</html>

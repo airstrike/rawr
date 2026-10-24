@@ -3,18 +3,19 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rawr-iced | rawr docs</title>
-<meta name="description" content="Write iced apps in rawr. App shapes, impl Widget, boxed elements, components, canvas drawing, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
-<meta property="og:title" content="rawr-iced | rawr docs">
-<meta property="og:description" content="Write iced apps in rawr. App shapes, impl Widget, boxed elements, components, canvas drawing, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
+<title>Supported iced APIs | rawr docs</title>
+<meta name="description" content="The parts of iced that rawr-iced supports: views and elements, components, canvas, widgets of your own, subscriptions, Rust crates, tasks and async code, diagnostics, and what isn&#x27;t available yet.">
+<meta property="og:title" content="Supported iced APIs | rawr docs">
+<meta property="og:description" content="The parts of iced that rawr-iced supports: views and elements, components, canvas, widgets of your own, subscriptions, Rust crates, tasks and async code, diagnostics, and what isn&#x27;t available yet.">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced/reference">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#141416">
-<link rel="canonical" href="https://rawr.airstrike.fyi/docs/iced">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/iced/reference">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,7 +25,7 @@
 </head>
 <body>
 <header class="bar">
-  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">Pre-alpha</span></a>
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
     <a href="/docs" aria-current="true">Docs</a>
     <a href="/play">Playground</a>
@@ -33,127 +34,45 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>Docs</p>
+  <p class="cap"><span class="slash">//</span>docs</p>
+  <p class="grp">Develop with rawr</p>
   <ol>
     <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Getting started</a></li>
-    <li><a href="/docs/language">The language</a></li>
+    <li><a href="/docs/start">Get started</a></li>
+    <li><a href="/docs/run">Run Rust with rawr</a></li>
+    <li><a href="/docs/imports">Cargo dependencies</a></li>
+  </ol>
+  <p class="grp">Embed rawr</p>
+  <ol>
     <li><a href="/docs/embedding">Embedding</a></li>
-    <li><a href="/docs/iced" aria-current="page">rawr-iced</a><ol><li><a href="#when">When rawr-iced is used</a></li><li><a href="#shapes">App shapes</a></li><li><a href="#views">Views and elements</a></li><li><a href="#hot-reload">Hot reload</a></li><li><a href="#previews">Previews and snapshots</a></li><li><a href="#rust-crates">Importing your own Rust crates</a></li><li><a href="#diagnostics">Diagnostics</a></li><li><a href="#available">What of iced is available</a></li></ol></li>
-    <li><a href="/docs/play">?play and the playground</a></li>
+  </ol>
+  <p class="grp">Reference</p>
+  <ol>
+    <li><a href="/docs/language">Supported Rust</a></li>
     <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/faq">FAQ</a></li>
+    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How rawr works</a></li>
+  </ol>
+  <p class="grp" data-here>rawr-iced</p>
+  <ol data-here>
+    <li><a href="/docs/iced">Overview and setup</a></li>
+    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
+    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
+    <li><a href="/docs/iced/reference" aria-current="page">Supported iced APIs</a><ol><li><a href="#views">Views and elements</a></li><li><a href="#rust-crates">Rust crates in an iced app</a></li><li><a href="#async">Async code</a></li><li><a href="#diagnostics">Diagnostics</a></li><li><a href="#available">What of iced is available</a></li></ol></li>
+  </ol>
+  <p class="grp">Playground and Discord</p>
+  <ol>
+    <li><a href="/docs/play">Use the playground</a></li>
+    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
+    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
   </ol>
 </nav>
 <main>
 <article>
 <p class="cap"><span class="slash">//</span>rawr-iced</p>
-<h1>rawr-iced</h1>
-<p class="lede">rawr-iced runs <a href="https://github.com/iced-rs/iced">iced</a> apps written in rawr. The app is a native iced app. Saving a file marked <code>// rawr</code> reloads it while the window stays open.</p>
-
-<h2 id="when">When rawr-iced is used</h2>
-<p>The <code>rawr</code> command reads a program once and decides who runs it. A program goes to rawr-iced when it names the <code>iced</code> crate. A program that imports Rust crates from its <code>Cargo.toml</code> but doesn&rsquo;t use iced goes to <a href="/docs/cli#rawr-import">rawr-import</a>. rawr-iced imports an iced app&rsquo;s other crates the same way and adds iced to its runner. Every other program runs on the base language. Set <code>RAWR_VERBOSE=1</code> to see which way a program went.</p>
-<p>rawr-iced follows iced master. It is built against one iced revision. <code>rawr doctor</code> prints that revision. Install rawr-iced as described in <a href="/docs/start#install-iced">Getting started</a>.</p>
-
-<h2 id="new">The <code>iced</code> template</h2>
-<p>rawr-iced offers one template to <code>rawr new</code>. <code>rawr new hello --template iced</code> writes a Cargo crate whose <code>src/main.rs</code> starts with <code>// rawr</code> and holds iced&rsquo;s counter. Its <code>Cargo.toml</code> depends on iced at the revision <code>rawr doctor</code> prints, with every widget rawr offers plus <code>advanced</code> and <code>sipper</code>. It also writes <code>rust-toolchain.toml</code> and <code>.cargo/config.toml</code>, so <code>cargo build</code> and <code>rawr run</code> build one shared iced. <a href="/docs/start#first-app">Getting started</a> shows the files.</p>
-
-<h2 id="shapes">App shapes</h2>
-<p>An app starts from <code>main</code> with one of iced&rsquo;s own entry points.</p>
-<h3 id="iced-run"><code>iced::run</code></h3>
-<p><code>iced::run(State::update, State::view)</code> boots <code>State::default()</code>. The state type needs <code>#[derive(Default)]</code>. The counter on <a href="/docs/start#first-app">Getting started</a> has this shape.</p>
-<p><code>update</code> and <code>view</code> can also be closures with typed parameters. <code>iced::run(|state: &amp;mut State, message: Message| state.update(message), State::view)</code> is one example. A parameter can be a pattern such as <code>_: Message</code>. An update closure returns <code>()</code> unless it is written with a return type such as <code>-&gt; Task&lt;Message&gt;</code>. An untyped closure parameter fails the check with an error that asks for its type.</p>
-<p>The state can be any type with a <code>Default</code>. <code>iced::run(|n: &amp;mut u32, _: Message| *n += 1, |n: &amp;u32| text(n))</code> keeps a <code>u32</code>.</p>
-<h3 id="application">The application builder</h3>
-<p><code>iced::application(boot, update, view)</code> takes a boot function such as <code>State::default</code>. It accepts these builders before <code>.run()</code>:</p>
-<ul>
-  <li><code>.title(..)</code> with a method of the state or a string literal.</li>
-  <li><code>.theme(..)</code> with a method that returns a <code>Theme</code>, or with a theme such as <code>Theme::Dark</code>.</li>
-  <li><code>.subscription(..)</code> with a method that returns a <code>Subscription</code>.</li>
-  <li><code>.centered()</code>.</li>
-</ul>
-<p>Window and renderer settings such as <code>.window_size(..)</code>, <code>.font(..)</code> and <code>.style(..)</code> are accepted. rawr-iced doesn&rsquo;t apply them yet.</p>
-<p>The builder may come from a function of your own, as iced&rsquo;s todos example writes it. <code>fn application() -&gt; Application&lt;impl Program&lt;Message = Message, Theme = Theme&gt;&gt;</code> returns the chain, and <code>main</code> ends with <code>application().run()</code>. rawr reads the chain as if <code>main</code> held it. <code>main</code> must be the function&rsquo;s only caller. <code>use iced::{Application, Program};</code> imports the two names.</p>
-<p><code>update</code> can return nothing or a <code>Task&lt;Message&gt;</code>. This app uses the builder, a <code>Task</code>, a text input and a list built at run time:</p>
-<div class="block">
-  <div class="file"><b>src/main.rs</b></div>
-  <pre><code data-lang="rust">// rawr
-use iced::widget::{Column, Widget, button, column, row, text, text_input};
-use iced::{Element, Fill, Task};
-use rawr::preview;
-
-pub fn main() -&gt; iced::Result {
-    iced::application(Todos::default, Todos::update, Todos::view)
-        .title("Todos")
-        .run()
-}
-
-#[derive(Default)]
-struct Todos {
-    draft: String,
-    items: Vec&lt;String&gt;,
-}
-
-#[derive(Debug, Clone)]
-enum Message {
-    Edit(String),
-    Add,
-    Remove(usize),
-}
-
-impl Todos {
-    fn sample() -&gt; Todos {
-        Todos {
-            draft: String::new(),
-            items: vec!["Write the docs".to_string(), "Ship them".to_string()],
-        }
-    }
-
-    fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
-        match message {
-            Message::Edit(draft) =&gt; self.draft = draft,
-            Message::Add =&gt; {
-                if !self.draft.is_empty() {
-                    self.items.push(self.draft.clone());
-                    self.draft.clear();
-                }
-            }
-            Message::Remove(index) =&gt; {
-                self.items.remove(index);
-            }
-        }
-        Task::none()
-    }
-
-    #[preview(name = "two items", seed = Todos::sample, size = (360, 180))]
-    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
-        let items: Vec&lt;Element&lt;'_, Message&gt;&gt; = self
-            .items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                row![text(item).width(Fill), button("x").on_press(Message::Remove(index))]
-                    .spacing(8)
-                    .boxed()
-            })
-            .collect();
-        column![
-            text_input("What needs doing?", &amp;self.draft)
-                .on_input(Message::Edit)
-                .on_submit(Message::Add),
-            Column::with_children(items).spacing(4),
-        ]
-        .spacing(12)
-        .padding(16)
-    }
-}</code></pre>
-</div>
-<figure class="shot">
-  <img src="/img/docs-todos.png" width="360" height="180" alt="The Todos app with an empty text input and two items, Write the docs and Ship them, each with an x button">
-  <figcaption>The <code>two items</code> preview as <code>rawr snapshot</code> renders it.</figcaption>
-</figure>
-<p>The line <code>use rawr::preview;</code> is there for cargo. The <code>rawr-macros</code> dependency provides it, as <a href="#previews">Previews and snapshots</a> describes.</p>
-
+<h1>Supported iced APIs</h1>
+<p class="lede">The parts of iced that work in marked files today, and what isn&rsquo;t available yet.</p>
 <h2 id="views">Views and elements</h2>
 <p>A view returns <code>impl Widget&lt;Message&gt;</code> as views do in iced master. It can also return <code>Element&lt;'_, Message&gt;</code>.</p>
 <p>To turn a widget into an <code>Element</code>, call <code>.boxed()</code>. The list above uses it to collect its rows into a <code>Vec&lt;Element&gt;</code>. A widget&rsquo;s <code>.into()</code> into an <code>Element</code> fails the check, as rustc rejects it on iced master. <code>Element::from(widget)</code> fails the same way. Both errors say to call <code>.boxed()</code> instead.</p>
@@ -334,7 +253,7 @@ impl App {
 fn main() -&gt; iced::Result {
     iced::run(App::update, App::view)
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-widget" data-out="out-widget" data-alt="A pink circle of radius 50 above its radius and a slider, drawn by a widget written in rawr" aria-label="Run widget.rs" hidden></button><b>rawr run widget.rs</b><span class="quiet" id="out-widget" aria-live="polite">(opens a window)</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-widget" data-out="out-widget" data-alt="A pink circle of radius 50 above its radius and a slider, drawn by a widget in a marked file" aria-label="Run widget.rs" hidden></button><b>rawr run widget.rs</b><span class="quiet" id="out-widget" aria-live="polite">(opens a window)</span></div>
 </div>
 <h3 id="subscriptions">Subscriptions</h3>
 <p>A <code>.subscription(..)</code> method returns a <code>Subscription&lt;Message&gt;</code>. <code>iced::time::every</code>, <code>iced::keyboard::listen</code>, <code>iced::event::listen</code> and <code>iced::window::frames</code> work. Subscriptions combine with <code>map</code> and <code>filter_map</code>. <code>Subscription::run(builder)</code> takes a Rust function that returns a sipper, as <a href="#async">Async code</a> describes.</p>
@@ -351,46 +270,9 @@ fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
 }</code></pre>
 </div>
 
-<h2 id="hot-reload">Hot reload</h2>
-<p><code>rawr run</code> opens the app and watches the crate. Saving a file marked <code>// rawr</code> reloads the app in about 0.2&nbsp;s. The window stays open and the app keeps its state.</p>
-<p>A save that doesn&rsquo;t pass the check doesn&rsquo;t replace the running app. A bar in the window says <code>Last good still running</code> and shows the error. Its buttons retry, copy the error or reset the app.</p>
-<p>Saving a native module or the source of a dependency rebuilds it natively. The app reloads when the build finishes.</p>
-<p><code>rawr run</code> also runs <code>cargo check</code> in the background when the app opens and after each save. Its errors appear in a card at the top of the window and on stderr. They don&rsquo;t block the reload.</p>
-<p>Press Cmd+Shift+S in the window to save a PNG of it.</p>
 
-<h2 id="previews">Previews and snapshots</h2>
-<p><code>#[preview]</code> marks a view function to render on its own. A view can have several. The attribute comes from the <code>rawr-macros</code> crate, whose library name is <code>rawr</code>. Add it to <code>[dependencies]</code> in <code>Cargo.toml</code>:</p>
-<div class="block">
-  <div class="file"><b>Cargo.toml</b></div>
-  <pre><code data-lang="toml">rawr-macros = { git = "https://github.com/airstrike/rawr" }</code></pre>
-</div>
-<p>Then write <code>#[rawr::preview(..)]</code>, or write <code>use rawr::preview;</code> and then <code>#[preview(..)]</code>. Under cargo the attribute leaves the item as written. rawr reads it itself. Cargo doesn&rsquo;t warn about a function that only previews use. The crate is not on crates.io yet.</p>
-<table>
-  <tr><th>Option</th><th>Meaning</th></tr>
-  <tr><td><code>name = ".."</code></td><td>The preview&rsquo;s name.</td></tr>
-  <tr><td><code>group = ".."</code></td><td>Groups previews. <code>rawr preview</code> steps through a group with the arrow keys.</td></tr>
-  <tr><td><code>seed = path</code></td><td>A function that builds the state to render, such as <code>Todos::sample</code>. Without it the state is <code>Default</code>.</td></tr>
-  <tr><td><code>update = path</code></td><td>The update function to use in the preview window.</td></tr>
-  <tr><td><code>theme = path</code></td><td>A function that returns the <code>Theme</code> to render with.</td></tr>
-  <tr><td><code>themes = [..]</code></td><td>Several theme functions. Each one gets its own snapshot.</td></tr>
-  <tr><td><code>size = (w, h)</code></td><td>The canvas size in logical pixels.</td></tr>
-  <tr><td><code>snapshot = false</code></td><td>Leaves the preview out of <code>rawr snapshot</code>.</td></tr>
-  <tr><td><code>bind = (..)</code></td><td>Arguments for a free view function that takes parameters.</td></tr>
-</table>
-<p><code>rawr preview</code> opens one preview in a window. It takes the preview&rsquo;s name or <code>group/name</code>. Without a name it opens the last one you picked. The preview window reloads on save as <code>rawr run</code> does.</p>
-<p><code>rawr snapshot --update</code> renders every preview to a PNG under <code>snapshots/</code>. Commit those files. <code>rawr snapshot --check</code> renders them again and compares pixels. It exits with status 1 and names the first changed pixel when an image differs. The new images go under <code>target/rawr/snapshots/</code> so you can compare them.</p>
-<div class="block diag">
-  <div class="file"><b>rawr snapshot --check</b><span>exit 1</span></div>
-  <pre><code><span class="h">Snapshot check found 1 mismatch(es) across 1 artifact(s):</span>
-
-<span class="e">[pixel drift]</span> clock::Clock::view#busy (native)
-  expected: snapshots/Clock-6c008925/view/busy/native.png
-  actual:   target/rawr/snapshots/Clock-6c008925/view/busy/native.png
-  first changed pixel (38, 31): baseline [255, 255, 255, 255], actual [137, 137, 137, 255]</code></pre>
-</div>
-
-<h2 id="rust-crates">Importing your own Rust crates</h2>
-<p>An app can <code>use</code> items from your own Rust crates without bindings. List each crate under <code>[dependencies]</code> in the crate&rsquo;s <code>Cargo.toml</code>. List <code>iced</code> there too. Use the revision that <code>rawr doctor</code> prints. A crate under <code>[target.'cfg(not(target_arch = "wasm32"))'.dependencies]</code> counts too when its <code>cfg</code> holds on your machine. Importing your own Rust crates needs a Unix system. It has only been tested on Apple Silicon Macs so far.</p>
+<h2 id="rust-crates">Rust crates in an iced app</h2>
+<p>An iced app uses its dependencies the way <a href="/docs/imports">Cargo dependencies</a> describes. List <code>iced</code> in <code>Cargo.toml</code> at the revision <code>rawr doctor</code> prints.</p>
 <div class="block">
   <div class="file"><b>Cargo.toml</b></div>
   <pre><code data-lang="toml">[dependencies]
@@ -438,16 +320,7 @@ impl App {
     }
 }</code></pre>
 </div>
-<p>rawr uses the dependencies as cargo resolves them. Workspace inheritance works. A path dependency is built natively, even if its files start with <code>// rawr</code>. Only the crate you run is interpreted.</p>
-<p>A module of your crate whose first line is not <code>// rawr</code> is native Rust too. <code>rawr run</code> builds it with cargo and rebuilds it when you save it. Native code must not use code from marked files. rawr reports an error if it does.</p>
-<p>rawr reads only the items your code uses. A custom iced widget written in Rust is imported like any other item. The crates compile with the pinned nightly on the first run, so that run takes longer.</p>
-<p>A rawr struct can hold a value of an imported type. It can <code>#[derive(Default)]</code> when the crate implements <code>Default</code> for that type. The field then takes the crate&rsquo;s <code>default()</code>, as in Rust. It can also derive <code>Debug</code>, <code>Clone</code> and <code>Copy</code> when the crate implements them for that type. <code>==</code> and <code>!=</code> compare two imported values when the crate implements <code>PartialEq</code> for their type. An imported value can key a <code>HashMap</code> or a <code>HashSet</code> when the crate implements <code>Hash</code> and <code>Eq</code> for its type. <code>{:?}</code> of an imported value prints the crate&rsquo;s <code>Debug</code> text. <code>to_string()</code> and <code>{}</code> of an imported value print its <code>Display</code> text. A Message can hold an imported value, and a <code>match</code> can bind it.</p>
-<p>A Rust method that takes a <code>&amp;str</code> takes a rawr string. A method whose result rawr cannot hold returns that result&rsquo;s <code>Display</code> text instead, when its type has one. So chrono&rsquo;s <code>now.format(&quot;%H:%M:%S&quot;)</code> is a <code>String</code>.</p>
-<p>An imported type written without its defaulted type arguments takes their defaults, as in Rust. So palette&rsquo;s <code>Hsl</code> is <code>Hsl&lt;Srgb, f32&gt;</code>. A default that rawr cannot name, such as iced&rsquo;s renderer in <code>text_editor::Content</code>, still has to be written.</p>
-<p>A Rust function or method that returns a <code>Vec</code>, a slice or a tuple gives a rawr <code>Vec</code> or tuple. An immutable <code>static</code> of a slice or a number reads as its value, as <code>preset::ALL</code> does for <code>pub static ALL: &amp;[Preset] = &amp;[..]</code>. Its elements are cloned out of the slice. Rust functions still cannot take a <code>Vec</code>, a slice or a tuple from rawr.</p>
-<p>A field of an imported type that is <code>Copy</code> reads as a copy, as in Rust. <code>.clone()</code> of an imported value leaves the original usable, as in Rust.</p>
-<p>A <code>match</code> or <code>if let</code> can match a variant of an imported enum, as in <code>echo::Event::Connected(connection) =&gt; ..</code>. The pattern takes the variant&rsquo;s fields as clones. A path through a native module, such as <code>download::Progress</code> in a field, names the type even beside a function called <code>download</code>.</p>
-<p>An edit to your rawr code applies to a running app whose State holds a value of an imported type. The value keeps its state across the edit. An edit to the dependency&rsquo;s Rust code starts a new app, and its State starts again from its default. The window then names the imported type that did not carry over.</p>
+<p>A custom iced widget written in Rust is imported like any other item. A <code>Message</code> can hold an imported value, and a <code>match</code> can bind it.</p>
 
 <h2 id="async">Async code</h2>
 <p>An app runs futures as iced tasks. A Rust function that returns a future gives a <code>Task</code>. That covers an <code>async fn</code> in a Rust crate and <code>tokio::time::sleep</code>. A Rust method that takes <code>self</code> by value and returns a future gives one too, as reqwest&rsquo;s <code>Response::text</code> does. A Rust function that returns an iced <code>Task</code>, such as <code>system::information()</code>, gives that task.</p>
@@ -465,12 +338,11 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
     }
 }</code></pre>
 </div>
-<p><code>Task::perform</code>, <code>Task::future</code>, <code>Task::sip</code>, <code>Task::abortable</code> with <code>task::Handle</code> and <code>Subscription::run</code> work. <code>Task::sip</code> and <code>Subscription::run</code> take a Rust sipper. The rawr code that maps a task&rsquo;s values runs on the UI thread.</p>
+<p><code>Task::perform</code>, <code>Task::future</code>, <code>Task::sip</code>, <code>Task::abortable</code> with <code>task::Handle</code> and <code>Subscription::run</code> work. <code>Task::sip</code> and <code>Subscription::run</code> take a Rust sipper. The interpreted code that maps a task&rsquo;s values runs on the UI thread.</p>
 <p>A variant passed as a function keeps its payload&rsquo;s type. So <code>.map(Message::Number)</code> maps a <code>Task&lt;u32&gt;</code> when <code>Number</code> holds a <code>u32</code>. <code>Task::&lt;Message&gt;::none()</code> names the task&rsquo;s message type with a turbofish, as in Rust.</p>
 <p>A task&rsquo;s future runs on iced&rsquo;s thread pool, so it must be <code>Send</code>, as iced requires. <code>rawr check</code> names the Rust function whose future is not.</p>
-<p>A reload cancels the tasks the app is running. Their handles report <code>is_aborted()</code>, and the status line says that a running task was cancelled. The State keeps what it held, so a download the reload cancelled still shows as running until a message changes it.</p>
-<h3 id="async-rawr">Async rawr code</h3>
-<p>rawr code can be async too. <code>async fn</code>, <code>async</code> blocks, <code>async move</code> blocks and async closures work. <code>.await</code> takes a future&rsquo;s output inside them. An <code>async fn</code> returns <code>impl Future&lt;Output = T&gt;</code> of its declared output, as in Rust. rawr runs such a future as iced&rsquo;s <code>Task&lt;T&gt;</code>, so <code>Task::perform</code> takes it.</p>
+<h3 id="async-rawr">Async code in marked files</h3>
+<p>Code in marked files can be async too. <code>async fn</code>, <code>async</code> blocks, <code>async move</code> blocks and async closures work. <code>.await</code> takes a future&rsquo;s output inside them. An <code>async fn</code> returns <code>impl Future&lt;Output = T&gt;</code> of its declared output, as in Rust. rawr runs such a future as iced&rsquo;s <code>Task&lt;T&gt;</code>, so <code>Task::perform</code> takes it.</p>
 <div class="block">
   <pre><code data-lang="rust">use iced::task::sipper;
 use std::time::Duration;
@@ -488,11 +360,10 @@ fn start() -&gt; (Download, Task&lt;Message&gt;) {
 <p><code>iced::task::sipper</code> takes an async closure. The closure sends its progress with <code>progress.send(value).await</code>. <code>Task::sip</code> maps each value it sends, and then its output.</p>
 <p>An async body runs on the UI thread, one step at a time. It stops at each <code>.await</code> and goes on from there once the future ends. Its locals keep their values in between, and no work it did runs again. <code>.await</code> works in a loop, a branch, a <code>match</code> arm and a call&rsquo;s arguments. <code>?</code> returns from the async body, as in Rust.</p>
 <p><code>futures::future::join</code> and <code>try_join</code> run two futures at once, through iced&rsquo;s <code>iced::futures</code>. <code>try_join</code> ends at the first <code>Err</code>.</p>
-<p>A program that does not depend on tokio still has tokio&rsquo;s timers, channels, <code>Mutex</code> and <code>join!</code>, <code>try_join!</code> and <code>select!</code>. rawr runs its own tokio for them. In <code>?play</code> its timers follow the recording&rsquo;s clock, so the GIF shows each step. <a href="/docs/play#tokio">?play&rsquo;s tokio</a> lists what it has. A program that depends on tokio uses the real crate instead.</p>
-<p>A reload that changes an async body cancels the task that runs it. A suspended body never goes on with the new code.</p>
+<p>A program that does not depend on tokio still has tokio&rsquo;s timers, channels, <code>Mutex</code> and <code>join!</code>, <code>try_join!</code> and <code>select!</code>. rawr runs its own tokio for them. In <code>?play</code> its timers follow the recording&rsquo;s clock, so the GIF shows each step. <a href="/docs/play/reference#tokio">?play&rsquo;s tokio</a> lists what it has. A program that depends on tokio uses the real crate instead.</p>
 <p>A Rust async method that borrows its receiver does not cross.</p>
 <h3 id="blocking">Blocking work</h3>
-<p><code>tokio::task::spawn_blocking</code> runs a rawr closure off the UI thread. Its handle is a future of <code>Result&lt;T, JoinError&gt;</code>, as in tokio. So <code>Task::perform</code> takes it, and <code>.await</code> takes its output in an async body.</p>
+<p><code>tokio::task::spawn_blocking</code> runs a closure from a marked file off the UI thread. Its handle is a future of <code>Result&lt;T, JoinError&gt;</code>, as in tokio. So <code>Task::perform</code> takes it, and <code>.await</code> takes its output in an async body.</p>
 <div class="block">
   <pre><code data-lang="rust">use tokio::task::spawn_blocking;
 
@@ -513,7 +384,9 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
 </div>
 <p>The closure runs on a worker thread of its own when its task starts. It has its own evaluation, so the window keeps drawing while it works. It sees only the values it moved in, and those are its own, so its work never changes the State. A shared handle such as a channel sender stays shared, as in Rust. Its output reaches <code>update</code> on the UI thread, after the same check as every other step of a task. A reload drops the output of a closure that is still running, but it cannot stop the thread. The thread ends when the closure returns.</p>
 <p>A closure that fails fails its task, as a failing <code>update</code> does. So the <code>Result</code> is always <code>Ok</code>, and <code>JoinError</code> exists only so the type can be named. tokio starts the closure when <code>spawn_blocking</code> is called. rawr starts it when the task runs, which iced does right after <code>update</code> returns it.</p>
-<p><code>std::thread::spawn</code> does not compile, and the error points to <code>spawn_blocking</code>. Its <code>join</code> waits on the calling thread, which would stop the UI thread. rawr runs a closure off the UI thread only as a task whose output reaches <code>update</code>. In a project that depends on tokio, <code>tokio::task::spawn_blocking</code> is still rawr&rsquo;s, so it takes a rawr closure there too.</p>
+<p><code>std::thread::spawn</code> does not compile, and the error points to <code>spawn_blocking</code>. Its <code>join</code> waits on the calling thread, which would stop the UI thread. rawr runs a closure off the UI thread only as a task whose output reaches <code>update</code>. In a project that depends on tokio, <code>tokio::task::spawn_blocking</code> is still rawr&rsquo;s, so it takes an interpreted closure there too.</p>
+
+<p>A reload cancels running tasks. <a href="/docs/iced/reload#tasks">Reload an iced app</a> says what happens to them.</p>
 
 <h2 id="diagnostics">Diagnostics</h2>
 <p><code>rawr check</code> checks an app without opening a window. Errors look like rustc&rsquo;s. Delete the <code>Decrement</code> arm from the counter and it reports the missing arm:</p>
@@ -528,6 +401,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
     <span class="c">|</span> <span class="e">^^^^^^^^</span></code></pre>
 </div>
 <p>The error code names the stage that failed and the kind of error. Codes will change while rawr is pre-alpha.</p>
+
 
 <h2 id="available">What of iced is available</h2>
 <p>Most of iced&rsquo;s everyday widgets and modules work. A missing one fails the check with <code>unknown import</code>.</p>
@@ -544,8 +418,6 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
   <li>Modules: <code>iced::time</code>, <code>iced::keyboard</code>, <code>iced::event</code>, <code>iced::window</code>, <code>iced::mouse</code>, <code>iced::font</code>, <code>iced::border</code> and <code>iced::theme</code>. <code>font::list()</code> lists the system&rsquo;s font families. <code>Seed::LIGHT</code> and iced&rsquo;s other built-in seeds are in <code>iced::theme::palette</code>. <code>Color</code>, <code>color!</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code> and the other alignment names work, also by their full paths such as <code>iced::Center</code>. <code>space::horizontal()</code> and <code>space::vertical()</code> work. <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>.</li>
 </ul>
 <p>An available widget may still miss some of its methods. <code>Rotation::radians_mut</code> works, so <code>*rotation.radians_mut() = angle</code> turns a rotation in place. <code>Animation&lt;T&gt;</code> animates a <code>bool</code> or a number with <code>go</code>, <code>go_mut</code>, <code>is_animating</code> and <code>interpolate</code> at an <code>Instant</code>. <code>go</code> also ends a chain of builders, as in <code>Animation::new(false).quick().go(true, now)</code>. A <code>Vector</code> adds, subtracts, and scales by an <code>f32</code>. A <code>Point</code> moves by a <code>Vector</code>, and two points differ by one. <code>color!(0xffc8a8, alpha)</code> and <code>color!(r, g, b, alpha)</code> take any <code>f32</code> alpha. A helper such as <code>text</code> passes as a function, as in <code>.map(text)</code>. A canvas program&rsquo;s State may be a <code>RefCell</code>. <code>canvas::Group</code> and <code>Cache::with_group</code> work. A function of yours that takes <code>impl Into&lt;Length&gt;</code> takes a number or a <code>Length</code>.</p>
-<h3 id="main-statements">Statements before the app</h3>
-<p><code>main</code> may run statements before <code>iced::application</code> or <code>iced::run</code>, such as <code>tracing_subscriber::fmt::init();</code>. They run once, when <code>rawr run</code> starts, as Rust runs <code>main</code> once. A reset or a reload boots the app again without them. An edit to them takes effect when <code>rawr run</code> restarts, and the window says so. <code>#[cfg(..)]</code> on a statement and <code>cfg!</code> follow the machine rawr runs on.</p>
 <h3 id="not-available">Not available yet</h3>
 <ul>
   <li>A widget type of your own that borrows, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>
@@ -556,7 +428,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
 <p>iced master has 56 examples. 34 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>custom_quad</code>, <code>custom_widget</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>ferris</code>, <code>geometry</code>, <code>lazy</code>, <code>loupe</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>sandpiles</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code>, <code>vectorial_text</code> and <code>websocket</code>. Six of the others use <code>async</code> code and now stop at other gaps. Two need <code>iced::application::timed</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/embedding">Previous<b>Embedding</b></a><a class="next" href="/docs/play">Next<b>?play and the playground</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/iced/previews">Previous<b>Previews and tooling</b></a></nav>
 </article>
 </main>
 </div>
@@ -564,7 +436,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
   <div class="wrap cap">
     <span>MIT or Apache-2.0</span>
     <a href="/docs">Docs</a>
-    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
     <a href="https://airstrike.fyi">airstrike.fyi</a>
   </div>
 </footer>

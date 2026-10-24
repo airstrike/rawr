@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Previews and tooling | rawr docs</title>
+<meta name="description" content="Render iced views on their own with #[preview], compare them with rawr snapshot, and connect a coding agent to previews and the running app with rawr mcp.">
+<meta property="og:title" content="Previews and tooling | rawr docs">
+<meta property="og:description" content="Render iced views on their own with #[preview], compare them with rawr snapshot, and connect a coding agent to previews and the running app with rawr mcp.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced/previews">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/iced/previews">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="cap"><span class="slash">//</span>docs</p>
+  <p class="grp">Develop with rawr</p>
+  <ol>
+    <li><a href="/docs">Overview</a></li>
+    <li><a href="/docs/start">Get started</a></li>
+    <li><a href="/docs/run">Run Rust with rawr</a></li>
+    <li><a href="/docs/imports">Cargo dependencies</a></li>
+  </ol>
+  <p class="grp">Embed rawr</p>
+  <ol>
+    <li><a href="/docs/embedding">Embedding</a></li>
+  </ol>
+  <p class="grp">Reference</p>
+  <ol>
+    <li><a href="/docs/language">Supported Rust</a></li>
+    <li><a href="/docs/cli">Commands</a></li>
+    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How rawr works</a></li>
+  </ol>
+  <p class="grp" data-here>rawr-iced</p>
+  <ol data-here>
+    <li><a href="/docs/iced">Overview and setup</a></li>
+    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
+    <li><a href="/docs/iced/previews" aria-current="page">Previews and tooling</a><ol><li><a href="#previews">Previews and snapshots</a></li><li><a href="#commands">Commands from rawr-iced</a></li><li><a href="#files">Files</a></li></ol></li>
+    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
+  </ol>
+  <p class="grp">Playground and Discord</p>
+  <ol>
+    <li><a href="/docs/play">Use the playground</a></li>
+    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
+    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<p class="cap"><span class="slash">//</span>rawr-iced</p>
+<h1>Previews and tooling</h1>
+<p class="lede">Render views on their own, check them against stored images and connect a coding agent to the running app.</p>
+<h2 id="previews">Previews and snapshots</h2>
+<p><code>#[preview]</code> marks a view function to render on its own. A view can have several. The attribute comes from the <code>rawr-macros</code> crate, whose library name is <code>rawr</code>. Add it to <code>[dependencies]</code> in <code>Cargo.toml</code>:</p>
+<div class="block">
+  <div class="file"><b>Cargo.toml</b></div>
+  <pre><code data-lang="toml">rawr-macros = { git = "https://github.com/airstrike/rawr" }</code></pre>
+</div>
+<p>Then write <code>#[rawr::preview(..)]</code>, or write <code>use rawr::preview;</code> and then <code>#[preview(..)]</code>. Under cargo the attribute leaves the item as written. rawr reads it itself. Cargo doesn&rsquo;t warn about a function that only previews use. The crate is not on crates.io yet.</p>
+<table>
+  <tr><th>Option</th><th>Meaning</th></tr>
+  <tr><td><code>name = ".."</code></td><td>The preview&rsquo;s name.</td></tr>
+  <tr><td><code>group = ".."</code></td><td>Groups previews. <code>rawr preview</code> steps through a group with the arrow keys.</td></tr>
+  <tr><td><code>seed = path</code></td><td>A function that builds the state to render, such as <code>Todos::sample</code>. Without it the state is <code>Default</code>.</td></tr>
+  <tr><td><code>update = path</code></td><td>The update function to use in the preview window.</td></tr>
+  <tr><td><code>theme = path</code></td><td>A function that returns the <code>Theme</code> to render with.</td></tr>
+  <tr><td><code>themes = [..]</code></td><td>Several theme functions. Each one gets its own snapshot.</td></tr>
+  <tr><td><code>size = (w, h)</code></td><td>The canvas size in logical pixels.</td></tr>
+  <tr><td><code>snapshot = false</code></td><td>Leaves the preview out of <code>rawr snapshot</code>.</td></tr>
+  <tr><td><code>bind = (..)</code></td><td>Arguments for a free view function that takes parameters.</td></tr>
+</table>
+<p><code>rawr preview</code> opens one preview in a window. It takes the preview&rsquo;s name or <code>group/name</code>. Without a name it opens the last one you picked. The preview window reloads on save as <code>rawr run</code> does.</p>
+<p><code>rawr snapshot --update</code> renders every preview to a PNG under <code>snapshots/</code>. Commit those files. <code>rawr snapshot --check</code> renders them again and compares pixels. It exits with status 1 and names the first changed pixel when an image differs. The new images go under <code>target/rawr/snapshots/</code> so you can compare them.</p>
+<div class="block diag">
+  <div class="file"><b>rawr snapshot --check</b><span>exit 1</span></div>
+  <pre><code><span class="h">Snapshot check found 1 mismatch(es) across 1 artifact(s):</span>
+
+<span class="e">[pixel drift]</span> clock::Clock::view#busy (native)
+  expected: snapshots/Clock-6c008925/view/busy/native.png
+  actual:   target/rawr/snapshots/Clock-6c008925/view/busy/native.png
+  first changed pixel (38, 31): baseline [255, 255, 255, 255], actual [137, 137, 137, 255]</code></pre>
+</div>
+
+
+<p>Press Cmd+Shift+S in the window of a running app or preview to save a PNG of it.</p>
+<h2 id="commands">Commands from rawr-iced</h2>
+<p>These need <a href="/docs/iced#install">rawr-iced</a>. With rawr-iced installed, it also runs <code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> for programs that use iced.</p>
+<table class="wide">
+  <tr><th>Command</th><th>What it does</th></tr>
+  <tr><td><code>rawr preview [path] [name]</code></td><td>Opens one <code>#[preview]</code> view in a window. <code>name</code> is the preview&rsquo;s name or <code>group/name</code>. Without a name it opens the last preview you picked. The arrow keys step through a group.</td></tr>
+  <tr><td><code>rawr snapshot --update [path]</code></td><td>Renders every preview to a PNG under <code>snapshots/</code> and replaces the stored images.</td></tr>
+  <tr><td><code>rawr snapshot --check [path]</code></td><td>Renders every preview and compares it with the stored image. It exits with status 1 if any pixel differs. The new images go under <code>target/rawr/snapshots/</code>.</td></tr>
+  <tr><td><code>--verbose</code></td><td>With <code>rawr snapshot</code>, prints absolute paths and storage details.</td></tr>
+  <tr><td><code>rawr mcp</code></td><td>Runs an MCP server on stdio for coding tools such as Claude Code and Codex. Its tools list and render previews, check the project and drive a running window. The window tools take screenshots, click, type, press keys, reset the app and wait for a reload.</td></tr>
+  <tr><td><code>rawr init [--claude] [--codex] [path]</code></td><td>Registers <code>rawr mcp</code> in the project. <code>--claude</code> writes <code>.mcp.json</code> for Claude Code. <code>--codex</code> writes <code>.codex/config.toml</code> for Codex.</td></tr>
+  <tr><td><code>rawr cache clean</code></td><td>Removes the shared builds that no running process uses.</td></tr>
+  <tr><td><code>rawr cache clean --all</code></td><td>Also removes the current project&rsquo;s <code>target/rawr</code>.</td></tr>
+</table>
+
+
+<h2 id="files">Files</h2>
+<ul>
+  <li><code>snapshots/</code> holds the stored preview images. Commit it.</li>
+  <li><code>target/rawr/snapshots/</code> holds the images from the last <code>rawr snapshot --check</code>.</li>
+  <li><code>rawr init --claude</code> writes <code>.mcp.json</code>, and <code>rawr init --codex</code> writes <code>.codex/config.toml</code>.</li>
+</ul>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/iced/reload">Previous<b>Reload an iced app</b></a><a class="next" href="/docs/iced/reference">Next<b>Supported iced APIs</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+</body>
+</html>

@@ -3,15 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Getting started | rawr docs</title>
-<meta name="description" content="Install the rawr command and the extensions you need. Run a program, start a crate with rawr new, and start an iced app that reloads when you save.">
-<meta property="og:title" content="Getting started | rawr docs">
-<meta property="og:description" content="Install the rawr command and the extensions you need. Run a program, start a crate with rawr new, and start an iced app that reloads when you save.">
+<title>Get started | rawr docs</title>
+<meta name="description" content="Install the rawr command, start a Cargo crate whose src/main.rs starts with // rawr, run it, read its errors and build it for release with Cargo.">
+<meta property="og:title" content="Get started | rawr docs">
+<meta property="og:description" content="Install the rawr command, start a Cargo crate whose src/main.rs starts with // rawr, run it, read its errors and build it for release with Cargo.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/start">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#141416">
 <link rel="canonical" href="https://rawr.airstrike.fyi/docs/start">
@@ -24,7 +25,7 @@
 </head>
 <body>
 <header class="bar">
-  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">Pre-alpha</span></a>
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
     <a href="/docs" aria-current="true">Docs</a>
     <a href="/play">Playground</a>
@@ -33,56 +34,104 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>Docs</p>
-  <ol>
+  <p class="cap"><span class="slash">//</span>docs</p>
+  <p class="grp" data-here>Develop with rawr</p>
+  <ol data-here>
     <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start" aria-current="page">Getting started</a><ol><li><a href="#install">Install</a></li><li><a href="#first-program">A first program</a></li><li><a href="#first-crate">A first crate</a></li><li><a href="#first-app">A first iced app</a></li><li><a href="#hot-reload">Hot reload</a></li><li><a href="#next">Next steps</a></li></ol></li>
-    <li><a href="/docs/language">The language</a></li>
+    <li><a href="/docs/start" aria-current="page">Get started</a><ol><li><a href="#install">Install</a></li><li><a href="#first-crate">A first crate</a></li><li><a href="#errors">Errors</a></li><li><a href="#check">Check without running</a></li><li><a href="#first-program">A single file</a></li><li><a href="#native">Native modules and dependencies</a></li><li><a href="#release">Build for release</a></li><li><a href="#next">Next steps</a></li></ol></li>
+    <li><a href="/docs/run">Run Rust with rawr</a></li>
+    <li><a href="/docs/imports">Cargo dependencies</a></li>
+  </ol>
+  <p class="grp">Embed rawr</p>
+  <ol>
     <li><a href="/docs/embedding">Embedding</a></li>
-    <li><a href="/docs/iced">rawr-iced</a></li>
-    <li><a href="/docs/play">?play and the playground</a></li>
+  </ol>
+  <p class="grp">Reference</p>
+  <ol>
+    <li><a href="/docs/language">Supported Rust</a></li>
     <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/faq">FAQ</a></li>
+    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How rawr works</a></li>
+  </ol>
+  <p class="grp">rawr-iced</p>
+  <ol>
+    <li><a href="/docs/iced">Overview and setup</a></li>
+    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
+    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
+    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
+  </ol>
+  <p class="grp">Playground and Discord</p>
+  <ol>
+    <li><a href="/docs/play">Use the playground</a></li>
+    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
+    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>Getting started</p>
-<h1>Getting started</h1>
-<p class="lede">Install what you need. Run a program and start a crate. Then start an iced app and edit it while it runs.</p>
-
+<p class="cap"><span class="slash">//</span>get started</p>
+<h1>Get started</h1>
+<p class="lede">Install the <code>rawr</code> command and start a crate. Run it, make an error, then build it for release with Cargo.</p>
 <h2 id="install">Install</h2>
-<p>rawr installs from git. There are four things you can install. You only need the ones you use.</p>
-
-<h3 id="install-crate">The crate</h3>
-<p>To embed the language in a Rust program, add the crate. It builds on stable Rust 1.95 or newer.</p>
-<div class="block"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre></div>
-<p><a href="/docs/embedding">Embedding</a> shows how to compile a script and call its functions.</p>
-
-<h3 id="install-command">The <code>rawr</code> command</h3>
-<p>The <code>rawr</code> command runs rawr programs. It builds on stable Rust too.</p>
+<p>Install the <code>rawr</code> command. It needs Rust 1.95 or newer.</p>
 <div class="block"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre></div>
-<p>The <code>rawr-cli</code> package installs the <code>rawr</code> binary. It also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works too. A program with no dependencies runs once and exits. It doesn&rsquo;t hot reload.</p>
-<p>Other programs go to an extension: a <code>rawr-&lt;name&gt;</code> binary that <code>rawr</code> finds next to itself or on <code>PATH</code>. The two below are the extensions today.</p>
+<p>The <code>rawr-cli</code> package installs <code>rawr</code>. It also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works too. Run <code>rawr doctor</code> to see what is installed.</p>
 
-<h3 id="install-import">rawr-import</h3>
-<p>rawr-import runs programs whose <code>Cargo.toml</code> lists dependencies, or which have native modules. Install it and <code>rawr</code> hands those programs to it.</p>
-<div class="note"><p>Importing Rust crates builds them for the host of the pinned toolchain. It needs a Unix system. It has only been tested on Apple Silicon Macs so far. rawr-import needs the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. rawr builds your crates with that toolchain too.</p></div>
-<div class="block"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import-cli
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre></div>
-<p>The <code>rawr-import-cli</code> package installs <code>rawr-import</code>. The <code>rawr-import</code> package installs <code>rawr-import-driver</code> in the same directory. The driver reads your Rust crates when a program imports them.</p>
+<h2 id="first-crate">A first crate</h2>
+<div class="block"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre></div>
+<p><code>rawr new hello</code> creates the <code>hello</code> directory. It holds a Cargo crate with <code>Cargo.toml</code> and <code>src/main.rs</code>. The crate has no dependencies.</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">// rawr
+// `rawr run` interprets this file, and `cargo build` compiles it as
+// ordinary Rust.
 
-<h3 id="install-iced">rawr-iced</h3>
-<p>rawr-iced adds iced support. Install it and <code>rawr</code> hands every program that uses iced to it. It imports an iced app&rsquo;s Rust crates as rawr-import does, so it needs the same toolchain and driver. rawr-iced should work wherever iced runs. It has only been tested on macOS so far.</p>
-<div class="block"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre></div>
-<p>The <code>rawr-iced-cli</code> package installs <code>rawr-iced</code>. A project&rsquo;s first <code>rawr run</code> compiles iced and its other crates in the project&rsquo;s <code>target/</code>, and <code>cargo build</code> reuses them.</p>
-<p>Run <code>rawr doctor</code> to see what is installed and where. Run <code>rawr --help</code> to see which programs and commands each extension serves.</p>
+struct Greeting {
+    name: String,
+    times: i64,
+}
 
-<h2 id="first-program">A first program</h2>
-<p>A plain program is one that doesn&rsquo;t use iced. Save this as <code>cart.rs</code>. Its first line is <code>// rawr</code>. That line marks it as a rawr file.</p>
+impl Greeting {
+    fn line(&amp;self, count: i64) -&gt; String {
+        format!("{count}. Hello, {}!", self.name)
+    }
+}
+
+fn main() {
+    let greeting = Greeting {
+        name: String::from("rawr"),
+        times: 3,
+    };
+    for count in 1..=greeting.times {
+        println!("{}", greeting.line(count));
+    }
+}</code></pre>
+  <div class="run"><b>rawr run</b><span>1. Hello, rawr!
+2. Hello, rawr!
+3. Hello, rawr!</span></div>
+</div>
+<p>The first line, <code>// rawr</code>, marks the file. <code>rawr run</code> checks it and then interprets it. <code>cargo run</code> compiles the same file and prints the same three lines.</p>
+<p><code>rawr run</code> runs the program once and exits. Edit <code>src/main.rs</code> and run it again. A crate with no dependencies needs no build, so the edit runs at once. Reload on save for a program like this one is planned. iced apps reload today, with <a href="/docs/iced">rawr-iced</a>.</p>
+
+<h2 id="errors">Errors</h2>
+<p>rawr checks the whole program before any of it runs. Change <code>greeting.line(count)</code> to <code>greeting.lines(count)</code> and run it again:</p>
+<div class="block diag">
+  <div class="file"><b>rawr run</b><span>exit 1</span></div>
+  <pre><code><span class="e">error[E0599]</span><span class="h">: no method named `lines` found for `Greeting` in the current scope</span>
+ <span class="c">--&gt;</span> /home/you/hello/src/main.rs:22:33-22:38
+ <span class="c">22 |</span>         println!("{}", greeting.lines(count));
+    <span class="c">|</span>                                 <span class="e">^^^^^</span></code></pre>
+</div>
+<p>The program doesn&rsquo;t start, so nothing is printed before the error. Where rustc has an error for the same mistake, rawr uses rustc&rsquo;s code and wording. rawr reports one error at a time.</p>
+<p>For a crate, <code>rawr run</code> also runs <code>cargo check</code> beside the program. Its errors are printed after the program ends, so here rustc reports the same mistake a second time.</p>
+
+<h2 id="check">Check without running</h2>
+<p><code>rawr check</code> runs rawr&rsquo;s check and then <code>cargo check</code>. It prints <code>Checked</code> and the path, then <code>cargo check passed</code>. It exits with status 1 if either check fails.</p>
+<p>rawr&rsquo;s check is not rustc. It accepts some code that rustc rejects, so rustc has the final word. <a href="/docs/language#lenient">Supported Rust</a> lists those cases.</p>
+
+<h2 id="first-program">A single file</h2>
+<p><code>rawr run</code> also takes one <code>.rs</code> file. A single file doesn&rsquo;t need the marker.</p>
 <div class="block">
   <div class="file"><b>cart.rs</b></div>
   <pre><code data-lang="rust" data-run="cart.rs" id="src-cart">// rawr
@@ -118,120 +167,26 @@ fn main() {
 }</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-cart" aria-label="Run cart.rs" hidden></button><b>rawr run cart.rs</b><span id="out-cart" aria-live="polite">total: 27</span></div>
 </div>
-<p><code>rawr run</code> checks the whole file first. If the check passes, it runs the file&rsquo;s top-level statements and then <code>fn main</code>. A file can be only statements. It can also be only items and a <code>main</code>, as in Rust. Cargo would not build a file of top-level statements, so keep those to snippets and the playground.</p>
-<p><code>rawr check cart.rs</code> runs the check without running the program. It prints <code>Checked</code> and the path when the file is valid.</p>
+<p>A single file can hold items, top-level statements, or both. Top-level statements run first, as the body of <code>fn main</code> would, and then <code>fn main</code> runs. Cargo would not build a file of top-level statements, so keep those to snippets and the playground.</p>
+<p>The run button sends the file to rawr&rsquo;s server and shows what it printed there.</p>
 
-<h3 id="errors">Errors</h3>
-<p>rawr reports one error at a time. Each error has a code, a message and the source span. Where rustc has an error for the same mistake, rawr uses rustc&rsquo;s code and wording. Change <code>item.price()</code> to <code>item.cost()</code> and run it again:</p>
-<div class="block diag">
-  <div class="file"><b>rawr run cart.rs</b><span>exit 1</span></div>
-  <pre><code><span class="e">error[E0599]</span><span class="h">: no method named `cost` found for `Item` in the current scope</span>
- <span class="c">--&gt;</span> cart.rs:23:21-23:25
- <span class="c">23 |</span>         sum += item.cost();
-    <span class="c">|</span>                     <span class="e">^^^^</span></code></pre>
-</div>
-<p>The program doesn&rsquo;t start, so nothing is printed before the error.</p>
+<h2 id="native">Native modules and dependencies</h2>
+<p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust. So is every crate in <code>[dependencies]</code>. A crate with either one goes to <a href="/docs/imports">rawr-import</a>, which compiles the native code with Cargo. The marked code calls it.</p>
+<p>The crate root must be marked today. A native <code>main</code> that calls into marked modules is planned.</p>
 
-<h2 id="first-crate">A first crate</h2>
-<p><code>rawr new</code> writes a Cargo crate whose <code>src/main.rs</code> starts with <code>// rawr</code>.</p>
-<div class="block">
-  <pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre>
-</div>
-<p><code>rawr new hello</code> creates the <code>hello</code> directory with <code>Cargo.toml</code> and <code>src/main.rs</code>. The crate has no dependencies, so <code>rawr</code> runs it itself. It prints three lines. <code>cargo run</code> builds the same file natively.</p>
-<p>When the crate adds a dependency, <code>rawr run</code> hands it to <a href="#install-import">rawr-import</a>. The crate then needs the two files described below. <code>rawr run</code> names them.</p>
-
-<h2 id="first-app">A first iced app</h2>
-<p>With rawr-iced installed, <code>rawr new</code> writes a starter iced crate from rawr-iced&rsquo;s <a href="/docs/iced#new"><code>iced</code> template</a>.</p>
-<div class="block">
-  <pre><code>rawr new counter --template iced &amp;&amp; cd counter &amp;&amp; rawr run</code></pre>
-</div>
-<p><code>rawr new counter --template iced</code> creates the <code>counter</code> directory. It holds an ordinary Cargo crate. <code>rawr run</code> opens the app in a window.</p>
-<p><code>counter/Cargo.toml</code> depends on iced from git. The revision is the one rawr-iced is built against. <code>rawr doctor</code> prints it. iced turns on every widget rawr offers.</p>
-<div class="block">
-  <div class="file"><b>Cargo.toml</b></div>
-  <pre><code data-lang="toml">[package]
-name = "counter"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", features = ["advanced", "canvas", "image-without-codecs", "qr_code", "selector", "sipper", "svg"] }</code></pre>
-</div>
-<p>Two more files make the crate build as rawr builds it. <code>rust-toolchain.toml</code> pins the nightly rawr reads Rust with. <code>.cargo/config.toml</code> sets <code>build.target</code> to <code>"host-tuple"</code>, so builds go in <code>target/&lt;host&gt;/debug</code>. With both, <code>rawr run</code> and <code>cargo build</code> compile iced once and share it. Whichever runs second reuses what the first compiled.</p>
-<div class="block">
-  <div class="file"><b>rust-toolchain.toml</b></div>
-  <pre><code data-lang="toml">[toolchain]
-channel = "nightly-2026-07-11"
-components = ["rust-src", "rustfmt", "clippy"]</code></pre>
-</div>
-<div class="block">
-  <div class="file"><b>.cargo/config.toml</b></div>
-  <pre><code data-lang="toml">[build]
-target = "host-tuple"</code></pre>
-</div>
-<p>A crate of your own needs the same two files. Without them, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and prints the files to add.</p>
-<p><code>counter/src/main.rs</code> is iced&rsquo;s own counter example with <code>// rawr</code> as its first line. <code>rawr check</code> accepts it.</p>
-<div class="block">
-  <div class="file"><b>src/main.rs</b></div>
-  <pre><code data-lang="rust">// rawr
-use iced::Center;
-use iced::widget::{Widget, button, column, text};
-
-pub fn main() -&gt; iced::Result {
-    iced::run(Counter::update, Counter::view)
-}
-
-#[derive(Default)]
-struct Counter {
-    value: i64,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Message {
-    Increment,
-    Decrement,
-}
-
-impl Counter {
-    fn update(&amp;mut self, message: Message) {
-        match message {
-            Message::Increment =&gt; {
-                self.value += 1;
-            }
-            Message::Decrement =&gt; {
-                self.value -= 1;
-            }
-        }
-    }
-
-    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
-        column![
-            button("Increment").on_press(Message::Increment),
-            text(self.value).size(50),
-            button("Decrement").on_press(Message::Decrement)
-        ]
-        .padding(20)
-        .align_x(Center)
-    }
-}</code></pre>
-</div>
-
-<p><code>cargo run</code> builds and runs the same app natively. <code>cargo build --release</code> builds it for release. No interpreter ships with it.</p>
-
-<h2 id="hot-reload">Hot reload</h2>
-<p>Keep the window open and edit <code>src/main.rs</code>. When you save, <code>rawr run</code> reloads the app in about 0.2&nbsp;s. The window stays open. The app keeps its state, so the counter keeps its value.</p>
-<p>Saving a file marked <code>// rawr</code> never rebuilds native code. Saving a native module or the source of a dependency does. A native module is a file without the marker. <code>rawr run</code> rebuilds the native code and then reloads the app.</p>
-<p><code>rawr run</code> also runs <code>cargo check</code> in the background on launch and after each save. Its errors appear in a card at the top of the window and on stderr. They don&rsquo;t block the reload.</p>
-<p>If a save doesn&rsquo;t pass the check, the last good version keeps running. The window shows the error until you fix it.</p>
+<h2 id="release">Build for release</h2>
+<div class="block"><pre><code>cargo build --release</code></pre></div>
+<p>Cargo compiles every file natively. The marker is a comment, so the release build has no interpreter in it.</p>
 
 <h2 id="next">Next steps</h2>
 <ul>
-  <li><a href="/docs/language">The language</a> lists the Rust that rawr supports today.</li>
-  <li><a href="/docs/iced">rawr-iced</a> covers app shapes, previews, snapshots and Rust imports.</li>
-  <li><a href="/docs/cli">Commands</a> lists every command and flag.</li>
-  <li><a href="/play">The playground</a> runs snippets in a browser without installing anything.</li>
+  <li><a href="/docs/run">Run Rust with rawr</a> says which files are interpreted and who runs a program.</li>
+  <li><a href="/docs/imports">Cargo dependencies</a> sets up rawr-import.</li>
+  <li><a href="/docs/iced">rawr-iced</a> starts an iced app that reloads when you save.</li>
+  <li><a href="/docs/embedding">Embedding</a> runs Rust scripts inside your own app.</li>
+  <li><a href="/play">The playground</a> runs snippets in a browser.</li>
 </ul>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs">Previous<b>Overview</b></a><a class="next" href="/docs/language">Next<b>The language</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs">Previous<b>Overview</b></a><a class="next" href="/docs/run">Next<b>Run Rust with rawr</b></a></nav>
 </article>
 </main>
 </div>
@@ -239,7 +194,7 @@ impl Counter {
   <div class="wrap cap">
     <span>MIT or Apache-2.0</span>
     <a href="/docs">Docs</a>
-    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
     <a href="https://airstrike.fyi">airstrike.fyi</a>
   </div>
 </footer>

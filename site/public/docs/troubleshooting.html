@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting | rawr docs</title>
+<meta name="description" content="Common rawr errors and what to do about them: an unmarked crate root, a missing extension, the project build files, rawr&#x27;s check against rustc&#x27;s, slow first runs and iced reloads.">
+<meta property="og:title" content="Troubleshooting | rawr docs">
+<meta property="og:description" content="Common rawr errors and what to do about them: an unmarked crate root, a missing extension, the project build files, rawr&#x27;s check against rustc&#x27;s, slow first runs and iced reloads.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/troubleshooting">
+<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#141416">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/troubleshooting">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Mono&family=Fira+Sans:wght@300;400;500&display=swap">
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current="true">Docs</a>
+    <a href="/play">Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+  </nav>
+</header>
+<div class="docs">
+<nav class="side" aria-label="Docs">
+  <p class="cap"><span class="slash">//</span>docs</p>
+  <p class="grp">Develop with rawr</p>
+  <ol>
+    <li><a href="/docs">Overview</a></li>
+    <li><a href="/docs/start">Get started</a></li>
+    <li><a href="/docs/run">Run Rust with rawr</a></li>
+    <li><a href="/docs/imports">Cargo dependencies</a></li>
+  </ol>
+  <p class="grp">Embed rawr</p>
+  <ol>
+    <li><a href="/docs/embedding">Embedding</a></li>
+  </ol>
+  <p class="grp" data-here>Reference</p>
+  <ol data-here>
+    <li><a href="/docs/language">Supported Rust</a></li>
+    <li><a href="/docs/cli">Commands</a></li>
+    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/troubleshooting" aria-current="page">Troubleshooting</a><ol><li><a href="#first">First steps</a></li><li><a href="#not-marked">&ldquo;Its first line is not <code>// rawr</code>&rdquo;</a></li><li><a href="#not-installed">A program needs an extension that isn&rsquo;t installed</a></li><li><a href="#project-build">RAWR-ENVIRONMENT-PROJECT-BUILD</a></li><li><a href="#which-check">rawr&rsquo;s error or rustc&rsquo;s?</a></li><li><a href="#first-run-slow">The first run takes minutes</a></li><li><a href="#reload">An iced app doesn&rsquo;t pick up a save</a></li><li><a href="#report">Reporting a bug</a></li></ol></li>
+    <li><a href="/docs/how-it-works">How rawr works</a></li>
+  </ol>
+  <p class="grp">rawr-iced</p>
+  <ol>
+    <li><a href="/docs/iced">Overview and setup</a></li>
+    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
+    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
+    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
+  </ol>
+  <p class="grp">Playground and Discord</p>
+  <ol>
+    <li><a href="/docs/play">Use the playground</a></li>
+    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
+    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
+  </ol>
+</nav>
+<main>
+<article>
+<p class="cap"><span class="slash">//</span>reference</p>
+<h1>Troubleshooting</h1>
+<p class="lede">Common errors and what to do about them.</p>
+<h2 id="first">First steps</h2>
+<ul>
+  <li><code>rawr doctor</code> shows where <code>rawr</code> and each extension are installed, and the program it finds.</li>
+  <li><code>RAWR_VERBOSE=1 rawr run</code> says how the program was loaded and which binary ran it.</li>
+  <li><code>rawr --help</code> lists the installed extensions and the commands each one adds.</li>
+</ul>
+
+<h2 id="not-marked">&ldquo;Its first line is not <code>// rawr</code>&rdquo;</h2>
+<div class="block diag">
+  <pre><code><span class="e">error[RAWR-ENVIRONMENT-MISSING-SOURCE]</span><span class="h">: `/home/you/app/src/main.rs` is not a Rawr file. Its first line is not `// rawr`.</span>
+  <span class="c">= help:</span> add `// rawr` as the first line of the crate root to run it with Rawr</code></pre>
+</div>
+<p>The crate root must start with <code>// rawr</code> today. Add the line, or run a single file with <code>rawr run path/to/file.rs</code>.</p>
+
+<h2 id="not-installed">A program needs an extension that isn&rsquo;t installed</h2>
+<p>A program with Cargo dependencies needs rawr-import. A program that uses iced needs rawr-iced. <code>rawr run</code> says which one is missing and prints the commands that install it. <a href="/docs/imports#install">Cargo dependencies</a> and <a href="/docs/iced#install">rawr-iced</a> list them too.</p>
+
+<h2 id="project-build">RAWR-ENVIRONMENT-PROJECT-BUILD</h2>
+<p>A crate with dependencies or native modules needs <code>rust-toolchain.toml</code> and <code>.cargo/config.toml</code>, so that <code>rawr run</code> and <code>cargo build</code> share one build. The error prints both files. <a href="/docs/imports#project">Project setup</a> explains them.</p>
+
+<h2 id="which-check">rawr&rsquo;s error or rustc&rsquo;s?</h2>
+<p><code>rawr check</code> prints rawr&rsquo;s result first: <code>Checked</code> and the path, or one error. Then it prints <code>cargo check passed</code>, or <code>cargo check found</code> and rustc&rsquo;s errors.</p>
+<ul>
+  <li>An error from rawr alone often means code that rawr doesn&rsquo;t support yet. The error names the construct. <a href="/docs/language#not-supported">Supported Rust</a> lists the gaps.</li>
+  <li>An error from rustc alone means code that rawr accepts and rustc rejects. <a href="/docs/language#lenient">That list</a> is on the same page. Fix it for rustc.</li>
+</ul>
+
+<h2 id="first-run-slow">The first run takes minutes</h2>
+<p>With dependencies or iced, the first <code>rawr run</code> compiles them and a runner. Later runs reuse that build in the project&rsquo;s <code>target/</code>. An edit to a marked file needs no native build.</p>
+
+<h2 id="reload">An iced app doesn&rsquo;t pick up a save</h2>
+<p>A save that fails the check leaves the last good version running. The window shows the error and buttons to retry, copy the error or reset the app. <a href="/docs/iced/reload">Reload an iced app</a> says what a reload keeps.</p>
+
+<h2 id="report">Reporting a bug</h2>
+<p>If rawr gives a different result than Rust, or rejects Rust it says it supports, report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/requirements">Previous<b>Requirements and status</b></a><a class="next" href="/docs/how-it-works">Next<b>How rawr works</b></a></nav>
+</article>
+</main>
+</div>
+<footer>
+  <div class="wrap cap">
+    <span>MIT or Apache-2.0</span>
+    <a href="/docs">Docs</a>
+    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
+    <a href="https://airstrike.fyi">airstrike.fyi</a>
+  </div>
+</footer>
+<script src="/docs/docs.js"></script>
+</body>
+</html>
