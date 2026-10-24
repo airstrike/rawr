@@ -2710,6 +2710,24 @@ fn declare_facade_traits(
                 }
                 _ => {}
             }
+            // A facade trait a bound names (`R: advanced::Renderer`) is
+            // declared too, so a bounded value has its methods.
+            let generics: Vec<&[item::Generic]> = match &shell.kind {
+                item::Kind::Struct(own) => vec![&own.generics[..]],
+                item::Kind::Enum(own) => vec![&own.generics[..]],
+                item::Kind::Impl(own) => std::iter::once(&own.generics[..])
+                    .chain(own.functions.iter().map(|function| &function.generics[..]))
+                    .collect(),
+                item::Kind::Trait(own) => own
+                    .functions
+                    .iter()
+                    .map(|function| &function.generics[..])
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for generic in generics.into_iter().flatten() {
+                implemented.extend(generic.traits.iter().map(|name| name.text.clone()));
+            }
         }
         let declarations = host
             .trait_types()
@@ -3997,6 +4015,38 @@ fn resolve_bounds_with_arguments(
                 })
             {
                 traits.push(last.name.clone());
+                continue;
+            }
+            // iced's `advanced` traits by their module path:
+            // `renderer::Renderer`, `advanced::widget::Widget<M, T, R>`.
+            if let [prefix @ .., last] = &bound.segments[..]
+                && !prefix.is_empty()
+                && prefix.iter().all(|module| {
+                    module.arguments.is_empty()
+                        && matches!(
+                            module.name.text.as_str(),
+                            "iced" | "core" | "advanced" | "widget" | "renderer" | "graphics" | "mesh"
+                        )
+                })
+                && matches!(last.name.text.as_str(), "Renderer" | "Widget" | "Meta")
+                && last
+                    .arguments
+                    .iter()
+                    .all(|argument| matches!(argument, crate::item::type_ref::Argument::Type(_)))
+            {
+                traits.push(last.name.clone());
+                if !last.arguments.is_empty() {
+                    trait_arguments.push((
+                        last.name.clone(),
+                        last.arguments
+                            .iter()
+                            .filter_map(|argument| match argument {
+                                crate::item::type_ref::Argument::Type(ty) => Some(ty.clone()),
+                                crate::item::type_ref::Argument::Lifetime(_) => None,
+                            })
+                            .collect(),
+                    ));
+                }
                 continue;
             }
             return Err(Error::UnsupportedNominalSyntax {

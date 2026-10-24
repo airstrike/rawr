@@ -75,6 +75,31 @@ const IMMEDIATE_CALLBACKS: [&str; 3] = [
     "iced::widget::canvas::Frame::with_save",
     "iced::widget::canvas::Cache::draw",
 ];
+/// iced's `advanced` traits that a facade type implements natively: the
+/// trait's name and its implementor. A bound by one of them takes that type,
+/// and a value bounded by one calls the type's own method of each name.
+const FACADE_TRAIT_HOSTS: [(&str, &str); 2] = [
+    ("Renderer", "iced::widget::Renderer"),
+    ("Widget", "iced::Element"),
+];
+
+/// The facade type of `FACADE_TRAIT_HOSTS` that `ty` is, when it
+/// implements `trait_name` that way.
+fn facade_trait_host(ty: &Ty, trait_name: &str) -> Option<&'static str> {
+    let ty = match ty {
+        Ty::Reference { target, .. } => target,
+        ty => ty,
+    };
+    let Ty::Host { proof, .. } = ty else {
+        return None;
+    };
+    let path = proof.definition.path();
+    FACADE_TRAIT_HOSTS
+        .iter()
+        .find(|(name, host)| *name == trait_name && *host == path.as_str())
+        .map(|(_, host)| *host)
+}
+
 /// The iced types whose first parameter is a Link that defaults to `()`.
 const LINK_DEFAULT_TYPES: [&str; 2] = [WIDGET_SPAN_TYPE, "iced::widget::text::Rich"];
 const WIDGET_VOID_PATH: &str = "iced::widget::void";
@@ -9680,6 +9705,9 @@ impl<'a> Parser<'a> {
     /// Whether `ty` implements the crate trait `trait_name`: a script type
     /// with an impl of it, or a generic parameter bounded by it.
     fn type_implements(&self, ty: &Ty, trait_name: &str) -> bool {
+        if facade_trait_host(ty, trait_name).is_some() {
+            return true;
+        }
         match ty {
             Ty::Dyn(name, _) => {
                 name == trait_name
@@ -9732,6 +9760,10 @@ impl<'a> Parser<'a> {
     fn type_implements_with(&mut self, ty: &Ty, trait_name: &str, arguments: &[Ty]) -> bool {
         if arguments.is_empty() {
             return self.type_implements(ty, trait_name);
+        }
+        let resolved = self.inference.resolve(ty);
+        if facade_trait_host(&resolved, trait_name).is_some() {
+            return true;
         }
         // The prelude's blanket impls: `impl<T> From<T> for T`, its builtin
         // conversions, and `impl<T, U: From<T>> Into<U> for T`.
@@ -10217,6 +10249,101 @@ impl<'a> Parser<'a> {
             .iter()
             .position(|declared| declared.text == name)?;
         declared.associated_bounds.get(index)
+    }
+
+    /// `value.member(arguments)` of a value bounded by one of iced's
+    /// `advanced` traits (`FACADE_TRAIT_HOSTS`): the facade type's own
+    /// method, or, for a value of a script type implementing the trait,
+    /// its impl's. `None` when no such bound has the member.
+    fn call_facade_bound(
+        &mut self,
+        value: &ParsedExpr,
+        bounded: &Ty,
+        member: &ImmutableString,
+        arguments: &[ParsedExpr],
+        member_span: Span,
+        end: Position,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        let bounds = self.bound_traits(bounded);
+        let Some((trait_name, host)) = FACADE_TRAIT_HOSTS
+            .iter()
+            .find(|(name, _)| bounds.iter().any(|bound| bound == name))
+        else {
+            return Ok(None);
+        };
+        if self.models.host_items(&format!("{host}::{member}")).is_none() {
+            return Ok(None);
+        }
+        let Some(definition) = self.models.host.type_(host).cloned() else {
+            return Ok(None);
+        };
+        let owner = self.models.host.type_owner(host).cloned();
+        let host_ty = Ty::Host {
+            proof: HostTyProof::new(definition.clone(), None, owner),
+            arguments: definition
+                .parameters()
+                .iter()
+                .map(|_| self.inference.fresh())
+                .collect(),
+        };
+        let trait_name: ImmutableString = (*trait_name).into();
+        let implementors = self
+            .models
+            .trait_methods
+            .iter()
+            .filter(|((_, name), definitions)| {
+                name == member
+                    && definitions
+                        .iter()
+                        .any(|definition| definition.trait_name() == Some(&trait_name))
+            })
+            .map(|((owner, _), _)| *owner)
+            .collect::<Vec<_>>();
+        let local = self.temporary("bounded");
+        let call = span(value.span.start(), end);
+        let receiver = self.operator_expr(local.as_str().into(), host_ty, value.span);
+        self.pending_arguments = Some((arguments.to_vec(), end));
+        let host_call = self.parse_host_method(receiver, member.clone(), member_span)?;
+        let mut source = origin::Fragment::plain(format!("{{ let {local} = "));
+        source.push(value.rendered_source());
+        source.push_text("; ");
+        let dispatch = if implementors.is_empty() {
+            None
+        } else {
+            self.bound_trait_function(bounded, member, member_span)?
+        };
+        match dispatch {
+            Some((trait_name, function)) => {
+                let script = self.operator_expr(local.as_str().into(), value.ty.clone(), value.span);
+                let dispatched = self.call_trait_method(
+                    script,
+                    bounded.clone(),
+                    &trait_name,
+                    &function,
+                    arguments.to_vec(),
+                    member_span,
+                    end,
+                )?;
+                self.require_type(&dispatched.ty, &host_call.ty, call)?;
+                let index = self.prelude_op(PreludeOp::TypeIndex, [local.as_str().into()]);
+                source.push_text("if ");
+                for (position, owner) in implementors.iter().enumerate() {
+                    if position > 0 {
+                        source.push_text(" || ");
+                    }
+                    source.push(index.clone());
+                    source.push_text(format!(" == {}", owner_key(*owner)));
+                }
+                source.push_text(" { ");
+                source.push(dispatched.rendered_source());
+                source.push_text(" } else { ");
+                source.push(host_call.rendered_source());
+                source.push_text(" }");
+            }
+            None => source.push(host_call.rendered_source()),
+        }
+        source.push_text(" }");
+        Ok(Some(self.operator_expr(source, host_call.ty, call)))
     }
 
     /// The function `member` of a user trait bounding `bounded`, a generic
@@ -15211,6 +15338,18 @@ impl<'a> Parser<'a> {
         if scoped {
             self.require_invocation_receiver(&receiver, member_span)?;
         }
+        // `tree.size = size`: a facade field set in place, through the
+        // field's owned builder, which returns the changed value.
+        if self.pending_arguments.is_none()
+            && assignment_token(&self.peek())
+            && receiver.lvalue.is_some()
+            && items.iter().any(|item| {
+                item.receiver() == Some(receiver::Mode::Owned)
+                    && item.signature().parameters().len() == 1
+            })
+        {
+            return self.parse_host_field_place(receiver, member, member_span);
+        }
         // A facade type's field: a parameterless shared-receiver reader,
         // written `value.field` as in Rust.
         let field = self.pending_arguments.is_none()
@@ -15262,6 +15401,63 @@ impl<'a> Parser<'a> {
             arguments,
             call,
         )
+    }
+
+    /// `value.field` of a facade type as an assignment's target: a place
+    /// whose reader is the field's reader and whose store is its owned
+    /// builder, `value = value.field(new)`.
+    fn parse_host_field_place(
+        &mut self,
+        receiver: ParsedExpr,
+        field: ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let Some(lvalue) = receiver.lvalue.clone() else {
+            return Err(self.unsupported("assignment target"));
+        };
+        let place = self.temporary("place");
+        let stored = self.temporary("stored");
+        let receiver_ty = receiver.ty.clone();
+        let at = receiver.span;
+        let local = self.operator_expr(origin::Fragment::plain(place.clone()), receiver_ty.clone(), at);
+        // The place's local has no lvalue, so this reads the field.
+        let getter = self.parse_host_method(local.clone(), field.clone(), member_span)?;
+        let ty = self.inference.resolve(&getter.ty);
+        let operand = self.operator_expr(origin::Fragment::plain(stored.clone()), ty.clone(), at);
+        self.pending_arguments = Some((vec![operand], member_span.end()));
+        let setter = self.parse_host_method(local, field, member_span)?;
+        let mut read = origin::Fragment::plain("{ ");
+        read.push(getter.prelude.clone());
+        read.push(getter.source.clone());
+        read.push_text(" }");
+        let mut store = origin::Fragment::plain("{ ");
+        store.push(setter.prelude.clone());
+        store.push(setter.source.clone());
+        store.push_text(" }");
+        let step = PlaceStep::Accessor {
+            place: place.clone(),
+            stored,
+            read: read.clone(),
+            store,
+        };
+        let lvalue = match &lvalue {
+            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(NestedLvalue {
+                binding: binding.clone(),
+                base: origin::Fragment::plain(binding.to_string()),
+                steps: vec![step],
+                ty: ty.clone(),
+            })),
+            Lvalue::Slice(_) => return Err(self.unsupported("assignment target")),
+            lvalue => nested_step(lvalue, step, ty.clone()),
+        };
+        let mut source = origin::Fragment::plain(format!("{{ let {place} = "));
+        source.push(receiver.rendered_source());
+        source.push_text("; ");
+        source.push(read);
+        source.push_text(" }");
+        let mut value = self.operator_expr(source, ty, span(at.start(), member_span.end()));
+        value.lvalue = Some(lvalue);
+        Ok(value)
     }
 
     /// `value.name_mut()` of a facade type: a `&mut` place whose reader is
@@ -24923,6 +25119,12 @@ impl<'a> Parser<'a> {
                 let name = bounded.name(&self.models);
                 let (arguments, end) =
                     self.parse_borrowing_arguments("generic value method arguments")?;
+                if let Some(called) =
+                    self.call_facade_bound(&value, &bounded, &member, &arguments, member_span, end)?
+                {
+                    value = called;
+                    continue;
+                }
                 if let Some((trait_name, function)) =
                     self.bound_trait_function(&bounded, &member, member_span)?
                 {
@@ -34979,6 +35181,34 @@ impl<'a> Parser<'a> {
                 let default = self.default_source(&ty, call)?;
                 arguments.push(self.operator_expr(default, ty, call));
             }
+            // A projection that takes one more argument is told which
+            // methods the impl writes itself, so it runs the trait's
+            // default natively for the rest (bit `n` for function `n`).
+            let takes = items.first().map_or(0, |item| item.signature().parameters().len());
+            if takes == arguments.len() + 2 {
+                let written = declared
+                    .functions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, function)| {
+                        self.models
+                            .trait_methods
+                            .get(&(*id, function.name.text.clone()))
+                            .is_some_and(|methods| {
+                                methods.iter().any(|method| {
+                                    method.trait_name() == Some(&trait_name)
+                                        && method.trait_default().is_none()
+                                })
+                            })
+                    })
+                    .fold(0_i64, |mask, (index, _)| mask | (1 << index));
+                let ty = Ty::Int(Int::Var(self.inference.fresh_id()));
+                arguments.push(self.operator_expr(
+                    origin::Fragment::plain(written.to_string()),
+                    ty,
+                    call,
+                ));
+            }
             let placeholder = self.operator_expr(origin::Fragment::default(), Ty::Unit, call);
             let mut program = std::mem::replace(value, placeholder);
             // A reference is its value at runtime.
@@ -35041,20 +35271,29 @@ impl<'a> Parser<'a> {
     /// projection's `new`.
     fn implemented_trait(&self, id: type_def::Id, target: &str) -> Option<(ImmutableString, String)> {
         self.models.host.trait_types().find_map(|(definition, _)| {
-            if !matches!(definition.shape(), crate::host::type_def::Shape::Trait(_))
-                || !definition
-                    .projections()
-                    .iter()
-                    .any(|projection| projection.target() == target)
-            {
+            if !matches!(definition.shape(), crate::host::type_def::Shape::Trait(_)) {
                 return None;
             }
+            // The trait's projection, or the type it projects to when that
+            // type projects to `target` in turn: iced's `advanced::Widget`
+            // makes an `Instance`, which is an `Element`.
+            let projected = definition.projections().iter().find_map(|projection| {
+                let projected = projection.target();
+                (projected == target
+                    || self.models.host.type_(&projected).is_some_and(|instance| {
+                        instance
+                            .projections()
+                            .iter()
+                            .any(|projection| projection.target() == target)
+                    }))
+                .then_some(projected)
+            })?;
             let path = definition.path();
             let name: ImmutableString = path.rsplit("::").next()?.into();
             self.models
                 .impls
                 .contains(&(name.clone(), id))
-                .then(|| (name, format!("{target}::new")))
+                .then(|| (name, format!("{projected}::new")))
         })
     }
 

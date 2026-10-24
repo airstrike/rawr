@@ -529,6 +529,26 @@ fn resolve_path(
         });
     }
 
+    // iced's `Size<Length>`, which `advanced::Widget::size` returns, is a
+    // type of its own: the facade's `Size` is iced's `Size<f32>`.
+    let target = match &target {
+        Target::Host { definition, owner }
+            if definition.path().as_str() == "iced::Size"
+                && matches!(
+                    &arguments[..],
+                    [Argument::Type(Type::Path(Path { target: Target::Host { definition: length, .. }, .. }))]
+                        if length.path().as_str() == "iced::Length"
+                )
+                && let Some(lengths) = host.type_(LENGTH_SIZE) =>
+        {
+            arguments.clear();
+            Target::Host {
+                definition: lengths.clone(),
+                owner: owner.clone(),
+            }
+        }
+        _ => target,
+    };
     if let Target::Host { definition, .. } = &target {
         if definition.role() == host::type_def::Role::Trait {
             return Err(Error::UnsupportedNominalSyntax {
@@ -574,6 +594,9 @@ fn resolve_path(
         span,
     })
 }
+
+/// The facade's type for iced's `Size<Length>`.
+pub(crate) const LENGTH_SIZE: &str = "iced::advanced::layout::LengthSize";
 
 /// iced's widgets are generic over their content: `Column<Element<'_,
 /// Message>>`, `Container<'a, W>`, `Button<'a, Message, &str>`. A facade
