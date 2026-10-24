@@ -320,3 +320,54 @@ async fn run(jobs: Vec<Job>) -> i64 {
     );
     assert_eq!(loaded(&source), 13);
 }
+
+#[test]
+fn spawn_blocking_runs_a_closure_on_a_worker_and_its_output_reaches_update() {
+    let source = app(
+        r#"
+fn fib(n: i64) -> i64 {
+    let (mut a, mut b) = (0, 1);
+    for _ in 0..n { let next = a + b; a = b; b = next; }
+    a
+}
+"#,
+        "Task::perform(tokio::task::spawn_blocking(move || fib(15)), |result| result.unwrap())",
+    );
+    assert_eq!(loaded(&source), 610);
+}
+
+#[test]
+fn spawn_blocking_awaits_in_an_async_body_with_the_values_it_moved() {
+    let source = app(
+        r#"
+use tokio::task::spawn_blocking;
+async fn total(values: Vec<i64>) -> i64 {
+    let base = 2;
+    let sum = spawn_blocking(move || values.iter().sum::<i64>() * base).await.unwrap();
+    let more = spawn_blocking(move || sum + 1).await.unwrap();
+    more
+}
+"#,
+        "total(vec![1, 2, 3])",
+    );
+    assert_eq!(loaded(&source), 13);
+}
+
+#[test]
+fn std_thread_spawn_says_to_use_spawn_blocking() {
+    let error = rejected(&app(
+        "fn work() -> i64 { std::thread::spawn(move || 1).join().unwrap() }",
+        "Task::done(work())",
+    ));
+    assert!(error.contains("`std::thread::spawn`"), "{error}");
+    assert!(error.contains("spawn_blocking"), "{error}");
+}
+
+#[test]
+fn task_future_over_spawn_blocking_maps_its_result() {
+    let source = app(
+        "",
+        "Task::future(tokio::task::spawn_blocking(move || 6 * 7)).map(|result| result.unwrap_or(0))",
+    );
+    assert_eq!(loaded(&source), 42);
+}

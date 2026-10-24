@@ -96,6 +96,12 @@ pub(crate) struct Interval {
 #[derive(Clone, Debug)]
 pub(crate) struct Elapsed(());
 
+/// tokio's `task::JoinError`. A `spawn_blocking` closure that fails fails
+/// its task, as a failing `update` does, so no task gives one; the type
+/// exists so its `Result` can be named.
+#[derive(Clone, Debug)]
+pub(crate) struct JoinError(());
+
 /// A sender Rawr code holds. Its copies are one sender, as a moved sender
 /// is in Rust: `drop` ends it for all of them, and `clone` makes another.
 /// A channel closes once each of its senders is dropped.
@@ -184,6 +190,7 @@ pub(crate) fn register_debug() {
     use rawr::host::debug::register;
     register::<Interval>();
     register::<Elapsed>();
+    register::<JoinError>();
     register::<Sender>();
     register::<UnboundedSender>();
     register::<Receiver>();
@@ -227,6 +234,7 @@ pub(crate) fn declare(
     }
     builder.type_::<Interval>("tokio::time::Interval", &[], &[Debug])?;
     builder.type_::<Elapsed>("tokio::time::error::Elapsed", &[], &[Debug, Clone])?;
+    builder.type_::<JoinError>("tokio::task::JoinError", &[], &[Debug, Clone])?;
     builder.type_::<Sender>("tokio::sync::mpsc::Sender", &["T"], &[Debug, Clone])?;
     builder.type_::<Receiver>("tokio::sync::mpsc::Receiver", &["T"], &[Debug])?;
     builder.type_::<UnboundedSender>(
@@ -338,6 +346,18 @@ pub(crate) fn declare(
         &[],
         vec![],
         task_of(unit())?,
+    )?;
+    // `spawn_blocking(move || ..)`: its `JoinHandle` is the task of the
+    // closure's output, as a oneshot receiver is the task of its value.
+    function(
+        builder,
+        "tokio::task::spawn_blocking",
+        &["T"],
+        vec![Type::callable(unit(), parameter("T")?)],
+        task_of(Type::result(
+            parameter("T")?,
+            Type::registered("tokio::task::JoinError")?,
+        ))?,
     )?;
 
     // mpsc
@@ -651,6 +671,12 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
         let duration = read::<std::time::Duration>(duration, "Duration")?;
         let witness = witness(call)?;
         task::tokio_timeout(witness, plan, duration, Dynamic::from(Elapsed(())))
+    });
+    bind("tokio::task::spawn_blocking", |call, args| {
+        let [work] = args else {
+            return Err(error("`spawn_blocking` takes one closure"));
+        };
+        task::tokio_blocking(witness(call)?, work)
     });
     bind("tokio::task::yield_now", |call, _args| {
         // Each step of Rawr code already goes back to the UI thread, so the

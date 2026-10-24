@@ -392,6 +392,58 @@ fn tokio_spawn_says_what_to_use_instead() {
 }
 
 #[test]
+fn tokio_spawn_blocking_runs_at_the_instant_it_starts() {
+    // The worker reads the recording's frozen time, and the recording waits
+    // for it, so its output shows at the same simulated instant every run.
+    shows_at(
+        "use tokio::task::spawn_blocking;
+fn count(limit: u64) -> u64 {
+    let mut primes = 0;
+    for n in 2..limit {
+        if (2..n).take_while(|d| d * d <= n).all(|d| n % d != 0) {
+            primes += 1;
+        }
+    }
+    primes
+}
+async fn run() -> String {
+    let start = tokio::time::Instant::now();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (primes, elapsed) = spawn_blocking(move || (count(1000), start.elapsed().as_millis()))
+        .await
+        .unwrap();
+    format!(\"{primes} primes at {elapsed} ms\")
+}",
+        "168 primes at 200 ms",
+        Duration::from_millis(200),
+    );
+}
+
+#[test]
+fn tokio_spawn_blocking_output_reaches_update_through_task_perform() {
+    let items = "fn work(n: u64) -> String { format!(\"sum {}\", (1..=n).sum::<u64>()) }";
+    let frames = record(&app(
+        items,
+        "Task::perform(tokio::task::spawn_blocking(move || work(100)), |result| \
+         Message::Shown(result.unwrap()))",
+    ));
+    let shown = record(&app(items, "Task::done(Message::Shown(\"sum 5050\".to_string()))"));
+    let last = frames.last().unwrap();
+    assert!(last.same_image(shown.last().unwrap()), "the app does not show the sum");
+    assert_eq!(frames.iter().find(|frame| frame.same_image(last)).unwrap().time, Duration::ZERO);
+}
+
+#[test]
+fn std_thread_spawn_says_to_use_spawn_blocking() {
+    let error = rejected(
+        "async fn run() -> String {
+    std::thread::spawn(move || 1).join().unwrap().to_string()
+}",
+    );
+    assert!(error.contains("spawn_blocking"), "{error}");
+}
+
+#[test]
 fn tokio_files_sockets_and_processes_are_unknown() {
     for path in [
         "tokio::fs::read_to_string(\"/etc/passwd\")",
