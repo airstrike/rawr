@@ -335,7 +335,7 @@ impl App {
 <p>Rawr reads only the items your code uses. A custom iced widget written in Rust is imported like any other item. The crates compile with the pinned nightly on the first run, so that run takes longer.</p>
 <p>A Rawr struct can hold a value of an imported type. It can <code>#[derive(Default)]</code> when the crate implements <code>Default</code> for that type. The field then takes the crate&rsquo;s <code>default()</code>, as in Rust. It can also derive <code>Debug</code>, <code>Clone</code> and <code>Copy</code> when the crate implements them for that type. <code>{:?}</code> of an imported value prints the crate&rsquo;s <code>Debug</code> text. <code>to_string()</code> and <code>{}</code> of an imported value print its <code>Display</code> text. A Message can hold an imported value, and a <code>match</code> can bind it.</p>
 <p>A Rust method that takes a <code>&amp;str</code> takes a Rawr string. A method whose result Rawr cannot hold returns that result&rsquo;s <code>Display</code> text instead, when its type has one. So chrono&rsquo;s <code>now.format(&quot;%H:%M:%S&quot;)</code> is a <code>String</code>.</p>
-<p>A field of an imported type that is <code>Copy</code> reads as a copy, as in Rust.</p>
+<p>A field of an imported type that is <code>Copy</code> reads as a copy, as in Rust. <code>.clone()</code> of an imported value leaves the original usable, as in Rust.</p>
 <p>A <code>match</code> or <code>if let</code> can match a variant of an imported enum, as in <code>echo::Event::Connected(connection) =&gt; ..</code>. The pattern takes the variant&rsquo;s fields as clones. A path through a native module, such as <code>download::Progress</code> in a field, names the type even beside a function called <code>download</code>.</p>
 <p>An edit to your Rawr code applies to a running app whose State holds a value of an imported type. The value keeps its state across the edit. An edit to the dependency&rsquo;s Rust code starts a new app, and its State starts again from its default. The window then names the imported type that did not carry over.</p>
 
@@ -356,6 +356,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
 }</code></pre>
 </div>
 <p><code>Task::perform</code>, <code>Task::future</code>, <code>Task::sip</code>, <code>Task::abortable</code> with <code>task::Handle</code> and <code>Subscription::run</code> work. <code>Task::sip</code> and <code>Subscription::run</code> take a Rust sipper. The Rawr code that maps a task&rsquo;s values runs on the UI thread.</p>
+<p>A variant passed as a function keeps its payload&rsquo;s type. So <code>.map(Message::Number)</code> maps a <code>Task&lt;u32&gt;</code> when <code>Number</code> holds a <code>u32</code>. <code>Task::&lt;Message&gt;::none()</code> names the task&rsquo;s message type with a turbofish, as in Rust.</p>
 <p>A task&rsquo;s future runs on iced&rsquo;s thread pool, so it must be <code>Send</code>, as iced requires. <code>rawr check</code> names the Rust function whose future is not.</p>
 <p>A reload cancels the tasks the app is running. Their handles report <code>is_aborted()</code>, and the status line says that a running task was cancelled. The State keeps what it held, so a download the reload cancelled still shows as running until a message changes it.</p>
 <p><code>async fn</code> and <code>.await</code> in Rawr code are not supported yet. Write them in a native module or a Rust crate.</p>
@@ -384,6 +385,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
   <li>Rich text: <code>rich_text</code>, <code>rich_text!</code> and <code>span</code>. A string works as a span. <code>on_link_click</code> maps a span&rsquo;s link to a message. A span without a link needs no link type.</li>
   <li>Drawing: <code>canvas</code>, as <a href="#canvas">above</a>.</li>
   <li>Interaction: <code>mouse_area</code>, <code>opaque</code>, <code>hover</code>, <code>sensor</code>, <code>component</code> and <code>widget::operation</code>.</li>
+  <li><code>float</code> draws its content scaled and moved above the rest. It takes <code>scale</code>, <code>translate</code> with a function of the content&rsquo;s bounds and the viewport, and <code>style</code> with a function of the theme that returns a <code>float::Style</code>.</li>
   <li><code>selector::find</code> with a widget <code>Id</code>. Its <code>Target</code> has <code>bounds</code> and <code>visible_bounds</code>.</li>
   <li>Modules: <code>iced::time</code>, <code>iced::keyboard</code>, <code>iced::event</code>, <code>iced::window</code>, <code>iced::mouse</code>, <code>iced::font</code>, <code>iced::border</code> and <code>iced::theme</code>. <code>font::list()</code> lists the system&rsquo;s font families. <code>Seed::LIGHT</code> and iced&rsquo;s other built-in seeds are in <code>iced::theme::palette</code>. <code>Color</code>, <code>color!</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code> and the other alignment names work, also by their full paths such as <code>iced::Center</code>. <code>space::horizontal()</code> and <code>space::vertical()</code> work. <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>.</li>
 </ul>
@@ -393,7 +395,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
 <h3 id="not-available">Not available yet</h3>
 <ul>
   <li><code>iced::advanced</code>&rsquo;s widget traits. A custom widget other than a canvas program is written in Rust and imported. Its type cannot borrow yet, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>
-  <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code>, <code>grid</code>, <code>float</code> and <code>keyed_column</code>.</li>
+  <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code>, <code>grid</code> and <code>keyed_column</code>.</li>
   <li><code>iced::gradient</code>, <code>iced::clipboard</code> and <code>application::timed</code>.</li>
   <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
   <li><code>async fn</code> and <code>.await</code> in Rawr code. Rust futures work, as <a href="#async">Async code</a> describes.</li>

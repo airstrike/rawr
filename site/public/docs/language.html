@@ -175,6 +175,7 @@ fn main() {
   <li>Struct, tuple and enum patterns. <code>..</code> matches the rest.</li>
   <li>Slice patterns such as <code>[first, .., last]</code>.</li>
   <li><code>if let</code>, <code>while let</code> and <code>let .. else</code>.</li>
+  <li>A <code>let</code> whose pattern is an enum with one variant, such as <code>let Wrapper::Named(x) = value;</code>. Rust accepts it because the pattern can&rsquo;t fail, and so does Rawr.</li>
   <li>Let chains, as in Rust 2024: <code>if let Some(x) = a &amp;&amp; let Some(y) = b &amp;&amp; x &lt; y { .. }</code>. <code>while</code> takes them too.</li>
   <li><code>loop</code>, <code>while</code> and <code>for</code>. Loop labels work. <code>break</code> can carry a value.</li>
   <li>Blocks are expressions. <code>let x = { .. };</code> works.</li>
@@ -270,7 +271,6 @@ fn main() {
   <li>Byte literals (<code>b'a'</code>, <code>b"ab"</code>) and <code>char</code> ranges such as <code>'a'..='e'</code>.</li>
   <li><code>macro_rules!</code>, <code>async</code> and <code>.await</code>. An iced app can run Rust futures, as <a href="/docs/iced#async">Async code</a> describes.</li>
   <li>A <code>const</code> captured in a format string (<code>"{LIMIT}"</code>). Pass it as an argument instead.</li>
-  <li>A <code>let</code> whose pattern is an enum with one variant, such as <code>let Wrapper::Named(x) = value;</code>. Use <code>match</code> instead.</li>
 </ul>
 <h3 id="missing-types">Types and borrowing</h3>
 <ul>
