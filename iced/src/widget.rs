@@ -5,6 +5,7 @@ mod angle;
 mod animation;
 pub(crate) mod builtin;
 mod canvas;
+mod gradient;
 pub mod children;
 mod column;
 mod component;

@@ -2577,3 +2577,52 @@ fn master_row_wraps() {
     find(&adapter, "square 40");
     find(&adapter, "right");
 }
+
+/// gradient's container style: `gradient::Linear::new(angle)`, its stops,
+/// and `into()` the container style.
+const GRADIENT_BOX: &str = r#"
+use iced::gradient;
+use iced::widget::{column, container, text};
+use iced::{Color, Degrees, Fill, Radians, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let angle = Radians(0.5);
+        let start = Color::WHITE;
+        column![
+            container(text("gradient box"))
+                .style(move |_theme| {
+                    let gradient = gradient::Linear::new(angle)
+                        .add_stop(0.0, start)
+                        .add_stop(1.0, Color::BLACK);
+
+                    gradient.into()
+                })
+                .width(Fill)
+                .height(Fill),
+            container(text("by degrees")).style(|_theme| {
+                gradient::Linear::new(Degrees(90.0)).add_stop(0.5, Color::WHITE).into()
+            }),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_container_style_from_a_linear_gradient() {
+    let adapter = boot(GRADIENT_BOX);
+    find(&adapter, "gradient box");
+    find(&adapter, "by degrees");
+}

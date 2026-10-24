@@ -141,6 +141,7 @@ fn register_debug() {
     register::<iced::Size>();
     register::<iced::touch::Event>();
     register::<iced::touch::Finger>();
+    register::<iced::gradient::Linear>();
     // `HashMap<touch::Finger, Point>`: a finger keys a map by its id.
     rawr::host::value::register_relations::<iced::touch::Finger>(
         |lhs, rhs| Some(*lhs.read_lock::<iced::touch::Finger>()? == *rhs.read_lock()?),
@@ -203,6 +204,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("keyboard")?;
     builder.module("keyboard::key")?;
     builder.module("touch")?;
+    builder.module("gradient")?;
     builder.module("widget::scrollable")?;
     builder.module("widget::slider")?;
     builder.module("widget::table")?;
@@ -290,6 +292,18 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.default_value_type::<iced::Size>("Size", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::Vector>("Vector", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::Rotation>("Rotation", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::gradient::Linear>(
+        "gradient::Linear",
+        &[],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
     for path in ["Degrees", "Radians"] {
         let capabilities = &[
             capability::Kind::Debug,
@@ -4072,6 +4086,32 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let mut from = signature::Builder::new();
     from.parameter(degrees()?).output(radians()?);
     builder.item(item::Definition::associated_function("Radians::from", from.finish())?)?;
+    // `gradient::Linear::new(angle)`, iced's `impl Into<Radians>`, its
+    // stops, and the container style it is the background of.
+    let linear = || type_ref::Type::registered("gradient::Linear");
+    for input in [f64(), radians()?, degrees()?] {
+        let mut new = signature::Builder::new();
+        new.parameter(input).output(linear()?);
+        builder.item(item::Definition::associated_function(
+            "gradient::Linear::new",
+            new.finish(),
+        )?)?;
+    }
+    let mut add_stop = signature::Builder::new();
+    add_stop
+        .parameter(f64())
+        .parameter(type_ref::Type::registered("Color")?)
+        .output(linear()?);
+    builder.item(item::Definition::method(
+        "gradient::Linear::add_stop",
+        receiver::Mode::Owned,
+        add_stop.finish(),
+    )?)?;
+    builder.item(item::Definition::method(
+        "gradient::Linear::into",
+        receiver::Mode::Owned,
+        output_signature("widget::container::Style")?,
+    )?)?;
     // `f32::from(degrees)`: the angle as a number.
     for path in ["Degrees", "Radians"] {
         builder.item(item::Definition::method(

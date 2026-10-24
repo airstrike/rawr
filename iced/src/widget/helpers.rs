@@ -24,6 +24,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     super::media::bind(builder);
     super::icon::bind(builder);
     super::angle::bind(builder);
+    super::gradient::bind(builder);
     super::scroll::bind(builder);
     super::table::bind(builder);
     super::rich::bind(builder);

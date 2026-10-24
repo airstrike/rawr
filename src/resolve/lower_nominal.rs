@@ -26062,6 +26062,28 @@ impl<'a> Parser<'a> {
             if member == "into" && matches!(self.peek(), Token::Unit) && !bounded_into {
                 let end = self.next().1;
                 let source = self.inference.resolve(&value.ty);
+                // A facade type's own `into` another facade type
+                // (`gradient::Linear` into the container style it is the
+                // background of). One into a number is `f32::from`'s.
+                if let Ty::Host { proof, .. } = &source
+                    && self
+                        .models
+                        .host_items(&format!("{}::into", proof.definition.path()))
+                        .is_some_and(|items| {
+                            items.iter().any(|item| {
+                                item.kind() == crate::host::item::Kind::Method
+                                    && item.signature().parameters().is_empty()
+                                    && matches!(
+                                        item.signature().output().shape(),
+                                        crate::host::type_ref::Shape::Registered { .. }
+                                    )
+                            })
+                        })
+                {
+                    self.pending_arguments = Some((Vec::new(), end));
+                    value = self.parse_host_method(value, "into".into(), member_span)?;
+                    continue;
+                }
                 value = if self.projected_host_types(&source).is_empty()
                     && self.converts_from(&source)
                 {
