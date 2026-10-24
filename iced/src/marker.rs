@@ -82,6 +82,9 @@ pub(crate) struct Table {
 /// every function of two or more inputs.
 pub(crate) struct Function;
 
+/// iced's `Program` trait, which source names only as `impl Program<..>`.
+pub(crate) struct Program;
+
 /// iced's `component::Component` trait, which script types implement.
 pub(crate) struct ComponentTrait;
 

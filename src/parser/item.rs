@@ -77,7 +77,125 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
         inner.extend(dropped.iter().map(crate::item::Parsed::span));
         items = kept.into_boxed_slice();
     }
+    #[cfg(not(feature = "no_function"))]
+    if let Some(dropped) = inline_application_builder(&mut items) {
+        inner.push(dropped);
+    }
     Ok((items, inner))
+}
+
+/// iced's `Application` builder returned by a function of the file, as
+/// iced's todos example writes it:
+///
+/// ```text
+/// pub fn main() -> iced::Result { application().run() }
+/// fn application() -> Application<impl Program<..>> { iced::application(..).title(..) }
+/// ```
+///
+/// The function's chain takes the call's place in `main`, so `main` holds
+/// the application entry, and the function leaves the file's items. It
+/// applies only when `main` is the function's one caller. The span of the
+/// function that left, which the legacy script does not see either.
+#[cfg(not(feature = "no_function"))]
+fn inline_application_builder(items: &mut Box<[crate::item::Parsed]>) -> Option<Span> {
+    use crate::item::{BodyToken, BodyTokenKind as Kind, Parsed};
+    let identifier = |token: &BodyToken, name: &str| {
+        matches!(token.kind(), Kind::Identifier(text) if text.as_str() == name)
+    };
+    let free = |function: &crate::item::Function| {
+        function.receiver.is_none()
+            && function.parameters.is_empty()
+            && !function.asynchronous
+            && !function.constant
+    };
+    let main = items.iter().position(|item| {
+        matches!(item, Parsed::Function(function) if function.name.text == "main" && free(function))
+    })?;
+    let Parsed::Function(main_function) = &items[main] else {
+        return None;
+    };
+    let tokens = main_function.body_syntax.tokens();
+    let tail = match tokens {
+        [.., last] if matches!(last.kind(), Kind::Semicolon) => tokens.len() - 1,
+        _ => tokens.len(),
+    };
+    let call = tail.checked_sub(5)?;
+    let [name, unit, dot, run, run_unit] = &tokens[call..tail] else {
+        return None;
+    };
+    let Kind::Identifier(builder) = name.kind() else {
+        return None;
+    };
+    if !matches!(unit.kind(), Kind::Unit)
+        || !matches!(dot.kind(), Kind::Dot)
+        || !identifier(run, "run")
+        || !matches!(run_unit.kind(), Kind::Unit)
+        || call > 0 && !matches!(tokens[call - 1].kind(), Kind::Semicolon | Kind::RightBrace)
+    {
+        return None;
+    }
+    let builder = builder.clone();
+    let position = items.iter().position(|item| {
+        matches!(item, Parsed::Function(function) if function.name.text == builder && free(function))
+    })?;
+    let Parsed::Function(function) = &items[position] else {
+        return None;
+    };
+    let chain = function.body_syntax.tokens();
+    if !matches!(chain, [iced, colons, application, ..]
+        if identifier(iced, "iced")
+            && matches!(colons.kind(), Kind::DoubleColon)
+            && identifier(application, "application"))
+        || chain.iter().any(|token| matches!(token.kind(), Kind::Semicolon))
+    {
+        return None;
+    }
+    // `main` must be the function's one caller.
+    // A name after `::` (`iced::application`) is another item's.
+    let mentions = |tokens: &[BodyToken]| {
+        tokens
+            .iter()
+            .enumerate()
+            .filter(|(index, token)| {
+                identifier(token, &builder)
+                    && !index
+                        .checked_sub(1)
+                        .is_some_and(|before| matches!(tokens[before].kind(), Kind::DoubleColon))
+            })
+            .count()
+    };
+    let callers: usize = items
+        .iter()
+        .map(|item| match item {
+            Parsed::Function(function) => mentions(function.body_syntax.tokens()),
+            Parsed::Impl(implementation) => implementation
+                .functions
+                .iter()
+                .map(|function| mentions(function.body_syntax.tokens()))
+                .sum(),
+            _ => 0,
+        })
+        .sum();
+    if callers != 1 {
+        return None;
+    }
+    let mut inlined = tokens[..call].to_vec();
+    for (index, token) in chain.iter().enumerate() {
+        // The entry starts where `main` calls the function.
+        let span = if index == 0 { name.span() } else { token.span() };
+        inlined.push(BodyToken::new(token.kind().clone(), span));
+    }
+    inlined.extend_from_slice(&tokens[call + 2..]);
+    let dropped = function.span;
+    let mut all = core::mem::take(items).into_vec();
+    let removed = all.remove(position);
+    let main = if position < main { main - 1 } else { main };
+    if let Parsed::Function(main_function) = &mut all[main] {
+        main_function.body_syntax = crate::item::BodySyntax::new(inlined);
+    }
+    drop(removed);
+    *items = all.into_boxed_slice();
+    Some(dropped)
 }
 
 /// The attributes of the `rawr` crate, which marked `.rs` files name so

@@ -705,6 +705,57 @@ fn std_io_errors_compute_as_rust() {
     find(&adapter, "unsupported uri: x Other timed out");
 }
 
+/// iced's `Application` builder returned by a function of the crate, as
+/// todos writes it.
+const APPLICATION_BUILDER: &str = r#"
+use iced::widget::{button, column, text};
+use iced::{Application, Program, Theme, Widget};
+
+pub fn main() -> iced::Result {
+    application().run()
+}
+
+fn application() -> Application<impl Program<Message = Message, Theme = Theme>> {
+    iced::application(Counter::default, Counter::update, Counter::view)
+        .title(Counter::title)
+}
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+}
+
+impl Counter {
+    fn title(&self) -> String {
+        format!("Count {}", self.value)
+    }
+
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Increment => self.value += 1,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            text(format!("value {}", self.value + 7)),
+            button("+").on_press(Message::Increment),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_application_builder_from_a_function() {
+    let adapter = boot(APPLICATION_BUILDER);
+    find(&adapter, "value 7");
+}
+
 const RICH: &str = r#"
 use iced::widget::{column, rich_text, span, text};
 use iced::{Color, Font, Widget};

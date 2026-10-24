@@ -261,7 +261,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             capability::Kind::Static,
         ],
     )?;
-    builder.private_type::<marker::Application>("Application", &["State", "Message"], &[])?;
+    // iced's `Application` builder, which `iced::application` returns.
+    builder.type_::<marker::Application>("Application", &["State", "Message"], &[])?;
     builder.private_type::<marker::container::Style>("widget::container::Builtin", &[], &[])?;
     builder.default_value_type::<iced::widget::container::Style>(
         "widget::container::Style",
@@ -308,6 +309,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         builder.project(path, "Element", &["Message"])?;
     }
     builder.trait_::<marker::Function>("Function", &[])?;
+    // iced's `Program` trait, which an `Application` builds.
+    builder.trait_::<marker::Program>("Program", &[])?;
     builder.type_::<marker::Column>("widget::Column", &["Message"], &[])?;
     builder.type_::<marker::Row>("widget::Row", &["Message"], &[])?;
     builder.type_::<marker::Container>("widget::Container", &["Message"], &[])?;

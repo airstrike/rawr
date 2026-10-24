@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [241, 116, 24, 27, 53, 246, 137, 72, 151, 61, 249, 248, 119, 31, 30, 149]
+        [65, 141, 44, 182, 47, 75, 218, 233, 237, 189, 152, 227, 250, 91, 172, 149]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
@@ -567,12 +567,11 @@ struct Controls { input: TextInput<Message>, checkbox: Checkbox<Message>, toggle
             if path == "iced::widget::Value"
     ));
 
-    let error = engine.compile("use iced::Application;").unwrap_err();
-    assert!(matches!(
-        error.err_type(),
-        ParseErrorType::Resolution(resolve::Error::UnknownImport { path, .. })
-            if path == "iced::Application"
-    ));
+    // iced's `Application` builder and `Program` trait are nameable, as
+    // iced master exports them.
+    engine
+        .compile("use iced::{Application, Program};")
+        .unwrap_or_else(|error| panic!("{error}"));
 
     for path in [
         "iced::widget::button::Builtin",
