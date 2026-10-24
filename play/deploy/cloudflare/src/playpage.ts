@@ -11,6 +11,8 @@ export interface Example {
   code: string;
   /** Messages sent before the preview. */
   messages?: string[];
+  /** The canvas size, WxH, when the default would cut the view off. */
+  size?: string;
 }
 
 export interface Page {
@@ -271,7 +273,7 @@ ${sitekey ? '<div id="ts"></div>' : ""}
   $("examples").onchange = (event) => {
     const example = event.target.value === "reset" ? examples[0] : examples[event.target.value];
     if (example) {
-      fill({ code: example.code, messages: example.messages || [], theme: "dark", size: "" });
+      fill({ code: example.code, messages: example.messages || [], theme: "dark", size: example.size || "" });
       save(); history.replaceState(null, "", "/play"); run();
     }
     event.target.value = "";

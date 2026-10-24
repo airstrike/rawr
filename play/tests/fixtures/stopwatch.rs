@@ -1,6 +1,7 @@
-use iced::time::{self, Duration};
-use iced::widget::{column, text};
-use iced::{Subscription, Widget};
+use iced::keyboard;
+use iced::time::{self, Duration, Instant, milliseconds};
+use iced::widget::{button, center, column, row, text};
+use iced::{Center, Subscription, Widget};
 
 pub fn main() -> iced::Result {
     iced::application(Stopwatch::default, Stopwatch::update, Stopwatch::view)
@@ -10,30 +11,108 @@ pub fn main() -> iced::Result {
 
 #[derive(Default)]
 struct Stopwatch {
-    tenths: u64,
+    duration: Duration,
+    state: State,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Default)]
+enum State {
+    #[default]
+    Idle,
+    Ticking {
+        last_tick: Instant,
+    },
+}
+
+#[derive(Debug, Clone)]
 enum Message {
-    Tick,
+    Toggle,
+    Reset,
+    Tick(Instant),
 }
 
 impl Stopwatch {
     fn update(&mut self, message: Message) {
         match message {
-            Message::Tick => self.tenths += 1,
+            Message::Toggle => match self.state {
+                State::Idle => {
+                    self.state = State::Ticking {
+                        last_tick: Instant::now(),
+                    };
+                }
+                State::Ticking { .. } => {
+                    self.state = State::Idle;
+                }
+            },
+            Message::Tick(now) => {
+                if let State::Ticking { last_tick } = &mut self.state {
+                    self.duration += now - *last_tick;
+                    *last_tick = now;
+                }
+            }
+            Message::Reset => {
+                self.duration = Duration::default();
+            }
         }
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+        let tick = match self.state {
+            State::Idle => Subscription::none(),
+            State::Ticking { .. } => time::every(milliseconds(10)).map(Message::Tick),
+        };
+
+        fn handle_hotkey(event: keyboard::Event) -> Option<Message> {
+            use keyboard::key;
+
+            let keyboard::Event::KeyPressed { modified_key, .. } = event else {
+                return None;
+            };
+
+            match modified_key.as_ref() {
+                keyboard::Key::Named(key::Named::Space) => Some(Message::Toggle),
+                keyboard::Key::Character("r") => Some(Message::Reset),
+                _ => None,
+            }
+        }
+
+        Subscription::batch(vec![tick, keyboard::listen().filter_map(handle_hotkey)])
     }
 
     fn view(&self) -> impl Widget<Message> {
-        column![
-            text("Stopwatch"),
-            text(format!("{}.{} s", self.tenths / 10, self.tenths % 10)).size(32),
-        ]
-        .spacing(4)
+        const MINUTE: u64 = 60;
+        const HOUR: u64 = 60 * MINUTE;
+
+        let seconds = self.duration.as_secs();
+
+        let duration = text!(
+            "{:0>2}:{:0>2}:{:0>2}.{:0>2}",
+            seconds / HOUR,
+            (seconds % HOUR) / MINUTE,
+            seconds % MINUTE,
+            self.duration.subsec_millis() / 10,
+        )
+        .size(40);
+
+        let button = |label| button(text(label).align_x(Center)).padding(10).width(80);
+
+        let toggle_button = {
+            let label = match self.state {
+                State::Idle => "Start",
+                State::Ticking { .. } => "Stop",
+            };
+
+            button(label).on_press(Message::Toggle)
+        };
+
+        let reset_button = button("Reset")
+            .style(button::danger)
+            .on_press(Message::Reset);
+
+        let controls = row![toggle_button, reset_button].spacing(20);
+
+        let content = column![duration, controls].align_x(Center).spacing(20);
+
+        center(content)
     }
 }

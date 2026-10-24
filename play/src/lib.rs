@@ -1334,7 +1334,7 @@ fn view() -> impl Widget<()> {
     /// taken that Event, frames after the message.
     #[test]
     fn render_master_component_settles() {
-        let source = include_str!("../tests/fixtures/component.rs");
+        let source = include_str!("../tests/fixtures/component_sensor.rs");
         assert_eq!(shape(source), Shape::App);
         let shown = Options {
             messages: vec!["()".into()],

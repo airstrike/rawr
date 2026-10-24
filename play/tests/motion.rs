@@ -98,7 +98,7 @@ fn motion_a_loop_lasts_one_period() {
 
 #[test]
 fn motion_a_stopwatch_plays_once_with_a_note() {
-    let rendered = render("stopwatch", "stopwatch.png", &[]);
+    let rendered = render("tenths", "tenths.png", &[]);
     let gif = decode(&rendered.bytes);
     assert!(!gif.looping, "an animation with no loop plays once");
     assert!(*gif.delays.last().unwrap() >= Duration::from_secs(3));
@@ -128,4 +128,15 @@ fn motion_a_counter_stays_a_png_until_its_messages_change_it() {
     let mut args = increments.to_vec();
     args.push("--still");
     assert!(is_png(&render("counter", "counter_still.png", &args).bytes));
+}
+
+#[test]
+fn motion_the_playgrounds_animated_iced_examples_are_gifs() {
+    // iced's arc and sandpiles move on their own; its stopwatch moves once
+    // the playground's `Message::Toggle` starts it.
+    for (name, args) in [("arc", &[][..]), ("sandpiles", &[]), ("stopwatch", &["--message", "Message::Toggle"])] {
+        let rendered = render(name, &format!("example_{name}.png"), args);
+        let gif = decode(&rendered.bytes);
+        assert!(gif.delays.len() > 10, "{name}: {} frames", gif.delays.len());
+    }
 }

@@ -116,8 +116,8 @@ fn cli_renders_iced_counter_example_after_messages() {
 fn cli_renders_master_component_after_its_message() {
     // "hi" shows frames after `()`: the component appears, its sensor fires,
     // and its own `update` takes that Event.
-    let show = render_fixture("component");
-    let hi = render_fixture_with("component", "component_hi", &["--message", "()"]);
+    let show = render_fixture("component_sensor");
+    let hi = render_fixture_with("component_sensor", "component_sensor_hi", &["--message", "()"]);
     assert_ne!(show, hi);
 }
 
@@ -246,4 +246,46 @@ fn cli_names_an_unknown_function_and_quotes_only_what_was_written() {
     let result = run_stdin("use iced::widget::text;\nfn view() -> impl iced::Widget<()> { center(text(\"a\")) }\n", &["--format", "png"]);
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("use iced::widget::center;"), "{stderr}");
+}
+
+/// How many distinct colors a PNG holds.
+fn colors(png: &[u8]) -> usize {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+    let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut rgba).unwrap();
+    let bytes = info.color_type.samples();
+    let mut seen: Vec<&[u8]> = rgba[..info.buffer_size()].chunks(bytes).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    seen.len()
+}
+
+#[test]
+fn cli_renders_the_playgrounds_iced_examples() {
+    // Each is iced's own example, with the size and messages the
+    // playground's examples.ts gives it. None draws a blank frame.
+    let examples: [(&str, &[&str]); 12] = [
+        ("component", &["--message", "Message::NumericInputChanged(Some(1))", "--message", "Message::NumericInputChanged(Some(2))"]),
+        ("custom_widget", &["--message", "Message::RadiusChanged(70.0)", "--message", "Message::RadiusChanged(90.0)"]),
+        ("modal", &["--message", "Message::ShowModal", "--message", "Message::Email(\"ferris@example.com\".to_string())"]),
+        ("lazy", &["--message", "Message::AddItem(\"Rawr\".to_string())", "--message", "Message::ToggleOrder"]),
+        ("vectorial_text", &["--message", "Message::AngleChanged(20.0)", "--message", "Message::SizeChanged(50.0)"]),
+        ("text", &[]),
+        ("scrollable", &[]),
+        ("table", &[]),
+        (
+            "qr_code",
+            &["--size", "480x740", "--message", "Message::DataChanged(\"rawr\".to_string())", "--message", "Message::DataChanged(\"https://rawr.airstrike.fyi\".to_string())"],
+        ),
+        (
+            "styling",
+            &["--size", "480x640", "--message", "Message::SliderChanged(60.0)", "--message", "Message::CheckboxToggled(true)", "--message", "Message::TogglerToggled(true)"],
+        ),
+        ("custom_quad", &["--size", "480x660"]),
+        ("stopwatch", &[]),
+    ];
+    for (name, args) in examples {
+        let png = render_fixture_with(name, &format!("example_{name}"), args);
+        assert!(colors(&png) > 16, "{name} drew a blank frame");
+    }
 }
