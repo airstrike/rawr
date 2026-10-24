@@ -352,3 +352,73 @@ fn language_rust_meaning_u64_orders_as_unsigned_everywhere() {
         .expect_err("200 + 100 overflows a u8");
     assert!(error.to_string().contains("attempt to add with overflow"), "{error}");
 }
+
+#[test]
+fn language_rust_meaning_rc_clone_shares_its_value() {
+    // `Rc::clone` is another handle to one value: a change through either
+    // shows through both, where the value's own `clone` would copy it.
+    let value = text(
+        r#"
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        #[derive(Clone)]
+        struct Node { val: Rc<RefCell<i64>> }
+        let a = Rc::new(RefCell::new(1));
+        let b = a.clone();
+        *b.borrow_mut() += 1;
+        let shared = Rc::new(RefCell::new(vec![1]));
+        let h2 = Rc::clone(&shared);
+        h2.borrow_mut().push(2);
+        let c = RefCell::new(5);
+        let d = c.clone();
+        *d.borrow_mut() = 6;
+        let r = &a;
+        let e = r.clone();
+        *e.borrow_mut() += 10;
+        let n1 = Node { val: Rc::new(RefCell::new(1)) };
+        let n2 = n1.clone();
+        *n2.val.borrow_mut() = 9;
+        format!("{} {:?} {} {} {}", a.borrow(), shared.borrow(), c.borrow(), d.borrow(), n1.val.borrow())
+        "#,
+    );
+    assert_eq!(value, "12 [1, 2] 5 6 9");
+}
+
+#[test]
+fn language_rust_meaning_moved_parts_are_not_observable() {
+    // Each of these reads a value Rust moved out, which rustc rejects; a
+    // copy would let the old value show.
+    let cases = [
+        (r#"let a = vec![String::from("x")]; let b = a[0]; b.len()"#, "cannot move out of index"),
+        (
+            r#"struct S { v: Vec<i64> } fn f(p: &S) -> usize { let x = p.v; x.len() } f(&S { v: vec![1] })"#,
+            "behind a shared reference",
+        ),
+        (
+            r#"struct S { v: Vec<i64> } let s = S { v: vec![1] }; let S { v } = s; s.v.len() + v.len()"#,
+            "moved value 's.v'",
+        ),
+        (r#"let t = (String::from("a"), 1); let (x, _) = t; t.0.len() + x.len()"#, "moved value 't.0'"),
+        (r#"let v = vec![String::from("a")]; for s in v { } v.len()"#, "moved value 'v'"),
+    ];
+    for (source, message) in cases {
+        let error = Engine::new()
+            .eval::<usize>(source)
+            .expect_err("rustc rejects this program");
+        assert!(error.to_string().contains(message), "{source}: {error}");
+    }
+    // What Rust accepts still runs: a Copy part, a borrow, a clone.
+    let value = text(
+        r#"
+        let t = (String::from("a"), 1);
+        let (x, _) = t;
+        let a = vec![String::from("x")];
+        let b = a[0].clone();
+        let c = &a[0];
+        let v = vec![String::from("y")];
+        for s in &v { }
+        format!("{} {} {} {} {} {}", x, t.1, b, c, a[0].len(), v.len())
+        "#,
+    );
+    assert_eq!(value, "a 1 x x 1 1");
+}

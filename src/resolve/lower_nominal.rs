@@ -10849,7 +10849,7 @@ impl<'a> Parser<'a> {
         for (argument, parameter) in arguments.iter_mut().zip(function.parameters.iter()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
-            self.move_local(argument);
+            self.move_local(argument)?;
         }
         let output = instantiate(
             &function.output.as_ref().map_or(Ty::Unit, Ty::from_resolved),
@@ -12109,7 +12109,7 @@ impl<'a> Parser<'a> {
         for (argument, parameter) in arguments.iter_mut().zip(function.parameters.iter()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
-            self.move_local(argument);
+            self.move_local(argument)?;
         }
         let output = instantiate(
             &function.output.as_ref().map_or(Ty::Unit, Ty::from_resolved),
@@ -12196,7 +12196,7 @@ impl<'a> Parser<'a> {
             crate::item::Receiver::Owned(_) | crate::item::Receiver::OwnedMutable(_)
         ) {
             // The method takes the value, as a move or copy does.
-            self.move_local(&mut value);
+            self.move_local(&mut value)?;
             let temporary = self.temporary("receiver");
             let mut source = origin::Fragment::plain(format!("({{\nlet {temporary} = "));
             source.push(value.rendered_source());
@@ -14571,7 +14571,7 @@ impl<'a> Parser<'a> {
         let (mut arguments, end) = self.parse_call_arguments("host function arguments")?;
         // The written arguments move into the call, as Rust's do.
         for argument in &mut arguments {
-            self.move_local(argument);
+            self.move_local(argument)?;
         }
         let call = span(name_span.start(), end);
         self.call_host_function(&items, owner, arguments, call)
@@ -16624,7 +16624,7 @@ impl<'a> Parser<'a> {
             if item.imported_identity().is_some() {
                 self.consume_imported_value(argument, &item.path(), call)?;
             }
-            self.move_local(argument);
+            self.move_local(argument)?;
         }
         let output = self.inference.resolve(&signature.output);
         self.reject_invocation(&output, call, "returned from its scoped receiver operation")?;
@@ -16875,28 +16875,34 @@ impl<'a> Parser<'a> {
     /// The use reads `__rawr_move(local)`, which leaves `()` in the slot, so
     /// the value drops with its new owner. A closure's capture moves only in
     /// a `move` closure or async block, which owns it.
-    fn move_local(&mut self, value: &mut ParsedExpr) {
+    fn move_local(&mut self, value: &mut ParsedExpr) -> Result<(), Error> {
         if let Some(Lvalue::Field(field)) = &value.lvalue {
             let field = field.clone();
-            self.move_field(value, &field);
-            return;
+            return self.move_field(value, &field);
+        }
+        // `let b = v[0];` of a `String`: rustc's E0507. A copy would leave
+        // the element in place, where Rust's move cannot.
+        if let Some(Lvalue::Place { .. } | Lvalue::Nested(..)) = &value.lvalue
+            && self.moves_by_value(&value.ty)
+        {
+            return Err(self.move_out_error(value, "of index of `{owner}`"));
         }
         let Some(Lvalue::Binding { binding: name, .. }) = &value.lvalue else {
-            return;
+            return Ok(());
         };
         if !value.prelude.is_empty() || value.source.as_str() != name.as_str() {
-            return;
+            return Ok(());
         }
         let name = name.clone();
         let Some(binding) = self.bindings.get(name.as_str()) else {
-            return;
+            return Ok(());
         };
         if !matches!(binding.kind, BindingKind::Local) {
-            return;
+            return Ok(());
         }
         let declaration = binding.declaration;
         if !self.moves_by_value(&value.ty) {
-            return;
+            return Ok(());
         }
         // A closure that moves out a capture is `FnOnce`. One that is not
         // `move` takes that capture by value, as Rust's closure capture
@@ -16911,17 +16917,109 @@ impl<'a> Parser<'a> {
         }
         self.moved_at.insert(declaration, value.span);
         value.source = origin::Fragment::call(crate::engine::KEYWORD_MOVE, [value.source.clone()]);
+        Ok(())
+    }
+
+    /// `let (x, _) = t;` and `let S { v, .. } = s;` of a local: each part
+    /// a pattern binds by value, whose type is not `Copy`, moves out of
+    /// it, so a later use of that part or of the whole is rustc's E0382.
+    fn move_pattern_parts(&mut self, syntax: &PatternSyntax, value: &ParsedExpr) {
+        let Some(Lvalue::Binding { binding: name, .. }) = &value.lvalue else {
+            return;
+        };
+        if !value.prelude.is_empty() || value.source.as_str() != name.as_str() {
+            return;
+        }
+        let Some(binding) = self.bindings.get(name.as_str()) else {
+            return;
+        };
+        if !matches!(binding.kind, BindingKind::Local) || !binding.available {
+            return;
+        }
+        let parts: Vec<(ImmutableString, Ty, &PatternSyntax)> = match (syntax, self.inference.resolve(&value.ty)) {
+            (PatternSyntax::Tuple { members, .. }, Ty::Tuple(types)) => members
+                .iter()
+                .zip(types.iter())
+                .enumerate()
+                .map(|(index, (member, ty))| (index.to_string().into(), ty.clone(), member))
+                .collect(),
+            (
+                PatternSyntax::TupleStruct {
+                    definition,
+                    fields,
+                    members,
+                    ..
+                },
+                _,
+            ) => {
+                let Nominal::Struct { item, .. } = self.models.definition(definition.id()) else {
+                    return;
+                };
+                item.fields
+                    .iter()
+                    .zip(fields.iter())
+                    .zip(members.iter())
+                    .map(|((field, ty), member)| (field.name.text.clone(), ty.clone(), member))
+                    .collect()
+            }
+            _ => return,
+        };
+        let moved: Vec<ImmutableString> = parts
+            .into_iter()
+            .filter(|(_, ty, member)| binds_by_value(member) && self.moves_by_value(ty))
+            .map(|(field, ..)| field)
+            .collect();
+        if let Some(binding) = self.bindings.get_mut(name.as_str()) {
+            for field in moved {
+                binding.moved_fields.insert(field, value.span);
+            }
+        }
+    }
+
+    /// rustc's E0507 for a by-value use of `value`, a place Rust cannot
+    /// move out of.
+    fn move_out_error(&self, value: &ParsedExpr, what: &str) -> Error {
+        let ty = value.ty.name(&self.models);
+        let owner = match &value.lvalue {
+            Some(Lvalue::Place { binding, .. }) | Some(Lvalue::Binding { binding, .. }) => self
+                .bindings
+                .get(binding.as_str())
+                .map(|binding| binding.ty.name(&self.models))
+                .unwrap_or_else(|| ty.clone()),
+            Some(Lvalue::Nested(nested)) => nested.binding.to_string().into(),
+            _ => ty.clone(),
+        };
+        Error::Syntax {
+            message: format!("cannot move out {}", what.replace("{owner}", &owner)).into(),
+            label: format!(
+                "move occurs because value has type `{ty}`, which does not implement the `Copy` trait"
+            )
+            .into(),
+            help: Some("consider borrowing here, or cloning the value".into()),
+            at: value.span,
+        }
     }
 
     /// `local.field` by value, where the field's type is not `Copy`: the
     /// local is partially moved. A later use of the field, or of the
     /// whole local, is rustc's E0382. The other fields stay usable, and
     /// assigning the field makes it usable again.
-    fn move_field(&mut self, value: &ParsedExpr, field: &FieldLvalue) {
+    fn move_field(&mut self, value: &ParsedExpr, field: &FieldLvalue) -> Result<(), Error> {
         let Some(binding) = self.bindings.get(field.binding.as_str()) else {
-            return;
+            return Ok(());
         };
         let declaration = binding.declaration;
+        // `self.v` through `&self`: rustc's E0507.
+        if let Ty::Reference { mutable, .. } = self.inference.resolve(&binding.ty)
+            && value.prelude.is_empty()
+            && self.moves_by_value(&value.ty)
+        {
+            let behind = if mutable { "mutable" } else { "shared" };
+            return Err(self.move_out_error(
+                value,
+                &format!("of `{}.{}` which is behind a {behind} reference", field.binding, field.member),
+            ));
+        }
         if !matches!(binding.kind, BindingKind::Local)
             || !matches!(self.inference.resolve(&binding.ty), Ty::Script(..))
             || !value.prelude.is_empty()
@@ -16930,11 +17028,12 @@ impl<'a> Parser<'a> {
                 scope.outer.get(field.binding.as_str()) == Some(&declaration)
             })
         {
-            return;
+            return Ok(());
         }
         if let Some(binding) = self.bindings.get_mut(field.binding.as_str()) {
             binding.moved_fields.insert(field.member.clone(), value.span);
         }
+        Ok(())
     }
 
     /// Whether a `move` closure or async block written at `at` takes the
@@ -17308,7 +17407,7 @@ impl<'a> Parser<'a> {
         }
 
         self.consume_imported_value(&value, &name, value.span)?;
-        self.move_local(&mut value);
+        self.move_local(&mut value)?;
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
         // An immutable local iterator stays its chain: what it evaluates is
         // evaluated here, and each use runs it.
@@ -17925,6 +18024,7 @@ impl<'a> Parser<'a> {
         let value = self.parse_expr_expecting(expected.as_ref());
         self.mutable_borrow = outer;
         let mut value = value?;
+        self.move_pattern_parts(&syntax, &value);
         // `let (a, b) = &mut pair;`: the bindings are the place's parts.
         if annotation.is_none()
             && !syntax.has_ref_mut()
@@ -18808,7 +18908,7 @@ impl<'a> Parser<'a> {
         )?;
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
-        self.move_local(&mut replacement);
+        self.move_local(&mut replacement)?;
         let rendered = match lvalue {
             Lvalue::Binding { .. } => {
                 let mut rendered = origin::Fragment::plain(format!("{binding_name} = "));
@@ -20647,7 +20747,7 @@ impl<'a> Parser<'a> {
                 {
                     let (name, declaration) = self.expect_name("match binding")?;
                     // The binding takes the subject by value.
-                    self.move_local(&mut place.clone());
+                    self.move_local(&mut place.clone())?;
                     self.bindings.insert(
                         name.clone(),
                         Binding {
@@ -20713,7 +20813,7 @@ impl<'a> Parser<'a> {
                     .iter()
                     .any(|binding| self.moves_by_value(&binding.ty))
                 {
-                    self.move_local(&mut place.clone());
+                    self.move_local(&mut place.clone())?;
                 }
                 for binding in &resolved.bindings {
                     let written = write_back.as_ref().is_some_and(|write_back| {
@@ -21566,6 +21666,11 @@ impl<'a> Parser<'a> {
                     },
                     _ => return Err(self.unsupported("`for` over a value that is not iterable")),
                 };
+                // `for x in v` takes `v`: a later use is rustc's E0382.
+                let mut lhs = lhs;
+                if matches!(self.inference.resolve(&lhs.ty), Ty::Array { .. } | Ty::Keyed(..)) {
+                    self.move_local(&mut lhs)?;
+                }
                 let mut source = origin::Fragment::plain(format!("for {name} in "));
                 source.push(lhs.rendered_source());
                 return self.parse_for_body(
@@ -23000,7 +23105,7 @@ impl<'a> Parser<'a> {
         }
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
-        self.move_local(&mut replacement);
+        self.move_local(&mut replacement)?;
         let mut source = origin::Fragment::plain("{ ");
         match lvalue {
             Lvalue::Binding { .. } => {
@@ -23355,7 +23460,7 @@ impl<'a> Parser<'a> {
             if matches!(operator, Token::Plus)
                 && matches!(self.inference.resolve(&lhs.ty), Ty::String)
             {
-                self.move_local(&mut lhs);
+                self.move_local(&mut lhs)?;
             }
             let rhs = self.parse_binary(precedence + 1)?;
             lhs = self.apply_binary(operator, lhs, rhs)?;
@@ -26433,6 +26538,19 @@ impl<'a> Parser<'a> {
                     value.lvalue = None;
                     continue;
                 }
+                // `rc.clone()` is another `Rc` of the same value, as Rust's
+                // `Rc::clone` shares it: the runtime's copy, which shares
+                // every cell inside, rather than the value's own `clone`.
+                if member.as_str() == "clone"
+                    && matches!(self.peek(), Token::Unit)
+                    && matches!(&boxed, Ty::Boxed(Pointer::Rc | Pointer::Arc, _))
+                {
+                    let end = self.next().1;
+                    value.ty = boxed;
+                    value.span = span(value.span.start(), end);
+                    value.lvalue = None;
+                    continue;
+                }
                 if member.as_str() == "clone" {
                     rebox = Some(boxed);
                 }
@@ -27279,7 +27397,7 @@ impl<'a> Parser<'a> {
                 }
                 // The method takes the value, as a move or copy does.
                 receiver::Mode::Owned => {
-                    self.move_local(&mut value);
+                    self.move_local(&mut value)?;
                     Some(Writeback::Owned)
                 }
             };
@@ -27867,7 +27985,7 @@ impl<'a> Parser<'a> {
         }
         let end = self.expect(Token::RightParen, "')' after a tuple")?;
         for member in &mut members {
-            self.move_local(member);
+            self.move_local(member)?;
         }
         let ty = Ty::Tuple(
             members
@@ -29103,7 +29221,13 @@ impl<'a> Parser<'a> {
                 (Token::Period, Token::Identifier(field), after)
                     if !matches!(after, Token::LeftParen | Token::DoubleColon) =>
                 {
-                    Some((field, matches!(after, Token::Equals)))
+                    Some((field.to_string(), matches!(after, Token::Equals)))
+                }
+                // `t.0` of a tuple or a tuple struct.
+                (Token::Period, Token::IntegerConstant(index), after)
+                    if !matches!(after, Token::LeftParen | Token::DoubleColon) =>
+                {
+                    Some((index.to_string(), matches!(after, Token::Equals)))
                 }
                 _ => None,
             };
@@ -29255,7 +29379,7 @@ impl<'a> Parser<'a> {
         }
         for (expected, argument) in inputs.iter().zip(arguments.iter_mut()) {
             self.coerce_expr(expected, argument)?;
-            self.move_local(argument);
+            self.move_local(argument)?;
         }
         let places = self.mutable_arguments(&arguments, copied)?;
         let pointer = if choice { "[1]" } else { "" };
@@ -29784,7 +29908,7 @@ impl<'a> Parser<'a> {
         }
         for (value, expected) in args.iter_mut().zip(inputs.iter()) {
             self.coerce_expr(expected, value)?;
-            self.move_local(value);
+            self.move_local(value)?;
         }
         let source = origin::Fragment::call(&helper, args.iter().map(ParsedExpr::rendered_source));
         Ok(Some(self.operator_expr(
@@ -30181,7 +30305,7 @@ impl<'a> Parser<'a> {
             self.coerce_expr(&element, value)?;
         }
         for value in &mut elements {
-            self.move_local(value);
+            self.move_local(value)?;
         }
         let source = match (repeat, counted) {
             (Some(count), _) => {
@@ -30309,7 +30433,7 @@ impl<'a> Parser<'a> {
             _ => ok.clone(),
         };
         self.coerce_expr(&expected, value)?;
-        self.move_local(value);
+        self.move_local(value)?;
         let payload = Box::new(self.inference.resolve(&value.ty));
         let (op, ty) = match variant {
             Prelude::Some => (PreludeOp::Some, Ty::Option(payload)),
@@ -32459,7 +32583,7 @@ impl<'a> Parser<'a> {
         };
         // `.await` takes the future, as Rust's `IntoFuture` does.
         let mut future = future;
-        self.move_local(&mut future);
+        self.move_local(&mut future)?;
         let mut source = origin::Fragment::plain(format!("{}(", crate::eval::machine::AWAIT));
         source.push(future.rendered_source());
         source.push_text(")");
@@ -32927,11 +33051,11 @@ impl<'a> Parser<'a> {
                 && let Some(items) =
                     self.models.host_items("rawr_iced::tokio::__drop").map(<[_]>::to_vec)
             {
-                self.move_local(argument);
+                self.move_local(argument)?;
                 let owner = self.models.item_owner("rawr_iced::tokio::__drop").cloned();
                 return self.call_host_function(&items, owner, arguments, call);
             }
-            self.move_local(argument);
+            self.move_local(argument)?;
             let source =
                 origin::Fragment::call(crate::engine::KEYWORD_DROP, [argument.rendered_source()]);
             return Ok(self.operator_expr(source, Ty::Unit, call));
@@ -33007,7 +33131,7 @@ impl<'a> Parser<'a> {
                 let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
-                self.move_local(argument);
+                self.move_local(argument)?;
             }
             // The boot returns its sealed startup envelope: script code
             // that calls it gets the tuple back.
@@ -33179,7 +33303,7 @@ impl<'a> Parser<'a> {
                 .expect("unknown fields were rejected");
             let expected = instantiate(&Ty::from_resolved(&declared.ty), &substitution);
             self.coerce_expr(&expected, value)?;
-            self.move_local(value);
+            self.move_local(value)?;
             let temporary = self.temporary("field");
             prelude.push_text(format!("let {temporary} = "));
             prelude.push(value.rendered_source());
@@ -33277,7 +33401,7 @@ impl<'a> Parser<'a> {
                 self.parse_name_primary(field, field_span)?
             };
             self.coerce_expr(expected, &mut value)?;
-            self.move_local(&mut value);
+            self.move_local(&mut value)?;
             written.push((slot, value));
             if matches!(self.peek(), Token::Comma) {
                 self.next();
@@ -33812,7 +33936,7 @@ impl<'a> Parser<'a> {
         for (argument, parameter) in arguments.iter_mut().zip(definition.parameters()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
-            self.move_local(argument);
+            self.move_local(argument)?;
         }
         Ok(())
     }
@@ -34614,7 +34738,7 @@ impl<'a> Parser<'a> {
                     let owner = self.models.item_owner(&reexported).cloned();
                     let (mut arguments, end) = self.parse_call_arguments("call arguments")?;
                     for argument in &mut arguments {
-                        self.move_local(argument);
+                        self.move_local(argument)?;
                     }
                     let call = span(first_span.start(), end);
                     return self.call_host_function(&items, owner, arguments, call);
@@ -35429,7 +35553,7 @@ impl<'a> Parser<'a> {
                 &instantiate(&Ty::from_resolved(expected), &substitution),
                 value,
             )?;
-            self.move_local(value);
+            self.move_local(value)?;
         }
         let helper = self.push_op(Op::Enum {
             definition: definition.clone(),
@@ -41307,6 +41431,25 @@ enum PendingFloatKind {
     Literal(f64),
     /// The name of the `RoundF32` helper the placeholder calls.
     Round(String),
+}
+
+/// Whether `pattern` binds some part of its value by value: a name, not a
+/// `ref`, a `_` or a `&` pattern.
+fn binds_by_value(pattern: &PatternSyntax) -> bool {
+    match pattern {
+        PatternSyntax::Binding { .. } => true,
+        PatternSyntax::Rest { binding, .. } => binding.is_some(),
+        PatternSyntax::TupleStruct { members, .. } | PatternSyntax::Tuple { members, .. } => {
+            members.iter().any(binds_by_value)
+        }
+        PatternSyntax::Or { alternatives, .. } => alternatives.iter().any(binds_by_value),
+        PatternSyntax::Prelude { payload, .. } => payload.as_deref().is_some_and(binds_by_value),
+        PatternSyntax::Slice { before, rest, after, .. } => {
+            before.iter().chain(after.iter()).any(binds_by_value)
+                || rest.as_deref().is_some_and(binds_by_value)
+        }
+        _ => false,
+    }
 }
 
 fn compound_operator(assignment: &Token) -> Option<Token> {
