@@ -3,15 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The language | rawr docs</title>
-<meta name="description" content="The Rust that rawr supports today. Items, types, generics, traits, patterns, closures, modules, macros and the std surface. What is not supported yet, and where rawr differs from cargo run.">
-<meta property="og:title" content="The language | rawr docs">
-<meta property="og:description" content="The Rust that rawr supports today. Items, types, generics, traits, patterns, closures, modules, macros and the std surface. What is not supported yet, and where rawr differs from cargo run.">
+<title>Supported Rust | rawr docs</title>
+<meta name="description" content="The Rust that rawr supports today: items, types, generics, patterns, closures, macros and the standard library. What is missing, what rawr refuses rather than run differently, and what it accepts that rustc rejects.">
+<meta property="og:title" content="Supported Rust | rawr docs">
+<meta property="og:description" content="The Rust that rawr supports today: items, types, generics, patterns, closures, macros and the standard library. What is missing, what rawr refuses rather than run differently, and what it accepts that rustc rejects.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/language">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#141416">
 <link rel="canonical" href="https://rawr.airstrike.fyi/docs/language">
@@ -24,7 +25,7 @@
 </head>
 <body>
 <header class="bar">
-  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">Pre-alpha</span></a>
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
     <a href="/docs" aria-current="true">Docs</a>
     <a href="/play">Playground</a>
@@ -33,27 +34,59 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>Docs</p>
+  <p class="cap"><span class="slash">//</span>docs</p>
+  <p class="grp">Develop with rawr</p>
   <ol>
     <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Getting started</a></li>
-    <li><a href="/docs/language" aria-current="page">The language</a><ol><li><a href="#overview">How a program runs</a></li><li><a href="#items">Items</a></li><li><a href="#types">Types</a></li><li><a href="#generics-traits">Generics and traits</a></li><li><a href="#patterns">Patterns and control flow</a></li><li><a href="#moves">Moves</a></li><li><a href="#closures">Closures</a></li><li><a href="#macros">Macros</a></li><li><a href="#std">The standard library</a></li><li><a href="#not-supported">Not supported yet</a></li><li><a href="#differences">Differences from cargo run</a></li></ol></li>
+    <li><a href="/docs/start">Get started</a></li>
+    <li><a href="/docs/run">Run Rust with rawr</a></li>
+    <li><a href="/docs/imports">Cargo dependencies</a></li>
+  </ol>
+  <p class="grp">Embed rawr</p>
+  <ol>
     <li><a href="/docs/embedding">Embedding</a></li>
-    <li><a href="/docs/iced">rawr-iced</a></li>
-    <li><a href="/docs/play">?play and the playground</a></li>
+  </ol>
+  <p class="grp" data-here>Reference</p>
+  <ol data-here>
+    <li><a href="/docs/language" aria-current="page">Supported Rust</a><ol><li><a href="#glance">At a glance</a></li><li><a href="#overview">How a program runs</a></li><li><a href="#items">Items</a></li><li><a href="#types">Types</a></li><li><a href="#generics-traits">Generics and traits</a></li><li><a href="#patterns">Patterns and control flow</a></li><li><a href="#moves">Moves</a></li><li><a href="#closures">Closures</a></li><li><a href="#macros">Macros</a></li><li><a href="#std">The standard library</a></li><li><a href="#not-supported">Not supported yet</a></li><li><a href="#differences">Differences from <code>cargo run</code></a></li></ol></li>
     <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/faq">FAQ</a></li>
+    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How rawr works</a></li>
+  </ol>
+  <p class="grp">rawr-iced</p>
+  <ol>
+    <li><a href="/docs/iced">Overview and setup</a></li>
+    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
+    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
+    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
+  </ol>
+  <p class="grp">Playground and Discord</p>
+  <ol>
+    <li><a href="/docs/play">Use the playground</a></li>
+    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
+    <li><a href="/docs/play/reference">Hosted execution reference</a></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>The language</p>
-<h1>The language</h1>
-<p class="lede">rawr is written in Rust syntax and checked before it runs. This page lists the Rust that works today, what doesn&rsquo;t work yet and where a program behaves differently from the same code built by cargo.</p>
+<p class="cap"><span class="slash">//</span>reference</p>
+<h1>Supported Rust</h1>
+<p class="lede">rawr checks Rust before it runs it. This page lists the Rust that works today, the largest gaps first. It also lists what is missing, what rawr refuses and the known cases that still differ from <code>cargo run</code>.</p>
+<h2 id="glance">At a glance</h2>
+<p>rawr runs a growing part of Rust. Code that rawr doesn&rsquo;t support fails the check with an error that names the construct. These are the largest gaps:</p>
+<ul>
+  <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="#macros">built-in macros</a> work.</li>
+  <li><code>i128</code>, <code>u128</code> and returning <code>&amp;mut</code> from a function aren&rsquo;t supported.</li>
+  <li><code>async</code> code runs only in iced apps under rawr-iced.</li>
+  <li>Only part of <code>std</code> works. <a href="#std">The standard library</a> lists it.</li>
+  <li>Borrow checking is partial. rawr rejects a use after a move and two live <code>&amp;mut</code> borrows of one value, but <a href="#lenient">accepts some code rustc rejects</a>. <code>rawr check</code> runs <code>cargo check</code> for that reason.</li>
+</ul>
+<p>rawr follows Rust&rsquo;s meaning. Where it can&rsquo;t yet, it <a href="#refused">refuses the code</a>. A few <a href="#differences">known differences</a> remain, and each one is a defect to fix.</p>
 
 <h2 id="overview">How a program runs</h2>
 <p>rawr checks a whole program before any of it runs. The check resolves names and types, traits and method calls. It also checks that every <code>match</code> covers every case. A program that fails the check doesn&rsquo;t start.</p>
-<p>A program is a Cargo crate or a single <code>.rs</code> file. In a crate, the root file is <code>src/main.rs</code> or <code>src/lib.rs</code>. Its first line is <code>// rawr</code>. A single file is one <code>.rs</code> file you give to <code>rawr run</code>. Its first line may be <code>// rawr</code> but doesn&rsquo;t have to be.</p>
+<p>A program is a Cargo crate or a single <code>.rs</code> file. <a href="/docs/run#marker">Run Rust with rawr</a> says which files are interpreted.</p>
 <p>A single file can hold items, top-level statements, or both. Top-level statements behave like the body of <code>fn main() { .. }</code>, the way rustdoc runs a doctest, so a function can&rsquo;t read their variables. rawr runs the top-level statements first and then calls <code>fn main</code> if there is one. Cargo would not build a file with top-level statements, so keep them to snippets and the playground.</p>
 <p>This program uses <code>?</code>, a <code>Result</code> from <code>main</code> and a closure. It prints the same output as the Rust binary and exits with the same status.</p>
 <div class="block">
@@ -81,7 +114,7 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>struct</code> with named fields, tuple structs and unit structs.</li>
   <li><code>enum</code> with unit, tuple and struct variants.</li>
   <li><code>impl</code> blocks with methods, associated functions and associated consts. An <code>impl</code> may sit inside a function body. <code>Self</code> works in a method body&rsquo;s type annotations, as in <code>let next: Self = ..</code>.</li>
-  <li><code>unsafe impl Send for T {}</code> and <code>unsafe impl Sync for T {}</code>. Every rawr value is already <code>Send</code> and <code>Sync</code>, so the impl changes nothing. rawr checks it as rustc does. <code>impl Send</code> without <code>unsafe</code> is an error. So is <code>unsafe impl</code> of another trait.</li>
+  <li><code>unsafe impl Send for T {}</code> and <code>unsafe impl Sync for T {}</code>. Every value in interpreted code is already <code>Send</code> and <code>Sync</code>, so the impl changes nothing. rawr checks it as rustc does. <code>impl Send</code> without <code>unsafe</code> is an error. So is <code>unsafe impl</code> of another trait.</li>
   <li><code>trait</code> with default methods, associated types and static functions. Traits can be implemented for your own types and for built-in types such as <code>i64</code>.</li>
   <li><code>const</code> and <code>static</code> items.</li>
   <li><code>type</code> aliases, generic ones included, such as <code>type Pair&lt;T&gt; = (T, T);</code>. A <code>pub type</code> can be imported from another module.</li>
@@ -106,7 +139,7 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>as</code> casts between numbers. They truncate and saturate as Rust&rsquo;s do. <code>u8 as char</code> works too.</li>
   <li>A fieldless enum casts to an integer with <code>as</code>. Explicit discriminants such as <code>Red = 1</code> set its values.</li>
 </ul>
-<p>Mixing numeric types without a cast is an error in rawr too. <code>i32 + i64</code> doesn&rsquo;t pass the check. Indexing a <code>Vec</code> takes a <code>usize</code>.</p>
+<p>Mixing numeric types without a cast is an error, as in Rust. <code>i32 + i64</code> doesn&rsquo;t pass the check. Indexing a <code>Vec</code> takes a <code>usize</code>.</p>
 
 <h2 id="generics-traits">Generics and traits</h2>
 <p>Functions, structs, enums and impl blocks can be generic. Bounds work inline and in <code>where</code> clauses. A generic type without the bound it needs fails the check. rustc rejects it too.</p>
@@ -220,7 +253,7 @@ fn main() {
 </div>
 
 <h3 id="async">Async code</h3>
-<p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. Each <code>.await</code> suspends the body, and it goes on from there with its locals as they were. <a href="/docs/iced#async">Async code</a> describes how an app runs them.</p>
+<p>In an iced app under rawr-iced, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. Each <code>.await</code> suspends the body, and it goes on from there with its locals as they were. <a href="/docs/iced/reference#async">Async code</a> describes how an app runs them. Other programs can&rsquo;t use <code>async</code> yet.</p>
 
 <h2 id="macros">Macros</h2>
 <p>rawr has a fixed set of built-in macros. You can&rsquo;t define your own with <code>macro_rules!</code>.</p>
@@ -283,7 +316,7 @@ fn main() {
   <li><code>char</code> ranges such as <code>'a'..='e'</code>.</li>
   <li><code>macro_rules!</code>.</li>
   <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>
-  <li><code>async</code> and <code>.await</code> in a program without iced. iced&rsquo;s <code>Task</code> is what runs a future, as <a href="/docs/iced#async">Async code</a> describes.</li>
+  <li><code>async</code> and <code>.await</code> in a program without iced. iced&rsquo;s <code>Task</code> is what runs a future, as <a href="/docs/iced/reference#async">Async code</a> describes.</li>
   <li>A <code>const</code> captured in a format string (<code>"{LIMIT}"</code>). Pass it as an argument instead.</li>
 </ul>
 <h3 id="missing-types">Types and borrowing</h3>
@@ -312,7 +345,7 @@ fn main() {
 <p>rawr reports one error per check. A file with several unsupported constructs shows them one at a time.</p>
 
 <h2 id="differences">Differences from <code>cargo run</code></h2>
-<p>A program that passes both <code>rawr check</code> and rustc usually prints the same output. These are the known cases where it doesn&rsquo;t.</p>
+<p>A program that passes both <code>rawr check</code> and rustc prints the same output, except in these known cases. Each one is a defect to fix, not a rule of the language.</p>
 <ul>
   <li><strong><code>HashMap</code> iteration order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust uses a random order that changes from run to run. Code shouldn&rsquo;t depend on either.</li>
   <li><strong>Width on your own <code>Display</code>.</strong> rawr pads the output of a user <code>Display</code> impl to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
@@ -340,7 +373,7 @@ fn main() {
   <li><code>.await</code> on an iced <code>Task</code> is accepted. Rust awaits only a future.</li>
   <li>Returning a field of <code>&amp;self</code> by value, as <code>fn name(&amp;self) -&gt; String { self.name }</code>, is accepted. rustc reports E0507. A <code>let</code> that moves such a field is rejected as rustc rejects it.</li>
 </ul>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Getting started</b></a><a class="next" href="/docs/embedding">Next<b>Embedding</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="next" href="/docs/cli">Next<b>Commands</b></a></nav>
 </article>
 </main>
 </div>
@@ -348,7 +381,7 @@ fn main() {
   <div class="wrap cap">
     <span>MIT or Apache-2.0</span>
     <a href="/docs">Docs</a>
-    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
     <a href="https://airstrike.fyi">airstrike.fyi</a>
   </div>
 </footer>

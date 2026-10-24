@@ -108,8 +108,8 @@ export function render(d: Dashboard): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="refresh" content="60">
-<title>Rawr Play</title>
-<meta name="description" content="Status and aggregate render stats of the Rawr Play Discord bot.">
+<title>rawr play bot</title>
+<meta name="description" content="Status and aggregate render stats of the rawr ?play Discord bot.">
 <meta name="theme-color" content="#ff2e93">
 <style>
 :root { --bg: #141416; --raised: #1b1b1e; --text: #e4e4e8; --dim: #9a9aa3; --line: #2e2e33; --pink: #ff2e93; }
@@ -133,6 +133,7 @@ h1.ready { color: var(--pink); }
 .lede { color: var(--dim); padding-bottom: 20px; border-bottom: 1px solid var(--line); }
 section { margin-top: 32px; }
 section > .cap { margin-bottom: 10px; }
+.brand b { text-transform: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
 .cell { background: var(--raised); padding: 14px 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .num { font-size: 22px; margin-top: 6px; }
@@ -153,7 +154,7 @@ footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wr
 </style>
 </head>
 <body>
-<header class="bar"><a class="brand" href="/" aria-label="Rawr home, play bot"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span>Play bot</span></a><span class="links"><a href="/play">Playground</a><a href="/bot/invite">Add to a server</a></span></header>
+<header class="bar"><a class="brand" href="/" aria-label="rawr home, play bot"><span class="mark" aria-hidden="true"></span><b>rawr</b><span>Play bot</span></a><span class="links"><a href="/play">Playground</a><a href="/bot/invite">Add to a server</a></span></header>
 <main>
 <p class="cap kicker"><span class="pink">//</span>Status</p>
 <h1 class="${st}">${title}</h1>

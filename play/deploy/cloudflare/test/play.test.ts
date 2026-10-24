@@ -264,15 +264,62 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   const { hashes, blocks } = await allowList(pages);
   const at = (page: string) => blocks.filter((block: { page: string }) => block.page === page).map((block: { name: string }) => block.name);
   assert.deepEqual(at("index.html"), ["cart.rs", "main.rs"]);
-  assert.deepEqual(at("docs/index.html"), ["cart.rs"]);
+  assert.deepEqual(at("docs/index.html"), []);
   assert.deepEqual(at("docs/start.html"), ["cart.rs"]);
   assert.deepEqual(at("docs/language.html"), ["parse.rs", "generics.rs", "closures.rs"]);
-  assert.deepEqual(at("docs/play.html"), ["", "fill.rs", "dots.rs", "circle.rs", "channel.rs"]);
+  assert.deepEqual(at("docs/iced/reference.html"), ["sun.rs", "widget.rs"]);
+  assert.deepEqual(at("docs/play/index.html"), [""]);
+  assert.deepEqual(at("docs/play/reference.html"), ["fill.rs", "dots.rs", "circle.rs", "channel.rs"]);
   // The docs' cart.rs is the landing page's, so it is one entry.
   assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
-  assert.equal(hashes.length, blocks.length - 2);
+  assert.equal(hashes.length, blocks.length - 1);
   assert.ok(hashes.includes(await sha256("let xs = vec![3, 1, 2];\nxs.iter().sum::<i64>()")));
   assert.ok(!hashes.includes(await sha256("println!(\"hi\");")));
+});
+
+test("every link between the site's pages lands on a page and an anchor", async () => {
+  const { existsSync, readFileSync } = await import("node:fs");
+  const { sitePages } = await import("../allowlist.mjs");
+  const root = new URL("../../../../site/public/", import.meta.url).pathname;
+  const pages: Map<string, string> = sitePages(root);
+  // The assets binding serves /a from a.html or a/index.html, and other files as they are.
+  const file = (path: string) =>
+    [path.slice(1), `${path.slice(1)}.html`, `${path.slice(1)}/index.html`.replace(/^\//, "")]
+      .find((candidate) => candidate !== "" && existsSync(root + candidate));
+  const ids = (html: string) => new Set([...html.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]));
+  const broken: string[] = [];
+  for (const [page, html] of pages) {
+    const self = "/" + page.replace(/(^|\/)index\.html$/, "").replace(/\.html$/, "");
+    for (const [, href] of html.matchAll(/href="([^"]+)"/g)) {
+      if (/^(https?:|mailto:)/.test(href)) continue;
+      const [path, anchor] = href.split("#");
+      // The Worker serves /play and /bot itself.
+      if (/^\/(play|bot)(\/|$)/.test(path) && !path.startsWith("/play.svg")) continue;
+      const target = path === "" ? page : path === "/" ? "index.html" : file(path.startsWith("/") ? path : `${self.replace(/[^/]*$/, "")}${path}`);
+      if (!target) {
+        broken.push(`${page}: ${href}`);
+        continue;
+      }
+      if (anchor && target.endsWith(".html") && !ids(readFileSync(root + target, "utf8")).has(anchor)) {
+        broken.push(`${page}: ${href} has no #${anchor}`);
+      }
+    }
+  }
+  assert.deepEqual(broken, []);
+});
+
+test("docs pages that moved redirect to their new paths", async () => {
+  const { existsSync, readFileSync } = await import("node:fs");
+  const root = new URL("../../../../site/public/", import.meta.url).pathname;
+  const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+  const block = source.match(/export const DOCS_MOVED[^{]*\{([^}]*)\}/);
+  assert.ok(block);
+  const moved = Object.fromEntries([...block[1].matchAll(/"([^"]+)": "([^"]+)"/g)].map((m) => [m[1], m[2]]));
+  assert.deepEqual(Object.keys(moved).sort(), ["/docs/faq", "/docs/faq.html", "/docs/iced.html", "/docs/play.html"]);
+  for (const [from, to] of Object.entries(moved)) {
+    assert.ok(!existsSync(root + from.slice(1)) && !existsSync(root + from.slice(1) + ".html"), `${from} is still a page`);
+    assert.ok(existsSync(root + to.slice(1) + ".html") || existsSync(root + to.slice(1) + "/index.html"), `${to} is not a page`);
+  }
 });
 
 test("the allow-list build fails on empty, marked-up or disagreeing blocks", async () => {

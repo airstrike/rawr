@@ -1,4 +1,4 @@
-/* Rawr docs: the landing page's Ink tokens, a sidebar and a reading column. */
+/* rawr docs: the landing page's Ink tokens, a sidebar and a reading column. */
 :root {
   --bg: #141416; --raised: #1b1b1e; --inset: #101012; --text: #e4e4e8; --code: #cfcfd6;
   --dim: #9a9aa3; --line: #2e2e33; --pink: #ff2e93; --rose: #ff8cc6;
@@ -15,7 +15,9 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 code, pre, kbd { font-family: var(--mono); }
 p code, li code, td code, th code, h2 code, h3 code, dt code, figcaption code { font-size: 0.88em; color: var(--text); background: var(--raised); border: 1px solid var(--line); padding: 0 4px; }
 h2 code, h3 code { font-size: 0.85em; }
-.cap { font: 12px/1.4 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+/* Captions keep the case they are written in, so product names stay lowercase. */
+.cap { font: 12px/1.4 var(--mono); letter-spacing: 0.04em; color: var(--dim); }
+code.nw { white-space: nowrap; }
 .slash { color: var(--pink); margin-right: 8px; }
 
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 32px; border-bottom: 1px solid var(--line); }
@@ -37,7 +39,17 @@ h2 code, h3 code { font-size: 0.85em; }
 .side ol ol { margin: 4px 0 8px; }
 .side ol ol a { font-size: 13.5px; padding-left: 24px; }
 .side .cap { margin: 0 0 12px; }
+.side .grp { font: 12px/1.4 var(--mono); letter-spacing: 0.04em; color: var(--text); margin: 18px 0 6px; }
+.side .cap + .grp { margin-top: 0; }
+/* "On this page", for narrow screens where the sidebar hides each page's sections. */
+.toc { display: none; border: 1px solid var(--line); background: var(--raised); margin: 0 0 24px; }
+.toc summary { cursor: pointer; padding: 10px 14px; font: 13px/1.4 var(--mono); color: var(--text); }
+.toc ol { list-style: none; margin: 0; padding: 0 14px 10px; }
+.toc li { margin: 0; }
+.toc a { display: block; padding: 4px 0; color: var(--dim); font-size: 15px; }
 
+/* The grid item is <main>: without min-width it grows to its widest code block. */
+.docs > main { min-width: 0; }
 article { min-width: 0; max-width: 760px; padding: 48px 0 80px; }
 article > .cap { margin-bottom: 14px; }
 h1 { font-weight: 300; font-size: clamp(34px, 4.4vw, 48px); line-height: 1.08; letter-spacing: -0.015em; margin-bottom: 20px; }
@@ -68,7 +80,7 @@ article li::marker { color: var(--dim); }
 
 table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); background: var(--raised); font-size: 15px; margin: 18px 0; }
 th, td { padding: 10px 14px; border-top: 1px solid var(--line); vertical-align: top; text-align: left; }
-th { font: 12px/1.4 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); font-weight: 400; border-top: 0; }
+th { font: 12px/1.4 var(--mono); letter-spacing: 0.04em; color: var(--dim); font-weight: 400; border-top: 0; }
 td { color: #cdcdd3; }
 td:first-child { white-space: nowrap; }
 td:first-child code { font-size: 13px; color: var(--text); background: none; border: 0; padding: 0; }
@@ -110,6 +122,10 @@ footer .wrap { max-width: 1180px; margin: 0 auto; padding: 18px 32px 28px; displ
   .side a { border: 1px solid var(--line); padding: 4px 10px; font-size: 14px; }
   .side a[aria-current="page"] { border-color: var(--pink); }
   .side ol ol { display: none; }
+  .side .grp { margin: 0 0 6px; }
+  /* Only the current page's group shows here. The Docs link leads to the rest. */
+  .side > ol:not([data-here]), .side .grp:not([data-here]) { display: none; }
+  .toc { display: block; }
   article { padding-top: 32px; }
   .anchor { display: none; }
 }

@@ -108,6 +108,18 @@ const OLD_HOST = "rawr-bot.airstrike.fyi";
 const MOVED: Record<string, string> = { "/": "/bot", "/invite": "/bot/invite", "/health": "/bot/health" };
 
 /**
+ * Docs pages that moved when the docs were split by task. The FAQ's answers
+ * went to /docs/how-it-works and elsewhere (docs.js follows a moved anchor),
+ * and rawr-iced's and ?play's pages became directories.
+ */
+export const DOCS_MOVED: Record<string, string> = {
+  "/docs/faq": "/docs/how-it-works",
+  "/docs/faq.html": "/docs/how-it-works",
+  "/docs/iced.html": "/docs/iced",
+  "/docs/play.html": "/docs/play",
+};
+
+/**
  * A share's preview: its PNG, a plain program's output (JSON), or a failure
  * (kept forever for a code error or a limit).
  */
@@ -762,11 +774,11 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
   let snippet = EMPTY;
   let shared: string | null = null;
   let og = {
-    title: "Rawr Playground",
-    description: "Write Rawr code and run it. iced code shows its last frame. An app that moves shows a GIF. Other programs show their output.",
+    title: "rawr playground",
+    description: "Write Rust and run it. iced code shows its last frame. An app that moves shows a GIF. Other programs show their output.",
     url: `${SITE}/play`,
     image: `${SITE}/og/invite.png`,
-    alt: "Rawr: iced code and the frame it renders",
+    alt: "rawr: iced code and the frame it renders",
     width: 1200,
     height: 630,
   } as Og;
@@ -783,20 +795,20 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     const output = info && "output" in info ? parseTextResult(info.output) : null;
     og = output
       ? {
-          title: "Rawr Playground",
-          description: firstOutputLine(output) || firstLine(snippet.code) || "A Rawr program and its output",
+          title: "rawr playground",
+          description: firstOutputLine(output) || firstLine(snippet.code) || "A Rust program and its output",
           url: `${SITE}/play/${id}`,
           image: `${SITE}/play/${id}.png`,
-          alt: "Rawr",
+          alt: "rawr is rust augmented with rust: a Rust interpreter for your dev builds",
           width: 1200,
           height: 630,
         }
       : {
-          title: "Rawr Playground",
-          description: firstLine(snippet.code) || "An iced snippet rendered by Rawr",
+          title: "rawr playground",
+          description: firstLine(snippet.code) || "An iced snippet rendered by rawr",
           url: `${SITE}/play/${id}`,
           image: `${SITE}/play/${id}.png`,
-          alt: "The last frame of this snippet, rendered by Rawr",
+          alt: "The last frame of this snippet, rendered by rawr",
           ...(info && "width" in info ? info : {}),
         };
   }
@@ -821,6 +833,9 @@ export default {
       return new Response(request.method === "HEAD" ? null : html, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
       });
+    }
+    if (DOCS_MOVED[path]) {
+      return Response.redirect(`${SITE}${DOCS_MOVED[path]}${url.search}`, 301);
     }
     if (path !== "/bot/health") {
       return env.ASSETS.fetch(request);

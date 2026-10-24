@@ -3,18 +3,19 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>?play and the playground | rawr docs</title>
-<meta name="description" content="A reference for the ?play Discord bot and the browser playground. Snippet shapes, the sandbox, the simulated clock, PNG and GIF output, limits, differences from rawr run and every note the bot prints.">
-<meta property="og:title" content="?play and the playground | rawr docs">
-<meta property="og:description" content="A reference for the ?play Discord bot and the browser playground. Snippet shapes, the sandbox, the simulated clock, PNG and GIF output, limits, differences from rawr run and every note the bot prints.">
+<title>Hosted execution reference | rawr docs</title>
+<meta name="description" content="How the playground and the ?play bot run snippets: the sandbox, the simulated clock, PNG and GIF output, limits, where ?play differs from rawr run, and every note and error reply.">
+<meta property="og:title" content="Hosted execution reference | rawr docs">
+<meta property="og:description" content="How the playground and the ?play bot run snippets: the sandbox, the simulated clock, PNG and GIF output, limits, where ?play differs from rawr run, and every note and error reply.">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://rawr.airstrike.fyi/docs/play">
+<meta property="og:url" content="https://rawr.airstrike.fyi/docs/play/reference">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#141416">
-<link rel="canonical" href="https://rawr.airstrike.fyi/docs/play">
+<link rel="canonical" href="https://rawr.airstrike.fyi/docs/play/reference">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,7 +25,7 @@
 </head>
 <body>
 <header class="bar">
-  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">Pre-alpha</span></a>
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
     <a href="/docs" aria-current="true">Docs</a>
     <a href="/play">Playground</a>
@@ -33,109 +34,45 @@
 </header>
 <div class="docs">
 <nav class="side" aria-label="Docs">
-  <p class="cap"><span class="slash">//</span>Docs</p>
+  <p class="cap"><span class="slash">//</span>docs</p>
+  <p class="grp">Develop with rawr</p>
   <ol>
     <li><a href="/docs">Overview</a></li>
-    <li><a href="/docs/start">Getting started</a></li>
-    <li><a href="/docs/language">The language</a></li>
+    <li><a href="/docs/start">Get started</a></li>
+    <li><a href="/docs/run">Run Rust with rawr</a></li>
+    <li><a href="/docs/imports">Cargo dependencies</a></li>
+  </ol>
+  <p class="grp">Embed rawr</p>
+  <ol>
     <li><a href="/docs/embedding">Embedding</a></li>
-    <li><a href="/docs/iced">rawr-iced</a></li>
-    <li><a href="/docs/play" aria-current="page">?play and the playground</a><ol><li><a href="#discord">In Discord</a></li><li><a href="#shapes">Snippet shapes</a></li><li><a href="#sandbox">The sandbox</a></li><li><a href="#clock">The clock</a></li><li><a href="#output">Output</a></li><li><a href="#limits">Limits</a></li><li><a href="#differences">Differences from rawr run</a></li><li><a href="#notes">Notes and replies</a></li><li><a href="#playground">The playground</a></li><li><a href="#add-bot">Adding the bot to a server</a></li></ol></li>
+  </ol>
+  <p class="grp">Reference</p>
+  <ol>
+    <li><a href="/docs/language">Supported Rust</a></li>
     <li><a href="/docs/cli">Commands</a></li>
-    <li><a href="/docs/faq">FAQ</a></li>
+    <li><a href="/docs/requirements">Requirements and status</a></li>
+    <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
+    <li><a href="/docs/how-it-works">How rawr works</a></li>
+  </ol>
+  <p class="grp">rawr-iced</p>
+  <ol>
+    <li><a href="/docs/iced">Overview and setup</a></li>
+    <li><a href="/docs/iced/reload">Reload an iced app</a></li>
+    <li><a href="/docs/iced/previews">Previews and tooling</a></li>
+    <li><a href="/docs/iced/reference">Supported iced APIs</a></li>
+  </ol>
+  <p class="grp" data-here>Playground and Discord</p>
+  <ol data-here>
+    <li><a href="/docs/play">Use the playground</a></li>
+    <li><a href="/docs/play/discord">Use rawr in Discord</a></li>
+    <li><a href="/docs/play/reference" aria-current="page">Hosted execution reference</a><ol><li><a href="#sandbox">The sandbox</a></li><li><a href="#clock">The clock</a></li><li><a href="#output">Output</a></li><li><a href="#limits">Limits</a></li><li><a href="#differences">Where ?play differs from rawr run</a></li><li><a href="#notes">Notes and replies</a></li></ol></li>
   </ol>
 </nav>
 <main>
 <article>
-<p class="cap"><span class="slash">//</span>?play and the playground</p>
-<h1>?play and the playground</h1>
-<p class="lede">The <code>?play</code> bot runs a rawr snippet posted in Discord and replies with the result. <a href="/play">The playground</a> does the same in a browser. Neither needs anything installed.</p>
-<p>This page is a reference for both. It covers how a snippet is read and what it may touch. It covers the clock an app runs on and when the reply is a PNG or a GIF. It also lists the limits, the ways <code>?play</code> differs from <code>rawr run</code> and every note the bot can print.</p>
-
-<h2 id="discord">In Discord</h2>
-<p>Write <code>?play</code> on the first line of a message and put the snippet in a code block below it. The fence can be <code>```rust</code>, <code>```rs</code> or a bare <code>```</code>. The bot also answers when <code>?play</code> is in the fence&rsquo;s info string, as in <code>```rust ?play</code>.</p>
-<div class="block">
-  <div class="file"><b>Discord</b></div>
-  <pre><code><span class="k">?play</span> 320x200 light msg=Message::Increment
-<span class="c">```rust</span>
-column![text("hi"), button("go")]
-<span class="c">```</span></code></pre>
-</div>
-<p>The bot runs the first code block in the message. A snippet that uses iced gets an image. A plain program gets its output in a text block. An error gets the report that <code>rawr check</code> would print. The report names the snippet <code>play.rs</code>. The bot cuts an error reply to fit Discord&rsquo;s 2000 characters.</p>
-<p>The bot shows Discord&rsquo;s typing indicator while it runs a snippet. If you edit a message the bot already answered, it runs the snippet again and edits its reply. The bot ignores messages from other bots.</p>
-
-<h3 id="options">Options</h3>
-<p>Options go on the <code>?play</code> line after the command. They are separated by spaces.</p>
-<table>
-  <tr><th>Option</th><th>Meaning</th></tr>
-  <tr><td><code>WxH</code> or <code>size=WxH</code></td><td>The canvas size in logical pixels. Each side can be from 1 to 2048. Without a size the canvas fits the content.</td></tr>
-  <tr><td><code>dark</code>, <code>light</code> or <code>theme=..</code></td><td>The theme to render with. The default is dark. An app that passes its own function to <code>.theme(..)</code> uses its own theme.</td></tr>
-  <tr><td><code>msg=EXPR</code> or <code>message=EXPR</code></td><td>A message to apply to an app. Repeat it to apply several in order. The expression can&rsquo;t contain <code>;</code>, <code>{</code>, <code>}</code> or <code>#</code>.</td></tr>
-</table>
-
-<h2 id="shapes">Snippet shapes</h2>
-<p>A snippet uses iced when it names the <code>iced</code> crate. It also uses iced when it uses a name from rawr-iced&rsquo;s <a href="#prelude">prelude</a> without declaring or importing it. <code>column!</code>, <code>text</code>, <code>button</code>, <code>Color</code> and <code>Fill</code> are examples. Every other snippet is a plain program.</p>
-
-<h3 id="expression">An expression</h3>
-<p>A bare iced expression renders as a view.</p>
-<div class="block"><pre><code data-lang="rust">column![text("hi"), button("go")]</code></pre></div>
-
-<h3 id="view">A view</h3>
-<p>A function named <code>view</code> with no arguments renders what it returns.</p>
-<div class="block"><pre><code data-lang="rust">fn view() -&gt; impl Widget&lt;()&gt; {
-    row![text("left"), text("right")].spacing(20)
-}</code></pre></div>
-<p>Expressions and views can&rsquo;t take messages. Only an app takes them.</p>
-
-<h3 id="app">An app</h3>
-<p>A type with <code>fn view(&amp;self)</code> and <code>fn update(&amp;mut self, message)</code> is an app. The snippet can have its own <code>main</code> that calls <code>iced::run</code> or <code>iced::application</code>. Without one, the bot boots <code>State::default()</code>. A <code>main</code> whose <code>iced::run</code> takes closures is an app too. <code>iced::run(|n: &amp;mut u32, _: Message| *n += 1, |n: &amp;u32| text(n))</code> is one example. It needs no <code>fn view</code>.</p>
-<p>The bot applies each <code>msg=</code> in order. <a href="#output">Output</a> says what the reply shows. An app doesn&rsquo;t get imports for free. Write its <code>use</code> lines as you would in a file.</p>
-<div class="block">
-  <div class="file"><b>?play light msg=Message::Increment msg=Message::Increment</b></div>
-  <pre><code data-lang="rust">use iced::widget::{Widget, button, column, text};
-
-#[derive(Default)]
-struct Counter {
-    value: i64,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Message {
-    Increment,
-}
-
-impl Counter {
-    fn update(&amp;mut self, message: Message) {
-        match message {
-            Message::Increment =&gt; self.value += 1,
-        }
-    }
-
-    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
-        column![
-            text(self.value).size(40),
-            button("Increment").on_press(Message::Increment),
-        ]
-        .padding(20)
-    }
-}</code></pre>
-</div>
-<figure class="shot">
-  <img src="/img/docs-play-counter.png" width="159" height="151" alt="The counter rendered in the light theme after two Increment messages: the number 2 above an Increment button">
-  <figcaption>The reply after two <code>Increment</code> messages.</figcaption>
-</figure>
-<p>A snippet with its own <code>#[preview]</code> is refused. Use the size option instead.</p>
-
-<h3 id="plain">A plain program</h3>
-<p>A plain program runs the way <code>rawr run</code> runs a file. Its top-level statements run first. Then <code>fn main</code> runs if there is one. The reply is its stdout and stderr in the order it wrote them.</p>
-<p>A snippet of statements alone runs as the body of <code>main</code>. If its last expression has no semicolon, its value is printed with <code>{:?}</code>. So <code>1 + 2</code> prints <code>3</code>, and <code>1 + 2;</code> prints nothing. A last value whose type has no <code>Debug</code> runs and isn&rsquo;t printed.</p>
-<div class="block">
-  <pre><code data-lang="rust" data-run id="src-sum">let xs = vec![3, 1, 2];
-xs.iter().sum::&lt;i64&gt;()</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-sum" data-out="out-sum" aria-label="Run this snippet" hidden></button><span id="out-sum" aria-live="polite">6</span></div>
-</div>
-<p>The reply shows the exit status when it isn&rsquo;t 0. A <code>main</code> that returns <code>Err</code> prints <code>Error: ..</code> and exits with status 1. A panic exits with status 101. A program stopped by a limit exits with status 1. Messages don&rsquo;t apply to a plain program. The reply notes that they were ignored.</p>
-
+<p class="cap"><span class="slash">//</span>playground and Discord</p>
+<h1>Hosted execution reference</h1>
+<p class="lede">How the playground and the <code class="nw">?play</code> bot run a snippet: what it may touch, the clock an app runs on, when the reply is a PNG or a GIF, the limits, and every note and error reply.</p>
 <h2 id="sandbox">The sandbox</h2>
 <p>A snippet runs on a server whose files and settings belong to someone else. So <code>?play</code> gives it no files, no environment variables and no network. Each run is its own process, and that process starts with an empty environment. The table shows what each attempt gets.</p>
 <table>
@@ -150,6 +87,7 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
 </table>
 <p>A snippet can still draw an image from bytes it holds. <a href="#images">Images in memory</a> shows how.</p>
 
+
 <h2 id="clock">The clock</h2>
 <p>An app runs on a simulated clock. The clock starts when the app boots. It moves 50&nbsp;ms for each frame the bot draws. No step waits for real time to pass.</p>
 <ul>
@@ -161,6 +99,7 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
 </ul>
 <p>So the same snippet gives the same frames on every run. A 400&nbsp;ms sleep shows as 400&nbsp;ms in the GIF, and it takes no real time to render.</p>
 <p>Only an app runs on this clock. A plain program reads the real clock. Real time still limits every run. The scripts and the drawing count against the <a href="#limits">time budgets</a>.</p>
+
 
 <h2 id="output">Output</h2>
 <p>A bare expression and a view each get a PNG. An app is recorded frame by frame on the simulated clock. Its reply is a PNG or a GIF, depending on how its frames change.</p>
@@ -295,6 +234,7 @@ impl Dots {
 </div>
 <p>The playground shows the same GIF. A share link&rsquo;s preview image is the last frame as a PNG.</p>
 
+
 <h2 id="limits">Limits</h2>
 <p>Snippets are untrusted. Each one runs in its own process. The hosted bot and playground use these limits.</p>
 <table>
@@ -335,6 +275,7 @@ impl Dots {
 </ul>
 <p>When the clock cuts a render that had only the still budget, its note says why. <a href="#notes">Notes and replies</a> lists each case.</p>
 
+
 <h2 id="differences">Where ?play differs from rawr run</h2>
 <p>A snippet has no project around it. It has no <code>Cargo.toml</code>, no files and no window. So <code>?play</code> fills some gaps with stand-ins and shortcuts. Each one is listed here with its reason and what to write instead.</p>
 
@@ -367,7 +308,7 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
 <p>A render has no window, so nobody can click it. Use <code>msg=</code> to apply the message a click would send. In the playground, write one message per line in the messages box.</p>
 
 <h3 id="tokio">tokio</h3>
-<p>A snippet has no <code>Cargo.toml</code>, so it can&rsquo;t depend on tokio. rawr-iced declares its own tokio for it instead. Each item is backed by the real tokio type holding rawr values. Its timers run on the <a href="#clock">simulated clock</a>, so a GIF shows each wait.</p>
+<p>A snippet has no <code>Cargo.toml</code>, so it can&rsquo;t depend on tokio. rawr-iced declares its own tokio for it instead. Each item is backed by the real tokio type holding interpreted values. Its timers run on the <a href="#clock">simulated clock</a>, so a GIF shows each wait.</p>
 <ul>
   <li><code>tokio::time</code> has <code>sleep</code>, <code>interval</code> with <code>tick().await</code>, <code>timeout</code>, <code>Instant</code> and <code>Duration</code>.</li>
   <li><code>tokio::sync::mpsc</code> has <code>channel</code> and <code>unbounded_channel</code>. Their senders have <code>send</code> and <code>clone</code>, and their receivers have <code>recv</code>.</li>
@@ -447,7 +388,7 @@ impl Sum {
 <p>Use <code>tokio::join!</code> to run futures at once. Return a <code>Task</code> from <code>update</code> to start work that outlives the current message.</p>
 
 <h3 id="spawn-blocking">spawn_blocking</h3>
-<p><code>tokio::task::spawn_blocking(move || ..)</code> runs a closure on a worker thread, as <a href="/docs/iced#blocking">iced&rsquo;s blocking work</a> describes. <code>Task::perform</code> takes its handle, and <code>.await</code> takes its output. In a recording the worker reads the simulated clock, and the recording waits for the closure to end. So its output is ready at the instant its task started, and a GIF is the same on every run. A closure that takes long uses up the snippet&rsquo;s time limit, as the same work in <code>update</code> would. <code>std::thread::spawn</code> doesn&rsquo;t compile, and its error points to <code>spawn_blocking</code>.</p>
+<p><code>tokio::task::spawn_blocking(move || ..)</code> runs a closure on a worker thread, as <a href="/docs/iced/reference#blocking">iced&rsquo;s blocking work</a> describes. <code>Task::perform</code> takes its handle, and <code>.await</code> takes its output. In a recording the worker reads the simulated clock, and the recording waits for the closure to end. So its output is ready at the instant its task started, and a GIF is the same on every run. A closure that takes long uses up the snippet&rsquo;s time limit, as the same work in <code>update</code> would. <code>std::thread::spawn</code> doesn&rsquo;t compile, and its error points to <code>spawn_blocking</code>.</p>
 
 <h3 id="tokio-differences">Where ?play&rsquo;s tokio behaves differently</h3>
 <p>Two things work differently from the real tokio.</p>
@@ -457,7 +398,8 @@ impl Sum {
 </ul>
 
 <h3 id="sippers">Script sippers</h3>
-<p>A sipper written in rawr with <code>task::sipper(async |sender| ..)</code> is rawr&rsquo;s own sipper. Its body runs in steps on the UI thread. Each <code>sender.send(value).await</code> hands the value to the progress mapper, and the body goes on after that. The sipper crate sends through a channel that holds one value, so a fast sender waits for the receiver. rawr&rsquo;s sipper has no such channel, so it has none of that backpressure. <code>rawr run</code> uses the same sipper for rawr code. A program that needs the backpressure should send from a Rust sipper in a project and run it with <code>rawr run</code>.</p>
+<p>A sipper written in a snippet with <code>task::sipper(async |sender| ..)</code> is rawr&rsquo;s own sipper. Its body runs in steps on the UI thread. Each <code>sender.send(value).await</code> hands the value to the progress mapper, and the body goes on after that. The sipper crate sends through a channel that holds one value, so a fast sender waits for the receiver. rawr&rsquo;s sipper has no such channel, so it has none of that backpressure. <code>rawr run</code> uses the same sipper for code in marked files. A program that needs the backpressure should send from a Rust sipper in a project and run it with <code>rawr run</code>.</p>
+
 
 <h2 id="notes">Notes and replies</h2>
 <p>A note is a short line that comes with the reply. In Discord it shows as small text with the image or below the output. The playground shows an image&rsquo;s note after the run time. It shows a program&rsquo;s note at the end of the output.</p>
@@ -510,28 +452,7 @@ impl Sum {
   <tr><td><code>cannot find the Message type `fn update` takes</code></td><td>The app was given messages, but its <code>update</code> doesn&rsquo;t name its Message type.</td></tr>
   <tr><td><code>?play adds `#[preview]` itself; remove it and use size=WxH</code></td><td>The snippet has its own <code>#[preview]</code>.</td></tr>
 </table>
-
-<h2 id="playground">The playground</h2>
-<p><a href="/play">rawr.airstrike.fyi/play</a> has an editor and an output pane. Ctrl+Enter or Cmd+Enter runs the code. Tab indents. You can pick the theme and a size. The messages box takes one <code>Message</code> expression per line.</p>
-<p>The Examples menu loads iced&rsquo;s own arc, checkbox, combo box, component, counter, custom quad, custom widget, lazy, modal, progress bar, QR code, sandpiles, scrollable, slider, stopwatch, styling, table, text, tooltip and vectorial text examples. Examples &rarr; Reset brings back the counter. The editor keeps your latest snippet in the browser, so <code>/play</code> opens where you left off.</p>
-<p>Each visitor gets 6 runs a minute and 60 an hour. Code can be up to 16 KiB. A run takes up to 32 messages, and each message can be up to 256 bytes. The playground uses the same renderer as the bot, with the same limits and allowance. Discord runs go first. When the renderer is busy for too long, the playground says <code>the playground is busy; try again in a moment</code>.</p>
-
-<h3 id="share">Share links</h3>
-<p><strong>Share</strong> saves the code and options and gives a link of the form <code>/play/&lt;id&gt;</code>. The id comes from the content, so the same snippet always gets the same link. A shared snippet can be up to 64 KiB.</p>
-<p>A shared link shows a preview card when posted in Discord and other apps. For an iced snippet the card is its last frame. For a plain program it is the site card with the first line of output. A share that nobody opens for 30 days is deleted.</p>
-
-<h2 id="add-bot">Adding the bot to a server</h2>
-<p>Use the <a href="/bot/invite">invite link</a> to add the bot to a Discord server you manage. The bot answers only in channels a moderator turns on. It doesn&rsquo;t answer in direct messages.</p>
-<p>Moderators choose the channels with the <code>/play-channel</code> command. It needs the Manage Channels permission in the channel it changes. Its replies are visible only to the moderator who ran it.</p>
-<table>
-  <tr><th>Command</th><th>What it does</th></tr>
-  <tr><td><code>/play-channel add [channel]</code></td><td>Turns the bot on in a channel. The default is the current channel.</td></tr>
-  <tr><td><code>/play-channel remove [channel]</code></td><td>Turns the bot off in a channel.</td></tr>
-  <tr><td><code>/play-channel list</code></td><td>Lists the channels where the bot answers.</td></tr>
-</table>
-<p>A thread follows its parent channel. Running <code>/play-channel add</code> in a thread turns the bot on for the parent channel.</p>
-<p>The <a href="/bot">status page</a> shows whether the bot is up. It also counts recent runs.</p>
-<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/iced">Previous<b>rawr-iced</b></a><a class="next" href="/docs/cli">Next<b>Commands</b></a></nav>
+<nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/play/discord">Previous<b>Use rawr in Discord</b></a></nav>
 </article>
 </main>
 </div>
@@ -539,7 +460,7 @@ impl Sum {
   <div class="wrap cap">
     <span>MIT or Apache-2.0</span>
     <a href="/docs">Docs</a>
-    <a href="https://github.com/airstrike/rawr">github.com/airstrike/rawr</a>
+    <a href="https://github.com/airstrike/rawr">Source on GitHub</a>
     <a href="https://airstrike.fyi">airstrike.fyi</a>
   </div>
 </footer>
