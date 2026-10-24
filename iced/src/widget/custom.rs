@@ -611,6 +611,33 @@ mod tests {
     }
 
     #[test]
+    fn custom_quad_sets_a_nested_facade_field_in_place() {
+        let source = format!(
+            "{CUSTOM_QUAD}\nfn shift() -> Message {{ Message::ShadowXOffsetChanged(-30.0) }}\nfn corner() -> Message {{ Message::RadiusTopLeftChanged(10.0) }}\n"
+        );
+        let mut adapter = crate::application::Compiler::new()
+            .unwrap()
+            .check_named_crate_source("main.rs", &source)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .prepare()
+            .unwrap()
+            .into_adapter();
+        let messages = ["shift", "corner"]
+            .map(|name| adapter.message_of(name).unwrap().unwrap());
+        adapter.deliver(messages);
+        REPLAYED.with(|replayed| replayed.borrow_mut().clear());
+        let mut simulator = iced_test::simulator(adapter.view());
+        simulator.draw(&iced::Theme::Dark);
+        let drawn = REPLAYED.with(|replayed| std::mem::take(&mut *replayed.borrow_mut()));
+        let [(quad, _)] = &quads(&drawn[0])[..] else {
+            panic!("one quad, found {drawn:?}");
+        };
+        assert_eq!(quad.shadow.offset, iced::Vector::new(-30.0, 8.0));
+        assert_eq!(quad.border.radius.top_left, 10.0);
+        assert_eq!(quad.border.radius.top_right, 50.0);
+    }
+
+    #[test]
     fn geometry_draws_its_mesh_translated_and_follows_the_cursor() {
         let mesh = |cursor| {
             let drawn = drawn(GEOMETRY, cursor);
