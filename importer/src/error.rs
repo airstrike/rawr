@@ -77,6 +77,20 @@ pub enum Error {
         actual: usize,
     },
 
+    /// A Rust future a task runs is not `Send`, so the runner cannot run it.
+    #[error(
+        "the future `{function}` returns is not `Send` ({location}). iced runs a task's \
+         future on its thread pool, which takes only a `Send` future, as iced's own \
+         `Task::future` does. Hold `Send` values across each `.await`, such as `Arc` \
+         in place of `Rc`."
+    )]
+    NonSendFuture {
+        /// The Rust function whose future is not `Send`.
+        function: Box<str>,
+        /// Where its body is, as rustc reports it.
+        location: Box<str>,
+    },
+
     /// A child command failed without publishing resolution evidence.
     #[error("{program} command failed with {status}: {stderr}")]
     Process {

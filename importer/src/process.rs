@@ -630,10 +630,38 @@ impl Limits {
     }
 }
 
+/// The Rust function whose future a generated runner could not make a
+/// task of because it is not `Send`, with where rustc found its body:
+/// rustc's E0277 at a `task::lazy` call in the runner's adapters.
+fn non_send_future(stderr: &str) -> Option<(Box<str>, Box<str>)> {
+    let start = stderr.find("cannot be sent between threads safely")?;
+    let block = &stderr[start..];
+    let block = &block[..block.find("\nerror").unwrap_or(block.len())];
+    if !block.contains("task::lazy") {
+        return None;
+    }
+    let call = block.split("lazy(move || ").nth(1)?;
+    let function = call[..call.find('(')?].trim();
+    let location = block
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("::: "))
+        .find(|path| !path.contains("/.cargo/") && !path.contains("rawr_adapters"))
+        .map(|path| match path.find("/target/rawr/crate/") {
+            Some(at) => &path[at + "/target/rawr/crate/".len()..],
+            None => path,
+        })
+        .unwrap_or("its Rust source");
+    Some((function.into(), location.trim().into()))
+}
+
 impl Output {
     pub(crate) fn checked(self, program: Program) -> Result<Box<[u8]>> {
         if self.success {
             return Ok(self.stdout);
+        }
+        let stderr = String::from_utf8_lossy(&self.stderr);
+        if let Some((function, location)) = non_send_future(&stderr) {
+            return Err(Error::NonSendFuture { function, location });
         }
         Err(Error::Process {
             program: program.as_str(),
@@ -1892,5 +1920,17 @@ mod tests {
             command.environment.as_ref(),
             [(OsString::from("RETAINED"), OsString::from("yes"))]
         );
+    }
+}
+
+#[cfg(test)]
+mod non_send_tests {
+    #[test]
+    fn a_non_send_future_is_named_with_its_source() {
+        let stderr = "error[E0277]: `Rc<i64>` cannot be sent between threads safely\n   --> src/rawr_adapters_app_f.rs:9:18\n    |\n  9 |     let output = __rawr_profile_host::task::lazy(move || app::download::local());\n    |\n   ::: /p/app/target/rawr/crate/src/download.rs:42:25\n    |\nnote: required by a bound in `rawr_iced::task::lazy`\n   --> /Users/x/.cargo/rawr/hosts/1/iced/src/task.rs:319:30\n";
+        let (function, location) = super::non_send_future(stderr).unwrap();
+        assert_eq!(&*function, "app::download::local");
+        assert_eq!(&*location, "src/download.rs:42:25");
+        assert!(super::non_send_future("error[E0308]: mismatched types").is_none());
     }
 }
