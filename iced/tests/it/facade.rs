@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [65, 141, 44, 182, 47, 75, 218, 233, 237, 189, 152, 227, 250, 91, 172, 149]
+        [233, 202, 162, 52, 62, 205, 126, 207, 189, 146, 67, 205, 150, 148, 216, 140]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
@@ -447,12 +447,13 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert!(padding_inputs.contains(&host::type_ref::Type::builtin(host::type_ref::Builtin::I64)));
     assert!(padding_inputs.contains(&host::type_ref::Type::builtin(host::type_ref::Builtin::F64)));
     assert!(padding_inputs.contains(&host::type_ref::Type::registered("iced::Padding").unwrap()));
-    // `slider` over `i64`, and over `f64` as iced's `f32` sliders.
+    // `slider` over `i64`, over `f64` as iced's `f32` sliders, and over
+    // `Degrees` and `Radians`.
     let sliders = second
         .items()
         .filter(|item| item.path() == "iced::widget::slider")
         .collect::<Vec<_>>();
-    assert_eq!(sliders.len(), 2);
+    assert_eq!(sliders.len(), 4);
     for (slider, range, number) in [
         (sliders[0], host::type_ref::Builtin::InclusiveRange, host::type_ref::Builtin::I64),
         (sliders[1], host::type_ref::Builtin::FloatInclusiveRange, host::type_ref::Builtin::F64),
