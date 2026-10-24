@@ -178,11 +178,11 @@ use iced::widget::{button, column, text};
 struct State { primary: String }
 #[derive(Debug, Clone, Copy)] enum Message { Fail, Recover }
 impl State {
-    fn new() -> State { State { primary: "#4455aa" } }
+    fn new() -> State { State { primary: "#4455aa".to_string() } }
     fn update(&mut self, message: Message) {
         match message {
-            Message::Fail => self.primary = "invalid",
-            Message::Recover => self.primary = "#4455aa",
+            Message::Fail => self.primary = "invalid".to_string(),
+            Message::Recover => self.primary = "#4455aa".to_string(),
         }
     }
     fn view(&self) -> Element<'_, Message> {
@@ -191,7 +191,7 @@ impl State {
         column![fail, recover]
     }
     fn theme(&self) -> Theme {
-        let palette = Palette::new("#10131a", "#e7eaf0", self.primary, "#78dba9", "#f4cc67", "#ff7d8b");
+        let palette = Palette::new("#10131a", "#e7eaf0", self.primary.clone(), "#78dba9", "#f4cc67", "#ff7d8b");
         custom("Recovering palette", palette)
     }
 }
@@ -211,17 +211,17 @@ use iced::widget::button;
 struct State { primary: String }
 #[derive(Debug, Clone, Copy)] enum Message { Recover }
 impl State {
-    fn new() -> State { State { primary: "invalid" } }
+    fn new() -> State { State { primary: "invalid".to_string() } }
     fn update(&mut self, message: Message) {
         match message {
-            Message::Recover => self.primary = "#4455aa",
+            Message::Recover => self.primary = "#4455aa".to_string(),
         }
     }
     fn view(&self) -> Element<'_, Message> {
         button("Recover theme").on_press(Message::Recover)
     }
     fn theme(&self) -> Theme {
-        let palette = Palette::new("#10131a", "#e7eaf0", self.primary, "#78dba9", "#f4cc67", "#ff7d8b");
+        let palette = Palette::new("#10131a", "#e7eaf0", self.primary.clone(), "#78dba9", "#f4cc67", "#ff7d8b");
         custom("Initial recovery", palette)
     }
 }

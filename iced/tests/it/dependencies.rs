@@ -228,7 +228,7 @@ fn projection_source() -> &'static str {
 #[derive(Clone)] enum Message { Tick }
 impl Counter {
     fn update(&mut self, message: Message) { () }
-    fn view(&self) -> charts::Plot<Message> { throw "phase 4" }
+    fn view(&self) -> charts::Plot<Message> { panic!("phase 4") }
 }
 pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
 "#
@@ -240,7 +240,7 @@ fn direct_value_source() -> &'static str {
 #[derive(Clone)] enum Message { Tick }
 impl Counter {
     fn update(&mut self, message: Message) { () }
-    fn view(&self) -> iced::Element<Message> { throw "phase 4" }
+    fn view(&self) -> iced::Element<Message> { panic!("phase 4") }
 }
 pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
 "#
@@ -253,7 +253,7 @@ use native::Opaque;
 #[derive(Clone)] enum Message { Data(Opaque) }
 impl Counter {
     fn update(&mut self, message: Message) { () }
-    fn view(&self) -> iced::Element<Message> { throw "phase 4" }
+    fn view(&self) -> iced::Element<Message> { panic!("phase 4") }
 }
 pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
 "#

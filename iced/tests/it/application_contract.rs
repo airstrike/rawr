@@ -90,7 +90,7 @@ fn title_and_centered_shell_settings_are_exact_contract_proofs() {
     let mut engine = Engine::new();
     rawr_iced::install(&mut engine).unwrap();
     let descriptor = engine
-        .compile_application_descriptor(shell_source("self.label", true))
+        .compile_application_descriptor(shell_source("self.label.clone()", true))
         .unwrap();
 
     let title = descriptor.title().unwrap();
@@ -100,12 +100,12 @@ fn title_and_centered_shell_settings_are_exact_contract_proofs() {
     assert!(descriptor.centered());
 
     let changed_body = engine
-        .compile_application_descriptor(shell_source("\"Changed\"", true))
+        .compile_application_descriptor(shell_source("\"Changed\".to_string()", true))
         .unwrap();
     assert_eq!(descriptor.fingerprint(), changed_body.fingerprint());
 
     let not_centered = engine
-        .compile_application_descriptor(shell_source("self.label", false))
+        .compile_application_descriptor(shell_source("self.label.clone()", false))
         .unwrap();
     assert_ne!(descriptor.fingerprint(), not_centered.fingerprint());
 }
@@ -150,7 +150,7 @@ fn explicit_boot_kind_owner_arity_state_and_task_message_are_exact() {
         (
             explicit_declarations(
                 "Counter",
-                "fn boot(&self) -> Counter { throw \"phase 4\" }",
+                "fn boot(&self) -> Counter { panic!(\"phase 4\") }",
                 "Counter::boot",
             ),
             Category::InvalidCallbackKind,
@@ -158,7 +158,7 @@ fn explicit_boot_kind_owner_arity_state_and_task_message_are_exact() {
         (
             explicit_declarations(
                 "Counter",
-                "fn boot(value: i64) -> Counter { throw \"phase 4\" }",
+                "fn boot(value: i64) -> Counter { panic!(\"phase 4\") }",
                 "Counter::boot",
             ),
             Category::InvalidArity,
@@ -166,7 +166,7 @@ fn explicit_boot_kind_owner_arity_state_and_task_message_are_exact() {
         (
             explicit_declarations(
                 "Counter",
-                "fn boot() -> OtherState { throw \"phase 4\" }",
+                "fn boot() -> OtherState { panic!(\"phase 4\") }",
                 "Counter::boot",
             ),
             Category::TypeMismatch,
@@ -174,7 +174,7 @@ fn explicit_boot_kind_owner_arity_state_and_task_message_are_exact() {
         (
             explicit_declarations(
                 "Counter",
-                "fn boot() -> (Counter, iced::Task<Other>) { throw \"phase 4\" }",
+                "fn boot() -> (Counter, iced::Task<Other>) { panic!(\"phase 4\") }",
                 "Counter::boot",
             ),
             Category::InvalidOutput,
@@ -182,7 +182,7 @@ fn explicit_boot_kind_owner_arity_state_and_task_message_are_exact() {
         (
             explicit_declarations(
                 "OtherState",
-                "fn boot() -> Counter { throw \"phase 4\" }",
+                "fn boot() -> Counter { panic!(\"phase 4\") }",
                 "OtherState::boot",
             ),
             Category::TypeMismatch,
@@ -205,7 +205,7 @@ fn callback_state_message_receiver_kind_arity_and_output_are_exact() {
         (
             declarations(
                 "fn update(&self, message: Message) { () }",
-                "fn view(&self) -> iced::widget::Column<'_, Message> { throw \"phase 4\" }",
+                "fn view(&self) -> iced::widget::Column<'_, Message> { panic!(\"phase 4\") }",
                 true,
             ),
             Category::InvalidReceiver,
@@ -213,7 +213,7 @@ fn callback_state_message_receiver_kind_arity_and_output_are_exact() {
         (
             declarations(
                 "fn update(&mut self, message: Message) { () }",
-                "fn view(&mut self) -> iced::widget::Column<'_, Message> { throw \"phase 4\" }",
+                "fn view(&mut self) -> iced::widget::Column<'_, Message> { panic!(\"phase 4\") }",
                 true,
             ),
             Category::InvalidReceiver,
@@ -221,7 +221,7 @@ fn callback_state_message_receiver_kind_arity_and_output_are_exact() {
         (
             declarations(
                 "fn update(message: Message) { () }",
-                "fn view(&self) -> iced::widget::Column<'_, Message> { throw \"phase 4\" }",
+                "fn view(&self) -> iced::widget::Column<'_, Message> { panic!(\"phase 4\") }",
                 true,
             ),
             Category::InvalidCallbackKind,
@@ -229,15 +229,15 @@ fn callback_state_message_receiver_kind_arity_and_output_are_exact() {
         (
             declarations(
                 "fn update(&mut self) { () }",
-                "fn view(&self) -> iced::widget::Column<'_, Message> { throw \"phase 4\" }",
+                "fn view(&self) -> iced::widget::Column<'_, Message> { panic!(\"phase 4\") }",
                 true,
             ),
             Category::InvalidArity,
         ),
         (
             declarations(
-                "fn update(&mut self, message: Message) -> Counter { throw \"phase 4\" }",
-                "fn view(&self) -> iced::widget::Column<'_, Message> { throw \"phase 4\" }",
+                "fn update(&mut self, message: Message) -> Counter { panic!(\"phase 4\") }",
+                "fn view(&self) -> iced::widget::Column<'_, Message> { panic!(\"phase 4\") }",
                 true,
             ),
             Category::InvalidOutput,
@@ -246,7 +246,7 @@ fn callback_state_message_receiver_kind_arity_and_output_are_exact() {
         (
             declarations(
                 "fn update(&mut self, message: Message) { () }",
-                "fn view(&self) -> iced::widget::Column<'_, Other> { throw \"phase 4\" }",
+                "fn view(&self) -> iced::widget::Column<'_, Other> { panic!(\"phase 4\") }",
                 true,
             ),
             Category::InvalidOutput,
@@ -270,7 +270,7 @@ fn default_and_message_capabilities_are_proved_before_descriptor_exists() {
     let error = no_default
         .compile_application_descriptor(declarations(
             "fn update(&mut self, message: Message) { () }",
-            "fn view(&self) -> iced::widget::Column<'_, Message> { throw \"phase 4\" }",
+            "fn view(&self) -> iced::widget::Column<'_, Message> { panic!(\"phase 4\") }",
             false,
         ))
         .unwrap_err();
@@ -471,11 +471,11 @@ fn default_source(update_output: &str) -> String {
     let update = if update_output == "()" {
         "fn update(&mut self, message: Message) { () }".to_string()
     } else {
-        format!("fn update(&mut self, message: Message) -> {update_output} {{ throw \"phase 4\" }}")
+        format!("fn update(&mut self, message: Message) -> {update_output} {{ panic!(\"phase 4\") }}")
     };
     declarations(
         &update,
-        "fn view(&self) -> iced::widget::Column<'_, Message> { throw \"phase 4\" }",
+        "fn view(&self) -> iced::widget::Column<'_, Message> { panic!(\"phase 4\") }",
         true,
     )
 }
@@ -489,7 +489,7 @@ struct Counter {{ value: i64 }}
 enum Message {{ Tick }}
 impl Counter {{
     fn update(&mut self, message: Message) {{ () }}
-    fn view(&self) -> iced::widget::Column<'_, Message> {{ throw "phase 4" }}
+    fn view(&self) -> iced::widget::Column<'_, Message> {{ panic!("phase 4") }}
 }}
 pub fn main() -> iced::Result {{ iced::run(Counter::update, Counter::view) }}
 "#
@@ -503,7 +503,7 @@ fn default_source_with_state(fields: &str) -> String {
 #[derive(Clone)] enum Message {{ Tick }}
 impl Counter {{
     fn update(&mut self, message: Message) {{ () }}
-    fn view(&self) -> iced::widget::Column<'_, Message> {{ throw "phase 4" }}
+    fn view(&self) -> iced::widget::Column<'_, Message> {{ panic!("phase 4") }}
 }}
 pub fn main() -> iced::Result {{ iced::run(Counter::update, Counter::view) }}
 "#
@@ -514,16 +514,16 @@ fn explicit_source(boot_output: &str, update_output: &str) -> String {
     let update = if update_output == "()" {
         "fn update(&mut self, message: Message) { () }".to_string()
     } else {
-        format!("fn update(&mut self, message: Message) -> {update_output} {{ throw \"phase 4\" }}")
+        format!("fn update(&mut self, message: Message) -> {update_output} {{ panic!(\"phase 4\") }}")
     };
     format!(
         r#"
 struct Counter {{ value: i64 }}
 #[derive(Clone)] enum Message {{ Tick }}
 impl Counter {{
-    fn new() -> {boot_output} {{ throw "phase 4" }}
+    fn new() -> {boot_output} {{ panic!("phase 4") }}
     {update}
-    fn view(&self) -> iced::Element<Message> {{ throw "phase 4" }}
+    fn view(&self) -> iced::Element<Message> {{ panic!("phase 4") }}
 }}
 pub fn main() -> iced::Result {{
     iced::application(Counter::new, Counter::update, Counter::view).run()
@@ -541,9 +541,9 @@ use iced::widget::text;
 struct State {{ label: String }}
 #[derive(Clone)] enum Message {{ Tick }}
 impl State {{
-    fn new() -> State {{ State {{ label: "Tour" }} }}
+    fn new() -> State {{ State {{ label: "Tour".to_string() }} }}
     fn update(&mut self, message: Message) {{ () }}
-    fn view(&self) -> Element<Message> {{ text(self.label) }}
+    fn view(&self) -> Element<Message> {{ text(&self.label) }}
     fn title(&self) -> String {{ {title} }}
 }}
 pub fn main() -> iced::Result {{
@@ -583,10 +583,10 @@ fn free_boot_source() -> &'static str {
     r#"
 struct Counter { value: i64 }
 #[derive(Clone)] enum Message { Tick }
-pub fn boot() -> Counter { throw "phase 4" }
+pub fn boot() -> Counter { panic!("phase 4") }
 impl Counter {
     fn update(&mut self, message: Message) { () }
-    fn view(&self) -> iced::Element<Message> { throw "phase 4" }
+    fn view(&self) -> iced::Element<Message> { panic!("phase 4") }
 }
 pub fn main() -> iced::Result {
     iced::application(boot, Counter::update, Counter::view).run()
@@ -604,7 +604,7 @@ struct OtherState;
 impl {boot_owner} {{ {boot} }}
 impl Counter {{
     fn update(&mut self, message: Message) {{ () }}
-    fn view(&self) -> iced::Element<Message> {{ throw "phase 4" }}
+    fn view(&self) -> iced::Element<Message> {{ panic!("phase 4") }}
 }}
 pub fn main() -> iced::Result {{
     iced::application({callback}, Counter::update, Counter::view).run()
@@ -639,7 +639,7 @@ fn reordered_default_source() -> &'static str {
 #[derive(Clone)] enum Message { Tick }
 #[derive(Default)] struct Counter { value: i64 }
 impl Counter {
-    fn view(&self) -> iced::widget::Column<'_, Message> { throw "phase 4" }
+    fn view(&self) -> iced::widget::Column<'_, Message> { panic!("phase 4") }
     fn update(&mut self, message: Message) { () }
 }
 pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
@@ -652,7 +652,7 @@ fn mismatched_state_source() -> String {
 struct OtherState;
 #[derive(Clone)] enum Message { Tick }
 impl Counter { fn update(&mut self, message: Message) { () } }
-impl OtherState { fn view(&self) -> iced::widget::Column<'_, Message> { throw "phase 4" } }
+impl OtherState { fn view(&self) -> iced::widget::Column<'_, Message> { panic!("phase 4") } }
 pub fn main() -> iced::Result { iced::run(Counter::update, OtherState::view) }
 "#
     .to_string()
@@ -663,7 +663,7 @@ fn direct_tuple_message_source() -> &'static str {
 #[derive(Default)] struct Counter;
 impl Counter {
     fn update(&mut self, message: (i64, bool)) { () }
-    fn view(&self) -> iced::widget::Column<'_, (i64, bool)> { throw "phase 4" }
+    fn view(&self) -> iced::widget::Column<'_, (i64, bool)> { panic!("phase 4") }
 }
 pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
 "#
@@ -676,7 +676,7 @@ fn nested_tuple_message_source() -> &'static str {
 #[derive(Clone)] enum Message { Data(Payload) }
 impl Counter {
     fn update(&mut self, message: Message) { () }
-    fn view(&self) -> iced::widget::Column<'_, Message> { throw "phase 4" }
+    fn view(&self) -> iced::widget::Column<'_, Message> { panic!("phase 4") }
 }
 pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
 "#
@@ -688,7 +688,7 @@ fn nested_tuple_state_source() -> &'static str {
 #[derive(Clone)] enum Message { Tick }
 impl Counter {
     fn update(&mut self, message: Message) { () }
-    fn view(&self) -> iced::widget::Column<'_, Message> { throw "phase 4" }
+    fn view(&self) -> iced::widget::Column<'_, Message> { panic!("phase 4") }
 }
 pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
 "#
@@ -768,7 +768,7 @@ use native::Opaque;
 #[derive(Clone)] enum Message { Data(Opaque) }
 impl Counter {
     fn update(&mut self, message: Message) { () }
-    fn view(&self) -> iced::widget::Column<'_, Message> { throw "phase 4" }
+    fn view(&self) -> iced::widget::Column<'_, Message> { panic!("phase 4") }
 }
 pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
 "#
@@ -780,7 +780,7 @@ fn cross_facade_source() -> &'static str {
 #[derive(Clone)] enum Message { Tick }
 impl Counter {
     fn update(&mut self, message: Message) { () }
-    fn view(&self) -> charts::Plot<Message> { throw "phase 4" }
+    fn view(&self) -> charts::Plot<Message> { panic!("phase 4") }
 }
 pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
 "#

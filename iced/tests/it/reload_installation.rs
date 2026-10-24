@@ -70,7 +70,7 @@ fn palette_only_custom_theme_rebinds_on_retained_reload() {
 #[test]
 fn title_rebinds_on_retained_state_and_throwing_candidates_preserve_last_good_shell() {
     let project = Project::new("title-shell");
-    project.write("src/main.rs", title_source("self.label", true));
+    project.write("src/main.rs", title_source("self.label.clone()", true));
     let engine = compiler();
     let mut host = bootstrap(&engine, compile(&engine, &project));
     let instance = host.adapter().instance();
@@ -81,7 +81,7 @@ fn title_rebinds_on_retained_state_and_throwing_candidates_preserve_last_good_sh
     assert_eq!(host.update(rename).unwrap().delivery(), Delivery::Applied);
     assert_eq!(host.adapter().title(), "Updated");
 
-    project.write("src/main.rs", title_source("\"Rebound\"", true));
+    project.write("src/main.rs", title_source("\"Rebound\".to_string()", true));
     let outcome = install(&mut host, compile(&engine, &project), &engine, registry()).unwrap();
     assert_eq!(outcome.evidence()[0].action(), Action::Retain);
     assert_eq!(host.adapter().instance(), instance);
@@ -90,15 +90,15 @@ fn title_rebinds_on_retained_state_and_throwing_candidates_preserve_last_good_sh
 
     let retained_generation = host.generation().clone();
     let adapter_generation = host.adapter().generation();
-    let retained_failure = title_source("throw \"replacement title failed\"", true);
+    let retained_failure = title_source("panic!(\"replacement title failed\")", true);
     let reset_failure = retained_failure
         .replace(
             "struct State { label: String }",
             "struct State { label: String, reset: bool }",
         )
         .replace(
-            "State { label: \"Initial\" }",
-            "State { label: \"Initial\", reset: false }",
+            "State { label: \"Initial\".to_string() }",
+            "State { label: \"Initial\".to_string(), reset: false }",
         );
     for candidate in [retained_failure, reset_failure] {
         project.write("src/main.rs", candidate.clone());
@@ -115,11 +115,13 @@ fn title_rebinds_on_retained_state_and_throwing_candidates_preserve_last_good_sh
             .find(|(_, line)| line.contains("fn title"))
             .expect("the candidate must retain its title declaration");
         let column = declaration
-            .find("throw")
-            .expect("the failing title must retain its throw expression");
+            .find("panic!")
+            .expect("the failing title must retain its panic expression");
+        // The label covers the whole `panic!(..)` call, as rustc's does.
+        let call = "panic!(\"replacement title failed\")";
         let expected = rawr::Span::new(
             rawr::Position::new((line + 2) as u16, (column + 1) as u16),
-            rawr::Position::new((line + 2) as u16, (column + 7) as u16),
+            rawr::Position::new((line + 2) as u16, (column + call.len()) as u16),
         );
 
         assert_eq!(report.code(), rawr::diagnostic::code::RUNTIME_THROW);
@@ -137,7 +139,7 @@ fn title_rebinds_on_retained_state_and_throwing_candidates_preserve_last_good_sh
         iced_test::simulator(host.view()).find("Updated").unwrap();
     }
 
-    project.write("src/main.rs", title_source("\"Off center\"", false));
+    project.write("src/main.rs", title_source("\"Off center\".to_string()", false));
     let outcome = install(&mut host, compile(&engine, &project), &engine, registry()).unwrap();
     assert_eq!(outcome.evidence()[0].action(), Action::Reset);
     assert_ne!(host.adapter().instance(), instance);
@@ -179,7 +181,7 @@ fn view_and_boot_failure_preserve_the_exact_last_good_owner() {
         )
         .replace(
             "fn view(&self) -> Element<Message>",
-            "fn broken(&self) -> Element<Message> { throw \"replacement view failed\" }\n\n    fn view(&self) -> Element<Message>",
+            "fn broken(&self) -> Element<Message> { panic!(\"replacement view failed\") }\n\n    fn view(&self) -> Element<Message>",
         );
     project.write("src/main.rs", &failing_view);
     let Err(error) = install(&mut host, compile(&engine, &project), &engine, registry()) else {
@@ -580,12 +582,12 @@ struct State {{ label: String }}
 #[derive(Debug, Clone, Copy)] enum Message {{ Rename }}
 
 impl State {{
-    fn boot() -> State {{ State {{ label: "Initial" }} }}
+    fn boot() -> State {{ State {{ label: "Initial".to_string() }} }}
     fn update(&mut self, message: Message) {{
-        match message {{ Message::Rename => self.label = "Updated", }}
+        match message {{ Message::Rename => self.label = "Updated".to_string(), }}
     }}
     fn view(&self) -> Element<Message> {{
-        column![text(self.label), button("Rename").on_press(Message::Rename)]
+        column![text(&self.label), button("Rename").on_press(Message::Rename)]
     }}
     fn title(&self) -> String {{ {title} }}
 }}
@@ -601,7 +603,7 @@ pub fn main() -> iced::Result {{
 
 fn explicit_source(field: &str, fail: bool) -> String {
     let boot = if fail {
-        "throw \"replacement boot failed\""
+        "panic!(\"replacement boot failed\")"
     } else {
         "State { value: 0 }"
     };

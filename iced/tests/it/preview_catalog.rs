@@ -223,7 +223,7 @@ impl State {
 }
 
 #[preview]
-fn native_preview() -> gallery::Plot<()> { throw "preview body is not executed" }
+fn native_preview() -> gallery::Plot<()> { panic!("preview body is not executed") }
 
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 "#

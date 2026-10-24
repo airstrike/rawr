@@ -111,7 +111,7 @@ impl Counter {
     fn update(&mut self, message: Message) {
         match message { Message::Increment => self.value += 1 }
     }
-    fn view(&self) -> Element<'_, Message> { throw self.value; }
+    fn view(&self) -> Element<'_, Message> { panic!("{}", self.value) }
 }
 "#
 }

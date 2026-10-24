@@ -12,19 +12,19 @@ fn installed_facade_compiles_the_complete_scripted_widget_protocol() {
 
         #[widget]
         impl Dial {
-            fn state(&self) -> State { throw "state" }
-            fn children(&self) -> rawr_iced::widget::children::List<Message> { throw "children" }
+            fn state(&self) -> State { panic!("state") }
+            fn children(&self) -> rawr_iced::widget::children::List<Message> { panic!("children") }
             fn diff(&mut self, state: &mut State) { () }
-            fn size(&self) -> rawr_iced::widget::layout::Size { throw "size" }
-            fn layout(&mut self, state: &mut State, input: rawr_iced::widget::layout::Input) -> rawr_iced::widget::layout::Node { throw "layout" }
-            fn update(&mut self, state: &mut State, input: rawr_iced::widget::event::Input) -> rawr_iced::widget::event::Outcome<Message> { throw "update" }
+            fn size(&self) -> rawr_iced::widget::layout::Size { panic!("size") }
+            fn layout(&mut self, state: &mut State, input: rawr_iced::widget::layout::Input) -> rawr_iced::widget::layout::Node { panic!("layout") }
+            fn update(&mut self, state: &mut State, input: rawr_iced::widget::event::Input) -> rawr_iced::widget::event::Outcome<Message> { panic!("update") }
             fn draw(&self, state: &State, renderer: &mut rawr_iced::Renderer, input: rawr_iced::widget::draw::Input) {
                 renderer.fill_quad(input.bounds(), Color::from_rgb(0.95, 0.45, 0.10));
                 renderer.fill_rounded_quad(input.bounds(), Color::from_rgb(0.95, 0.45, 0.10), 12);
             }
-            fn mouse_interaction(&self, state: &State, input: rawr_iced::widget::mouse::Input) -> iced::mouse::Interaction { throw "mouse" }
-            fn operate(&mut self, state: &mut State, input: rawr_iced::widget::operation::Input) -> rawr_iced::widget::operation::Outcome { throw "operate" }
-            fn overlay(&mut self, state: &mut State, input: rawr_iced::widget::overlay::Input) -> rawr_iced::widget::overlay::Value<Message> { throw "overlay" }
+            fn mouse_interaction(&self, state: &State, input: rawr_iced::widget::mouse::Input) -> iced::mouse::Interaction { panic!("mouse") }
+            fn operate(&mut self, state: &mut State, input: rawr_iced::widget::operation::Input) -> rawr_iced::widget::operation::Outcome { panic!("operate") }
+            fn overlay(&mut self, state: &mut State, input: rawr_iced::widget::overlay::Input) -> rawr_iced::widget::overlay::Value<Message> { panic!("overlay") }
         }
     "#;
     let mut engine = Engine::new();

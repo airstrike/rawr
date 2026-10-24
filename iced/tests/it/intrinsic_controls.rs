@@ -894,15 +894,15 @@ impl State {
 
     fn view(&self) -> Element<'_, Message> {
         column![
-            text_input("Type a message", self.value)
+            text_input("Type a message", &self.value)
                 .on_input(Message::Input)
                 .padding(Padding::new(12))
                 .size(18)
                 .secure(false),
-            text_input("Integer padding", self.value)
+            text_input("Integer padding", &self.value)
                 .on_input(Message::Input)
                 .padding(12),
-            text(self.value),
+            text(&self.value),
             checkbox(self.accepted)
                 .label("Accept changes")
                 .on_toggle(Message::Accepted),
@@ -946,7 +946,7 @@ impl State {
 
     fn view(&self) -> Element<'_, Message> {
         let input = child().map(Message::Editor);
-        column![input, text(self.value)]
+        column![input, text(&self.value)]
     }
 }
 
@@ -1008,7 +1008,7 @@ use iced::widget::text_input;
 #[derive(Default)] struct State;
 #[derive(Debug, Clone)] enum Message { Input(String) }
 impl Message {
-    fn map_input(value: String) -> Message { throw "input mapper failed" }
+    fn map_input(value: String) -> Message { panic!("input mapper failed") }
 }
 impl State {
     fn update(&mut self, message: Message) {}
@@ -1079,7 +1079,7 @@ use iced::widget::slider;
 #[derive(Default)] struct State;
 #[derive(Debug, Clone)] enum Message { Changed(i64) }
 impl Message {
-    fn map_slider(value: i64) -> Message { throw "slider mapper failed" }
+    fn map_slider(value: i64) -> Message { panic!("slider mapper failed") }
 }
 impl State {
     fn update(&mut self, message: Message) {}
@@ -1102,7 +1102,7 @@ impl State {
         match message { Message::Input(value) => self.value = value }
     }
     fn view(&self) -> Element<'_, Message> {
-        text_input("Identity input", self.value).on_input(Message::Input)
+        text_input("Identity input", &self.value).on_input(Message::Input)
     }
 }
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
@@ -1152,7 +1152,7 @@ impl State {
     fn new() -> State { State {} }
     fn update(&mut self, message: Message) {}
     fn view(&self) -> Element<Message> { text("Fallback") }
-    fn title(&self) -> String { throw "title evaluation failed" }
+    fn title(&self) -> String { panic!("title evaluation failed") }
 }
 
 pub fn main() -> iced::Result {

@@ -179,7 +179,7 @@ fn widget_protocol_and_opaque_content_reset_conservatively() {
     let engine = compiler();
     project.write("src/main.rs", &widget_source("i64", "0"));
     let first = compile(&engine, &project).generation().clone();
-    let widget_body = widget_source("i64", "0").replace("throw \"size\"", "throw \"changed\"");
+    let widget_body = widget_source("i64", "0").replace("panic!(\"size\")", "panic!(\"changed\")");
     project.write("src/main.rs", &widget_body);
     let compatible = compare(
         first.clone(),
@@ -928,7 +928,7 @@ enum Message {{ Tick }}
 
 #[widget]
 impl Dial {{
-    fn size(&self) -> Size {{ throw "size" }}
+    fn size(&self) -> Size {{ panic!("size") }}
 }}
 
 impl State {{

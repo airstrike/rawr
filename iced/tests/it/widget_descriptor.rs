@@ -125,7 +125,7 @@ impl Counter {
     fn update(&mut self, message: Message) {
         match message { Message::Tick => self.value += 1 }
     }
-    fn view(&self) -> Element<'_, Message> { throw "initial view failed"; }
+    fn view(&self) -> Element<'_, Message> { panic!("initial view failed"); }
 }
 "#
 }
