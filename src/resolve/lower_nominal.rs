@@ -11216,11 +11216,25 @@ impl<'a> Parser<'a> {
                 spliced.push((Token::RightBrace, at));
                 spliced.push((Token::Comma, at));
             }
-            if let Some(body) = otherwise {
-                spliced.extend([(Token::Underscore, at), (Token::DoubleArrow, at), (Token::LeftBrace, at)]);
-                spliced.extend(body);
-                spliced.extend([(Token::RightBrace, at), (Token::Comma, at)]);
-            }
+            // A branch whose pattern does not match ends the select at the
+            // `else` branch, which panics as tokio's does when there is none.
+            let otherwise = otherwise.unwrap_or_else(|| {
+                vec![
+                    ident("panic"),
+                    (Token::Bang, at),
+                    (Token::LeftParen, at),
+                    (
+                        Token::StringConstant(Box::new(
+                            "all branches are disabled and there is no else branch".into(),
+                        )),
+                        at,
+                    ),
+                    (Token::RightParen, at),
+                ]
+            });
+            spliced.extend([(Token::Underscore, at), (Token::DoubleArrow, at), (Token::LeftBrace, at)]);
+            spliced.extend(otherwise);
+            spliced.extend([(Token::RightBrace, at), (Token::Comma, at)]);
             spliced.push((Token::RightBrace, at));
         }
         spliced.push((Token::RightParen, end));
