@@ -140,6 +140,12 @@ fn register_debug() {
     register::<iced::Rectangle>();
     register::<iced::Size>();
     register::<iced::touch::Event>();
+    register::<iced::touch::Finger>();
+    // `HashMap<touch::Finger, Point>`: a finger keys a map by its id.
+    rawr::host::value::register_relations::<iced::touch::Finger>(
+        |lhs, rhs| Some(*lhs.read_lock::<iced::touch::Finger>()? == *rhs.read_lock()?),
+        |lhs, rhs| Some(lhs.read_lock::<iced::touch::Finger>()?.0.cmp(&rhs.read_lock::<iced::touch::Finger>()?.0)),
+    );
     register::<iced::Vector>();
     register::<iced::window::Event>();
     register::<iced::window::Id>();
@@ -442,6 +448,20 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.value_type::<iced::mouse::Event>("mouse::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::mouse::Button>("mouse::Button", &[], OWNED_EQ_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::touch::Event>("touch::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::touch::Finger>(
+        "touch::Finger",
+        &[],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Hash,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
     builder.value_type::<iced::keyboard::Event>("keyboard::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::keyboard::Key>("keyboard::Key", &[], DEBUG_EQ_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::keyboard::key::Named>(
@@ -3548,6 +3568,9 @@ fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Err
         reader(builder, format!("touch::Event::{variant}"), bool_())?;
     }
     reader(builder, "touch::Event::position".into(), type_ref::Type::registered("Point")?)?;
+    reader(builder, "touch::Event::id".into(), type_ref::Type::registered("touch::Finger")?)?;
+    // `finger.0`, its `u64` id.
+    reader(builder, "touch::Finger::0".into(), type_ref::Type::builtin(type_ref::Builtin::U64))?;
     // `Key::Named(named)` and `Key::Character(c)` in a pattern: beside
     // their constructors, the readers of their fields.
     reader(builder, "keyboard::Key::Named".into(), some("keyboard::key::Named")?)?;

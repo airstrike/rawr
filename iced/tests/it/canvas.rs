@@ -329,3 +329,109 @@ fn a_program_state_in_a_ref_cell_draws() {
     simulator.draw(&iced::Theme::Dark);
     assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
 }
+
+/// multitouch's fingers: `touch::Event`'s `id`, a `touch::Finger` keying a
+/// `HashMap`, and its `u64` id.
+const FINGERS: &str = r#"
+use std::collections::HashMap;
+use iced::mouse;
+use iced::touch;
+use iced::widget::canvas::{self, Event, Geometry};
+use iced::widget::{column, text};
+use iced::{Element, Fill, Point, Rectangle, Renderer, Theme};
+
+#[derive(Default)]
+struct Fingers {
+    fingers: HashMap<touch::Finger, Point>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    FingerPressed { id: touch::Finger, position: Point },
+    FingerLifted { id: touch::Finger },
+}
+
+impl Fingers {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::FingerPressed { id, position } => {
+                self.fingers.insert(id, position);
+            }
+            Message::FingerLifted { id } => {
+                self.fingers.remove(&id);
+            }
+        }
+    }
+
+    fn view(&self) -> Element<'_, Message> {
+        let ids: Vec<u64> = self.fingers.iter().map(|(id, _)| id.0).collect();
+        column![
+            text(format!("fingers {ids:?}")),
+            canvas::Canvas::new(self).width(Fill).height(200),
+        ]
+        .boxed()
+    }
+}
+
+impl canvas::Program<Message> for Fingers {
+    type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: &Event,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let message = match event.clone() {
+            Event::Touch(
+                touch::Event::FingerPressed { id, position }
+                | touch::Event::FingerMoved { id, position },
+            ) => Some(Message::FingerPressed { id, position }),
+            Event::Touch(
+                touch::Event::FingerLifted { id, .. } | touch::Event::FingerLost { id, .. },
+            ) => Some(Message::FingerLifted { id }),
+            _ => None,
+        };
+        message.map(canvas::Action::publish)
+    }
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        _renderer: &Renderer,
+        _theme: &Theme,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        Vec::new()
+    }
+}
+
+pub fn main() -> iced::Result {
+    iced::run(Fingers::update, Fingers::view)
+}
+"#;
+
+#[test]
+fn touch_fingers_key_a_map() {
+    use iced::touch::{Event, Finger};
+    let mut adapter = boot(FINGERS);
+    let press = |id, x| {
+        iced::Event::Touch(Event::FingerPressed {
+            id: Finger(id),
+            position: iced::Point::new(x, 100.0),
+        })
+    };
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.simulate([press(7, 10.0), press(3, 20.0), press(7, 30.0)]);
+    let messages = simulator.into_messages().collect::<Vec<_>>();
+    assert_eq!(messages.len(), 3, "each touch publishes one Message");
+    for message in messages {
+        adapter.update(message).unwrap();
+    }
+    adapter.refresh_view().unwrap();
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.find("fingers [3, 7]").unwrap();
+    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+}

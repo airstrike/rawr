@@ -87,11 +87,11 @@ pub(crate) fn register_equality<T: PartialEq + Clone + 'static>() {
     }
 }
 
-/// Let a generated bridge compare its imported values, which are handles
-/// of one Rust type `T` whatever value each holds: `==` by the value's own
-/// `PartialEq`, and the order a hashed collection keeps them in.
+/// Let the values of the host type `T` compare: `==`, and the order a
+/// hashed collection keeps them in. A generated bridge registers its
+/// handles, which compare by the imported values they stand for.
 #[doc(hidden)]
-pub fn register_imported<T: 'static>(
+pub fn register_relations<T: 'static>(
     equal: fn(&Dynamic, &Dynamic) -> Option<bool>,
     compare: fn(&Dynamic, &Dynamic) -> Option<std::cmp::Ordering>,
 ) {
@@ -188,7 +188,7 @@ pub(crate) fn decode_host(name: &str, bytes: &[u8]) -> Option<Dynamic> {
 
 #[cfg(all(test, not(feature = "no_std")))]
 mod tests {
-    use super::{host_compare, host_equal, register_imported};
+    use super::{host_compare, host_equal, register_relations};
     use crate::Dynamic;
 
     /// A bridge's handle, which compares by what it stands for.
@@ -203,7 +203,7 @@ mod tests {
         fn compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
             Some(lhs.read_lock::<Handle>()?.0.cmp(&rhs.read_lock::<Handle>()?.0))
         }
-        register_imported::<Handle>(equal, compare);
+        register_relations::<Handle>(equal, compare);
         let (one, two) = (Dynamic::from(Handle(1)), Dynamic::from(Handle(2)));
         assert_eq!(host_equal(&one, &one.clone()), Some(true));
         assert_eq!(host_equal(&one, &two), Some(false));

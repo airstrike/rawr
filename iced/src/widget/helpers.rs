@@ -191,6 +191,16 @@ fn bind_events(builder: &mut host::runtime::Builder) {
         | touch::Event::FingerLifted { position, .. }
         | touch::Event::FingerLost { position, .. } => Dynamic::from(*position),
     });
+    read::<touch::Event>(builder, "iced::touch::Event::id", |event| match event {
+        touch::Event::FingerPressed { id, .. }
+        | touch::Event::FingerMoved { id, .. }
+        | touch::Event::FingerLifted { id, .. }
+        | touch::Event::FingerLost { id, .. } => Dynamic::from(*id),
+    });
+    // A `u64` is its bits in Rawr's `i64`.
+    read::<touch::Finger>(builder, "iced::touch::Finger::0", |finger| {
+        Dynamic::from(finger.0 as i64)
+    });
 
     builder
         .bind_variant_reader("iced::keyboard::Key::Named", |args| {

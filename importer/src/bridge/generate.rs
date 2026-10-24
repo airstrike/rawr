@@ -948,7 +948,7 @@ fn imported_runtime(
     engine: &__rawr_internal::Engine,
     definitions: &[__rawr_internal::host::facade::Definition],
 ) -> Result<__rawr_internal::host::runtime::Registry, __rawr_internal::host::runtime::Error> {
-    __rawr_internal::host::value::register_imported::<NativeHandle>(native_equal, native_compare);
+    __rawr_internal::host::value::register_relations::<NativeHandle>(native_equal, native_compare);
     let mut registry = __rawr_internal::host::runtime::Registry::new();
     let mut native = engine.begin_imported_runtime()?;
     native.authenticate_structural(definitions, STRUCTURAL_ROWS)?;

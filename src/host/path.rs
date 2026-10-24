@@ -34,10 +34,15 @@ impl Path {
             .map_err(|_| host::Error::Allocation)?;
         segments.extend(path.split("::").map(Into::into));
 
+        // A tuple field's reader ends in its index: `touch::Finger::0`.
+        let tuple_field = |segment: &ImmutableString| {
+            !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit())
+        };
         if path.is_empty()
-            || segments
-                .iter()
-                .any(|segment: &ImmutableString| !is_valid_identifier(segment))
+            || segments.iter().enumerate().any(|(index, segment): (usize, &ImmutableString)| {
+                !is_valid_identifier(segment)
+                    && !(index + 1 == segments.len() && index > 0 && tuple_field(segment))
+            })
         {
             return Err(host::Error::InvalidFacadePath(path));
         }
