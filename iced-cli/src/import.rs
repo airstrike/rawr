@@ -108,9 +108,8 @@ pub(crate) fn declared(
 ///
 /// The aim is the ones the project's iced has, as its Cargo.toml names them
 /// (`image-without-codecs` counts as `image`), so the runner adds no iced
-/// feature. Until the profile's compatibility pin (`COMPATIBILITY_DIGEST`
-/// and `COMPATIBILITY_PROJECTIONS` in rawr-iced's `profile/runner.rs`)
-/// holds for a facade without some widgets, every project gets them all.
+/// feature. Until a runner is shown to build with the project's list alone,
+/// every project gets them all.
 fn widgets(graph: &rawr::package::Graph) -> Vec<rawr_iced::features::Feature> {
     const FOLLOW_PROJECT: bool = false;
     if !FOLLOW_PROJECT {

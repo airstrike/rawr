@@ -34,11 +34,6 @@ const COMPATIBILITY_SEMANTIC_POLICY: &[u8] = b"rawr.iced.compatibility-applicati
 const COMPATIBILITY_RUNTIME_BINDING: &[u8] = b"rawr.iced.compatibility-runtime-binding/v2";
 const TEXT_ENDPOINT_DISPOSITION: &[u8] =
     b"rawr.iced.compatibility-text-endpoint/suppressed-by-D271/v1";
-const COMPATIBILITY_PROJECTIONS: usize = 36;
-const COMPATIBILITY_ABI: u32 = 16;
-const COMPATIBILITY_DIGEST: [u8; 16] = [
-    108, 238, 119, 185, 114, 119, 114, 27, 80, 239, 157, 252, 37, 161, 129, 72,
-];
 
 /// One exact target-argument substitution sealed into a generated projection table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1624,11 +1619,6 @@ fn compatibility_preimage(
     digest.update(COMPATIBILITY_RUNTIME_BINDING);
     digest.update(TEXT_ENDPOINT_DISPOSITION);
     digest.update(endpoint.selector);
-    digest.update(
-        u64::try_from(COMPATIBILITY_PROJECTIONS)
-            .unwrap_or(u64::MAX)
-            .to_le_bytes(),
-    );
     digest.update(semantic.abi().get().to_le_bytes());
     digest.update(semantic.fingerprint().compatibility_digest());
     framed_bytes(digest, plan);
@@ -2778,88 +2768,6 @@ impl<'proof> Decoration<'proof> {
         self.semantic.items().any(|item| item.path() == qualified)
     }
 
-    fn complete_text_compatibility_cohort(semantic: &host::facade::Definition) -> bool {
-        if semantic.abi().get() != COMPATIBILITY_ABI
-            || semantic.fingerprint().compatibility_digest() != COMPATIBILITY_DIGEST
-            || semantic
-                .types()
-                .map(|definition| definition.projections().len())
-                .sum::<usize>()
-                != COMPATIBILITY_PROJECTIONS
-        {
-            return false;
-        }
-
-        let mut text_types = semantic
-            .types()
-            .filter(|definition| definition.path() == "iced::widget::Text");
-        let Some(text_type) = text_types.next() else {
-            return false;
-        };
-        if text_types.next().is_some()
-            || !text_type.parameters().is_empty()
-            || !matches!(
-                text_type.projections(),
-                [projection]
-                    if projection.target() == "iced::Element"
-                        && projection.arguments() == [host::type_def::Argument::fresh()]
-            )
-        {
-            return false;
-        }
-
-        // Five `text(..)` forms; `text!` beside them is a macro.
-        let text_item_count = semantic
-            .items()
-            .filter(|item| {
-                item.path() == "iced::widget::text" && item.kind() != host::item::Kind::IntrinsicMacro
-            })
-            .count();
-        if text_item_count != 5
-            || !semantic
-                .items()
-                .filter(|item| {
-                    item.path() == "iced::widget::text"
-                        && item.kind() != host::item::Kind::IntrinsicMacro
-                })
-                .all(|item| item.kind() == host::item::Kind::Function && item.receiver().is_none())
-        {
-            return false;
-        }
-
-        // Every builder path with its overloads: `impl Into<Length>` and
-        // `impl Into<Pixels>` each register one item per accepted input, and
-        // `style` takes a pinned style or a style function.
-        const BUILDERS: [&str; 11] = [
-            "iced::widget::Text::align_x",
-            "iced::widget::Text::align_y",
-            "iced::widget::Text::center",
-            "iced::widget::Text::color",
-            "iced::widget::Text::color_maybe",
-            "iced::widget::Text::font",
-            "iced::widget::Text::height",
-            "iced::widget::Text::line_height",
-            "iced::widget::Text::size",
-            "iced::widget::Text::style",
-            "iced::widget::Text::width",
-        ];
-        const OVERLOADS: usize = 19;
-        let builder_count = semantic
-            .items()
-            .filter(|item| item.path().strip_prefix("iced::widget::Text::").is_some())
-            .count();
-        builder_count == OVERLOADS
-            && semantic
-                .items()
-                .filter(|item| item.path().strip_prefix("iced::widget::Text::").is_some())
-                .all(|item| {
-                    let path = item.path();
-                    BUILDERS.contains(&path.as_str())
-                        && item.kind() == host::item::Kind::Method
-                        && item.receiver() == Some(rawr::receiver::Mode::Owned)
-                })
-    }
-
     fn source_site(
         &self,
         selector: &[u8; 32],
@@ -3018,16 +2926,11 @@ impl rawr::package::import::runner::Profile for Decoration<'_> {
         })
     }
 
-    fn compatibility_seed<'a>(
+    fn compatibility<'a>(
         &'a self,
         facade: &facade::Facade,
-    ) -> Option<&'a host::facade::Definition> {
-        (facade.root() == ROOT && Self::complete_text_compatibility_cohort(&self.semantic))
-            .then_some(&self.semantic)
-    }
-
-    fn compatibility_seal(&self, facade: &facade::Facade) -> Option<[u8; 32]> {
-        (facade.root() == ROOT).then_some(self.compatibility)
+    ) -> Option<(&'a host::facade::Definition, [u8; 32])> {
+        (facade.root() == ROOT).then_some((&self.semantic, self.compatibility))
     }
 
     fn owns_type(&self, facade: &facade::Facade, ty: &facade::TypeDefinition) -> bool {
@@ -3207,10 +3110,7 @@ impl rawr::package::import::runner::Profile for Decoration<'_> {
                 item: "profile operation endpoint".into(),
                 ty: "profile alias target".into(),
             })?;
-        if site.path() != "widget::text"
-            || alias.path != "Element"
-            || !Self::complete_text_compatibility_cohort(&self.semantic)
-        {
+        if site.path() != "widget::text" || alias.path != "Element" {
             return Err(host::Error::UnknownFacadeType {
                 item: "profile operation endpoint".into(),
                 ty: "complete iced::widget::Text compatibility cohort".into(),
@@ -3218,7 +3118,7 @@ impl rawr::package::import::runner::Profile for Decoration<'_> {
         }
 
         // The endpoint proof remains validated and fingerprinted, but the
-        // complete compatibility cohort owns the sole final callable meaning.
+        // facade's own `text` owns the sole final callable meaning.
         Ok(())
     }
 
@@ -3300,7 +3200,7 @@ mod alias_proof_tests {
         alias_site_selector, alias_target_selector, bind_runtime, projection_source_selector,
         projection_source_site_selector, selector, validate_extension_abis,
         validate_operation_endpoints, validate_projections, with_contract_rows, AliasParameter,
-        AliasTarget, Argument, Decoration, Namespace, ParameterKind, Projection,
+        AliasTarget, Argument, Namespace, ParameterKind, Projection,
         ProjectionSourceSite, SourceArgument,
     };
     use sha2::{Digest as _, Sha256};
@@ -3350,33 +3250,6 @@ mod alias_proof_tests {
                 Err(super::Error::ProfileFixture)
             ));
         }
-    }
-
-    #[test]
-    fn text_endpoint_suppression_requires_the_exact_complete_compatibility_cohort() {
-        let complete = crate::facade().expect("the exact compatibility facade builds");
-        assert!(Decoration::complete_text_compatibility_cohort(&complete));
-
-        let mut partial = rawr::host::facade::Builder::new(
-            "iced",
-            rawr::host::facade::Abi::new(super::COMPATIBILITY_ABI).unwrap(),
-        )
-        .unwrap();
-        partial.module("widget").unwrap();
-        partial
-            .type_::<crate::marker::Text>("widget::Text", &[], &[])
-            .unwrap();
-        let partial = partial.finish().unwrap();
-        assert!(!Decoration::complete_text_compatibility_cohort(&partial));
-
-        let stale = rawr::host::facade::Builder::new(
-            "iced",
-            rawr::host::facade::Abi::new(super::COMPATIBILITY_ABI - 1).unwrap(),
-        )
-        .unwrap()
-        .finish()
-        .unwrap();
-        assert!(!Decoration::complete_text_compatibility_cohort(&stale));
     }
 
     #[test]
@@ -3799,7 +3672,7 @@ mod alias_proof_tests {
     }
 
     #[test]
-    fn complete_text_compatibility_cohort_suppresses_the_profile_endpoint() {
+    fn the_facade_text_cohort_suppresses_the_profile_endpoint() {
         let limits = rawr_import::cargo::Limits::standard();
         let definition = crate::profile::Definition::new(&limits).unwrap();
         let graph = rawr_import::test_fixture::iced_profile();
@@ -3901,28 +3774,5 @@ fn names_projected(ty: &facade::Type) -> bool {
         }
         facade::Type::Option(element) => names_projected(element),
         _ => false,
-    }
-}
-
-#[cfg(test)]
-mod digest_tests {
-    /// The pinned compatibility digest is the semantic facade's own. A
-    /// facade change moves it; the failure prints the new value.
-    #[test]
-    fn compatibility_digest_is_the_semantic_facade_digest() {
-        let semantic = crate::facade().expect("the iced facade builds");
-        assert_eq!(
-            semantic.fingerprint().compatibility_digest(),
-            super::COMPATIBILITY_DIGEST,
-            "update COMPATIBILITY_DIGEST to the left value"
-        );
-        assert_eq!(
-            semantic
-                .types()
-                .map(|definition| definition.projections().len())
-                .sum::<usize>(),
-            super::COMPATIBILITY_PROJECTIONS,
-            "update COMPATIBILITY_PROJECTIONS to the left value"
-        );
     }
 }

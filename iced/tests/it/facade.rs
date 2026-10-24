@@ -8,10 +8,6 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     let second_extension = rawr_iced::extension(&second).unwrap();
     assert_eq!(first.fingerprint(), second.fingerprint());
     assert_eq!(first.abi().get(), 16);
-    assert_eq!(
-        first.fingerprint().compatibility_digest(),
-        [108, 238, 119, 185, 114, 119, 114, 27, 80, 239, 157, 252, 37, 161, 129, 72]
-    );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
 

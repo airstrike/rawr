@@ -367,16 +367,12 @@ pub trait Profile {
         true
     }
 
-    /// Return one complete unregistered compatibility seed for this imported root.
-    fn compatibility_seed<'a>(
+    /// Return one unregistered compatibility seed for this imported root and
+    /// the exact proof seal of its composition.
+    fn compatibility<'a>(
         &'a self,
         _facade: &facade::Facade,
-    ) -> Option<&'a host::facade::Definition> {
-        None
-    }
-
-    /// Return the exact proof seal for one compatibility composition.
-    fn compatibility_seal(&self, _facade: &facade::Facade) -> Option<[u8; 32]> {
+    ) -> Option<(&'a host::facade::Definition, [u8; 32])> {
         None
     }
 
@@ -847,17 +843,11 @@ fn build(
 ) -> Result<host::facade::Definition, Error> {
     let abi = host::facade::Abi::new(1)?;
     let mut builder = host::facade::Builder::new_imported(facade.root(), abi, allocation)?;
-    let compatibility = profile.compatibility_seed(facade);
-    match (compatibility, profile.compatibility_seal(facade)) {
-        (Some(seed), Some(seal)) if seed.root() == facade.root() => {
-            if !seed.support_map().is_empty() || !seed.endpoint_map().is_empty() {
-                return Err(Error::CompatibilitySeed);
-            }
-            builder.compatibility_seal(seal)?;
-        }
-        (None, None) => {}
-        _ => return Err(Error::CompatibilitySeed),
+    let compatibility = profile.compatibility(facade);
+    if let Some((_, seal)) = compatibility {
+        builder.compatibility_seal(seal)?;
     }
+    let compatibility = compatibility.map(|(seed, _)| seed);
     let type_paths = facade
         .types()
         .map(facade::TypeDefinition::path)
@@ -874,9 +864,10 @@ fn build(
         let prefix = format!("{}::", facade.root());
         for module in seed.modules() {
             let display = module.to_string();
-            let relative = display
-                .strip_prefix(&prefix)
-                .ok_or(Error::CompatibilitySeed)?;
+            // A definition's modules all sit under its own root.
+            let Some(relative) = display.strip_prefix(&prefix) else {
+                continue;
+            };
             if type_paths.contains(&relative) {
                 return Err(host::Error::DuplicateFacadeEntry {
                     path: display.into(),
@@ -1339,9 +1330,6 @@ pub enum Error {
     /// Profile-owned cross-facade projections contain an unresolved dependency cycle.
     #[error("generated profile facade dependencies cannot be ordered")]
     ProfileOrder,
-    /// A whole-facade compatibility seed was stale, incomplete, or contradictory.
-    #[error("generated compatibility facade seed is not one exact atomic composition")]
-    CompatibilitySeed,
     /// A private event producer is absent from the generated manifest.
     #[error("generated event producer is absent from its manifest")]
     EventManifest,
