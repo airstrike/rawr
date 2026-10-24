@@ -1301,6 +1301,7 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "iter"
                 | "iter::once"
                 | "iter::empty"
+                | "iter::FromIterator"
                 | "time"
                 | "time::Duration"
                 | "time::Instant"
@@ -2936,7 +2937,7 @@ fn trait_table(
 /// The std traits a crate may implement by hand: the derivable ones,
 /// `Display` for `{}`, the prelude's `From<T>` and `Into<T>`, and
 /// `PartialOrd` and `Ord`, which compare to a `std::cmp::Ordering`.
-pub(crate) const BUILTIN_TRAITS: [&str; 38] = [
+pub(crate) const BUILTIN_TRAITS: [&str; 39] = [
     "Clone",
     "Hash",
     "Copy",
@@ -2975,6 +2976,7 @@ pub(crate) const BUILTIN_TRAITS: [&str; 38] = [
     "ShrAssign",
     "Index",
     "IndexMut",
+    "FromIterator",
 ];
 
 /// `std::ops`' operator traits Rawr dispatches its operators through for a
@@ -3181,6 +3183,26 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             vec![("value", path("T", type_ref::Target::Parameter, Vec::new()))],
             Some(this()),
         )],
+        // `trait FromIterator<A> { fn from_iter<I: IntoIterator<Item = A>>(iter: I)
+        // -> Self; }`, which `collect()` into the type calls. Its `I` reads
+        // as `impl IntoIterator<Item = A>`, as an impl's does.
+        "FromIterator" => vec![function(
+            "from_iter",
+            false,
+            vec![(
+                "iter",
+                path(
+                    crate::item::type_ref::INTO_ITER_TYPE,
+                    type_ref::Target::Builtin,
+                    vec![type_ref::Argument::Type(path(
+                        "A",
+                        type_ref::Target::Parameter,
+                        Vec::new(),
+                    ))],
+                ),
+            )],
+            Some(this()),
+        )],
         "Into" => {
             let mut into = function(
                 "into",
@@ -3248,10 +3270,10 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             default: Some(this()),
             host: false,
         }])
-    } else if matches!(name, "From" | "Into") {
+    } else if matches!(name, "From" | "Into" | "FromIterator") {
         Box::new([item::Generic {
             name: crate::item::Name {
-                text: "T".into(),
+                text: if name == "FromIterator" { "A" } else { "T" }.into(),
                 span: Span::NONE,
             },
             bounds: crate::capability::Set::new(),
@@ -4272,13 +4294,14 @@ fn resolve_trait(
             arguments: Box::default(),
         });
     }
-    // `std::convert::From<T>`: the prelude's conversion traits by path.
+    // `std::convert::From<T>` and `std::iter::FromIterator<A>`: the
+    // prelude's conversion traits by path.
     if let [prefix @ .., last] = &path.segments[..]
-        && matches!(last.name.text.as_str(), "From" | "Into")
+        && matches!(last.name.text.as_str(), "From" | "Into" | "FromIterator")
         && !prefix.is_empty()
         && prefix.iter().all(|module| {
             module.arguments.is_empty()
-                && matches!(module.name.text.as_str(), "std" | "core" | "convert")
+                && matches!(module.name.text.as_str(), "std" | "core" | "convert" | "iter")
         })
     {
         let arguments = last

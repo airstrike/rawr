@@ -8721,3 +8721,52 @@ fn language_pointer_kinds_do_not_mix() {
     "#);
     assert!(error.contains("Arc"), "{error}");
 }
+
+#[test]
+fn language_collect_into_a_type_that_implements_from_iterator() {
+    let value = run(r#"
+        use std::collections::HashSet;
+        #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+        struct Cell { i: i64, j: i64 }
+        struct Life { cells: HashSet<Cell> }
+        impl std::iter::FromIterator<Cell> for Life {
+            fn from_iter<I: IntoIterator<Item = Cell>>(iter: I) -> Self {
+                Life { cells: iter.into_iter().collect() }
+            }
+        }
+        struct Total(i64);
+        impl FromIterator<i64> for Total {
+            fn from_iter<T: IntoIterator<Item = i64>>(iter: T) -> Self {
+                Total(iter.into_iter().sum())
+            }
+        }
+        fn size(life: Life) -> i64 { life.cells.len() as i64 }
+        pub fn run() -> i64 {
+            let life: Life = vec![(1, 2), (3, 4), (1, 2)].into_iter().map(|(i, j)| Cell { i, j }).collect();
+            let passed = size(vec![Cell { i: 0, j: 0 }].into_iter().collect());
+            let direct = Life::from_iter(vec![Cell { i: 5, j: 5 }]);
+            let total = (1..=4).collect::<Total>();
+            life.cells.len() as i64 * 1000 + passed * 100 + direct.cells.len() as i64 * 10 + total.0
+        }
+        run()
+    "#);
+    assert_eq!(value, 2120);
+}
+
+#[test]
+fn language_collect_into_a_type_checks_the_item() {
+    let error = rejected(r#"
+        struct Total(i64);
+        impl FromIterator<i64> for Total {
+            fn from_iter<T: IntoIterator<Item = i64>>(iter: T) -> Self {
+                Total(iter.into_iter().sum())
+            }
+        }
+        pub fn run() -> i64 {
+            let total: Total = vec![true].into_iter().collect();
+            total.0
+        }
+        run()
+    "#);
+    assert!(error.contains("mismatch"), "{error}");
+}

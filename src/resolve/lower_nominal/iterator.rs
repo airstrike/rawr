@@ -1117,6 +1117,18 @@ impl Parser<'_> {
                         };
                         (self.prelude_op(op, [items]), collected)
                     }
+                    // A crate type's `impl FromIterator<A>`: its
+                    // `from_iter` of the items.
+                    Some(target @ Ty::Script(id, _))
+                        if let Some(definition) =
+                            self.models.std_impl(id, "FromIterator", "from_iter").cloned() =>
+                    {
+                        if let Some(argument) = definition.trait_arguments().first() {
+                            self.require_type(&Ty::from_resolved(argument), &item, expression)?;
+                        }
+                        let items = self.materialized(&pipeline);
+                        (origin::Fragment::call(method_name(definition.id()), [items]), target)
+                    }
                     Some(target @ Ty::Array { .. }) => {
                         let vec = Ty::Array {
                             element: Box::new(item),
