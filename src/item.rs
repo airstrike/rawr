@@ -657,6 +657,9 @@ pub struct Function {
     /// `const NAME: T = value;`, lowered as a zero-argument function whose
     /// body span covers `value`; uses evaluate it, as Rust inlines it.
     pub(crate) constant: bool,
+    /// `async fn`: the declared output is the future's, and the body runs
+    /// as an `async move` block.
+    pub(crate) asynchronous: bool,
     /// Complete item span.
     pub span: Span,
 }

@@ -340,7 +340,7 @@ impl App {
 <p>An edit to your Rawr code applies to a running app whose State holds a value of an imported type. The value keeps its state across the edit. An edit to the dependency&rsquo;s Rust code starts a new app, and its State starts again from its default. The window then names the imported type that did not carry over.</p>
 
 <h2 id="async">Async code</h2>
-<p>An app runs Rust futures as iced tasks. A Rust function that returns a future gives a <code>Task</code>. That covers an <code>async fn</code> in your crate and <code>tokio::time::sleep</code>. A Rust function that returns an iced <code>Task</code>, such as <code>system::information()</code>, gives that task.</p>
+<p>An app runs futures as iced tasks. A Rust function that returns a future gives a <code>Task</code>. That covers an <code>async fn</code> in a Rust crate and <code>tokio::time::sleep</code>. A Rust method that takes <code>self</code> by value and returns a future gives one too, as reqwest&rsquo;s <code>Response::text</code> does. A Rust function that returns an iced <code>Task</code>, such as <code>system::information()</code>, gives that task.</p>
 <div class="block">
   <pre><code data-lang="rust">// rawr
 mod fetch; // native Rust: pub async fn size(url: String) -&gt; usize
@@ -359,7 +359,28 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
 <p>A variant passed as a function keeps its payload&rsquo;s type. So <code>.map(Message::Number)</code> maps a <code>Task&lt;u32&gt;</code> when <code>Number</code> holds a <code>u32</code>. <code>Task::&lt;Message&gt;::none()</code> names the task&rsquo;s message type with a turbofish, as in Rust.</p>
 <p>A task&rsquo;s future runs on iced&rsquo;s thread pool, so it must be <code>Send</code>, as iced requires. <code>rawr check</code> names the Rust function whose future is not.</p>
 <p>A reload cancels the tasks the app is running. Their handles report <code>is_aborted()</code>, and the status line says that a running task was cancelled. The State keeps what it held, so a download the reload cancelled still shows as running until a message changes it.</p>
-<p><code>async fn</code> and <code>.await</code> in Rawr code are not supported yet. Write them in a native module or a Rust crate.</p>
+<h3 id="async-rawr">Async Rawr code</h3>
+<p>Rawr code can be async too. <code>async fn</code>, <code>async</code> blocks, <code>async move</code> blocks and async closures work. <code>.await</code> takes a future&rsquo;s output inside them. An <code>async fn</code> returns <code>impl Future&lt;Output = T&gt;</code> of its declared output, as in Rust. Rawr runs such a future as iced&rsquo;s <code>Task&lt;T&gt;</code>, so <code>Task::perform</code> takes it.</p>
+<div class="block">
+  <pre><code data-lang="rust">use iced::task::sipper;
+use std::time::Duration;
+
+fn start() -&gt; (Download, Task&lt;Message&gt;) {
+    let download = sipper(async |mut progress| {
+        for step in 0..=10 {
+            progress.send(step as f32 * 10.0).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+    (Download::default(), Task::sip(download, Message::Progress, |_| Message::Done))
+}</code></pre>
+</div>
+<p><code>iced::task::sipper</code> takes an async closure. The closure sends its progress with <code>progress.send(value).await</code>. <code>Task::sip</code> maps each value it sends, and then its output.</p>
+<p>An async body runs on the UI thread, one step at a time. It stops at each <code>.await</code> and goes on from there once the future ends. Its locals keep their values in between, and no work it did runs again. <code>.await</code> works in a loop, a branch, a <code>match</code> arm and a call&rsquo;s arguments. <code>?</code> returns from the async body, as in Rust.</p>
+<p><code>futures::future::join</code> and <code>try_join</code> run two futures at once, through iced&rsquo;s <code>iced::futures</code>. <code>try_join</code> ends at the first <code>Err</code>.</p>
+<p>A program that does not depend on tokio still has <code>tokio::time::sleep</code>. Rawr runs its own, which waits on a thread. In <code>?play</code> it follows the recording&rsquo;s clock, so the GIF shows each step.</p>
+<p>A reload that changes an async body cancels the task that runs it. A suspended body never goes on with the new code.</p>
+<p><code>tokio::task::spawn_blocking</code> with a Rawr closure does not work yet. A Rust async method that borrows its receiver does not cross either.</p>
 
 <h2 id="diagnostics">Diagnostics</h2>
 <p><code>rawr check</code> checks an app without opening a window. Errors look like rustc&rsquo;s. Delete the <code>Decrement</code> arm from the counter and it reports the missing arm:</p>
@@ -398,7 +419,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
   <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code>, <code>grid</code> and <code>keyed_column</code>.</li>
   <li><code>iced::gradient</code>, <code>iced::clipboard</code> and <code>application::timed</code>.</li>
   <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
-  <li><code>async fn</code> and <code>.await</code> in Rawr code. Rust futures work, as <a href="#async">Async code</a> describes.</li>
+  <li><code>tokio::task::spawn_blocking</code> with a Rawr closure. Other async code works, as <a href="#async">Async code</a> describes.</li>
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
 <p>iced master has 56 examples. 28 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>lazy</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code>, <code>vectorial_text</code> and <code>websocket</code>. Six of the others write <code>async</code> code in the app itself. Four implement their own widget through <code>iced::advanced</code>. Two need <code>iced::application::timed</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>

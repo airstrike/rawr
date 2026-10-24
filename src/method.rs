@@ -56,6 +56,8 @@ pub(crate) struct Definition {
     trait_default: bool,
     /// An associated `const NAME: T = value;`, used as `Type::NAME`.
     constant: bool,
+    /// `async fn`: the body runs as an `async move` block.
+    asynchronous: bool,
     /// The value of such a constant when it is one integer literal, as an
     /// array length (`[T; Self::N]`) names it.
     integer: Option<crate::INT>,
@@ -126,6 +128,7 @@ impl Definition {
             trait_arguments: Box::default(),
             trait_default: false,
             constant: function.body.constant,
+            asynchronous: function.body.asynchronous,
             integer: function
                 .body
                 .syntax
@@ -215,6 +218,10 @@ impl Definition {
     /// Whether this is an associated const, used without call parentheses.
     pub(crate) const fn constant(&self) -> bool {
         self.constant
+    }
+
+    pub(crate) const fn asynchronous(&self) -> bool {
+        self.asynchronous
     }
 
     /// An integer-literal associated constant's value.

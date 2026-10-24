@@ -43,6 +43,11 @@ const DISPATCH_SENTINEL: &str = "__rawr_nominal_dispatch_";
 /// The generated function from a type witness to that type's default.
 const DEFAULT_DISPATCHER: &str = "__rawr_nominal_default";
 const CLOSURE_SENTINEL: &str = "__rawr_nominal_closure_";
+/// The last parameter of an async body's step function: `()` to start, or
+/// the frame it resumes from.
+const ASYNC_RESUME: &str = "__rawr_resume";
+/// The facade function that makes an async body's step function a `Task`.
+const ASYNC_TASK: &str = "rawr_iced::task::script";
 /// The std and prelude traits whose functions a path call names
 /// (`Default::default()`, `From::from(x)`), with those functions, and
 /// `std::cmp`'s free `min` and `max`.
@@ -855,6 +860,29 @@ fn lower_with_context(
             function.name = name.clone();
         }
     });
+    // Each async body becomes a state machine, once its names are final.
+    let mut unsupported = None;
+    ast.for_each_fn_def_mut(|function| {
+        if unsupported.is_none() {
+            unsupported = crate::eval::machine::lower(function).err();
+        }
+    });
+    if let Some(crate::eval::machine::Unsupported(what, position)) = unsupported {
+        let error = crate::ParseError(
+            Box::new(crate::ParseErrorType::BadInput(crate::LexError::ImproperSymbol(
+                "await".into(),
+                format!("{what} is not supported in Rawr yet").into(),
+            ))),
+            position,
+        );
+        return Err(match generated.translate(Span::new(position, position)) {
+            Ok(translated) => LoweringFailure::generated(translated.source, translated.span, error),
+            Err(origin) => LoweringFailure::unmapped(
+                format!("cannot retain compiler diagnostic origin: {origin}"),
+                error,
+            ),
+        });
+    }
     ast.reindex_script_functions();
     ast.add_support(module);
     let locations = resolve_locations(generated.as_str(), locations);
@@ -8188,6 +8216,12 @@ struct Parser<'a> {
     /// argument: a closure's body is converted into it, as Rust's `Into`.
     closure_outputs: Vec<Option<(Rc<HostTyProof>, usize)>>,
     closure_output: Option<(Rc<HostTyProof>, usize)>,
+    /// The closure about to be parsed is an async body's step function
+    /// (`parse_async_block`), with its output type when it is known.
+    async_step: Option<Option<Ty>>,
+    /// The closure about to be parsed is `async |..| body`: its body is an
+    /// `async move` block.
+    async_closure: bool,
     /// The element type an array literal about to be parsed is expected to
     /// have, so each element coerces to it (`vec![Box::new(a), Box::new(b)]`
     /// as `Vec<Box<dyn Shape>>`), as Rust's expectation does.
@@ -8478,6 +8512,8 @@ impl<'a> Parser<'a> {
             closure_hint: None,
             closure_outputs: Vec::new(),
             closure_output: None,
+            async_step: None,
+            async_closure: false,
             array_hint: None,
             collect_hint: None,
             pipelines: BTreeMap::new(),
@@ -8874,6 +8910,34 @@ impl<'a> Parser<'a> {
                 closures: self.take_lifted(),
             });
         }
+        if definition.asynchronous() {
+            if definition.receiver().is_some() && definition.builtin_owner().is_none() {
+                let model = self.models.definition(definition.owner()).clone();
+                let helper = self.push_op(Op::Validate {
+                    definition: model.definition().clone(),
+                });
+                self.write_output(format!("{helper}(this);"), definition.body());
+            }
+            self.destructure_parameters(definition.parameters(), definition.body())?;
+            let output = Ty::from_resolved(definition.output());
+            self.parse_async_body(&output, definition.body())?;
+            if !matches!(self.peek(), Token::EOF) {
+                return Err(self.unsupported("tokens after a method body"));
+            }
+            self.coerce_tail(&output, definition.body())?;
+            self.finish_conversions()?;
+            self.finish_bounds()?;
+            self.finish_witnesses()?;
+            let ops = self.finish_ops()?;
+            let (source, locations) = std::mem::take(&mut self.output).finish();
+            return Ok(Lowered {
+                source,
+                locations,
+                ops,
+                patterns: std::mem::take(&mut self.patterns),
+                closures: self.take_lifted(),
+            });
+        }
         self.expect(Token::LeftBrace, "'{' to start a method body")?;
         let mut startup_tail = false;
         if self.startup {
@@ -8989,6 +9053,11 @@ impl<'a> Parser<'a> {
         definition: &item::Function,
         startup_tail: &mut bool,
     ) -> Result<(), Error> {
+        if definition.body.asynchronous {
+            let output = definition.output.as_ref().map_or(Ty::Unit, Ty::from_resolved);
+            self.destructure_parameters(&definition.parameters, definition.body.span)?;
+            return self.parse_async_body(&output, definition.body.span);
+        }
         self.expect(Token::LeftBrace, "'{' to start a function body")?;
         if self.startup {
             self.return_blocked = Some("from a startup boot; use its tail");
@@ -24764,6 +24833,16 @@ impl<'a> Parser<'a> {
                     continue;
                 }
             }
+            // `future.await`.
+            if pending.is_none()
+                && matches!(self.peek(), Token::Period)
+                && matches!(self.peek_second(), Token::Reserved(ref keyword) if keyword.as_str() == "await")
+            {
+                self.next();
+                let at = self.next().1;
+                value = self.parse_await(value, at)?;
+                continue;
+            }
             // `value?`, also as the `?` of `?.` and `?[`.
             match self.peek() {
                 _ if pending.is_some() => {}
@@ -25998,6 +26077,7 @@ impl<'a> Parser<'a> {
             Token::Break | Token::Continue => self.parse_jump(token, token_span),
             Token::Return => self.parse_return(token_span),
             Token::Pipe | Token::Or => self.parse_closure(token, token_span, false),
+            Token::Reserved(keyword) if keyword.as_str() == "async" => self.parse_async(token_span),
             Token::LeftBracket => self.parse_array(position, Token::RightBracket, Some(0)),
             Token::Reserved(keyword) if keyword.as_str() == "match" => self.parse_match(token_span),
             Token::Identifier(name) => self.parse_name_primary((*name).into(), token_span),
@@ -27576,7 +27656,7 @@ impl<'a> Parser<'a> {
             Vec::<Vec<Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>>>::new();
         for item in items {
             let checkpoint = self.inference.checkpoint();
-            let hints = self
+            let hints: Vec<Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>> = self
                 .instantiate_host_signature(item, receiver, None)
                 .map(|signature| {
                     signature
@@ -27591,8 +27671,7 @@ impl<'a> Parser<'a> {
                                     Ty::Host { proof, arguments } => Some((proof, arguments.len())),
                                     _ => None,
                                 };
-                                let inputs =
-                                    (!inputs.iter().any(contains_inference)).then_some(inputs);
+                                let inputs = Some(inputs);
                                 (inputs.is_some() || output.is_some()).then_some((inputs, output))
                             }
                             _ => None,
@@ -27601,6 +27680,24 @@ impl<'a> Parser<'a> {
                 })
                 .unwrap_or_default();
             self.inference.rollback(checkpoint);
+            // An input still open gives no parameter types, except a host
+            // type whose arguments are open: `sipper(|progress| ..)` takes
+            // a `Sender<P>` whose `P` the body settles.
+            let hints = hints
+                .into_iter()
+                .map(|hint: Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>| {
+                    hint.and_then(|(inputs, output)| {
+                        let mut fresh = BTreeMap::new();
+                        let inputs = inputs.and_then(|inputs| {
+                            inputs
+                                .iter()
+                                .map(|input| self.open_host_hint(input, &mut fresh))
+                                .collect::<Option<Box<[Ty]>>>()
+                        });
+                        (inputs.is_some() || output.is_some()).then_some((inputs, output))
+                    })
+                })
+                .collect();
             overloads.push(hints);
         }
         let positions = overloads.iter().map(Vec::len).max().unwrap_or_default();
@@ -27639,6 +27736,33 @@ impl<'a> Parser<'a> {
                 })
             })
             .collect();
+    }
+
+    /// A closure parameter hint: `ty` itself when it is settled, or a host
+    /// type whose open arguments become fresh inference variables.
+    fn open_host_hint(&mut self, ty: &Ty, fresh: &mut BTreeMap<usize, Ty>) -> Option<Ty> {
+        if !contains_inference(ty) {
+            return Some(ty.clone());
+        }
+        let Ty::Host { proof, arguments } = ty else {
+            return None;
+        };
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                Ty::Infer(id) => Some(
+                    fresh
+                        .entry(*id)
+                        .or_insert_with(|| self.inference.fresh())
+                        .clone(),
+                ),
+                argument => self.open_host_hint(argument, fresh),
+            })
+            .collect::<Option<Box<[Ty]>>>()?;
+        Some(Ty::Host {
+            proof: proof.clone(),
+            arguments,
+        })
     }
 
     /// The input types of the host callable parameter after `arguments`,
@@ -30452,12 +30576,102 @@ impl<'a> Parser<'a> {
     /// `|a, b: T| body`, `move |..| ..` or `|| ..`. A closure that captures
     /// nothing is a function item; one that captures is a `fn` value whose
     /// captures are shared with its scope, or copied into it with `move`.
+    /// `async { .. }`, `async move { .. }`, `async |x| ..` and
+    /// `async move |x| ..`.
+    fn parse_async(&mut self, start: Span) -> Result<ParsedExpr, Error> {
+        let moved = matches!(self.peek(), Token::Identifier(ref name) if name.as_str() == "move")
+            && !self.bindings.contains_key("move");
+        if moved {
+            self.next();
+        }
+        match self.peek() {
+            Token::Pipe | Token::Or => {
+                let token = self.next().0;
+                self.async_closure = true;
+                self.parse_closure(token, start, moved)
+            }
+            Token::LeftBrace => self.parse_async_block(start, moved, None),
+            _ => Err(self.unsupported("`async` before something other than a block or a closure")),
+        }
+    }
+
+    /// An async block: its body becomes a step function, which the facade
+    /// makes a `Task` of its output (`eval::machine`). `output` is the
+    /// body's type when the caller knows it, as an `async fn`'s.
+    fn parse_async_block(
+        &mut self,
+        start: Span,
+        moved: bool,
+        output: Option<Ty>,
+    ) -> Result<ParsedExpr, Error> {
+        let items = self
+            .models
+            .host_items(ASYNC_TASK)
+            .map(<[_]>::to_vec)
+            .ok_or_else(|| Error::UnsupportedNominalSyntax {
+                construct: "`async` in a program without iced, whose `Task` runs it".into(),
+                source: start,
+            })?;
+        let owner = self.models.item_owner(ASYNC_TASK).cloned();
+        self.async_step = Some(output);
+        let step = self.parse_closure(Token::Or, start, moved)?;
+        let call = span(start.start(), step.span.end());
+        self.call_host_function(&items, owner, vec![step], call)
+    }
+
+    /// `future.await` in an async body: the machine suspends there
+    /// (`eval::machine::AWAIT`), and the future's output is its value.
+    fn parse_await(&mut self, future: ParsedExpr, at: Position) -> Result<ParsedExpr, Error> {
+        let whole = span(future.span.start(), point_span(at).end());
+        if !self.closures.last().is_some_and(|scope| scope.asynchronous) {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "`.await` outside an async block or `async fn`".into(),
+                source: whole,
+            });
+        }
+        let Some(output) = self.task_output(&future.ty) else {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "`.await` on a value that is not a future".into(),
+                source: whole,
+            });
+        };
+        let mut source = origin::Fragment::plain(format!("{}(", crate::eval::machine::AWAIT));
+        source.push(future.rendered_source());
+        source.push_text(")");
+        Ok(self.operator_expr(source, output, whole))
+    }
+
+    /// The body of an `async fn`, whose declared output is `Task<T>`: an
+    /// `async move` block of its body, as Rust desugars it, and the tail.
+    fn parse_async_body(&mut self, output: &Ty, body: Span) -> Result<(), Error> {
+        let inner = self.task_output(output);
+        let block = self.parse_async_block(body, true, inner)?;
+        let start = self.write_output(block.rendered_source(), block.span);
+        self.last_type = block.ty;
+        self.last_expression = Some((start, block.span));
+        Ok(())
+    }
+
+    /// The output of a `Task<T>`, which `.await` gives.
+    fn task_output(&self, ty: &Ty) -> Option<Ty> {
+        match self.inference.resolve(ty) {
+            Ty::Host { proof, arguments }
+                if proof.definition.path() == "iced::Task" && arguments.len() == 1 =>
+            {
+                Some(arguments[0].clone())
+            }
+            _ => None,
+        }
+    }
+
     fn parse_closure(
         &mut self,
         token: Token,
         start: Span,
         moved: bool,
     ) -> Result<ParsedExpr, Error> {
+        let async_step = self.async_step.take();
+        let async_closure = std::mem::take(&mut self.async_closure);
         let mut hint = self.closure_hint.take();
         // A tuple the host hands over spreads over a closure of as many
         // parameters: `event::listen_with(|event, status, window| ..)`.
@@ -30538,8 +30752,13 @@ impl<'a> Parser<'a> {
             }
             Some(ty)
         } else {
-            None
+            async_step.clone().flatten()
         };
+        // An async body's step function takes the value it resumes with
+        // last (`eval::machine`).
+        if async_step.is_some() {
+            parameters.push((ASYNC_RESUME.into(), Ty::Unit, start));
+        }
 
         // `?` in the body returns from the closure, as in Rust.
         let closure_output = annotated.clone().unwrap_or_else(|| self.inference.fresh());
@@ -30553,6 +30772,7 @@ impl<'a> Parser<'a> {
                 .map(|(name, binding)| (name.clone(), binding.declaration))
                 .collect(),
             captures: BTreeSet::new(),
+            asynchronous: async_step.is_some(),
         });
         let outer_loops = std::mem::take(&mut self.loops);
         // A `&mut T` parameter is copied in and back out, as a function's
@@ -30600,7 +30820,10 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        let body = if matches!(self.peek(), Token::LeftBrace) {
+        let body = if async_closure {
+            // `async |x| body` is `|x| async move { body }`.
+            self.parse_async_block(start, true, None)
+        } else if matches!(self.peek(), Token::LeftBrace) {
             self.parse_match_action().map(|branch| branch.value)
         } else {
             self.parse_expr().and_then(|value| {
@@ -32436,6 +32659,22 @@ impl<'a> Parser<'a> {
                 ),
                 _ => written,
             };
+            // `tokio::time::sleep(d)` without tokio: the facade's own
+            // (`resolve::std_reexport`).
+            if full.starts_with("tokio::")
+                && matches!(self.peek(), Token::LeftParen | Token::Unit)
+            {
+                let reexported = crate::resolve::std_reexport(&full, &self.models.host);
+                if let Some(items) = (reexported != full)
+                    .then(|| self.models.host_items(&reexported).map(<[_]>::to_vec))
+                    .flatten()
+                {
+                    let owner = self.models.item_owner(&reexported).cloned();
+                    let (arguments, end) = self.parse_call_arguments("call arguments")?;
+                    let call = span(first_span.start(), end);
+                    return self.call_host_function(&items, owner, arguments, call);
+                }
+            }
             if let Some((value, single)) = crate::resolve::float_constant(&full) {
                 return Ok(self.float_constant(
                     value,
@@ -36566,6 +36805,8 @@ impl<'a> Parser<'a> {
 struct ClosureScope {
     outer: BTreeMap<ImmutableString, Span>,
     captures: BTreeSet<ImmutableString>,
+    /// An async body, where `.await` may appear.
+    asynchronous: bool,
 }
 
 /// Whether a type still has an inference variable in it.

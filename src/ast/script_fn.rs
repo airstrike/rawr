@@ -38,6 +38,8 @@ pub struct ScriptFuncDef {
     /// Each line in non-block doc-comments starts with `///`.
     #[cfg(feature = "metadata")]
     pub comments: crate::StaticVec<crate::SmartString>,
+    /// The async body this function runs instead of `body`, once lowered.
+    pub(crate) machine: Option<crate::Shared<crate::eval::machine::Machine>>,
 }
 
 impl ScriptFuncDef {
@@ -55,6 +57,7 @@ impl ScriptFuncDef {
             params: self.params.clone(),
             #[cfg(feature = "metadata")]
             comments: <_>::default(),
+            machine: None,
         }
     }
 }

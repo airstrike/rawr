@@ -80,6 +80,9 @@ pub struct Adapter {
     source: Option<rawr::diagnostic::Source>,
     timing: Option<timing::Session>,
     pub(crate) prepared: Option<task::Prepared>,
+    /// Tasks [`Adapter::deliver`] left running: a recording polls them
+    /// again on each frame, as its clock moves.
+    running: Vec<iced::futures::stream::BoxStream<'static, iced_runtime::Action<runtime::Message>>>,
 }
 
 pub(crate) struct Draft {
@@ -575,6 +578,7 @@ impl Draft {
             source,
             timing,
             prepared: None,
+            running: Vec::new(),
         }
     }
 
@@ -851,23 +855,49 @@ impl Adapter {
 
     /// Apply the boot's Task and then `messages` as iced's runtime does:
     /// each Task output ready at once (`Task::done`) is applied after them,
-    /// a pending future is never driven, and at most [`DELIVERED`] are
-    /// applied. A failing update stays in the diagnostics.
+    /// and at most [`DELIVERED`] are applied. A task still waiting keeps
+    /// running: each call polls it again, so a timer on a recording's clock
+    /// ends as the clock passes it. A failing update stays in the
+    /// diagnostics.
     pub fn deliver(&mut self, messages: impl IntoIterator<Item = runtime::Message>) {
         let startup = self.take_startup_plan();
         let mut queue = self.ready(startup);
         queue.extend(messages);
         let mut delivered = 0;
-        while let Some(message) = queue.pop_front() {
-            if delivered == DELIVERED {
-                break;
+        loop {
+            while let Some(message) = queue.pop_front() {
+                if delivered == DELIVERED {
+                    return;
+                }
+                delivered += 1;
+                if let Ok(transition) = self.update(message) {
+                    let ready = self.ready(transition.into_plan());
+                    queue.extend(ready);
+                }
             }
-            delivered += 1;
-            if let Ok(transition) = self.update(message) {
-                let ready = self.ready(transition.into_plan());
-                queue.extend(ready);
+            // A script step that just ran may have let a running task go on.
+            queue.extend(self.poll_running());
+            if queue.is_empty() {
+                return;
             }
         }
+    }
+
+    /// Every output the running tasks have ready. A task that ended is
+    /// dropped.
+    fn poll_running(&mut self) -> std::collections::VecDeque<runtime::Message> {
+        use iced::futures::{FutureExt as _, StreamExt as _};
+
+        let mut ready = std::collections::VecDeque::new();
+        self.running.retain_mut(|stream| loop {
+            match stream.next().now_or_never() {
+                Some(Some(iced_runtime::Action::Output(message))) => ready.push_back(message),
+                Some(Some(_)) => {}
+                Some(None) => return false,
+                None => return true,
+            }
+        });
+        ready
     }
 
     /// Apply `message` here when it is a script step a task handed back,
@@ -918,9 +948,15 @@ impl Adapter {
         else {
             return ready;
         };
-        while let Some(Some(action)) = stream.next().now_or_never() {
-            if let iced_runtime::Action::Output(message) = action {
-                ready.push_back(message);
+        loop {
+            match stream.next().now_or_never() {
+                Some(Some(iced_runtime::Action::Output(message))) => ready.push_back(message),
+                Some(Some(_)) => {}
+                Some(None) => break,
+                None => {
+                    self.running.push(stream);
+                    break;
+                }
             }
         }
         ready

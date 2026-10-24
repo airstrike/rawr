@@ -697,7 +697,16 @@ fn runtime_invoke(
         // A projected iced Task takes this call's output witness.
         let output = match output.try_cast_result::<__rawr_internal::host::runtime::Unwitnessed>() {
             Ok(pending) => {
-                let witness = call.output_witness().map_err(|_| Error::Stale)?;
+                // A method's task takes its witness from its receiver's.
+                let witness = call
+                    .output_witness()
+                    .ok()
+                    .or_else(|| {
+                        receiver
+                            .as_ref()
+                            .and_then(|witness| call.transform_native_witness(witness).ok())
+                    })
+                    .ok_or(Error::Stale)?;
                 pending.witness(witness).ok_or(Error::Stale)?
             }
             Err(output) => output,
@@ -3991,7 +4000,15 @@ fn render_adapter(
                         .write_all(b"))?;\n")
                         .map_err(|_| request::Error::Encoding)?;
                 }
-                render_give_with(signature, substitutions, "output", output)?;
+                // A method that takes `self` by value may give a Rust
+                // future, as `Response::text` does.
+                let returned = substitute(signature.output(), signature, substitutions)?;
+                match facade_task_output(returned, facade) {
+                    Some(element) if matches!(receiver, Receiver::Owned) => {
+                        render_give_task(element, "output", output)?;
+                    }
+                    _ => render_give_with(signature, substitutions, "output", output)?,
+                }
             }
         }
         Operation::Constant { ty, associated, .. } => {

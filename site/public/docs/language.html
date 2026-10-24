@@ -210,6 +210,9 @@ fn main() {
 [1, 9, 25, 49, 81]</span></div>
 </div>
 
+<h3 id="async">Async code</h3>
+<p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. Each <code>.await</code> suspends the body, and it goes on from there with its locals as they were. <a href="/docs/iced#async">Async code</a> describes how an app runs them.</p>
+
 <h2 id="macros">Macros</h2>
 <p>Rawr has a fixed set of built-in macros. You can&rsquo;t define your own with <code>macro_rules!</code>.</p>
 <table>
@@ -269,7 +272,8 @@ fn main() {
   <li>A glob import of an enum&rsquo;s variants (<code>use Shape::*;</code>).</li>
   <li><code>const fn</code>.</li>
   <li>Byte literals (<code>b'a'</code>, <code>b"ab"</code>) and <code>char</code> ranges such as <code>'a'..='e'</code>.</li>
-  <li><code>macro_rules!</code>, <code>async</code> and <code>.await</code>. An iced app can run Rust futures, as <a href="/docs/iced#async">Async code</a> describes.</li>
+  <li><code>macro_rules!</code>.</li>
+  <li><code>async</code> and <code>.await</code> in a program without iced. iced&rsquo;s <code>Task</code> is what runs a future, as <a href="/docs/iced#async">Async code</a> describes.</li>
   <li>A <code>const</code> captured in a format string (<code>"{LIMIT}"</code>). Pass it as an argument instead.</li>
 </ul>
 <h3 id="missing-types">Types and borrowing</h3>
@@ -317,6 +321,7 @@ fn main() {
   <li>Out-of-range literals such as <code>let x: u8 = 300</code> are accepted.</li>
   <li>Top-level statements are accepted. Rust allows only items at the top level.</li>
   <li>In iced code, a concrete widget is accepted where an <code>Element</code> is expected.</li>
+  <li><code>.await</code> on an iced <code>Task</code> is accepted. Rust awaits only a future.</li>
 </ul>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Getting started</b></a><a class="next" href="/docs/embedding">Next<b>Embedding</b></a></nav>
 </article>

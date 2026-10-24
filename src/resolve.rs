@@ -1162,7 +1162,16 @@ fn resolve_import_binding(
 /// module as its own: `std::time::Instant` is `iced::time::Instant`, as
 /// iced's `time` re-exports std's types.
 pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableString {
-    const REEXPORTS: [(&str, &str); 2] = [("std::time", "iced::time"), ("core::time", "iced::time")];
+    // tokio's `sleep` in a program that does not import tokio is the
+    // facade's own, which follows a recording's clock.
+    const REEXPORTS: [(&str, &str); 3] = [
+        ("std::time", "iced::time"),
+        ("core::time", "iced::time"),
+        ("tokio::time::sleep", "rawr_iced::time::sleep"),
+    ];
+    if host.entry(qualified).is_some() {
+        return qualified.into();
+    }
     for (std, facade) in REEXPORTS {
         if let Some(rest) = qualified.strip_prefix(std)
             && (rest.is_empty() || rest.starts_with("::"))
@@ -1737,6 +1746,7 @@ fn resolve_item(
                     lowering: item::Lowering::Unavailable,
                     syntax: parsed.body_syntax,
                     constant: false,
+                    asynchronous: false,
                     text: None,
                     elide: None,
                 },
@@ -1836,6 +1846,7 @@ fn resolve_function(
             lowering: item::Lowering::Unavailable,
             syntax: parsed.body_syntax,
             constant: parsed.constant,
+            asynchronous: parsed.asynchronous,
             text: None,
             elide: None,
         },
@@ -2925,6 +2936,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             lowering: item::Lowering::Unavailable,
             syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: false,
+            asynchronous: false,
             text: None,
             elide: None,
         },

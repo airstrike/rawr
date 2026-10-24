@@ -185,10 +185,10 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                 ))
                 .into_err(*position));
             }
-            (Token::Reserved(text), position)
+            (Token::Reserved(text), _)
                 if scan.delimiter_depth == 0 && text.as_str() == "async" =>
             {
-                return Err(async_unsupported(*position));
+                items.extend(parse_item(input, &tokenizer_control)?);
             }
             (Token::Reserved(text), _) if scan.delimiter_depth == 0 && text.as_str() == "static" => {
                 let start = input.peek().expect("peeked static").1;
@@ -539,6 +539,15 @@ fn parse_enabled_item(
             visibility,
             start,
             false,
+        )
+        .map(crate::item::Parsed::Function),
+        #[cfg(not(feature = "no_function"))]
+        (Token::Reserved(text), _) if text.as_str() == "async" => parse_async_function(
+            input,
+            tokenizer_control,
+            attributes,
+            visibility,
+            start,
         )
         .map(crate::item::Parsed::Function),
         #[cfg(not(feature = "no_function"))]
@@ -1133,6 +1142,7 @@ fn bind_previews(
                 body_span: bind.span,
                 body_syntax: crate::item::BodySyntax::new(bind.tokens),
                 constant: true,
+                asynchronous: false,
                 span: bind.span,
             }));
         }
@@ -1720,6 +1730,16 @@ fn parse_impl(
                 )?);
                 continue;
             }
+            if matches!(input.peek(), Some((Token::Reserved(text), _)) if text.as_str() == "async") {
+                functions.push(parse_async_function(
+                    input,
+                    tokenizer_control,
+                    attributes,
+                    visibility,
+                    function_start,
+                )?);
+                continue;
+            }
             if matches!(input.peek(), Some((Token::Const, _))) {
                 functions.push(parse_associated_const(
                     input,
@@ -1733,11 +1753,7 @@ fn parse_impl(
             }
         }
 
-        let (token, position) = input.peek().expect("token streams always end with EOF");
-        if matches!(token, Token::Reserved(text) if text.as_str() == "async") {
-            return Err(async_unsupported(*position));
-        }
-        let position = *position;
+        let position = input.peek().expect("token streams always end with EOF").1;
         return Err(PERR::MissingToken(
             "fn".into(),
             "for an associated function inside an impl block".into(),
@@ -2015,6 +2031,63 @@ fn parse_function(
     )
 }
 
+/// `async fn`: a function that returns `impl Future<Output = T>` of its
+/// declared output `T`, and whose body runs as an `async move` block.
+#[cfg(not(feature = "no_function"))]
+fn parse_async_function(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<crate::item::Function> {
+    let (_, at) = input.next().expect("the caller peeked `async`");
+    let mut function = parse_function(
+        input,
+        tokenizer_control,
+        attributes,
+        visibility,
+        start,
+        false,
+    )?;
+    let keyword = token_span(at, "async");
+    let output = function
+        .output
+        .take()
+        .unwrap_or(type_ref::Type::Unit(keyword));
+    function.output = Some(future_type(output, keyword));
+    function.asynchronous = true;
+    Ok(function)
+}
+
+/// `impl Future<Output = output>`, as `parse_impl_bounds` reads it.
+#[cfg(not(feature = "no_function"))]
+fn future_type(output: type_ref::Type, at: Span) -> type_ref::Type {
+    let path = |text: String, arguments: Vec<type_ref::Argument>| type_ref::Path {
+        segments: Box::new([type_ref::Segment {
+            name: crate::item::Name {
+                text: text.into(),
+                span: at,
+            },
+            arguments: arguments.into_boxed_slice(),
+            span: at,
+        }]),
+        span: at,
+    };
+    let bound = path("Future".into(), Vec::new());
+    let binding = path(
+        format!("{}Future=Output", type_ref::BINDING_PREFIX),
+        vec![type_ref::Argument::Type(output)],
+    );
+    type_ref::Type::Path(path(
+        type_ref::IMPL_TYPE.into(),
+        vec![
+            type_ref::Argument::Type(type_ref::Type::Path(bound)),
+            type_ref::Argument::Type(type_ref::Type::Path(binding)),
+        ],
+    ))
+}
+
 /// Parse a function after its name and `(` (`parameters` is `Some`, holding
 /// a first parameter name already consumed), or after `()` (`None`).
 #[cfg(not(feature = "no_function"))]
@@ -2188,6 +2261,7 @@ fn parse_function_rest(
             body_span: semicolon,
             body_syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: false,
+            asynchronous: false,
             span: Span::new(start, semicolon.end()),
         });
     }
@@ -2209,6 +2283,7 @@ fn parse_function_rest(
         body_span,
         body_syntax,
         constant: false,
+        asynchronous: false,
         span,
     })
 }
@@ -2268,18 +2343,16 @@ fn parse_generic_params(input: &mut TokenStream) -> ParseResult<Vec<crate::item:
 
 /// `Bound + Bound`: trait paths; lifetime bounds are erased. Associated
 /// type equalities (`Shape<Output = i64>`) go to `projections`.
-/// `async fn`, which Rawr does not run yet.
-fn async_unsupported(position: Position) -> crate::ParseError {
-    PERR::BadInput(crate::LexError::ImproperSymbol(
-        "async".into(),
-        "`async` functions are not supported in Rawr yet".into(),
-    ))
-    .into_err(position)
-}
 
 /// `use<'a, T>` among `impl Trait` bounds: Rust's precise capturing, which
 /// Rawr's types need no record of. Where it ends, when it was there.
-fn skip_precise_capture(input: &mut TokenStream) -> ParseResult<Option<Position>> {
+///
+/// `Option<impl Future + use<>>` ends in `>>`, one token: its second `>`
+/// closes the enclosing list, which `split` then records.
+fn skip_precise_capture(
+    input: &mut TokenStream,
+    split: Option<&mut Option<Position>>,
+) -> ParseResult<Option<Position>> {
     if !matches!(input.peek(), Some((Token::Use, _))) {
         return Ok(None);
     }
@@ -2288,6 +2361,13 @@ fn skip_precise_capture(input: &mut TokenStream) -> ParseResult<Option<Position>
     loop {
         match input.next() {
             Some((Token::GreaterThan, position)) => return Ok(Some(after(position, 1))),
+            Some((Token::RightShift, position)) if split.is_some() => {
+                let end = after(position, 1);
+                if let Some(split) = split {
+                    *split = Some(end);
+                }
+                return Ok(Some(end));
+            }
             Some((Token::EOF, position)) => {
                 return Err(PERR::MissingToken(">".into(), "to close `use<..>`".into())
                     .into_err(position));
@@ -2307,7 +2387,7 @@ fn parse_bounds(
     loop {
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             parse_lifetime(input)?;
-        } else if skip_precise_capture(input)?.is_some() {
+        } else if skip_precise_capture(input, closing.as_deref_mut())?.is_some() {
         } else if let Some((Token::Identifier(name) | Token::Reserved(name), position)) =
             input.peek()
             && is_fn_trait(name)
@@ -2613,6 +2693,7 @@ fn parse_associated_const(
             body_span: semicolon,
             body_syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: true,
+            asynchronous: false,
             span: Span::new(start, semicolon.end()),
         });
     }
@@ -2674,6 +2755,7 @@ fn finish_associated_const(
         body_span: Span::new(value_start, semicolon),
         body_syntax: crate::item::BodySyntax::new(tokens),
         constant: true,
+        asynchronous: false,
         span,
     })
 }
@@ -2724,6 +2806,7 @@ fn parse_const_rest(
         body_span: Span::new(value_start, semicolon),
         body_syntax: crate::item::BodySyntax::new(tokens),
         constant: true,
+        asynchronous: false,
         span,
     })
 }
@@ -2932,7 +3015,7 @@ fn parse_type_split(
                 path.span = Span::new(start, lifetime.span.end());
                 continue;
             }
-            if let Some(end) = skip_precise_capture(input)? {
+            if let Some(end) = skip_precise_capture(input, Some(split))? {
                 path.span = Span::new(start, end);
                 continue;
             }
@@ -3029,7 +3112,7 @@ fn skip_fn_bounds(
             path.span = Span::new(start, lifetime.span.end());
             continue;
         }
-        if let Some(end) = skip_precise_capture(input)? {
+        if let Some(end) = skip_precise_capture(input, Some(split))? {
             path.span = Span::new(start, end);
             continue;
         }
@@ -3315,7 +3398,7 @@ fn parse_iterator_type(
             span = Span::new(start, lifetime.span.end());
             continue;
         }
-        if let Some(end) = skip_precise_capture(input)? {
+        if let Some(end) = skip_precise_capture(input, Some(split))? {
             span = Span::new(start, end);
             continue;
         }
@@ -3919,6 +4002,7 @@ fn parse_callback_closure(
         body_span,
         body_syntax,
         constant,
+        asynchronous: false,
         span,
     })
 }
@@ -4115,6 +4199,7 @@ fn parse_legacy_function_outline(
             body_span,
             body_syntax,
             constant: false,
+            asynchronous: false,
             span,
         })));
     }

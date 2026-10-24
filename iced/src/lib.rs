@@ -181,6 +181,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::selector")?;
     builder.module("widget::operation::scrollable")?;
     builder.module("window")?;
+    builder.module("futures")?;
+    builder.module("futures::future")?;
     builder.module("event")?;
     builder.module("keyboard")?;
     builder.module("keyboard::key")?;
@@ -197,6 +199,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.required_type::<task::Plan>("Task", &["Message"], &[])?;
     // A Rust `impl Sipper<Output, Progress>`, and iced's `task::Handle`.
     builder.type_::<task::Sip>("task::Sipper", &["Output", "Progress"], &[])?;
+    // The `task::Sender` a script sipper's builder sends its progress with.
+    builder.type_::<task::Sender>("task::Sender", &["Progress"], &[])?;
     builder.type_::<task::Handle>(
         "task::Handle",
         &[],
@@ -1114,6 +1118,7 @@ fn extension_with_exports(
         "task",
         "subscription",
         "theme",
+        "time",
         "widget",
         "widget::children",
         "widget::draw",
@@ -1153,6 +1158,15 @@ fn extension_with_exports(
         "subscription::batch",
         external_batch_signature(&exports.subscription)?,
     )?)?;
+    builder.item(item::Definition::function(
+        "task::script",
+        script_signature(&exports.task)?,
+    )?)?;
+    // tokio's `time::sleep`, for a program without tokio (`resolve::std_reexport`).
+    let mut sleep = signature::Builder::new();
+    sleep.parameter(external_type(&exports.duration, [])?);
+    sleep.output(external_type(&exports.task, [type_ref::Type::unit()])?);
+    builder.item(item::Definition::function("time::sleep", sleep.finish())?)?;
     builder.item(item::Definition::function(
         "theme::custom",
         extension_theme_signature(&exports.theme)?,
@@ -1324,6 +1338,7 @@ pub(crate) fn install_test_runtime(registry: &mut host::runtime::Registry) {
 
 struct Exports {
     task: host::type_def::Export,
+    duration: host::type_def::Export,
     subscription: host::type_def::Export,
     theme: host::type_def::Export,
     element: host::type_def::Export,
@@ -1337,6 +1352,7 @@ impl Exports {
     fn new(iced: &facade::Definition) -> Result<Self, host::Error> {
         Ok(Self {
             task: iced.export_type("Task")?,
+            duration: iced.export_type("time::Duration")?,
             subscription: iced.export_type("Subscription")?,
             theme: iced.export_type("Theme")?,
             element: iced.export_type("Element")?,
@@ -1363,6 +1379,22 @@ fn external_batch_signature(
     let plan = external_type(export, [type_ref::Type::parameter("Message")?])?;
     signature.parameter(plan.clone());
     signature.output(plan);
+    Ok(signature.finish())
+}
+
+/// The `Task` an async body runs as: its step function, which takes `()`
+/// or the frame it resumes from (`rawr::future`), and the body's output.
+fn script_signature(
+    export: &host::type_def::Export,
+) -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Resume", &[])?;
+    signature.type_parameter("Output", &[])?;
+    signature.parameter(type_ref::Type::callable(
+        type_ref::Type::parameter("Resume")?,
+        type_ref::Type::parameter("Output")?,
+    ));
+    signature.output(external_type(export, [type_ref::Type::parameter("Output")?])?);
     Ok(signature.finish())
 }
 
@@ -1601,6 +1633,60 @@ fn declare_sippers(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let task = |message: &str| type_ref::Type::applied("Task", [parameter(message)?]);
     let sipper = || type_ref::Type::applied("task::Sipper", [parameter("Output")?, parameter("Progress")?]);
     let handle = || type_ref::Type::registered("task::Handle");
+
+    // `futures::future::join(a, b)` and `try_join(a, b)`, which iced
+    // re-exports: both futures run at once.
+    let mut join = signature::Builder::new();
+    join.type_parameter("A", &[])?;
+    join.type_parameter("B", &[])?;
+    join.parameter(task("A")?);
+    join.parameter(task("B")?);
+    join.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::tuple([parameter("A")?, parameter("B")?])?],
+    )?);
+    builder.item(item::Definition::function("futures::future::join", join.finish())?)?;
+    let fallible = |name: &str| -> Result<type_ref::Type, host::Error> {
+        type_ref::Type::applied(
+            "Task",
+            [type_ref::Type::result(parameter(name)?, parameter("E")?)],
+        )
+    };
+    let mut try_join = signature::Builder::new();
+    try_join.type_parameter("A", &[])?;
+    try_join.type_parameter("B", &[])?;
+    try_join.type_parameter("E", &[])?;
+    try_join.parameter(fallible("A")?);
+    try_join.parameter(fallible("B")?);
+    try_join.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::result(
+            type_ref::Type::tuple([parameter("A")?, parameter("B")?])?,
+            parameter("E")?,
+        )],
+    )?);
+    builder.item(item::Definition::function(
+        "futures::future::try_join",
+        try_join.finish(),
+    )?)?;
+
+    // `sipper(async |mut progress| { progress.send(value).await; .. })`.
+    let sender = || type_ref::Type::applied("task::Sender", [parameter("Progress")?]);
+    let mut script = signature::Builder::new();
+    script.type_parameter("Output", &[])?;
+    script.type_parameter("Progress", &[])?;
+    script.parameter(type_ref::Type::callable(sender()?, task("Output")?));
+    script.output(sipper()?);
+    builder.item(item::Definition::function("task::sipper", script.finish())?)?;
+    let mut send = signature::Builder::new();
+    send.type_parameter("Progress", &[])?;
+    send.parameter(parameter("Progress")?);
+    send.output(type_ref::Type::applied("Task", [type_ref::Type::unit()])?);
+    builder.item(item::Definition::method(
+        "task::Sender::send",
+        receiver::Mode::Shared,
+        send.finish(),
+    )?)?;
 
     let mut sip = signature::Builder::new();
     sip.type_parameter("Output", &[])?;
