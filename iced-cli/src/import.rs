@@ -58,6 +58,103 @@ pub(crate) fn declared(
     Ok(graph.declares_rust_import().then_some(target))
 }
 
+/// Rawr compiles a project's Rust in the project's own build directory with
+/// the pinned nightly, for the host named as a target. Those are the units
+/// `cargo build` compiles only when the project builds the same way, which
+/// is what `rawr new` sets up; otherwise every crate would be compiled twice.
+/// `Err` names what the project needs, as the files to add.
+pub(crate) fn same_build(root: &std::path::Path) -> Result<(), String> {
+    let environment = Environment::capture().map_err(|error| error.to_string())?;
+    // rustup decides the toolchain from the directory: `RUSTUP_TOOLCHAIN`,
+    // an override, a `rust-toolchain.toml` above it, or the default.
+    let active = std::process::Command::new("rustup")
+        .args(["show", "active-toolchain"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        });
+    let target = rawr_import::location::build_target(root, &environment);
+    let overrides = rawr_import::location::rawr_profile_configs(root, &environment);
+    same_build_as(root, active.as_deref(), target.as_deref(), &overrides)
+}
+
+/// [`same_build`] for a project whose toolchain is `active` (`None` when
+/// rustup cannot tell), whose `cargo build` target is `target`, and whose
+/// Cargo config files `overrides` set a profile for the `rawr` crate.
+fn same_build_as(
+    root: &std::path::Path,
+    active: Option<&str>,
+    target: Option<&str>,
+    overrides: &[PathBuf],
+) -> Result<(), String> {
+    let channel = rawr_import::cargo::toolchain::CHANNEL;
+    let host = rawr_import::cargo::toolchain::HOST.trim();
+    let mut needed = Vec::new();
+    if let Some(active) = active
+        && active != channel
+        && !active.starts_with(&format!("{channel}-"))
+    {
+        needed.push(format!(
+            "It builds with `{active}`, so add `rust-toolchain.toml`:\n\n{}",
+            crate::new::toolchain()
+        ));
+    }
+    if !matches!(target, Some(target) if target == host || target == "host-tuple") {
+        needed.push(format!(
+            "It builds for {}, so add `.cargo/config.toml`:\n\n{}",
+            target.map_or_else(|| "no named target".to_owned(), |target| format!("`{target}`")),
+            crate::new::cargo_config()
+        ));
+    }
+    for config in overrides {
+        needed.push(format!(
+            "`{}` sets a profile for the `rawr` crate, and Cargo cannot combine it with \
+             the one Rawr's runner sets. A project inside a Rawr checkout inherits the \
+             checkout's config; move the project out of it, or remove that profile.",
+            config.display()
+        ));
+    }
+    if needed.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "`{}` must build as Rawr builds it, with `{channel}` for `{host}`, or each of its \
+         crates is compiled twice: once by `cargo build` and once by Rawr. {}",
+        root.display(),
+        needed.join("\n")
+    ))
+}
+
+/// The rawr-iced widget features a project's runner builds with.
+///
+/// The aim is the ones the project's iced has, as its Cargo.toml names them
+/// (`image-without-codecs` counts as `image`), so the runner adds no iced
+/// feature. Until the profile's compatibility pin (`COMPATIBILITY_DIGEST`
+/// and `COMPATIBILITY_PROJECTIONS` in rawr-iced's `profile/runner.rs`)
+/// holds for a facade without some widgets, every project gets them all.
+fn widgets(graph: &rawr::package::Graph) -> Vec<rawr_iced::features::Feature> {
+    const FOLLOW_PROJECT: bool = false;
+    if !FOLLOW_PROJECT {
+        return rawr_iced::features::Feature::ALL.to_vec();
+    }
+    let named = graph.dependency_features(rawr_iced::profile::Definition::FRAMEWORK);
+    rawr_iced::features::Feature::ALL
+        .into_iter()
+        .filter(|feature| {
+            named
+                .iter()
+                .any(|name| rawr_iced::features::Feature::of_iced(name) == Some(*feature))
+        })
+        .collect()
+}
+
 impl Prepared {
     /// The limits profile this preparation captured; later routes reuse it.
     pub(crate) const fn limits(&self) -> rawr_import::cargo::Limits {
@@ -186,6 +283,10 @@ fn prepare_transform(
     // paths the iced profile selects), so the first launch needs one probe.
     // A path the pass misses below such a dependency is demanded as above.
     let framework = rawr_iced::profile::Definition::FRAMEWORK;
+    // The runner's rawr-iced has the widgets the project's iced has, and
+    // this process declares the same facade to check against.
+    let widgets = widgets(&graph);
+    rawr_iced::features::select(widgets.iter().copied());
     let seed = graph.rust_demand_seed(rawr_iced::profile::Definition::DEMAND, Some(framework));
     #[cfg(feature = "import-baseline")]
     let (mut observed_toolchain, mut observed_resolution);
@@ -197,8 +298,8 @@ fn prepare_transform(
         request_demand.sort_unstable();
         request_demand.dedup();
         let environment = Environment::capture().map_err(Error::Import)?;
-        let dependency =
-            rawr_iced::profile::Definition::cargo_dependency(&limits).map_err(Error::Import)?;
+        let dependency = rawr_iced::profile::Definition::cargo_dependency(&widgets, &limits)
+            .map_err(Error::Import)?;
         let framework_dependency =
             rawr_iced::profile::Definition::framework_dependency(&limits).map_err(Error::Import)?;
         let request = match graph.rust_import_with_profile(
@@ -513,6 +614,27 @@ mod tests {
     use rawr_import::cargo::config::Environment;
 
     #[test]
+    fn a_project_builds_as_rawr_builds_it_or_is_told_what_to_add() {
+        let root = Path::new("/project");
+        let channel = rawr_import::cargo::toolchain::CHANNEL;
+        let host = rawr_import::cargo::toolchain::HOST.trim();
+        let pinned = format!("{channel}-{host}");
+        assert_eq!(super::same_build_as(root, Some(&pinned), Some(host), &[]), Ok(()));
+        assert_eq!(super::same_build_as(root, None, Some(host), &[]), Ok(()));
+        assert_eq!(super::same_build_as(root, None, Some("host-tuple"), &[]), Ok(()));
+        let error = super::same_build_as(root, Some(&pinned), None, &[]).unwrap_err();
+        assert!(error.contains(".cargo/config.toml"), "{error}");
+        assert!(!error.contains("rust-toolchain.toml"), "{error}");
+        let error = super::same_build_as(root, Some("stable-aarch64-apple-darwin"), Some(host), &[])
+            .unwrap_err();
+        assert!(error.contains("rust-toolchain.toml"), "{error}");
+        assert!(error.contains(channel), "{error}");
+        let config = PathBuf::from("/checkout/.cargo/config.toml");
+        let error = super::same_build_as(root, Some(&pinned), Some(host), &[config]).unwrap_err();
+        assert!(error.contains("/checkout/.cargo/config.toml"), "{error}");
+    }
+
+    #[test]
     fn real_iced_import_seals_one_generated_profile_owner() {
         rawr_import::store::isolate_for_tests();
         let project = real_iced_fixture();
@@ -592,7 +714,7 @@ mod tests {
         let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target)
             .expect("fixture package graph");
         let environment = Environment::capture().expect("fixture Cargo environment");
-        let dependency = rawr_iced::profile::Definition::cargo_dependency(&limits)
+        let dependency = rawr_iced::profile::Definition::cargo_dependency(&super::widgets(&graph), &limits)
             .expect("fixture profile dependency");
         let universe = rawr_iced::profile::Definition::new(&limits)
             .expect("fixture profile definition")
@@ -623,7 +745,7 @@ mod tests {
         let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target)
             .expect("fixture package graph");
         let environment = Environment::capture().expect("fixture Cargo environment");
-        let dependency = rawr_iced::profile::Definition::cargo_dependency(&limits)
+        let dependency = rawr_iced::profile::Definition::cargo_dependency(&super::widgets(&graph), &limits)
             .expect("fixture profile dependency");
         let universe = rawr_iced::profile::Definition::new(&limits)
             .expect("fixture profile definition")

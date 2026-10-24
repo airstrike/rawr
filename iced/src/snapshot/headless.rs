@@ -24,6 +24,7 @@ pub(super) struct Renderer {
 
 impl Renderer {
     pub(super) fn new() -> Result<Self, Error> {
+        super::fonts::embed_fira_sans();
         let raw = iced::futures::executor::block_on(<iced::Renderer as Headless>::new(
             renderer::Settings {
                 font: iced::Font::DEFAULT,

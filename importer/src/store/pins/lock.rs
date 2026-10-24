@@ -932,13 +932,11 @@ fn open_shared(
     })?;
     #[cfg(unix)]
     {
-        use std::os::fd::AsRawFd as _;
-
-        nix::fcntl::flock(file.as_raw_fd(), nix::fcntl::FlockArg::LockShared).map_err(
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockShared).map_err(
             |source| Error::Io {
                 operation: "acquire typed store pin-root lock",
                 path: path.to_path_buf(),
-                source: std::io::Error::from_raw_os_error(source as i32),
+                source: std::io::Error::from_raw_os_error(source.raw_os_error()),
             },
         )?;
     }
@@ -1076,8 +1074,6 @@ fn open_snapshot_with(
     retain_active: bool,
     #[cfg(feature = "import-baseline")] source: Option<&pin::Source>,
 ) -> Result<Option<SnapshotLock>, Error> {
-    use std::os::fd::AsRawFd as _;
-
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect typed store pin-root snapshot",
         path: path.to_path_buf(),
@@ -1091,20 +1087,17 @@ fn open_snapshot_with(
         path: path.to_path_buf(),
         source,
     })?;
-    let state = match nix::fcntl::flock(
-        file.as_raw_fd(),
-        nix::fcntl::FlockArg::LockExclusiveNonblock,
-    ) {
+    let state = match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
         Ok(()) => false,
-        Err(source) if source == nix::errno::Errno::EWOULDBLOCK => {
+        Err(source) if source == rustix::io::Errno::WOULDBLOCK => {
             if !retain_active {
                 return Ok(None);
             }
-            nix::fcntl::flock(file.as_raw_fd(), nix::fcntl::FlockArg::LockShared).map_err(
+            rustix::fs::flock(&file, rustix::fs::FlockOperation::LockShared).map_err(
                 |source| Error::Io {
                     operation: "retain active typed store pin-root snapshot",
                     path: path.to_path_buf(),
-                    source: std::io::Error::from_raw_os_error(source as i32),
+                    source: std::io::Error::from_raw_os_error(source.raw_os_error()),
                 },
             )?;
             true
@@ -1113,7 +1106,7 @@ fn open_snapshot_with(
             return Err(Error::Io {
                 operation: "probe typed store pin-root snapshot",
                 path: path.to_path_buf(),
-                source: std::io::Error::from_raw_os_error(source as i32),
+                source: std::io::Error::from_raw_os_error(source.raw_os_error()),
             });
         }
     };
@@ -1204,23 +1197,18 @@ pub(in crate::store) fn fixture_counts(store: &Path) -> Result<(usize, usize), E
 
 #[cfg(test)]
 fn independently_locked_path(path: &Path) -> Result<bool, Error> {
-    use std::os::fd::AsRawFd as _;
-
     let file = File::open(path).map_err(|source| Error::Io {
         operation: "open typed store pin-root contention fixture",
         path: path.to_path_buf(),
         source,
     })?;
-    match nix::fcntl::flock(
-        file.as_raw_fd(),
-        nix::fcntl::FlockArg::LockExclusiveNonblock,
-    ) {
+    match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
         Ok(()) => Ok(false),
-        Err(source) if source == nix::errno::Errno::EWOULDBLOCK => Ok(true),
+        Err(source) if source == rustix::io::Errno::WOULDBLOCK => Ok(true),
         Err(source) => Err(Error::Io {
             operation: "probe typed store pin-root contention",
             path: path.to_path_buf(),
-            source: std::io::Error::from_raw_os_error(source as i32),
+            source: std::io::Error::from_raw_os_error(source.raw_os_error()),
         }),
     }
 }

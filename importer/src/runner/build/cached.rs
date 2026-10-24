@@ -230,9 +230,10 @@ fn compile<B>(
     let target = attempt.target();
     let production = native.production();
     let (rustc, rustdoc) = production.cargo_tools();
-    let build = crate::deps::directory(context.rawr()).map_err(|source| node::Error::Io {
-        operation: "create the project's runner build directory",
-        path: context.rawr().join("build"),
+    let project_build = crate::location::build_directory(context.project(), context.environment());
+    let build = crate::deps::directory(&project_build).map_err(|source| node::Error::Io {
+        operation: "create the project's Cargo build directory",
+        path: project_build.clone(),
         source,
     })?;
     let work = work_directory(context.rawr());
@@ -254,9 +255,6 @@ fn compile<B>(
     let prefix = vec![
         OsString::from("--config"),
         OsString::from(format!("build.build-dir={build_value}")),
-        // Content, not mtime, decides freshness: every bundle's generated crate
-        // shares one unit in the shared build directory.
-        OsString::from("-Zchecksum-freshness"),
     ];
     let tail = vec![
         // Artifacts as JSON name every unit this build used; rustc's
@@ -282,9 +280,9 @@ fn compile<B>(
         None
     };
     before_cargo()?;
-    let shared = crate::deps::lock(&build).map_err(|source| node::Error::Io {
+    let shared = crate::deps::lock(context.rawr()).map_err(|source| node::Error::Io {
         operation: "lock shared runner build directory",
-        path: build.clone(),
+        path: context.rawr().join("build.lock"),
         source,
     })?;
     let carrier = manifest

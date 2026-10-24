@@ -99,7 +99,7 @@ impl file::System for Script {
         self.events.push(Event::Open);
         let result = if self.interrupt_open > 0 {
             self.interrupt_open -= 1;
-            Err(nix::libc::EINTR)
+            Err(libc::EINTR)
         } else {
             self.opens.pop_front().unwrap_or(Ok(17))
         };
@@ -125,7 +125,7 @@ impl file::System for Script {
         self.events.push(Event::Read(output.len()));
         if self.interrupt_read > 0 {
             self.interrupt_read -= 1;
-            return Err(nix::libc::EINTR);
+            return Err(libc::EINTR);
         }
         match self
             .reads
@@ -232,14 +232,14 @@ fn cap_plus_one_rejects_without_retaining_excess_or_post_read_io() {
 #[test]
 fn positive_short_reads_and_first_late_interruptions_continue_one_stream() {
     let mut script = Script::new([
-        Step::Error(nix::libc::EINTR),
+        Step::Error(libc::EINTR),
         bytes(b"a"),
         bytes(b"b"),
-        Step::Error(nix::libc::EINTR),
+        Step::Error(libc::EINTR),
         bytes(b"c"),
         Step::Eof,
     ]);
-    script.opens = [Err(nix::libc::EINTR), Ok(17)].into();
+    script.opens = [Err(libc::EINTR), Ok(17)].into();
     let acquired = run(&mut script, 3).unwrap();
     assert_eq!(content(&acquired), (b"abc".as_slice(), observed::End::Eof));
     assert_eq!(
@@ -281,7 +281,7 @@ fn large_reads_use_fixed_chunks_and_a_separate_terminal_probe() {
 
 #[test]
 fn terminal_errors_preserve_errno_and_never_promote_read_enoent_to_absence() {
-    for code in [nix::libc::EIO, nix::libc::ENOENT, 107] {
+    for code in [libc::EIO, libc::ENOENT, 107] {
         for prefix in [b"".as_slice(), b"a=1\n".as_slice(), b"\xff".as_slice()] {
             let mut steps = Vec::new();
             if !prefix.is_empty() {
@@ -317,15 +317,15 @@ fn terminal_errors_preserve_errno_and_never_promote_read_enoent_to_absence() {
 #[test]
 fn only_open_enoent_is_absence_and_no_descriptor_facts_are_fabricated() {
     for code in [
-        nix::libc::ENOENT,
-        nix::libc::ENOTDIR,
-        nix::libc::EACCES,
+        libc::ENOENT,
+        libc::ENOTDIR,
+        libc::EACCES,
         107,
     ] {
         let mut script = Script::new([]);
         script.opens.push_back(Err(code));
         let acquired = run(&mut script, 100).unwrap();
-        let expected = if code == nix::libc::ENOENT {
+        let expected = if code == libc::ENOENT {
             observed::Value::Absent
         } else {
             observed::Value::Error(code)
@@ -401,7 +401,7 @@ fn growth_truncation_replacement_and_available_disagreement_are_explicit() {
     ] {
         let mut script = Script::new([bytes(b"abc"), Step::Eof]);
         script.path_stats[1] = Stat::Metadata(changed);
-        script.handle_stats[1] = Stat::Error(nix::libc::EIO);
+        script.handle_stats[1] = Stat::Error(libc::EIO);
         let acquired = run(&mut script, 3).unwrap();
         assert_eq!(content(&acquired).1, observed::End::Eof);
         assert_eq!(acquired.identity().comparison(), Comparison::Changed);
@@ -424,13 +424,13 @@ fn optional_metadata_errors_stay_optional_and_unknown_never_matches() {
         assert_eq!(content(&acquired), (b"a".as_slice(), observed::End::Eof));
         assert_eq!(acquired.identity().comparison(), Comparison::Unavailable);
     }
-    let mut script = Script::new([Step::Error(nix::libc::EACCES)]);
+    let mut script = Script::new([Step::Error(libc::EACCES)]);
     script.path_stats = [Stat::Error(107); 2];
     script.handle_stats = [Stat::Error(107); 2];
     let acquired = run(&mut script, 1).unwrap();
     assert_eq!(
         acquired.record().value,
-        observed::Value::Error(nix::libc::EACCES)
+        observed::Value::Error(libc::EACCES)
     );
     assert_eq!(acquired.identity().before_path(), &Stat::Error(107));
     assert_eq!(acquired.identity().comparison(), Comparison::Unavailable);
@@ -447,7 +447,7 @@ fn exact_native_query_keeps_non_utf8_bytes_and_overlong_spelling() {
         let mut allocation = input::Allocation::new(&limits);
         let mut script = Script::new([]);
         script.path = path.clone();
-        script.opens.push_back(Err(nix::libc::ENAMETOOLONG));
+        script.opens.push_back(Err(libc::ENAMETOOLONG));
         let acquired = file::acquire(
             &path,
             1,
@@ -464,7 +464,7 @@ fn exact_native_query_keeps_non_utf8_bytes_and_overlong_spelling() {
         assert_eq!(retained.bytes(), path);
         assert_eq!(
             acquired.record().value,
-            observed::Value::Error(nix::libc::ENAMETOOLONG)
+            observed::Value::Error(libc::ENAMETOOLONG)
         );
     }
 }
@@ -782,7 +782,7 @@ fn allocation_refusal_precedes_reservation_and_cannot_spend_allocator_bonus() {
     let mut allocation =
         input::Allocation::with_limits(100, PATH.len() + PATH.len(), limits.string_bytes);
     let mut script = Script::new([]);
-    script.opens.push_back(Err(nix::libc::ENOENT));
+    script.opens.push_back(Err(libc::ENOENT));
     let acquired = file::acquire(
         PATH,
         1,

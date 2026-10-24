@@ -64,7 +64,7 @@ impl Attempt {
             Self::Acquired(_) => true,
             // Pinned std's OpenOptions uses cvt_r(open), so interruption is
             // retried internally and cannot be its completed native failure.
-            Self::OpenFailed(NativeError::Os(code)) if code == nix::libc::EINTR => false,
+            Self::OpenFailed(NativeError::Os(code)) if code == libc::EINTR => false,
             Self::OpenFailed(error) => error.valid(),
             // Descriptor fstat does not perform native pathname conversion.
             Self::StatFailed(code) => code > 0,

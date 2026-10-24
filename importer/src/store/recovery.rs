@@ -793,7 +793,7 @@ mod tests {
     fn freeze_fixture_member(path: &Path, metadata: &fs::Metadata) {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let mode = if metadata.is_dir() { 0o555 } else { 0o444 };
+        let mode = if metadata.is_dir() { 0o755 } else { 0o444 };
         fs::set_permissions(path, fs::Permissions::from_mode(mode))
             .expect("the fixture member freezes");
     }

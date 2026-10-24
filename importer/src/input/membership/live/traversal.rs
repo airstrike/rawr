@@ -327,7 +327,7 @@ impl<'account> Capture<'_, '_, 'account> {
         let opened = loop {
             self.owner.budget.graph.paths(1)?;
             match <native::System as file::System>::open(&mut native::System, name) {
-                Err(code) if code == nix::libc::EINTR => continue,
+                Err(code) if code == libc::EINTR => continue,
                 result => break result,
             }
         };

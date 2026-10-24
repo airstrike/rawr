@@ -71,7 +71,7 @@
 <p>These need <a href="/docs/start#install-iced">rawr-iced</a>. With rawr-iced installed, it also runs <code>rawr run</code>, <code>rawr check</code> and <code>rawr doctor</code> for programs that use iced.</p>
 <table class="wide">
   <tr><th>Command</th><th>What it does</th></tr>
-  <tr><td><code>rawr new &lt;name-or-path&gt;</code></td><td>Creates a Cargo crate. It writes <code>Cargo.toml</code> and <code>src/main.rs</code>. <code>src/main.rs</code> starts with <code>// rawr</code> and holds iced&rsquo;s counter. <code>rawr run</code> opens it and <code>cargo run</code> builds it natively.</td></tr>
+  <tr><td><code>rawr new &lt;name-or-path&gt;</code></td><td>Creates a Cargo crate. It writes <code>Cargo.toml</code>, <code>src/main.rs</code>, <code>rust-toolchain.toml</code> and <code>.cargo/config.toml</code>. The last two make <code>cargo build</code> build as rawr does, so both share one build of iced. <code>src/main.rs</code> starts with <code>// rawr</code> and holds iced&rsquo;s counter. <code>rawr run</code> opens it and <code>cargo run</code> builds it natively.</td></tr>
   <tr><td><code>rawr preview [path] [name]</code></td><td>Opens one <code>#[preview]</code> view in a window. <code>name</code> is the preview&rsquo;s name or <code>group/name</code>. Without a name it opens the last preview you picked. The arrow keys step through a group.</td></tr>
   <tr><td><code>rawr snapshot --update [path]</code></td><td>Renders every preview to a PNG under <code>snapshots/</code> and replaces the stored images.</td></tr>
   <tr><td><code>rawr snapshot --check [path]</code></td><td>Renders every preview and compares it with the stored image. It exits with status 1 if any pixel differs. The new images go under <code>target/rawr/snapshots/</code>.</td></tr>
@@ -92,7 +92,8 @@
 <h2 id="files">Files rawr writes</h2>
 <ul>
   <li><code>snapshots/</code> holds the stored preview images. Commit it.</li>
-  <li><code>target/rawr/</code> holds rawr&rsquo;s build files and cached data. <code>cargo clean</code> removes it. The images from the last <code>rawr snapshot --check</code> go in <code>target/rawr/snapshots/</code>.</li>
+  <li><code>target/&lt;host&gt;/debug/</code> holds the compiled crates. <code>rawr run</code> and <code>cargo build</code> share them.</li>
+  <li><code>target/rawr/</code> holds rawr&rsquo;s cached data and the generated runner. <code>cargo clean</code> removes it. The images from the last <code>rawr snapshot --check</code> go in <code>target/rawr/snapshots/</code>.</li>
 </ul>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/play">Previous<b>?play and the playground</b></a><a class="next" href="/docs/faq">Next<b>FAQ</b></a></nav>
 </article>

@@ -9,10 +9,14 @@ repository = "https://github.com/airstrike/rawr"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced", "canvas", "crisp", "fira-sans", "image-without-codecs", "qr_code", "selector", "sipper", "svg", "thread-pool", "tiny-skia", "web-colors", "wgpu"] }
+# A project's runner builds rawr-iced against the project's own iced, so it
+# adds only `advanced` (the profile reads `iced::advanced::Widget`) and
+# `sipper` (Rust sippers cross as `task::Sipper`); every other iced feature
+# comes from the project, and the features below follow it.
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced", "sipper"] }
 iced_runtime = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
-# The codecs the `image` widget decodes: PNG and JPEG only.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Reads image headers for the `image` widget; its codecs are the project's.
+image = { version = "0.25", default-features = false, optional = true }
 png = "0.18.1"
 rawr = { path = "..", features = ["rust-import", "sync"] }
 rawr_import = { package = "rawr-import", path = "../importer" }
@@ -26,16 +30,27 @@ tokio = { version = "1", default-features = false, features = ["rt", "sync", "te
 # Fallback lists for bundled fonts (src/snapshot/fonts.rs); the version cosmic-text uses.
 unicode-script = "0.5"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["x11", "wayland"] }
-
 [dev-dependencies]
-iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced"] }
 iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
 rawr_import = { package = "rawr-import", path = "../importer", features = ["test-fixtures"] }
 serde_json = "1"
 
 [features]
+# rawr-iced on its own (the `rawr-iced` command, ?play, tests): every widget
+# it supports, with iced's renderers and embedded fonts.
+default = ["standalone"]
+standalone = [
+    "canvas", "image", "qr_code", "selector", "svg",
+    "image/png", "image/jpeg",
+    "iced/crisp", "iced/fira-sans", "iced/thread-pool", "iced/tiny-skia", "iced/web-colors", "iced/wgpu",
+    "iced/x11", "iced/wayland",
+]
+# One per optional iced widget. A project's runner enables the ones its iced has.
+canvas = ["iced/canvas"]
+image = ["iced/image-without-codecs", "dep:image"]
+qr_code = ["iced/qr_code"]
+selector = ["iced/selector"]
+svg = ["iced/svg"]
 grain = ["rawr/grain"]
 no_optimize = ["rawr/no_optimize"]
 profile-selection-diagnostic = ["rawr_import/canonical-selector-diagnostic"]

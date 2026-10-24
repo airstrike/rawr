@@ -660,6 +660,7 @@ fn subtree<'a>(tree: &'a NativeTree, path: &[usize]) -> Option<&'a NativeTree> {
 }
 
 /// A failed call's message, drawn in the widget's bounds.
+#[cfg(feature = "canvas")]
 fn draw_failure(renderer: &mut iced::Renderer, bounds: Rectangle, message: String) {
     use iced::advanced::graphics::geometry::Renderer as _;
     use iced::advanced::Renderer as _;
@@ -676,6 +677,26 @@ fn draw_failure(renderer: &mut iced::Renderer, bounds: Rectangle, message: Strin
     renderer.with_translation(iced::Vector::new(bounds.x, bounds.y), |renderer| {
         renderer.draw_geometry(geometry);
     });
+}
+
+/// A failed call's bounds, outlined in red: without iced's `canvas` there
+/// is no frame to write the message in.
+#[cfg(not(feature = "canvas"))]
+fn draw_failure(renderer: &mut iced::Renderer, bounds: Rectangle, _message: String) {
+    use iced::advanced::Renderer as _;
+
+    renderer.fill_quad(
+        iced::advanced::renderer::Quad {
+            bounds,
+            border: iced::Border {
+                color: iced::Color::from_rgb(0.9, 0.2, 0.2),
+                width: 2.0,
+                radius: 0.0.into(),
+            },
+            ..iced::advanced::renderer::Quad::default()
+        },
+        iced::Background::Color(iced::Color::TRANSPARENT),
+    );
 }
 
 impl Tree {

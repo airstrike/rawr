@@ -55,14 +55,14 @@ pub(super) fn acquire(
     let opened = loop {
         budget.graph.paths(1)?;
         match system.open(native) {
-            Err(code) if code == nix::libc::EINTR => continue,
+            Err(code) if code == libc::EINTR => continue,
             result => break result,
         }
     };
 
     let (value, opened, after_opened) = match opened {
         Err(code) => {
-            let value = if code == nix::libc::ENOENT {
+            let value = if code == libc::ENOENT {
                 observed::Value::Absent
             } else {
                 observed::Value::Error(code)
@@ -157,7 +157,7 @@ fn read<S: System>(
                 super::super::super::limited("membership manifest bytes", limit, length)?;
                 bytes.extend(&scratch[..count], limit, budget)?;
             }
-            Err(code) if code == nix::libc::EINTR => continue,
+            Err(code) if code == libc::EINTR => continue,
             Err(code) if bytes.values.is_empty() => return Ok(observed::Value::Error(code)),
             Err(code) => {
                 return Ok(observed::Value::File {

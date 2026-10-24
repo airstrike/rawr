@@ -230,10 +230,10 @@ fn present_directory_load_error_is_not_inline_parse_and_file_credentials_are_all
     metadata.kind = observed::Kind::Directory;
     let failed = observed::Record {
         query: observed::Query::File(path("/directory")),
-        value: observed::Value::Error(nix::libc::EISDIR),
+        value: observed::Value::Error(libc::EISDIR),
     };
     assert!(
-        matches!(run(vec![directory, failed], &["/directory"], true), Err(Error::Host(InputError::Io(code))) if code == nix::libc::EISDIR)
+        matches!(run(vec![directory, failed], &["/directory"], true), Err(Error::Host(InputError::Io(code))) if code == libc::EISDIR)
     );
     // The security syntax checks belong only to successful inline parsing;
     // file configuration does not run them.

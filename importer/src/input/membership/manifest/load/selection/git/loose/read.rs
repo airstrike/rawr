@@ -40,7 +40,7 @@ pub(super) fn one(
     let bytes = match contents {
         git_read::Outcome::Bytes(bytes) => bytes,
         git_read::Outcome::OpenFailed(code)
-            if code == nix::libc::ENOENT || code == nix::libc::ENOTDIR =>
+            if code == libc::ENOENT || code == libc::ENOTDIR =>
         {
             return Ok(Ok(None))
         }
@@ -48,7 +48,7 @@ pub(super) fn one(
             directory: Some(Ok(true)),
             ..
         } => return Ok(Ok(None)),
-        git_read::Outcome::ReadFailed { code, .. } if code == nix::libc::ENOTDIR => {
+        git_read::Outcome::ReadFailed { code, .. } if code == libc::ENOTDIR => {
             return Ok(Ok(None))
         }
         git_read::Outcome::OpenFailed(code) | git_read::Outcome::ReadFailed { code, .. } => {

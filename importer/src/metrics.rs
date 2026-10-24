@@ -449,11 +449,11 @@ fn with_sink(_observe: impl FnOnce(&dyn Sink, u64)) {}
 /// Read the process-shared monotonic clock without granting scheduling authority.
 #[doc(hidden)]
 pub fn monotonic_ns() -> Option<u64> {
-    use nix::time::{clock_gettime, ClockId};
+    use rustix::time::{clock_gettime, ClockId};
 
-    let value = clock_gettime(ClockId::from_raw(nix::libc::CLOCK_MONOTONIC_RAW)).ok()?;
-    let seconds = u64::try_from(value.tv_sec()).ok()?;
-    let nanoseconds = u64::try_from(value.tv_nsec()).ok()?;
+    let value = clock_gettime(ClockId::Monotonic);
+    let seconds = u64::try_from(value.tv_sec).ok()?;
+    let nanoseconds = u64::try_from(value.tv_nsec).ok()?;
     seconds
         .checked_mul(1_000_000_000)
         .and_then(|base| base.checked_add(nanoseconds))

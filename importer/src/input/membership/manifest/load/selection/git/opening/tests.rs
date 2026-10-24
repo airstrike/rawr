@@ -73,13 +73,13 @@ fn complete_discovery_calls_opening_cwd_and_replays_commondir_before_stage_one()
             (
                 "/r/.git/commondir",
                 Role::DiscoveryPath,
-                vec![Event::Open(Err(nix::libc::ENOENT))],
+                vec![Event::Open(Err(libc::ENOENT))],
                 vec![],
             ),
             (
                 "/r/.git/config",
                 Role::Configuration { capacity: 512 },
-                vec![Event::Open(Err(nix::libc::ENOENT))],
+                vec![Event::Open(Err(libc::ENOENT))],
                 vec![],
             ),
         ] {

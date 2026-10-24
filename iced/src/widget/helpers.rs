@@ -1365,8 +1365,14 @@ fn into_element(view: Dynamic) -> Result<widget::Value, String> {
     widgets!(
         Text, TextInput, Checkbox, Toggler, Slider, ProgressBar, Transition, Button, Column, Row, Wrapping,
         Container, Tooltip, Scrollable, Logo, Sensor, Space, Radio, PickList, ComboBox, Stack,
-        Pin, Float, MouseArea, Image, Svg, QrCode, Rich
+        Pin, Float, MouseArea, Rich
     );
+    #[cfg(feature = "image")]
+    widgets!(Image);
+    #[cfg(feature = "svg")]
+    widgets!(Svg);
+    #[cfg(feature = "qr_code")]
+    widgets!(QrCode);
     Err(format!("expected a widget, found `{}`", view.type_name()))
 }
 

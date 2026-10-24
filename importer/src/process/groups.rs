@@ -2,9 +2,32 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use nix::sys::signal::{SigSet, Signal};
-
 static OWNED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// Files a child leaves behind when it is killed, such as a runner window's
+/// agent socket under `target/rawr`, removed when their owner retires.
+static LEFT: Mutex<Vec<std::path::PathBuf>> = Mutex::new(Vec::new());
+
+/// Remove `path` when this process retires its children, or when the
+/// returned guard drops, whichever is first.
+pub fn remove_on_exit(path: std::path::PathBuf) -> Left {
+    LEFT.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(path.clone());
+    Left(path)
+}
+
+/// Removes its file on drop. See [`remove_on_exit`].
+pub struct Left(std::path::PathBuf);
+
+impl Drop for Left {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        LEFT.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|path| *path != self.0);
+    }
+}
 
 fn owned() -> MutexGuard<'static, Vec<u32>> {
     OWNED.lock().unwrap_or_else(PoisonError::into_inner)
@@ -23,41 +46,32 @@ pub(super) fn release(leader: u32) {
 }
 
 /// Kill every owned group and keep the registry locked, so no group spawned
-/// after this point can escape the exiting process.
-fn retire_owned() -> MutexGuard<'static, Vec<u32>> {
+/// after this point can escape the exiting process. A command calls it when
+/// it is told to stop (SIGINT, SIGTERM or SIGHUP), before it exits: a runner
+/// and its window, or a Cargo build, then go with it.
+pub fn retire_owned() -> MutexGuard<'static, Vec<u32>> {
     let owned = owned();
     for leader in owned.iter() {
         super::kill_group(*leader);
     }
-    owned
-}
-
-/// Make SIGINT, SIGTERM and SIGHUP retire every owned child process group
-/// (a runner and its window, a Cargo build) before this process exits with the
-/// conventional status. Call before spawning threads: they inherit the blocked
-/// mask, while spawned programs start with an empty one.
-pub fn retire_on_termination() -> std::io::Result<()> {
-    let mut signals = SigSet::empty();
-    for signal in [Signal::SIGINT, Signal::SIGTERM, Signal::SIGHUP] {
-        signals.add(signal);
+    for path in LEFT.lock().unwrap_or_else(PoisonError::into_inner).iter() {
+        let _ = std::fs::remove_file(path);
     }
-    signals.thread_block().map_err(std::io::Error::from)?;
-    std::thread::Builder::new()
-        .name("rawr-termination".into())
-        .spawn(move || {
-            let signal = loop {
-                if let Ok(signal) = signals.wait() {
-                    break signal;
-                }
-            };
-            let _owned = retire_owned();
-            std::process::exit(128 + signal as i32);
-        })
-        .map(drop)
+    owned
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_left_file_goes_with_its_guard() {
+        let path = std::env::temp_dir().join(format!("rawr-left-{}.sock", std::process::id()));
+        std::fs::write(&path, b"").unwrap();
+        let left = super::remove_on_exit(path.clone());
+        assert!(path.exists());
+        drop(left);
+        assert!(!path.exists());
+    }
+
     use std::os::unix::process::CommandExt as _;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};

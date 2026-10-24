@@ -194,8 +194,11 @@ impl Definition {
         .features(["advanced"], false)
     }
 
-    /// Select this exact crate as the generated runner's semantic profile host.
+    /// Select this exact crate as the generated runner's semantic profile
+    /// host, with the widget `features` the project's iced has and nothing
+    /// else, so it adds no feature to that iced (`crate::features`).
     pub fn cargo_dependency(
+        features: &[crate::features::Feature],
         limits: &rawr_import::cargo::Limits,
     ) -> rawr_import::Result<rawr_import::cargo::config::Dependency> {
         let dependency = rawr_import::cargo::config::Dependency::profile_path(
@@ -204,9 +207,10 @@ impl Definition {
             &rawr_import::host::root()?.join("iced"),
             limits,
         )?;
+        let names = features.iter().map(|feature| feature.name());
         #[cfg(feature = "import-baseline")]
-        let dependency = dependency.features(["import-baseline"], true)?;
-        Ok(dependency)
+        let names = names.chain(["import-baseline"]);
+        dependency.features(names, false)
     }
 }
 

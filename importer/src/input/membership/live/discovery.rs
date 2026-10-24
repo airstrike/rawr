@@ -59,7 +59,7 @@ impl<S: System> Handles<'_, S> {
             loop {
                 budget.graph.paths(1)?;
                 match self.system.open(native) {
-                    Err(code) if code == nix::libc::EINTR => continue,
+                    Err(code) if code == libc::EINTR => continue,
                     Err(code) => return Ok(Attempt::OpenFailed(native_error(code)?)),
                     Ok(descriptor) if descriptor >= 0 => break descriptor,
                     Ok(_) => {

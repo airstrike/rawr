@@ -23,24 +23,28 @@ struct Initial {
     manifests: resident::Manifests,
 }
 
-/// Check one imported application without opening a native window.
+/// Check one imported application without opening a native window: its
+/// Rust imports are resolved and extracted and the Rawr source is checked
+/// against them. No runner is built; `rawr run` builds it.
 pub(crate) fn check(
     target: &rawr::project::Target,
     graph: Option<rawr::package::Graph>,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<PathBuf, diagnostic::Report> {
+    same_build(target)?;
     let source = target.source().path().to_path_buf();
     let fallback = fallback(target)?;
-    let (mut lane, _) = initial(
+    let revision = rawr_import::supervisor::Owner::new()
+        .revision()
+        .map_err(|error| framework(error, fallback.clone()))?;
+    super::prepare_loaded(
         target,
         graph,
-        rawr_import::process::Lifecycle::Check,
-        false,
+        revision,
         #[cfg(feature = "import-baseline")]
         profile,
-    )?;
-    lane.shutdown()
-        .map_err(|error| framework(error, fallback))?;
+    )
+    .map_err(|error| import(error, fallback))?;
     Ok(source)
 }
 
@@ -54,10 +58,15 @@ pub(crate) fn run(
     lifecycle: rawr_import::process::Lifecycle,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<bool, diagnostic::Report> {
+    same_build(target)?;
     let source = fallback(target)?;
     let target_path = project(target)
         .ok_or_else(|| framework("a native owner requires a Rawr crate", source.clone()))?
         .to_path_buf();
+    // The window listens on an agent socket under `target/rawr`; a killed
+    // window cannot remove it, so its owner does, and `cargo clean` never
+    // meets a stale one.
+    let _socket = rawr_import::process::remove_on_exit(rawr_iced::reload::agent::socket(&target_path));
     rawr_import::progress::begin(&target_path);
     let initial = initial_watched(
         target,
@@ -306,6 +315,7 @@ pub(crate) fn snapshot(
     mode: crate::command::Mode,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<rawr_iced::snapshot::Outcome, diagnostic::Report> {
+    same_build(target)?;
     let lifecycle = match mode {
         crate::command::Mode::Check => rawr_import::process::Lifecycle::SnapshotCheck,
         crate::command::Mode::Update => rawr_import::process::Lifecycle::SnapshotUpdate,
@@ -637,6 +647,17 @@ fn wait_for_window(mut lane: Lane, source: diagnostic::Source) -> Result<(), dia
         }
         std::thread::sleep(IDLE_POLL);
     }
+}
+
+/// A project that builds as Rawr builds it, or the error naming the files
+/// it needs.
+fn same_build(target: &rawr::project::Target) -> Result<(), diagnostic::Report> {
+    let Some(root) = project(target) else {
+        return Ok(());
+    };
+    super::same_build(root).map_err(|message| {
+        diagnostic::Report::error(diagnostic::code::ENVIRONMENT_PROJECT_BUILD, message).finish()
+    })
 }
 
 fn project(target: &rawr::project::Target) -> Option<&Path> {

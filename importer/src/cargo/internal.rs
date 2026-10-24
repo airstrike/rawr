@@ -9,6 +9,12 @@ use super::unit;
 use super::{canonical_directory, read_bounded_budgeted, RequestAllocation, Selection};
 use crate::{Error, Result};
 
+/// The `opt-level` of the `rawr` crate in a project's runner. `Some(3)`
+/// makes the compiler and interpreter inside the runner fast, and costs
+/// about 30 s more on a project's first `rawr run`. `None` builds it with
+/// the project's own profile, like any other dependency.
+pub(crate) const RAWR_OPT_LEVEL: Option<i64> = Some(3);
+
 const SCHEMA: u32 = 1;
 const PACKAGE: &str = "rawr";
 const FEATURE: &str = "std";
@@ -278,7 +284,7 @@ impl Recipe {
         profile: &str,
         allocation: &mut super::RequestAllocation,
     ) -> Result<()> {
-        allocation.items(9)?;
+        allocation.items(7)?;
         for value in [
             "profile",
             profile,
@@ -286,8 +292,6 @@ impl Recipe {
             self.package_id.as_ref(),
             "debug",
             "opt-level",
-            "strip",
-            "build-override",
             "strip",
         ] {
             allocation.string(value)?;
@@ -315,25 +319,21 @@ impl Recipe {
         // The embedded compiler runs on every Rawr edit; optimize it like the
         // released CLI so an edit recompiles in milliseconds. User crates keep
         // the selected profile's own semantics.
+        let Some(level) = RAWR_OPT_LEVEL else {
+            return Ok(());
+        };
         let mut override_table = Table::new();
         override_table.insert("debug", value(0));
-        override_table.insert("opt-level", value(3));
+        override_table.insert("opt-level", value(level));
         // Without debug info Cargo strips it with `rust-objcopy`, which some
         // toolchains ship broken. Nothing is stripped, so the build never
         // runs it.
         override_table.insert("strip", value(false));
         packages.insert(self.package_id.as_ref(), Item::Table(override_table));
-        let selected = table(profiles_of(document)?, profile, "selected Cargo profile")?;
-        let build = table(selected, "build-override", "Cargo build script profile")?;
-        if !build.contains_key("strip") {
-            build.insert("strip", value(false));
-        }
+        // No `build-override`: build scripts and proc macros are units the
+        // project's own `cargo build` compiles, and they must stay the same.
         Ok(())
     }
-}
-
-fn profiles_of(document: &mut DocumentMut) -> Result<&mut Table> {
-    table(document.as_table_mut(), "profile", "Cargo profile authority")
 }
 
 fn table<'a>(parent: &'a mut Table, key: &str, document: &'static str) -> Result<&'a mut Table> {
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(internal["opt-level"].as_integer(), Some(3));
         // Nothing is stripped, so no build runs `rust-objcopy`.
         assert_eq!(internal["strip"].as_bool(), Some(false));
-        assert_eq!(profile["build-override"]["strip"].as_bool(), Some(false));
+        assert!(profile.get("build-override").is_none());
     }
 
     #[test]

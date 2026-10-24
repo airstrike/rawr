@@ -170,7 +170,7 @@ fn exact_branches_preserve_overlap_warning_boundary_and_close_order() {
     for (second, intent) in [
         (metadata(1), Diagnostic::None),
         (metadata(2), Diagnostic::Both),
-        (Stat::Error(nix::libc::EINTR), Diagnostic::Deprecated),
+        (Stat::Error(libc::EINTR), Diagnostic::Deprecated),
     ] {
         let mut script = Script::new([Ok(17), Ok(23)], [metadata(1), second], None);
         let value = transcript(run(&mut script, true).expect("two acquisitions"));
@@ -210,9 +210,9 @@ fn exact_branches_preserve_overlap_warning_boundary_and_close_order() {
 
     for first_stat in [false, true] {
         for warn in [false, true] {
-            for exists in [metadata(1), Stat::Error(nix::libc::EINTR), Stat::Error(107)] {
+            for exists in [metadata(1), Stat::Error(libc::EINTR), Stat::Error(107)] {
                 let mut script = if first_stat {
-                    Script::new([Ok(17)], [Stat::Error(nix::libc::EINTR)], Some(exists))
+                    Script::new([Ok(17)], [Stat::Error(libc::EINTR)], Some(exists))
                 } else {
                     Script::new([Err(107)], [], Some(exists))
                 };

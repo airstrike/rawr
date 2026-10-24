@@ -14,7 +14,7 @@ mod host;
 const RUSTC_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
 
 /// The Rawr packages a generated harness builds through `rawr-iced`.
-const HOST_PACKAGES: [&str; 10] = [
+const HOST_PACKAGES: [&str; 11] = [
     ".",
     "canonical",
     "codegen",
@@ -23,6 +23,7 @@ const HOST_PACKAGES: [&str; 10] = [
     "importer",
     "location",
     "toml",
+    "toml/edit",
     "watch",
     "watch/notify",
 ];

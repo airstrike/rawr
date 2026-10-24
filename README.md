@@ -167,11 +167,11 @@ cargo install --locked --git https://github.com/airstrike/rawr rawr-cli
 works too. A program without iced runs once and exits. It doesn't hot reload.
 
 rawr-iced adds iced support. Install it and `rawr` hands programs that use
-iced to it. Importing your own Rust crates builds them for the host of the
-pinned toolchain. It needs a Unix system. It has only been tested on Apple
-Silicon Macs so far. The rest of rawr-iced should work wherever iced runs. It
-has only been tested on macOS. It needs one pinned Rust nightly, `nightly-2026-07-11`, with the `rustc-dev` and `rust-src`
-components. Rawr builds iced and your own crates with that toolchain too.
+iced to it. It needs a Unix system. It has only been tested on Apple Silicon
+Macs so far. The rest of rawr-iced should work wherever iced runs. It has only
+been tested on macOS. It needs one pinned Rust nightly, `nightly-2026-07-11`,
+with the `rustc-dev` and `rust-src` components. Rawr reads the API of your
+Rust dependencies with that nightly.
 
 ```sh
 rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
@@ -182,9 +182,12 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 `rawr-iced-cli` installs `rawr-iced`. `rawr-import` installs
 `rawr-import-driver` in the same directory. The driver reads your Rust crates
 for imports. `rawr` finds `rawr-iced` next to itself or on `PATH`.
-`cargo install` builds iced into `rawr-iced`, so it takes a few minutes.
-After that, an iced app opens in seconds. A project with its own Rust crates
-compiles them on its first run.
+
+An iced program is a Cargo project. `rawr run` builds a runner against the
+project's own iced and its features, in the project's `target/rawr/`, so the
+first `rawr run` of a project compiles iced and Rawr's crates. Edits to Rawr
+code need no build. A program that uses iced without a Cargo.toml is refused;
+`rawr new` starts a project.
 
 ## How do I start an iced project?
 
@@ -195,7 +198,9 @@ rawr new hello && cd hello && rawr run
 ```
 
 `rawr new hello` writes a Cargo crate. `hello/Cargo.toml` depends on iced at the
-revision rawr-iced is built against. `hello/src/main.rs` starts with `// rawr`
+revision rawr-iced supports, with its `advanced` feature, which Rawr's runner
+needs. `hello/rust-toolchain.toml` pins the nightly Rawr builds with, so
+`cargo build` uses the same compiler. `hello/src/main.rs` starts with `// rawr`
 and holds iced's counter. Edit it while the window is open. `cargo run` builds
 and runs the same app.
 

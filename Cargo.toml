@@ -12,6 +12,7 @@ members = [
     "importer",
     "location",
     "toml",
+    "toml/edit",
     "macros",
     "watch",
 ]
@@ -38,13 +39,15 @@ smallvec = { version = "1.7.0", default-features = false, features = ["union", "
 thin-vec = { version = "0.2.13", default-features = false }
 ahash = { version = "0.8.4", default-features = false, features = ["compile-time-rng"] }
 num-traits = { version = "0.2.14", default-features = false }
-once_cell = { version = "1.20.1", default-features = false, features = ["race", "portable-atomic", "alloc"] }
+# `portable-atomic` only for no-std targets: a project's runner links this
+# crate beside iced, and any feature added here makes a second once_cell.
+once_cell = { version = "1.20.1", default-features = false, features = ["race", "alloc"] }
 bitflags = { version = "2.3.3", default-features = false }
 futures-core = { version = "0.3.31", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
 smartstring = { version = "1.0.0", default-features = false }
 rawr_codegen = { version = "3.2.0", path = "codegen" }
-toml_edit = { version = "0.25.13", default-features = false, features = ["parse"], optional = true }
+toml_edit = { package = "rawr-toml-edit", path = "toml/edit", default-features = false, features = ["parse"], optional = true }
 rawr_import = { package = "rawr-import", path = "importer", optional = true }
 thiserror = { version = "2", optional = true }
 
@@ -143,7 +146,7 @@ no_optimize = []
 #! ### Compiling for `no-std`
 
 ## Turn on `no-std` compilation (nightly only).
-no_std = ["no-std-compat", "num-traits/libm", "core-error", "libm", "hashbrown", "no_time"]
+no_std = ["no-std-compat", "num-traits/libm", "core-error", "libm", "hashbrown", "no_time", "once_cell/portable-atomic"]
 
 #! ### JavaScript Interface for WASM
 

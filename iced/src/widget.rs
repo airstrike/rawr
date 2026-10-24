@@ -4,6 +4,7 @@ mod adapter;
 mod angle;
 mod animation;
 pub(crate) mod builtin;
+#[cfg(feature = "canvas")]
 mod canvas;
 mod gradient;
 pub mod children;
@@ -47,7 +48,10 @@ pub(crate) fn bind(
     rawr: &mut rawr::host::runtime::Builder,
 ) {
     builtin::bind(iced, rawr);
-    canvas::bind(iced);
+    #[cfg(feature = "canvas")]
+    if crate::features::on(crate::features::Feature::Canvas) {
+        canvas::bind(iced);
+    }
     component::bind(iced);
     custom::bind(iced);
     protocol::bind(iced, rawr);
@@ -60,7 +64,10 @@ pub(crate) fn bind_profile(
     _element: crate::profile::runner::ElementReplacement,
 ) {
     builtin::bind_profile(iced, rawr);
-    canvas::bind(iced);
+    #[cfg(feature = "canvas")]
+    if crate::features::on(crate::features::Feature::Canvas) {
+        canvas::bind(iced);
+    }
     component::bind(iced);
     custom::bind(iced);
     protocol::bind_profile(iced, rawr);

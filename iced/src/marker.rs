@@ -555,6 +555,7 @@ pub(crate) struct MouseArea {
     pub(crate) interaction: Option<iced::mouse::Interaction>,
 }
 
+#[cfg(feature = "image")]
 /// iced's `image(handle)`.
 #[derive(Clone)]
 pub(crate) struct Image {
@@ -598,6 +599,7 @@ pub(crate) struct Rich {
     pub(crate) height: Option<iced::Length>,
 }
 
+#[cfg(feature = "svg")]
 /// iced's `svg(handle)`.
 #[derive(Clone)]
 pub(crate) struct Svg {
@@ -611,11 +613,13 @@ pub(crate) struct Svg {
     pub(crate) style: Option<Source<iced::widget::svg::Status, iced::widget::svg::Style>>,
 }
 
+#[cfg(feature = "qr_code")]
 /// iced's `qr_code::Data`, as the text it encodes: iced's holds a drawing
 /// cache that is neither `Clone` nor `Sync`, so each view encodes it again.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct QrData(pub(crate) std::sync::Arc<str>);
 
+#[cfg(feature = "qr_code")]
 /// iced's `qr_code(&data)`.
 #[derive(Clone)]
 pub(crate) struct QrCode {
@@ -626,9 +630,11 @@ pub(crate) struct QrCode {
     pub(crate) total_size: Option<f32>,
 }
 
+#[cfg(feature = "canvas")]
 /// iced's `canvas::Program` trait, which script types implement.
 pub(crate) struct CanvasTrait;
 
+#[cfg(feature = "canvas")]
 /// A script `canvas::Program`: its value, its impl's `update`, `draw` and
 /// `mouse_interaction`, and its State's default.
 #[derive(Clone)]
@@ -641,6 +647,7 @@ pub(crate) struct CanvasProgram {
     pub(crate) state: Dynamic,
 }
 
+#[cfg(feature = "canvas")]
 /// iced's `canvas(program)`.
 #[derive(Clone)]
 pub(crate) struct Canvas {
@@ -651,6 +658,7 @@ pub(crate) struct Canvas {
     pub(crate) height: iced::Length,
 }
 
+#[cfg(feature = "canvas")]
 /// One drawing operation a script `Frame` records, replayed on iced's own
 /// frame when the canvas draws.
 #[derive(Clone, Debug)]
@@ -668,6 +676,7 @@ pub(crate) enum Draw {
     ScaleNonuniform(iced::Vector),
 }
 
+#[cfg(feature = "canvas")]
 /// iced's `canvas::Frame`: the operations drawn on it so far. A copy draws
 /// on the same frame, as the `&mut Frame` a closure takes does.
 #[derive(Clone)]
@@ -676,6 +685,7 @@ pub(crate) struct Frame {
     pub(crate) draws: std::sync::Arc<std::sync::Mutex<Vec<Draw>>>,
 }
 
+#[cfg(feature = "canvas")]
 /// iced's `canvas::Geometry`: a finished frame's operations and size.
 #[derive(Clone, Debug)]
 pub(crate) struct Geometry {
@@ -683,27 +693,32 @@ pub(crate) struct Geometry {
     pub(crate) draws: std::sync::Arc<[Draw]>,
 }
 
+#[cfg(feature = "canvas")]
 /// iced's `canvas::Cache`: the geometry it last drew, and its size. Copies
 /// share it, so `clear` through `&self` empties every copy.
 #[derive(Clone, Default)]
 pub(crate) struct Cache(pub(crate) std::sync::Arc<std::sync::Mutex<Option<Geometry>>>);
 
+#[cfg(feature = "canvas")]
 /// `canvas::Group`: caches iced draws together, which Rawr draws one by one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CacheGroup;
 
+#[cfg(feature = "canvas")]
 impl std::fmt::Debug for Cache {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("Cache")
     }
 }
 
+#[cfg(feature = "canvas")]
 /// iced's `canvas::path::Builder`, shared by the closure `Path::new` gives it.
 #[derive(Clone)]
 pub(crate) struct PathBuilder(
     pub(crate) std::sync::Arc<std::sync::Mutex<Option<iced::widget::canvas::path::Builder>>>,
 );
 
+#[cfg(feature = "canvas")]
 /// iced's `canvas::Action<Message>`.
 #[derive(Clone)]
 pub(crate) struct CanvasAction {

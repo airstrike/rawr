@@ -2685,8 +2685,7 @@ fn unit_key_digests(
                 operation: "Cargo unit graph",
                 source,
             })?;
-        for unit in units {
-            let key = canonical_unit_key_buffer(unit, no_build_std, allocation, limits)?;
+        for key in unit_key_buffers(units, no_build_std, allocation, limits)? {
             digests.push(digest(key.value()));
             key.drop_from(allocation)?;
         }
@@ -5350,8 +5349,95 @@ fn write_merged_object(
         .map_err(|error| schema("canonical Cargo unit graph", &error.to_string()))
 }
 
+/// The indices a unit depends on.
+fn unit_dependency_indices(unit: &Value, count: usize) -> Result<Vec<usize>> {
+    unit.get("dependencies")
+        .and_then(Value::as_array)
+        .ok_or_else(|| schema("Cargo unit graph", "unit dependencies are absent"))?
+        .iter()
+        .map(|dependency| {
+            dependency
+                .get("index")
+                .and_then(Value::as_u64)
+                .and_then(|index| usize::try_from(index).ok())
+                .filter(|index| *index < count)
+                .ok_or_else(|| schema("Cargo unit graph", "dependency index is invalid"))
+        })
+        .collect()
+}
+
+/// Every unit index after the units it depends on.
+pub(super) fn dependency_order(units: &[Value]) -> Result<Vec<usize>> {
+    const NEW: u8 = 0;
+    const OPEN: u8 = 1;
+    const DONE: u8 = 2;
+    let mut state = vec![NEW; units.len()];
+    let mut order = Vec::with_capacity(units.len());
+    for root in 0..units.len() {
+        if state[root] != NEW {
+            continue;
+        }
+        state[root] = OPEN;
+        let mut stack = vec![(root, unit_dependency_indices(&units[root], units.len())?, 0_usize)];
+        while let Some((index, dependencies, next)) = stack.last_mut() {
+            if let Some(&dependency) = dependencies.get(*next) {
+                *next += 1;
+                match state[dependency] {
+                    NEW => {
+                        state[dependency] = OPEN;
+                        let nested = unit_dependency_indices(&units[dependency], units.len())?;
+                        stack.push((dependency, nested, 0));
+                    }
+                    // Cargo's graphs have no cycles; an edge back into the
+                    // open path adds nothing to the order.
+                    _ => {}
+                }
+            } else {
+                state[*index] = DONE;
+                order.push(*index);
+                stack.pop();
+            }
+        }
+    }
+    Ok(order)
+}
+
+/// Every unit's key. A key names its dependencies' keys, as Cargo's
+/// `-C metadata` hashes its dependencies' hashes: a crate built over two
+/// variants of one dependency, such as a host and a target build of a crate
+/// over two `libc` feature sets, is two units even without `--target`.
+fn unit_key_buffers(
+    units: &[Value],
+    no_build_std: config::NoBuildStd,
+    allocation: &mut JsonAllocation,
+    limits: &Limits,
+) -> Result<Vec<Budgeted<Box<[u8]>>>> {
+    let mut keys = (0..units.len()).map(|_| None).collect::<Vec<_>>();
+    let mut digests: Vec<Option<Digest>> = vec![None; units.len()];
+    for index in dependency_order(units)? {
+        let mut dependencies = unit_dependency_indices(&units[index], units.len())?
+            .into_iter()
+            .filter_map(|dependency| digests[dependency])
+            .collect::<Vec<_>>();
+        dependencies.sort_unstable();
+        let key = canonical_unit_key_buffer(
+            &units[index],
+            &dependencies,
+            no_build_std,
+            allocation,
+            limits,
+        )?;
+        digests[index] = Some(digest(key.value()));
+        keys[index] = Some(key);
+    }
+    keys.into_iter()
+        .map(|key| key.ok_or_else(|| schema("Cargo unit graph", "unit key is absent")))
+        .collect()
+}
+
 fn canonical_unit_key_buffer(
     unit: &Value,
+    dependencies: &[Digest],
     no_build_std: config::NoBuildStd,
     allocation: &mut JsonAllocation,
     limits: &Limits,
@@ -5374,7 +5460,20 @@ fn canonical_unit_key_buffer(
         limits,
         |writer, allocation| {
             writer
-                .write_all(b"{")
+                .write_all(b"{\"dependencies\":[")
+                .map_err(|error| schema("canonical Cargo unit key", &error.to_string()))?;
+            for (index, dependency) in dependencies.iter().enumerate() {
+                let separator = if index == 0 { "" } else { "," };
+                let mut hex = String::with_capacity(64);
+                for byte in dependency.as_bytes() {
+                    use std::fmt::Write as _;
+                    let _ = write!(hex, "{byte:02x}");
+                }
+                write!(writer, "{separator}\"{hex}\"")
+                    .map_err(|error| schema("canonical Cargo unit key", &error.to_string()))?;
+            }
+            writer
+                .write_all(b"],")
                 .map_err(|error| schema("canonical Cargo unit key", &error.to_string()))?;
             for (index, (field, part)) in [
                 ("features", CanonicalPart::Value(&object["features"])),
@@ -5575,14 +5674,7 @@ fn canonical_unit_write(
                 operation: "canonical Cargo unit graph",
                 source,
             })?;
-        for unit in units {
-            keys.push(canonical_unit_key_buffer(
-                unit,
-                no_build_std,
-                allocation,
-                limits,
-            )?);
-        }
+        keys.extend(unit_key_buffers(units, no_build_std, allocation, limits)?);
         let mut unique = keys.iter().map(Budgeted::value).collect::<Vec<_>>();
         unique.sort_unstable();
         if unique.windows(2).any(|pair| pair[0] == pair[1]) {
@@ -5722,10 +5814,28 @@ fn canonical_unit_bytes_clone_reference(
                 operation: "canonical Cargo unit graph",
                 source,
             })?;
-        for unit in units {
-            let key = unit_key_budgeted(unit, no_build_std, allocation, limits)?;
-            keys.push(key);
+        let mut ordered: Vec<Option<(Value, Digest)>> = (0..units.len()).map(|_| None).collect();
+        for index in dependency_order(units)? {
+            let mut key = unit_key_budgeted(&units[index], no_build_std, allocation, limits)?;
+            let mut dependencies = unit_dependency_indices(&units[index], units.len())?
+                .into_iter()
+                .filter_map(|dependency| ordered[dependency].as_ref().map(|(_, digest)| *digest))
+                .collect::<Vec<_>>();
+            dependencies.sort_unstable();
+            let hex = dependencies
+                .iter()
+                .map(|digest| {
+                    Value::String(digest.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect())
+                })
+                .collect();
+            key.as_object_mut()
+                .ok_or_else(|| schema("Cargo unit graph", "unit key is not an object"))?
+                .insert("dependencies".to_owned(), Value::Array(hex));
+            canonicalize(&mut key, allocation, limits)?;
+            let bytes = json_sort_key(&key, allocation, limits)?;
+            ordered[index] = Some((key, digest(&bytes)));
         }
+        keys.extend(ordered.into_iter().map(|key| key.expect("every unit is ordered").0));
         let mut unique = BTreeMap::new();
         allocation.member_nodes("canonical Cargo unit uniqueness nodes", keys.len(), limits)?;
         for key in &keys {

@@ -1,4 +1,9 @@
-//! iced's `image`, `svg` and `qr_code` widgets.
+//! iced's `image`, `svg` and `qr_code` widgets, each when the project's
+//! iced has it.
+#![cfg_attr(
+    not(all(feature = "image", feature = "svg", feature = "qr_code")),
+    allow(unused_imports)
+)]
 
 use std::sync::Arc;
 
@@ -13,12 +18,14 @@ use super::builtin::{
 };
 use crate::{marker, runtime, widget};
 
+#[cfg(any(feature = "image", feature = "svg"))]
 /// Whether scripts in this process may read the files that image and svg
 /// paths name (`rawr::resolve::deny_files`).
 fn files() -> bool {
     rawr::resolve::files_denied().is_none()
 }
 
+#[cfg(feature = "image")]
 /// `image::Handle::from_path`, unless files are denied.
 fn image_from_path(path: &str) -> iced::widget::image::Handle {
     if files() {
@@ -28,6 +35,7 @@ fn image_from_path(path: &str) -> iced::widget::image::Handle {
     }
 }
 
+#[cfg(feature = "svg")]
 /// `svg::Handle::from_path`, unless files are denied: then no bytes,
 /// which draw as a missing file does.
 fn svg_from_path(path: &str) -> iced::widget::svg::Handle {
@@ -38,6 +46,7 @@ fn svg_from_path(path: &str) -> iced::widget::svg::Handle {
     }
 }
 
+#[cfg(feature = "image")]
 /// `image::Handle::from_bytes`, or a blank pixel when `bytes` do not
 /// start like a PNG or JPEG file. iced's tiny-skia renderer panics on an
 /// image it cannot decode (see [`drawable`]), so this reads the header.
@@ -52,6 +61,7 @@ fn image_from_bytes(bytes: Vec<u8>) -> iced::widget::image::Handle {
     }
 }
 
+#[cfg(any(feature = "image", feature = "svg"))]
 /// The bytes of a `Vec<u8>`, a `&[u8]` or a `&[u8; N]`: an array of
 /// integers at runtime.
 fn bytes(value: &mut Dynamic, operation: &str) -> Result<Vec<u8>, Box<EvalAltResult>> {
@@ -68,6 +78,7 @@ fn bytes(value: &mut Dynamic, operation: &str) -> Result<Vec<u8>, Box<EvalAltRes
         .collect()
 }
 
+#[cfg(feature = "image")]
 /// A `u32` operand of `operation`.
 fn dimension(value: &Dynamic, operation: &str) -> Result<u32, Box<EvalAltResult>> {
     value
@@ -77,6 +88,7 @@ fn dimension(value: &Dynamic, operation: &str) -> Result<u32, Box<EvalAltResult>
         .ok_or_else(|| runtime_error(format!("{operation} expects a u32")))
 }
 
+#[cfg(feature = "image")]
 /// A transparent pixel, one handle for the process.
 fn blank() -> iced::widget::image::Handle {
     static BLANK: std::sync::OnceLock<iced::widget::image::Handle> = std::sync::OnceLock::new();
@@ -86,9 +98,19 @@ fn blank() -> iced::widget::image::Handle {
 }
 
 pub(super) fn bind(builder: &mut host::runtime::Builder) {
-    bind_image(builder);
-    bind_svg(builder);
-    bind_qr_code(builder);
+    use crate::features::{on, Feature};
+    #[cfg(feature = "image")]
+    if on(Feature::Image) {
+        bind_image(builder);
+    }
+    #[cfg(feature = "svg")]
+    if on(Feature::Svg) {
+        bind_svg(builder);
+    }
+    #[cfg(feature = "qr_code")]
+    if on(Feature::QrCode) {
+        bind_qr_code(builder);
+    }
     for (name, fit) in crate::CONTENT_FITS.into_iter().zip([
         iced::ContentFit::Contain,
         iced::ContentFit::Cover,
@@ -100,18 +122,22 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             .bind(format!("iced::ContentFit::{name}"), move |_| Ok(Dynamic::from(fit)))
             .expect("the iced facade must retain every ContentFit");
     }
-    for (name, method) in crate::IMAGE_FILTER_METHODS.into_iter().zip([
-        iced::widget::image::FilterMethod::Linear,
-        iced::widget::image::FilterMethod::Nearest,
-    ]) {
-        builder
-            .bind(format!("iced::widget::image::FilterMethod::{name}"), move |_| {
-                Ok(Dynamic::from(method))
-            })
-            .expect("the iced facade must retain every image::FilterMethod");
+    #[cfg(feature = "image")]
+    if on(Feature::Image) {
+        for (name, method) in crate::IMAGE_FILTER_METHODS.into_iter().zip([
+            iced::widget::image::FilterMethod::Linear,
+            iced::widget::image::FilterMethod::Nearest,
+        ]) {
+            builder
+                .bind(format!("iced::widget::image::FilterMethod::{name}"), move |_| {
+                    Ok(Dynamic::from(method))
+                })
+                .expect("the iced facade must retain every image::FilterMethod");
+        }
     }
 }
 
+#[cfg(any(feature = "image", feature = "svg", feature = "qr_code"))]
 fn attest<T>(builder: &mut host::runtime::Builder, path: &'static str)
 where
     T: widget::Descriptor + Witnessed + Clone,
@@ -123,6 +149,7 @@ where
         .expect("the iced facade must retain each widget's projection into Element");
 }
 
+#[cfg(feature = "image")]
 impl widget::Descriptor for marker::Image {
     fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut image = iced::widget::image(drawable(&self.handle));
@@ -155,6 +182,7 @@ impl widget::Descriptor for marker::Image {
     }
 }
 
+#[cfg(feature = "image")]
 /// `handle`, or a blank pixel when it names a file that does not exist or
 /// holds too few pixels.
 ///
@@ -176,12 +204,14 @@ fn drawable(handle: &iced::widget::image::Handle) -> iced::widget::image::Handle
     }
 }
 
+#[cfg(feature = "image")]
 impl Witnessed for marker::Image {
     fn witness(&self) -> &host::runtime::Witness {
         &self.witness
     }
 }
 
+#[cfg(feature = "svg")]
 impl widget::Descriptor for marker::Svg {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut svg = iced::widget::svg(self.handle.clone());
@@ -210,12 +240,14 @@ impl widget::Descriptor for marker::Svg {
     }
 }
 
+#[cfg(feature = "svg")]
 impl Witnessed for marker::Svg {
     fn witness(&self) -> &host::runtime::Witness {
         &self.witness
     }
 }
 
+#[cfg(any(feature = "image", feature = "svg", feature = "qr_code"))]
 fn number(value: &Dynamic, operation: &str) -> Result<f32, Box<EvalAltResult>> {
     value
         .as_float()
@@ -224,6 +256,7 @@ fn number(value: &Dynamic, operation: &str) -> Result<f32, Box<EvalAltResult>> {
         .map_err(|_| runtime_error(format!("{operation} expects a number")))
 }
 
+#[cfg(feature = "image")]
 fn bind_image(builder: &mut host::runtime::Builder) {
     attest::<marker::Image>(builder, "iced::widget::Image");
     builder
@@ -316,6 +349,7 @@ fn bind_image(builder: &mut host::runtime::Builder) {
     }
 }
 
+#[cfg(feature = "svg")]
 fn bind_svg(builder: &mut host::runtime::Builder) {
     attest::<marker::Svg>(builder, "iced::widget::Svg");
     builder
@@ -380,6 +414,7 @@ fn bind_svg(builder: &mut host::runtime::Builder) {
     }
 }
 
+#[cfg(feature = "qr_code")]
 /// iced's `QRCode` borrows its data; this owns it and builds the borrowing
 /// widget for each call.
 struct OwnedQrCode {
@@ -388,6 +423,7 @@ struct OwnedQrCode {
     total_size: Option<f32>,
 }
 
+#[cfg(feature = "qr_code")]
 impl OwnedQrCode {
     fn widget(&self) -> iced::widget::QRCode<'_, iced::Theme> {
         let mut code = iced::widget::QRCode::new(&self.data);
@@ -401,8 +437,10 @@ impl OwnedQrCode {
     }
 }
 
+#[cfg(feature = "qr_code")]
 impl iced::advanced::widget::Meta for OwnedQrCode {}
 
+#[cfg(feature = "qr_code")]
 impl iced::advanced::Widget<runtime::Message, iced::Theme, iced::Renderer> for OwnedQrCode {
     fn tag(&self) -> tree::Tag {
         iced::advanced::Widget::<runtime::Message, iced::Theme, iced::Renderer>::tag(&self.widget())
@@ -452,6 +490,7 @@ impl iced::advanced::Widget<runtime::Message, iced::Theme, iced::Renderer> for O
     }
 }
 
+#[cfg(feature = "qr_code")]
 impl widget::Descriptor for marker::QrCode {
     fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         // The text was encoded when the data was made, so it encodes again.
@@ -471,12 +510,14 @@ impl widget::Descriptor for marker::QrCode {
     }
 }
 
+#[cfg(feature = "qr_code")]
 impl Witnessed for marker::QrCode {
     fn witness(&self) -> &host::runtime::Witness {
         &self.witness
     }
 }
 
+#[cfg(feature = "qr_code")]
 fn bind_qr_code(builder: &mut host::runtime::Builder) {
     attest::<marker::QrCode>(builder, "iced::widget::QRCode");
     builder

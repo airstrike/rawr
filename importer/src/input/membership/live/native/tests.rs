@@ -1,18 +1,13 @@
-use nix::sys::stat::{self, SFlag};
+use rustix::fs as stat;
 
-use super::{metadata, raw_with};
+use super::{metadata, raw};
 use crate::input::membership::{live::Stat, observed};
 
 #[test]
-fn errno_capture_preserves_codes_outside_nix_enum() {
-    let result = raw_with::<()>(Err(nix::errno::Errno::UnknownErrno), || 107);
+fn errno_capture_preserves_native_codes() {
+    let result = raw::<()>(Err(rustix::io::Errno::from_raw_os_error(107)));
     assert_eq!(result, Err(107));
-    assert_eq!(
-        raw_with(Ok(17), || panic!("errno must not be read on success")),
-        Ok(17)
-    );
-    // This exercises the same immediate-error extraction helper without unsafe
-    // writes to thread-local errno. Native error107 availability is not assumed.
+    assert_eq!(raw(Ok(17)), Ok(17));
 }
 
 #[test]
@@ -20,13 +15,13 @@ fn every_native_type_uses_exact_masked_encoding() {
     // Obtain an initialized native stat safely; mutate only copied value fields.
     let original = stat::stat(c"/dev/null").unwrap();
     for (kind, expected) in [
-        (SFlag::S_IFREG.bits(), observed::Kind::File),
-        (SFlag::S_IFDIR.bits(), observed::Kind::Directory),
-        (SFlag::S_IFLNK.bits(), observed::Kind::Symlink),
-        (SFlag::S_IFIFO.bits(), observed::Kind::Fifo),
-        (SFlag::S_IFSOCK.bits(), observed::Kind::Socket),
-        (SFlag::S_IFCHR.bits(), observed::Kind::Character),
-        (SFlag::S_IFBLK.bits(), observed::Kind::Block),
+        (libc::S_IFREG, observed::Kind::File),
+        (libc::S_IFDIR, observed::Kind::Directory),
+        (libc::S_IFLNK, observed::Kind::Symlink),
+        (libc::S_IFIFO, observed::Kind::Fifo),
+        (libc::S_IFSOCK, observed::Kind::Socket),
+        (libc::S_IFCHR, observed::Kind::Character),
+        (libc::S_IFBLK, observed::Kind::Block),
         (0, observed::Kind::Unknown),
     ] {
         let mut native = original;

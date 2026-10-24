@@ -16,14 +16,15 @@ pub(crate) mod host;
 
 pub use cached::{cached, Attestation};
 
-pub(crate) const CHANNEL: &str = "nightly-2026-07-11";
+/// The pinned nightly the importer's driver runs on.
+pub const CHANNEL: &str = "nightly-2026-07-11";
 const RUST_RELEASE: &str = "1.99.0-nightly";
 const RUST_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
 const CARGO_RELEASE: &str = "1.99.0-nightly";
 const CARGO_COMMIT: &str = "59800466c5c41c444d264b1010b4d57e85a7117f";
 /// The host triple of the toolchain that built the importer, from its
 /// `rustc -vV`. Rawr builds imports for this triple with the pinned nightly.
-pub(crate) const HOST: &str = include_str!(concat!(env!("OUT_DIR"), "/toolchain-host"));
+pub const HOST: &str = include_str!(concat!(env!("OUT_DIR"), "/toolchain-host"));
 const REQUIRED_COMPONENTS: [&str; 2] = ["rustc-dev", "rust-src"];
 #[cfg(feature = "rustc-driver")]
 const SUPPORTED_PLAN_SCHEMA: u32 = 8;

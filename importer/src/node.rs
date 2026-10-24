@@ -1744,7 +1744,7 @@ pub enum Error {
         operation: &'static str,
         path: std::path::PathBuf,
         #[source]
-        source: nix::errno::Errno,
+        source: rustix::io::Errno,
     },
     #[error("node read-set entry became stale for action {action}")]
     StaleReadSet { action: ActionKey },

@@ -12,7 +12,7 @@ license = "MIT OR Apache-2.0"
 rawr = { path = "..", features = ["sync"] }
 rawr-location = { path = "../location" }
 serde_json = "1.0.45"
-toml_edit = { version = "0.25.13", default-features = false, features = ["parse", "display"] }
+toml_edit = { package = "rawr-toml-edit", path = "../toml/edit", default-features = false, features = ["parse", "display"] }
 
 [[bin]]
 name = "rawr"

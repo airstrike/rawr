@@ -195,6 +195,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
 }
 
 /// A `Rotation`, or an angle in radians or degrees.
+#[cfg(feature = "image")]
 pub(super) fn rotation(value: &mut Dynamic) -> Result<Rotation, Box<EvalAltResult>> {
     if let Some(rotation) = value.read_lock::<Rotation>().map(|rotation| *rotation) {
         return Ok(rotation);

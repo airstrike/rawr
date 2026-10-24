@@ -1034,7 +1034,7 @@ pub(crate) fn hash(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(nix::libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW);
     }
     let mut source = options
         .open(path)
@@ -1155,7 +1155,11 @@ pub(crate) fn permissions(metadata: &fs::Metadata) -> u32 {
 }
 #[cfg(unix)]
 fn valid_mode(mode: u32, directory: bool) -> bool {
-    mode == 0o555 || (!directory && mode == 0o444)
+    if directory {
+        mode == 0o755
+    } else {
+        matches!(mode, 0o444 | 0o555)
+    }
 }
 #[cfg(not(unix))]
 fn valid_mode(mode: u32, _directory: bool) -> bool {

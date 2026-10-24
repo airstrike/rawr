@@ -38,7 +38,7 @@ fn canonical_codec_retains_native_paths_and_positive_error_without_absence() {
         Ok(b"/r/\xfe".as_slice()),
         Ok(b"/"),
         Err(1),
-        Err(nix::libc::EINTR),
+        Err(libc::EINTR),
         Err(107),
         Err(i32::MAX),
     ] {

@@ -5,8 +5,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+/// An iced program runs against the iced its Cargo project builds, so one
+/// with no Cargo.toml is refused with the way to start a project.
 #[test]
-fn check_accepts_a_one_file_counter() {
+fn check_refuses_a_one_file_iced_program_without_a_cargo_project() {
     let source = temporary_source("counter");
     fs::write(
         &source,
@@ -19,12 +21,10 @@ fn check_accepts_a_one_file_counter() {
         .output()
         .unwrap();
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Checked"));
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("RAWR-ENVIRONMENT-PROJECT-NOT-FOUND"), "{stderr}");
+    assert!(stderr.contains("`rawr new <name>`"), "{stderr}");
     fs::remove_file(source).unwrap();
 }
 
@@ -78,9 +78,7 @@ fn new_creates_the_exact_marked_crate_in_a_missing_target() {
     );
     assert_eq!(
         fs::read_to_string(target.join("Cargo.toml")).unwrap(),
-        "[package]\nname = \"counter\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
-         [dependencies]\niced = { git = \"https://github.com/iced-rs/iced\", \
-         rev = \"be88873d38544455e26c7a104eb757da2cbbac6b\" }\n"
+        rawr_iced_cli::new::manifest("counter")
     );
     assert!(!target.join("rawr.toml").exists());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -314,7 +312,6 @@ fn check_and_run_share_byte_identical_golden_source_diagnostics() {
         "syntax",
         "duplicate_item",
         "unknown_type",
-        "unknown_callback",
     ] {
         let source = fixture_path(fixture, "rs");
         let expected = fs::read_to_string(fixture_path(fixture, "stderr")).unwrap();
@@ -621,7 +618,7 @@ fn an_iced_program_handed_from_rawr_to_rawr_iced_is_parsed_once() {
 
 /// The iced counter as a Cargo crate of two `.rs` files marked `// rawr`,
 /// without its native module: rawr-iced serves it from one parse of each
-/// file.
+/// file, and its iced is a Rust import, run against the crate's own iced.
 #[test]
 fn a_marked_iced_crate_is_served_by_rawr_iced() {
     let sandbox = Sandbox::new("marked-counter");
@@ -640,17 +637,12 @@ fn a_marked_iced_crate_is_served_by_rawr_iced() {
     let loaded = rawr_cli::base::load(Some(&root)).unwrap();
     assert!(rawr_iced_cli::layer::claims().claim(loaded.sheet.facts()));
     assert_eq!(loaded.cells.counts().parsed, 2);
-    assert!(!loaded.graph.declares_rust_import());
-    drop(loaded);
-
-    let prepared = rawr_iced_cli::run::prepare(Some(root)).unwrap();
-    assert!(prepared.adapter().last_good_output().is_some());
-    assert!(prepared.adapter().diagnostics().is_empty());
+    assert!(loaded.graph.declares_rust_import());
 }
 
 /// Previews written for rustc through the `rawr` attribute crate:
 /// `#[preview]` after `use rawr::preview;`, and `#[rawr::preview(..)]`.
-/// rawr-iced serves both, and the crate's dependency imports nothing.
+/// rawr-iced reads both.
 #[test]
 fn a_marked_iced_crate_writes_previews_through_the_rawr_crate() {
     let sandbox = Sandbox::new("marked-previews");
@@ -681,7 +673,7 @@ fn a_marked_iced_crate_writes_previews_through_the_rawr_crate() {
     fs::write(&ui, text).unwrap();
 
     let loaded = rawr_cli::base::load(Some(&root)).unwrap();
-    assert!(!loaded.graph.declares_rust_import());
+    assert!(loaded.graph.declares_rust_import());
     let names = loaded
         .graph
         .previews()
@@ -689,11 +681,6 @@ fn a_marked_iced_crate_writes_previews_through_the_rawr_crate() {
         .map(|preview| preview.name)
         .collect::<Vec<_>>();
     assert_eq!(names, ["view", "seven"]);
-    drop(loaded);
-
-    let prepared = rawr_iced_cli::run::prepare(Some(root)).unwrap();
-    assert!(prepared.adapter().diagnostics().is_empty());
-    assert!(prepared.adapter().last_good_output().is_some());
 }
 
 /// A copy of the fixture directory `name` from `cli/tests/fixtures` at

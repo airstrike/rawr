@@ -1,11 +1,16 @@
 // Copyright The rust-url developers. MIT OR Apache-2.0.
 //! Delayed ASCII sink writes and the pinned extended-passthrough path.
 
+#[cfg(feature = "unicode-hosts")]
 use rawr_toml::document;
 
-use crate::input::membership::manifest::{session, storage, Error, Step};
+use crate::input::membership::manifest::storage;
+#[cfg(feature = "unicode-hosts")]
+use crate::input::membership::manifest::{session, Error, Step};
 
+#[cfg(feature = "unicode-hosts")]
 use super::super::punycode;
+#[cfg(feature = "unicode-hosts")]
 use super::{domain, invalid, Work};
 
 pub(in crate::input::membership::manifest::spec::url) enum Bytes<'input> {
@@ -22,10 +27,12 @@ impl Bytes<'_> {
     }
 }
 
+#[cfg(feature = "unicode-hosts")]
 struct Sink {
     bytes: storage::Buffer<u8>,
 }
 
+#[cfg(feature = "unicode-hosts")]
 impl Sink {
     fn push<A: document::Admission>(
         &mut self,
@@ -52,6 +59,7 @@ impl Sink {
     }
 }
 
+#[cfg(feature = "unicode-hosts")]
 impl<'input> domain::Domain<'input> {
     pub(super) fn output<A: document::Admission>(
         self,

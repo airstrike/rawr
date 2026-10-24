@@ -528,6 +528,9 @@ struct Authority {
     retained: BTreeMap<Box<str>, Item>,
     digest: Digest,
     inputs: Box<[Input]>,
+    /// The project's own `Cargo.lock`, which starts the harness resolution
+    /// so Rawr's units are the ones `cargo build` already compiled.
+    lock: Option<Box<[u8]>>,
 }
 
 #[derive(Debug)]
@@ -1829,6 +1832,15 @@ impl Request {
             extraction_plan,
         })
     }
+
+    /// The lock a fresh resolution starts from: the project's own
+    /// `Cargo.lock` when it has one, so every package it already locks keeps
+    /// its version and Rawr's runner reuses what `cargo build` compiled, and
+    /// the universe's seed otherwise. Admission still fixes only iced (D402).
+    pub(crate) fn starting_lock<'a>(&'a self, definition: &'a universe::Definition) -> &'a [u8] {
+        self.authority.lock.as_deref().unwrap_or(definition.seed())
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "one shared Fresh phase preserves the legacy and reserved command sequences"
@@ -1870,7 +1882,7 @@ impl Request {
         let manifest = render_manifest_accounted(self, Some(&internal), limits, allocation)?;
         write_atomic(manifest_path, manifest.as_bytes())?;
         write_atomic(source_path, HARNESS_SOURCE.as_bytes())?;
-        write_atomic(lock_path, definition.seed())?;
+        write_atomic(lock_path, self.starting_lock(definition))?;
         // The candidate's metadata is the final metadata: Cargo wrote the lock
         // it resolved, and the `--locked` unit graph that follows refuses a
         // lock it would change. Running `--locked` metadata again only
@@ -3219,6 +3231,7 @@ impl Authority {
                 retained: BTreeMap::new(),
                 digest,
                 inputs: Box::default(),
+                lock: None,
             });
         };
         let bytes = read_bounded_budgeted(
@@ -3348,6 +3361,7 @@ impl Authority {
             retained,
             digest: digest(&evidence),
             inputs: inputs.into_boxed_slice(),
+            lock: lock_evidence.map(|(_, bytes)| bytes.into_boxed_slice()),
         })
     }
 }

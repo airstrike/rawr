@@ -50,6 +50,14 @@ fn execute_transform(
         )
         .map_err(Error::from_report);
     }
+    // A program with no Cargo project has no iced to run against.
+    if cfg!(feature = "native-runner") {
+        let source = match &path {
+            Some(path) => path.clone(),
+            None => std::env::current_dir().unwrap_or_default(),
+        };
+        return Err(Error::from_report(crate::base::without_cargo(&source)));
+    }
     #[cfg(feature = "import-baseline")]
     if profile.is_some() {
         return Err(Error::from_report(

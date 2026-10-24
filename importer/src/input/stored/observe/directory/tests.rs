@@ -58,7 +58,7 @@ fn cached_symlink_rejects_even_when_replacement_metadata_would_be_regular() {
     let graph = node::GraphBudget::new();
     let mut calls = 0;
     let result = super::inspect(
-        nix::libc::DT_LNK,
+        libc::DT_LNK,
         &mut Budget::borrow(&limits, &mut allocation, &graph),
         |_| {
             calls += 1;
@@ -77,12 +77,12 @@ fn every_known_nonlink_kind_uses_one_subsequent_nofollow_observation() {
     let fixture = Fixture::new();
     let limits = cargo::Limits::standard();
     for kind in [
-        nix::libc::DT_CHR,
-        nix::libc::DT_FIFO,
-        nix::libc::DT_REG,
-        nix::libc::DT_SOCK,
-        nix::libc::DT_DIR,
-        nix::libc::DT_BLK,
+        libc::DT_CHR,
+        libc::DT_FIFO,
+        libc::DT_REG,
+        libc::DT_SOCK,
+        libc::DT_DIR,
+        libc::DT_BLK,
     ] {
         let mut allocation = Allocation::for_proof(
             Usage {
@@ -121,7 +121,7 @@ fn every_known_nonlink_kind_uses_one_subsequent_nofollow_observation() {
         &mut budget,
     )
     .expect("independent lookup directory");
-    let metadata = super::metadata(&lookup, Path::new("link"), nix::libc::DT_REG, &mut budget)
+    let metadata = super::metadata(&lookup, Path::new("link"), libc::DT_REG, &mut budget)
         .expect("file record replaced by symlink is observed without following it");
     assert!(metadata.is_symlink());
     assert!(
@@ -134,7 +134,7 @@ fn every_known_nonlink_kind_uses_one_subsequent_nofollow_observation() {
 fn unknown_and_unrecognized_kinds_preserve_both_metadata_stages_and_errors() {
     let fixture = Fixture::new();
     let limits = cargo::Limits::standard();
-    for kind in [nix::libc::DT_UNKNOWN, 255] {
+    for kind in [libc::DT_UNKNOWN, 255] {
         for first_link in [false, true] {
             let mut allocation = Allocation::for_proof(
                 Usage {
@@ -220,7 +220,7 @@ fn fallback_failure_prevents_the_next_metadata_operation() {
     );
     let mut calls = 0;
     super::inspect(
-        nix::libc::DT_UNKNOWN,
+        libc::DT_UNKNOWN,
         &mut Budget::borrow(&limits, &mut allocation, &graph),
         |budget| {
             budget.paths(1)?;
@@ -260,7 +260,7 @@ fn fallback_failure_prevents_the_next_metadata_operation() {
         );
         let mut calls = 0;
         let result = super::inspect(
-            nix::libc::DT_UNKNOWN,
+            libc::DT_UNKNOWN,
             &mut Budget::borrow(&limits, &mut allocation, &graph),
             |budget| {
                 if calls == remaining {

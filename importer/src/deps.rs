@@ -1,33 +1,26 @@
-//! The project's one Cargo build directory, `<target>/rawr/build`.
-//! Runner and resolution builds compile into it, updated in place, so every
-//! unchanged dependency unit is compiled once and rustc's incremental
-//! state carries across edits; bundles keep only what they consume. It is a
-//! cache: removing it (as `cargo clean` does) costs a rebuild.
+//! The project's Cargo build directory, the one `cargo build` uses
+//! (`build.build-dir`, else the target directory). Runner and resolution
+//! builds compile into it, so a unit `cargo build` compiled is reused, and
+//! the reverse. Rawr removes only its own units there.
 
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// The project's build directory under its `<target>/rawr`. Cargo's own
-/// fingerprints tell toolchains apart inside it.
-pub(crate) fn directory(rawr: &Path) -> io::Result<PathBuf> {
-    let build = rawr.join("build");
-    fs::create_dir_all(&build)?;
-    Ok(build)
+/// The project's Cargo build directory, created if absent.
+pub(crate) fn directory(build: &Path) -> io::Result<PathBuf> {
+    fs::create_dir_all(build)?;
+    Ok(build.to_path_buf())
 }
 
 /// Held by every rawr build across its Cargo run and any read of what Cargo
-/// wrote, so no other build changes the shared files in between. It lives
-/// beside the directory, so removing the directory never orphans a waiter.
-pub(crate) fn lock(build: &Path) -> io::Result<File> {
-    let file = File::create(lock_path(build))?;
+/// wrote, so no other Rawr build changes the shared files in between. It
+/// lives in `<target>/rawr`, which `cargo clean` removes with the rest.
+pub(crate) fn lock(rawr: &Path) -> io::Result<File> {
+    fs::create_dir_all(rawr)?;
+    let file = File::create(rawr.join("build.lock"))?;
     file.lock()?;
     Ok(file)
-}
-
-fn lock_path(build: &Path) -> PathBuf {
-    let name = build.file_name().unwrap_or_default().to_string_lossy();
-    build.with_file_name(format!(".{name}.lock"))
 }
 
 /// After a successful build in `shared`, remove Rawr's own crates left by
@@ -224,13 +217,15 @@ fn debug_map_objects(binary: &Path) -> Option<std::collections::HashSet<String>>
 /// After a successful runner build in `shared` that began at `started`, keep
 /// what this build's Cargo messages (JSON) name and remove what they supersede:
 /// a unit of a crate this build used under another hash (an earlier
-/// install's `rawr_iced`, a host-built copy from before `--target`), the
+/// install's `rawr_iced`), the
 /// runner's own outputs this build did not write (each incremental build
 /// leaves a new set of codegen objects beside the binary), and incremental
 /// state this build did not touch (only the runner is incremental).
-/// Crates this build did not use (the resolution harness) are kept. Best
-/// effort; the caller holds the build lock.
+/// Crates this build did not use (the resolution harness) are kept, and so is
+/// every crate that is not Rawr's, since `cargo build` shares the directory.
+/// Best effort; the caller holds the build lock.
 pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::time::SystemTime) {
+    let owned = |krate: &str| krate == "rawr" || krate.starts_with("rawr_");
     let mut live = std::collections::BTreeSet::new();
     let mut crates = std::collections::BTreeSet::new();
     let mut name = |path: &str| {
@@ -303,11 +298,16 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
                 let file = entry.file_name();
                 let Some(file) = file.to_str() else { continue };
                 let stale = if directory == "incremental" {
-                    // `<crate>-<session base>`: only the runner is incremental,
-                    // and a rebuilt runner's directory took a new session.
-                    rebuilt && before(&entry)
+                    // `<crate>-<session base>`: the runner is Rawr's one
+                    // incremental unit, and a rebuilt runner's directory took
+                    // a new session. The project's own are Cargo's.
+                    rebuilt && file.starts_with(runner) && before(&entry)
                 } else if let Some((krate, hash)) = unit_key(file) {
-                    let superseded = crates.contains(&krate) && !live.contains(&format!("{krate}-{hash}"));
+                    // The build directory is the project's: only Rawr's own
+                    // crates are Rawr's to remove.
+                    let superseded = owned(&krate)
+                        && crates.contains(&krate)
+                        && !live.contains(&format!("{krate}-{hash}"));
                     if krate == runner {
                         // A binary unit's messages name its uplifted copy, not
                         // its hash.
@@ -340,17 +340,15 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn a_project_has_one_build_directory_under_its_rawr_directory() {
-        let rawr = std::env::temp_dir().join(format!("rawr-project-build-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&rawr);
-        let build = super::directory(&rawr).unwrap();
-        assert_eq!(build, rawr.join("build"));
-        // Every build of the project, whatever its toolchain, reuses it in place.
-        assert_eq!(super::directory(&rawr).unwrap(), build);
-        let held = super::lock(&build).unwrap();
-        assert!(rawr.join(".build.lock").is_file());
+    fn the_build_directory_is_the_projects_and_the_lock_is_rawrs() {
+        let root = std::env::temp_dir().join(format!("rawr-project-build-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (target, rawr) = (root.join("target"), root.join("target/rawr"));
+        assert_eq!(super::directory(&target).unwrap(), target);
+        let held = super::lock(&rawr).unwrap();
+        assert!(rawr.join("build.lock").is_file());
         drop(held);
-        fs::remove_dir_all(rawr).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -373,6 +371,9 @@ mod tests {
         let iced_old = write(target.join(format!("deps/librawr_iced-{}.rlib", hash('b'))));
         let iced_host = write(host.join(format!("deps/librawr_iced-{}.rlib", hash('c'))));
         let serde = write(target.join(format!("deps/libserde-{}.rlib", hash('d'))));
+        let serde_other = write(target.join(format!("deps/libserde-{}.rlib", hash('9'))));
+        let project_incremental = target.join("incremental/app-old");
+        fs::create_dir_all(&project_incremental).unwrap();
         let derive = write(host.join(format!("deps/libserde_derive-{}.dylib", hash('e'))));
         let harness = write(target.join(format!("deps/librawr_resolution_harness-{}.rlib", hash('f'))));
         let old_objects = write(target.join(format!(
@@ -432,7 +433,17 @@ mod tests {
         assert!(old_objects.exists() && old_incremental.exists() && other_runner.exists());
         assert!(!iced_old.exists() && !iced_host.exists(), "superseded rawr_iced units");
         super::prune_superseded(&shared, runner_fresh(false).as_bytes(), started);
-        for kept in [&iced, &serde, &derive, &harness, &new_objects, &binary, &new_incremental] {
+        for kept in [
+            &iced,
+            &serde,
+            &serde_other,
+            &derive,
+            &harness,
+            &new_objects,
+            &binary,
+            &new_incremental,
+            &project_incremental,
+        ] {
             assert!(kept.exists(), "{} is kept", kept.display());
         }
         assert!(!old_objects.exists(), "the runner's earlier codegen objects");

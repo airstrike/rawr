@@ -49,6 +49,28 @@ impl cosmic_text::Fallback for Bundled {
     }
 }
 
+/// Fira Sans Regular (SIL Open Font License 1.1), the face iced embeds
+/// with its `fira-sans` feature. A snapshot renders with it whether the
+/// project's iced embeds it or not, so snapshots read the same everywhere.
+const FIRA_SANS: &[u8] = include_bytes!("FiraSans-Regular.ttf");
+
+/// Make Fira Sans the sans-serif face, loading it when the project's iced
+/// does not embed it, as iced's `fira-sans` feature does.
+pub(crate) fn embed_fira_sans() {
+    let Ok(mut system) = font_system().write() else {
+        return;
+    };
+    let embedded = system.raw().db().faces().any(|face| {
+        face.families
+            .iter()
+            .any(|(family, _)| family == "Fira Sans")
+    });
+    if !embedded {
+        system.load_font(std::borrow::Cow::Borrowed(FIRA_SANS));
+    }
+    system.raw().db_mut().set_sans_serif_family("Fira Sans");
+}
+
 /// Use only iced's embedded faces and the fonts in `dir`; the number of
 /// faces found there.
 pub fn use_only(dir: &Path) -> Result<usize, String> {

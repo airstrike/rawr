@@ -143,7 +143,7 @@ fn discovery_repeated_queries_preserve_original_ownership_and_graph_floors() {
                 device: 1,
                 inode: 2,
             }),
-            After::Second(Attempt::StatFailed(nix::libc::EINTR)),
+            After::Second(Attempt::StatFailed(libc::EINTR)),
         )
         .expect("native fstat failure"),
     ] {

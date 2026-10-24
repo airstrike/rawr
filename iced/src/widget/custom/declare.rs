@@ -39,7 +39,11 @@ const RENDERER: &str = "pub trait Renderer {
 
 
 pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    // `advanced` and `advanced::graphics` are declared here, since a widget
+    // of one's own is there with or without iced's `canvas`.
     for module in [
+        "advanced",
+        "advanced::graphics",
         "advanced::layout",
         "advanced::renderer",
         "advanced::widget",
@@ -49,6 +53,8 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
     }
     let copied = crate::OWNED_VALUE_CAPABILITIES;
     let cloned = &[capability::Kind::Clone, capability::Kind::Send, capability::Kind::Static];
+    // A canvas program's hooks take the cursor too.
+    builder.value_type::<iced::mouse::Cursor>("mouse::Cursor", &[], copied)?;
     builder.value_type::<iced::advanced::Layout>("advanced::layout::Layout", &[], copied)?;
     builder.alias("advanced::Layout", "advanced::layout::Layout")?;
     builder.value_type::<iced::advanced::layout::Limits>("advanced::layout::Limits", &[], copied)?;
