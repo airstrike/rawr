@@ -971,9 +971,10 @@ impl Lowering {
             Ok(poll) => poll,
             Err(error) => return self.fail(error),
         };
-        let actual = poll.type_name().to_string();
         match poll.try_cast_result::<rawr::future::Poll>() {
             Ok(rawr::future::Poll::Ready(output)) => next(output),
+            // A body that never awaits is no machine: it gives its output.
+            Err(output) => next(output),
             Ok(rawr::future::Poll::Pending { future, frame }) => {
                 let awaited = match Plan::from_dynamic(future) {
                     Ok(awaited) => awaited,
@@ -993,7 +994,6 @@ impl Lowering {
                     .lower_with(self, resume)
                     .unwrap_or_else(|error| self.fail(error))
             }
-            Err(_) => self.fail(Error::Representation { actual }),
         }
     }
 
