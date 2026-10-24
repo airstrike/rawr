@@ -177,11 +177,7 @@ pub fn picture(
     budget: Duration,
     encoder: Encoder,
 ) -> Result<Image, PlayError> {
-    let Recording {
-        frames,
-        background,
-        ending,
-    } = recording;
+    let Recording { frames, ending } = recording;
     let last = frames.last().ok_or_else(|| PlayError::Limit(crate::TIME_LIMIT.into()))?;
     let still = |note: Option<&str>| {
         Ok(Image {
@@ -240,7 +236,7 @@ pub fn picture(
             (shown, false, note)
         }
     };
-    let gif = encoder.finish(&frames, &shown, background, looping)?;
+    let gif = encoder.finish(&frames, &shown, looping)?;
     if gif.bytes.len() > MAX_GIF {
         return still(Some(TOO_LARGE));
     }
@@ -307,9 +303,9 @@ impl Encoder {
         }
     }
 
-    /// Encode the frames of `frames` not yet seen, on a canvas of
-    /// `background`.
-    pub fn push(&mut self, frames: &[Frame], background: [u8; 4]) {
+    /// Encode the frames of `frames` not yet seen, each on a canvas of its
+    /// own background.
+    pub fn push(&mut self, frames: &[Frame]) {
         if self.error.is_some() {
             return;
         }
@@ -332,7 +328,7 @@ impl Encoder {
             self.previous.clear();
         }
         for frame in &frames[self.seen..] {
-            let canvas = self.canvas(frame, background);
+            let canvas = self.canvas(frame);
             let previous = (!self.previous.is_empty()).then_some(self.previous.as_slice());
             match encode(&canvas, previous, size) {
                 Ok(encoded) => self.encoded.push(encoded),
@@ -353,13 +349,13 @@ impl Encoder {
         (side(frame.width), side(frame.height))
     }
 
-    /// `frame` at the encoder's scale, on the canvas, padded with
-    /// `background`.
-    fn canvas(&self, frame: &Frame, background: [u8; 4]) -> Vec<u8> {
+    /// `frame` at the encoder's scale, on the canvas, padded with its
+    /// background.
+    fn canvas(&self, frame: &Frame) -> Vec<u8> {
         let (columns, rows) = self.size.unwrap_or((1, 1));
         let (width, height) = self.size_of(frame);
         let pixels = resample(frame, width, height);
-        let mut canvas = background.repeat(columns * rows);
+        let mut canvas = frame.background.repeat(columns * rows);
         let stride = width * 4;
         for (row, line) in pixels.chunks_exact(stride).enumerate() {
             let at = row * columns * 4;
@@ -373,7 +369,6 @@ impl Encoder {
         mut self,
         frames: &[Frame],
         shown: &[(usize, Duration)],
-        background: [u8; 4],
         looping: bool,
     ) -> Result<Gif, PlayError> {
         let failed = |error: &dyn std::fmt::Display| PlayError::Render(format!("cannot encode: {error}"));
@@ -390,7 +385,7 @@ impl Encoder {
                 // a change from the frame before it.
                 match self.encoded.get_mut(at).and_then(Option::take).filter(|_| at == 0) {
                     Some(frame) => Some(frame),
-                    None => encode(&self.canvas(&frames[at], background), None, (columns, rows))?,
+                    None => encode(&self.canvas(&frames[at]), None, (columns, rows))?,
                 }
             } else {
                 self.encoded.get_mut(at).and_then(Option::take)
@@ -606,6 +601,7 @@ mod tests {
             time: Duration::from_millis(50 * at),
             phase: 0,
             scale,
+            background: BACKGROUND,
         }
     }
 
@@ -652,7 +648,7 @@ mod tests {
         let mut encoder = Encoder::new(1.0);
         let frames: Vec<Frame> = (0..10).map(|at| frame(8, 2.0, None, at)).collect();
         for count in 1..=frames.len() {
-            encoder.push(&frames[..count], BACKGROUND);
+            encoder.push(&frames[..count]);
         }
         assert!(encoder.size.is_none() && encoder.encoded.is_empty());
     }
@@ -677,7 +673,7 @@ mod tests {
         ];
         let mut encoder = Encoder::new(1.0);
         for count in 1..=frames.len() {
-            encoder.push(&frames[..count], BACKGROUND);
+            encoder.push(&frames[..count]);
         }
         assert_eq!(encoder.size, Some((8, 8)));
         let first = encoder.encoded[0].as_ref().unwrap();
@@ -691,7 +687,6 @@ mod tests {
         assert_eq!(moved.transparent, Some(255));
         let recording = Recording {
             frames,
-            background: BACKGROUND,
             ending: Ending::Settled,
         };
         let image = super::picture(recording, &super::Loops::default(), Duration::ZERO, encoder).unwrap();

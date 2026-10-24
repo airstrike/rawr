@@ -222,30 +222,30 @@ impl Renderer {
             None => declared,
         };
         let mut drawn = |published| view(published, false);
-        let cache = std::mem::take(&mut trees.view);
+        let cache = trees
+            .drawn
+            .take()
+            .map_or_else(user_interface::Cache::default, UserInterface::into_cache);
         let (mut interface, request) = self.settle_at(&mut drawn, size, cache, now);
         let scale = *scale.get_or_insert_with(|| self.scale(size));
         let image = self.draw(&mut interface, theme, size, scale)?;
-        trees.view = interface.into_cache();
+        trees.drawn = Some(interface);
         Ok((image, request, size))
     }
 
-    /// The last [`Self::frame`]'s view at `size`, drawn again at `scale`.
-    /// It is built over that frame's trees with nothing published, so the
-    /// app's State and the clock are untouched.
+    /// The interface the last [`Self::frame`] drew, drawn again at
+    /// `scale`. It is the same interface, updated as that frame updated
+    /// it, so its widgets keep their status (a button not yet updated
+    /// draws as disabled), and the app's State and the clock are untouched.
     pub(super) fn redraw(
         &mut self,
-        view: &mut dyn FnMut(Vec<runtime::Message>, bool) -> iced::Element<'static, runtime::Message>,
         trees: &mut Trees,
         size: Size,
         theme: &iced::Theme,
         scale: f32,
     ) -> Result<image::Image, Error> {
-        let cache = std::mem::take(&mut trees.view);
-        let mut interface = UserInterface::build(view(Vec::new(), false), size, cache, &mut self.raw);
-        let image = self.draw(&mut interface, theme, size, scale);
-        trees.view = interface.into_cache();
-        image
+        let interface = trees.drawn.as_mut().expect("a frame was drawn before");
+        self.draw(interface, theme, size, scale)
     }
 
     /// `view` settled at `now` over `cache`, as [`Self::settle`] settles it
@@ -384,12 +384,12 @@ mod margin_tests {
     }
 }
 
-/// The widget trees a recording builds each frame over: the content it
-/// measures and the view it draws.
+/// What a recording builds each frame over: the widget trees of the
+/// content it measures, and the interface of the view it last drew.
 #[derive(Default)]
 pub(super) struct Trees {
     content: user_interface::Cache,
-    view: user_interface::Cache,
+    drawn: Option<UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>>,
 }
 
 /// A view to render: given the messages the last frame published, the

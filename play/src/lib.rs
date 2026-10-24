@@ -386,7 +386,7 @@ pub fn animate(source: &str, options: &Options) -> Result<Image, PlayError> {
         theme,
         motion,
         &mut |frames| loops.check(frames),
-        &mut |frames, background| encoder.push(frames, background),
+        &mut |frames| encoder.push(frames),
     )
     .map_err(|error| classify(&error.to_string(), &options.limits))?;
     // A cut recording stopped before its budget ran out.

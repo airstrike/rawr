@@ -75,7 +75,7 @@ fn record(source: &str) -> Vec<rawr_iced::snapshot::Frame> {
         Some(options.theme.variant()),
         motion,
         &mut |_| false,
-        &mut |_, _| {},
+        &mut |_| {},
     )
     .unwrap();
     for entry in adapter.diagnostics() {

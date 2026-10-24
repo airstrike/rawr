@@ -140,3 +140,80 @@ fn motion_the_playgrounds_animated_iced_examples_are_gifs() {
         assert!(gif.delays.len() > 10, "{name}: {} frames", gif.delays.len());
     }
 }
+
+/// A GIF's frames as whole RGBA images, each one's change drawn over the
+/// frame before, also written as PNGs to `target/play-fix/{name}-{i}.png`
+/// to look at.
+fn pictures(name: &str, bytes: &[u8]) -> Vec<Vec<u8>> {
+    let mut options = gif::DecodeOptions::new();
+    options.set_color_output(gif::ColorOutput::RGBA);
+    let mut decoder = options.read_info(bytes).unwrap();
+    let (width, height) = (usize::from(decoder.width()), usize::from(decoder.height()));
+    let mut canvas = vec![0_u8; width * height * 4];
+    let mut pictures = Vec::new();
+    while let Some(frame) = decoder.read_next_frame().unwrap() {
+        let (left, top) = (usize::from(frame.left), usize::from(frame.top));
+        for (at, pixel) in frame.buffer.chunks_exact(4).enumerate() {
+            if pixel[3] == 0 {
+                continue;
+            }
+            let (x, y) = (left + at % usize::from(frame.width), top + at / usize::from(frame.width));
+            let to = (y * width + x) * 4;
+            canvas[to..to + 4].copy_from_slice(pixel);
+        }
+        pictures.push(canvas.clone());
+    }
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/play-fix");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (at, picture) in pictures.iter().enumerate() {
+        let file = std::fs::File::create(dir.join(format!("{name}-{at}.png"))).unwrap();
+        let mut encoder = png::Encoder::new(file, width as u32, height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(picture).unwrap();
+    }
+    pictures
+}
+
+/// How many pixels of `picture` are `color`.
+fn count(picture: &[u8], color: &[u8]) -> usize {
+    picture.chunks_exact(4).filter(|pixel| *pixel == color).count()
+}
+
+#[test]
+fn motion_a_counters_buttons_stay_enabled_in_every_frame() {
+    // The frame where the view first changes is drawn again at the GIF's
+    // scale. Drawn from a fresh interface, its buttons showed disabled.
+    let increments = ["--message", "Message::Increment", "--message", "Message::Increment"];
+    let rendered = render("counter", "counter_enabled.png", &increments);
+    let pictures = pictures("counter", &rendered.bytes);
+    assert_eq!(pictures.len(), 3);
+    // The enabled buttons' fill: the boot frame's most common color after
+    // the background in its corner.
+    let first = &pictures[0];
+    let background = &first[..4];
+    let mut colors: Vec<&[u8]> = first.chunks_exact(4).filter(|pixel| *pixel != background).collect();
+    colors.sort_unstable();
+    let fill = colors
+        .chunk_by(|a, b| a == b)
+        .max_by_key(|run| run.len())
+        .unwrap()[0];
+    let enabled = count(first, fill);
+    for (at, picture) in pictures.iter().enumerate() {
+        // Drawn at another scale, the edges differ a little; disabled
+        // buttons lose the fill entirely.
+        let shown = count(picture, fill);
+        assert!(shown * 10 >= enabled * 9, "frame {at} shows its buttons disabled: {shown} of {enabled}");
+    }
+}
+
+#[test]
+fn motion_a_theme_change_changes_the_colors() {
+    let rendered = render("styling", "styling_theme.png", &["--message", "Message::ThemeChanged(Theme::Dracula)"]);
+    let pictures = pictures("styling", &rendered.bytes);
+    let corner = |picture: &[u8]| picture[..4].to_vec();
+    let (first, last) = (pictures.first().unwrap(), pictures.last().unwrap());
+    assert_ne!(corner(first), corner(last), "the background follows the theme");
+    // Dracula's background.
+    assert_eq!(corner(last), [0x28, 0x2a, 0x36, 0xff]);
+}

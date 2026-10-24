@@ -206,6 +206,8 @@ pub struct Frame {
     pub phase: usize,
     /// Pixels per logical pixel it was drawn at.
     pub scale: f32,
+    /// The background color of the theme it was drawn with, RGBA8.
+    pub background: [u8; 4],
 }
 
 impl Frame {
@@ -242,8 +244,6 @@ pub enum Ending {
 pub struct Recording {
     /// The frames, in order. Their sizes differ when the content's does.
     pub frames: Vec<Frame>,
-    /// The theme's background color, RGBA8.
-    pub background: [u8; 4],
     /// Why it ended.
     pub ending: Ending,
 }
@@ -258,8 +258,10 @@ pub struct Recording {
 /// [`clock::freeze`] before the application boots so its boot reads the
 /// same clock; otherwise it freezes here. After the last message, `stop`
 /// sees the frames recorded since and ends the recording when it returns
-/// `true`. `each` sees every frame recorded so far, with the background,
-/// after each frame; the time it takes counts against the deadline.
+/// `true`. `each` sees every frame recorded so far after each frame; the
+/// time it takes counts against the deadline. Each frame is drawn with the
+/// theme `theme` names, or else the application's theme as its State has
+/// it then, so a message that changes the theme changes the colors.
 pub fn record_application(
     adapter: &mut crate::program::Adapter,
     messages: Vec<crate::runtime::Message>,
@@ -268,7 +270,7 @@ pub fn record_application(
     theme: Option<&str>,
     motion: Motion,
     stop: &mut dyn FnMut(&[Frame]) -> bool,
-    each: &mut dyn FnMut(&[Frame], [u8; 4]),
+    each: &mut dyn FnMut(&[Frame]),
 ) -> Result<Recording, Error> {
     use iced::time::Instant;
     use iced::window::RedrawRequest;
@@ -277,15 +279,12 @@ pub fn record_application(
     let start = clock::now().expect("the clock is frozen");
     let mut renderer = headless::Renderer::with_canvas(canvas)?;
     adapter.deliver(Vec::new());
-    let theme = theme
-        .and_then(|name| {
-            iced::Theme::ALL
-                .iter()
-                .find(|theme| theme.to_string() == name)
-                .cloned()
-        })
-        .unwrap_or_else(|| adapter.theme().native().clone());
-    let background = iced::theme::Base::base(&theme).background_color.into_rgba8();
+    let named = theme.and_then(|name| {
+        iced::Theme::ALL
+            .iter()
+            .find(|theme| theme.to_string() == name)
+            .cloned()
+    });
     let framing = renderer.framing();
     let declared = iced::Size::new(bound.0 as f32, bound.1 as f32);
     let mut trees = headless::Trees::default();
@@ -319,6 +318,7 @@ pub fn record_application(
                 }
                 streams.sync(adapter);
                 clock::set(now);
+                let theme = named.clone().unwrap_or_else(|| adapter.theme().native().clone());
                 // The content sizes the image; the view, with its
                 // diagnostic overlays, fills it.
                 let mut view = |published: Vec<crate::runtime::Message>, content: bool| {
@@ -337,6 +337,7 @@ pub fn record_application(
                     time: now - start,
                     phase: if capped { last } else { phase },
                     scale: scale.unwrap_or(1.0),
+                    background: iced::theme::Base::base(&theme).background_color.into_rgba8(),
                 };
                 // The view changed: an animation gets the longer budget,
                 // and its frames from this one on are drawn at its scale.
@@ -350,7 +351,7 @@ pub fn record_application(
                         .and_then(|lower| scale.map(|scale| scale.min(lower)));
                     if let Some(lowered) = lowered.filter(|lowered| Some(*lowered) != scale) {
                         scale = Some(lowered);
-                        let image = renderer.redraw(&mut view, &mut trees, size, &theme, lowered)?;
+                        let image = renderer.redraw(&mut trees, size, &theme, lowered)?;
                         frame.width = image.width();
                         frame.height = image.height();
                         frame.rgba = image.into_bytes();
@@ -358,7 +359,7 @@ pub fn record_application(
                     }
                 }
                 frames.push(frame);
-                each(&frames, background);
+                each(&frames);
                 if capped {
                     break 'record Ending::Messages;
                 }
@@ -388,11 +389,7 @@ pub fn record_application(
         }
         unreachable!("the last phase ends the recording")
     };
-    Ok(Recording {
-        frames,
-        background,
-        ending,
-    })
+    Ok(Recording { frames, ending })
 }
 
 /// The streams of an application's subscription, run by hand on a
