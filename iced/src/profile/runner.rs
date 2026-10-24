@@ -2828,7 +2828,8 @@ impl<'proof> Decoration<'proof> {
         }
 
         // Every builder path with its overloads: `impl Into<Length>` and
-        // `impl Into<Pixels>` each register one item per accepted input.
+        // `impl Into<Pixels>` each register one item per accepted input, and
+        // `style` takes a pinned style or a style function.
         const BUILDERS: [&str; 11] = [
             "iced::widget::Text::align_x",
             "iced::widget::Text::align_y",
@@ -2842,7 +2843,7 @@ impl<'proof> Decoration<'proof> {
             "iced::widget::Text::style",
             "iced::widget::Text::width",
         ];
-        const OVERLOADS: usize = 18;
+        const OVERLOADS: usize = 19;
         let builder_count = semantic
             .items()
             .filter(|item| item.path().strip_prefix("iced::widget::Text::").is_some())
