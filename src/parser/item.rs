@@ -3864,6 +3864,17 @@ fn parse_body_syntax(
     let mut after_pub = false;
     let mut after_extern = false;
     let mut visibility = None;
+    // The delimiter depths inside the braces of open struct literals, as
+    // `S { x: 1 }`, which ends an expression as `1` does.
+    let mut literals: Vec<usize> = Vec::new();
+    // The heads of `if`, `while`, `for`, `match` and `->` whose block has
+    // not opened yet, at their depth: there `x {` opens the block, as in
+    // Rust. `pattern` holds after `let` until `=` and after `for` until
+    // `in`, where `S { x }` is a pattern.
+    let mut heads: Vec<(usize, bool)> = Vec::new();
+    // Whether the last token is a name that a struct literal's `{` may
+    // follow.
+    let mut after_name = false;
     // Each open parenthesis: the callback roles of an `iced::run(..)` or
     // `iced::application(..)` call it opens, and the argument it is at.
     let mut calls: Vec<Option<(&'static [&'static str], usize)>> = Vec::new();
@@ -3949,6 +3960,7 @@ fn parse_body_syntax(
             tokens.push(body_token(token, position));
             boundary = false;
             ends_expression = false;
+            after_name = false;
             after_pub = false;
             after_extern = false;
             continue;
@@ -4003,6 +4015,52 @@ fn parse_body_syntax(
                 };
             after_pub = matches!(token, Token::Pub);
             after_extern = matches!(token, Token::Identifier(name) if name.as_str() == "extern");
+            let depth = scan.delimiter_depth;
+            match token {
+                Token::If | Token::While | Token::Switch | Token::ThinArrow => {
+                    heads.push((depth, false));
+                }
+                Token::For => heads.push((depth, true)),
+                Token::Reserved(word) if word.as_str() == "match" => heads.push((depth, false)),
+                Token::Let => {
+                    if let Some((head, pattern)) = heads.last_mut()
+                        && *head == depth
+                    {
+                        *pattern = true;
+                    }
+                }
+                Token::Equals | Token::In => {
+                    if let Some((head, pattern)) = heads.last_mut()
+                        && *head == depth
+                    {
+                        *pattern = false;
+                    }
+                }
+                Token::SemiColon => {
+                    while heads.last().is_some_and(|(head, _)| *head >= depth) {
+                        heads.pop();
+                    }
+                }
+                Token::LeftBrace => match heads.last() {
+                    Some(&(head, pattern)) if head == depth => {
+                        if !pattern {
+                            heads.pop();
+                        }
+                    }
+                    _ if after_name => literals.push(depth + 1),
+                    _ => {}
+                },
+                Token::RightBrace if literals.last() == Some(&depth) => {
+                    literals.pop();
+                    boundary = false;
+                    ends_expression = true;
+                }
+                _ => {}
+            }
+            after_name = matches!(token, Token::Identifier(name) if !matches!(
+                name.as_str(),
+                "unsafe" | "move" | "async" | "try" | "extern" | "union"
+            ));
         }
         match scan
             .next(input, tokenizer_control)
@@ -4895,6 +4953,8 @@ fn view(state: &Counter) -> iced::widget::Column<'_, Message> { () }
         for (source, line, column) in [
             ("fn main() {\n    let v = { 1\n        struct S { x: i64 }\n    };\n}", 3, 9),
             ("fn main() {\n    let w = { 2 fn f() {} };\n}", 2, 17),
+            ("fn main() {\n    let s = S { x: 1 } struct B;\n}", 2, 24),
+            ("fn main() {\n    S { x: T { y: 2 } } fn f() {}\n}", 2, 25),
         ] {
             let error = Engine::new().parse_unit(source).unwrap_err();
             assert!(
@@ -4908,10 +4968,13 @@ fn view(state: &Counter) -> iced::widget::Column<'_, Message> { () }
             .parse_unit(
                 "fn main() {\n    struct A;\n    let x = 1;\n    if x > 0 {} struct B;\n    \
                  let w = { loop { break; } fn f() {} 5 };\n    m! { x } enum E { V }\n    \
-                 let f: fn(i64) -> i64 = g;\n}",
+                 let f: fn(i64) -> i64 = g;\n    if x == S {} struct C;\n    \
+                 while let S { a } = s {} struct D;\n    match s { S { a } => {} } struct E;\n    \
+                 for S { a } in v {} struct F;\n    let c = |s: S| -> S { s }; struct G;\n    \
+                 unsafe {} struct H;\n}",
             )
             .unwrap();
-        assert_eq!(unit.items().len(), 5);
+        assert_eq!(unit.items().len(), 11);
     }
 
     #[test]
