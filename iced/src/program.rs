@@ -60,6 +60,35 @@ pub enum Error {
 /// each other end.
 pub const DELIVERED: usize = 256;
 
+/// The next item `stream` has ready now, or `None` while it waits. A
+/// stream that wakes itself as it waits (iced's batch yields after a
+/// number of its tasks) is polled again, at most [`DELIVERED`] times.
+fn poll_now<S: iced::futures::Stream + Unpin>(stream: &mut S) -> Option<Option<S::Item>> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Woken(AtomicBool);
+    impl std::task::Wake for Woken {
+        fn wake(self: std::sync::Arc<Self>) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+        fn wake_by_ref(self: &std::sync::Arc<Self>) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+    let woken = std::sync::Arc::new(Woken(AtomicBool::new(false)));
+    let waker = std::task::Waker::from(woken.clone());
+    let mut context = std::task::Context::from_waker(&waker);
+    for _ in 0..DELIVERED {
+        woken.0.store(false, Ordering::Relaxed);
+        match iced::futures::Stream::poll_next(std::pin::Pin::new(&mut *stream), &mut context) {
+            std::task::Poll::Ready(item) => return Some(item),
+            std::task::Poll::Pending if woken.0.load(Ordering::Relaxed) => {}
+            std::task::Poll::Pending => return None,
+        }
+    }
+    None
+}
+
 /// One booted application instance with exact launch authority and last-good output.
 pub struct Adapter {
     launch: Launch,
@@ -886,11 +915,9 @@ impl Adapter {
     /// Every output the running tasks have ready. A task that ended is
     /// dropped.
     fn poll_running(&mut self) -> std::collections::VecDeque<runtime::Message> {
-        use iced::futures::{FutureExt as _, StreamExt as _};
-
         let mut ready = std::collections::VecDeque::new();
         self.running.retain_mut(|stream| loop {
-            match stream.next().now_or_never() {
+            match poll_now(stream) {
                 Some(Some(iced_runtime::Action::Output(message))) => ready.push_back(message),
                 Some(Some(_)) => {}
                 Some(None) => return false,
@@ -938,8 +965,6 @@ impl Adapter {
     }
 
     fn ready(&mut self, plan: task::Plan) -> std::collections::VecDeque<runtime::Message> {
-        use iced::futures::{FutureExt as _, StreamExt as _};
-
         let mut ready = std::collections::VecDeque::new();
         let Some(mut stream) = self
             .lower_task(plan)
@@ -949,7 +974,7 @@ impl Adapter {
             return ready;
         };
         loop {
-            match stream.next().now_or_never() {
+            match poll_now(&mut stream) {
                 Some(Some(iced_runtime::Action::Output(message))) => ready.push_back(message),
                 Some(Some(_)) => {}
                 Some(None) => break,
