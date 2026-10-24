@@ -142,6 +142,17 @@ pub const CASES: &[Case] = &[
     case("for_range", "let mut s: i64 = 0; for i in 0..5 { s += i; } s"),
     case("for_range_inclusive_reversed", "let mut s: i64 = 0; for i in (1..=5).rev() { s = s * 10 + i; } s"),
     case("for_range_step", "let mut s: i64 = 0; for i in (0..10).step_by(3) { s += i; } s"),
+    case("step_by_steps_a_huge_range", "(0..i64::MAX).step_by(1 << 61).count()"),
+    // Rust's meaning (D494.6): IEEE float comparison, f32 rounding, a
+    // crate type's own `eq` and `cmp` inside a tuple, a vector and a map
+    // key, and a `u64` above `i64::MAX` ordered as unsigned.
+    case("float_compare_ieee", "let n = 0.0_f64 / 0.0; (0.0 < 1e-16, 0.1 + 0.2 == 0.3, n != n)"),
+    case("f32_rounds", "let a = 0.1_f32 + 0.2_f32; a == 0.3_f32"),
+    case("hand_written_eq_in_tuple", "#[derive(Clone, Copy)] struct Ci(i64); impl PartialEq for Ci { fn eq(&self, o: &Self) -> bool { self.0.abs() == o.0.abs() } } ((Ci(3), 1) == (Ci(-3), 1), vec![Ci(3), Ci(4)].contains(&Ci(-4)))"),
+    case("hand_written_ord_sorts", "#[derive(Debug, Clone, Copy, PartialEq, Eq)] struct R(i64); impl PartialOrd for R { fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } } impl Ord for R { fn cmp(&self, o: &Self) -> std::cmp::Ordering { o.0.cmp(&self.0) } } let mut v = vec![(R(1), 'a'), (R(7), 'b')]; v.sort(); v[0].0 .0"),
+    case("u64_key_order", "use std::collections::BTreeMap; let mut m = BTreeMap::new(); m.insert(u64::MAX, 1); m.insert(3_u64, 2); m.into_iter().next().unwrap().0 == 3"),
+    case("method_beats_free_fn", "fn abs(x: i64) -> i64 { x + 1000 } let a: i64 = -5; a.abs()"),
+    case("method_call_beats_free_fn", r#"fn len() -> usize { 99 } fn push(x: i64) {} let s = String::from("hey"); let mut v = vec![1]; v.push(2); (s.len(), v.len())"#),
     case("for_vec", "let mut s: i64 = 0; for x in vec![10, 20, 30] { s += x; } s"),
     case("for_with_counter", "let mut s: i64 = 0; for (i, x) in vec![10, 20, 30].into_iter().enumerate() { s += x * i as i64; } s"),
     // The loop variable is its own binding, so the outer one of the same name

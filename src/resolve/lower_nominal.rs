@@ -12,12 +12,14 @@ pub(crate) mod cell;
 
 #[cfg(all(test, not(feature = "no_function"), feature = "rust-import"))]
 mod collected_tests;
+mod compare;
 #[cfg(all(test, not(feature = "no_function")))]
 mod language_tests;
 #[cfg(all(test, not(feature = "no_function")))]
 mod rust_meaning_tests;
 
 use super::{intrinsic, item, type_ref, Error, LoweringFailure, Program};
+use compare::{Comparison, Shape};
 use crate::ast::{
     self, BinaryExpr, FlowControl, FnCallExpr, FnCallHashes, NominalEnumPattern, NominalPattern,
     NominalPayloadType, Stmt, NOMINAL_MATCH_SENTINEL,
@@ -2953,7 +2955,21 @@ enum Op {
         op: PreludeOp,
         kinds: [Ty; 2],
     },
+    /// A comparison or a map's or set's operation on values of type `ty`
+    /// (a map's or set's key), whose shape inference settles: where it
+    /// holds unsigned integers (`Shape`). `flags` are `SHAPED_*`.
+    Shaped {
+        op: PreludeOp,
+        ty: Ty,
+        flags: u8,
+    },
 }
+
+/// `Op::Shaped`'s comparison is `Ord`'s (`cmp`), not `PartialOrd`'s.
+const SHAPED_TOTAL: u8 = 1;
+/// A hashed collection whose key type has a hand-written `PartialEq`: a
+/// key is found by its `eq`, not by its order.
+const SHAPED_HASHED: u8 = 2;
 
 /// The runtime primitives of `Option<T>` and `Result<T, E>`;
 /// every method composes them.
@@ -3065,6 +3081,9 @@ enum PreludeOp {
     /// An arithmetic result of a `{float}` that inference made an `f32`,
     /// rounded to it: `round(value)`.
     RoundF32,
+    /// A `u64` or a `usize` passed to a generic parameter, tagged as one
+    /// (`UNSIGNED_TAG`): `unsigned(value)`.
+    Unsigned,
     /// `(low..high).step_by(step)` of integers, which visits only the
     /// items it yields: `step_by(low, high, step, flags)`, `flags` bit 0
     /// for `..=` and bit 1 for an unsigned range.
@@ -3175,6 +3194,7 @@ impl PreludeOp {
             Self::StrSplit => "str.split",
             Self::Narrow => "number.narrow",
             Self::RoundF32 => "number.round-f32",
+            Self::Unsigned => "number.unsigned",
             Self::StepBy => "range.step-by",
             Self::Cast => "number.cast",
             Self::Slice => "slice.range",
@@ -3279,7 +3299,7 @@ impl PreludeOp {
                 TypeId::of::<ImmutableString>(),
             ],
             Self::Cast => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
-            Self::RoundF32 => vec![TypeId::of::<Dynamic>()],
+            Self::RoundF32 | Self::Unsigned => vec![TypeId::of::<Dynamic>()],
             Self::StepBy => vec![TypeId::of::<crate::INT>(); 4],
             Self::Parse => vec![TypeId::of::<ImmutableString>()],
             Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
@@ -3374,7 +3394,19 @@ impl PreludeOp {
         }
     }
 
-    fn invoke(self, args: &mut FnCallArgs, models: &Models) -> RawrResult {
+    fn invoke(
+        self,
+        context: Option<&NativeCallContext<'_>>,
+        args: &mut FnCallArgs,
+        models: &Models,
+        shape: &Shape,
+        flags: u8,
+    ) -> RawrResult {
+        let comparison = Comparison {
+            models,
+            context,
+            total: flags & SHAPED_TOTAL != 0,
+        };
         let panic = |message: String| -> RawrResult {
             Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
         };
@@ -3383,10 +3415,10 @@ impl PreludeOp {
             Self::None => return Ok(crate::option::none()),
             Self::Ok => return Ok(crate::result::ok(args[0].take())),
             Self::Err => return Ok(crate::result::err(args[0].take())),
-            Self::GenericEqual => return Ok(equal_value(args[0], args[1]).into()),
+            Self::GenericEqual => return Ok(comparison.equal(args[0], args[1])?.into()),
             Self::GenericDebug => return Ok(debug_value(args[0], models).into()),
             Self::Compare => {
-                return Ok(match compare_value(args[0], args[1], models) {
+                return Ok(match comparison.compare(args[0], args[1], shape)? {
                     Some(ordering) => crate::option::some((ordering as crate::INT).into()),
                     None => crate::option::none(),
                 })
@@ -3522,6 +3554,7 @@ impl PreludeOp {
             }
             Self::Cast => return cast_value(args[0], args[1].as_int().unwrap_or(3)),
             Self::RoundF32 => return cast_value(args[0], 10),
+            Self::Unsigned => return Ok(compare::tag_unsigned(args[0].take(), shape)),
             Self::StepBy => {
                 let [low, high, step, flags] =
                     [0, 1, 2, 3].map(|index| args[index].as_int().unwrap_or_default());
@@ -3570,7 +3603,9 @@ impl PreludeOp {
                 let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
                 return str_method(&text, code, &args[2].clone(), &args[3].clone());
             }
-            Self::SetAlgebra | Self::KeyedRange => return keyed_query(self, args, models),
+            Self::SetAlgebra | Self::KeyedRange => {
+                return keyed_query(self, args, &Keys::new(&comparison, shape, flags, false))
+            }
             Self::CharFrom => {
                 let n = u32::try_from(args[0].as_int().unwrap_or(-1)).ok();
                 let c = match args[1].as_int().unwrap_or(-1) {
@@ -3661,11 +3696,22 @@ impl PreludeOp {
                     .into_array()
                     .map_err(|_| invariant("collected items are not an array at runtime"))?;
                 let map = self == Self::MapFrom;
-                items.sort_by(|lhs, rhs| compare_entries(lhs, rhs, map, models));
+                let keys = Keys::new(&comparison, shape, flags, map);
+                items.sort_by(|lhs, rhs| keys.order_entries(lhs, rhs));
                 let mut entries = crate::Array::with_capacity(items.len());
                 for item in items {
-                    match entries.last_mut() {
-                        Some(last) if compare_entries(last, &item, map, models).is_eq() => {
+                    let same = match keys.hashed {
+                        true => entries.iter().position(|entry| keys.same_entries(entry, &item)),
+                        false => entries
+                            .last()
+                            .filter(|last| keys.order_entries(last, &item).is_eq())
+                            .map(|_| entries.len() - 1),
+                    };
+                    match same.and_then(|at| entries.get_mut(at)) {
+                        // A hashed collection keeps the key it has and takes
+                        // the last value, as repeated inserts do; a B-tree's
+                        // `from_iter` keeps the last of equal keys.
+                        Some(last) if keys.hashed => {
                             if map
                                 && let (Ok(mut last), Ok(mut item)) = (
                                     last.as_array_mut(),
@@ -3675,9 +3721,11 @@ impl PreludeOp {
                                 last[1] = item.pop().unwrap_or_default();
                             }
                         }
-                        _ => entries.push(item),
+                        Some(last) => *last = item,
+                        None => entries.push(item),
                     }
                 }
+                keys.finish()?;
                 return Ok(Dynamic::from_array(entries));
             }
             Self::MapInsert
@@ -3689,7 +3737,9 @@ impl PreludeOp {
             | Self::MapSlotInsert
             | Self::SetInsert
             | Self::SetRemove
-            | Self::SetContains => return keyed_operation(self, args, models),
+            | Self::SetContains => {
+                return keyed_operation(self, args, &Keys::new(&comparison, shape, flags, true))
+            }
             Self::CollectString => {
                 let mut text = String::new();
                 for item in args[0]
@@ -3786,16 +3836,76 @@ fn entry_key(entry: &Dynamic, map: bool) -> Dynamic {
     }
 }
 
-/// Two entries by their keys, as Rust's `Ord` (`compare_value`) orders them.
-fn compare_entries(lhs: &Dynamic, rhs: &Dynamic, map: bool, models: &Models) -> std::cmp::Ordering {
-    compare_value(&entry_key(lhs, map), &entry_key(rhs, map), models)
-        .unwrap_or(std::cmp::Ordering::Equal)
+/// How a map or a set compares its keys: by Rust's `Ord` of their type,
+/// at their shape, or by its `eq` for a hashed collection whose key type
+/// has a hand-written `PartialEq`. A crate type's own `cmp` or `eq` may
+/// panic; the first such error is kept and reported by `finish`.
+struct Keys<'k, 'a, 'c> {
+    comparison: &'k Comparison<'a, 'c>,
+    shape: &'k Shape,
+    hashed: bool,
+    map: bool,
+    failure: std::cell::RefCell<Option<crate::RawrError>>,
+}
+
+impl<'k, 'a, 'c> Keys<'k, 'a, 'c> {
+    fn new(comparison: &'k Comparison<'a, 'c>, shape: &'k Shape, flags: u8, map: bool) -> Self {
+        Self {
+            comparison,
+            shape,
+            hashed: flags & SHAPED_HASHED != 0,
+            map,
+            failure: std::cell::RefCell::new(None),
+        }
+    }
+
+    fn keep<T>(&self, result: Result<T, crate::RawrError>, otherwise: T) -> T {
+        result.unwrap_or_else(|error| {
+            self.failure.borrow_mut().get_or_insert(error);
+            otherwise
+        })
+    }
+
+    /// Two keys in order.
+    fn order(&self, lhs: &Dynamic, rhs: &Dynamic) -> std::cmp::Ordering {
+        let total = Comparison {
+            models: self.comparison.models,
+            context: self.comparison.context,
+            total: true,
+        };
+        self.keep(total.compare(lhs, rhs, self.shape), None)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+
+    /// Whether two keys are the same key.
+    fn same(&self, lhs: &Dynamic, rhs: &Dynamic) -> bool {
+        if self.hashed {
+            self.keep(self.comparison.equal(lhs, rhs), false)
+        } else {
+            self.order(lhs, rhs).is_eq()
+        }
+    }
+
+    fn order_entries(&self, lhs: &Dynamic, rhs: &Dynamic) -> std::cmp::Ordering {
+        self.order(&entry_key(lhs, self.map), &entry_key(rhs, self.map))
+    }
+
+    fn same_entries(&self, lhs: &Dynamic, rhs: &Dynamic) -> bool {
+        self.same(&entry_key(lhs, self.map), &entry_key(rhs, self.map))
+    }
+
+    fn finish(&self) -> Result<(), crate::RawrError> {
+        match self.failure.borrow_mut().take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
 }
 
 /// A map's or set's operation on its entries, sorted by key: the key's
 /// entry is found by binary search, so a lookup is O(log n) and an insert
 /// or a removal shifts the entries after it.
-fn keyed_operation(op: PreludeOp, args: &mut FnCallArgs, models: &Models) -> RawrResult {
+fn keyed_operation(op: PreludeOp, args: &mut FnCallArgs, keys: &Keys) -> RawrResult {
     let map = !matches!(
         op,
         PreludeOp::SetInsert | PreludeOp::SetRemove | PreludeOp::SetContains
@@ -3808,17 +3918,21 @@ fn keyed_operation(op: PreludeOp, args: &mut FnCallArgs, models: &Models) -> Raw
     let mut entries = args[0]
         .as_array_mut()
         .map_err(|_| invariant("a map or set is not an array at runtime"))?;
-    let slot = entries.binary_search_by(|entry| {
-        let ordering = if map {
-            entry
-                .as_array_ref()
-                .ok()
-                .and_then(|pair| compare_value(pair.first()?, &key, models))
-        } else {
-            compare_value(entry, &key, models)
-        };
-        ordering.unwrap_or(std::cmp::Ordering::Equal)
-    });
+    let entry_key = |entry: &Dynamic| entry_key(entry, map);
+    // A hashed key type with its own `eq`: the entry its `eq` finds, else
+    // the place its order gives.
+    let found = keys
+        .hashed
+        .then(|| entries.iter().position(|entry| keys.same(&entry_key(entry), &key)))
+        .flatten();
+    let slot = match found {
+        Some(at) => Ok(at),
+        None => match entries.binary_search_by(|entry| keys.order(&entry_key(entry), &key)) {
+            Ok(at) if keys.hashed => Err(at),
+            slot => slot,
+        },
+    };
+    keys.finish()?;
     let value_of = |entry: &Dynamic| {
         entry
             .as_array_ref()
@@ -4281,6 +4395,12 @@ enum ExecutableOp {
         op: PreludeOp,
         kinds: [INT; 2],
     },
+    /// A comparison or a keyed operation of the shape it was checked at.
+    Shaped {
+        op: PreludeOp,
+        shape: Shape,
+        flags: u8,
+    },
 }
 
 #[derive(Clone)]
@@ -4585,7 +4705,8 @@ impl ExecutableOp {
             | Self::MatchSubject { .. }
             | Self::Restore(_)
             | Self::Prelude(_)
-            | Self::Kinded { .. } => BTreeSet::new(),
+            | Self::Kinded { .. }
+            | Self::Shaped { .. } => BTreeSet::new(),
         }
     }
 
@@ -4616,7 +4737,8 @@ impl ExecutableOp {
             | Self::MatchSubject { .. }
             | Self::Restore(_)
             | Self::Prelude(_)
-            | Self::Kinded { .. } => None,
+            | Self::Kinded { .. }
+            | Self::Shaped { .. } => None,
         }
     }
 
@@ -4649,7 +4771,8 @@ impl ExecutableOp {
             | Self::MatchSubject { .. }
             | Self::Restore(_)
             | Self::Prelude(_)
-            | Self::Kinded { .. } => None,
+            | Self::Kinded { .. }
+            | Self::Shaped { .. } => None,
         }
     }
 
@@ -4679,6 +4802,9 @@ impl ExecutableOp {
             Self::Prelude(op) => return format!("\0rawr.{}", op.name()),
             Self::Kinded { op, kinds } => {
                 return format!("\0rawr.{}.{}.{}", op.name(), kinds[0], kinds[1]);
+            }
+            Self::Shaped { op, shape, flags } => {
+                return format!("\0rawr.{}.shaped.{shape}.{flags}", op.name());
             }
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => {
@@ -4912,7 +5038,9 @@ impl ExecutableOp {
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::Array>(),
             ],
-            Self::Prelude(op) | Self::Kinded { op, .. } => op.argument_types(),
+            Self::Prelude(op) | Self::Kinded { op, .. } | Self::Shaped { op, .. } => {
+                op.argument_types()
+            }
         }
     }
 
@@ -5216,7 +5344,14 @@ impl ExecutableOp {
                 let (lhs, rhs) = args.split_at_mut(1);
                 validate_dynamic(lhs[0], definition, models)?;
                 validate_dynamic(rhs[0], definition, models)?;
-                Ok(equal_value(lhs[0], rhs[0]).into())
+                // A derive: field by field, each by its type's own `eq`
+                // where it has one.
+                let comparison = Comparison {
+                    models,
+                    context: context.as_ref(),
+                    total: false,
+                };
+                Ok(comparison.equal(lhs[0], rhs[0])?.into())
             }
             Self::Default { value, definition } => {
                 validate_dynamic(value, definition, models)?;
@@ -5303,7 +5438,10 @@ impl ExecutableOp {
                 }
                 Ok(Dynamic::UNIT)
             }
-            Self::Prelude(op) => op.invoke(args, models),
+            Self::Prelude(op) => op.invoke(context.as_ref(), args, models, &Shape::Plain, 0),
+            Self::Shaped { op, shape, flags } => {
+                op.invoke(context.as_ref(), args, models, shape, *flags)
+            }
             Self::Kinded {
                 op: PreludeOp::Parse,
                 kinds,
@@ -5321,7 +5459,7 @@ fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models
     let models = models.clone();
     // A map's or set's operation takes it by reference, as a method.
     let by_reference = match &op {
-        ExecutableOp::Prelude(op) => op.by_reference(),
+        ExecutableOp::Prelude(op) | ExecutableOp::Shaped { op, .. } => op.by_reference(),
         // A facade method with a `&mut self` receiver changes the receiver
         // it is called on, which the caller stores back.
         ExecutableOp::Intrinsic { proof } if proof.mutates_receiver() => Some(true),
@@ -12769,6 +12907,19 @@ impl<'a> Parser<'a> {
                 op,
                 kinds: kinds.map(|kind| kind_code(self.inference.resolve(&kind))),
             },
+            Op::Shaped { op, ty, flags } => {
+                let shape = Shape::of(&ty, &|ty| self.inference.resolve(ty));
+                let flags = if flags & SHAPED_HASHED != 0 && !self.hand_written_eq_inside(&ty) {
+                    flags & !SHAPED_HASHED
+                } else {
+                    flags
+                };
+                if shape.is_plain() && flags == 0 {
+                    ExecutableOp::Prelude(op)
+                } else {
+                    ExecutableOp::Shaped { op, shape, flags }
+                }
+            }
             Op::Validate { definition } => ExecutableOp::Validate { definition },
             Op::MatchSubject { definition, item } => {
                 ExecutableOp::MatchSubject { definition, item }
@@ -24185,7 +24336,7 @@ impl<'a> Parser<'a> {
             (None, Ty::Param(_) | Ty::Projection(..)) => {
                 Self::std_dispatch("Ord", "cmp", value, &[other])
             }
-            (None, _) => self.prelude_op(PreludeOp::Compare, [value, other]),
+            (None, _) => self.compare_op(&peeled, false, [value, other]),
         };
         // `Some(ordering)` compared to `Equal`'s 0, as Rust's `lt` matches.
         let ordering = self.temporary("ordering");
@@ -24296,6 +24447,26 @@ impl<'a> Parser<'a> {
                 capability: "PartialEq".into(),
                 operation: lhs.span,
             }),
+            // Tuples and arrays of crate types: element by element, each by
+            // its type's own `eq` where it has one.
+            ty if !self.plain_equality(&ty) => {
+                let expression = span(lhs.span.start(), rhs.span.end());
+                if !self.type_provides(&ty, capability::Kind::PartialEq) {
+                    return Err(Error::MissingCapability {
+                        owner: ty.name(&self.models),
+                        capability: "PartialEq".into(),
+                        operation: expression,
+                    });
+                }
+                let equal = self
+                    .prelude_op(PreludeOp::GenericEqual, [lhs.rendered_source(), rhs.rendered_source()]);
+                let source = if negate {
+                    equal.surrounded("!(", ")")
+                } else {
+                    equal
+                };
+                Ok(self.operator_expr(source, Ty::Bool, expression))
+            }
             _ => Ok(self.binary(lhs, if negate { "!=" } else { "==" }, rhs, Ty::Bool)),
         }
     }
@@ -24315,7 +24486,27 @@ impl<'a> Parser<'a> {
         {
             *argument = iterator;
         }
-        self.coerce_expr(expected, argument).map(|_| ())
+        self.coerce_expr(expected, argument)?;
+        // A `u64` or a `usize` passed where the parameter's type names a
+        // generic (`T`, `&[T]`, `Option<T>`), which the body formats and
+        // orders without its type: tagged, so it stays the unsigned number
+        // (`compare_value`, `Dynamic`'s `Display`).
+        let mutable = matches!(parameter, type_ref::Type::Reference { mutable: true, .. });
+        if !mutable
+            && mentions_parameter(parameter)
+            && !Shape::of(&argument.ty, &|ty| self.inference.resolve(ty)).is_plain()
+        {
+            let helper = self.push_op(Op::Shaped {
+                op: PreludeOp::Unsigned,
+                ty: argument.ty.clone(),
+                flags: 0,
+            });
+            let value = argument.rendered_source();
+            argument.prelude = origin::Fragment::default();
+            argument.source = origin::Fragment::call(&helper, [value]);
+            argument.source.cover(argument.span);
+        }
+        Ok(())
     }
 
     /// `&String` reads as `&str` where Rust takes a string slice.
@@ -24728,15 +24919,15 @@ impl<'a> Parser<'a> {
             | Ty::Reverse(target) => self.ordered(&target, partial),
             Ty::Array { element, .. } => self.ordered(&element, partial),
             Ty::Tuple(members) => members.iter().all(|member| self.ordered(member, partial)),
-            // A derived `PartialOrd` or `Ord`, without a hand-written one.
-            ty @ Ty::Script(id, _) => {
-                let (capability, trait_name, member) = if partial {
-                    (capability::Kind::PartialOrd, "PartialOrd", "partial_cmp")
+            // A derived `PartialOrd` or `Ord`, or a hand-written one, which
+            // the runtime's comparison calls (`compare::Comparison`).
+            ty @ Ty::Script(..) => {
+                let capability = if partial {
+                    capability::Kind::PartialOrd
                 } else {
-                    (capability::Kind::Ord, "Ord", "cmp")
+                    capability::Kind::Ord
                 };
-                self.models.std_impl(id, trait_name, member).is_none()
-                    && self.type_provides(&ty, capability)
+                self.type_provides(&ty, capability)
             }
             _ => false,
         }
@@ -24761,12 +24952,117 @@ impl<'a> Parser<'a> {
         if matches!(ty, Ty::Param(_) | Ty::Projection(..)) {
             return Some(Self::std_dispatch("Ord", "cmp", lhs, &[rhs]));
         }
-        let (lhs, rhs) = match ty {
-            Ty::Int(Int::U64 | Int::Usize) => (unsigned_order(lhs), unsigned_order(rhs)),
-            _ => (lhs, rhs),
+        let compare = match ty {
+            Ty::Int(Int::U64 | Int::Usize) => self.prelude_op(
+                PreludeOp::Compare,
+                [unsigned_order(lhs), unsigned_order(rhs)],
+            ),
+            ty => self.compare_op(&ty, true, [lhs, rhs]),
         };
-        let compare = self.prelude_op(PreludeOp::Compare, [lhs, rhs]);
         Some(self.prelude_op(PreludeOp::Unwrap, [compare]))
+    }
+
+    /// Whether the runtime's `==` compares values of `ty` as Rust does:
+    /// numbers, strings, chars, bools, and tuples and arrays of them.
+    fn plain_equality(&self, ty: &Ty) -> bool {
+        match self.inference.resolve(ty) {
+            Ty::Tuple(members) => members.iter().all(|member| self.plain_equality(member)),
+            Ty::Array { element, .. } => self.plain_equality(&element),
+            Ty::Reference { target, .. } => self.plain_equality(&target),
+            Ty::Script(..)
+            | Ty::Host { .. }
+            | Ty::Option(_)
+            | Ty::Result(..)
+            | Ty::Keyed(..)
+            | Ty::Reverse(_)
+            | Ty::Time(_)
+            | Ty::Boxed(..)
+            | Ty::Param(_)
+            | Ty::Projection(..) => false,
+            _ => true,
+        }
+    }
+
+    /// A map's or set's operation `op` with keys of type `key`: the shape
+    /// its keys order at, and for a hashed kind whether they are found by
+    /// a hand-written `eq` (`Op::Shaped`, settled once inference has).
+    pub(super) fn keyed_op(&self, op: PreludeOp, kind: Keyed, key: &Ty) -> Op {
+        Op::Shaped {
+            op,
+            ty: key.clone(),
+            flags: if kind.hashed() { SHAPED_HASHED } else { 0 },
+        }
+    }
+
+    /// `keyed_op` for the collection type `collection`, through references.
+    pub(super) fn keyed_op_for(&self, op: PreludeOp, collection: &Ty) -> Op {
+        let mut ty = self.inference.resolve(collection);
+        while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = ty {
+            ty = self.inference.resolve(&target);
+        }
+        match ty {
+            Ty::Keyed(kind, arguments) if !arguments.is_empty() => {
+                self.keyed_op(op, kind, &arguments[0])
+            }
+            _ => Op::Prelude(op),
+        }
+    }
+
+    /// A comparison (`PreludeOp::Compare`) of `lhs` and `rhs`, values of
+    /// type `ty`, as `Ord` orders them when `total`.
+    fn compare_op(
+        &mut self,
+        ty: &Ty,
+        total: bool,
+        operands: [origin::Fragment; 2],
+    ) -> origin::Fragment {
+        let helper = self.push_op(Op::Shaped {
+            op: PreludeOp::Compare,
+            ty: ty.clone(),
+            flags: if total { SHAPED_TOTAL } else { 0 },
+        });
+        origin::Fragment::call(&helper, operands)
+    }
+
+    /// Whether a value of `ty` compares through a hand-written
+    /// `PartialEq` somewhere inside it: its own, an element's or a derived
+    /// type's field's.
+    fn hand_written_eq_inside(&self, ty: &Ty) -> bool {
+        fn inside(this: &Parser<'_>, ty: &Ty, seen: &mut BTreeSet<type_def::Id>) -> bool {
+            match this.inference.resolve(ty) {
+                Ty::Reference { target, .. }
+                | Ty::Boxed(_, target)
+                | Ty::Option(target)
+                | Ty::Reverse(target) => inside(this, &target, seen),
+                Ty::Array { element, .. } => inside(this, &element, seen),
+                Ty::Result(ok, err) => inside(this, &ok, seen) || inside(this, &err, seen),
+                Ty::Tuple(members) | Ty::Keyed(_, members) => {
+                    members.iter().any(|member| inside(this, member, seen))
+                }
+                Ty::Script(id, _) => {
+                    if !seen.insert(id) {
+                        return false;
+                    }
+                    if this.models.std_impl(id, "PartialEq", "eq").is_some() {
+                        return true;
+                    }
+                    let types: Vec<Ty> = match this.models.definition(id) {
+                        Nominal::Struct { item, .. } => {
+                            item.fields.iter().map(|field| Ty::from_resolved(&field.ty)).collect()
+                        }
+                        Nominal::Enum { item, .. } => item
+                            .variants
+                            .iter()
+                            .flat_map(|variant| variant.payload.iter())
+                            .map(Ty::from_resolved)
+                            .collect(),
+                    };
+                    types.iter().any(|ty| inside(this, ty, seen))
+                }
+                _ => false,
+            }
+        }
+        inside(self, ty, &mut BTreeSet::new())
     }
 
     /// `ty` without its references and boxes, when it is `Ord`.
@@ -25170,12 +25466,16 @@ impl<'a> Parser<'a> {
         };
         self.coerce_expr(&expected, &mut other)?;
         let operands = [value.rendered_source(), other.rendered_source()];
-        let operands = if unsigned {
-            operands.map(unsigned_order)
+        let compare = if unsigned {
+            self.prelude_op(PreludeOp::Compare, operands.map(unsigned_order))
         } else {
-            operands
+            let total = member.as_str() == "cmp";
+            let ty = match self.inference.resolve(&compared) {
+                Ty::Reference { target, .. } => *target,
+                ty => ty,
+            };
+            self.compare_op(&ty, total, operands)
         };
-        let compare = self.prelude_op(PreludeOp::Compare, operands);
         let (source, ty) = if member.as_str() == "cmp" {
             (self.prelude_op(PreludeOp::Unwrap, [compare]), Ty::Ordering)
         } else {
@@ -31144,6 +31444,16 @@ impl<'a> Parser<'a> {
             Ty::Unknown | Ty::Infer(_) => {
                 return Err(self.unsupported("equality of dynamic values"));
             }
+            ty if !self.plain_equality(ty) => {
+                if !self.type_provides(ty, capability::Kind::PartialEq) {
+                    return Err(Error::MissingCapability {
+                        owner: ty.name(&self.models),
+                        capability: "PartialEq".into(),
+                        operation: span,
+                    });
+                }
+                self.prelude_op(PreludeOp::GenericEqual, [lhs, rhs])
+            }
             _ => {
                 let mut source = lhs.surrounded("(", ")");
                 source.push_text(" == ");
@@ -31786,14 +32096,36 @@ impl<'a> Parser<'a> {
             ("contains", [argument]) => {
                 let expected = Ty::Reference {
                     mutable: false,
-                    target: Box::new(element),
+                    target: Box::new(element.clone()),
                 };
                 self.coerce_expr(&expected, argument)?;
-                let mut source = receiver;
-                source.push_text(".contains(");
-                source.push(argument.rendered_source());
-                source.push_text(")");
-                (source, Ty::Bool)
+                if self.plain_equality(&element) {
+                    let mut source = receiver;
+                    source.push_text(".contains(");
+                    source.push(argument.rendered_source());
+                    source.push_text(")");
+                    (source, Ty::Bool)
+                } else {
+                    // Each element by its `PartialEq`, a crate type's own
+                    // `eq` where it has one.
+                    let (probe, found, item) = (
+                        self.temporary("probe"),
+                        self.temporary("found"),
+                        self.temporary("item"),
+                    );
+                    let equal = self.prelude_op(
+                        PreludeOp::GenericEqual,
+                        [item.as_str().into(), probe.as_str().into()],
+                    );
+                    let mut source = origin::Fragment::plain(format!("{{ let {probe} = "));
+                    source.push(argument.rendered_source());
+                    source.push_text(format!("; let {found} = false; for {item} in "));
+                    source.push(receiver);
+                    source.push_text(" { if ");
+                    source.push(equal);
+                    source.push_text(format!(" {{ {found} = true; break; }} }} {found} }}"));
+                    (source, Ty::Bool)
+                }
             }
             // `v.iter().min()`, `max`, `min_by_key`, `max_by_key`, `min_by`
             // and `max_by`: Rust's first minimum and last maximum.
@@ -39191,6 +39523,13 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
         (Union::Unit(..), Union::Unit(..)) => Some(std::cmp::Ordering::Equal),
         (Union::Bool(lhs, ..), Union::Bool(rhs, ..)) => Some(lhs.cmp(rhs)),
         (Union::Char(lhs, ..), Union::Char(rhs, ..)) => Some(lhs.cmp(rhs)),
+        // A `u64` a generic parameter holds is tagged as one.
+        (Union::Int(lhs, tag, ..), Union::Int(rhs, other, ..))
+            if *tag == crate::types::dynamic::UNSIGNED_TAG
+                || *other == crate::types::dynamic::UNSIGNED_TAG =>
+        {
+            Some((*lhs as u64).cmp(&(*rhs as u64)))
+        }
         (Union::Int(lhs, ..), Union::Int(rhs, ..)) => Some(lhs.cmp(rhs)),
         (Union::Str(lhs, ..), Union::Str(rhs, ..)) => Some(lhs.as_str().cmp(rhs.as_str())),
         #[cfg(not(feature = "no_float"))]
@@ -39905,9 +40244,9 @@ const SET_ALGEBRA: &[&str] = &[
 
 /// `SetAlgebra` by merging two sets' sorted keys, and `KeyedRange` by
 /// binary search for the range's ends.
-fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, models: &Models) -> RawrResult {
+fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, keys: &Keys) -> RawrResult {
     use std::cmp::Ordering::{Equal, Greater, Less};
-    let compare = |lhs: &Dynamic, rhs: &Dynamic| compare_value(lhs, rhs, models).unwrap_or(Equal);
+    let compare = |lhs: &Dynamic, rhs: &Dynamic| keys.order(lhs, rhs);
     if op == PreludeOp::KeyedRange {
         let flags = args[3].as_int().unwrap_or_default();
         let (low, high) = (args[1].clone(), args[2].clone());
@@ -39927,6 +40266,7 @@ fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, models: &Models) -> RawrRes
         } else {
             entries.partition_point(|entry| compare(&key(entry), &high) == Less)
         };
+        keys.finish()?;
         if flags & 3 == 3 && compare(&low, &high) == Greater {
             return Err(EvalAltResult::ErrorRuntime(
                 "range start is greater than range end in BTreeMap".into(),
@@ -39938,11 +40278,29 @@ fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, models: &Models) -> RawrRes
     }
     let code = usize::try_from(args[2].as_int().unwrap_or_default()).unwrap_or(0);
     let other = args[1].clone().into_array().unwrap_or_default();
+    let comparer = keys;
     let keys = args[0]
         .as_array_ref()
         .map_err(|_| invariant("a set is not an array at runtime"))?;
     let (mut left, mut right) = (keys.iter().peekable(), other.iter().peekable());
     let (mut only_left, mut both, mut only_right) = (Vec::new(), Vec::new(), Vec::new());
+    if comparer.hashed {
+        // Keys its `eq` finds equal, which their order may not place together.
+        for key in keys.iter() {
+            if other.iter().any(|other| comparer.same(key, other)) {
+                both.push(key.clone());
+            } else {
+                only_left.push(key.clone());
+            }
+        }
+        for key in &other {
+            if !keys.iter().any(|mine| comparer.same(mine, key)) {
+                only_right.push(key.clone());
+            }
+        }
+        left = [].iter().peekable();
+        right = [].iter().peekable();
+    }
     loop {
         let order = match (left.peek(), right.peek()) {
             (Some(a), Some(b)) => compare(a, b),
@@ -39959,9 +40317,11 @@ fn keyed_query(op: PreludeOp, args: &mut FnCallArgs, models: &Models) -> RawrRes
             }
         }
     }
+    comparer.finish()?;
     let keys = |mut parts: Vec<Vec<Dynamic>>| {
         let mut keys: Vec<Dynamic> = parts.drain(..).flatten().collect();
         keys.sort_by(|a, b| compare(a, b));
+        comparer.finish()?;
         Ok(Dynamic::from_array(keys))
     };
     match SET_ALGEBRA.get(code).copied() {

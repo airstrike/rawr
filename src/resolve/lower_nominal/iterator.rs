@@ -1202,7 +1202,8 @@ impl Parser<'_> {
                         } else {
                             PreludeOp::SetFrom
                         };
-                        (self.prelude_op(op, [items]), collected)
+                        let helper = self.push_op(self.keyed_op(op, kind, &arguments[0]));
+                        (origin::Fragment::call(&helper, [items]), collected)
                     }
                     // A crate type's `impl FromIterator<A>`: its
                     // `from_iter` of the items.
@@ -1286,11 +1287,37 @@ impl Parser<'_> {
                 };
                 let acc = self.temporary("total");
                 let (start, operator) = if member.as_str() == "sum" {
-                    (zero, "+=")
+                    (zero, "+")
                 } else {
-                    (one, "*=")
+                    (one, "*")
                 };
-                let sink = origin::Fragment::plain(format!("{acc} {operator} {x}; "));
+                // Each step as the item kind's own arithmetic: a `u64`'s
+                // unsigned, a narrower kind's overflow panic, an `f32`
+                // rounded.
+                let step = match &total {
+                    Ty::Int(Int::I64) | Ty::Float(Float::F64) => None,
+                    Ty::Int(_) => Some(self.int_op(
+                        operator,
+                        acc.as_str().into(),
+                        x.as_str().into(),
+                        &total,
+                        &total,
+                    )),
+                    Ty::Float(Float::F32) => Some(self.prelude_op(
+                        PreludeOp::RoundF32,
+                        [format!("{acc} {operator} {x}").into()],
+                    )),
+                    _ => None,
+                };
+                let sink = match step {
+                    Some(step) => {
+                        let mut sink = origin::Fragment::plain(format!("{acc} = "));
+                        sink.push(step);
+                        sink.push_text("; ");
+                        sink
+                    }
+                    None => origin::Fragment::plain(format!("{acc} {operator}= {x}; ")),
+                };
                 let source = self.consume(&pipeline, &format!("let {acc} = {start};"), sink, &acc);
                 (source, total)
             }

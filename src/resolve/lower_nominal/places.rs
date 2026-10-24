@@ -738,6 +738,7 @@ impl Parser<'_> {
             return Ok(None);
         };
         // A `Vec`'s element at an index, or a map's value at a key.
+        let collection = binding.ty.clone();
         let (vec, arguments) = match self.inference.resolve(&binding.ty) {
             Ty::Keyed(kind, arguments) if kind.is_map() => (false, arguments),
             Ty::Array {
@@ -822,7 +823,7 @@ impl Parser<'_> {
             source.push(key.rendered_source());
             source.push_text(format!("; if {index} < {root}.len() "));
         } else {
-            let slot = self.push_op(Op::Prelude(PreludeOp::MapSlot));
+            let slot = self.push_op(self.keyed_op_for(PreludeOp::MapSlot, &collection));
             source.push_text(format!("{root}.{slot}("));
             source.push(key.rendered_source());
             source.push_text(format!("); if {index} >= 0 "));

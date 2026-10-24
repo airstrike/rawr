@@ -51,6 +51,11 @@ pub type Tag = i16;
 /// Default tag value for [`Dynamic`].
 const DEFAULT_TAG_VALUE: Tag = 0;
 
+/// The tag of an integer that holds a `u64`'s or a `usize`'s bits where
+/// no static type says so: a value a typed script passed to a generic
+/// parameter, which prints and orders as the unsigned number.
+pub(crate) const UNSIGNED_TAG: Tag = 0x7536;
+
 /// Dynamic type containing any value.
 #[must_use]
 pub struct Dynamic(pub(crate) Union);
@@ -543,6 +548,9 @@ impl fmt::Display for Dynamic {
             Union::Bool(ref v, ..) => fmt::Display::fmt(v, f),
             Union::Str(ref v, ..) => fmt::Display::fmt(v, f),
             Union::Char(ref v, ..) => fmt::Display::fmt(v, f),
+            Union::Int(ref v, tag, ..) if tag == UNSIGNED_TAG => {
+                fmt::Display::fmt(&(*v as u64), f)
+            }
             Union::Int(ref v, ..) => fmt::Display::fmt(v, f),
             #[cfg(not(feature = "no_float"))]
             Union::Float(ref v, ..) => fmt::Display::fmt(v, f),
@@ -707,6 +715,7 @@ impl fmt::Debug for Dynamic {
             Union::Bool(ref v, ..) => fmt::Debug::fmt(v, f),
             Union::Str(ref v, ..) => fmt::Debug::fmt(v, f),
             Union::Char(ref v, ..) => fmt::Debug::fmt(v, f),
+            Union::Int(ref v, tag, ..) if tag == UNSIGNED_TAG => fmt::Debug::fmt(&(*v as u64), f),
             Union::Int(ref v, ..) => fmt::Debug::fmt(v, f),
             #[cfg(not(feature = "no_float"))]
             Union::Float(ref v, ..) => fmt::Debug::fmt(v, f),

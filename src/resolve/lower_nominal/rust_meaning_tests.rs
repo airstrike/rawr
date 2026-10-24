@@ -226,3 +226,129 @@ fn deepest(error: &crate::EvalAltResult) -> &crate::EvalAltResult {
         leaf => leaf,
     }
 }
+
+/// `Ci` is equal by absolute value and ordered by descending absolute
+/// value, through hand-written impls Rust calls wherever a `Ci` sits.
+const HAND_WRITTEN: &str = r#"
+    use std::cmp::Ordering;
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+    #[derive(Debug, Clone, Copy)]
+    struct Ci(i64);
+    impl PartialEq for Ci { fn eq(&self, o: &Self) -> bool { self.0.abs() == o.0.abs() } }
+    impl Eq for Ci {}
+    impl PartialOrd for Ci { fn partial_cmp(&self, o: &Self) -> Option<Ordering> { Some(self.cmp(o)) } }
+    impl Ord for Ci { fn cmp(&self, o: &Self) -> Ordering { o.0.abs().cmp(&self.0.abs()) } }
+    impl std::hash::Hash for Ci { fn hash<H: std::hash::Hasher>(&self, h: &mut H) { self.0.abs().hash(h) } }
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+    struct W { a: Ci, b: i64 }
+    #[derive(Debug, PartialEq, PartialOrd)]
+    enum E { One(Ci), Two }
+"#;
+
+#[test]
+fn language_rust_meaning_hand_written_eq_and_ord_inside_values() {
+    let value = text(&format!(
+        r#"{HAND_WRITTEN}
+        let mut v = vec![(Ci(1), 'a'), (Ci(-7), 'b'), (Ci(3), 'c')];
+        v.sort();
+        let mut ws = vec![W {{ a: Ci(1), b: 0 }}, W {{ a: Ci(9), b: 0 }}];
+        ws.sort();
+        let mut m = BTreeMap::new();
+        m.insert(Ci(1), "one"); m.insert(Ci(5), "five"); m.insert(Ci(-1), "minus one");
+        let s: BTreeSet<Ci> = vec![Ci(2), Ci(-2), Ci(8)].into_iter().collect();
+        let mut h = HashMap::new();
+        h.insert(Ci(4), 1); h.insert(Ci(-4), 2);
+        let hs: HashSet<Ci> = vec![Ci(2), Ci(-2)].into_iter().collect();
+        format!(
+            "{{}} {{}} {{}} {{}} {{}} {{}} {{}} {{}} {{}} {{}} {{}} {{}} {{:?}} {{:?}} {{:?}} {{:?}} {{}} {{}} {{}} {{}}",
+            (Ci(3), 1) == (Ci(-3), 1),
+            (Ci(1), 1) < (Ci(5), 1),
+            Some(Ci(3)) == Some(Ci(-3)),
+            Some(Ci(1)) < Some(Ci(5)),
+            vec![Ci(3)] == vec![Ci(-3)],
+            vec![Ci(1)] < vec![Ci(5)],
+            W {{ a: Ci(3), b: 1 }} == W {{ a: Ci(-3), b: 1 }},
+            W {{ a: Ci(1), b: 1 }} < W {{ a: Ci(5), b: 1 }},
+            E::One(Ci(3)) == E::One(Ci(-3)),
+            E::One(Ci(1)) < E::One(Ci(5)),
+            vec![Ci(3), Ci(4)].contains(&Ci(-4)),
+            [Ci(1)] == [Ci(-1)],
+            v,
+            ws,
+            m,
+            s,
+            h.len(),
+            hs.len(),
+            h[&Ci(-4)],
+            hs.contains(&Ci(-2)),
+        )
+        "#
+    ));
+    // rustc 1.9x, debug: the same program's output.
+    assert_eq!(
+        value,
+        "true false true false true false true false true false true true \
+         [(Ci(-7), 'b'), (Ci(3), 'c'), (Ci(1), 'a')] \
+         [W { a: Ci(9), b: 0 }, W { a: Ci(1), b: 0 }] \
+         {Ci(5): \"five\", Ci(1): \"minus one\"} {Ci(8), Ci(-2)} 1 1 2 true"
+    );
+}
+
+#[test]
+fn language_rust_meaning_u64_orders_as_unsigned_everywhere() {
+    let value = text(
+        r#"
+        use std::collections::{BTreeMap, BTreeSet};
+        use std::fmt::{Debug, Display};
+        #[derive(Debug, PartialEq, PartialOrd)]
+        struct W { v: Vec<u64> }
+        #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
+        enum K { A(Option<u64>), B }
+        fn bigger<T: PartialOrd>(a: T, b: T) -> bool { a > b }
+        fn show<T: Debug>(v: &[T]) -> String { format!("{:?}", v) }
+        fn shown(x: impl Display) -> String { x.to_string() }
+        let x = -1_i64 as u64;
+        let mut m = BTreeMap::new();
+        m.insert(x, "max"); m.insert(3_u64, "three"); m.insert(1 << 63, "half");
+        let s: BTreeSet<u64> = vec![x, 2, 1 << 63].into_iter().collect();
+        let mut v = vec![(x, 'a'), (3, 'b')];
+        v.sort();
+        let mut ks = vec![K::A(Some(x)), K::A(Some(1)), K::B, K::A(None)];
+        ks.sort();
+        let total: u64 = vec![1u64 << 62, 1u64 << 62, 1u64 << 62].iter().sum();
+        format!(
+            "{:?} {:?} {:?} {} {} {} {} {:?} {:?} {:?} {} {} {} {} {}",
+            m,
+            s,
+            s.range(5..).collect::<Vec<_>>(),
+            W { v: vec![x] } > W { v: vec![1] },
+            (x, 1) > (1, 1),
+            Some(x) > Some(1),
+            vec![x] > vec![1],
+            v,
+            ks,
+            vec![(1, x), (1, 5)].iter().max(),
+            total,
+            bigger(x, 1),
+            show(&[x, 1]),
+            shown(x),
+            bigger(Some(x), Some(1)),
+        )
+        "#,
+    );
+    assert_eq!(
+        value,
+        "{3: \"three\", 9223372036854775808: \"half\", 18446744073709551615: \"max\"} \
+         {2, 9223372036854775808, 18446744073709551615} \
+         [9223372036854775808, 18446744073709551615] true true true true \
+         [(3, 'b'), (18446744073709551615, 'a')] \
+         [A(None), A(Some(1)), A(Some(18446744073709551615)), B] \
+         Some((1, 18446744073709551615)) 13835058055282163712 true \
+         [18446744073709551615, 1] 18446744073709551615 true"
+    );
+    // A narrower kind's sum overflows as debug Rust's does.
+    let error = Engine::new()
+        .eval::<u8>("vec![200_u8, 100].iter().sum::<u8>()")
+        .expect_err("200 + 100 overflows a u8");
+    assert!(error.to_string().contains("attempt to add with overflow"), "{error}");
+}

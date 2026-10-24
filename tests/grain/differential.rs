@@ -155,7 +155,18 @@ fn only_error_cases_error() {
 /// takes an `Option` apart. Both still give the walker's answer, which
 /// `vm_agrees_with_the_engine` checks, and neither can be written to an
 /// artifact until it lowers.
-const MAY_FRAGMENT: &[&str] = &["match_option", "if_let", "closure_capture_read", "closure_capture_in_map"];
+///
+/// `method_beats_free_fn` and `method_call_beats_free_fn` call a std function
+/// that a script function shares the name of: the call reaches only the
+/// runtime's functions, which `Op::Call` cannot say, so the walker runs it.
+const MAY_FRAGMENT: &[&str] = &[
+    "match_option",
+    "if_let",
+    "closure_capture_read",
+    "closure_capture_in_map",
+    "method_beats_free_fn",
+    "method_call_beats_free_fn",
+];
 
 /// Every chunk the compiler emits must pass its own verifier.
 ///

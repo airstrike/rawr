@@ -182,7 +182,21 @@ impl Compiler {
             && functions
                 .iter()
                 .any(|f| crate::grain::program::takes_this(&code, f.chunk, &lowering.chains));
-        let needs_walker = skipped > 0 || !lowering.residuals.is_empty() || escapes_as_pointer;
+        // A crate type's own `eq`, `partial_cmp` or `cmp`, which a native
+        // comparison calls back through rawr (`lower_nominal::compare`).
+        let compared = ast.shared_lib().iter_script_fn_info().any(|(.., def)| {
+            let name = def.name.as_str();
+            name.starts_with("\0rawr.method.")
+                && [
+                    "::PartialEq::eq",
+                    "::PartialOrd::partial_cmp",
+                    "::Ord::cmp",
+                ]
+                .iter()
+                .any(|suffix| name.ends_with(suffix))
+        });
+        let needs_walker =
+            skipped > 0 || !lowering.residuals.is_empty() || escapes_as_pointer || compared;
         let has_compiler_support = !ast.shared_support().is_empty();
         let lib = if needs_walker || has_compiler_support {
             let mut lib = crate::Module::new();
@@ -1849,7 +1863,14 @@ impl Lowering {
             return false;
         }
 
+        // A call that reaches only the runtime's functions, though a script
+        // function shares its name (`abs(x)` of `x.abs()` beside a script
+        // `fn abs`): the walker honours its hashes, where `Op::Call` would
+        // take the script function.
+        let native_only = call.hashes.is_native_only() && self.script_fns.contains(&call.name);
+
         !call.capture_parent_scope
+            && !native_only
             && !call_has_namespace!(call)
             && call.args.len() <= u8::MAX as usize
             && !SYNTACTIC.contains(&call.name.as_str())

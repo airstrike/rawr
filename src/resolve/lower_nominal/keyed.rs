@@ -160,7 +160,8 @@ impl Parser<'_> {
                 } else {
                     PreludeOp::SetFrom
                 };
-                self.prelude_op(op, [items])
+                let helper = self.push_op(self.keyed_op(op, kind, &arguments[0]));
+                origin::Fragment::call(&helper, [items])
             }
             _ => {
                 return Err(Error::UnknownMember {
@@ -319,7 +320,7 @@ impl Parser<'_> {
         op: PreludeOp,
         arguments: Vec<origin::Fragment>,
     ) -> Result<origin::Fragment, Error> {
-        let helper = self.push_op(Op::Prelude(op));
+        let helper = self.push_op(self.keyed_op_for(op, &value.ty));
         self.mutation_call(value, &helper, arguments)
     }
 
@@ -424,7 +425,7 @@ impl Parser<'_> {
                 });
             }
             operands.push(flags.to_string().into());
-            let helper = self.push_op(Op::Prelude(PreludeOp::KeyedRange));
+            let helper = self.push_op(self.keyed_op(PreludeOp::KeyedRange, kind, &types[0]));
             let mut source = value.rendered_source().surrounded("(", ")");
             source.push_text(format!(".{helper}("));
             source.push(origin::Fragment::join(operands, ", "));
@@ -450,7 +451,7 @@ impl Parser<'_> {
         };
         let receiver = value.rendered_source().surrounded("(", ")");
         let read = |this: &mut Self, op: PreludeOp, arguments: &[ParsedExpr]| {
-            let helper = this.push_op(Op::Prelude(op));
+            let helper = this.push_op(this.keyed_op(op, kind, &types[0]));
             let mut source = receiver.clone();
             source.push_text(format!(".{helper}("));
             source.push(origin::Fragment::join(
@@ -643,7 +644,7 @@ impl Parser<'_> {
             });
         }
         self.coerce_key(&keyed.arguments[0], &mut index)?;
-        let helper = self.push_op(Op::Prelude(PreludeOp::MapIndex));
+        let helper = self.push_op(self.keyed_op(PreludeOp::MapIndex, keyed.kind, &keyed.arguments[0]));
         let mut source = value.rendered_source().surrounded("(", ")");
         source.push_text(format!(".{helper}("));
         source.push(index.rendered_source());
@@ -708,8 +709,8 @@ impl Parser<'_> {
             .as_ref()
             .map(|lvalue| lvalue.binding().clone())
             .expect("a place has a binding");
-        let slot = self.push_op(Op::Prelude(PreludeOp::MapSlot));
-        let insert = self.push_op(Op::Prelude(PreludeOp::MapSlotInsert));
+        let slot = self.push_op(self.keyed_op(PreludeOp::MapSlot, kind, &types[0]));
+        let insert = self.push_op(self.keyed_op(PreludeOp::MapSlotInsert, kind, &types[0]));
         let at = self.temporary("at");
         let mut modify: Option<origin::Fragment> = None;
         // The value a vacant entry gets, and whether it is made lazily.
