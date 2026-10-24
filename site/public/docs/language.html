@@ -76,10 +76,10 @@
 <h2 id="glance">At a glance</h2>
 <p>rawr runs a growing part of Rust. Code that rawr doesn&rsquo;t support fails the check with an error that names the construct. These are the largest gaps:</p>
 <ul>
-  <li>No <code>macro_rules!</code>, and only the <a href="#macros">built-in macros</a>.</li>
-  <li>No <code>i128</code> or <code>u128</code>, and no <code>&amp;mut</code> returned from a function.</li>
+  <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="#macros">built-in macros</a> work.</li>
+  <li><code>i128</code>, <code>u128</code> and returning <code>&amp;mut</code> from a function aren&rsquo;t supported.</li>
   <li><code>async</code> code runs only in iced apps under rawr-iced.</li>
-  <li>Part of <code>std</code>. <a href="#std">The standard library</a> lists what works.</li>
+  <li>Only part of <code>std</code> works. <a href="#std">The standard library</a> lists it.</li>
   <li>Borrow checking is partial. rawr rejects a use after a move and two live <code>&amp;mut</code> borrows of one value, but <a href="#lenient">accepts some code rustc rejects</a>. <code>rawr check</code> runs <code>cargo check</code> for that reason.</li>
 </ul>
 <p>rawr follows Rust&rsquo;s meaning. Where it can&rsquo;t yet, it <a href="#refused">refuses the code</a>. A few <a href="#differences">known differences</a> remain, and each one is a defect to fix.</p>
