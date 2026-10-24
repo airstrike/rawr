@@ -1155,7 +1155,11 @@ pub(crate) fn permissions(metadata: &fs::Metadata) -> u32 {
 }
 #[cfg(unix)]
 fn valid_mode(mode: u32, directory: bool) -> bool {
-    mode == 0o555 || (!directory && mode == 0o444)
+    if directory {
+        mode == 0o755
+    } else {
+        matches!(mode, 0o444 | 0o555)
+    }
 }
 #[cfg(not(unix))]
 fn valid_mode(mode: u32, _directory: bool) -> bool {

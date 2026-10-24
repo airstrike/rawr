@@ -3423,9 +3423,14 @@ fn set_frozen(
 }
 
 #[cfg(unix)]
+/// A frozen member's mode. Files are read-only. Directories stay writable
+/// by their owner, so `cargo clean` (and any `rm -r`) can remove a bundle;
+/// a member added to one is still caught, by the bundle's recorded listing.
 pub(crate) fn frozen_mode(metadata: &fs::Metadata, directory: bool) -> u32 {
     use std::os::unix::fs::MetadataExt as _;
-    if directory || metadata.mode() & 0o111 != 0 {
+    if directory {
+        0o755
+    } else if metadata.mode() & 0o111 != 0 {
         0o555
     } else {
         0o444
@@ -3509,7 +3514,13 @@ fn set_writable(
 fn writable(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
 
-    metadata.mode() & 0o222 != 0
+    // A frozen directory is 0o755 (see `frozen_mode`).
+    let mode = metadata.mode() & 0o7777;
+    if metadata.is_dir() {
+        mode != 0o755 && mode & 0o022 != 0
+    } else {
+        mode & 0o222 != 0
+    }
 }
 
 #[cfg(not(unix))]

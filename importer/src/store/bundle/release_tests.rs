@@ -692,15 +692,18 @@ fn published_geometry_matches_the_sealed_commitment() {
     let (root, record) = fixture.published(&[]);
     let published = survey(&root, View::Published, None, true, Error::Shape).unwrap();
     assert_eq!(Some(published.geometry), record.sealed_geometry());
-    thaw_root(&root).unwrap();
+    // A frozen root is 0o755 already; any other mode on it is a change the
+    // retiring view forgives and the published one does not.
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     let retiring = survey(&root, View::Retiring, None, false, Error::Shape).unwrap();
     assert_eq!(Some(retiring.geometry), record.sealed_geometry());
     let exact = survey(&root, View::Published, None, false, Error::Shape).unwrap();
     assert_ne!(
         Some(exact.geometry),
         record.sealed_geometry(),
-        "a thawed root is a mode change outside retirement"
+        "a root's mode change counts outside retirement"
     );
+    thaw_root(&root).unwrap();
     fixture.retire();
 }
 

@@ -340,7 +340,10 @@ impl Retained {
 fn expected_facts(member: &Member, frozen: Option<&Path>) -> Facts {
     let mut facts = member.facts;
     if frozen.is_some_and(|root| member.path.starts_with(root)) {
-        let permissions = if facts.kind == 0 || facts.mode & 0o111 != 0 {
+        // As `store::bundle::frozen_mode`: directories stay owner-writable.
+        let permissions = if facts.kind == 0 {
+            0o755
+        } else if facts.mode & 0o111 != 0 {
             0o555
         } else {
             0o444
