@@ -1086,7 +1086,7 @@ mod tests {
                     fn diff(&mut self, state: &mut State) {
                         self.value = 7;
                         state.value = 9;
-                        throw "after mutation";
+                        panic!("after mutation");
                     }
                 }
 
@@ -1108,7 +1108,7 @@ mod tests {
                     fn diff(&mut self, state: &mut State) {
                         self.value = 7;
                         state.value = 9;
-                        throw "after mutation";
+                        panic!("after mutation");
                     }
                 }
 
