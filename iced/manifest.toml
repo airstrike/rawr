@@ -41,4 +41,5 @@ prelude = [
     "iced::widget::top", "iced::widget::transition", "iced::widget::vertical_slider",
     "iced::widget::void",
 ]
-commands = ["preview", "snapshot", "new", "mcp", "init", "doctor", "cache"]
+templates = ["iced"]
+commands = ["preview", "snapshot", "mcp", "init", "doctor", "cache"]

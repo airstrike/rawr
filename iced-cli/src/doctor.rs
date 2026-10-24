@@ -548,7 +548,7 @@ fn check_project(discovery: &Discovery, explicit: bool) -> Check {
                 diagnostic::code::ENVIRONMENT_PROJECT_NOT_FOUND,
                 failure.report.message(),
             )
-            .help("run inside a project, pass a path, or create one with `rawr new <path>`")
+            .help("run inside a project, pass a path, or create one with `rawr new <path> --template iced`")
             .finish(),
         ),
         Discovery::Failed(failure) => Check::failure("project", failure.report.clone()),

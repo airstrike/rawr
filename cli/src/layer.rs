@@ -40,6 +40,8 @@ pub struct Manifest {
     /// The binaries it extends: a program it and one of them both claim
     /// goes to it.
     pub extends: Vec<String>,
+    /// The `rawr new` templates it writes.
+    pub templates: Vec<String>,
     /// The commands it adds to `rawr`.
     pub commands: Vec<Provided>,
 }
@@ -111,6 +113,7 @@ impl Manifest {
                 prelude: strings("prelude")?,
             },
             extends: strings("extends")?,
+            templates: strings("templates")?,
             commands: strings("commands")?
                 .iter()
                 .map(|command| {

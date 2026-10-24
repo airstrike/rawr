@@ -24,7 +24,7 @@ fn check_refuses_a_one_file_iced_program_without_a_cargo_project() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("RAWR-ENVIRONMENT-PROJECT-NOT-FOUND"), "{stderr}");
-    assert!(stderr.contains("`rawr new <name>`"), "{stderr}");
+    assert!(stderr.contains("`rawr new <name> --template iced`"), "{stderr}");
     fs::remove_file(source).unwrap();
 }
 
