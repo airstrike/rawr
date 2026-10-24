@@ -657,6 +657,54 @@ fn master_pick_list_takes_an_array_of_script_values() {
     find(&adapter, "floating");
 }
 
+/// std's `io::Error` and `io::ErrorKind`, as editor and markdown use them.
+const IO_ERRORS: &str = r#"
+use iced::widget::{column, text};
+use iced::Widget;
+use std::io;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+#[derive(Debug, Clone)]
+pub enum Error {
+    DialogClosed,
+    IoError(io::ErrorKind),
+}
+
+fn classify(error: io::Error) -> Error {
+    Error::IoError(error.kind())
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let missing = classify(io::Error::new(io::ErrorKind::NotFound, String::from("gone")));
+        let other = io::Error::other(format!("unsupported uri: {}", "x"));
+        let same = matches!(missing, Error::IoError(io::ErrorKind::NotFound));
+        column![
+            text(format!("{missing:?} {same}")),
+            text(format!("{} {:?} {}", other, other.kind(), io::ErrorKind::TimedOut)),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn std_io_errors_compute_as_rust() {
+    let adapter = boot(IO_ERRORS);
+    find(&adapter, "IoError(NotFound) true");
+    find(&adapter, "unsupported uri: x Other timed out");
+}
+
 const RICH: &str = r#"
 use iced::widget::{column, rich_text, span, text};
 use iced::{Color, Font, Widget};

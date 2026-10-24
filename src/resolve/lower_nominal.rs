@@ -10087,6 +10087,16 @@ impl<'a> Parser<'a> {
         {
             return Some(self.prelude_op(PreludeOp::DisplayText, [value]));
         }
+        // A facade type with `to_string`, as std's `io::Error`: its Rust
+        // `Display`, which the facade registers.
+        if let Ty::Host { proof, .. } = &target
+            && self
+                .models
+                .host_items(&format!("{}::to_string", proof.definition.path()))
+                .is_some()
+        {
+            return Some(self.prelude_op(PreludeOp::DisplayText, [value]));
+        }
         match ty {
             Ty::Int(kind @ (Int::U64 | Int::Usize)) => Some(self.prelude_op(
                 PreludeOp::FormatBits,
