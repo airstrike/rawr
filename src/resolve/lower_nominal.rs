@@ -704,6 +704,7 @@ fn lower_with_context(
         patterns.extend(lowered.patterns);
         write_closures(
             &mut generated,
+            &mut locations,
             shell.source,
             lowered.closures,
             &mut closures,
@@ -759,6 +760,7 @@ fn lower_with_context(
         patterns.extend(lowered.patterns);
         write_closures(
             &mut generated,
+            &mut locations,
             definition.source(),
             lowered.closures,
             &mut closures,
@@ -920,6 +922,7 @@ fn lower_with_context(
 /// Write each lifted closure as its own generated function.
 fn write_closures(
     output: &mut location::Generated,
+    retained: &mut Vec<location::Pending>,
     source: crate::program::source::Id,
     lifted: Vec<LiftedClosure>,
     closures: &mut Vec<ClosureCallable>,
@@ -937,7 +940,10 @@ fn write_closures(
             &format!("fn {generated}({}) {{\n", closure.parameters.join(", ")),
         );
         let (body, locations) = closure.body.finish();
-        output.body(source, closure.span, &body, &locations);
+        let offset = output.body(source, closure.span, &body, &locations);
+        // A runtime error in the closure's body, as in an async body the
+        // host runs, is placed at the statement that failed.
+        retain_locations(retained, offset, Some(&closure.key), source, locations);
         output.declaration(source, closure.span, "\n}\n");
         rewrites.insert(generated.into(), dispatch.clone());
         closures.push(ClosureCallable {
@@ -35328,7 +35334,11 @@ impl<'a> Parser<'a> {
                         &owner[segments[0].0.len()..]
                     )
                 }
-                _ => format!("{owner}::{member}"),
+                // `std::time::Duration::from_millis` is the facade's where
+                // its `time` re-exports std's, as `use std::time::Duration`
+                // is (`resolve::std_reexport`).
+                _ => crate::resolve::std_reexport(&format!("{owner}::{member}"), &self.models.host)
+                    .to_string(),
             };
             if let Some(items) = self
                 .models

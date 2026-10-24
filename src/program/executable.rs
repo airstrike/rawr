@@ -471,6 +471,41 @@ impl Executable {
         })
     }
 
+    /// The evidence that places `error`, an evaluation error of a callable
+    /// the host invoked with no callback of its own (a Task's async body):
+    /// that callable's, or the body in its source whose evidence holds the
+    /// error's deepest position (a function it called). `None` when no
+    /// evidence holds it.
+    pub(crate) fn error_evidence(&self, error: &super::Error) -> Option<Evidence<'_>> {
+        let super::Error::Evaluation { key, error } = error else {
+            return None;
+        };
+        let position = deepest_position(error);
+        if position.is_none() {
+            return None;
+        }
+        let (key, callable) = self.callables.get_key_value(key)?;
+        let location = self.sources.key(callable.source.index());
+        let source = self.sources.resolve(location).ok()?;
+        let helpers = self.helper_locations.get(&location).map(|entries| &entries[..]);
+        let locations = std::iter::once(callable)
+            .chain(self.callables.values())
+            .filter_map(|callable| callable.locations.as_ref())
+            .filter(|locations| locations.source == location)
+            .find(|locations| innermost(&locations.entries, position).is_some());
+        let in_helpers = helpers.is_some_and(|helpers| innermost(helpers, position).is_some());
+        if locations.is_none() && !in_helpers {
+            return None;
+        }
+        Some(Evidence {
+            key,
+            source,
+            declaration: crate::Span::NONE,
+            locations,
+            helpers,
+        })
+    }
+
     #[cfg_attr(feature = "no_function", allow(dead_code))]
     pub(crate) const fn ast(&self) -> &AST {
         &self.ast

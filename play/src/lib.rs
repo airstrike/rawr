@@ -424,7 +424,7 @@ pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
     let deadline = Instant::now() + options.limits.time;
     let canvas = canvas(options);
     let rendered = if shape(source) == Shape::App {
-        render_application(&program, source, options, canvas, Deadline::new(deadline))
+        return render_application(&program, source, options, canvas, deadline);
     } else {
         let sandbox = sandbox(&options.limits, Deadline::new(deadline));
         let compiler = rawr_iced::preview::Compiler::configured(sandbox)
@@ -445,20 +445,52 @@ pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
 }
 
 /// A full app runs as `rawr run` would show it, headless: booted, given
-/// the options' messages, and drawn once its view settles.
+/// the options' messages, and drawn once its view settles. It runs on the
+/// simulated clock as a recording does, so its timers fire and the image
+/// is the recording's last frame: the one a GIF ends on. The recording
+/// keeps the still budget, and a recording the budget cuts shows its last
+/// frame.
 fn render_application(
     program: &str,
     source: &str,
     options: &Options,
     canvas: rawr_iced::snapshot::Canvas,
-    deadline: Deadline,
+    deadline: Instant,
 ) -> Result<Png, PlayError> {
-    let (mut adapter, messages) = application(program, source, options, deadline)?;
+    // The app boots on the simulated clock, so the times it reads are on it.
+    let _clock = rawr_iced::snapshot::clock::freeze();
+    let (mut adapter, messages) = application(program, source, options, Deadline::new(deadline))?;
     // The app's own `.theme(f)` wins over the built-in theme.
     let theme = app_theme(source).is_none().then(|| options.theme.variant());
     let bound = options.size.unwrap_or((MAX_SIDE, MAX_SIDE));
-    rawr_iced::snapshot::render_application(&mut adapter, messages, canvas, bound, theme)
-        .map_err(|error| classify(&error.to_string(), &options.limits))
+    let motion = rawr_iced::snapshot::Motion {
+        step: motion::STEP,
+        frames: motion::FRAMES,
+        phase: motion::PHASE,
+        span: motion::SPAN,
+        deadline: Deadline::new(deadline),
+        extended: deadline,
+        cut: None,
+        // Frames after the view changes are drawn small, and the last one
+        // again at the still's scale.
+        animation_scale: Some(motion::SCALE),
+    };
+    let mut loops = motion::Loops::default();
+    let classified =
+        |error: rawr_iced::snapshot::Error| classify(&error.to_string(), &options.limits);
+    rawr_iced::snapshot::record_application(
+        &mut adapter,
+        messages,
+        canvas,
+        bound,
+        theme,
+        motion,
+        &mut |frames| loops.check(frames),
+        &mut |_| {},
+    )
+    .map_err(classified)?;
+    rawr_iced::snapshot::render_application(&mut adapter, Vec::new(), canvas, bound, theme)
+        .map_err(classified)
 }
 
 /// A full app checked and booted, and the options' messages for it.
@@ -1587,6 +1619,21 @@ fn view() -> impl Widget<()> {
         assert_eq!(panicked.status, 101);
         let text = panicked.text();
         assert!(text.contains("out of bounds") && text.contains("play.rs:2:5"), "{text}");
+
+        // A failure in the async body's own statements is placed at the
+        // statement, before an await and after one.
+        for (body, at) in [
+            ("let v: Vec<i64> = Vec::new();\n    let x = v[3];\n    println!(\"{x}\");", "play.rs:4:13"),
+            (
+                "tokio::task::yield_now().await;\n    let v: Vec<i64> = Vec::new();\n    println!(\"{}\", v[3]);",
+                "play.rs:5:20",
+            ),
+        ] {
+            let failed = async_text(&format!("#[tokio::main]\nasync fn main() {{\n    {body}\n}}\n"));
+            let text = failed.text();
+            assert_eq!(failed.status, 101, "{text}");
+            assert!(text.contains("out of bounds") && text.contains(at), "{text}");
+        }
     }
 
     #[test]
@@ -1758,6 +1805,45 @@ impl Spin {
             panic!("expected a compile error, got {error:?}");
         };
         assert!(text.contains("play.rs:2:"), "{text}");
+    }
+
+    /// A still of an app is the frame after it settles, as a GIF's last
+    /// frame is: a boot Task that sleeps on the simulated clock has run.
+    #[test]
+    fn a_still_app_waits_for_its_timers() {
+        const APP: &str = "use iced::Task;
+use iced::widget::text;
+use std::time::Duration;
+
+pub fn main() -> iced::Result {
+    iced::application(App::new, App::update, App::view).run()
+}
+
+struct App { done: bool }
+
+#[derive(Debug, Clone)]
+enum Message { Done }
+
+impl App {
+    fn new() -> (Self, Task<Message>) {
+        (App { done: false }, Task::perform(tokio::time::sleep(Duration::from_millis(300)), |_| Message::Done))
+    }
+    fn update(&mut self, _message: Message) { self.done = true; }
+    fn view(&self) -> impl iced::Widget<Message> { text(if self.done { \"done\" } else { \"waiting\" }) }
+}
+";
+        let still = |source: &str| {
+            let options = Options { still: true, ..Options::default() };
+            match super::animate(source, &options).unwrap().picture {
+                super::Picture::Still(png) => png.bytes,
+                super::Picture::Animated(_) => panic!("a still was animated"),
+            }
+        };
+        let waited = still(APP);
+        let done = still(&APP.replace("App { done: false }", "App { done: true }"));
+        let waiting = still(&APP.replace("self.done = true;", ""));
+        assert!(waited == done, "the still shows the settled frame");
+        assert!(waited != waiting, "the view's text shows in the still");
     }
 
     #[test]

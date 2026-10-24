@@ -555,8 +555,10 @@ impl Registry {
         Ok(())
     }
 
+    /// A public type source names by `path`, also through a facade
+    /// re-export (`iced::Renderer`), as Rust names a re-exported type.
     pub(crate) fn source_type(&self, path: &str) -> Option<&type_def::Definition> {
-        self.type_(path)
+        self.type_by_path(&path::Path::parse(path).ok()?)
             .filter(|definition| definition.visibility() == type_def::Visibility::Public)
     }
 

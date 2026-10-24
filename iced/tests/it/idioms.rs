@@ -1363,3 +1363,26 @@ fn keyed_column_keys_each_child_by_its_pair() {
     find(&adapter, "second");
     find(&adapter, "third");
 }
+
+/// Paths rustc resolves that Rawr named only through an import:
+/// `iced::Renderer` written out as a type, an angle's `.0`, and
+/// `std::time::Duration::from_millis` in full.
+#[test]
+fn full_paths_and_an_angles_field_resolve_as_in_rust() {
+    let adapter = boot_with(
+        r#"column![
+            label(format!("radians {}", Radians(1.5).0)),
+            label(format!("degrees {}", Degrees(90.0).0 * 2.0)),
+            label(format!("millis {}", std::time::Duration::from_millis(250).as_millis())),
+        ]"#,
+        r#"
+use iced::{Degrees, Radians};
+fn label(value: String) -> Element<'static, Message, Theme, iced::Renderer> {
+    text(value).boxed()
+}
+"#,
+    );
+    find(&adapter, "radians 1.5");
+    find(&adapter, "degrees 180");
+    find(&adapter, "millis 250");
+}

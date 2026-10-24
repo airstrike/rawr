@@ -1089,6 +1089,8 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
     reader::<iced::Rectangle>(builder, "iced::Rectangle::y", |bounds| bounds.y);
     reader::<iced::Rectangle>(builder, "iced::Rectangle::width", |bounds| bounds.width);
     reader::<iced::Rectangle>(builder, "iced::Rectangle::height", |bounds| bounds.height);
+    reader::<iced::Radians>(builder, "iced::Radians::0", |angle| angle.0);
+    reader::<iced::Degrees>(builder, "iced::Degrees::0", |angle| angle.0);
     // A channel read (`color.a`), or set by a literal (`Color { a: 0.8, ..base }`).
     fn channel<'a>(color: &'a mut iced::Color, name: &str) -> &'a mut f32 {
         match name {

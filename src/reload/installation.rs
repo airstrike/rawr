@@ -360,6 +360,16 @@ impl Application<'_> {
         self.0.callback_evidence(callback)
     }
 
+    /// Resolve the retained evidence of the callable `error` came from, for
+    /// a failure no callback owns (a Task's async body).
+    #[must_use]
+    pub fn error_evidence(
+        &self,
+        error: &program::Error,
+    ) -> Option<application::callback::Evidence<'_>> {
+        self.0.error_evidence(error)
+    }
+
     /// Materialize the default application State.
     pub fn boot_default(&self) -> Result<Dynamic, application::RuntimeError> {
         self.0.boot_default()

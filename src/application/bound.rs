@@ -156,6 +156,19 @@ impl BoundLaunch {
             .map(application::callback::Evidence::new)
     }
 
+    /// Resolve the retained evidence of the callable `error` came from, for
+    /// a failure no callback owns (a Task's async body).
+    #[must_use]
+    pub fn error_evidence(
+        &self,
+        error: &crate::program::Error,
+    ) -> Option<application::callback::Evidence<'_>> {
+        self.launch
+            .authority()
+            .error_evidence(error)
+            .map(application::callback::Evidence::new)
+    }
+
     /// The crate's free function `name`, as a symbolic item.
     #[must_use]
     pub fn function(&self, name: &str) -> Option<item::Value> {

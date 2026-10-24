@@ -2554,6 +2554,9 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         ("Vector", &["x", "y"][..]),
         ("Rectangle", &["x", "y", "width", "height"][..]),
         ("Color", &["r", "g", "b", "a"][..]),
+        // `Radians(1.5).0`: the angle's one public field.
+        ("Radians", &["0"][..]),
+        ("Degrees", &["0"][..]),
     ] {
         for field in fields {
             let mut reader = signature::Builder::new();

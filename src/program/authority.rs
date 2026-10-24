@@ -87,6 +87,13 @@ impl Authority {
         self.executable.callable_evidence(callable).ok()
     }
 
+    /// The evidence of the callable an evaluation error came from: a
+    /// function the host invoked with no callback of its own, as a Task's
+    /// async body.
+    pub(crate) fn error_evidence(&self, error: &super::Error) -> Option<super::Evidence<'_>> {
+        self.executable.error_evidence(error)
+    }
+
     /// Rebind a retained symbolic item to this exact generation.
     ///
     /// Every stable proof component is checked before the current canonical

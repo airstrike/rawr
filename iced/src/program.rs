@@ -1713,6 +1713,15 @@ fn callback_report(
 ) -> rawr::diagnostic::Report {
     callback
         .and_then(|callback| launch.callback_evidence(callback))
+        // A Task's script step has no callback: its error is placed by
+        // the evidence of the function it came from (an async body).
+        .or_else(|| match error {
+            Error::Task(task) => match &**task {
+                task::Error::Mapper(error) => launch.error_evidence(error),
+                _ => None,
+            },
+            _ => None,
+        })
         .map_or_else(
             || error.report(fallback),
             |evidence| report_with_callback_evidence(error, &evidence),
