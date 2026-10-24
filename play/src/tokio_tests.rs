@@ -262,13 +262,14 @@ fn tokio_yield_now_lets_the_others_run() {
 #[test]
 fn tokio_join_and_try_join_run_futures_at_once() {
     shows_at(
-        "use tokio::time::sleep;
+        "use tokio::join;
+use tokio::time::sleep;
 async fn after(ms: u64, value: i64) -> Result<i64, String> {
     sleep(Duration::from_millis(ms)).await;
     if value < 0 { Err(format!(\"{value} failed\")) } else { Ok(value) }
 }
 async fn run() -> String {
-    let (a, b, c) = tokio::join!(after(200, 1), after(100, 2), after(200, 3));
+    let (a, b, c) = join!(after(200, 1), after(100, 2), after(200, 3));
     let all = tokio::try_join!(after(100, 4), after(200, 5));
     let failed = tokio::try_join!(after(100, -1), after(200, 6));
     format!(\"{} {all:?} {failed:?}\", a.unwrap() + b.unwrap() + c.unwrap())

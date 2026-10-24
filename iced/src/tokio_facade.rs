@@ -58,40 +58,13 @@ impl<F: Future> Future for Entered<F> {
     }
 }
 
-/// The future `make` gives, made and polled inside tokio's runtime.
-pub(crate) fn entered<F>(make: impl FnOnce() -> F) -> BoxFuture<'static, F::Output>
-where
-    F: Future + Send + 'static,
-{
-    let handle = handle();
-    let future = {
-        let _entered = handle.enter();
-        Box::pin(make())
-    };
-    Box::pin(Entered { handle, future })
-}
-
-/// A timer's future, made and polled inside tokio's runtime. On a
-/// recording's clock it keeps the clock running until it ends.
-pub(crate) fn timer<F>(make: impl FnOnce() -> F) -> BoxFuture<'static, F::Output>
-where
-    F: Future + Send + 'static,
-{
-    let armed = clock::now().is_some().then(clock::Armed::new);
-    let future = entered(make);
-    Box::pin(async move {
-        let output = future.await;
-        drop(armed);
-        output
-    })
-}
-
 /// tokio's `time::sleep`.
 pub(crate) fn sleep(duration: std::time::Duration) -> BoxFuture<'static, ()> {
-    timer(move || tokio::time::sleep(duration))
+    timer_in(handle(), move || tokio::time::sleep(duration))
 }
 
-/// A timer's future in `handle`'s runtime, as [`timer`] makes one.
+/// A timer's future, made and polled inside `handle`'s runtime. On a
+/// recording's clock it keeps the clock running until it ends.
 fn timer_in<F>(
     handle: tokio::runtime::Handle,
     make: impl FnOnce() -> F,
@@ -171,7 +144,7 @@ pub(crate) struct RecvError(());
 pub(crate) struct WatchSender(Held<watch::Sender<Dynamic>>);
 
 /// tokio's `sync::watch::Receiver`. Its copies are one receiver, which has
-/// seen what any of them has.
+/// seen what any of them has, and `clone` makes another.
 #[derive(Clone)]
 pub(crate) struct WatchReceiver(Arc<tokio::sync::Mutex<watch::Receiver<Dynamic>>>);
 
@@ -588,6 +561,11 @@ fn read<T: std::clone::Clone + 'static>(
         })
 }
 
+/// The output witness of a function's call.
+fn witness(call: &host::runtime::Call<'_>) -> Result<host::runtime::Witness, Box<EvalAltResult>> {
+    call.output_witness().map_err(|witness| error(witness.to_string()))
+}
+
 fn ready(value: Dynamic) -> BoxFuture<'static, Dynamic> {
     Box::pin(std::future::ready(value))
 }
@@ -627,12 +605,9 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
         })
         .unwrap_or_else(|_| panic!("the rawr_iced facade must retain {path}"));
     };
-    let witness =
-        |call: &host::runtime::Call<'_>| call.output_witness().map_err(|e| error(e.to_string()));
-
     bind("tokio::time::sleep", |call, args| {
         let duration = read::<std::time::Duration>(args[0], "Duration")?;
-        let witness = call.output_witness().map_err(|e| error(e.to_string()))?;
+        let witness = witness(call)?;
         Ok(task::tokio_task(Some(witness), move || {
             let sleep = sleep(duration);
             Box::pin(async move {
@@ -641,7 +616,6 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
             })
         }))
     });
-    let _ = witness;
     bind("tokio::time::interval", |_call, args| {
         let period = read::<std::time::Duration>(args[0], "Duration")?;
         if period.is_zero() {
@@ -675,13 +649,13 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
             return Err(error("`timeout` takes a duration and a future"));
         };
         let duration = read::<std::time::Duration>(duration, "Duration")?;
-        let witness = call.output_witness().map_err(|e| error(e.to_string()))?;
+        let witness = witness(call)?;
         task::tokio_timeout(witness, plan, duration, Dynamic::from(Elapsed(())))
     });
     bind("tokio::task::yield_now", |call, _args| {
         // Each step of Rawr code already goes back to the UI thread, so the
         // other tasks run between this one's steps.
-        let witness = call.output_witness().map_err(|e| error(e.to_string()))?;
+        let witness = witness(call)?;
         Ok(task::tokio_task(Some(witness), || ready(Dynamic::UNIT)))
     });
 
@@ -939,7 +913,7 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
             let path = format!("rawr_iced::tokio::{name}{count}");
             let what = path.clone();
             rawr.bind_with_context(&path, move |call, args| {
-                let witness = call.output_witness().map_err(|e| error(e.to_string()))?;
+                let witness = witness(call)?;
                 task::tokio_combined(witness, args, join, &what)
             })
             .unwrap_or_else(|_| panic!("the rawr_iced facade must retain {path}"));
