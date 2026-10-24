@@ -22,7 +22,10 @@ run` runs a file: its top level, then `fn main` if it has one. A snippet of
 statements alone becomes a block in `fn main`, read as Rust reads a block.
 The block's value is printed with `{:?}` unless it is `()`. So `1 + 2` prints
 `3`, and `1 + 2;` prints nothing. A `main` that returns `Err`
-prints `Error: ..` and exits with status 1. A panic exits with status 101,
+prints `Error: ..` and exits with status 1. A `main` that is `async`, as
+`#[tokio::main] async fn main()` is, runs on rawr-iced's tokio with no
+window: its timers follow the simulated clock iced apps record on, and its
+output is text too. A panic exits with status 101,
 as in Rust. A limit exits with status 1. Output is capped at 64 KiB. A program that writes more
 is stopped and its output ends with `… output truncated`. Messages drive an iced app. A plain program runs without them, and its
 output carries the note "messages are ignored for programs without iced".

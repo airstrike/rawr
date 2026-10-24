@@ -334,7 +334,13 @@ pub fn run_claimed(
         return animate(source, options).map(Outcome::Image);
     }
     // Messages drive an iced app; a plain program runs without them.
-    let mut output = parsed.run(source, &options.limits)?;
+    let mut output = match plain::async_main(&without_tests(source)) {
+        Some(main) => {
+            drop(parsed);
+            plain::run_async(source, &main, &options.limits, deadline)?
+        }
+        None => parsed.run(source, &options.limits)?,
+    };
     if !options.messages.is_empty() {
         let note = output.note.take().map(|note| format!("{note}\n")).unwrap_or_default();
         output.note = Some(format!("{note}{}", plain::MESSAGES_IGNORED));
@@ -1499,6 +1505,98 @@ fn view() -> impl Widget<()> {
         let text = output.text();
         assert!(text.starts_with("before\n"), "{text}");
         assert!(text.contains("assertion `left == right` failed\n  left: 2\n right: 3"), "{text}");
+    }
+
+    /// A plain program's output, with a debug build's longer time budget.
+    fn async_text(source: &str) -> super::Output {
+        let options = Options {
+            limits: super::Limits {
+                time: std::time::Duration::from_secs(if cfg!(debug_assertions) { 30 } else { 5 }),
+                ..super::Limits::default()
+            },
+            ..Options::default()
+        };
+        match super::run(source, &options).unwrap() {
+            super::Outcome::Text(output) => output,
+            super::Outcome::Image(_) => panic!("{source} rendered an image"),
+        }
+    }
+
+    /// `#[tokio::main] async fn main` runs on rawr-iced's tokio with no
+    /// window: sleeps on the simulated clock, a channel between two joined
+    /// futures, and `spawn_blocking`. An `Err` from `main` exits 1, and a
+    /// panic exits 101, as a plain program's do.
+    #[test]
+    fn run_plain_async_main_on_the_simulated_clock() {
+        let output = async_text(
+            "use std::time::Duration;\n\
+             use tokio::sync::mpsc;\n\
+             use tokio::time::{sleep, Instant};\n\
+             \n\
+             #[tokio::main]\n\
+             async fn main() {\n\
+                 let start = Instant::now();\n\
+                 let (sender, mut receiver) = mpsc::channel(4);\n\
+                 let produce = async move {\n\
+                     for n in 1..=3 {\n\
+                         sleep(Duration::from_millis(250)).await;\n\
+                         sender.send(n).await.unwrap();\n\
+                     }\n\
+                 };\n\
+                 let consume = async move {\n\
+                     let mut total = 0;\n\
+                     while let Some(n) = receiver.recv().await {\n\
+                         println!(\"got {n} at {} ms\", start.elapsed().as_millis());\n\
+                         total += n;\n\
+                     }\n\
+                     total\n\
+                 };\n\
+                 let (_, total) = tokio::join!(produce, consume);\n\
+                 let primes = tokio::task::spawn_blocking(|| (2..100u64).filter(|n| (2..*n).all(|d| n % d != 0)).count())\n\
+                     .await\n\
+                     .unwrap();\n\
+                 println!(\"total {total}, {primes} primes, done at {} ms\", start.elapsed().as_millis());\n\
+             }\n",
+        );
+        assert_eq!(
+            output.text(),
+            "got 1 at 250 ms\ngot 2 at 500 ms\ngot 3 at 750 ms\ntotal 6, 25 primes, done at 750 ms\n"
+        );
+        assert_eq!((output.status, output.limit), (0, false));
+
+        let failed = async_text(
+            "use std::time::Duration;\n\
+             #[tokio::main]\n\
+             async fn main() -> Result<(), String> {\n\
+                 tokio::time::sleep(Duration::from_millis(10)).await;\n\
+                 println!(\"before\");\n\
+                 Err(\"bad\".to_string())\n\
+             }\n",
+        );
+        assert_eq!(failed.text(), "before\nError: \"bad\"\n");
+        assert_eq!(failed.status, 1);
+
+        let panicked = async_text(
+            "fn third(v: &[i64]) -> i64 {\n    v[3]\n}\n\
+             #[tokio::main]\n\
+             async fn main() {\n\
+                 tokio::task::yield_now().await;\n\
+                 println!(\"{}\", third(&Vec::new()));\n\
+             }\n",
+        );
+        assert_eq!(panicked.status, 101);
+        let text = panicked.text();
+        assert!(text.contains("out of bounds") && text.contains("play.rs:2:5"), "{text}");
+    }
+
+    #[test]
+    fn async_main_is_found_with_its_tokio_attribute() {
+        let source = "use std::time::Duration;\n#[tokio::main]\nasync fn main() -> Result<(), String> {\n    Ok(())\n}\n";
+        let main = super::plain::async_main(source).unwrap();
+        assert_eq!(&source[main.name..main.name + 4], "main");
+        assert_eq!(main.attribute.clone().map(|span| &source[span]), Some("#[tokio::main]"));
+        assert!(main.returns);
+        assert_eq!(super::plain::async_main("fn main() {}\nasync fn helper() {}\n"), None);
     }
 
     #[test]

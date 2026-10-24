@@ -11,6 +11,11 @@
 //! level, then `fn main` if there is one. A snippet of statements alone is
 //! a block in a `fn main`, and the block's value is printed with `{:?}`
 //! unless it is `()`.
+//!
+//! An `async fn main`, as `#[tokio::main]` marks it, runs on rawr-iced's
+//! tokio (see [`run_async`]): its futures, timers, channels and
+//! `spawn_blocking` are that tokio's, on the simulated clock iced apps
+//! record on. Its output is text, as any plain program's.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -327,6 +332,12 @@ fn diagnostic(program: &str) -> Option<rawr::diagnostic::Source> {
 /// `sink`; it stops a program at the deadline or once `sink` is full.
 fn engine(limits: &Limits, deadline: Instant, sink: &Arc<Mutex<Output>>) -> Engine {
     let mut engine = Engine::new();
+    sandbox(&mut engine, limits, deadline, sink);
+    engine
+}
+
+/// The untrusted-snippet limits on `engine`, its output going to `sink`.
+fn sandbox(engine: &mut Engine, limits: &Limits, deadline: Instant, sink: &Arc<Mutex<Output>>) {
     let depth = engine.max_call_levels().min(limits.call_depth);
     let (output, print, debug, progress) = (sink.clone(), sink.clone(), sink.clone(), sink.clone());
     engine
@@ -364,7 +375,158 @@ fn engine(limits: &Limits, deadline: Instant, sink: &Arc<Mutex<Output>>) -> Engi
     engine
         .register_fn("sleep", move |_: rawr::INT| refuse())
         .register_fn("sleep", move |_: rawr::FLOAT| refuse());
-    engine
+}
+
+/// Where a snippet's `async fn main` is, as rawr-play rewrites it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AsyncMain {
+    /// The byte offset of the name `main`.
+    pub(crate) name: usize,
+    /// The span of a `#[tokio::main]` (or `#[tokio::main(..)]`) on it.
+    pub(crate) attribute: Option<std::ops::Range<usize>>,
+    /// Whether it returns a value (a `Result`), which `?` and an `Err`
+    /// end the program with.
+    pub(crate) returns: bool,
+}
+
+/// The `async fn main` at the top level of `source`, with tests blanked.
+#[must_use]
+pub fn async_main(source: &str) -> Option<AsyncMain> {
+    let mut offset = 0;
+    let mut attribute = None;
+    for line in source.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if indent == 0 && trimmed.starts_with("#[tokio::main") {
+            let end = trimmed.find(']').map_or(trimmed.trim_end().len(), |end| end + 1);
+            attribute = Some(offset..offset + end);
+        }
+        let rest = trimmed.strip_prefix("pub ").unwrap_or(trimmed);
+        if indent == 0
+            && let Some(rest) = rest.strip_prefix("async fn main")
+            && rest.trim_start().starts_with('(')
+        {
+            let name = offset + (line.len() - rest.len()) - "main".len();
+            let signature = &source[name..];
+            let signature = &signature[..signature.find('{').unwrap_or(signature.len())];
+            return Some(AsyncMain {
+                name,
+                attribute,
+                returns: signature.contains("->"),
+            });
+        }
+        if !trimmed.is_empty() && !trimmed.starts_with("#[") && !trimmed.starts_with("//") {
+            attribute = None;
+        }
+        offset += line.len();
+    }
+    None
+}
+
+/// The program an `async fn main` runs as: the snippet with its `main`
+/// renamed `rawr_play_main` and its `#[tokio::main]` blanked, so every
+/// line keeps its number, and after it an app whose boot Task awaits it.
+fn async_program(source: &str, main: &AsyncMain) -> String {
+    let mut program = source.to_owned();
+    program.insert_str(main.name, "rawr_play_");
+    if let Some(attribute) = &main.attribute {
+        program.replace_range(attribute.clone(), &" ".repeat(attribute.len()));
+    }
+    let run = if main.returns {
+        "match rawr_play_main().await { Ok(_) => 0, Err(error) => { eprintln!(\"Error: {error:?}\"); 1 } }"
+    } else {
+        "rawr_play_main().await; 0"
+    };
+    program.push_str(&format!(
+        "\n#[derive(Default)]\nstruct RawrPlayAsync {{ status: i64 }}\n\
+         #[derive(Debug, Clone)]\nenum RawrPlayDone {{ Done(i64) }}\n\
+         impl RawrPlayAsync {{\n\
+             fn start() -> (Self, iced::Task<RawrPlayDone>) {{ (Self {{ status: -1 }}, iced::Task::perform(rawr_play_run(), RawrPlayDone::Done)) }}\n\
+             fn update(&mut self, message: RawrPlayDone) {{ match message {{ RawrPlayDone::Done(status) => self.status = status }} }}\n\
+             fn view(&self) -> impl iced::Widget<RawrPlayDone> {{ iced::widget::text(\"\") }}\n\
+             fn title(&self) -> String {{ self.status.to_string() }}\n\
+         }}\n\
+         async fn rawr_play_run() -> i64 {{ {run} }}\n\
+         pub fn main() -> iced::Result {{ iced::application(RawrPlayAsync::start, RawrPlayAsync::update, RawrPlayAsync::view).title(RawrPlayAsync::title).run() }}\n"
+    ));
+    program
+}
+
+/// Run a snippet whose `main` is `async`, as `#[tokio::main]` runs it, and
+/// return its output as text. It runs on rawr-iced's tokio, whose timers
+/// follow the simulated clock iced apps record on: the clock moves only
+/// while a task waits on it, so a sleep costs no wall time. No window is
+/// made, and nothing is drawn.
+pub fn run_async(
+    source: &str,
+    main: &AsyncMain,
+    limits: &Limits,
+    deadline: Instant,
+) -> Result<Output, PlayError> {
+    let source = crate::without_tests(source);
+    let program = async_program(&source, main);
+    let sink = Arc::new(Mutex::new(Output::default()));
+    let configured = {
+        let (limits, sink) = (limits.clone(), sink.clone());
+        move |engine: &mut Engine| sandbox(engine, &limits, deadline, &sink)
+    };
+    let compiler = rawr_iced::application::Compiler::configured(configured)
+        .map_err(|error| PlayError::Render(error.to_string()))?;
+    // The program boots on the simulated clock, so the times it reads are
+    // on it.
+    let _clock = rawr_iced::snapshot::clock::freeze();
+    let mut adapter = compiler
+        .check_named_source(SOURCE_NAME, &program)
+        .and_then(rawr_iced::application::Checked::prepare)
+        .map_err(|error| {
+            PlayError::Compile(crate::report(&error.report(diagnostic(&program)), &program, &source))
+        })?
+        .into_adapter();
+    let finished = rawr_iced::snapshot::run_tasks(&mut adapter, &rawr_iced::snapshot::Deadline::new(deadline));
+    let status = adapter.refresh_title().ok().and_then(|status| status.parse::<i32>().ok());
+    let failures = adapter
+        .diagnostics()
+        .iter()
+        .map(|entry| entry.report().clone())
+        .collect::<Vec<_>>();
+    drop(adapter);
+    drop(compiler);
+    let mut output = sink.lock().unwrap().clone();
+    if let Some(report) = failures.first() {
+        output.status = 1;
+        let text = rawr::diagnostic::render(report);
+        if output.truncated || text.contains(OUTPUT_LIMIT) {
+            output.limit = true;
+        } else {
+            let message = match crate::classify(&text, limits) {
+                PlayError::Limit(reason) => {
+                    output.limit = true;
+                    reason.replace(crate::TIME_LIMIT, TIME_LIMIT)
+                }
+                _ => {
+                    output.status = PANIC_STATUS;
+                    crate::report(report, &program, &source)
+                }
+            };
+            output.push(Stream::Stderr, &format!("{}\n", message.trim_end()));
+        }
+    } else if !finished {
+        output.status = 1;
+        output.limit = true;
+        output.push(Stream::Stderr, &format!("{TIME_LIMIT}\n"));
+    } else if status == Some(1) {
+        output.status = 1;
+    }
+    if output.truncated {
+        let marker = format!("\n{TRUNCATED}\n");
+        match output.chunks.last_mut() {
+            Some((Stream::Stderr, chunk)) => chunk.push_str(&marker),
+            _ => output.chunks.push((Stream::Stderr, marker)),
+        }
+        output.status = 1;
+        output.limit = true;
+    }
+    Ok(output)
 }
 
 /// The program a snippet runs as. One with items runs as written. One of

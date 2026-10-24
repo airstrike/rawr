@@ -78,7 +78,7 @@
 <ul>
   <li><code>macro_rules!</code> isn&rsquo;t supported. Only the <a href="#macros">built-in macros</a> work.</li>
   <li><code>i128</code>, <code>u128</code> and returning <code>&amp;mut</code> from a function aren&rsquo;t supported.</li>
-  <li><code>async</code> code runs only in iced apps under rawr-iced.</li>
+  <li><code>async</code> code runs in iced apps under rawr-iced, and in a <code>?play</code> program whose <code>main</code> is <code>async</code>.</li>
   <li>Only part of <code>std</code> works. <a href="#std">The standard library</a> lists it.</li>
   <li>Borrow checking is partial. rawr rejects a use after a move and two live <code>&amp;mut</code> borrows of one value, but <a href="#lenient">accepts some code rustc rejects</a>. <code>rawr check</code> runs <code>cargo check</code> for that reason.</li>
 </ul>
@@ -253,7 +253,7 @@ fn main() {
 </div>
 
 <h3 id="async">Async code</h3>
-<p>In an iced app under rawr-iced, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. Each <code>.await</code> suspends the body, and it goes on from there with its locals as they were. <a href="/docs/iced/reference#async">Async code</a> describes how an app runs them. Other programs can&rsquo;t use <code>async</code> yet.</p>
+<p>In an iced app under rawr-iced, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. Each <code>.await</code> suspends the body, and it goes on from there with its locals as they were. <a href="/docs/iced/reference#async">Async code</a> describes how an app runs them. In <code>?play</code>, a plain program whose <code>main</code> is <code>async</code>, as <code>#[tokio::main] async fn main()</code> is, runs the same way with no window, and its output comes back as text. <a href="/docs/play/reference#tokio">?play&rsquo;s tokio</a> lists what it has. Other programs can&rsquo;t use <code>async</code> yet.</p>
 
 <h2 id="macros">Macros</h2>
 <p>rawr has a fixed set of built-in macros. You can&rsquo;t define your own with <code>macro_rules!</code>.</p>
@@ -316,7 +316,7 @@ fn main() {
   <li><code>char</code> ranges such as <code>'a'..='e'</code>.</li>
   <li><code>macro_rules!</code>.</li>
   <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>
-  <li><code>async</code> and <code>.await</code> in a program without iced. iced&rsquo;s <code>Task</code> is what runs a future, as <a href="/docs/iced/reference#async">Async code</a> describes.</li>
+  <li><code>async</code> and <code>.await</code> in a program without iced, except an <code>async fn main</code> in <code>?play</code>. iced&rsquo;s <code>Task</code> is what runs a future, as <a href="/docs/iced/reference#async">Async code</a> describes.</li>
   <li>A <code>const</code> captured in a format string (<code>"{LIMIT}"</code>). Pass it as an argument instead.</li>
 </ul>
 <h3 id="missing-types">Types and borrowing</h3>

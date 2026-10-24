@@ -912,6 +912,11 @@ impl Adapter {
         }
     }
 
+    /// Whether a task [`Adapter::deliver`] started still runs.
+    pub(crate) fn is_running(&self) -> bool {
+        !self.running.is_empty()
+    }
+
     /// Every output the running tasks have ready. A task that ended is
     /// dropped.
     fn poll_running(&mut self) -> std::collections::VecDeque<runtime::Message> {
@@ -1612,11 +1617,16 @@ impl Error {
                 error.to_string(),
                 source,
             )),
-            Self::Task(error) => Ok(report_with_source(
-                code::FRAMEWORK_TASK_OUTPUT,
-                error.to_string(),
-                source,
-            )),
+            Self::Task(error) => match &**error {
+                // A script step or mapper of the task failed: its own
+                // error, at its own place.
+                task::Error::Mapper(error) => Report::from_program(source, error),
+                error => Ok(report_with_source(
+                    code::FRAMEWORK_TASK_OUTPUT,
+                    error.to_string(),
+                    source,
+                )),
+            },
             Self::Subscription(error) => Ok(report_with_source(
                 code::FRAMEWORK_SUBSCRIPTION_OUTPUT,
                 error.to_string(),
@@ -1675,12 +1685,15 @@ impl Error {
                 evidence.source().clone(),
                 evidence.declaration(),
             ),
-            Self::Task(error) => report_with_location(
-                code::FRAMEWORK_TASK_OUTPUT,
-                error.to_string(),
-                evidence.source().clone(),
-                evidence.declaration(),
-            ),
+            Self::Task(error) => match &**error {
+                task::Error::Mapper(error) => evidence.program_report(error),
+                error => report_with_location(
+                    code::FRAMEWORK_TASK_OUTPUT,
+                    error.to_string(),
+                    evidence.source().clone(),
+                    evidence.declaration(),
+                ),
+            },
             Self::Subscription(error) => report_with_location(
                 code::FRAMEWORK_SUBSCRIPTION_OUTPUT,
                 error.to_string(),

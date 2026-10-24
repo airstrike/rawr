@@ -98,7 +98,7 @@
   <li>A view can ask to be redrawn at a later time. When no timer is running, the clock jumps straight to that time.</li>
 </ul>
 <p>So the same snippet gives the same frames on every run. A 400&nbsp;ms sleep shows as 400&nbsp;ms in the GIF, and it takes no real time to render.</p>
-<p>Only an app runs on this clock. A plain program reads the real clock. Real time still limits every run. The scripts and the drawing count against the <a href="#limits">time budgets</a>.</p>
+<p>An app runs on this clock, and so does a plain program whose <code>main</code> is <code>async</code>. There the clock moves only while the program waits on a timer, one millisecond at a time, and nothing is drawn. Any other plain program reads the real clock. Real time still limits every run. The scripts and the drawing count against the <a href="#limits">time budgets</a>.</p>
 
 
 <h2 id="output">Output</h2>
@@ -318,7 +318,7 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
   <li><code>tokio::task</code> has <code>yield_now</code> and <code>spawn_blocking</code>.</li>
   <li><code>tokio::join!</code>, <code>tokio::try_join!</code> and <code>tokio::select!</code> take up to 5 futures. <code>select!</code> accepts <code>biased;</code>. A <code>select!</code> branch whose pattern doesn&rsquo;t match its value is disabled, and the others keep running, as in tokio. Once every branch is disabled, the <code>else</code> branch runs, or the program panics when there is none. A branch can&rsquo;t have an <code>if</code> condition. <code>use tokio::join;</code> makes <code>join!</code> tokio&rsquo;s.</li>
 </ul>
-<p>It doesn&rsquo;t have <code>JoinSet</code>, <code>Notify</code>, <code>Semaphore</code>, <code>RwLock</code>, <code>broadcast</code> or <code>time::sleep_until</code>. A <code>Mutex</code> has no <code>try_lock</code> or <code>into_inner</code>. A plain program has no async code, so only an app can use tokio.</p>
+<p>It doesn&rsquo;t have <code>JoinSet</code>, <code>Notify</code>, <code>Semaphore</code>, <code>RwLock</code>, <code>broadcast</code> or <code>time::sleep_until</code>. A <code>Mutex</code> has no <code>try_lock</code> or <code>into_inner</code>. A plain program can use it too when its <code>main</code> is <code>async</code>, as <code>#[tokio::main] async fn main()</code> is. Its output comes back as text, and its sleeps take no real time. A plain program with a <code>main</code> that isn&rsquo;t <code>async</code> has no async code.</p>
 <p><code>rawr run</code> uses the same stand-in for a program that doesn&rsquo;t depend on tokio. There its timers run on the real clock. A project whose <code>Cargo.toml</code> depends on tokio gets the real crate.</p>
 <p>This app adds up what a producer sends over a channel. Its GIF shows &ldquo;adding up&rdquo; and then the sum at 400&nbsp;ms of simulated time. The sender moves into the producer, as in Rust. The channel closes when the producer ends, so the consumer&rsquo;s loop stops.</p>
 <div class="block">
