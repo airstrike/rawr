@@ -17599,7 +17599,11 @@ impl<'a> Parser<'a> {
         // The bindings own the parts now: the whole is dropped, so a part
         // that is moved on drops with its new owner.
         if !whole.is_empty() && !syntax.has_ref_mut() && self.moves_by_value(&ty) {
-            rendered.push_text(format!(" {}({whole});", crate::engine::KEYWORD_MOVE));
+            rendered.push_text(format!(
+                " {}({}({whole}));",
+                crate::engine::KEYWORD_DROP,
+                crate::engine::KEYWORD_MOVE
+            ));
         }
         let rendered = self.with_field_entries(pending, rendered);
         self.write_output(rendered, span(start, value.span.end()));
@@ -28245,6 +28249,7 @@ impl<'a> Parser<'a> {
         {
             return Ok(value);
         }
+        let assigned = self.peek() == Token::Equals;
         let Some(binding) = self.bindings.get(name.as_str()) else {
             return Err(self.unknown_variable(&name, name_span));
         };
@@ -28287,7 +28292,8 @@ impl<'a> Parser<'a> {
             value.lvalue = Some(Lvalue::Binding { binding: name, ty });
             return Ok(value);
         }
-        if !binding.available {
+        // A moved local may be assigned again, as in Rust.
+        if !binding.available && !assigned {
             return Err(Error::MovedValue {
                 moved: self
                     .moved_at
@@ -31528,6 +31534,9 @@ impl<'a> Parser<'a> {
                 source: whole,
             });
         };
+        // `.await` takes the future, as Rust's `IntoFuture` does.
+        let mut future = future;
+        self.move_local(&mut future);
         let mut source = origin::Fragment::plain(format!("{}(", crate::eval::machine::AWAIT));
         source.push(future.rendered_source());
         source.push_text(")");
@@ -31990,9 +31999,8 @@ impl<'a> Parser<'a> {
                 return self.call_host_function(&items, owner, arguments, call);
             }
             self.move_local(argument);
-            let mut source = origin::Fragment::plain("{ ");
-            source.push(argument.rendered_source());
-            source.push_text("; () }");
+            let source =
+                origin::Fragment::call(crate::engine::KEYWORD_DROP, [argument.rendered_source()]);
             return Ok(self.operator_expr(source, Ty::Unit, call));
         }
         // A name that no function of the crate's has is an error at the
