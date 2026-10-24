@@ -620,7 +620,7 @@ async function readJson(request: Request, max: number): Promise<unknown> {
   }
 }
 
-/** GET /play/<id>.png: the share's first frame, rendered once and kept. */
+/** GET /play/<id>.png: the share's last frame, rendered once and kept. */
 async function previewImage(request: Request, env: Env, ctx: ExecutionContext, id: string): Promise<Response> {
   const bot = getContainer(env.PLAY_BOT);
   ctx.waitUntil(bot.visit(id));
@@ -763,7 +763,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
   let shared: string | null = null;
   let og = {
     title: "Rawr Playground",
-    description: "Write Rawr code and run it. iced code shows its first frame. Other programs show their output.",
+    description: "Write Rawr code and run it. iced code shows its last frame. An app that moves shows a GIF. Other programs show their output.",
     url: `${SITE}/play`,
     image: `${SITE}/og/invite.png`,
     alt: "Rawr: iced code and the frame it renders",
@@ -796,7 +796,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
           description: firstLine(snippet.code) || "An iced snippet rendered by Rawr",
           url: `${SITE}/play/${id}`,
           image: `${SITE}/play/${id}.png`,
-          alt: "The first frame of this snippet, rendered by Rawr",
+          alt: "The last frame of this snippet, rendered by Rawr",
           ...(info && "width" in info ? info : {}),
         };
   }

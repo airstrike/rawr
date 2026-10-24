@@ -37,7 +37,7 @@ const OG = {
   description: "use iced::widget::{button, column};",
   url: "https://rawr.airstrike.fyi/play/abcDEF1234",
   image: "https://rawr.airstrike.fyi/play/abcDEF1234.png",
-  alt: "The first frame",
+  alt: "The last frame",
   width: 328,
   height: 382,
 };
@@ -194,7 +194,7 @@ test("link preview tags", () => {
   assert.ok(tags.includes('<meta property="og:image:width" content="328">'));
   assert.ok(tags.includes('<meta property="og:image:height" content="382">'));
   assert.ok(tags.includes('<meta name="twitter:card" content="summary_large_image">'));
-  assert.ok(tags.includes('<meta property="og:image:alt" content="The first frame">'));
+  assert.ok(tags.includes('<meta property="og:image:alt" content="The last frame">'));
   assert.ok(tags.includes("&#34;hi&#34; &#60;b&#62;"));
   const unsized = ogTags({ ...OG, width: undefined, height: undefined }, escape);
   assert.ok(!unsized.includes("og:image:width"), "no size until the preview is rendered");

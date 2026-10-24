@@ -1,7 +1,7 @@
 // The playground page at /play and /play/<id>: server-rendered HTML in
 // RawrGallery's Ink sheet. A small inline script runs the snippet through
 // POST /play/render and shares it through POST /play/share. A run shows an
-// iced snippet's first frame, or a plain program's output as a terminal.
+// iced snippet's last frame or its GIF, or a plain program's output as a terminal.
 
 import { escape } from "./dashboard.ts";
 import { ogTags, type Og, type Snippet } from "./play.ts";
@@ -134,7 +134,7 @@ ${sitekey ? '<div id="ts"></div>' : ""}
 </section>
 <section class="pane">
 <p class="cap"><span><span class="pink">//</span> Output</span><span id="status">${shared ? `shared · ${escape(shared)}` : "ready"}</span></p>
-<div class="out" id="out" aria-live="polite"><p class="note">Run (Ctrl/Cmd + Enter). iced code shows its first frame. Other programs show their output.</p></div>
+<div class="out" id="out" aria-live="polite"><p class="note">Run (Ctrl/Cmd + Enter). iced code shows its last frame. An app that moves shows a GIF. Other programs show their output.</p></div>
 </section>
 </main>
 <footer><span>MIT or Apache-2.0</span><a href="https://airstrike.fyi">airstrike.fyi</a></footer>
