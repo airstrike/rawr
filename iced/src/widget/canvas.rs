@@ -744,11 +744,15 @@ struct Program {
 }
 
 /// The tree-held State: the script State once `update` has changed it,
-/// and the failure of the last `update`, which `draw` shows.
+/// the failure of the last `update`, which `draw` shows, and iced's own
+/// geometry for each recording the last `draw` returned.
 #[derive(Default)]
 pub(crate) struct State {
     value: Option<Dynamic>,
     failure: Option<String>,
+    /// A script `Cache` returns the same recording until it is cleared, so
+    /// iced tessellates that recording once, not on every draw.
+    geometries: std::cell::RefCell<Vec<(Arc<[marker::Draw]>, canvas::Cache)>>,
 }
 
 impl Program {
@@ -862,17 +866,28 @@ impl canvas::Program<runtime::Message> for Program {
         let Ok(geometries) = drawn.into_typed_array::<Dynamic>() else {
             return failure("canvas draw returned something other than a `Vec<Geometry>`".into());
         };
-        geometries
+        let mut previous = std::mem::take(&mut *state.geometries.borrow_mut());
+        let mut kept = Vec::with_capacity(geometries.len());
+        let drawn = geometries
             .into_iter()
             .filter_map(|geometry| geometry.try_cast::<marker::Geometry>())
             .map(|geometry| {
-                let mut frame = canvas::Frame::new(renderer, geometry.size);
-                for draw in geometry.draws.iter() {
-                    replay(&mut frame, draw);
-                }
-                frame.into_geometry()
+                let cache = previous
+                    .iter()
+                    .position(|(draws, _)| Arc::ptr_eq(draws, &geometry.draws))
+                    .map(|index| previous.swap_remove(index).1)
+                    .unwrap_or_default();
+                let drawn = cache.draw(renderer, geometry.size, |frame| {
+                    for draw in geometry.draws.iter() {
+                        replay(frame, draw);
+                    }
+                });
+                kept.push((geometry.draws, cache));
+                drawn
             })
-            .collect()
+            .collect();
+        *state.geometries.borrow_mut() = kept;
+        drawn
     }
 
     fn mouse_interaction(
