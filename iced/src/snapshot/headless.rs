@@ -200,7 +200,7 @@ impl Renderer {
     /// within the frame (each message its widgets publish applied while the
     /// clock stands still). The image is sized as the canvas sizes the
     /// content and drawn at `scale` (the first frame's, once set). Gives
-    /// when the drawn interface asked to be redrawn.
+    /// when the drawn interface asked to be redrawn, and the logical size.
     pub(super) fn frame(
         &mut self,
         view: &mut dyn FnMut(Vec<runtime::Message>, bool) -> iced::Element<'static, runtime::Message>,
@@ -209,7 +209,7 @@ impl Renderer {
         now: time::Instant,
         theme: &iced::Theme,
         scale: &mut Option<f32>,
-    ) -> Result<(image::Image, window::RedrawRequest), Error> {
+    ) -> Result<(image::Image, window::RedrawRequest, Size), Error> {
         let size = match self.canvas.filter(|canvas| canvas.fit) {
             Some(canvas) => {
                 let mut content = |published| view(published, true);
@@ -227,7 +227,25 @@ impl Renderer {
         let scale = *scale.get_or_insert_with(|| self.scale(size));
         let image = self.draw(&mut interface, theme, size, scale)?;
         trees.view = interface.into_cache();
-        Ok((image, request))
+        Ok((image, request, size))
+    }
+
+    /// The last [`Self::frame`]'s view at `size`, drawn again at `scale`.
+    /// It is built over that frame's trees with nothing published, so the
+    /// app's State and the clock are untouched.
+    pub(super) fn redraw(
+        &mut self,
+        view: &mut dyn FnMut(Vec<runtime::Message>, bool) -> iced::Element<'static, runtime::Message>,
+        trees: &mut Trees,
+        size: Size,
+        theme: &iced::Theme,
+        scale: f32,
+    ) -> Result<image::Image, Error> {
+        let cache = std::mem::take(&mut trees.view);
+        let mut interface = UserInterface::build(view(Vec::new(), false), size, cache, &mut self.raw);
+        let image = self.draw(&mut interface, theme, size, scale);
+        trees.view = interface.into_cache();
+        image
     }
 
     /// `view` settled at `now` over `cache`, as [`Self::settle`] settles it

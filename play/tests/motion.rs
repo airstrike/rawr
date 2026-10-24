@@ -85,6 +85,18 @@ fn motion_a_spinner_loops_once_around() {
 }
 
 #[test]
+fn motion_a_loop_lasts_one_period() {
+    // The dots' view first changes at 250 ms. That frame is drawn at the
+    // GIF's scale too, so the loop starts there and loses no step.
+    let rendered = render("dots", "dots.png", &[]);
+    let gif = decode(&rendered.bytes);
+    assert!(gif.looping, "a periodic animation loops");
+    let total: Duration = gif.delays.iter().sum();
+    assert_eq!(total, Duration::from_secs(1), "{:?}", gif.delays);
+    assert_eq!(gif.delays, vec![Duration::from_millis(250); 4]);
+}
+
+#[test]
 fn motion_a_stopwatch_plays_once_with_a_note() {
     let rendered = render("stopwatch", "stopwatch.png", &[]);
     let gif = decode(&rendered.bytes);

@@ -325,12 +325,12 @@ pub fn record_application(
                     adapter.deliver(published);
                     framing(if content { adapter.content() } else { adapter.view() })
                 };
-                let (image, request) =
+                let (image, request, size) =
                     renderer.frame(&mut view, &mut trees, declared, now, &theme, &mut scale)?;
                 if motion.deadline.past() {
                     break 'record Ending::Deadline;
                 }
-                let frame = Frame {
+                let mut frame = Frame {
                     width: image.width(),
                     height: image.height(),
                     rgba: image.into_bytes(),
@@ -339,12 +339,22 @@ pub fn record_application(
                     scale: scale.unwrap_or(1.0),
                 };
                 // The view changed: an animation gets the longer budget,
-                // and its next frames are drawn at its scale.
+                // and its frames from this one on are drawn at its scale.
+                // This frame is drawn again, so it matches the later frames
+                // that show the same picture.
                 if !changed && frames.first().is_some_and(|first| !first.same_image(&frame)) {
                     changed = true;
                     motion.deadline.extend(motion.extended);
-                    if let Some(lower) = motion.animation_scale {
-                        scale = scale.map(|scale| scale.min(lower));
+                    let lowered = motion
+                        .animation_scale
+                        .and_then(|lower| scale.map(|scale| scale.min(lower)));
+                    if let Some(lowered) = lowered.filter(|lowered| Some(*lowered) != scale) {
+                        scale = Some(lowered);
+                        let image = renderer.redraw(&mut view, &mut trees, size, &theme, lowered)?;
+                        frame.width = image.width();
+                        frame.height = image.height();
+                        frame.rgba = image.into_bytes();
+                        frame.scale = lowered;
                     }
                 }
                 frames.push(frame);
