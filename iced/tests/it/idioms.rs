@@ -1265,3 +1265,24 @@ pub fn pick(counted: Counted) -> Task<Counted> {
     );
     find(&adapter, "tasks");
 }
+
+#[test]
+fn float_scales_translates_and_styles_its_content() {
+    let adapter = boot(
+        r#"
+        column![
+            iced::widget::float(text("Big text")).scale(10.0),
+            iced::widget::Float::new(text("moved"))
+                .translate(|bounds: iced::Rectangle, viewport: iced::Rectangle| {
+                    iced::Vector::new(bounds.width - viewport.width, 2.0)
+                })
+                .style(|theme: &Theme| iced::widget::float::Style {
+                    shadow: iced::Shadow::default(),
+                    ..iced::widget::float::Style::default()
+                }),
+        ]
+        "#,
+    );
+    find(&adapter, "Big text");
+    find(&adapter, "moved");
+}

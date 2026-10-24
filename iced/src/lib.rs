@@ -171,6 +171,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::component")?;
     builder.module("widget::container")?;
     builder.module("widget::progress_bar")?;
+    builder.module("widget::float")?;
     builder.module("widget::radio")?;
     builder.module("widget::rule")?;
     builder.module("widget::image")?;
@@ -507,6 +508,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.project_with("widget::QRCode", "Element", &[host::type_def::Argument::fresh()])?;
     builder.type_::<marker::Pin>("widget::Pin", &["Message"], &[])?;
     builder.project("widget::Pin", "Element", &["Message"])?;
+    builder.type_::<marker::Float>("widget::Float", &["Message"], &[])?;
+    builder.project("widget::Float", "Element", &["Message"])?;
     builder.type_::<marker::MouseArea>("widget::MouseArea", &["Message"], &[])?;
     builder.project("widget::MouseArea", "Element", &["Message"])?;
     builder.default_value_type::<iced::font::Weight>(
@@ -2372,6 +2375,32 @@ fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
         "widget::pin",
         unary_widget_signature("widget::Pin")?,
     )?)?;
+    builder.item(item::Definition::function(
+        "widget::float",
+        unary_widget_signature("widget::Float")?,
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::Float::new",
+        unary_widget_signature("widget::Float")?,
+    )?)?;
+    builders(
+        builder,
+        "widget::Float",
+        "scale",
+        [type_ref::Type::builtin(type_ref::Builtin::F64)],
+    )?;
+    builders(
+        builder,
+        "widget::Float",
+        "translate",
+        [type_ref::Type::callable(
+            type_ref::Type::tuple([
+                type_ref::Type::registered("Rectangle")?,
+                type_ref::Type::registered("Rectangle")?,
+            ])?,
+            type_ref::Type::registered("Vector")?,
+        )],
+    )?;
     pixels_builders(builder, "widget::Pin", "x")?;
     pixels_builders(builder, "widget::Pin", "y")?;
     builders(builder, "widget::Pin", "position", [type_ref::Type::registered("Point")?])?;

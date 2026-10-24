@@ -492,6 +492,19 @@ pub(crate) struct Pin {
     pub(crate) height: iced::Length,
 }
 
+/// iced's `float(content)`: content drawn scaled and moved above the rest.
+#[derive(Clone)]
+pub(crate) struct Float {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) child: widget::Value,
+    pub(crate) scale: f32,
+    /// A Rawr `Fn(Rectangle, Rectangle) -> Vector`.
+    pub(crate) translate: Option<rawr::item::Value>,
+    /// A Rawr `Fn(&Theme) -> float::Style`.
+    pub(crate) style: Option<rawr::item::Value>,
+}
+
 /// iced's `mouse_area(content)`: the messages of each mouse event.
 #[derive(Clone)]
 pub(crate) struct MouseArea {

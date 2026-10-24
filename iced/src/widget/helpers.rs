@@ -1271,7 +1271,7 @@ fn into_element(view: Dynamic) -> Result<widget::Value, String> {
     widgets!(
         Text, TextInput, Checkbox, Toggler, Slider, ProgressBar, Transition, Button, Column, Row,
         Container, Tooltip, Scrollable, Logo, Sensor, Space, Radio, PickList, ComboBox, Stack,
-        Pin, MouseArea, Image, Svg, QrCode, Rich
+        Pin, Float, MouseArea, Image, Svg, QrCode, Rich
     );
     Err(format!("expected a widget, found `{}`", view.type_name()))
 }
@@ -1303,6 +1303,47 @@ impl widget::Descriptor for marker::Pin {
 }
 
 impl Witnessed for marker::Pin {
+    fn witness(&self) -> &host::runtime::Witness {
+        &self.witness
+    }
+}
+
+impl widget::Descriptor for marker::Float {
+    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+        let mut float: iced::widget::Float<'static, _, iced::Theme> =
+            iced::widget::float(self.child.lower(context)).scale(self.scale);
+        if let Some(translate) = &self.translate {
+            let owned = context.owned();
+            let translate = translate.clone();
+            float = float.translate(move |bounds, viewport| {
+                let context = owned.context();
+                let arguments = &mut [Dynamic::from(bounds), Dynamic::from(viewport)];
+                match context.invoke(&translate, arguments) {
+                    Some(Ok(vector)) => vector.try_cast::<iced::Vector>().unwrap_or(iced::Vector::ZERO),
+                    _ => iced::Vector::ZERO,
+                }
+            });
+        }
+        if let Some(function) = &self.style {
+            match super::style::theme_style::<iced::widget::float::Style>(
+                function,
+                context,
+                "iced::widget::float::Style",
+            ) {
+                Ok(Some(style)) => float = float.style(move |_| *style),
+                Ok(None) => {}
+                Err(diagnostic) => return diagnostic,
+            }
+        }
+        float.boxed()
+    }
+
+    fn identity(&self) -> widget::Identity {
+        self.identity.clone()
+    }
+}
+
+impl Witnessed for marker::Float {
     fn witness(&self) -> &host::runtime::Witness {
         &self.witness
     }
@@ -1438,6 +1479,45 @@ fn bind_wrappers(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Pin builder");
     }
+
+    bind_widget_type::<marker::Float>(builder, "iced::widget::Float");
+    for path in ["iced::widget::float", "iced::widget::Float::new"] {
+        builder
+            .bind_with_context(path, move |call, args| {
+                if args.len() != 1 {
+                    return Err(arity(path, 1, args.len()));
+                }
+                Ok(Dynamic::from(marker::Float {
+                    witness: call.output_witness().map_err(witness_error)?,
+                    identity: widget::Identity::unique(),
+                    child: take::<widget::Value>(args[0], "iced::Element")?,
+                    scale: 1.0,
+                    translate: None,
+                    style: None,
+                }))
+            })
+            .expect("the iced facade must retain float");
+    }
+    builder
+        .bind("iced::widget::Float::scale", |args| {
+            if args.len() != 2 {
+                return Err(arity("Float::scale", 2, args.len()));
+            }
+            let mut float = take::<marker::Float>(args[0], "iced::widget::Float")?;
+            float.scale = super::builtin::pixels(args[1], "iced::widget::Float::scale")?;
+            Ok(Dynamic::from(float))
+        })
+        .expect("the iced facade must retain Float::scale");
+    builder
+        .bind("iced::widget::Float::translate", |args| {
+            if args.len() != 2 {
+                return Err(arity("Float::translate", 2, args.len()));
+            }
+            let mut float = take::<marker::Float>(args[0], "iced::widget::Float")?;
+            float.translate = Some(take_function(args[1], "Float::translate")?);
+            Ok(Dynamic::from(float))
+        })
+        .expect("the iced facade must retain Float::translate");
 
     bind_widget_type::<marker::MouseArea>(builder, "iced::widget::MouseArea");
     builder
