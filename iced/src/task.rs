@@ -60,6 +60,7 @@ enum PreparedKind {
         plan: Box<Prepared>,
         abort: Arc<Abort>,
     },
+    Script(item::Value),
 }
 
 /// One value a Rust task yields, turned into a Rawr value on the UI thread.
@@ -446,6 +447,9 @@ enum Kind {
         plan: Box<Plan>,
         abort: Arc<Abort>,
     },
+    /// An async body, not yet started: its step function
+    /// (`rawr::future`). Each step runs on the UI thread.
+    Script(item::Value),
 }
 
 /// Current executable authority used only while a symbolic plan is lowered.
@@ -564,7 +568,8 @@ impl Plan {
             | Kind::Imported(_)
             | Kind::Discard(_)
             | Kind::Sip { .. }
-            | Kind::Abortable { .. } => None,
+            | Kind::Abortable { .. }
+            | Kind::Script(_) => None,
             Kind::Done(payload) => Some(payload),
         }
     }
@@ -639,6 +644,7 @@ impl Plan {
                 plan: Box::new(plan.prepare_application(authority)?),
                 abort,
             },
+            Kind::Script(step) => PreparedKind::Script(step),
         };
         Ok(Prepared { kind, witness })
     }
@@ -686,6 +692,7 @@ impl Plan {
                 on_output,
             } => lowering.sip(&sipper, on_progress, on_output, next),
             Kind::Abortable { plan, abort } => abort.attach(plan.lower_with(lowering, next)?),
+            Kind::Script(step) => lowering.script(step, Dynamic::UNIT, next),
         })
     }
 }
@@ -827,6 +834,43 @@ impl Lowering {
         })
     }
 
+    /// Run an async body's next step here, on the UI thread: from its
+    /// start with `()`, or from a frame. When it awaits, the awaited task
+    /// runs, and its first output resumes the body, again on the UI thread,
+    /// after the freshness check of the step that hands it back. A stale
+    /// step is dropped, which ends the whole task: a frame never resumes
+    /// against new code. When the body ends, its output goes to `next`.
+    fn script(&self, step: item::Value, resume: Dynamic, next: Next) -> iced::Task<runtime::Message> {
+        let poll = match self.authority.map(resume, &step) {
+            Ok(poll) => poll,
+            Err(error) => return self.fail(error),
+        };
+        let actual = poll.type_name().to_string();
+        match poll.try_cast_result::<rawr::future::Poll>() {
+            Ok(rawr::future::Poll::Ready(output)) => next(output),
+            Ok(rawr::future::Poll::Pending { future, frame }) => {
+                let awaited = match Plan::from_dynamic(future) {
+                    Ok(awaited) => awaited,
+                    Err(error) => return self.fail(error),
+                };
+                let lowering = self.clone();
+                // A future gives one output; a task's later outputs resume
+                // nothing.
+                let frame = Arc::new(Mutex::new(Some(frame)));
+                let resume: Next = Arc::new(move |output| {
+                    let Some(frame) = frame.lock().unwrap_or_else(PoisonError::into_inner).take() else {
+                        return iced::Task::none();
+                    };
+                    lowering.script(step.clone(), frame.resume(output), next.clone())
+                });
+                awaited
+                    .lower_with(self, resume)
+                    .unwrap_or_else(|error| self.fail(error))
+            }
+            Err(_) => self.fail(Error::Representation { actual }),
+        }
+    }
+
     /// Await an issued operation natively, then validate its output and run
     /// its mapper on the UI thread.
     fn operation(&self, pending: host::operation::Pending, next: Next) -> iced::Task<runtime::Message> {
@@ -905,6 +949,7 @@ impl Prepared {
             PreparedKind::Abortable { plan, abort } => {
                 abort.attach(plan.lower_with(context, lowering, next))
             }
+            PreparedKind::Script(step) => lowering.script(step, Dynamic::UNIT, next),
         }
     }
 }
@@ -1284,6 +1329,17 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             )))
         })
         .expect("the iced facade must retain the exact Task::perform item");
+    rawr.bind_with_context("rawr_iced::task::script", |call, args| {
+        let [step] = args else {
+            return Err(arity("task::script", 1, args.len()));
+        };
+        let step = take_value::<item::Value>(step, "an async body's step function")?;
+        Ok(Dynamic::from(Plan {
+            kind: Kind::Script(step),
+            witness: Some(call.output_witness().map_err(witness_error)?),
+        }))
+    })
+    .expect("the rawr_iced facade must retain the async body's Task");
     rawr.bind_with_context("rawr_iced::task::batch", |call, args| {
         let mut plans = Vec::with_capacity(args.len());
         for value in args {

@@ -1151,6 +1151,10 @@ fn extension_with_exports(
         external_batch_signature(&exports.subscription)?,
     )?)?;
     builder.item(item::Definition::function(
+        "task::script",
+        script_signature(&exports.task)?,
+    )?)?;
+    builder.item(item::Definition::function(
         "theme::custom",
         extension_theme_signature(&exports.theme)?,
     )?)?;
@@ -1360,6 +1364,22 @@ fn external_batch_signature(
     let plan = external_type(export, [type_ref::Type::parameter("Message")?])?;
     signature.parameter(plan.clone());
     signature.output(plan);
+    Ok(signature.finish())
+}
+
+/// The `Task` an async body runs as: its step function, which takes `()`
+/// or the frame it resumes from (`rawr::future`), and the body's output.
+fn script_signature(
+    export: &host::type_def::Export,
+) -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Resume", &[])?;
+    signature.type_parameter("Output", &[])?;
+    signature.parameter(type_ref::Type::callable(
+        type_ref::Type::parameter("Resume")?,
+        type_ref::Type::parameter("Output")?,
+    ));
+    signature.output(external_type(export, [type_ref::Type::parameter("Output")?])?);
     Ok(signature.finish())
 }
 

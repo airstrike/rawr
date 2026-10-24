@@ -2,6 +2,7 @@
 //! linking its own copy of Rawr and iced.
 
 mod application_contract;
+mod async_body;
 mod application_entry;
 mod builtin_styles;
 mod canvas;
