@@ -873,6 +873,76 @@ impl Parser<'_> {
                     expression,
                 ));
             }
+            // A bare integer range steps from item to item, as Rust's
+            // `StepBy` of a range does, never visiting those in between.
+            "step_by"
+                if let Some(Source::Range {
+                    low,
+                    high: Some(high),
+                    inclusive,
+                }) = pipeline.source.clone()
+                    && let Ty::Int(kind) = self.inference.resolve(&item) =>
+            {
+                arity(1, &arguments)?;
+                self.coerce_expr(&Ty::Int(Int::Usize), &mut arguments[0])?;
+                let flags = i32::from(inclusive) | i32::from(!kind.signed() && kind.bits() == 64) << 1;
+                let step = self.prelude_op(
+                    PreludeOp::StepBy,
+                    [low, high, arguments[0].rendered_source(), flags.to_string().into()],
+                );
+                let stepped = self.bind(&mut pipeline, "steps", step);
+                let segment = &mut pipeline.segments[0];
+                segment.header = vec![Part::Text(format!("for {x} in {stepped}"))];
+                pipeline.source = None;
+                pipeline.reversible = None;
+                return Ok(self.adapted(pipeline, item, expression));
+            }
+            // A bare array or `low..` steps through its indexes or values.
+            "step_by"
+                if matches!(
+                    pipeline.source,
+                    Some(Source::Values { array: true, .. } | Source::Range { high: None, .. })
+                ) =>
+            {
+                arity(1, &arguments)?;
+                self.coerce_expr(&Ty::Int(Int::Usize), &mut arguments[0])?;
+                let step = self.bind(&mut pipeline, "step", arguments[0].rendered_source());
+                pipeline
+                    .setup
+                    .push_text(format!("if {step} == 0 {{ throw \"assertion failed: step != 0\"; }} "));
+                match pipeline.source.take() {
+                    Some(Source::Values { values, .. }) => {
+                        let values = self.bind(&mut pipeline, "values", values);
+                        let index = self.temporary("index");
+                        let flags = "0";
+                        let steps = self.prelude_op(
+                            PreludeOp::StepBy,
+                            [
+                                "0".into(),
+                                format!("{values}.len()").into(),
+                                step.as_str().into(),
+                                flags.into(),
+                            ],
+                        );
+                        let steps = self.bind(&mut pipeline, "steps", steps);
+                        let segment = &mut pipeline.segments[0];
+                        segment.header = vec![Part::Text(format!("for {index} in {steps}"))];
+                        let mut entry = origin::Fragment::plain(format!("let {x} = {values}[{index}]; "));
+                        entry.push(std::mem::take(&mut segment.entry));
+                        segment.entry = entry;
+                    }
+                    _ => {
+                        // `let item = next; next += 1;` steps by `step`.
+                        let segment = &mut pipeline.segments[0];
+                        let entry = segment.entry.as_str().to_string();
+                        let stepped = entry.replacen(" += 1; ", &format!(" += {step}; "), 1);
+                        debug_assert_ne!(entry, stepped);
+                        segment.entry = origin::Fragment::plain(stepped);
+                    }
+                }
+                pipeline.reversible = None;
+                return Ok(self.adapted(pipeline, item, expression));
+            }
             "take" | "skip" | "step_by" => {
                 arity(1, &arguments)?;
                 self.coerce_expr(&Ty::Int(Int::Usize), &mut arguments[0])?;

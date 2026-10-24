@@ -42,6 +42,57 @@ where
     Some(x + y)
 }
 
+/// Rust's `(low..high).step_by(step)` and `(low..=high).step_by(step)`
+/// over an integer range: `low`, then each `step` on while in range, with
+/// no item in between visited. An unsigned range holds a `u64`'s bits.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct StepBy {
+    next: Option<INT>,
+    end: INT,
+    step: u64,
+    inclusive: bool,
+    unsigned: bool,
+}
+
+impl StepBy {
+    pub(crate) const fn new(low: INT, end: INT, step: u64, inclusive: bool, unsigned: bool) -> Self {
+        Self {
+            next: Some(low),
+            end,
+            step,
+            inclusive,
+            unsigned,
+        }
+    }
+}
+
+impl Iterator for StepBy {
+    type Item = INT;
+
+    fn next(&mut self) -> Option<INT> {
+        let current = self.next?;
+        let order = if self.unsigned {
+            (current as u64).cmp(&(self.end as u64))
+        } else {
+            current.cmp(&self.end)
+        };
+        if order == Ordering::Greater || (order == Ordering::Equal && !self.inclusive) {
+            self.next = None;
+            return None;
+        }
+        self.next = if self.unsigned {
+            (current as u64).checked_add(self.step).map(|next| next as INT)
+        } else {
+            INT::try_from(self.step)
+                .ok()
+                .and_then(|step| current.checked_add(step))
+        };
+        Some(current)
+    }
+}
+
+impl FusedIterator for StepBy {}
+
 // Range iterator with step
 #[derive(Clone)]
 pub struct StepRange<T> {
@@ -417,6 +468,7 @@ def_package! {
         // Register iterator types.
         lib.set_iterator::<CharsStream>();
         lib.set_iterator::<BitRange>();
+        lib.set_iterator::<StepBy>();
 
         // Register range functions.
         reg_range!(lib => INT);

@@ -97,3 +97,45 @@ fn language_rust_meaning_method_calls_never_reach_a_same_named_fn() {
     );
     assert_eq!(value, "5 995 3 99 4 -1 [1, 2] false 5 mine");
 }
+
+#[test]
+fn language_rust_meaning_step_by_steps() {
+    // Walking every item of these ranges takes millions of operations;
+    // stepping takes a few, as Rust's `StepBy` of a range does.
+    let mut engine = Engine::new();
+    engine.set_max_operations(20_000);
+    let value = engine
+        .eval::<String>(
+            r#"
+            let a = vec![10, 20, 30, 40, 50];
+            let b: Vec<i64> = a.iter().step_by(2).map(|x| *x + 1).collect();
+            let c: Vec<i64> = (5..).step_by(10).take(3).collect();
+            let mut s = 0;
+            for i in (0..1_000_000_000_000i64).step_by(100_000_000_000) { s += i; }
+            format!(
+                "{:?} {:?} {} {:?} {} {:?} {:?} {} {} {:?}",
+                (0..10).step_by(3).collect::<Vec<i64>>(),
+                (1..=10).step_by(3).collect::<Vec<i64>>(),
+                (0..i64::MAX).step_by(1 << 61).count(),
+                (i64::MAX - 5..=i64::MAX).step_by(2).collect::<Vec<i64>>(),
+                (0..u64::MAX).step_by(1 << 62).count(),
+                (u64::MAX - 4..=u64::MAX).step_by(2).collect::<Vec<u64>>(),
+                b,
+                (0..10_000_000).step_by(1_000_000).len(),
+                s,
+                c,
+            )
+            "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        value,
+        "[0, 3, 6, 9] [1, 4, 7, 10] 4 [9223372036854775802, 9223372036854775804, \
+         9223372036854775806] 4 [18446744073709551611, 18446744073709551613, \
+         18446744073709551615] [11, 31, 51] 10 4500000000000 [5, 15, 25]"
+    );
+    for source in ["(0..3).step_by(0).count()", "vec![1, 2].iter().step_by(0).count()"] {
+        let error = Engine::new().eval::<usize>(source).expect_err("a zero step panics");
+        assert!(error.to_string().contains("assertion failed: step != 0"), "{error}");
+    }
+}

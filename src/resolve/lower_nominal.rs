@@ -3060,6 +3060,10 @@ enum PreludeOp {
     /// An arithmetic result of a `{float}` that inference made an `f32`,
     /// rounded to it: `round(value)`.
     RoundF32,
+    /// `(low..high).step_by(step)` of integers, which visits only the
+    /// items it yields: `step_by(low, high, step, flags)`, `flags` bit 0
+    /// for `..=` and bit 1 for an unsigned range.
+    StepBy,
     /// `v[low..high]` of an array or a string (by bytes, on `char`
     /// boundaries): `slice(value, low, high, inclusive)`, `high` `-1` for
     /// an open end; a copy, with Rust's panics.
@@ -3166,6 +3170,7 @@ impl PreludeOp {
             Self::StrSplit => "str.split",
             Self::Narrow => "number.narrow",
             Self::RoundF32 => "number.round-f32",
+            Self::StepBy => "range.step-by",
             Self::Cast => "number.cast",
             Self::Slice => "slice.range",
             Self::SliceGet => "slice.get",
@@ -3270,6 +3275,7 @@ impl PreludeOp {
             ],
             Self::Cast => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
             Self::RoundF32 => vec![TypeId::of::<Dynamic>()],
+            Self::StepBy => vec![TypeId::of::<crate::INT>(); 4],
             Self::Parse => vec![TypeId::of::<ImmutableString>()],
             Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
             Self::StrChange => vec![
@@ -3511,6 +3517,20 @@ impl PreludeOp {
             }
             Self::Cast => return cast_value(args[0], args[1].as_int().unwrap_or(3)),
             Self::RoundF32 => return cast_value(args[0], 10),
+            Self::StepBy => {
+                let [low, high, step, flags] =
+                    [0, 1, 2, 3].map(|index| args[index].as_int().unwrap_or_default());
+                if step == 0 {
+                    return panic("assertion failed: step != 0".into());
+                }
+                return Ok(Dynamic::from(crate::packages::iter_basic::StepBy::new(
+                    low,
+                    high,
+                    step as u64,
+                    flags & 1 == 1,
+                    flags & 2 == 2,
+                )));
+            }
             Self::Slice | Self::SplitAt => return slice_value(self, args),
             Self::VecMethod => return vec_method(args),
             Self::Time => return time_method(args),
