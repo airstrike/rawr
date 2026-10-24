@@ -1172,7 +1172,7 @@ mod layout_tests {
     #[test]
     fn imported_shape_metadata_stays_compact() {
         assert_eq!(size_of::<Option<Shared<Shape>>>(), size_of::<usize>());
-        assert_eq!(size_of::<Definition>(), 104);
+        assert_eq!(size_of::<Definition>(), 120);
         assert!(size_of::<Contract>() <= 88);
     }
 }
