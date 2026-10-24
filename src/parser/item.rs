@@ -4146,6 +4146,7 @@ fn parse_body_syntax(
                     #[cfg(not(feature = "no_float"))]
                     Token::FloatConstant(_) => true,
                     Token::IntegerConstant(_)
+                    | Token::ByteConstant(_)
                     | Token::CharConstant(_)
                     | Token::True
                     | Token::False

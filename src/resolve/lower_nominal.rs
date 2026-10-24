@@ -18772,6 +18772,7 @@ impl<'a> Parser<'a> {
             && !matches!(
                 self.peek(),
                 Token::IntegerConstant(_)
+                    | Token::ByteConstant(_)
                     | Token::CharConstant(_)
                     | Token::StringConstant(_)
                     | Token::True
@@ -18805,6 +18806,11 @@ impl<'a> Parser<'a> {
                 }),
                 self.literal_kind(0, false, point_span(position))?.0,
                 value.1.to_string(),
+            ),
+            Token::ByteConstant(value) if !negative => (
+                ast::NominalLiteral::Int(value.into()),
+                Ty::Int(Int::U8),
+                value.to_string(),
             ),
             Token::CharConstant(value) if !negative => (
                 ast::NominalLiteral::Char(value),
@@ -22911,6 +22917,7 @@ impl<'a> Parser<'a> {
                 | Token::IntegerConstant(_)
                 | Token::StringConstant(_)
                 | Token::CharConstant(_)
+                | Token::ByteConstant(_)
                 | Token::InterpolatedString(_)
                 | Token::True
                 | Token::False
@@ -27321,6 +27328,9 @@ impl<'a> Parser<'a> {
             }
             // `b"…"`: a `&[u8; N]`, an array of its bytes at runtime.
             Token::ByteStringConstant(bytes) => Ok(self.byte_literal(&bytes, token_span)),
+            Token::ByteConstant(byte) => {
+                Ok(self.literal(byte.to_string(), Ty::Int(Int::U8), token_span))
+            }
             #[cfg(not(feature = "no_float"))]
             Token::FloatConstant(value) => {
                 let ty = self.literal_kind(0, false, token_span)?.0;
@@ -40937,6 +40947,7 @@ fn ends_operand(token: &Token) -> bool {
         | Token::IntegerConstant(_)
         | Token::StringConstant(_)
         | Token::ByteStringConstant(_)
+        | Token::ByteConstant(_)
         | Token::CharConstant(_)
         | Token::True
         | Token::False

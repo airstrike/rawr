@@ -91,6 +91,8 @@ pub enum Token {
     StringConstant(Box<SmartString>),
     /// A byte string constant: Rust's `b"…"`, `br"…"` or `br#"…"#`.
     ByteStringConstant(Box<Vec<u8>>),
+    /// A byte constant: Rust's `b'a'`, a `u8`.
+    ByteConstant(u8),
     /// An interpolated string.
     InterpolatedString(Box<SmartString>),
     /// `{`
@@ -329,6 +331,7 @@ impl fmt::Display for Token {
             DecimalConstant(d) => write!(f, "{}", d.0),
             StringConstant(s) => write!(f, r#""{s}""#),
             ByteStringConstant(s) => write!(f, r#"b"{}""#, s.escape_ascii()),
+            ByteConstant(b) => write!(f, "b'{}'", b.escape_ascii()),
             InterpolatedString(..) => f.write_str("string"),
             CharConstant(c) => write!(f, "{c}"),
             Identifier(s) => f.write_str(s),
@@ -750,6 +753,7 @@ impl Token {
             DecimalConstant(..) => false,
             StringConstant(..)
             | ByteStringConstant(..)
+            | ByteConstant(..)
             | InterpolatedString(..)
             | CharConstant(..)
             | Identifier(..)
@@ -2523,6 +2527,29 @@ fn get_next_token_inner(
                 );
             }
             ('?', ..) => return (Token::Reserved(Box::new("?".into())), start_pos),
+
+            // Rust's byte literal: b'a', a `u8`.
+            ('b', '\'') => {
+                stream.eat_next_and_advance(pos);
+                return parse_string_literal(stream, state, pos, '\'', false, false, false)
+                    .map_or_else(
+                        |(err, err_pos)| (Token::LexError(err.into()), err_pos),
+                        |(result, ..)| {
+                            let mut chars = result.chars();
+                            match (chars.next(), chars.next()) {
+                                (Some(byte), None) if (byte as u32) < 256 => {
+                                    (Token::ByteConstant(byte as u8), start_pos)
+                                }
+                                _ => (
+                                    Token::LexError(
+                                        LERR::MalformedChar(result.to_string()).into(),
+                                    ),
+                                    start_pos,
+                                ),
+                            }
+                        },
+                    );
+            }
 
             // Rust's raw strings and byte strings: r"…", r#"…"#, b"…", br#"…"#.
             ('r', '"' | '#') | ('b', '"' | 'r') => {

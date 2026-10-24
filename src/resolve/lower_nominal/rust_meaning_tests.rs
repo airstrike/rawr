@@ -164,3 +164,17 @@ fn language_rust_meaning_host_reads_integer_kinds() {
         1
     );
 }
+
+#[test]
+fn language_rust_meaning_byte_literals() {
+    let value = text(
+        r#"
+        let c = 'd';
+        let s = b"hey";
+        let t: u8 = b'z';
+        let kind = match t { b'a'..=b'y' => "early", b'z' => "last", _ => "other" };
+        format!("{} {:?} {} {} {} {} {}", c as u8 - b'a', s, b'\n', b'\x7f', b'\\', t, kind)
+        "#,
+    );
+    assert_eq!(value, "3 [104, 101, 121] 10 127 92 122 last");
+}
