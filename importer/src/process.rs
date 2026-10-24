@@ -46,7 +46,7 @@ pub mod runner;
 pub(crate) mod test_launch;
 pub mod value;
 
-pub use groups::retire_owned;
+pub use groups::{remove_on_exit, retire_owned, Left};
 
 pub use runner::{Admitted, Candidate, Error as RunnerError, Lifecycle, Owner};
 

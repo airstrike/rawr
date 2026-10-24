@@ -63,6 +63,10 @@ pub(crate) fn run(
     let target_path = project(target)
         .ok_or_else(|| framework("a native owner requires a Rawr crate", source.clone()))?
         .to_path_buf();
+    // The window listens on an agent socket under `target/rawr`; a killed
+    // window cannot remove it, so its owner does, and `cargo clean` never
+    // meets a stale one.
+    let _socket = rawr_import::process::remove_on_exit(rawr_iced::reload::agent::socket(&target_path));
     rawr_import::progress::begin(&target_path);
     let initial = initial_watched(
         target,
