@@ -186,6 +186,8 @@ fn main() {
 
 <h2 id="moves">Moves</h2>
 <p>A value that is not <code>Copy</code> moves when it is passed, assigned or stored by value, as in Rust. It drops with its last owner. A use after the move fails the check as rustc&rsquo;s E0382 does. Moving one field out of a struct, as <code>let name = p.name;</code>, leaves the struct&rsquo;s other fields usable. Assigning the field again makes it usable. A <code>match</code> arm whose pattern binds a part by value moves the subject. <code>a + &amp;b</code> moves the <code>String</code> <code>a</code>.</p>
+<p>A <code>let</code> pattern moves each part it binds by value, so <code>let (name, _) = pair;</code> leaves <code>pair.1</code> usable and <code>pair.0</code> moved. <code>for x in v</code> moves <code>v</code>. Moving a value out of an index, as <code>let s = v[0];</code>, or out of a field behind a reference fails the check as rustc&rsquo;s E0507 does. Borrow it or clone it instead.</p>
+<p>Cloning an <code>Rc</code> or an <code>Arc</code> gives another handle to the same value. A change through a <code>RefCell</code> inside it shows through every clone, as in Rust.</p>
 
 <h2 id="closures">Closures</h2>
 <p>Closures capture their environment. <code>move</code> closures work. A closure that mutates what it captures is <code>FnMut</code>. Functions can take closures as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. They can return them as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>.</p>
@@ -278,7 +280,7 @@ fn main() {
 <ul>
   <li>A glob import of an enum&rsquo;s variants (<code>use Shape::*;</code>).</li>
   <li><code>const fn</code>.</li>
-  <li>Byte literals (<code>b'a'</code>, <code>b"ab"</code>) and <code>char</code> ranges such as <code>'a'..='e'</code>.</li>
+  <li><code>char</code> ranges such as <code>'a'..='e'</code>.</li>
   <li><code>macro_rules!</code>.</li>
   <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>
   <li><code>async</code> and <code>.await</code> in a program without iced. iced&rsquo;s <code>Task</code> is what runs a future, as <a href="/docs/iced#async">Async code</a> describes.</li>
@@ -313,10 +315,15 @@ fn main() {
 <p>A program that passes both <code>rawr check</code> and rustc usually prints the same output. These are the known cases where it doesn&rsquo;t.</p>
 <ul>
   <li><strong><code>HashMap</code> iteration order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust uses a random order that changes from run to run. Code shouldn&rsquo;t depend on either.</li>
-  <li><strong><code>f32 as f64</code>.</strong> rawr keeps the short decimal value. <code>0.1f32 as f64</code> prints <code>0.1</code> in rawr and <code>0.10000000149011612</code> in Rust. Other <code>f32</code> arithmetic and printing match.</li>
   <li><strong>Width on your own <code>Display</code>.</strong> rawr pads the output of a user <code>Display</code> impl to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
   <li><strong><code>TryFrom</code> errors.</strong> <code>u8::try_from(300i64)</code> prints <code>Err(())</code> with <code>{:?}</code>. Rust prints <code>Err(TryFromIntError(PosOverflow))</code>.</li>
   <li><strong>Panic messages.</strong> A panic exits with status 101 in both. rawr writes the message to stderr as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
+  <li><strong>Arithmetic on a generic <code>u64</code>.</strong> A <code>u64</code> or <code>usize</code> above <code>i64::MAX</code> prints and compares as the unsigned number inside a generic function. Adding or multiplying such values there, through <code>T: Add</code>, panics with an overflow once the result passes <code>i64::MAX</code>. Rust gives the result.</li>
+</ul>
+<h3 id="refused">Code that rawr refuses rather than run differently</h3>
+<p>These programs are valid Rust. rawr can&rsquo;t yet run them with Rust&rsquo;s meaning, so its check stops with an error that says what isn&rsquo;t supported.</p>
+<ul>
+  <li>A <code>tokio::select!</code> of two or more branches where a branch&rsquo;s pattern can fail to match, as <code>Some(n) = receiver.recv()</code> can. tokio would keep waiting on the other branches. Bind the value with <code>value = receiver.recv()</code> and match it in the branch&rsquo;s body.</li>
 </ul>
 <h3 id="lenient">Code that rawr accepts and rustc rejects</h3>
 <p>rawr&rsquo;s check is not rustc. Some code passes <code>rawr check</code> and fails <code>cargo build</code>. <code>rawr check</code> also runs <code>cargo check</code>, which reports these cases. <a href="/docs/cli#rawr">Commands</a> describes its output.</p>
@@ -331,6 +338,7 @@ fn main() {
   <li>Top-level statements are accepted. Rust allows only items at the top level.</li>
   <li>In iced code, a concrete widget is accepted where an <code>Element</code> is expected.</li>
   <li><code>.await</code> on an iced <code>Task</code> is accepted. Rust awaits only a future.</li>
+  <li>Returning a field of <code>&amp;self</code> by value, as <code>fn name(&amp;self) -&gt; String { self.name }</code>, is accepted. rustc reports E0507. A <code>let</code> that moves such a field is rejected as rustc rejects it.</li>
 </ul>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Getting started</b></a><a class="next" href="/docs/embedding">Next<b>Embedding</b></a></nav>
 </article>

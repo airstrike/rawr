@@ -452,7 +452,7 @@ impl Sum {
 <h3 id="tokio-differences">Where ?play&rsquo;s tokio behaves differently</h3>
 <p>Two things work differently from the real tokio.</p>
 <ul>
-  <li><strong>A <code>select!</code> branch whose pattern doesn&rsquo;t match ends the wait.</strong> It goes to the <code>else</code> branch, or panics when there is none. The real tokio would keep waiting for the other branches. A branch can&rsquo;t have an <code>if</code> condition either. Give each branch a pattern that always matches. <code>value = receiver.recv()</code> is one. Then match on <code>value</code> in the branch&rsquo;s body.</li>
+  <li><strong>A <code>select!</code> branch pattern that can fail to match is refused when there are other branches.</strong> The real tokio would keep waiting for the other branches, which rawr can&rsquo;t do yet. A <code>select!</code> of one branch keeps its pattern: when it doesn&rsquo;t match, the <code>else</code> branch runs, or the program panics when there is none, as in tokio. A branch can&rsquo;t have an <code>if</code> condition either. Give each branch a pattern that always matches. <code>value = receiver.recv()</code> is one. Then match on <code>value</code> in the branch&rsquo;s body.</li>
   <li><strong>A read through a lock doesn&rsquo;t wait.</strong> <code>let mut held = mutex.lock().await;</code> waits until no other task holds the lock. A read inside a larger expression reads without waiting. <code>*mutex.lock().await + 1</code> is one such read. This keeps <code>+=</code> from locking twice. When a task must hold the lock across an <code>.await</code>, bind the guard with <code>let</code> first.</li>
 </ul>
 
