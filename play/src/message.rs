@@ -348,6 +348,22 @@ pub fn error_text(text: &str) -> String {
     format!("{OPEN}{body}{CLOSE}")
 }
 
+/// The bot's own earlier reply to `request`, among `messages` given as
+/// (id, author, the message it replies to). The bot keeps its replies in
+/// memory, so after a restart an edit finds its reply this way. The oldest
+/// match wins.
+pub fn own_reply(
+    messages: impl IntoIterator<Item = (u64, u64, Option<u64>)>,
+    bot: u64,
+    request: u64,
+) -> Option<u64> {
+    messages
+        .into_iter()
+        .filter(|&(_, author, to)| author == bot && to == Some(request))
+        .map(|(id, ..)| id)
+        .min()
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
@@ -547,5 +563,23 @@ mod tests {
             ..crate::Output::default()
         };
         assert!(output_text(&output).ends_with("\n-# one\n-# two"));
+    }
+
+    #[test]
+    fn own_reply_is_the_bots_reply_to_that_request() {
+        const BOT: u64 = 1;
+        const REQUEST: u64 = 100;
+        let messages = [
+            (105, 7, Some(REQUEST)),   // someone else replying to it
+            (104, BOT, Some(99)),      // our reply to another request
+            (103, BOT, None),          // ours, no reference
+            (102, BOT, Some(REQUEST)), // ours: the one
+            (101, 7, None),
+        ];
+        assert_eq!(super::own_reply(messages, BOT, REQUEST), Some(102));
+        assert_eq!(super::own_reply(messages, BOT, 98), None);
+        assert_eq!(super::own_reply([], BOT, REQUEST), None);
+        let twice = [(110, BOT, Some(REQUEST)), (102, BOT, Some(REQUEST))];
+        assert_eq!(super::own_reply(twice, BOT, REQUEST), Some(102), "oldest wins");
     }
 }

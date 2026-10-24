@@ -31,7 +31,7 @@
 //! Mods choose where the bot answers with `/play-channel add|remove|list`;
 //! a server with no channels chosen gets no answers.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -46,9 +46,9 @@ use rawr_play::stats::{self, Batch, Outcome, Report, Status};
 use serenity::all::{
     Channel, ChannelId, ChannelType, Command, CommandInteraction, CommandOptionType, Context,
     CreateAttachment, CreateCommand, CreateCommandOption, CreateMessage, EditInteractionResponse,
-    EditMessage, EventHandler, GatewayIntents, Guild, GuildChannel, GuildId, Interaction,
-    InteractionContext, Message, MessageId, MessageUpdateEvent, Permissions, ReactionType, Ready,
-    ResolvedValue, UnavailableGuild,
+    EditMessage, EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId,
+    Interaction, InteractionContext, Message, MessageId, MessageUpdateEvent, Permissions,
+    ReactionType, Ready, ResolvedValue, UnavailableGuild,
 };
 use serenity::async_trait;
 use tokio::io::AsyncWriteExt;
@@ -56,6 +56,10 @@ use tokio::sync::{watch, Semaphore};
 
 /// Replies kept for re-rendering on edit.
 const REMEMBERED: usize = 1024;
+
+/// Messages after an edited request searched for our reply to it, when
+/// that reply is not remembered (the bot restarted since).
+const REPLY_SEARCH: u8 = 50;
 
 /// The mods' command that chooses where the bot answers.
 const COMMAND: &str = "play-channel";
@@ -70,6 +74,18 @@ struct Handler {
     channel_rate: Mutex<RateLimit>,
     /// Request message → our reply, oldest first.
     replies: Mutex<(HashMap<MessageId, MessageId>, VecDeque<MessageId>)>,
+    /// Requests being answered now, so an edit meanwhile does not answer
+    /// one twice.
+    answering: Mutex<HashSet<MessageId>>,
+}
+
+/// A request in [`Handler::answering`] until dropped.
+struct Answering<'a>(&'a Mutex<HashSet<MessageId>>, MessageId);
+
+impl Drop for Answering<'_> {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().remove(&self.1);
+    }
 }
 
 /// A render's result: the image or output, or its error text, how it
@@ -416,29 +432,19 @@ impl EventHandler for Handler {
                 .await;
             return;
         }
+        let Some(_answering) = self.answering(msg.id) else {
+            return;
+        };
         // Serenity re-sends typing every 7 s until it is dropped; Discord
         // shows it for 10 s.
         let typing = msg.channel_id.start_typing(&context.http);
         let reply = self.reply(request, msg.guild_id, msg.author.id.get()).await;
         typing.stop();
-        let builder = CreateMessage::new().reference_message(&msg);
-        let builder = match reply {
-            Reply::Image(image, note) => {
-                let builder = builder.add_file(self.attachment(image));
-                match note {
-                    Some(note) => builder.content(subtext(&note)),
-                    None => builder,
-                }
-            }
-            Reply::Text(text) => builder.content(text),
-        };
-        match msg.channel_id.send_message(&context.http, builder).await {
-            Ok(sent) => self.remember(msg.id, sent.id),
-            Err(error) => eprintln!("rawr-play-bot: cannot reply: {error}"),
-        }
+        self.send(&context, msg.channel_id, msg.id, reply).await;
     }
 
-    /// Re-render a request we already answered when its author edits it.
+    /// Re-render a `?play` request when its author edits it: edit our
+    /// reply, found in memory or else on Discord, or reply anew.
     async fn message_update(
         &self,
         context: Context,
@@ -449,18 +455,20 @@ impl EventHandler for Handler {
         let Some(content) = event.content else {
             return;
         };
+        // An edit, not an embed filled in; never a bot's message, ours
+        // included.
+        if event.edited_timestamp.is_none() || event.author.as_ref().is_some_and(|a| a.bot) {
+            return;
+        }
+        let Some(request) = message::parse(&content, &self.defaults) else {
+            return;
+        };
         if !self
             .listens(&context, event.guild_id, event.channel_id)
             .await
         {
             return;
         }
-        let Some(reply_id) = self.replies.lock().unwrap().0.get(&event.id).copied() else {
-            return;
-        };
-        let Some(request) = message::parse(&content, &self.defaults) else {
-            return;
-        };
         let user = event.author.map_or(0, |author| author.id.get());
         if !self.allow(user, event.channel_id) {
             self.shared
@@ -470,9 +478,21 @@ impl EventHandler for Handler {
                 .rate_limited(event.guild_id.map(GuildId::get));
             return;
         }
+        let Some(_answering) = self.answering(event.id) else {
+            return;
+        };
+        let remembered = self.replies.lock().unwrap().0.get(&event.id).copied();
+        let reply_id = match remembered {
+            Some(id) => Some(id),
+            None => self.find_reply(&context, event.channel_id, event.id).await,
+        };
         let typing = event.channel_id.start_typing(&context.http);
         let reply = self.reply(request, event.guild_id, user).await;
         typing.stop();
+        let Some(reply_id) = reply_id else {
+            self.send(&context, event.channel_id, event.id, reply).await;
+            return;
+        };
         let builder = match reply {
             Reply::Image(image, note) => EditMessage::new()
                 .content(note.map_or_else(String::new, |note| subtext(&note)))
@@ -480,12 +500,13 @@ impl EventHandler for Handler {
                 .new_attachment(self.attachment(image)),
             Reply::Text(text) => EditMessage::new().content(text).remove_all_attachments(),
         };
-        if let Err(error) = event
+        match event
             .channel_id
             .edit_message(&context.http, reply_id, builder)
             .await
         {
-            eprintln!("rawr-play-bot: cannot edit reply: {error}");
+            Ok(_) => self.remember(event.id, reply_id),
+            Err(error) => eprintln!("rawr-play-bot: cannot edit reply: {error}"),
         }
     }
 
@@ -753,6 +774,58 @@ impl Handler {
             self.format.extension()
         };
         CreateAttachment::bytes(image, format!("play.{extension}"))
+    }
+
+    /// Mark `request` as being answered; `None` while it already is.
+    fn answering(&self, request: MessageId) -> Option<Answering<'_>> {
+        let fresh = self.answering.lock().unwrap().insert(request);
+        fresh.then(|| Answering(&self.answering, request))
+    }
+
+    /// Our reply to `request` on Discord, among the messages just after it.
+    async fn find_reply(
+        &self,
+        context: &Context,
+        channel: ChannelId,
+        request: MessageId,
+    ) -> Option<MessageId> {
+        let search = GetMessages::new().after(request).limit(REPLY_SEARCH);
+        let messages = match channel.messages(&context.http, search).await {
+            Ok(messages) => messages,
+            Err(error) => {
+                eprintln!("rawr-play-bot: cannot look for a reply: {error}");
+                return None;
+            }
+        };
+        let bot = context.cache.current_user().id.get();
+        let found = message::own_reply(
+            messages.iter().map(|sent| {
+                let to = sent.message_reference.as_ref().and_then(|to| to.message_id);
+                (sent.id.get(), sent.author.id.get(), to.map(MessageId::get))
+            }),
+            bot,
+            request.get(),
+        );
+        found.map(MessageId::new)
+    }
+
+    /// Post `reply` in `channel` as a reply to `request`, and remember it.
+    async fn send(&self, context: &Context, channel: ChannelId, request: MessageId, reply: Reply) {
+        let builder = CreateMessage::new().reference_message((channel, request));
+        let builder = match reply {
+            Reply::Image(image, note) => {
+                let builder = builder.add_file(self.attachment(image));
+                match note {
+                    Some(note) => builder.content(subtext(&note)),
+                    None => builder,
+                }
+            }
+            Reply::Text(text) => builder.content(text),
+        };
+        match channel.send_message(&context.http, builder).await {
+            Ok(sent) => self.remember(request, sent.id),
+            Err(error) => eprintln!("rawr-play-bot: cannot reply: {error}"),
+        }
     }
 
     fn remember(&self, request: MessageId, reply: MessageId) {
@@ -1089,6 +1162,7 @@ async fn main() {
         users: Mutex::new(per_minute("PLAY_USER_PER_MIN", 4)),
         channel_rate: Mutex::new(per_minute("PLAY_CHANNEL_PER_MIN", 12)),
         replies: Mutex::new((HashMap::new(), VecDeque::new())),
+        answering: Mutex::new(HashSet::new()),
     };
     // GUILDS fills the guild cache (channels, threads) that thread → parent
     // and the parent's permissions are read from.

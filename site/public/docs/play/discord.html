@@ -82,7 +82,7 @@ column![text("hi"), button("go")]
 <span class="c">```</span></code></pre>
 </div>
 <p>The bot runs the first code block in the message. It reads a snippet the way <a href="/docs/play#shapes">the playground</a> does. A snippet that uses iced gets an image. A plain program gets its output in a text block. An error gets the report that <code>rawr check</code> would print. The report names the snippet <code>play.rs</code>. The bot cuts an error reply to fit Discord&rsquo;s 2000 characters.</p>
-<p>The bot shows Discord&rsquo;s typing indicator while it runs a snippet. If you edit a message the bot already answered, it runs the snippet again and edits its reply. The bot ignores messages from other bots.</p>
+<p>The bot shows Discord&rsquo;s typing indicator while it runs a snippet. If you edit a <code>?play</code> message, the bot runs the snippet again and edits its reply, or replies anew if it has no reply to edit. The bot ignores messages from other bots.</p>
 
 <h3 id="options">Options</h3>
 <p>Options go on the <code>?play</code> line after the command. They are separated by spaces.</p>
