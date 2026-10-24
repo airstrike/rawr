@@ -3930,6 +3930,7 @@ impl Engine {
             body,
             #[cfg(feature = "metadata")]
             comments: comments.into_iter().collect(),
+            machine: None,
         })
     }
 
@@ -4146,6 +4147,7 @@ impl Engine {
             #[cfg(not(feature = "no_function"))]
             #[cfg(feature = "metadata")]
             comments: <_>::default(),
+            machine: None,
         });
 
         // Define the function pointer

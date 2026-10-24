@@ -855,6 +855,29 @@ fn lower_with_context(
             function.name = name.clone();
         }
     });
+    // Each async body becomes a state machine, once its names are final.
+    let mut unsupported = None;
+    ast.for_each_fn_def_mut(|function| {
+        if unsupported.is_none() {
+            unsupported = crate::eval::machine::lower(function).err();
+        }
+    });
+    if let Some(crate::eval::machine::Unsupported(what, position)) = unsupported {
+        let error = crate::ParseError(
+            Box::new(crate::ParseErrorType::BadInput(crate::LexError::ImproperSymbol(
+                "await".into(),
+                format!("{what} is not supported in Rawr yet").into(),
+            ))),
+            position,
+        );
+        return Err(match generated.translate(Span::new(position, position)) {
+            Ok(translated) => LoweringFailure::generated(translated.source, translated.span, error),
+            Err(origin) => LoweringFailure::unmapped(
+                format!("cannot retain compiler diagnostic origin: {origin}"),
+                error,
+            ),
+        });
+    }
     ast.reindex_script_functions();
     ast.add_support(module);
     let locations = resolve_locations(generated.as_str(), locations);
