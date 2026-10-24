@@ -108,6 +108,13 @@ fn facade_trait_host(ty: &Ty, trait_name: &str) -> Option<&'static str> {
         .map(|(_, host)| *host)
 }
 
+/// iced's `tree::Tag::of::<T>()`, and the logical tag Rawr makes it.
+const TAG_OF: &str = "iced::advanced::widget::tree::Tag::of";
+const TAG_OF_LOGICAL: &str = "iced::advanced::widget::tree::Tag::__rawr_of";
+/// The handle `tree.state` reads as, whose `downcast_ref::<T>()` and
+/// `downcast_mut::<T>()` reach a script widget's own State.
+const TREE_STATE: &str = "iced::advanced::widget::tree::Lent";
+
 /// The iced types whose first parameter is a Link that defaults to `()`.
 const LINK_DEFAULT_TYPES: [&str; 2] = [WIDGET_SPAN_TYPE, "iced::widget::text::Rich"];
 const WIDGET_VOID_PATH: &str = "iced::widget::void";
@@ -9771,6 +9778,22 @@ impl<'a> Parser<'a> {
         }
         let resolved = self.inference.resolve(ty);
         if facade_trait_host(&resolved, trait_name).is_some() {
+            // `Element<M>: Widget<Message, ..>`: the Element's Message is
+            // the trait's.
+            let target = match &resolved {
+                Ty::Reference { target, .. } => self.inference.resolve(target),
+                ty => ty.clone(),
+            };
+            if let (Ty::Host { arguments: own, .. }, Some(message)) = (&target, arguments.first())
+                && let [own] = &own[..]
+            {
+                let checkpoint = self.inference.checkpoint();
+                if self.unify_type(own, message) {
+                    self.inference.commit(checkpoint);
+                } else {
+                    self.inference.rollback(checkpoint);
+                }
+            }
             return true;
         }
         // The prelude's blanket impls: `impl<T> From<T> for T`, its builtin
@@ -14102,6 +14125,43 @@ impl<'a> Parser<'a> {
         {
             return Ok(value);
         }
+        // `tree::Tag::of::<State>()`: the logical tag of a script widget's
+        // State, its type and its schema, which a reload compares.
+        if items.first().is_some_and(|item| item.path() == TAG_OF)
+            && arguments.is_empty()
+            && let Some(types) = self.pending_turbofish.take()
+        {
+            let [ty] = &types[..] else {
+                return Err(Error::InvalidTypeArguments {
+                    ty: TAG_OF.into(),
+                    expected: 1,
+                    actual: types.len(),
+                    reference: call,
+                });
+            };
+            let ty = self.inference.resolve(ty);
+            let logical = match &ty {
+                Ty::Script(id, _) => {
+                    let model = self.models.definition(*id);
+                    format!(
+                        "{}#{:016x}",
+                        ty.name(&self.models),
+                        model.definition().schema().symbol_id()
+                    )
+                }
+                ty => ty.name(&self.models).to_string(),
+            };
+            let items = self.models.host_items(TAG_OF_LOGICAL).map(<[_]>::to_vec).ok_or_else(|| {
+                Error::InvalidHostOperation {
+                    item: TAG_OF.into(),
+                    reason: "the facade lacks the logical tag".into(),
+                    operation: call,
+                }
+            })?;
+            let owner = self.models.item_owner(TAG_OF_LOGICAL).cloned();
+            let literal = self.literal(format!("{logical:?}"), Ty::String, call);
+            return self.call_host_function(&items, owner, vec![literal], call);
+        }
         self.supply_display_labeller(items, &mut arguments, call)?;
         self.deref_facade_strings(items, &mut arguments)?;
         self.host_turbofish = self.pending_turbofish.take();
@@ -15402,6 +15462,13 @@ impl<'a> Parser<'a> {
         if scoped {
             self.require_invocation_receiver(&receiver, member_span)?;
         }
+        // `tree.state.downcast_ref::<State>()`, and `downcast_mut`, a place.
+        if definition.path().as_str() == TREE_STATE
+            && matches!(member.as_str(), "downcast_ref" | "downcast_mut")
+            && self.pending_arguments.is_none()
+        {
+            return self.parse_state_downcast(receiver, member, member_span);
+        }
         // `tree.size = size` and `self.shadow.offset.x = x`: a facade
         // field of a place is a place, set through the field's owned
         // builder, which returns the changed value.
@@ -15480,6 +15547,101 @@ impl<'a> Parser<'a> {
             arguments,
             call,
         )
+    }
+
+    /// `state.downcast_ref::<T>()` of a script widget's Tree state: its
+    /// State, a `T`. `downcast_mut::<T>()` is a place whose store puts the
+    /// changed State back in the Tree.
+    fn parse_state_downcast(
+        &mut self,
+        receiver: ParsedExpr,
+        member: ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        if !(matches!(self.peek(), Token::DoubleColon) && matches!(self.peek_second(), Token::LessThan)) {
+            return Err(Error::InvalidHostOperation {
+                item: format!("{TREE_STATE}::{member}").into(),
+                reason: "names its State's type, as `downcast_ref::<State>()`".into(),
+                operation: member_span,
+            });
+        }
+        self.next();
+        self.next();
+        let ty = self.parse_local_type()?;
+        self.expect_close_angle("'>' after the State's type")?;
+        let end = match self.peek() {
+            Token::Unit => self.next().1,
+            _ => {
+                self.expect(Token::LeftParen, "'(' after `downcast`")?;
+                self.expect(Token::RightParen, "')' after `downcast(`")?
+            }
+        };
+        let at = receiver.span;
+        let read = |this: &mut Self, local: ParsedExpr| -> Result<ParsedExpr, Error> {
+            this.pending_arguments = Some((Vec::new(), end));
+            this.host_turbofish = Some(vec![ty.clone()]);
+            let read = this.parse_host_method(local, "__rawr_downcast".into(), member_span);
+            this.host_turbofish = None;
+            read
+        };
+        if member.as_str() == "downcast_ref" || receiver.lvalue.is_none() {
+            if member.as_str() == "downcast_mut" {
+                return Err(self.unsupported("`downcast_mut` of a Tree's state that is not a place"));
+            }
+            let mut value = read(self, receiver)?;
+            value.span = span(at.start(), end);
+            return Ok(value);
+        }
+        let lvalue = receiver.lvalue.clone().expect("checked above");
+        let place = self.temporary("place");
+        let stored = self.temporary("stored");
+        let local = self.operator_expr(origin::Fragment::plain(place.clone()), receiver.ty.clone(), at);
+        let getter = read(self, local.clone())?;
+        let operand = self.operator_expr(origin::Fragment::plain(stored.clone()), ty.clone(), at);
+        self.pending_arguments = Some((vec![operand], end));
+        self.host_turbofish = Some(vec![ty.clone()]);
+        let setter = self.parse_host_method(local, "__rawr_store".into(), member_span);
+        self.host_turbofish = None;
+        let setter = setter?;
+        let mut reader = origin::Fragment::plain("{ ");
+        reader.push(getter.prelude.clone());
+        reader.push(getter.source.clone());
+        reader.push_text(" }");
+        let mut store = origin::Fragment::plain("{ ");
+        store.push(setter.prelude.clone());
+        store.push(setter.source.clone());
+        store.push_text(" }");
+        let step = PlaceStep::Accessor {
+            place: place.clone(),
+            stored,
+            read: reader.clone(),
+            store,
+        };
+        let lvalue = match &lvalue {
+            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(NestedLvalue {
+                binding: binding.clone(),
+                base: origin::Fragment::plain(binding.to_string()),
+                steps: vec![step],
+                ty: ty.clone(),
+            })),
+            Lvalue::Slice(_) => return Err(self.unsupported("assignment target")),
+            lvalue => nested_step(lvalue, step, ty.clone()),
+        };
+        let mut source = origin::Fragment::plain(format!("{{ let {place} = "));
+        source.push(receiver.rendered_source());
+        source.push_text("; ");
+        source.push(reader);
+        source.push_text(" }");
+        let mut value = self.operator_expr(
+            source,
+            Ty::Reference {
+                mutable: true,
+                target: Box::new(ty),
+            },
+            span(at.start(), end),
+        );
+        value.lvalue = Some(lvalue);
+        Ok(value)
     }
 
     /// `value.field` of a facade type as an assignment's target: a place
@@ -16185,7 +16347,7 @@ impl<'a> Parser<'a> {
         // borrow keeps the map and the entry as they are meanwhile.
         if !mutable
             && annotation.is_none()
-            && let Some(tokens) = self.entry_alias_tokens()
+            && let Some(tokens) = self.entry_alias_tokens().or_else(|| self.downcast_alias_tokens())
         {
             self.entry_aliases.insert(name.clone(), (name_span, tokens));
         } else {
@@ -16517,6 +16679,35 @@ impl<'a> Parser<'a> {
                 if matches!(name.as_str(), "or_default" | "or_insert" | "or_insert_with")
         );
         (ends && last > entry).then_some(tokens)
+    }
+
+    /// `let state = tree.state.downcast_mut::<State>();`: each use of
+    /// `state` is the Tree's state again, so `state.count += 1` changes it.
+    fn downcast_alias_tokens(&mut self) -> Option<Vec<(Token, Position)>> {
+        let mut ahead = self.input.clone();
+        let mut tokens = Vec::new();
+        let mut depth = 0usize;
+        loop {
+            let (token, position) = ahead.next()?;
+            match token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.checked_sub(1)?;
+                }
+                Token::SemiColon if depth == 0 => break,
+                Token::EOF => return None,
+                _ => {}
+            }
+            tokens.push((token, position));
+        }
+        let last = tokens.iter().rposition(|(token, _)| matches!(token, Token::Period))?;
+        matches!(
+            tokens.get(last + 1),
+            Some((Token::Identifier(name), _)) if name.as_str() == "downcast_mut"
+        )
+        .then_some(tokens)
     }
 
     /// `PhantomData<T>`, which holds nothing: the unit type. Its arguments
@@ -17637,15 +17828,28 @@ impl<'a> Parser<'a> {
                 self.last_type = if diverges { Ty::Never } else { Ty::Unit };
                 self.last_expression = None;
             } else if self.field_entries.len() > pending {
-                // A tail changing a field's map through `entry`: stored back
-                // after it, so only a `()` tail.
-                self.require_type(&Ty::Unit, &value.ty, value.span)?;
-                let mut rendered = value.rendered_source();
-                rendered.push_text(";");
-                let rendered = self.with_field_entries(pending, rendered);
-                self.write_output(rendered, value.span);
-                self.last_type = Ty::Unit;
-                self.last_expression = None;
+                // A tail that changes a field, as through `entry` or a
+                // `&mut self` call on it: stored back after it, then the
+                // tail's value.
+                if self.inference.resolve(&value.ty) == Ty::Unit {
+                    let mut rendered = value.rendered_source();
+                    rendered.push_text(";");
+                    let rendered = self.with_field_entries(pending, rendered);
+                    self.write_output(rendered, value.span);
+                    self.last_type = Ty::Unit;
+                    self.last_expression = None;
+                } else {
+                    self.consume_imported_value(&value, "returned value", value.span)?;
+                    let tail = self.temporary("tail");
+                    let mut rendered = origin::Fragment::plain(format!("let {tail} = "));
+                    rendered.push(value.rendered_source());
+                    rendered.push_text(";");
+                    let rendered = self.with_field_entries(pending, rendered);
+                    self.write_output(rendered, value.span);
+                    let output_start = self.write_output(origin::Fragment::plain(tail), value.span);
+                    self.last_type = value.ty;
+                    self.last_expression = Some((output_start, value.span));
+                }
             } else {
                 self.consume_imported_value(&value, "returned value", value.span)?;
                 let output_start = self.write_output(value.rendered_source(), value.span);

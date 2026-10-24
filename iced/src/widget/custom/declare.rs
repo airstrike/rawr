@@ -7,8 +7,8 @@ use rawr::{capability, receiver};
 
 use super::{LengthSize, MeshRendererTrait, MetaTrait, RendererTrait, Shell, State, Tree, WidgetTrait};
 
-/// iced's `advanced::Widget` as script types implement it. `operate` and
-/// `overlay` are not here yet. A method the impl leaves out runs iced's
+/// iced's `advanced::Widget` as script types implement it, `operate` and
+/// `overlay` after the rest. A method the impl leaves out runs iced's
 /// default natively, so these default bodies only type-check.
 const WIDGET: &str = "pub trait Widget<Message, Theme, Renderer> {
     fn size(&self) -> iced::Size<iced::Length>;
@@ -19,6 +19,8 @@ const WIDGET: &str = "pub trait Widget<Message, Theme, Renderer> {
     fn draw(&self, tree: &iced::advanced::widget::Tree, renderer: &mut Renderer, theme: &Theme, style: &iced::advanced::renderer::Style, layout: iced::advanced::layout::Layout, cursor: iced::mouse::Cursor, viewport: &iced::Rectangle);
     fn update(&mut self, tree: &mut iced::advanced::widget::Tree, event: &iced::Event, layout: iced::advanced::layout::Layout, cursor: iced::mouse::Cursor, renderer: &Renderer, shell: &mut iced::advanced::Shell<'_, Message>, viewport: &iced::Rectangle) {}
     fn mouse_interaction(&self, tree: &iced::advanced::widget::Tree, layout: iced::advanced::layout::Layout, cursor: iced::mouse::Cursor, viewport: &iced::Rectangle, renderer: &Renderer) -> iced::mouse::Interaction { iced::mouse::Interaction::None }
+    fn operate(&mut self, tree: &mut iced::advanced::widget::Tree, layout: iced::advanced::layout::Layout, viewport: &iced::Rectangle, renderer: &Renderer, operation: &mut iced::advanced::widget::Operation) {}
+    fn overlay(&mut self, tree: &mut iced::advanced::widget::Tree, layout: iced::advanced::layout::Layout, renderer: &Renderer, viewport: &iced::Rectangle, translation: iced::Vector, window: iced::Size) -> Vec<iced::advanced::overlay::Element> { Vec::new() }
 }";
 
 const META: &str = "pub trait Meta {
@@ -53,11 +55,15 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
     builder.private_type::<LengthSize>("advanced::layout::LengthSize", &[], copied)?;
     builder.type_::<Tree>("advanced::widget::Tree", &[], cloned)?;
     builder.alias("advanced::widget::tree::Tree", "advanced::widget::Tree")?;
-    builder.value_type::<iced::advanced::widget::tree::Tag>(
+    builder.value_type::<super::Tag>(
         "advanced::widget::tree::Tag",
         &[],
-        crate::OWNED_EQ_VALUE_CAPABILITIES,
+        crate::DEBUG_EQ_VALUE_CAPABILITIES,
     )?;
+    builder.private_type::<super::TreeState>("advanced::widget::tree::Lent", &[], cloned)?;
+    builder.type_::<super::Operation>("advanced::widget::Operation", &[], cloned)?;
+    builder.module("advanced::overlay")?;
+    builder.type_::<super::Overlay>("advanced::overlay::Element", &[], cloned)?;
     builder.type_::<State>("advanced::widget::tree::State", &[], cloned)?;
     builder.value_type::<iced::advanced::renderer::Style>("advanced::renderer::Style", &[], copied)?;
     builder.default_value_type::<iced::advanced::renderer::Quad>(
@@ -201,6 +207,31 @@ fn declare_instance(builder: &mut facade::Builder) -> Result<(), host::Error> {
         ])?,
         ty("mouse::Interaction")?,
     ));
+    // operate
+    new.parameter(type_ref::Type::callable(
+        tuple(vec![
+            parameter("C")?,
+            tree()?,
+            layout()?,
+            rectangle()?,
+            ty("widget::Renderer")?,
+            ty("advanced::widget::Operation")?,
+        ])?,
+        unit(),
+    ));
+    // overlay
+    new.parameter(type_ref::Type::callable(
+        tuple(vec![
+            parameter("C")?,
+            tree()?,
+            layout()?,
+            ty("widget::Renderer")?,
+            rectangle()?,
+            ty("Vector")?,
+            ty("Size")?,
+        ])?,
+        type_ref::Type::slice(ty("advanced::overlay::Element")?),
+    ));
     new.parameter(type_ref::Type::builtin(type_ref::Builtin::I64));
     new.output(type_ref::Type::applied(
         "advanced::widget::Instance",
@@ -228,6 +259,49 @@ fn declare_values(builder: &mut facade::Builder) -> Result<(), host::Error> {
     builder.item(item::Definition::associated_value(
         "advanced::widget::tree::State::None",
         ty("advanced::widget::tree::State")?,
+    )?)?;
+    // `Tag::of::<State>()`, which Rawr makes `__rawr_of` of the State's
+    // logical tag, and `State::new(value)`.
+    let generic = |name: &str, inputs: Vec<type_ref::Type>, output: type_ref::Type| -> Result<_, host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter(name, &[])?;
+        for input in inputs {
+            signature.parameter(input);
+        }
+        signature.output(output);
+        Ok(signature.finish())
+    };
+    let tag = || ty("advanced::widget::tree::Tag");
+    let lent = || ty("advanced::widget::tree::Lent");
+    let t = || type_ref::Type::parameter("T");
+    builder.item(item::Definition::associated_function(
+        "advanced::widget::tree::Tag::of",
+        generic("T", Vec::new(), tag()?)?,
+    )?)?;
+    associated(
+        builder,
+        "advanced::widget::tree::Tag::__rawr_of",
+        vec![type_ref::Type::builtin(type_ref::Builtin::String)],
+        tag()?,
+    )?;
+    builder.item(item::Definition::associated_function(
+        "advanced::widget::tree::State::new",
+        generic("T", vec![t()?], ty("advanced::widget::tree::State")?)?,
+    )?)?;
+    // `tree.state` and its `downcast_ref::<T>()` and `downcast_mut::<T>()`.
+    method(builder, "advanced::widget::Tree::state", Shared, Vec::new(), lent()?)?;
+    method(builder, "advanced::widget::Tree::state", Owned, vec![lent()?], ty("advanced::widget::Tree")?)?;
+    for name in ["downcast_ref", "downcast_mut", "__rawr_downcast"] {
+        builder.item(item::Definition::method(
+            format!("advanced::widget::tree::Lent::{name}"),
+            Shared,
+            generic("T", Vec::new(), t()?)?,
+        )?)?;
+    }
+    builder.item(item::Definition::method(
+        "advanced::widget::tree::Lent::__rawr_store",
+        Owned,
+        generic("T", vec![t()?], lent()?)?,
     )?)?;
 
     for (name, output) in [
@@ -400,6 +474,16 @@ fn declare_forwarding(builder: &mut facade::Builder) -> Result<(), host::Error> 
             "mouse_interaction",
             vec![tree()?, layout()?, cursor()?, rectangle()?, r()?],
             ty("mouse::Interaction")?,
+        ),
+        (
+            "operate",
+            vec![tree()?, layout()?, rectangle()?, r()?, ty("advanced::widget::Operation")?],
+            unit(),
+        ),
+        (
+            "overlay",
+            vec![tree()?, layout()?, r()?, rectangle()?, ty("Vector")?, ty("Size")?],
+            type_ref::Type::slice(ty("advanced::overlay::Element")?),
         ),
     ] {
         builder.item(item::Definition::method(

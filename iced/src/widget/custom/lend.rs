@@ -16,7 +16,7 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use iced::advanced::widget::Tree;
+use iced::advanced::widget::{Operation, Tree};
 use iced::advanced::Shell;
 
 use crate::runtime;
@@ -54,6 +54,7 @@ pub(crate) struct Frame {
     mutable: bool,
     renderer: *const iced::Renderer,
     shell: *mut Shell<'static, runtime::Message>,
+    operation: Option<*mut (dyn Operation + 'static)>,
     children: *const Children,
 }
 
@@ -77,6 +78,8 @@ pub(crate) enum Error {
     Path(Vec<usize>),
     #[error("the wrapped widget is already in use by this call")]
     Busy,
+    #[error("the wrapped widget panicked: {0}")]
+    Panicked(String),
 }
 
 thread_local! {
@@ -113,10 +116,27 @@ impl Children {
         Ok(lowered.len() - 1)
     }
 
-    /// Run `f` on the child `index` lowered earlier in this view.
-    pub(crate) fn with<R>(&self, index: usize, f: impl FnOnce(&mut Element) -> R) -> Option<R> {
-        let mut lowered = self.lowered.try_borrow_mut().ok()?;
-        lowered.get_mut(index).map(|(_, element)| f(element))
+    /// The lowered children, for `overlay`, which borrows one for as long
+    /// as its overlay lives.
+    pub(crate) fn lowered_mut(&mut self) -> &mut Vec<(widget::Identity, Element)> {
+        self.lowered.get_mut()
+    }
+
+    /// Run `f` on the child `index` lowered earlier in this view. A panic
+    /// in the child's native code is an error of the call that reached it,
+    /// so it never unwinds through the script.
+    pub(crate) fn with<R>(&self, index: usize, f: impl FnOnce(&mut Element) -> R) -> Result<R, Error> {
+        let mut lowered = self.lowered.try_borrow_mut().map_err(|_| Error::Busy)?;
+        let (_, element) = lowered.get_mut(index).ok_or(Error::Busy)?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(element))).map_err(|panic| {
+            Error::Panicked(
+                panic
+                    .downcast_ref::<&str>()
+                    .map(|message| (*message).to_owned())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "a panic without a message".to_owned()),
+            )
+        })
     }
 }
 
@@ -127,6 +147,26 @@ impl<'a> Loan<'a> {
         tree: Lent<'a>,
         renderer: Option<&'a iced::Renderer>,
         shell: Option<&'a mut Shell<'_, runtime::Message>>,
+        children: &'a Children,
+    ) -> Self {
+        Self::lend(tree, renderer, shell, None, children)
+    }
+
+    /// Lend `operate`'s tree, renderer and operation.
+    pub(crate) fn operating(
+        tree: &'a mut Tree,
+        renderer: &'a iced::Renderer,
+        operation: &'a mut dyn Operation,
+        children: &'a Children,
+    ) -> Self {
+        Self::lend(Lent::Mutable(tree), Some(renderer), None, Some(operation), children)
+    }
+
+    fn lend(
+        tree: Lent<'a>,
+        renderer: Option<&'a iced::Renderer>,
+        shell: Option<&'a mut Shell<'_, runtime::Message>>,
+        operation: Option<&'a mut dyn Operation>,
         children: &'a Children,
     ) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -144,6 +184,13 @@ impl<'a> Loan<'a> {
             renderer: renderer.map_or(std::ptr::null(), std::ptr::from_ref),
             shell: shell.map_or(std::ptr::null_mut(), |shell| {
                 std::ptr::from_mut(shell).cast::<Shell<'static, runtime::Message>>()
+            }),
+            // SAFETY: only the lifetime is erased; the frame, and with it
+            // the pointer, is popped before `'a` ends.
+            operation: operation.map(|operation| unsafe {
+                std::mem::transmute::<*mut (dyn Operation + '_), *mut (dyn Operation + 'static)>(
+                    std::ptr::from_mut(operation),
+                )
             }),
             children: std::ptr::from_ref(children),
         };
@@ -233,6 +280,14 @@ impl Frame {
         unsafe { self.shell.as_mut() }.ok_or(Error::Missing("Shell"))
     }
 
+    /// The operation `operate` received.
+    pub(crate) fn operation(&self) -> Result<&mut dyn Operation, Error> {
+        // SAFETY: as in `tree`.
+        self.operation
+            .map(|operation| unsafe { &mut *operation })
+            .ok_or(Error::Missing("Operation"))
+    }
+
     pub(crate) fn children(&self) -> &Children {
         // SAFETY: as in `tree`.
         unsafe { &*self.children }
@@ -246,7 +301,7 @@ impl Frame {
 
 #[cfg(test)]
 mod tests {
-    use iced::advanced::widget::Tree;
+    use iced::advanced::widget::{Operation, Tree};
 
     use super::{Children, Error, Frame, Lent, Loan};
 

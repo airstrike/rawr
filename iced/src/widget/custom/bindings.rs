@@ -10,7 +10,7 @@ use iced::{mouse, Length, Rectangle, Size};
 use rawr::{host, Dynamic, EvalAltResult};
 
 use super::lend::Frame;
-use super::{record, ChildDraw, LengthSize, Shell, State, Tree};
+use super::{record, ChildDraw, LengthSize, Operation, Overlay, Shell, State, Tag, Tree, TreeState};
 use crate::renderer::Command;
 use crate::widget::builtin::{arity, number, pixels, runtime_error, take};
 use crate::widget as widgets;
@@ -267,14 +267,96 @@ fn bind_tree(builder: &mut host::runtime::Builder) {
     }
     builder
         .bind("iced::advanced::widget::tree::Tag::stateless", |_| {
-            Ok(Dynamic::from(tree::Tag::stateless()))
+            Ok(Dynamic::from(Tag::Native(tree::Tag::stateless())))
         })
         .expect("the iced facade must retain Tag::stateless");
     builder
+        .bind("iced::advanced::widget::tree::Tag::__rawr_of", |args| {
+            let [logical] = args else {
+                return Err(arity("Tag::of", 1, args.len()));
+            };
+            let logical = read::<rawr::ImmutableString>(logical, "Tag::of")?;
+            Ok(Dynamic::from(Tag::Script(Arc::from(logical.as_str()))))
+        })
+        .expect("the iced facade must retain Tag::of");
+    builder
+        .bind("iced::advanced::widget::tree::Tag::of", |_| {
+            Err(runtime_error("`Tag::of` names its State's type, as `Tag::of::<State>()`".into()))
+        })
+        .expect("the iced facade must retain Tag::of");
+    builder
         .bind("iced::advanced::widget::tree::State::None", |_| {
-            Ok(Dynamic::from(State(Arc::new(Mutex::new(Some(tree::State::None))))))
+            Ok(Dynamic::from(State::Native(Arc::new(Mutex::new(Some(tree::State::None))))))
         })
         .expect("the iced facade must retain State::None");
+    builder
+        .bind("iced::advanced::widget::tree::State::new", |args| {
+            let [value] = args else {
+                return Err(arity("State::new", 1, args.len()));
+            };
+            Ok(Dynamic::from(State::Script(value.take())))
+        })
+        .expect("the iced facade must retain State::new");
+    // `tree.state`, a handle to the subtree's state; setting it back, as a
+    // `downcast_mut` store does, keeps the handle.
+    builder
+        .bind("iced::advanced::widget::Tree::state", |args| {
+            let Some((receiver, _)) = args.split_first_mut() else {
+                return Err(arity("Tree::state", 1, 0));
+            };
+            let handle = read::<Tree>(receiver, "Tree::state")?;
+            if args.len() == 2 {
+                return Ok(Dynamic::from(handle));
+            }
+            Ok(Dynamic::from(TreeState {
+                nonce: handle.nonce,
+                path: handle.path,
+            }))
+        })
+        .expect("the iced facade must retain Tree::state");
+    builder
+        .bind("iced::advanced::widget::tree::Lent::__rawr_downcast", |args| {
+            let [receiver] = args else {
+                return Err(arity("downcast_ref", 1, args.len()));
+            };
+            let handle = read::<TreeState>(receiver, "downcast_ref")?;
+            let frame = lent(Frame::find(handle.nonce, "Tree"))?;
+            lent(frame.tree(&handle.path, |tree| match &tree.state {
+                tree::State::Some(state) => state
+                    .downcast_ref::<super::ScriptState>()
+                    .map(|state| state.value.clone()),
+                tree::State::None => None,
+            }))?
+            .ok_or_else(|| runtime_error("the Tree's state is not a script State".into()))
+        })
+        .expect("the iced facade must retain downcast_ref");
+    builder
+        .bind("iced::advanced::widget::tree::Lent::__rawr_store", |args| {
+            let [receiver, value] = args else {
+                return Err(arity("downcast_mut", 2, args.len()));
+            };
+            let handle = read::<TreeState>(receiver, "downcast_mut")?;
+            let value = value.take();
+            let frame = lent(Frame::find(handle.nonce, "Tree"))?;
+            lent(frame.tree_mut(&handle.path, |tree| match &mut tree.state {
+                tree::State::Some(state) => state
+                    .downcast_mut::<super::ScriptState>()
+                    .map(|state| state.value = value)
+                    .is_some(),
+                tree::State::None => false,
+            }))?
+            .then_some(Dynamic::from(handle))
+            .ok_or_else(|| runtime_error("the Tree's state is not a script State".into()))
+        })
+        .expect("the iced facade must retain downcast_mut's store");
+    for name in ["downcast_ref", "downcast_mut"] {
+        let path = format!("iced::advanced::widget::tree::Lent::{name}");
+        builder
+            .bind(path.clone(), move |_| {
+                Err(runtime_error(format!("`{path}` names its State's type")))
+            })
+            .expect("the iced facade must retain every downcast");
+    }
 }
 
 fn bind_values(builder: &mut host::runtime::Builder) {
@@ -569,8 +651,8 @@ fn tree(handle: &Dynamic, path: &'static str) -> Result<Tree, Box<EvalAltResult>
     Ok(tree)
 }
 
-fn busy() -> Box<EvalAltResult> {
-    runtime_error("the wrapped widget is already in use by this call".into())
+fn child_error(error: super::lend::Error) -> Box<EvalAltResult> {
+    runtime_error(error.to_string())
 }
 
 fn bind_forwarding(builder: &mut host::runtime::Builder) {
@@ -583,7 +665,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let size = frame
                 .children()
                 .with(index, |child| child.size())
-                .ok_or_else(busy)?;
+                .map_err(child_error)?;
             Ok(Dynamic::from(LengthSize(size)))
         })
         .expect("the iced facade must retain Element::size");
@@ -596,8 +678,8 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let tag = frame
                 .children()
                 .with(index, |child| child.tag())
-                .ok_or_else(busy)?;
-            Ok(Dynamic::from(tag))
+                .map_err(child_error)?;
+            Ok(Dynamic::from(Tag::Native(tag)))
         })
         .expect("the iced facade must retain Element::tag");
     builder
@@ -609,8 +691,8 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let state = frame
                 .children()
                 .with(index, |child| child.state())
-                .ok_or_else(busy)?;
-            Ok(Dynamic::from(State(Arc::new(Mutex::new(Some(state))))))
+                .map_err(child_error)?;
+            Ok(Dynamic::from(State::Native(Arc::new(Mutex::new(Some(state))))))
         })
         .expect("the iced facade must retain Element::state");
     builder
@@ -625,7 +707,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
                     .children()
                     .with(index, |child| child.diff(subtree))
             }))?
-            .ok_or_else(busy)?;
+            .map_err(child_error)?;
             Ok(Dynamic::UNIT)
         })
         .expect("the iced facade must retain Element::diff");
@@ -643,7 +725,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
                     child.layout(subtree, renderer, &limits);
                 })
             }))?
-            .ok_or_else(busy)?;
+            .map_err(child_error)?;
             Ok(Dynamic::UNIT)
         })
         .expect("the iced facade must retain Element::layout");
@@ -691,7 +773,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
                         .update(subtree, &event, layout, cursor, renderer, shell, &viewport);
                 })
             }))?
-            .ok_or_else(busy)?;
+            .map_err(child_error)?;
             Ok(Dynamic::UNIT)
         })
         .expect("the iced facade must retain Element::update");
@@ -714,10 +796,52 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
                         .mouse_interaction(subtree, layout, cursor, &viewport, renderer)
                 })
             }))?
-            .ok_or_else(busy)?;
+            .map_err(child_error)?;
             Ok(Dynamic::from(interaction))
         })
         .expect("the iced facade must retain Element::mouse_interaction");
+    builder
+        .bind("iced::Element::operate", |args| {
+            let [element, handle, layout, viewport, _renderer, operation] = args else {
+                return Err(arity("Element::operate", 6, args.len()));
+            };
+            let path = "Element::operate";
+            let handle = tree(handle, path)?;
+            let layout = read::<Layout>(layout, path)?;
+            let viewport = read::<Rectangle>(viewport, path)?;
+            let operation = read::<Operation>(operation, path)?;
+            if operation.nonce != handle.nonce {
+                return Err(runtime_error(format!("`{path}` received an operation lent to another call")));
+            }
+            let (frame, index) = child(element, path)?;
+            let renderer = lent(frame.renderer())?;
+            let operation = lent(frame.operation())?;
+            lent(frame.tree_mut(&handle.path, |subtree| {
+                frame.children().with(index, |child| {
+                    child.operate(subtree, layout, &viewport, renderer, operation);
+                })
+            }))?
+            .map_err(child_error)?;
+            Ok(Dynamic::UNIT)
+        })
+        .expect("the iced facade must retain Element::operate");
+    builder
+        .bind("iced::Element::overlay", |args| {
+            let [element, handle, layout, _renderer, _viewport, translation, _window] = args else {
+                return Err(arity("Element::overlay", 7, args.len()));
+            };
+            let path = "Element::overlay";
+            let handle = tree(handle, path)?;
+            let (_, child) = child(element, path)?;
+            let overlay = Overlay {
+                child,
+                path: handle.path.clone(),
+                layout: read(layout, path)?,
+                translation: read(translation, path)?,
+            };
+            Ok(Dynamic::from(vec![Dynamic::from(overlay)].into_iter().collect::<rawr::Array>()))
+        })
+        .expect("the iced facade must retain Element::overlay");
     builder
         .bind_with_context("iced::Element::explain", |call, args| {
             let [element, color] = args else {
