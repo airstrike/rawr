@@ -1,4 +1,5 @@
-# toml_edit 0.25.17 from crates.io, with one change: its tables name the
+# toml_edit 0.25.17 from crates.io, without its serde, visit and visit_mut
+# modules (Rawr uses none), and with one change: its tables name the
 # hasher (std's RandomState) instead of asking indexmap for its
 # `std` feature. A project's runner links this crate beside iced, whose wgpu and
 # naga use indexmap without `std`; any feature added there would make a
@@ -32,11 +33,6 @@ parse = [
     "dep:toml_parser",
     "dep:winnow",
 ]
-serde = [
-    "dep:serde_core",
-    "toml_datetime/serde",
-    "dep:serde_spanned",
-]
 unbounded = []
 
 [dependencies.anstream]
@@ -50,15 +46,6 @@ optional = true
 [dependencies.indexmap]
 version = "2.13.0"
 default-features = false
-
-[dependencies.serde_core]
-version = "1.0.228"
-optional = true
-
-[dependencies.serde_spanned]
-version = "1.1.2"
-features = ["serde"]
-optional = true
 
 [dependencies.toml_datetime]
 version = "1.1.2"

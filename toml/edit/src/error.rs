@@ -42,20 +42,7 @@ impl TomlError {
         }
     }
 
-    #[cfg(feature = "serde")]
-    pub(crate) fn custom(message: String, span: Option<std::ops::Range<usize>>) -> Self {
-        Self {
-            message,
-            input: None,
-            keys: Vec::new(),
-            span,
-        }
-    }
 
-    #[cfg(feature = "serde")]
-    pub(crate) fn add_key(&mut self, key: String) {
-        self.keys.insert(0, key);
-    }
 
     /// What went wrong
     pub fn message(&self) -> &str {
@@ -67,15 +54,7 @@ impl TomlError {
         self.span.clone()
     }
 
-    #[cfg(feature = "serde")]
-    pub(crate) fn set_span(&mut self, span: Option<std::ops::Range<usize>>) {
-        self.span = span;
-    }
 
-    #[cfg(feature = "serde")]
-    pub(crate) fn set_input(&mut self, input: Option<&str>) {
-        self.input = input.map(|s| s.into());
-    }
 }
 
 fn render_literal(literal: &str) -> String {
