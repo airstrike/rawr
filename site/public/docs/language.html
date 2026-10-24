@@ -175,9 +175,10 @@ fn main() {
   <li>Struct, tuple and enum patterns. <code>..</code> matches the rest.</li>
   <li>Slice patterns such as <code>[first, .., last]</code>.</li>
   <li><code>if let</code>, <code>while let</code> and <code>let .. else</code>.</li>
+  <li>Let chains, as in Rust 2024: <code>if let Some(x) = a &amp;&amp; let Some(y) = b &amp;&amp; x &lt; y { .. }</code>. <code>while</code> takes them too.</li>
   <li><code>loop</code>, <code>while</code> and <code>for</code>. Loop labels work. <code>break</code> can carry a value.</li>
   <li>Blocks are expressions. <code>let x = { .. };</code> works.</li>
-  <li>Patterns on <code>&amp;mut</code> places write their bindings back. <code>for p in &amp;mut points { p.x += 1; }</code> changes the elements.</li>
+  <li>Patterns on <code>&amp;mut</code> places write their bindings back. <code>for p in &amp;mut points { p.x += 1; }</code> changes the elements. So does <code>if let State::Running { progress, .. } = &amp;mut self.state { *progress = p; }</code>. This holds in <code>match</code>, <code>if let</code>, <code>while let</code>, <code>let</code> and <code>let .. else</code>. It holds for nested struct, tuple and slice patterns, for <code>ref mut</code>, for <code>match self</code> in a <code>&amp;mut self</code> method, and for a pattern inside another one.</li>
 </ul>
 
 <h2 id="closures">Closures</h2>
@@ -244,10 +245,10 @@ fn main() {
 <p>Rawr provides part of <code>std</code>. These work today:</p>
 <ul>
   <li><code>String</code> and <code>&amp;str</code>: <code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes as Rust&rsquo;s does.</li>
-  <li><code>Vec</code> and slices: <code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more.</li>
+  <li><code>Vec</code> and slices: <code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element, so <code>if let Some(d) = v.iter_mut().find(|d| d.id == id) { d.n += 1; }</code> changes it.</li>
   <li>Iterators: <code>map</code>, <code>filter</code>, <code>enumerate</code>, <code>zip</code>, <code>skip</code>, <code>take</code>, <code>step_by</code>, <code>rev</code>, <code>any</code>, <code>all</code>, <code>position</code>, <code>fold</code>, <code>sum</code>, <code>max</code>, <code>min</code>, <code>count</code>, <code>collect</code> and more. <code>std::iter::once</code> and <code>std::iter::empty</code> start one.</li>
   <li>Arrays: <code>[T; N]::map</code> gives a <code>[U; N]</code>.</li>
-  <li>Numbers: <code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>powi</code>, <code>powf</code>, <code>floor</code>, <code>round</code> and kin. Floats also have <code>sin</code>, <code>cos</code>, <code>tan</code>, their inverses and hyperbolic forms, <code>atan2</code>, <code>hypot</code>, <code>exp</code>, <code>ln</code>, <code>log</code>, <code>log10</code>, <code>to_degrees</code> and <code>to_radians</code>.</li>
+  <li>Numbers: <code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>powi</code>, <code>powf</code>, <code>floor</code>, <code>round</code> and kin. Floats also have <code>sin</code>, <code>cos</code>, <code>tan</code>, their inverses and hyperbolic forms, <code>atan2</code>, <code>hypot</code>, <code>exp</code>, <code>ln</code>, <code>log</code>, <code>log10</code>, <code>to_degrees</code> and <code>to_radians</code>. <code>rem_euclid</code> and <code>div_euclid</code> work on floats and integers. A number&rsquo;s method can be called by its path, as in <code>f32::rem_euclid(x, 1.0)</code>.</li>
   <li><code>std::time::Duration</code> and <code>Instant</code>: <code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code>, <code>duration_since</code>, and the operators <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>{:?}</code> prints Rust&rsquo;s text, such as <code>1.5s</code>.</li>
   <li><code>std::collections</code>: <code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. A local may hold an entry, as in <code>let n = map.entry(k).or_default(); *n += 1;</code>.</li>
   <li><code>std::cell::RefCell</code>: <code>new</code>, <code>default</code>, <code>borrow</code>, <code>borrow_mut</code>, <code>into_inner</code>, <code>replace</code>, <code>take</code> and <code>clone</code>. A change through a shared reference to a <code>RefCell</code> changes the cell. A borrow ends with its block, as in Rust. A borrow that conflicts with one still held panics with Rust&rsquo;s message.</li>
@@ -267,7 +268,7 @@ fn main() {
   <li>A glob import of an enum&rsquo;s variants (<code>use Shape::*;</code>).</li>
   <li><code>const fn</code>.</li>
   <li>Byte literals (<code>b'a'</code>, <code>b"ab"</code>) and <code>char</code> ranges such as <code>'a'..='e'</code>.</li>
-  <li><code>macro_rules!</code>, <code>async</code> and <code>.await</code>.</li>
+  <li><code>macro_rules!</code>, <code>async</code> and <code>.await</code>. An iced app can run Rust futures, as <a href="/docs/iced#async">Async code</a> describes.</li>
   <li>A <code>const</code> captured in a format string (<code>"{LIMIT}"</code>). Pass it as an argument instead.</li>
   <li>A <code>let</code> whose pattern is an enum with one variant, such as <code>let Wrapper::Named(x) = value;</code>. Use <code>match</code> instead.</li>
 </ul>
@@ -288,7 +289,7 @@ fn main() {
   <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
   <li><code>write!</code> into a <code>String</code> through <code>std::fmt::Write</code>.</li>
   <li><code>Formatter::pad</code>.</li>
-  <li><code>f64::NAN</code>, <code>f64::INFINITY</code>, <code>f64::MAX</code>, <code>f64::EPSILON</code>, <code>std::f64::consts</code> and <code>f64::rem_euclid</code>.</li>
+  <li><code>f64::NAN</code>, <code>f64::INFINITY</code> and <code>f64::EPSILON</code>.</li>
   <li><code>char::from(u8)</code> and <code>char::from_u32</code>. <code>byte as char</code> works.</li>
   <li><code>Vec::binary_search</code>.</li>
   <li>The <code>dbg!</code>, <code>line!</code>, <code>file!</code>, <code>column!</code> and <code>module_path!</code> macros.</li>

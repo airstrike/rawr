@@ -229,7 +229,7 @@ fn main() -&gt; iced::Result {
   <div class="run"><button type="button" class="runbtn" data-source="src-sun" data-out="out-sun" data-alt="A yellow sun with twelve pink rays, drawn by rawr-iced on the server" aria-label="Run sun.rs" hidden></button><b>rawr run sun.rs</b><span class="quiet" id="out-sun" aria-live="polite">(opens a window)</span></div>
 </div>
 <h3 id="subscriptions">Subscriptions</h3>
-<p>A <code>.subscription(..)</code> method returns a <code>Subscription&lt;Message&gt;</code>. <code>iced::time::every</code>, <code>iced::keyboard::listen</code>, <code>iced::event::listen</code> and <code>iced::window::frames</code> work. Subscriptions combine with <code>map</code> and <code>filter_map</code>.</p>
+<p>A <code>.subscription(..)</code> method returns a <code>Subscription&lt;Message&gt;</code>. <code>iced::time::every</code>, <code>iced::keyboard::listen</code>, <code>iced::event::listen</code> and <code>iced::window::frames</code> work. Subscriptions combine with <code>map</code> and <code>filter_map</code>. <code>Subscription::run(builder)</code> takes a Rust function that returns a sipper, as <a href="#async">Async code</a> describes.</p>
 <div class="block">
   <pre><code data-lang="rust">use iced::Subscription;
 use iced::time::{self, Duration};
@@ -336,7 +336,29 @@ impl App {
 <p>A Rawr struct can hold a value of an imported type. It can <code>#[derive(Default)]</code> when the crate implements <code>Default</code> for that type. The field then takes the crate&rsquo;s <code>default()</code>, as in Rust. It can also derive <code>Debug</code>, <code>Clone</code> and <code>Copy</code> when the crate implements them for that type. <code>{:?}</code> of an imported value prints the crate&rsquo;s <code>Debug</code> text. <code>to_string()</code> and <code>{}</code> of an imported value print its <code>Display</code> text. A Message can hold an imported value, and a <code>match</code> can bind it.</p>
 <p>A Rust method that takes a <code>&amp;str</code> takes a Rawr string. A method whose result Rawr cannot hold returns that result&rsquo;s <code>Display</code> text instead, when its type has one. So chrono&rsquo;s <code>now.format(&quot;%H:%M:%S&quot;)</code> is a <code>String</code>.</p>
 <p>A field of an imported type that is <code>Copy</code> reads as a copy, as in Rust.</p>
+<p>A <code>match</code> or <code>if let</code> can match a variant of an imported enum, as in <code>echo::Event::Connected(connection) =&gt; ..</code>. The pattern takes the variant&rsquo;s fields as clones. A path through a native module, such as <code>download::Progress</code> in a field, names the type even beside a function called <code>download</code>.</p>
 <p>An edit to your Rawr code applies to a running app whose State holds a value of an imported type. The value keeps its state across the edit. An edit to the dependency&rsquo;s Rust code starts a new app, and its State starts again from its default. The window then names the imported type that did not carry over.</p>
+
+<h2 id="async">Async code</h2>
+<p>An app runs Rust futures as iced tasks. A Rust function that returns a future gives a <code>Task</code>. That covers an <code>async fn</code> in your crate and <code>tokio::time::sleep</code>. A Rust function that returns an iced <code>Task</code>, such as <code>system::information()</code>, gives that task.</p>
+<div class="block">
+  <pre><code data-lang="rust">// rawr
+mod fetch; // native Rust: pub async fn size(url: String) -&gt; usize
+
+fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
+    match message {
+        Message::Load =&gt; Task::perform(fetch::size(self.url.clone()), Message::Loaded),
+        Message::Loaded(size) =&gt; {
+            self.size = Some(size);
+            Task::none()
+        }
+    }
+}</code></pre>
+</div>
+<p><code>Task::perform</code>, <code>Task::future</code>, <code>Task::sip</code>, <code>Task::abortable</code> with <code>task::Handle</code> and <code>Subscription::run</code> work. <code>Task::sip</code> and <code>Subscription::run</code> take a Rust sipper. The Rawr code that maps a task&rsquo;s values runs on the UI thread.</p>
+<p>A task&rsquo;s future runs on iced&rsquo;s thread pool, so it must be <code>Send</code>, as iced requires. <code>rawr check</code> names the Rust function whose future is not.</p>
+<p>A reload cancels the tasks the app is running. Their handles report <code>is_aborted()</code>, and the status line says that a running task was cancelled. The State keeps what it held, so a download the reload cancelled still shows as running until a message changes it.</p>
+<p><code>async fn</code> and <code>.await</code> in Rawr code are not supported yet. Write them in a native module or a Rust crate.</p>
 
 <h2 id="diagnostics">Diagnostics</h2>
 <p><code>rawr check</code> checks an app without opening a window. Errors look like rustc&rsquo;s. Delete the <code>Decrement</code> arm from the counter and it reports the missing arm:</p>
@@ -365,19 +387,19 @@ impl App {
   <li><code>selector::find</code> with a widget <code>Id</code>. Its <code>Target</code> has <code>bounds</code> and <code>visible_bounds</code>.</li>
   <li>Modules: <code>iced::time</code>, <code>iced::keyboard</code>, <code>iced::event</code>, <code>iced::window</code>, <code>iced::mouse</code>, <code>iced::font</code>, <code>iced::border</code> and <code>iced::theme</code>. <code>font::list()</code> lists the system&rsquo;s font families. <code>Seed::LIGHT</code> and iced&rsquo;s other built-in seeds are in <code>iced::theme::palette</code>. <code>Color</code>, <code>color!</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code> and the other alignment names work, also by their full paths such as <code>iced::Center</code>. <code>space::horizontal()</code> and <code>space::vertical()</code> work. <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>.</li>
 </ul>
-<p>An available widget may still miss some of its methods. <code>Rotation::radians_mut</code> works, so <code>*rotation.radians_mut() = angle</code> turns a rotation in place. <code>Animation&lt;T&gt;</code> animates a <code>bool</code> or a number with <code>go</code>, <code>go_mut</code>, <code>is_animating</code> and <code>interpolate</code> at an <code>Instant</code>. A canvas program&rsquo;s State may be a <code>RefCell</code>. <code>canvas::Group</code> and <code>Cache::with_group</code> work. A function of yours that takes <code>impl Into&lt;Length&gt;</code> takes a number or a <code>Length</code>.</p>
+<p>An available widget may still miss some of its methods. <code>Rotation::radians_mut</code> works, so <code>*rotation.radians_mut() = angle</code> turns a rotation in place. <code>Animation&lt;T&gt;</code> animates a <code>bool</code> or a number with <code>go</code>, <code>go_mut</code>, <code>is_animating</code> and <code>interpolate</code> at an <code>Instant</code>. <code>go</code> also ends a chain of builders, as in <code>Animation::new(false).quick().go(true, now)</code>. A <code>Vector</code> adds, subtracts, and scales by an <code>f32</code>. A <code>Point</code> moves by a <code>Vector</code>, and two points differ by one. <code>color!(0xffc8a8, alpha)</code> and <code>color!(r, g, b, alpha)</code> take any <code>f32</code> alpha. A helper such as <code>text</code> passes as a function, as in <code>.map(text)</code>. A canvas program&rsquo;s State may be a <code>RefCell</code>. <code>canvas::Group</code> and <code>Cache::with_group</code> work. A function of yours that takes <code>impl Into&lt;Length&gt;</code> takes a number or a <code>Length</code>.</p>
 <h3 id="main-statements">Statements before the app</h3>
 <p><code>main</code> may run statements before <code>iced::application</code> or <code>iced::run</code>, such as <code>tracing_subscriber::fmt::init();</code>. They run once, when <code>rawr run</code> starts, as Rust runs <code>main</code> once. A reset or a reload boots the app again without them. An edit to them takes effect when <code>rawr run</code> restarts, and the window says so. <code>#[cfg(..)]</code> on a statement and <code>cfg!</code> follow the machine Rawr runs on.</p>
 <h3 id="not-available">Not available yet</h3>
 <ul>
   <li><code>iced::advanced</code>&rsquo;s widget traits. A custom widget other than a canvas program is written in Rust and imported. Its type cannot borrow yet, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>
   <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code>, <code>grid</code>, <code>float</code> and <code>keyed_column</code>.</li>
-  <li><code>iced::gradient</code>, <code>iced::clipboard</code>, <code>iced::task</code> streams, <code>Task::future</code> and <code>application::timed</code>.</li>
+  <li><code>iced::gradient</code>, <code>iced::clipboard</code> and <code>application::timed</code>.</li>
   <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
-  <li><code>async fn</code> and <code>.await</code>. An imported function that returns a future or a <code>Task</code>, as <code>tokio::time::sleep</code> and <code>system::information</code> do, cannot be called yet.</li>
+  <li><code>async fn</code> and <code>.await</code> in Rawr code. Rust futures work, as <a href="#async">Async code</a> describes.</li>
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
-<p>iced master has 56 examples. 24 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>delineate</code>, <code>events</code>, <code>exit</code>, <code>lazy</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>table</code>, <code>text</code>, <code>tooltip</code>, <code>url_handler</code> and <code>vectorial_text</code>. Ten of the others need <code>async</code> code or a future from a Rust crate. Four implement their own widget through <code>iced::advanced</code>. Two need <code>iced::application::timed</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
+<p>iced master has 56 examples. 28 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>lazy</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code>, <code>vectorial_text</code> and <code>websocket</code>. Six of the others write <code>async</code> code in the app itself. Four implement their own widget through <code>iced::advanced</code>. Two need <code>iced::application::timed</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/embedding">Previous<b>Embedding</b></a><a class="next" href="/docs/play">Next<b>?play and the playground</b></a></nav>
 </article>
 </main>
