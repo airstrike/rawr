@@ -14987,8 +14987,29 @@ impl<'a> Parser<'a> {
         }
         let end = self.expect(close, "the closing delimiter after intrinsic macro elements")?;
         let call = span(name_span.start(), end);
+        // iced's `color!(0xrrggbb, a)` and `color!(r, g, b, a)`: the color
+        // with its alpha set to `a`, any `f32` expression.
+        let alpha = (item.path() == "iced::color" && matches!(arguments.len(), 2 | 4))
+            .then(|| arguments.pop())
+            .flatten();
+        if let Some(alpha) = alpha {
+            let color = self.lower_host_macro(&items, owner, arguments, call)?;
+            self.pending_arguments = Some((vec![alpha], end));
+            return self.parse_host_method(color, "a".into(), call);
+        }
+        self.lower_host_macro(&items, owner, arguments, call)
+    }
+
+    /// A list macro's call on `arguments`, each of its one repeated type.
+    fn lower_host_macro(
+        &mut self,
+        items: &[crate::host::item::Definition],
+        owner: Option<crate::host::facade::Dependency>,
+        mut arguments: Vec<ParsedExpr>,
+        call: Span,
+    ) -> Result<ParsedExpr, Error> {
         let (item, signature) =
-            self.select_host_signature(&items, None, &mut arguments, true, call)?;
+            self.select_host_signature(items, None, &mut arguments, true, call)?;
         let [expected] = signature.inputs.as_slice() else {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),

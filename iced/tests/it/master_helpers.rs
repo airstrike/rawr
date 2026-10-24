@@ -2093,3 +2093,37 @@ impl State {
     );
     find(&adapter, "3 4 5");
 }
+
+/// A generative piece fades a `color!` by an alpha it computes, as iced's
+/// macro takes any `f32` there.
+#[test]
+fn color_takes_a_runtime_alpha() {
+    let adapter = boot(
+        r#"
+use iced::widget::text;
+use iced::{color, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let fade: f32 = 0.25 + 0.25;
+        let tint = color!(0xffc8a8, fade);
+        let rgba = color!(255, 200, 168, fade * 0.5);
+        text(format!("{} {} {}", tint.a, rgba.a, tint.r))
+    }
+}
+"#,
+    );
+    find(&adapter, "0.5 0.25 1");
+}
