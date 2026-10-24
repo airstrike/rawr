@@ -137,7 +137,7 @@ fn bigger(mut order: Order) -&gt; f64 {
 Ada x2
 54.44</span></div>
 </div>
-<p>On a struct, <code>#[rawr::export]</code> exports the type and its pub fields. A script reads a field and assigns it. On the impl block, it exports the pub methods and associated functions. A method keeps its receiver, so a script calls <code>add</code>, which takes <code>&amp;mut self</code>, only on a <code>mut</code> binding. On a free function, it exports the function. Private fields and methods stay private.</p>
+<p>On a struct, <code>#[rawr::export]</code> exports the type and its pub fields. A script reads a field and assigns it. On the impl block, it exports the pub methods and associated functions. A method keeps its receiver, so a script calls <code>add</code>, which takes <code>&amp;mut self</code>, only on a <code>mut</code> binding. On a free function, it exports the function. Private fields and methods stay private. As in Rust, a field and a method may share a name. <code>order.items</code> reads the field, and calling a field or reading a method without parentheses is rustc&rsquo;s error.</p>
 <p><code>Exports::new</code> names the root that scripts <code>use</code>. <code>add</code> takes each exported struct and function by name. <code>Engine::export</code> installs them. Export everything before you compile a script that uses the exports. After that compile, the exports can&rsquo;t change, and <code>Engine::export</code> returns an error. Scripts on one engine share its exports. Use another <code>Engine</code> for another set.</p>
 <p>The first release exports one impl block per struct. It doesn&rsquo;t export generic items, <code>&amp;mut</code> parameters or functions that return a reference.</p>
 

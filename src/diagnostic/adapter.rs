@@ -401,7 +401,9 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
 /// An unknown member's span, which covers its name as rustc underlines it.
 fn member_span(error: &resolve::Error) -> Span {
     let primary = error.primary_span();
-    let resolve::Error::UnknownMember { member, .. } = error else {
+    let (resolve::Error::UnknownMember { member, .. } | resolve::Error::MemberKind { member, .. }) =
+        error
+    else {
         return primary;
     };
     let start = primary.start();
@@ -482,6 +484,40 @@ fn resolution_report_with_sources(
 }
 
 fn resolution_builder(error: &resolve::Error) -> Builder {
+    // A member used as the other kind, which rustc reports apart.
+    match error {
+        resolve::Error::MemberKind {
+            owner,
+            member,
+            field: true,
+            ..
+        } => {
+            return Report::error(
+                code::RESOLVE_NO_METHOD,
+                format!(
+                    "no method named `{member}` found for `{}` in the current scope",
+                    short(owner)
+                ),
+            )
+            .help(format!("to use the field `{member}`, remove the parentheses"));
+        }
+        resolve::Error::MemberKind {
+            owner,
+            member,
+            field: false,
+            ..
+        } => {
+            return Report::error(
+                code::RESOLVE_METHOD_VALUE,
+                format!(
+                    "attempted to take value of method `{member}` on type `{}`",
+                    short(owner)
+                ),
+            )
+            .help("use parentheses to call the method");
+        }
+        _ => {}
+    }
     let stable_code = match error.category() {
         resolve::Category::DuplicateItem => code::RESOLVE_DUPLICATE_ITEM,
         resolve::Category::UnknownType => code::RESOLVE_UNKNOWN_TYPE,
@@ -724,6 +760,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         }
         resolve::Error::UnknownMember { owner, member, .. } => {
             format!("unknown member `{owner}::{member}`")
+        }
+        resolve::Error::MemberKind { owner, member, .. } => {
+            format!("member `{owner}::{member}` used as the other kind")
         }
         resolve::Error::UnknownFunction { name, .. } => format!("unknown function `{name}`"),
         resolve::Error::UnknownVariable { name, .. } => format!("unknown variable `{name}`"),

@@ -202,14 +202,20 @@ impl Exports {
         owner: Result<Type, host::Error>,
         callback: Callback,
     ) -> &mut Self {
+        // Under its own name beside the methods, as Rust keeps a field and
+        // a method of one name apart.
+        let path = match path.rsplit_once("::") {
+            Some((owner, name)) => format!("{owner}::{}{name}", host::EXPORTED_FIELD),
+            None => format!("{}{path}", host::EXPORTED_FIELD),
+        };
         self.method(
-            path,
+            &path,
             receiver::Mode::Shared,
             Vec::new(),
             ty.clone(),
             callback,
         );
-        self.method(path, receiver::Mode::Owned, vec![ty], owner, callback)
+        self.method(&path, receiver::Mode::Owned, vec![ty], owner, callback)
     }
 
     /// Declare a method with its receiver mode.
@@ -321,6 +327,7 @@ impl Engine {
         let registry = crate::Shared::get_mut(registry)
             .ok_or_else(|| failed("a script is running on this engine"))?;
         self.host_registry.install(definition).map_err(failed)?;
+        self.host_registry.mark_exported(&root);
         registry.install(runtime.finish()).map_err(failed)?;
         Ok(self)
     }

@@ -15861,6 +15861,7 @@ impl<'a> Parser<'a> {
             member
         };
         let path = format!("{}::{member}", definition.path());
+        let (member, path) = self.exported_member(&definition, member, path, member_span)?;
         // `*rotation.radians_mut() = angle`: a facade writes a `&mut`
         // accessor as the function that stores the value back.
         if let Some(base) = member.strip_suffix("_mut")
@@ -16049,6 +16050,42 @@ impl<'a> Parser<'a> {
             arguments,
             call,
         )
+    }
+
+    /// An app's exported type keeps fields and methods apart, as Rust does:
+    /// `order.items` reads the field and `order.items()` calls the method.
+    /// Using one as the other is rustc's error. Returns the member and path
+    /// to look up.
+    fn exported_member(
+        &mut self,
+        definition: &crate::host::type_def::Definition,
+        member: ImmutableString,
+        path: String,
+        member_span: Span,
+    ) -> Result<(ImmutableString, String), Error> {
+        use crate::host::EXPORTED_FIELD;
+        if !self.models.host.is_exported(&definition.path())
+            || member.starts_with(EXPORTED_FIELD)
+        {
+            return Ok((member, path));
+        }
+        let field = format!("{}::{EXPORTED_FIELD}{member}", definition.path());
+        let has_field = self.models.host_items(&field).is_some();
+        let has_method = self.models.host_items(&path).is_some();
+        let called = self.pending_arguments.is_some()
+            || matches!(self.peek(), Token::LeftParen | Token::Unit);
+        let kind = |field| Error::MemberKind {
+            owner: definition.path().into(),
+            member: member.clone(),
+            field,
+            reference: member_span,
+        };
+        match (called, has_field, has_method) {
+            (false, true, _) => Ok((format!("{EXPORTED_FIELD}{member}").into(), field)),
+            (false, false, true) => Err(kind(false)),
+            (true, true, false) => Err(kind(true)),
+            _ => Ok((member, path)),
+        }
     }
 
     /// `state.downcast_ref::<T>()` of a script widget's Tree state: its

@@ -270,3 +270,56 @@ fn export_programs_on_one_engine_share_its_host() {
     let b = engine.call_fn::<i64>(&mut Scope::new(), &second, "g", ()).unwrap();
     assert!(b > 100 && a < b, "{a} {b}");
 }
+
+#[derive(Clone)]
+#[rawr::export]
+pub struct Tally {
+    pub count: i64,
+}
+
+#[rawr::export]
+impl Tally {
+    pub fn count(&self) -> i64 {
+        self.count * 10
+    }
+}
+
+fn tallying() -> Engine {
+    let mut exports = Exports::new("tally");
+    exports.add::<Tally>();
+    let mut engine = Engine::new();
+    engine.export(exports).unwrap();
+    engine
+}
+
+#[test]
+fn export_field_called_like_a_method_is_rustc_e0599() {
+    let error = engine().compile("use shop::Order;\nfn f(order: Order) -> i64 {\n    order.items()\n}\n").unwrap_err();
+    let text = error.to_string();
+    assert!(text.starts_with("error[E0599]: no method named `items` found for `Order` in the current scope\n --> <script>:3:11-3:16"), "{text}");
+    assert!(text.ends_with("= help: to use the field `items`, remove the parentheses"), "{text}");
+}
+
+#[test]
+fn export_method_read_like_a_field_is_rustc_e0615() {
+    let error = engine().compile("use shop::Order;\nfn f(order: Order) -> f64 {\n    order.total\n}\n").unwrap_err();
+    let text = error.to_string();
+    assert!(text.starts_with("error[E0615]: attempted to take value of method `total` on type `Order`\n --> <script>:3:11-3:16"), "{text}");
+}
+
+#[test]
+fn export_field_and_method_of_one_name_both_work() {
+    let engine = tallying();
+    let ast = engine
+        .compile(
+            "use tally::Tally;
+             fn f(mut tally: Tally) -> i64 {
+                 let before = tally.count + tally.count();
+                 tally.count = 5;
+                 before * 1000 + tally.count + tally.count()
+             }",
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let value: i64 = engine.call_fn(&mut Scope::new(), &ast, "f", (Tally { count: 1 },)).unwrap();
+    assert_eq!(value, 11 * 1000 + 5 + 50);
+}

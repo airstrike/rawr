@@ -347,6 +347,12 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnknownMember { owner, member, .. } => {
                     write!(f, "Unknown member '{owner}::{member}'")
                 }
+                crate::resolve::Error::MemberKind {
+                    owner, member, field: true, ..
+                } => write!(f, "Field '{owner}::{member}' called like a method"),
+                crate::resolve::Error::MemberKind {
+                    owner, member, field: false, ..
+                } => write!(f, "Method '{owner}::{member}' read like a field"),
                 crate::resolve::Error::UnknownFunction { name, .. } => {
                     write!(f, "Unknown function '{name}'")
                 }
