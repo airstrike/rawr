@@ -448,6 +448,19 @@ pub struct UseMember {
 }
 
 impl Use {
+    /// Whether `name` is bound by `self` in a group, `use a::m::{self}`,
+    /// which imports only the module `m`, not a function of its name.
+    #[must_use]
+    pub fn binds_module_only(&self, name: &Name) -> bool {
+        let UseTree::Group { members, .. } = &self.tree else {
+            return false;
+        };
+        members.iter().any(|member| {
+            member.name.text == "self"
+                && member.alias.as_ref().unwrap_or(&member.name).span == name.span
+        })
+    }
+
     /// Each local name this import binds, with the full path it names.
     #[must_use]
     pub fn bindings(&self) -> Vec<(Name, Box<[ImmutableString]>)> {

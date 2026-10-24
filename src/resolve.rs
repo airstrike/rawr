@@ -1019,7 +1019,12 @@ fn resolve_imports(
         }
         for (name, path) in parsed.bindings() {
             let qualified = through_module(path.join("::").into());
-            bindings.push(resolve_import_binding(name, qualified, host)?);
+            let module_only = parsed.binds_module_only(&name);
+            let mut binding = resolve_import_binding(name, qualified, host)?;
+            if module_only && matches!(binding.target, item::Import::ModuleItem { .. }) {
+                binding.target = item::Import::Module;
+            }
+            bindings.push(binding);
         }
         for (name, qualified) in globbed {
             bindings.push(resolve_import_binding(name, qualified.into(), host)?);

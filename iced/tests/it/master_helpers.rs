@@ -2127,3 +2127,47 @@ impl State {
     );
     find(&adapter, "0.5 0.25 1");
 }
+
+/// `use iced::widget::canvas::{self, ..}` imports the module only, so
+/// `canvas(..)` is not the function there, as rustc says.
+#[test]
+fn a_module_import_does_not_bring_its_function() {
+    let error = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check_source(
+            r#"
+use iced::widget::canvas::{self, Frame, Geometry};
+use iced::{mouse, Rectangle, Renderer, Theme, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        canvas(self)
+    }
+}
+
+impl canvas::Program<Message> for State {
+    type State = ();
+
+    fn draw(&self, _: &(), r: &Renderer, _: &Theme, b: Rectangle, _: mouse::Cursor) -> Vec<Geometry> {
+        vec![Frame::new(r, b.size()).into_geometry()]
+    }
+}
+"#,
+        )
+        .err()
+        .expect("rustc rejects calling a module")
+        .to_string();
+    assert!(error.contains("canvas"), "{error}");
+}

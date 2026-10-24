@@ -995,6 +995,7 @@ impl<'a> Resolver<'a> {
 
             let globbed = self.glob_paths(context, parsed, &occupied)?;
             for (name, path) in use_paths(parsed).into_iter().chain(globbed) {
+                let module_only = parsed.binds_module_only(&name);
                 // `use keyboard::key;` after `use iced::keyboard;`: a path
                 // through a library module this unit imported, as Rust's
                 // paths start at a name in scope.
@@ -1033,6 +1034,8 @@ impl<'a> Resolver<'a> {
                 );
                 let import = match target {
                     Target::Module | Target::Trait => item::Import::Module,
+                    // `use a::m::{self}` imports the module `m` only.
+                    Target::HostModuleItem { .. } if module_only => item::Import::Module,
                     Target::HostModuleItem { definitions, owner } => {
                         item::Import::ModuleItem { definitions, owner }
                     }

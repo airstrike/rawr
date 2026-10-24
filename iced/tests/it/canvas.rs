@@ -16,8 +16,8 @@ fn boot(source: &str) -> program::Adapter {
 
 const DOTS: &str = r#"
 use iced::mouse;
-use iced::widget::canvas::{self, Action, Cache, Event, Frame, Geometry, LineCap, Path, Stroke};
-use iced::widget::{column, text};
+use iced::widget::canvas::{Action, Cache, Event, Frame, Geometry, LineCap, Path, Stroke};
+use iced::widget::{canvas, column, text};
 use iced::{Color, Element, Fill, Point, Rectangle, Renderer, Theme, Vector};
 
 #[derive(Default)]
