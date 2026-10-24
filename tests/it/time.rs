@@ -1,40 +1,35 @@
 #![cfg(not(feature = "no_time"))]
-use rawr::Engine;
+use rawr::{Engine, INT};
 #[cfg(not(feature = "no_float"))]
 use rawr::FLOAT;
-#[cfg(feature = "no_float")]
-use rawr::INT;
 
 #[test]
 fn test_timestamp() {
     let engine = Engine::new();
-
-    assert_eq!(engine.eval::<String>("type_of(timestamp())").unwrap(), "timestamp");
 
     #[cfg(not(feature = "no_float"))]
     assert!(
         engine
             .eval::<FLOAT>(
                 r#"
-                    let time = timestamp();
-                    let x = 10_000;
+                    let time = std::time::Instant::now();
+                    let mut x = 10_000;
                     while x > 0 { x -= 1; }
-                    elapsed(time)
+                    time.elapsed().as_secs_f64()
                 "#
             )
             .unwrap()
             < 10.0
     );
 
-    #[cfg(feature = "no_float")]
     assert!(
         engine
             .eval::<INT>(
                 r#"
-                    let time = timestamp();
-                    let x = 10_000;
+                    let time = std::time::Instant::now();
+                    let mut x = 10_000;
                     while x > 0 { x -= 1; }
-                    elapsed(time)
+                    time.elapsed().as_secs() as i64
                 "#
             )
             .unwrap()
@@ -45,9 +40,11 @@ fn test_timestamp() {
         engine
             .eval::<bool>(
                 "
-                let time1 = timestamp();
+                use std::time::Instant;
+
+                let time1 = Instant::now();
                 for x in 0..10000 {}
-                let time2 = timestamp();
+                let time2 = Instant::now();
                 time1 <= time2
             "
             )
@@ -64,9 +61,11 @@ fn test_timestamp_op() {
         (engine
             .eval::<FLOAT>(
                 r#"
-                    let time1 = timestamp();
-                    let time2 = time1 + 123.45;
-                    time2 - time1
+                    use std::time::{Duration, Instant};
+
+                    let time1 = Instant::now();
+                    let time2 = time1 + Duration::from_secs_f64(123.45);
+                    (time2 - time1).as_secs_f64()
                 "#
             )
             .unwrap()
@@ -80,9 +79,11 @@ fn test_timestamp_op() {
         (engine
             .eval::<FLOAT>(
                 r#"
-                    let time1 = timestamp();
-                    let time2 = time1 - 123.45;
-                    time1 - time2
+                    use std::time::{Duration, Instant};
+
+                    let time1 = Instant::now();
+                    let time2 = time1 - Duration::from_secs_f64(123.45);
+                    (time1 - time2).as_secs_f64()
                 "#
             )
             .unwrap()
@@ -91,35 +92,33 @@ fn test_timestamp_op() {
             < 0.001
     );
 
-    #[cfg(feature = "no_float")]
     assert_eq!(
         engine
             .eval::<INT>(
                 r#"
-                    let time1 = timestamp();
-                    let time2 = time1 + 42;
-                    time2 - time1
+                    use std::time::{Duration, Instant};
+
+                    let time1 = Instant::now();
+                    let time2 = time1 + Duration::from_secs(42);
+                    (time2 - time1).as_secs() as i64
                 "#
             )
             .unwrap(),
         42
     );
 
-    #[cfg(feature = "no_float")]
     assert_eq!(
         engine
             .eval::<INT>(
                 r#"
-                    let time1 = timestamp();
-                    let time2 = time1 - 42;
-                    time1 - time2
+                    use std::time::{Duration, Instant};
+
+                    let time1 = Instant::now();
+                    let time2 = time1 - Duration::from_secs(42);
+                    time1.duration_since(time2).as_secs() as i64
                 "#
             )
             .unwrap(),
         42
     );
-
-    // Check edge case for crashes
-    #[cfg(not(feature = "unchecked"))]
-    let _ = engine.run("timestamp()-24>>-60");
 }

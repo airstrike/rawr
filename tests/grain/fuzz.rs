@@ -82,11 +82,15 @@ fn mutated_artifacts_load_or_fail_but_never_misbehave() {
 
     // Every artifact the corpus can produce, so the mutations land on real
     // structure — a hand-written sample would only ever exercise its own
-    // shape.
+    // shape. Generated scripts add shapes nobody wrote, and only some of them
+    // can be written at all, so a few hundred are tried.
+    let generated: Vec<String> = (0..400).map(|n| Generator::new(0x5eed_5eed_0000_0000 ^ n).script()).collect();
     let seeds: Vec<Vec<u8>> = corpus::CASES
         .iter()
-        .filter_map(|case| {
-            let ast = writer.compile(case.source).ok()?;
+        .map(|case| case.source)
+        .chain(generated.iter().map(String::as_str))
+        .filter_map(|source| {
+            let ast = writer.compile(source).ok()?;
             Compiler::new().compile(&ast).write().ok()
         })
         .collect();
@@ -212,96 +216,6 @@ fn quietly<T>(body: impl FnOnce() -> T) -> Option<T> {
     out
 }
 
-/// A rawr bug, not one of ours, found by `cargo fuzz run generated`.
-///
-/// A `switch` as the last statement of a block makes rawr's optimizer delete a
-/// `let` in that block and flatten what is left into the enclosing statement
-/// list — while the reads of that local keep the scope index the parser gave
-/// them. The index is counted back from the end of the scope, so it now names
-/// whatever moved into its place.
-///
-/// Two symptoms, and the quiet one is the dangerous one:
-///
-/// * with something else at that index, rawr answers with **another variable's
-///   value** and reports nothing at all;
-/// * with nothing there, `scope.len() - index` underflows (`eval/expr.rs:131`)
-///   — a panic in a debug build and a wild index in a release one.
-///
-/// Both are three lines of ordinary rawr with none of this involved. We resolve
-/// locals by name, so we say the variable is missing, which is the closest
-/// thing to right available: there is no agreeing with an AST that refers to a
-/// local it does not declare.
-///
-/// Pinned because `generated_scripts_agree_with_the_walker` and both `cargo
-/// fuzz` targets have to skip these, and every one of those skips should go the
-/// day this test starts failing.
-#[test]
-fn rawr_drops_a_local_its_optimizer_still_refers_to() {
-    // The read lands on `a`, so rawr answers 1 where the script says 99.
-    const WRONG: &str = "let a = 1; { let b = 99; switch b { _ => b } }";
-    // The same shape with nothing left at that index.
-    const PANIC: &str = "{ let b = 99; switch b { _ => b } }";
-
-    let engine = corpus::engine();
-    let mut plain = corpus::engine();
-    plain.set_optimization_level(rawr::OptimizationLevel::None);
-
-    let ast = engine.compile(WRONG).expect("it parses");
-    let value = engine.eval_ast::<Dynamic>(&ast).expect("rawr runs it, which is the problem");
-    assert_eq!(
-        value.as_int().ok(),
-        Some(1),
-        "rawr no longer reads the wrong variable — delete the optimizer skips \
-         in the fuzzers and this test with them",
-    );
-
-    let ast = engine.compile(PANIC).expect("it parses");
-    assert!(
-        quietly(|| engine.eval_ast::<Dynamic>(&ast)).is_none(),
-        "rawr no longer underflows here — delete the walker skip in \
-         `generated_scripts_agree_with_the_walker`",
-    );
-
-    // The same scripts with the optimizer out of the way, which is what says
-    // the fault is in the optimizer rather than in them.
-    for source in [WRONG, PANIC] {
-        let ast = plain.compile(source).expect("it parses either way");
-        let value = quietly(|| plain.eval_ast::<Dynamic>(&ast))
-            .expect("with the optimizer off it should run")
-            .expect("and it should not fail");
-        assert_eq!(value.as_int().ok(), Some(99), "{source:?}");
-    }
-}
-
-/// Whether the two sides agree once rawr's optimizer is out of the way.
-///
-/// The optimizer is what makes a dropped local reachable, so agreeing without
-/// it and disagreeing with it says the AST is at fault rather than the
-/// lowering. Only ever asked about a divergence that already looks like one.
-fn agree_unoptimised(source: &str) -> bool {
-    let mut plain = corpus::engine();
-    plain.set_optimization_level(rawr::OptimizationLevel::None);
-    let Ok(ast) = plain.compile(source) else {
-        return false;
-    };
-
-    let mut walker_scope = Scope::new();
-    let Some(walked) = quietly(|| plain.eval_ast_with_scope::<Dynamic>(&mut walker_scope, &ast)) else {
-        return false;
-    };
-
-    let program = Compiler::new().compile(&ast);
-    let mut vm_scope = Scope::new();
-    let ours = if program.makes_fn_pointers() {
-        let program = program.into_shared();
-        Vm::new(&plain).eval_with_callbacks(&mut vm_scope, &program)
-    } else {
-        Vm::new(&plain).eval_with_scope(&mut vm_scope, &program)
-    };
-
-    snapshot(&walker_scope, walked) == snapshot(&vm_scope, ours)
-}
-
 /// The claim the corpus makes, over scripts nobody wrote.
 ///
 /// `tests/differential.rs` pins the constructs someone thought of. This is the
@@ -333,7 +247,6 @@ fn generated_scripts_agree_with_the_walker() {
     let mut skipped = 0usize;
     let mut walker_panics = 0usize;
     let mut too_deep = 0usize;
-    let mut lost_a_local = 0usize;
     let mut unparsed: Vec<String> = Vec::new();
     let mut failures = Vec::new();
 
@@ -358,10 +271,9 @@ fn generated_scripts_agree_with_the_walker() {
         // The scope is snapshotted after the run, not during: what a script
         // leaves behind is half of what is being compared.
         //
-        // Guarded because the walker can panic on a script of its own accord —
-        // see `rawr_underflows_a_scope_index_under_its_own_optimizer`. There is
-        // nothing to compare against a side that did not finish, so those are
-        // counted and dropped rather than blamed on the VM.
+        // Guarded because the walker can panic on a script of its own accord.
+        // There is nothing to compare against a side that did not finish, so
+        // those are counted and dropped rather than blamed on the VM.
         let mut walker_scope = Scope::new();
         let Some(walked) = quietly(|| engine.eval_ast_with_scope::<Dynamic>(&mut walker_scope, &ast)) else {
             walker_panics += 1;
@@ -396,13 +308,6 @@ fn generated_scripts_agree_with_the_walker() {
         if walked == ours {
             continue;
         }
-        // Not every disagreement is one to have: rawr's optimizer can delete a
-        // `let` whose variable is still read, and then there is no agreeing
-        // with it. See `rawr_drops_a_local_its_optimizer_still_refers_to`.
-        if format!("{ours:?}").contains("ErrorVariableNotFound") && agree_unoptimised(&source) {
-            lost_a_local += 1;
-            continue;
-        }
 
         if failures.len() < 5 {
             failures.push(format!("\n=== script {n} (seed {:#x}) ===\n  {source}\n  rawr: {walked:?}\n  vm:   {ours:?}", SEED ^ n as u64,));
@@ -413,8 +318,7 @@ fn generated_scripts_agree_with_the_walker() {
         "{parsed} of {SCRIPTS} generated scripts parsed, {ran} compared, \
          {valued} produced a value, {skipped} hit a limit, \
          {walker_panics} panicked the walker, \
-         {too_deep} were too complex to parse, \
-         {lost_a_local} lost a local to rawr's optimizer",
+         {too_deep} were too complex to parse",
     );
 
     // The walker panicking is upstream's problem, but it is also a hole in this
@@ -422,8 +326,7 @@ fn generated_scripts_agree_with_the_walker() {
     assert!(
         walker_panics * 50 < SCRIPTS,
         "{walker_panics} of {SCRIPTS} scripts panicked the walker, which is too \
-         many to keep skipping — see \
-         `rawr_underflows_a_scope_index_under_its_own_optimizer`",
+         many to keep skipping",
     );
 
     // A generator that mostly emits garbage would pass this test by comparing
@@ -438,7 +341,7 @@ fn generated_scripts_agree_with_the_walker() {
     // So the two are counted apart, and this is the one that means something.
     assert!(
         unparsed.is_empty(),
-        "{} of {SCRIPTS} scripts are not valid rawr, so the generator is \
+        "{} of {SCRIPTS} scripts are not valid typed Rust, so the generator is \
          emitting syntax rather than testing it:{}",
         unparsed.len(),
         unparsed.iter().take(5).cloned().collect::<String>(),

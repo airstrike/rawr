@@ -3,24 +3,23 @@
 //! Slots are indices into the caller's `Scope` counted from a base taken when
 //! the program starts, so everything the host put there beforehand sits below
 //! every slot. Those reads and writes go by name instead, and this is where
-//! that is held to rawr's behaviour — including the three places rawr looks
-//! and the order it looks in.
+//! that is held to rawr's behaviour.
+//!
+//! A typed script is checked against the scope it will run in, so every
+//! program here is compiled with that scope: an `i64` or a `String` the host
+//! pushed is a typed local to the script, and anything else is a `<dynamic>`
+//! value only a registered function can use.
 //!
 //! It matters more than the node count suggests: a script that reads anything
 //! its host supplied used to be a fragment, and a program with a fragment in
 //! it cannot be written to an artifact at all.
-
-// `on_var` carries rawr's "volatile, may change" marker rather than a real
-// deprecation — the same one `eval_expression_tree_raw` carries. Registering a
-// resolver is the only way to test that the VM consults one.
-#![allow(deprecated)]
 
 // Only the engine is wanted here; the corpus scripts belong to the harnesses
 // that run all of them.
 use super::corpus;
 
 use rawr::grain::{Compiler, Vm};
-use rawr::{Dynamic, Engine, INT, Module, Scope};
+use rawr::{Dynamic, Engine, INT, Scope};
 
 /// What a run produced, in a form two runs can be compared on.
 #[derive(Debug, PartialEq, Eq)]
@@ -39,23 +38,23 @@ fn capture(scope: &Scope, result: Result<Dynamic, Box<rawr::EvalAltResult>>) -> 
 /// Run `source` under rawr and under the VM, from the same starting scope, and
 /// require they agree on the value, the error and what the scope holds after.
 ///
-/// `writable` is the point of the exercise rather than a detail: a program
-/// that still fragments cannot cross a wire, so a case that passes while
+/// `lowered` is the point of the exercise rather than a detail: a program that
+/// still fragments cannot cross a wire, so a case that passes while
 /// fragmenting has proved nothing about the feature.
 #[track_caller]
-fn agree(source: &str, build: impl Fn(&mut Scope), writable: bool) {
-    agree_with(&corpus::engine(), source, build, writable);
+fn agree(source: &str, build: impl Fn(&mut Scope), lowered: bool) {
+    agree_with(&corpus::engine(), source, build, lowered);
 }
 
-/// The same, against an engine the caller has set up — a variable resolver, a
-/// published module. Both change what a name resolves to, which is most of what
-/// this file is about.
+/// The same, against an engine the caller has set up.
 #[track_caller]
-fn agree_with(engine: &Engine, source: &str, build: impl Fn(&mut Scope), writable: bool) {
-    let ast = engine.compile(source).expect("must compile");
+fn agree_with(engine: &Engine, source: &str, build: impl Fn(&mut Scope), lowered: bool) {
+    let mut checked = Scope::new();
+    build(&mut checked);
+    let ast = engine.compile_with_scope(&checked, source).expect("must compile");
     let program = Compiler::new().compile(&ast);
 
-    assert_eq!(program.residual_count() == 0, writable, "{source:?} fragments: {:?}", program.first_unsupported(),);
+    assert_eq!(program.residual_count() == 0, lowered, "{source:?} fragments: {:?}", program.first_unsupported(),);
 
     let mut walked = Scope::new();
     build(&mut walked);
@@ -75,12 +74,6 @@ fn agree_with(engine: &Engine, source: &str, build: impl Fn(&mut Scope), writabl
     assert_eq!(actual, expected, "{source:?}");
 }
 
-/// A script integer. Spelled through `INT` because `only_i32` narrows it, and
-/// a caller variable holding the wider type is a host value no operator takes.
-fn lit(value: INT) -> Dynamic {
-    Dynamic::from(value)
-}
-
 #[test]
 fn a_caller_variable_can_be_read() {
     agree(
@@ -91,7 +84,7 @@ fn a_caller_variable_can_be_read() {
         true,
     );
     agree(
-        "mode + \"!\"",
+        "mode.clone() + \"!\"",
         |s| {
             s.push("mode", "chase".to_string());
         },
@@ -115,8 +108,6 @@ fn a_caller_variable_can_be_written() {
         },
         true,
     );
-    // The op-assignment expansion path: no `-=` for strings, so rawr falls
-    // back to `x = x - y` and fails there rather than reporting no `-=`.
     agree(
         "mode += \"!\"; mode",
         |s| {
@@ -126,44 +117,26 @@ fn a_caller_variable_can_be_written() {
     );
 }
 
-/// Rawr's method-call rewrite reaches a caller's variable too.
+/// A registered function's `&mut` first parameter reaches a caller's variable
+/// too.
 ///
-/// `f(x, ..)` means `x.f(..)`, so a `&mut` first parameter mutates the
-/// variable. A local is addressed by slot and one the caller supplied is not,
-/// but the rule is the same for both — which is the point, since whether a
-/// script's variable is a local is not something the script says.
+/// A local is addressed by slot and one the caller supplied is not, but the
+/// rule is the same for both — which is the point, since whether a script's
+/// variable is a local is not something the script says.
 #[test]
 fn a_caller_variable_in_first_argument_position_is_taken_by_reference() {
     agree(
-        "push(log, 2); log",
-        |s| {
-            s.push("log", vec![lit(1)]);
-        },
-        true,
-    );
-    agree(
-        "bump(w); w.level",
+        "bump(w); level_of(w)",
         |s| {
             s.push("w", corpus::Widget::default());
         },
         true,
     );
-    // A constant is not a place rawr will hand out, so the mutation is
-    // discarded — and the caller's entry has to come back untouched.
+    // And a failure after the mutation has already landed.
     agree(
-        "push(log, 2); log",
+        "bump_then_fail(w)",
         |s| {
-            s.push_constant("log", vec![lit(1)]);
-        },
-        true,
-    );
-    // Read after the other arguments, so it is the second name reported
-    // missing rather than the first.
-    agree("nosuch(gone, missing)", |_| {}, true);
-    agree(
-        "nosuch(gone, brightness)",
-        |s| {
-            s.push("brightness", 1 as INT);
+            s.push("w", corpus::Widget::default());
         },
         true,
     );
@@ -171,153 +144,44 @@ fn a_caller_variable_in_first_argument_position_is_taken_by_reference() {
 
 /// A chain rooted at a caller's variable, which is the last root shape that
 /// did not lower.
-///
-/// Whether such a root can be written through is not known until it is looked
-/// up, and rawr decides at the same moment and the same way: `search_namespace`
-/// hands back a `Target`, and a scope entry becomes a reference where anything
-/// else becomes a read-only value (`eval/expr.rs:120-155`). One case per arm of
-/// that, because each fails differently.
 #[test]
 fn a_chain_can_be_rooted_at_a_caller_variable() {
-    let array = || vec![lit(1)];
+    let text = |s: &mut Scope| {
+        s.push("mode", "chase".to_string());
+    };
 
-    // A writable entry: read, mutate through a method, and assign through.
-    agree(
-        "host[0]",
-        |s| {
-            s.push("host", array());
-        },
-        true,
-    );
-    agree(
-        "host.push(2); host",
-        |s| {
-            s.push("host", array());
-        },
-        true,
-    );
-    agree(
-        "host[0] = 9; host",
-        |s| {
-            s.push("host", array());
-        },
-        true,
-    );
-    agree(
-        "host.level",
-        |s| {
-            s.push("host", corpus::Widget::default());
-        },
-        true,
-    );
-    agree(
-        "host.level = 3; host.level",
-        |s| {
-            s.push("host", corpus::Widget::default());
-        },
-        true,
-    );
+    // Read, mutate through a method, and fail inside one.
+    agree("mode.len()", text, true);
+    agree("mode.push('!'); mode", text, true);
+    agree("mode.push_str(\"!!\"); mode.len()", text, true);
+    agree("mode.remove(99)", text, true);
 
-    // A constant is not a place. Rawr refuses the assignment outright and
-    // refuses a mutating method too, because it never hands out a reference to
-    // one and a non-pure native will not take a read-only first argument
-    // (`func/call.rs:405`).
+    // A constant can be read through a chain too.
     agree(
-        "host[0] = 9; host",
+        "mode.len()",
         |s| {
-            s.push_constant("host", array());
+            s.push_constant("mode", "chase".to_string());
         },
         true,
     );
-    agree(
-        "host.push(2); host",
-        |s| {
-            s.push_constant("host", array());
-        },
-        true,
-    );
-    agree(
-        "host[0]",
-        |s| {
-            s.push_constant("host", array());
-        },
-        true,
-    );
-
-    // A shared entry walks through its cell's guard, so the mutation lands
-    // where every holder of the cell can see it. The closure is made in a
-    // block so the compared scope does not end up holding a pointer, which the
-    // two sides render differently on purpose.
-    agree(
-        "{ let keep = || host.len(); } host.push(2); host",
-        |s| {
-            s.push("host", array());
-        },
-        true,
-    );
-
-    // No entry at all, reported against the variable rather than the chain.
-    agree("nowhere[0]", |_| {}, true);
-    agree("nowhere.push(1)", |_| {}, true);
 }
 
-/// The other two things a name can resolve to, neither of which is a place.
-#[test]
-fn a_chain_rooted_at_a_resolved_name_cannot_be_written_through() {
-    let mut engine = corpus::engine();
-    engine.on_var(|name, _, _| {
-        Ok(match name {
-            "injected" => Some(Dynamic::from(vec![lit(7)])),
-            _ => None,
-        })
-    });
-
-    let mut module = rawr::Module::new();
-    module.set_var("published", vec![lit(5)]);
-    engine.register_global_module(module.into());
-
-    for source in [
-        // A resolver's answer is read-only, so both the write and the mutating
-        // method are refused.
-        "injected[0]",
-        "injected[0] = 9; injected",
-        "injected.push(2); injected",
-        // A module's constant is not, so both go into a copy and are discarded.
-        // The two constants are not the same constant, which is the thing worth
-        // pinning here (`eval/expr.rs:151` against `:122`).
-        "published[0]",
-        "published[0] = 9",
-        "published.push(2)",
-    ] {
-        agree_with(&engine, source, |_| {}, true);
-    }
-}
-
-/// A closure can capture a variable the caller supplied, and capturing it means
-/// binding the cell rather than a copy of what is in it.
+/// A closure can capture a variable the caller supplied.
 ///
-/// Both halves of that were wrong. Sharing found the entry by walking
-/// `Scope::iter_raw`, which runs from the top down, and used the position as if
-/// it counted from the bottom — so with more than one caller entry it shared
-/// the wrong variable outright. And the read that binds the capture went
-/// through the flattening one, so even the right variable was captured by
-/// value: a write afterwards was invisible to the closure.
+/// Sharing used to find the entry by walking `Scope::iter_raw`, which runs from
+/// the top down, and used the position as if it counted from the bottom — so
+/// with more than one caller entry it shared the wrong variable outright.
 #[test]
 fn a_closure_can_capture_a_caller_variable() {
     let seed = |scope: &mut Scope| {
         // Two of them, and the interesting one is not last: the index bug is
         // invisible with a single entry.
-        scope.push("first", vec![lit(7)]);
-        scope.push("second", vec![lit(1)]);
+        scope.push("first", 7 as INT);
+        scope.push("second", 1 as INT);
     };
 
-    // The write happens after the closure is made, so a captured copy answers
-    // with the old length.
-    agree("let n = 0; { let f = || first.len(); first.push(9); n = f.call(); } n", seed, true);
-    agree("let n = 0; { let f = || second.len(); second.push(9); n = f.call(); } n", seed, true);
-    // And the capture is what shares it, which `is_shared` can see.
-    agree("{ let f = || first.len(); } is_shared(first)", seed, true);
-    agree("{ let f = || first.len(); } is_shared(second)", seed, true);
+    agree("let mut n: i64 = 0; { let f = |x: i64| x + first; n = f(100); } n", seed, true);
+    agree("let mut n: i64 = 0; { let f = |x: i64| x + second; n = f(100); } n", seed, true);
 }
 
 /// A local of the same name hides the caller's and must not write through to
@@ -325,7 +189,7 @@ fn a_closure_can_capture_a_caller_variable() {
 #[test]
 fn a_local_shadows_the_caller_without_disturbing_it() {
     agree(
-        "let brightness = 1; brightness += 1; brightness",
+        "let mut brightness: i64 = 1; brightness += 1; brightness",
         |s| {
             s.push("brightness", 100 as INT);
         },
@@ -334,7 +198,7 @@ fn a_local_shadows_the_caller_without_disturbing_it() {
     // And the other order: read before the local exists, so the same name is
     // two different variables in one script.
     agree(
-        "let first = brightness; let brightness = 1; [first, brightness]",
+        "let first = brightness; let brightness: i64 = 1; vec![first, brightness]",
         |s| {
             s.push("brightness", 100 as INT);
         },
@@ -342,263 +206,38 @@ fn a_local_shadows_the_caller_without_disturbing_it() {
     );
 }
 
+/// A constant the caller pushed is read like any other variable, and the
+/// checker refuses an assignment to it before anything runs.
 #[test]
-fn a_caller_constant_cannot_be_assigned_to() {
+fn a_caller_constant_can_be_read_but_not_assigned() {
     let constant = |s: &mut Scope| {
-        s.push_constant("mode", lit(1));
+        s.push_constant("mode", 1 as INT);
     };
 
-    agree("mode = 2; mode", constant, true);
-    agree("mode += 1; mode", constant, true);
-    // Reading one is fine, which is the half that must keep working.
     agree("mode + 1", constant, true);
+
+    let engine = corpus::engine();
+    let mut scope = Scope::new();
+    constant(&mut scope);
+    for source in ["mode = 2; mode", "mode += 1; mode"] {
+        let err = engine.compile_with_scope(&scope, source).expect_err("a constant is not assignable");
+        assert!(err.to_string().contains("immutable"), "{source:?}: {err}");
+    }
 }
 
-#[test]
-fn a_name_that_is_nowhere_is_reported_the_same_way() {
-    agree("nope + 1", |_| {}, true);
-    agree("nope = 1", |_| {}, true);
-    agree("nope += 1", |_| {}, true);
-}
-
-/// A bare script-function name is a function pointer with the calling
-/// environment attached (`eval/expr.rs:71-99`), not a variable read, so it
-/// must stay a fragment rather than becoming a name lookup that fails.
-///
-/// Checked on the compiled program rather than by running it, because running
-/// it currently disagrees with the walker for an unrelated reason: `execute`
-/// forces `always_search_scope` whenever a program has any fragment, and that
-/// flag makes rawr skip the function-pointer branch entirely
-/// (`eval/expr.rs:62`). Reported separately — it predates named variables, and
-/// the fix is about residuals rather than about this.
+/// A bare script-function name is a function pointer, not a variable read, so
+/// it must not become a name lookup that fails.
 #[test]
 fn a_script_function_name_is_not_a_variable() {
     let engine = corpus::engine();
-    let ast = engine.compile("fn helper() { 1 } let f = helper; f.call()").expect("must compile");
+    let ast = engine.compile("fn helper() -> i64 { 1 } let f = helper; f()").expect("must compile");
     let program = Compiler::new().compile(&ast);
 
-    assert!(program.residual_count() > 0, "a function name must not become a name lookup",);
     assert!(
         !rawr::grain::bytecode::disassemble(program.code()).any(|(.., op)| matches!(op, rawr::grain::bytecode::Op::LoadNamed(..))),
         "nothing in {:?} may load `helper` by name",
         program,
     );
-}
-
-/// The last of the three places rawr looks: a constant a host published on a
-/// module rather than in the scope.
-#[test]
-fn a_global_module_constant_resolves() {
-    let mut engine = corpus::engine();
-    let mut module = Module::new();
-    module.set_var("CHANNELS", 512 as INT);
-    engine.register_global_module(module.into());
-
-    let ast = engine.compile("CHANNELS / 2").expect("must compile");
-    let program = Compiler::new().compile(&ast);
-    assert_eq!(program.residual_count(), 0);
-
-    let value = Vm::new(&engine).eval_with_scope(&mut Scope::new(), &program).expect("a module constant must resolve");
-    assert_eq!(value.as_int().unwrap(), 256);
-
-    // And writing to one is refused, because it is a value and not a place.
-    let ast = engine.compile("CHANNELS = 1").expect("must compile");
-    let program = Compiler::new().compile(&ast);
-    let err = Vm::new(&engine).eval_with_scope(&mut Scope::new(), &program).expect_err("a module constant is not assignable");
-    assert!(matches!(*err, rawr::EvalAltResult::ErrorAssignmentToConstant(..)), "got {err:?}",);
-}
-
-/// A script `import` costs the whole body its lowering, and must.
-///
-/// `import` declares into the imports stack, not the scope. A per-statement
-/// fragment rewinds that stack on the way out (`eval/stmt.rs:55`), so the alias
-/// would be dropped before the qualified call — itself a separate fragment —
-/// could name it, and the VM answered `Module not found` where the walker
-/// answered. That is a wrong result rather than a missing feature, which is the
-/// one thing the fragment fallback is not allowed to produce.
-///
-/// So the compiler refuses the lowering instead, and the walker takes the body
-/// as one block. These cases are here to keep it refusing: an `import` that
-/// started lowering again would put the divergence straight back.
-#[test]
-#[cfg(not(feature = "no_module"))]
-fn an_import_keeps_the_walkers_answer() {
-    let mut engine = corpus::engine();
-
-    let mut resolver = rawr::module_resolvers::StaticModuleResolver::new();
-    let module_ast = engine.compile("fn double(x) { x * 2 } export const LIMIT = 99;").expect("the module source must parse");
-    let module = Module::eval_ast_as_new(Scope::new(), &module_ast, &engine).expect("the module must build");
-    resolver.insert("kit", module);
-    engine.set_module_resolver(resolver);
-
-    // An `import` in the body costs the body its lowering, so the program is a
-    // fragment rawr's walker has to evaluate and cannot become an artifact.
-    for source in [
-        r#"import "kit" as k; k::double(21)"#,
-        r#"import "kit" as k; k::LIMIT"#,
-        r#"let r = 0; { import "kit" as k; r = k::double(4); } r"#,
-        r#"import "kit" as k; let t = 0; for i in 0..3 { t += k::double(i); } t"#,
-    ] {
-        agree_with(&engine, source, |_| {}, false);
-    }
-
-    // In a function body the fallback is per-function: that body stays an AST
-    // in the library and the top level still lowers whole.
-    agree_with(&engine, r#"fn via_kit() { import "kit" as k; k::double(3) } via_kit()"#, |_| {}, true);
-}
-
-/// `eval` costs the body its lowering, and must.
-///
-/// It runs against the caller's scope and can declare into it, and the AST
-/// does not say so. The slot model resolves indices against the scope shape it
-/// can see, so a read after one looks in the wrong place —
-/// `eval("let x = 40"); x + 2` found no `x` where the walker found 40.
-///
-/// Written as a divergence rather than a missing feature, which is what makes
-/// it worth a test: it used to become an ordinary fragment and answer wrongly.
-#[test]
-fn eval_keeps_the_walkers_answer() {
-    let engine = corpus::engine();
-
-    for source in [
-        // The case that diverged: what `eval` declares outlives it.
-        r#"eval("let x = 40"); x + 2"#,
-        r#"let x = 1; eval("x = 99"); x"#,
-        r#"eval("1 + 1")"#,
-        r#"eval("let y = 7; y * 3")"#,
-    ] {
-        agree_with(&engine, source, |_| {}, false);
-    }
-}
-
-/// The same for custom syntax, which reaches the caller's scope through an
-/// `EvalContext` and is likewise invisible to the slot model.
-#[test]
-#[cfg(not(feature = "no_custom_syntax"))]
-fn custom_syntax_keeps_the_walkers_answer() {
-    let mut engine = corpus::engine();
-    engine
-        .register_custom_syntax(["declare", "$ident$", "=", "$int$"], true, |context, inputs| {
-            let name = inputs[0].get_string_value().unwrap().to_string();
-            let value = inputs[1].get_literal_value::<INT>().unwrap();
-            context.scope_mut().push(name, value);
-            Ok(Dynamic::UNIT)
-        })
-        .expect("the custom syntax must register");
-
-    for source in [r#"declare foo = 41; foo + 1"#, r#"declare bar = 5; 10"#] {
-        agree_with(&engine, source, |_| {}, false);
-    }
-}
-
-/// The first of the three, and the one a VM would most plausibly skip: a
-/// resolver the host registered through `Engine::on_var` sees the name before
-/// the scope does.
-#[test]
-fn a_variable_resolver_is_consulted_first() {
-    let mut engine = corpus::engine();
-    engine.on_var(|name, _, _| {
-        Ok(match name {
-            "injected" => Some(lit(99)),
-            // Declining must fall through to the scope rather than fail.
-            _ => None,
-        })
-    });
-
-    let compile = |engine: &Engine, source: &str| {
-        let ast = engine.compile(source).expect("must compile");
-        let program = Compiler::new().compile(&ast);
-        assert_eq!(program.residual_count(), 0, "{source:?} must not fragment");
-        program
-    };
-
-    let mut scope = Scope::new();
-    scope.push("ordinary", 5 as INT);
-
-    let program = compile(&engine, "injected + ordinary");
-    let value = Vm::new(&engine).eval_with_scope(&mut scope.clone(), &program).expect("both must resolve");
-    assert_eq!(value.as_int().unwrap(), 104);
-
-    // A resolver hands back a value rather than a place, so it is read-only.
-    let program = compile(&engine, "injected = 1");
-    let err = Vm::new(&engine).eval_with_scope(&mut scope.clone(), &program).expect_err("a resolved variable is not assignable");
-    assert!(matches!(*err, rawr::EvalAltResult::ErrorAssignmentToConstant(..)), "got {err:?}",);
-
-    // And the walker agrees about all of it.
-    let ast = engine.compile("injected + ordinary").expect("must compile");
-    let expected = engine.eval_ast_with_scope::<Dynamic>(&mut scope.clone(), &ast).expect("the walker must agree");
-    assert_eq!(expected.as_int().unwrap(), 104);
-}
-
-/// A resolver that pushes onto the scope invalidates every parse-time index,
-/// and rawr stops trusting them from that point. Nothing this compiler emits
-/// depends on those, but a fragment's does — so the flag still has to be set.
-#[test]
-fn a_resolver_that_grows_the_scope_forces_a_search() {
-    let mut engine = corpus::engine();
-    engine.on_var(|name, _, mut context| {
-        if name == "grow" {
-            context.scope_mut().push("added", 1 as INT);
-            return Ok(Some(lit(1)));
-        }
-        Ok(None)
-    });
-
-    let ast = engine.compile("let a = 10; grow + a").expect("must compile");
-    let program = Compiler::new().compile(&ast);
-    assert_eq!(program.residual_count(), 0);
-
-    let mut scope = Scope::new();
-    let value = Vm::new(&engine).eval_with_scope(&mut scope, &program).expect("must run");
-
-    let mut walked = Scope::new();
-    let expected = engine.eval_ast_with_scope::<Dynamic>(&mut walked, &ast).expect("the walker must run it too");
-
-    assert_eq!(format!("{value:?}"), format!("{expected:?}"));
-}
-
-/// The receiver a resolver answered is not the scope entry of the same name.
-///
-/// This is the case the by-reference rewrite is most easily got wrong on: the
-/// resolver is consulted first and hands back a *value*, so `push(shadowed, 2)`
-/// mutates a temporary and the caller's entry is left alone — even though there
-/// is an entry of that name sitting right there to take a reference to.
-///
-/// The VM tells them apart by the value already on the stack being read-only,
-/// which is how `load_named` marks a resolver's answer. The alternative would
-/// be running the resolver a second time, and a host can see that.
-#[test]
-fn a_resolved_receiver_is_not_the_scope_entry_it_shadows() {
-    let mut engine = corpus::engine();
-    engine.on_var(|name, _, _| {
-        Ok(match name {
-            "shadowed" => Some(Dynamic::from(vec![lit(9)])),
-            _ => None,
-        })
-    });
-
-    let source = "push(shadowed, 2); shadowed";
-    let ast = engine.compile(source).expect("must compile");
-    let program = Compiler::new().compile(&ast);
-    assert_eq!(program.residual_count(), 0, "the call must lower");
-
-    let start = |scope: &mut Scope| {
-        scope.push("shadowed", vec![lit(1)]);
-    };
-
-    let mut walked = Scope::new();
-    start(&mut walked);
-    let walker = engine.eval_ast_with_scope::<Dynamic>(&mut walked, &ast);
-
-    let mut run = Scope::new();
-    start(&mut run);
-    let ours = Vm::new(&engine).eval_with_scope(&mut run, &program);
-
-    // Read-only all the way through, so rawr refuses the call outright rather
-    // than mutating a copy — which is a sharper thing to agree on.
-    assert!(matches!(walker.as_ref().unwrap_err().as_ref(), rawr::EvalAltResult::ErrorNonPureMethodCallOnConstant(..),), "got {walker:?}",);
-    assert_eq!(capture(&run, ours), capture(&walked, walker));
-    assert_eq!(format!("{:?}", run.get_value::<Dynamic>("shadowed").unwrap()), "[1]", "the entry the resolver shadowed must come back untouched",);
 }
 
 /// The one place a compiled closure is not the walker's closure.
@@ -614,7 +253,7 @@ fn a_resolved_receiver_is_not_the_scope_entry_it_shadows() {
 #[test]
 fn a_closure_pointer_is_late_bound() {
     let engine = corpus::engine();
-    let source = "let n = 1; let f = |x| x + n; f";
+    let source = "let f = |x: i64| x + 1; f";
 
     let ast = engine.compile(source).expect("must compile");
     let program = Compiler::new().compile(&ast);
@@ -633,20 +272,20 @@ fn a_closure_pointer_is_late_bound() {
 }
 
 /// Calling a compiled function from outside, which is what a native wrapper
-/// will do once compiled chunks are registered for callbacks.
+/// does when it calls a compiled chunk back.
 #[test]
 fn a_compiled_function_can_be_called_by_name() {
     let engine = corpus::engine();
-    let ast = engine.compile("fn add(a, b) { a + b } fn boom() { throw 7; } 0").expect("must compile");
+    let ast = engine.compile(r#"fn add(a: i64, b: i64) -> i64 { a + b } fn boom() -> i64 { panic!("7") } 0"#).expect("must compile");
     let program = Compiler::new().compile(&ast);
 
     let mut vm = Vm::new(&engine);
-    let value = vm.call_function(&program, "add", vec![lit(2), lit(3)], 0, rawr::Position::NONE).expect("must call");
+    let value = vm.call_function(&program, "add", vec![Dynamic::from(2 as INT), Dynamic::from(3 as INT)], 0, rawr::Position::NONE).expect("must call");
     assert_eq!(value.as_int().unwrap(), 5);
 
     // Wrong arity is a miss, not a crash — the table is keyed on both.
     let err = vm
-        .call_function(&program, "add", vec![lit(1)], 0, rawr::Position::NONE)
+        .call_function(&program, "add", vec![Dynamic::from(1 as INT)], 0, rawr::Position::NONE)
         .expect_err("one argument is a different function");
     assert!(matches!(*err, rawr::EvalAltResult::ErrorFunctionNotFound(..)));
 
@@ -655,7 +294,7 @@ fn a_compiled_function_can_be_called_by_name() {
     assert!(matches!(*err, rawr::EvalAltResult::ErrorInFunctionCall(..)), "got {err:?}",);
 
     // The operand stack is where it started, so a caller can keep using it.
-    let value = vm.call_function(&program, "add", vec![lit(10), lit(1)], 0, rawr::Position::NONE).expect("must call again");
+    let value = vm.call_function(&program, "add", vec![Dynamic::from(10 as INT), Dynamic::from(1 as INT)], 0, rawr::Position::NONE).expect("must call again");
     assert_eq!(value.as_int().unwrap(), 11);
 }
 
@@ -668,7 +307,7 @@ fn a_compiled_function_can_be_called_by_name() {
 #[test]
 fn call_fn_mirrors_the_engines() {
     let engine = corpus::engine();
-    let ast = engine.compile("fn add(a, b) { a + b } let marker = 10; 0").expect("must compile");
+    let ast = engine.compile("fn add(a: i64, b: i64) -> i64 { a + b } let marker: i64 = 10; 0").expect("must compile");
     let program = Compiler::new().compile(&ast);
 
     let mut vm = Vm::new(&engine);
@@ -716,14 +355,14 @@ fn the_compiler_says_whether_a_program_makes_function_pointers() {
     let engine = corpus::engine();
 
     for (source, expected) in [
-        ("let a = 1; a + 2", false),
-        ("fn f(x) { x } f(1)", false),
-        ("let s = 0; for i in 0..3 { s += i; } s", false),
+        ("let a: i64 = 1; a + 2", false),
+        ("fn f(x: i64) -> i64 { x } f(1)", false),
+        ("let mut s: i64 = 0; for i in 0..3 { s += i; } s", false),
         // Every shape that produces one.
-        ("let n = \"ab\" + \"s\"; Fn(n)", true),
-        ("let n = 1; let f = |x| x + n; f.call(2)", true),
-        ("fn t(x) { x } let f = Fn(\"t\"); f.call(1)", true),
-        ("fn a(x, y) { x } let n = \"a\"; Fn(n).curry(1)", true),
+        ("let f = |x: i64| x + 1; f(2)", true),
+        ("fn t(x: i64) -> i64 { x } let f = t; f(1)", true),
+        ("fn t(x: i64) -> i64 { x } fn apply(f: fn(i64) -> i64) -> i64 { f(1) } apply(t)", true),
+        ("let a = vec![1, 2]; a.iter().map(|x| x + 1).collect::<Vec<i64>>()", true),
     ] {
         let ast = engine.compile(source).expect("must compile");
         let program = Compiler::new().compile(&ast);
@@ -741,17 +380,17 @@ fn the_compiler_says_whether_a_program_makes_function_pointers() {
 #[test]
 fn a_program_reading_caller_state_can_be_written() {
     let engine = corpus::engine();
-    let source = "let out = brightness; if mode == \"chase\" { out += 10 } out";
-
-    let ast = engine.compile(source).expect("must compile");
-    let program = Compiler::new().compile(&ast);
-    let bytes = program.write().expect("must be writable");
-
-    let reloaded = rawr::grain::Program::read(&bytes).expect("must load");
+    let source = "let mut out = brightness; if mode == \"chase\" { out += 10 } out";
 
     let mut scope = Scope::new();
     scope.push("brightness", 5 as INT);
     scope.push("mode", "chase".to_string());
+
+    let ast = engine.compile_with_scope(&scope, source).expect("must compile");
+    let program = Compiler::new().compile(&ast);
+    let bytes = program.write().expect("must be writable");
+
+    let reloaded = rawr::grain::Program::read(&bytes).expect("must load");
     let value = Vm::new(&engine).eval_with_scope(&mut scope, &reloaded).expect("must run");
 
     assert_eq!(value.as_int().unwrap(), 15);

@@ -14,38 +14,44 @@ fn test_math() {
     assert_eq!(engine.eval::<INT>("3 % 2").unwrap(), 1);
 
     #[cfg(not(feature = "no_float"))]
-    assert!((engine.eval::<FLOAT>("sin(PI()/6.0)").unwrap() - 0.5).abs() < 0.001);
+    assert!((engine.eval::<FLOAT>("(std::f64::consts::PI / 6.0).sin()").unwrap() - 0.5).abs() < 0.001);
 
     #[cfg(not(feature = "no_float"))]
-    assert!(engine.eval::<FLOAT>("cos(PI()/2.0)").unwrap().abs() < 0.001);
+    assert!(engine.eval::<FLOAT>("(std::f64::consts::PI / 2.0).cos()").unwrap().abs() < 0.001);
 
     #[cfg(not(feature = "only_i32"))]
-    assert_eq!(engine.eval::<INT>("abs(-9223372036854775807)").unwrap(), 9_223_372_036_854_775_807);
+    assert_eq!(engine.eval::<INT>("(-9223372036854775807_i64).abs()").unwrap(), 9_223_372_036_854_775_807);
 
     #[cfg(feature = "only_i32")]
-    assert_eq!(engine.eval::<INT>("abs(-2147483647)").unwrap(), 2147483647);
+    assert_eq!(engine.eval::<INT>("(-2147483647_i32).abs()").unwrap(), 2147483647);
 
-    // Overflow/underflow/division-by-zero errors
+    // Overflow, underflow and division by zero are runtime errors. The operands come in as
+    // function arguments, so the checker can't see the overflow ahead of time.
     #[cfg(not(feature = "unchecked"))]
+    #[cfg(not(feature = "only_i32"))]
     {
-        #[cfg(not(feature = "only_i32"))]
-        {
-            assert!(matches!(*engine.eval::<INT>("abs(-9223372036854775808)").expect_err("expects negation overflow"), EvalAltResult::ErrorArithmetic(..)));
-            assert!(matches!(*engine.eval::<INT>("9223372036854775807 + 1").expect_err("expects overflow"), EvalAltResult::ErrorArithmetic(..)));
-            assert!(matches!(*engine.eval::<INT>("-9223372036854775808 - 1").expect_err("expects underflow"), EvalAltResult::ErrorArithmetic(..)));
-            assert!(matches!(*engine.eval::<INT>("9223372036854775807 * 9223372036854775807").expect_err("expects overflow"), EvalAltResult::ErrorArithmetic(..)));
-            assert!(matches!(*engine.eval::<INT>("9223372036854775807 / 0").expect_err("expects division by zero"), EvalAltResult::ErrorArithmetic(..)));
-            assert!(matches!(*engine.eval::<INT>("9223372036854775807 % 0").expect_err("expects division by zero"), EvalAltResult::ErrorArithmetic(..)));
-        }
+        let ops = "
+            fn add(a: i64, b: i64) -> i64 { a + b }
+            fn sub(a: i64, b: i64) -> i64 { a - b }
+            fn mul(a: i64, b: i64) -> i64 { a * b }
+            fn div(a: i64, b: i64) -> i64 { a / b }
+            fn rem(a: i64, b: i64) -> i64 { a % b }
+            fn magnitude(a: i64) -> i64 { a.abs() }
+        ";
+        let arithmetic_error = |call: &str| {
+            let err = engine.eval::<INT>(&format!("{ops} {call}")).expect_err(call);
+            match *err {
+                EvalAltResult::ErrorInFunctionCall(_, _, inner, ..) => matches!(*inner, EvalAltResult::ErrorArithmetic(..)),
+                other => matches!(other, EvalAltResult::ErrorArithmetic(..)),
+            }
+        };
 
-        #[cfg(feature = "only_i32")]
-        {
-            assert!(matches!(*engine.eval::<INT>("2147483647 + 1").expect_err("expects overflow"), EvalAltResult::ErrorArithmetic(..)));
-            assert!(matches!(*engine.eval::<INT>("-2147483648 - 1").expect_err("expects underflow"), EvalAltResult::ErrorArithmetic(..)));
-            assert!(matches!(*engine.eval::<INT>("2147483647 * 2147483647").expect_err("expects overflow"), EvalAltResult::ErrorArithmetic(..)));
-            assert!(matches!(*engine.eval::<INT>("2147483647 / 0").expect_err("expects division by zero"), EvalAltResult::ErrorArithmetic(..)));
-            assert!(matches!(*engine.eval::<INT>("2147483647 % 0").expect_err("expects division by zero"), EvalAltResult::ErrorArithmetic(..)));
-        }
+        assert!(arithmetic_error("magnitude(i64::MIN)"));
+        assert!(arithmetic_error("add(i64::MAX, 1)"));
+        assert!(arithmetic_error("sub(i64::MIN, 1)"));
+        assert!(arithmetic_error("mul(i64::MAX, i64::MAX)"));
+        assert!(arithmetic_error("div(i64::MAX, 0)"));
+        assert!(arithmetic_error("rem(i64::MAX, 0)"));
     }
 }
 
@@ -53,7 +59,5 @@ fn test_math() {
 fn test_math_parse() {
     let engine = Engine::new();
 
-    assert_eq!(engine.eval::<INT>(r#"parse_int("42")"#).unwrap(), 42);
-    assert_eq!(engine.eval::<INT>(r#"parse_int("42", 16)"#).unwrap(), 0x42);
-    assert_eq!(engine.eval::<INT>(r#"parse_int("abcdef", 16)"#).unwrap(), 0xabcdef);
+    assert_eq!(engine.eval::<INT>(r#""42".parse::<i64>().unwrap()"#).unwrap(), 42);
 }

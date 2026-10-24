@@ -1,46 +1,43 @@
 //! This script tests string operations.
 
-print("hello");
-print("this\nis \\ nice");      // escape sequences
-print("0x40 hex is \x40");      // hex escape sequence
-print("Unicode fun: \u2764");   // Unicode escape sequence
-print("more fun: \U0001F603");  // Unicode escape sequence
-print("foo" + " " + "bar");     // string building using strings
-print("foo" < "bar");           // string comparison
-print("foo" >= "bar");          // string comparison
-print("the answer is " + 42);   // string building using non-string types
+println!("hello");
+println!("this\nis \\ nice");       // escape sequences
+println!("0x40 hex is \x40");       // hex escape sequence
+println!("Unicode fun: \u{2764}");  // Unicode escape sequence
+println!("more fun: \u{1F603}");    // Unicode escape sequence
+println!("{}", "foo".to_string() + " " + "bar");    // string building using strings
+println!("{}", "foo" < "bar");      // string comparison
+println!("{}", "foo" >= "bar");     // string comparison
+println!("{}", format!("the answer is {}", 42));    // string building using non-string types
 
-let s = "\u2764 hello, world! \U0001F603"; // string variable
-print(`length=${s.len}`);       // should be 17
+let s = "\u{2764} hello, world! \u{1F603}"; // string variable
+println!("length={}", s.chars().count());   // should be 17
 
-s[s.len-3] = '?';               // change the string
-print(`Question: ${s}`);        // should print 'Question: hello, world?'
+let s: String = s.chars().skip(2).take(12).chain(['?']).collect();  // change the string
+println!("Question: {s}");          // should print 'Question: hello, world?'
 
 // Line continuation:
 let s = "This is a long \
          string constructed using \
          line continuation";
 
-// String interpolation
-print(`One string: ${s}`);
+// Inline format arguments
+println!("One string: {s}");
 
-// Multi-line literal string:
-let s = `
-          \U0001F603 This is a multi-line
-                "string" with \t\x20\r\n
-made using multi-line literal
-      string syntax.
-`;
+// Raw multi-line string literal:
+let s = r#"
+          This is a multi-line
+                "string" with no \t escapes
+made using raw string
+      syntax.
+"#;
 
-print(s);
+println!("{s}");
 
-// Interpolation
-let s = `This is interpolation ${
-            let x = `within ${let y = "yet another level \
-                                       of interpolation!"; y} interpolation`;
-            x
-} within literal string.`;
+// Nested formatting
+let inner = format!("within {} formatting", format!("yet another level of {}", "formatting!"));
+let s = format!("This is formatting {inner} within a format string.");
 
-print(s);
+println!("{s}");
 
-print(">>> END <<<");
+println!(">>> END <<<");

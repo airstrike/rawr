@@ -9,7 +9,7 @@ use test::Bencher;
 #[bench]
 fn bench_iterations_1000(bench: &mut Bencher) {
     let script = "
-            let x = 1_000;
+            let mut x = 1_000;
 
             while x > 0 {
                 x -= 1;
@@ -27,7 +27,7 @@ fn bench_iterations_1000(bench: &mut Bencher) {
 #[bench]
 fn bench_iterations_fibonacci(bench: &mut Bencher) {
     let script = "
-        fn fibonacci(n) {
+        fn fibonacci(n: i64) -> i64 {
             if n < 2 {
                 n
             } else {
@@ -49,9 +49,8 @@ fn bench_iterations_fibonacci(bench: &mut Bencher) {
 #[bench]
 fn bench_iterations_array(bench: &mut Bencher) {
     let script = "
-            let x = [];
-            x.pad(1000, 0);
-            for i in 0..1000 { x[i] = i % 256; }
+            let mut x = vec![0; 1000];
+            for i in 0..1000 { x[i] = i as i64 % 256; }
         ";
 
     let mut engine = Engine::new();
@@ -65,8 +64,8 @@ fn bench_iterations_array(bench: &mut Bencher) {
 #[bench]
 fn bench_iterations_blob(bench: &mut Bencher) {
     let script = "
-            let x = blob(1000, 0);
-            for i in 0..1000 { x[i] = i % 256; }
+            let mut x = vec![0_u8; 1000];
+            for i in 0..1000 { x[i] = (i % 256) as u8; }
         ";
 
     let mut engine = Engine::new();

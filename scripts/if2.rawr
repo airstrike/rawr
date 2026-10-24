@@ -9,4 +9,4 @@ let x = if a <= b {         // <- if-expression
     a - b
 } * 10;
 
-print(`x should be 810: ${x}`);
+println!("x should be 810: {x}");

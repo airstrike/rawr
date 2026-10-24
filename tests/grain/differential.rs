@@ -95,11 +95,11 @@ fn harness_detects_a_real_difference() {
 
     assert_ne!(run_stock(&engine, "1 + 1"), run_stock(&engine, "1 + 2"), "differing results must compare unequal",);
     assert_ne!(run_stock(&engine, "1"), run_stock(&engine, "1.0"), "int and float must not compare equal",);
-    assert_ne!(run_stock(&engine, "let a = 1; a"), run_stock(&engine, "1"), "differing leftover scope must compare unequal",);
+    assert_ne!(run_stock(&engine, "let a: i64 = 1; a"), run_stock(&engine, "1"), "differing leftover scope must compare unequal",);
     // `no_position` compiles positions out, so there is no such thing as the
     // same error at a different one and nothing here to detect.
     #[cfg(not(feature = "no_position"))]
-    assert_ne!(run_stock(&engine, "let a = [1]; a[9]"), run_stock(&engine, "let a = [1];  a[9]"), "the same error at a different position must compare unequal",);
+    assert_ne!(run_stock(&engine, "let a = vec![1]; a[9]"), run_stock(&engine, "let a = vec![1]; 0 + a[9]"), "the same error at a different position must compare unequal",);
 }
 
 /// A script that does not parse compares equal on both sides for the wrong
@@ -134,7 +134,7 @@ fn only_error_cases_error() {
 
     let surprises: Vec<_> = corpus::CASES
         .iter()
-        .filter(|case| !case.name.starts_with("error_") && !case.name.starts_with("throw_"))
+        .filter(|case| !case.name.starts_with("error_"))
         .filter(|case| applies_to_this_build(case.name))
         .filter_map(|case| match run_stock(&engine, case.source).result {
             Err(err) => Some(format!("\n  {}: {err}", case.name)),
@@ -147,14 +147,15 @@ fn only_error_cases_error() {
 
 /// Corpus scripts allowed to leave a fragment behind.
 ///
-/// Empty, and that is the claim: every script in the corpus lowers with nothing
-/// left over. A case that fragments therefore fails on arrival rather than
+/// A case that fragments and is not listed fails on arrival rather than
 /// quietly joining a majority, which is the point of stating it this way round.
 ///
-/// What legitimately belongs here: `eval`, `import`/`export`, custom syntax,
-/// and `?.`. All four are the escape hatch working as intended rather than a
-/// gap, and none is in the corpus.
-const MAY_FRAGMENT: &[&str] = &[];
+/// What is here today is work the compiler has not done yet rather than the
+/// escape hatch: a closure that captures a script local, and a pattern that
+/// takes an `Option` apart. Both still give the walker's answer, which
+/// `vm_agrees_with_the_engine` checks, and neither can be written to an
+/// artifact until it lowers.
+const MAY_FRAGMENT: &[&str] = &["match_option", "if_let", "closure_capture_read", "closure_capture_in_map"];
 
 /// Every chunk the compiler emits must pass its own verifier.
 ///
@@ -262,8 +263,8 @@ fn residual_census() {
     assert!(
         regressions.is_empty(),
         "{} scripts fragment that are not on `MAY_FRAGMENT`. Either the \
-         construct regressed, or the case needs one of the four things the \
-         escape hatch is for — say which, in the list:{}",
+         construct regressed, or the case needs something the compiler does \
+         not lower yet — say what, in the list:{}",
         regressions.len(),
         regressions.join(""),
     );
@@ -271,4 +272,39 @@ fn residual_census() {
     // The other direction, which the check above cannot see: a corpus that
     // stopped compiling at all would have nothing to fragment and would pass.
     assert_eq!(at_zero.len(), applicable - MAY_FRAGMENT.len(), "some scripts did not compile, so they were counted as neither",);
+}
+
+/// A divergence the corpus found and cannot keep: moving a `Vec` out of a
+/// local.
+///
+/// Reading a `Vec` or a `String` local by value moves it, and the lowered
+/// program spells the move as a call to a support function the walker finds
+/// and the VM does not. Pinned so the day it is fixed is noticed: then this
+/// fails, and the case belongs back in the corpus as
+/// `vec_empty_nested_in_computed` with its last `.clone()` removed.
+#[test]
+fn moving_a_vec_out_of_a_local_is_not_found_by_the_vm() {
+    let engine = corpus::engine();
+    let source = "let v: i64 = 7; let e: Vec<i64> = Vec::new(); vec![e.clone(), vec![v], e]";
+
+    assert_eq!(run_stock(&engine, source).result, Ok("[[], [7], []]".to_string()));
+    let vm = run_vm(&engine, source).result.unwrap_err();
+    assert!(vm.contains("ErrorFunctionNotFound") && vm.contains("__rawr_move"), "{vm}");
+}
+
+/// A divergence the generated scripts found: `to_string` straight on a
+/// string's length.
+///
+/// The walker answers `"2"`. The VM reaches a property write on the string and
+/// fails, which no script asked for. Naming the length first, or adding to it,
+/// avoids it. Pinned so the day it is fixed is noticed, and so the generator
+/// can go back to writing `.to_string()`.
+#[test]
+fn to_string_on_a_string_length_is_refused_by_the_vm() {
+    let engine = corpus::engine();
+    let source = r#"let s = "ab"; (s.len() as i64).to_string()"#;
+
+    assert_eq!(run_stock(&engine, source).result, Ok(r#""2""#.to_string()));
+    let vm = run_vm(&engine, source).result.unwrap_err();
+    assert!(vm.contains("ErrorDotExpr") && vm.contains("bytes"), "{vm}");
 }

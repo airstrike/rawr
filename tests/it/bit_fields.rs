@@ -12,36 +12,26 @@ fn test_right_shift() {
     assert_eq!(engine.eval::<INT>("9 >> 1").unwrap(), 4);
 }
 
-#[cfg(not(feature = "no_index"))]
 #[test]
 fn test_bit_fields() {
     let engine = Engine::new();
-    assert!(!engine.eval::<bool>("let x = 10; x[0]").unwrap());
-    assert!(engine.eval::<bool>("let x = 10; x[1]").unwrap());
-    assert!(!engine.eval::<bool>("let x = 10; x[-1]").unwrap());
-    assert_eq!(engine.eval::<INT>("let x = 10; x[0] = true; x[1] = false; x").unwrap(), 9);
-    assert_eq!(engine.eval::<INT>("let x = 10; get_bits(x, 1, 3)").unwrap(), 5);
-    assert_eq!(engine.eval::<INT>("let x = 10; x[1..=3]").unwrap(), 5);
-    let _ = engine.eval::<INT>("let x = 10; x[1..99]").unwrap_err();
-    let _ = engine.eval::<INT>("let x = 10; x[-1..3]").unwrap_err();
-    assert_eq!(engine.eval::<INT>("let x = 10; set_bits(x, 1, 3, 7); x").unwrap(), 14);
-    #[cfg(target_pointer_width = "64")]
-    #[cfg(not(feature = "only_i32"))]
-    {
-        assert_eq!(engine.eval::<INT>("let x = 255; get_bits(x, -60, 2)").unwrap(), 3);
-        assert_eq!(engine.eval::<INT>("let x = 0; set_bits(x, -64, 1, 15); x").unwrap(), 1);
-        assert_eq!(engine.eval::<INT>("let x = 0; set_bits(x, -60, 2, 15); x").unwrap(), 0b00110000);
-    }
-    assert_eq!(engine.eval::<INT>("let x = 10; x[1..4] = 7; x").unwrap(), 14);
+
+    // Rust reads and writes bits with shifts and masks.
+    assert!(!engine.eval::<bool>("let x: i64 = 10; (x >> 0) & 1 == 1").unwrap());
+    assert!(engine.eval::<bool>("let x: i64 = 10; (x >> 1) & 1 == 1").unwrap());
+    assert!(!engine.eval::<bool>("let x: i64 = 10; (x >> 63) & 1 == 1").unwrap());
+    assert_eq!(engine.eval::<INT>("let mut x: i64 = 10; x |= 1; x &= !(1 << 1); x").unwrap(), 9);
+    assert_eq!(engine.eval::<INT>("let x: i64 = 10; (x >> 1) & 0b111").unwrap(), 5);
+    assert_eq!(engine.eval::<INT>("let mut x: i64 = 10; x = (x & !(0b111 << 1)) | (7 << 1); x").unwrap(), 14);
     assert_eq!(
         engine
             .eval::<INT>(
                 "
-                    let x = 0b001101101010001;
-                    let count = 0;
+                    let x: i64 = 0b001101101010001;
+                    let mut count = 0;
 
-                    for b in bits(x, 2, 10) {
-                        if b { count += 1; }
+                    for i in 2..12 {
+                        if (x >> i) & 1 == 1 { count += 1; }
                     }
 
                     count
@@ -50,21 +40,8 @@ fn test_bit_fields() {
             .unwrap(),
         5
     );
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                "
-                    let x = 0b001101101010001;
-                    let count = 0;
+    assert_eq!(engine.eval::<INT>("let x: i64 = 0b001101101010001; ((x >> 2) & 0x3ff).count_ones() as i64").unwrap(), 5);
 
-                    for b in bits(x, 2..=11) {
-                        if b { count += 1; }
-                    }
-
-                    count
-                "
-            )
-            .unwrap(),
-        5
-    );
+    // Indexing an integer is not Rust.
+    let _ = engine.compile("let x = 10; x[0]").unwrap_err();
 }

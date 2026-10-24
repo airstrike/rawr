@@ -288,7 +288,7 @@ fn nested_if_scopes_bindings_and_evaluates_only_the_selected_branch() {
                         selected
                     }
                     fn selected(&mut self) -> i64 { self.calls += 1; 40 }
-                    fn unselected(&mut self) -> i64 { throw "unselected branch ran" }
+                    fn unselected(&mut self) -> i64 { panic!("unselected branch ran") }
                     fn choose(&mut self) -> i64 {
                         if self.condition(false) {
                             self.unselected()
@@ -315,7 +315,13 @@ fn nested_if_scopes_bindings_and_evaluates_only_the_selected_branch() {
 fn if_unit_branches_and_divergence_boundary_are_explicit() {
     Engine::new().compile("pub fn unit(flag: bool) { if flag { () } else { () } }").unwrap();
 
-    assert_resolution(&Engine::new(), "pub fn rejected(flag: bool) -> i64 { if flag { throw \"branch\" } else { throw \"branch\" } }", Category::UnsupportedNominalSyntax, "throw");
+    // Branches that panic diverge, so they fit any type, as in Rust.
+    let engine = Engine::new();
+    engine.compile(r#"pub fn diverges(flag: bool) -> i64 { if flag { panic!("branch") } else { panic!("branch") } }"#).unwrap();
+    assert_eq!(engine.eval::<i64>(r#"fn choose(flag: bool) -> i64 { if flag { panic!("branch") } else { 42 } } choose(false)"#).unwrap(), 42);
+
+    // `throw` is not Rust.
+    assert_resolution(&engine, "pub fn rejected(flag: bool) -> i64 { if flag { throw \"branch\" } else { 0 } }", Category::Syntax, "found `throw`");
 }
 
 #[test]

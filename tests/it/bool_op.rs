@@ -21,9 +21,9 @@ fn test_bool_op3() {
     let engine = Engine::new();
 
     let _ = engine.eval::<bool>("true && (false || 123)").unwrap_err();
-    assert!(engine.eval::<bool>("true && (true || { throw })").unwrap());
+    assert!(engine.eval::<bool>("true && (true || { panic!() })").unwrap());
     let _ = engine.eval::<bool>("123 && (false || true)").unwrap_err();
-    assert!(!engine.eval::<bool>("false && (true || { throw })").unwrap());
+    assert!(!engine.eval::<bool>("false && (true || { panic!() })").unwrap());
 }
 
 #[test]
@@ -35,7 +35,7 @@ fn test_bool_op_short_circuit() {
             .eval::<bool>(
                 "
                 let x = true;
-                x || { throw; };
+                x || { panic!() }
             "
             )
             .unwrap()
@@ -46,7 +46,7 @@ fn test_bool_op_short_circuit() {
             .eval::<bool>(
                 "
                 let x = false;
-                x && { throw; };
+                x && { panic!() }
             "
             )
             .unwrap()
@@ -61,7 +61,7 @@ fn test_bool_op_no_short_circuit1() {
         .eval::<bool>(
             "
                 let x = true;
-                x | { throw; }
+                x | { panic!() }
             ",
         )
         .unwrap_err();
@@ -75,7 +75,7 @@ fn test_bool_op_no_short_circuit2() {
         .eval::<bool>(
             "
                 let x = false;
-                x & { throw; }
+                x & { panic!() }
             ",
         )
         .unwrap_err();

@@ -66,11 +66,11 @@ fn main() -> Result<(), Box<EvalAltResult>> {
         engine.run_with_scope(
             &mut scope,
             r#"
-                display("Length", x.len());
-                x.trim();
+                display("Length", len(x));
+                trim(x);
                 display("Trimmed", x);
-                display("Trimmed Length", x.len());
-                display("Index of \"!!!\"", x.index_of("!!!"));
+                display("Trimmed Length", len(x));
+                display("Index of \"!!!\"", index_of(x, "!!!"));
             "#,
         )?;
 

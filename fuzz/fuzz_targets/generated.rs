@@ -3,10 +3,10 @@
 //! `roundtrip` hands libfuzzer's bytes straight to the parser, which for a
 //! language with real syntax means most of them are rejected before anything
 //! interesting runs. This spends the same bytes on *grammar decisions* instead,
-//! so every input is a valid script and coverage feedback is steering the shape
-//! of the program rather than the spelling of it.
+//! so every input is a well-typed script and coverage feedback is steering the
+//! shape of the program rather than the spelling of it.
 //!
-//! `tests/fuzz.rs` runs the same generator over a few thousand seeded scripts
+//! `tests/grain/fuzz.rs` runs the same generator over a few thousand seeded scripts
 //! on every `cargo test`. This is the one that runs for hours.
 //!
 //! `cargo fuzz run generated`
@@ -38,7 +38,7 @@ fn engine() -> Engine {
     engine.set_max_string_size(8192);
     engine.set_max_array_size(2048);
     engine.set_max_map_size(64);
-    // Pinned for the reason `tests/fuzz.rs` pins them: rawr's defaults are
+    // Pinned for the reason `tests/grain/fuzz.rs` pins them: rawr's defaults are
     // `debug_assertions`-gated (`api/limits.rs:10-36`), so an unpinned harness
     // explores one script space here and a different one under `cargo test`.
     // Same numbers in both, so a finding from one reproduces in the other.
@@ -49,12 +49,8 @@ fn engine() -> Engine {
 
 /// Run the walker, surviving a panic of its own making.
 ///
-/// Rawr's optimizer can leave a local's parse-time scope index stale, and
-/// evaluating it then underflows (`eval/expr.rs:131`). It is reachable from an
-/// ordinary script with none of this involved — `tests/fuzz.rs` pins a
-/// reproducer — and a fuzzing run trips it often enough to end the run in
-/// minutes, which costs far more than it finds. There is nothing to compare
-/// against a side that did not finish, so those inputs are dropped.
+/// There is nothing to compare against a side that did not finish, so those
+/// inputs are dropped.
 ///
 /// The hook is swapped for the duration because libfuzzer installs one that
 /// aborts, which would defeat `catch_unwind`. It is swapped back immediately,
@@ -82,7 +78,7 @@ fn outcome(scope: &Scope, result: RawrOutcome) -> Option<String> {
 
     match result {
         Ok(value) => Some(format!("ok {value:?} [{}]", scope.join(","))),
-        // The limits neither side counts towards in lockstep. `tests/fuzz.rs`
+        // The limits neither side counts towards in lockstep. `tests/grain/fuzz.rs`
         // documents why and asserts they stay rare; here they are simply
         // dropped, because there is no way to assert a rate over one input.
         Err(err)
@@ -120,27 +116,6 @@ fn compare(engine: &Engine, source: &str) -> Option<(String, String)> {
     Some((outcome(&vm_scope, ours)?, expected))
 }
 
-/// Whether a divergence is rawr's optimizer losing a local rather than a bug of
-/// ours — see `rawr_drops_a_local_its_optimizer_still_refers_to` in
-/// `tests/fuzz.rs`.
-///
-/// The optimizer can delete a `let` whose variable is still read, leaving the
-/// read pointing at whatever now sits at that scope index. Rawr answers with
-/// another variable's value; we resolve by name and report it missing. There is
-/// no agreeing with an AST that refers to a local it does not declare.
-///
-/// Turning the optimizer off is what tells the two apart, and it runs only on a
-/// divergence that already looks like this one — a fuzzer that quietly stopped
-/// comparing would be worse than one that stops.
-fn optimizer_lost_a_local(source: &str, ours: &str) -> bool {
-    if !ours.contains("ErrorVariableNotFound") {
-        return false;
-    }
-    let mut plain = engine();
-    plain.set_optimization_level(rawr::OptimizationLevel::None);
-    compare(&plain, source).is_some_and(|(ours, expected)| ours == expected)
-}
-
 fuzz_target!(|data: &[u8]| {
     // Too few bytes to steer with, and the PRNG fallback would make every such
     // input the same script.
@@ -152,7 +127,7 @@ fuzz_target!(|data: &[u8]| {
     let Some((ours, expected)) = compare(&engine(), &source) else {
         return;
     };
-    if ours == expected || optimizer_lost_a_local(&source, &ours) {
+    if ours == expected {
         return;
     }
 

@@ -40,7 +40,7 @@ fn engine() -> Engine {
 /// name-only and resolved at call time. That is the whole point: a `Script`
 /// pointer carries an AST, and an AST is what an artifact must not contain.
 /// The difference is deliberate, pinned by `a_closure_pointer_is_late_bound` in
-/// `tests/scope.rs`, and left in the rendering rather than papered over there.
+/// `tests/grain/scope.rs`, and left in the rendering rather than papered over there.
 ///
 /// Here it has to be papered over, or the first script whose value is a bare
 /// closure ends the run — which is within a few thousand executions.
@@ -81,34 +81,6 @@ fn outcome(run: impl FnOnce(&mut Scope) -> Result<Dynamic, Box<rawr::EvalAltResu
     }
 }
 
-/// Whether a divergence is rawr's optimizer losing a local rather than a bug of
-/// ours — see `rawr_drops_a_local_its_optimizer_still_refers_to` in
-/// `tests/fuzz.rs`.
-///
-/// The optimizer can delete a `let` whose variable is still read, leaving the
-/// read pointing at whatever now sits at that scope index. Rawr answers with
-/// another variable's value; we resolve by name and report it missing. There is
-/// no agreeing with an AST that refers to a local it does not declare.
-///
-/// Turning the optimizer off is what tells the two apart, and it runs only on a
-/// divergence that already looks like this one — a fuzzer that quietly stopped
-/// comparing would be worse than one that stops.
-fn optimizer_lost_a_local(source: &str, direct: &str) -> bool {
-    if !direct.contains("ErrorVariableNotFound") {
-        return false;
-    }
-    let mut plain = engine();
-    plain.set_optimization_level(rawr::OptimizationLevel::None);
-    let Ok(ast) = plain.compile(source) else {
-        return false;
-    };
-    let program = Compiler::new().compile(&ast);
-
-    let expected = outcome(|scope| plain.eval_ast_with_scope::<Dynamic>(scope, &ast));
-    let ours = outcome(|scope| Vm::new(&plain).eval_with_scope(scope, &program));
-    ours == expected
-}
-
 fuzz_target!(|source: String| {
     let engine = engine();
     let Ok(ast) = engine.compile(&source) else {
@@ -130,9 +102,6 @@ fuzz_target!(|source: String| {
 
     let direct = outcome(run);
     if expected == "budget" || direct == "budget" {
-        return;
-    }
-    if direct != expected && optimizer_lost_a_local(&source, &direct) {
         return;
     }
     assert_eq!(

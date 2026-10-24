@@ -1,47 +1,43 @@
 //! This script simulates multi-dimensional matrix calculations.
 
-const SIZE = 50;
+use std::time::Instant;
 
-fn new_mat(x, y) {
-    let row = [];
-    row.pad(y, 0.0);
+const SIZE: usize = 50;
 
-    let matrix = [];
-    matrix.pad(x, row);
-
-    matrix
+fn new_mat(x: usize, y: usize) -> Vec<Vec<f64>> {
+    vec![vec![0.0; y]; x]
 }
 
-fn mat_gen() {
-    const n = global::SIZE;
-    const tmp = 1.0 / n / n;
-    let m = new_mat(n, n);
+fn mat_gen() -> Vec<Vec<f64>> {
+    let n = SIZE;
+    let tmp = 1.0 / n as f64 / n as f64;
+    let mut m = new_mat(n, n);
 
     for i in 0..n {
         for j in 0..n {
-            m[i][j] = tmp * (i - j) * (i + j);
+            m[i][j] = tmp * (i as f64 - j as f64) * (i as f64 + j as f64);
         }
     }
 
     m
 }
 
-fn mat_mul(a, b) {
-    let b2 = new_mat(a[0].len, b[0].len);
+fn mat_mul(a: &Vec<Vec<f64>>, b: &Vec<Vec<f64>>) -> Vec<Vec<f64>> {
+    let mut b2 = new_mat(a[0].len(), b[0].len());
 
-    for i in 0..a[0].len {
-        for j in 0..b[0].len {
+    for i in 0..a[0].len() {
+        for j in 0..b[0].len() {
             b2[j][i] = b[i][j];
         }
     }
 
-    let c = new_mat(a.len, b[0].len);
+    let mut c = new_mat(a.len(), b[0].len());
 
-    for i in 0..c.len {
-        for j in 0..c[i].len {
+    for i in 0..c.len() {
+        for j in 0..c[i].len() {
             c[i][j] = 0.0;
 
-            for z in 0..a[i].len {
+            for z in 0..a[i].len() {
                 c[i][j] += a[i][z] * b2[j][z];
             }
         }
@@ -50,16 +46,17 @@ fn mat_mul(a, b) {
     c
 }
 
-const now = timestamp();
+let now = Instant::now();
 
-const a = mat_gen();
-const b = mat_gen();
-const c = mat_mul(a, b);
+let a = mat_gen();
+let b = mat_gen();
+let c = mat_mul(&a, &b);
 
 /*
-for i in 0..SIZE) {
-    print(c[i]);
+for i in 0..SIZE {
+    println!("{:?}", c[i]);
 }
 */
 
-print(`Finished. Run time = ${now.elapsed} seconds.`);
+println!("c[1][2] = {}", c[1][2]);
+println!("Finished. Run time = {:?}.", now.elapsed());

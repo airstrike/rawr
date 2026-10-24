@@ -2,4 +2,4 @@
 
 let x = 78;
 
-print(`x should be 78: ${x}`);
+println!("x should be 78: {x}");

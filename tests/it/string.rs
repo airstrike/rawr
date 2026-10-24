@@ -4,29 +4,24 @@ use rawr::{Engine, EvalAltResult, INT, ImmutableString, LexError, ParseErrorType
 fn test_string() {
     let engine = Engine::new();
 
-    assert_eq!(engine.eval::<String>(r#""Test string: \u2764""#).unwrap(), "Test string: ❤");
-    assert_eq!(engine.eval::<String>(r#""Test string: ""\u2764""""#).unwrap(), r#"Test string: "❤""#);
-    assert_eq!(engine.eval::<String>("\"Test\rstring: \\u2764\"").unwrap(), "Test\rstring: ❤");
+    assert_eq!(engine.eval::<String>(r#""Test string: \u{2764}""#).unwrap(), "Test string: ❤");
+    assert_eq!(engine.eval::<String>("\"Test\\rstring: \\u{2764}\"").unwrap(), "Test\rstring: ❤");
     assert_eq!(
-        engine.eval::<String>("   \"Test string: \\u2764\\\n     hello, world!\"").unwrap(),
+        engine.eval::<String>("   \"Test string: \\u{2764}\\\n     hello, world!\"").unwrap(),
         // A `\` at the end of a line skips the line break and the next
         // line's leading whitespace, as in Rust.
         "Test string: ❤hello, world!"
     );
-    assert_eq!(engine.eval::<String>("     `Test string: \\u2764\nhello,\\nworld!`").unwrap(), "Test string: \\u2764\nhello,\\nworld!");
-    assert_eq!(engine.eval::<String>(r#"     `Test string: \\u2764\n``hello``,\\n"world"!`"#).unwrap(), r#"Test string: \\u2764\n`hello`,\\n"world"!"#);
-    assert_eq!(engine.eval::<String>("     `\nTest string: \\u2764\nhello,\\nworld!`").unwrap(), "Test string: \\u2764\nhello,\\nworld!");
-    assert_eq!(engine.eval::<String>("     `\r\nTest string: \\u2764\nhello,\\nworld!`").unwrap(), "Test string: \\u2764\nhello,\\nworld!");
     assert_eq!(engine.eval::<String>(r#""Test string: \x58""#).unwrap(), "Test string: X");
     assert_eq!(engine.eval::<String>(r#""\"hello\"""#).unwrap(), r#""hello""#);
-    assert_eq!(engine.eval::<String>(r##"#"Test"#"##).unwrap(), "Test");
-    assert_eq!(engine.eval::<String>(r##"#"Test string: \\u2764\nhello,\nworld!"#"##).unwrap(), r#"Test string: \\u2764\nhello,\nworld!"#);
-    assert_eq!(engine.eval::<String>(r###"##"Test string: #"\\u2764\nhello,\\nworld!"#"##"###).unwrap(), r##"Test string: #"\\u2764\nhello,\\nworld!"#"##);
+    assert_eq!(engine.eval::<String>(r##"r#"Test"#"##).unwrap(), "Test");
+    assert_eq!(engine.eval::<String>(r##"r#"Test string: \\x58\nhello,\nworld!"#"##).unwrap(), r#"Test string: \\x58\nhello,\nworld!"#);
+    assert_eq!(engine.eval::<String>(r###"r##"Test string: #"\\x58\nhello,\\nworld!"#"##"###).unwrap(), r##"Test string: #"\\x58\nhello,\\nworld!"#"##);
     assert_eq!(
         engine
             .eval::<String>(
-                r###"##"Test
-string: "## + "\u2764""###
+                r###"r##"Test
+string: "##.to_string() + "\u{2764}""###
             )
             .unwrap(),
         "Test\nstring: ❤"
@@ -34,22 +29,18 @@ string: "## + "\u2764""###
     assert_eq!(
         engine
             .eval::<String>(
-                r###"##"Test"
-string: "## + "\u2764""###
+                r###"r##"Test"
+string: "##.to_string() + "\u{2764}""###
             )
             .unwrap(),
         "Test\"\nstring: ❤"
     );
-    let bad_result = *engine.eval::<String>(r###"#"Test string: \"##"###).unwrap_err();
-    if let EvalAltResult::ErrorParsing(parse_error, pos, _) = bad_result {
-        assert_eq!(parse_error, ParseErrorType::UnknownOperator("#".to_string()));
-        assert_eq!(pos, Position::new(1, 19));
-    } else {
-        panic!("Wrong error type: {}", bad_result);
-    }
+    // A raw string followed by a stray `#` is a syntax error.
+    let bad_result = *engine.eval::<String>(r###"r#"Test string: \"##"###).unwrap_err();
+    assert!(matches!(bad_result, EvalAltResult::ErrorParsing(..)), "Wrong error type: {bad_result}");
     let bad_result = *engine
         .eval::<String>(
-            r###"##"Test string:
+            r###"r##"Test string:
     \"#"###,
         )
         .unwrap_err();
@@ -60,61 +51,55 @@ string: "## + "\u2764""###
         panic!("Wrong error type: {}", bad_result);
     }
 
-    assert_eq!(engine.eval::<String>(r#""foo" + "bar""#).unwrap(), "foobar");
+    assert_eq!(engine.eval::<String>(r#""foo".to_string() + "bar""#).unwrap(), "foobar");
 
-    assert!(engine.eval::<bool>(r#"let y = "hello, world!"; "world" in y"#).unwrap());
-    assert!(engine.eval::<bool>(r#"let y = "hello, world!"; 'w' in y"#).unwrap());
-    assert!(!engine.eval::<bool>(r#"let y = "hello, world!"; "hey" in y"#).unwrap());
+    assert!(engine.eval::<bool>(r#"let y = "hello, world!"; y.contains("world")"#).unwrap());
+    assert!(engine.eval::<bool>(r#"let y = "hello, world!"; y.contains('w')"#).unwrap());
+    assert!(!engine.eval::<bool>(r#"let y = "hello, world!"; y.contains("hey")"#).unwrap());
 
-    assert_eq!(engine.eval::<String>(r#""foo" + 123"#).unwrap(), "foo123");
-
-    #[cfg(not(feature = "no_object"))]
-    assert_eq!(engine.eval::<String>("to_string(42)").unwrap(), "42");
-
-    #[cfg(not(feature = "no_index"))]
-    assert_eq!(engine.eval::<char>(r#"let y = "hello"; y[1]"#).unwrap(), 'e');
-
-    #[cfg(not(feature = "no_index"))]
-    assert_eq!(engine.eval::<char>(r#"let y = "hello"; y[-1]"#).unwrap(), 'o');
-
-    #[cfg(not(feature = "no_index"))]
-    assert_eq!(engine.eval::<char>(r#"let y = "hello"; y[-4]"#).unwrap(), 'e');
+    assert_eq!(engine.eval::<String>(r#"format!("foo{}", 123)"#).unwrap(), "foo123");
+    assert_eq!(engine.eval::<String>(r#""foo".to_string() + &123.to_string()"#).unwrap(), "foo123");
 
     #[cfg(not(feature = "no_object"))]
-    assert_eq!(engine.eval::<INT>(r#"let y = "hello"; y.len"#).unwrap(), 5);
+    assert_eq!(engine.eval::<String>("42.to_string()").unwrap(), "42");
+
+    #[cfg(not(feature = "no_index"))]
+    assert_eq!(engine.eval::<char>(r#"let y = "hello"; y.chars().nth(1).unwrap()"#).unwrap(), 'e');
+
+    #[cfg(not(feature = "no_index"))]
+    assert_eq!(engine.eval::<char>(r#"let y = "hello"; y.chars().last().unwrap()"#).unwrap(), 'o');
 
     #[cfg(not(feature = "no_object"))]
-    assert_eq!(engine.eval::<INT>(r#"let mut y = "hello"; y.clear(); y.len()"#).unwrap(), 0);
+    assert_eq!(engine.eval::<INT>(r#"let y = "hello"; y.len()"#).unwrap(), 5);
 
-    assert_eq!(engine.eval::<INT>(r#"let y = "hello"; len(y)"#).unwrap(), 5);
+    #[cfg(not(feature = "no_object"))]
+    assert_eq!(engine.eval::<INT>(r#"let mut y = String::from("hello"); y.clear(); y.len()"#).unwrap(), 0);
 
     #[cfg(not(feature = "no_object"))]
     #[cfg(not(feature = "no_index"))]
-    assert_eq!(engine.eval::<char>(r#"let y = "hello"; y[y.len-1]"#).unwrap(), 'o');
+    assert_eq!(engine.eval::<char>(r#"let y = "hello"; y.as_bytes()[y.len() - 1] as char"#).unwrap(), 'o');
 
     #[cfg(not(feature = "no_float"))]
-    assert_eq!(engine.eval::<String>(r#""foo" + 123.4556"#).unwrap(), "foo123.4556");
+    assert_eq!(engine.eval::<String>(r#"format!("foo{}", 123.4556)"#).unwrap(), "foo123.4556");
 }
 #[cfg(not(feature = "no_index"))]
 #[test]
 fn test_string_index() {
     let engine = Engine::new();
-    // char index
-    assert_eq!(engine.eval::<char>(r#"let y = "hello"; y[-4]"#).unwrap(), 'e');
 
-    // range index returns a string
-    assert_eq!(engine.eval::<char>(r#"let y = "hello"; y[1..2]"#).unwrap_err().to_string(), "Output type incorrect: string (expecting char)");
+    // A range of a string is a string, not a char.
+    assert_eq!(engine.eval::<char>(r#"let y = "hello"; y[1..2].to_string()"#).unwrap_err().to_string(), "Output type incorrect: string (expecting char)");
 
     // A range of a string is its slice, as in Rust.
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..3]"#).unwrap(), "el");
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..]"#).unwrap(), "hello");
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..2]"#).unwrap(), "he");
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..]"#).unwrap(), "ello");
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..=3]"#).unwrap(), "ell");
-    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..=2]"#).unwrap(), "hel");
+    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..3].to_string()"#).unwrap(), "el");
+    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..].to_string()"#).unwrap(), "hello");
+    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..2].to_string()"#).unwrap(), "he");
+    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..].to_string()"#).unwrap(), "ello");
+    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[1..=3].to_string()"#).unwrap(), "ell");
+    assert_eq!(engine.eval::<String>(r#"let y = "hello"; y[..=2].to_string()"#).unwrap(), "hel");
 
     // A range past the end fails, as Rust's panics.
-    let _ = engine.eval::<String>(r#"let y = "hello"; y[0..18]"#).unwrap_err();
+    let _ = engine.eval::<String>(r#"let y = "hello"; y[0..18].to_string()"#).unwrap_err();
 }
 #[test]
 fn test_string_dynamic() {
@@ -137,10 +122,9 @@ fn test_string_mut() {
     engine.register_fn("bar", |s: String| s.len() as INT);
     engine.register_fn("baz", |s: &mut String| s.len());
 
-    assert_eq!(engine.eval::<char>(r#"pop("hello")"#).unwrap(), 'o');
-    assert_eq!(engine.eval::<String>(r#"pop("hello", 3)"#).unwrap(), "llo");
-    assert_eq!(engine.eval::<String>(r#"pop("hello", 10)"#).unwrap(), "hello");
-    assert_eq!(engine.eval::<String>(r#"pop("hello", -42)"#).unwrap(), "");
+    assert_eq!(engine.eval::<char>(r#"let mut s = String::from("hello"); s.pop().unwrap()"#).unwrap(), 'o');
+    assert_eq!(engine.eval::<String>(r#"let mut s = String::from("hello"); s.split_off(2)"#).unwrap(), "llo");
+    assert_eq!(engine.eval::<String>(r#"let mut s = String::from("hello"); s.truncate(2); s"#).unwrap(), "he");
 
     assert_eq!(engine.eval::<INT>(r#"foo("hello")"#).unwrap(), 5);
     assert_eq!(engine.eval::<INT>(r#"bar("hello")"#).unwrap(), 5);
@@ -155,57 +139,26 @@ fn test_string_mut() {
 fn test_string_substring() {
     let engine = Engine::new();
 
-    assert_eq!(engine.eval::<String>(r#"let x = "hello! \u2764\u2764\u2764"; x.sub_string(-2, 2)"#).unwrap(), "❤❤");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.sub_string(1, 5)"#).unwrap(), "❤❤ he");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.sub_string(1)"#).unwrap(), "❤❤ hello! ❤❤❤");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.sub_string(99)"#).unwrap(), "");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.sub_string(1, -1)"#).unwrap(), "");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.sub_string(1, 999)"#).unwrap(), "❤❤ hello! ❤❤❤");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.crop(1, -1); x"#).unwrap(), "");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.crop(4, 6); x"#).unwrap(), "hello!");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.crop(1, 999); x"#).unwrap(), "❤❤ hello! ❤❤❤");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x -= 'l'; x"#).unwrap(), "❤❤❤ heo! ❤❤❤");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x -= "\u2764\u2764"; x"#).unwrap(), "❤ hello! ❤");
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.index_of('\u2764')"#).unwrap(), 0);
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.index_of('\u2764', 5)"#).unwrap(), 11);
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.index_of('\u2764', -6)"#).unwrap(), 11);
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.index_of('\u2764', 999)"#).unwrap(), -1);
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.index_of('x')"#).unwrap(), -1);
-}
-
-#[cfg(not(feature = "no_object"))]
-#[test]
-fn test_string_format() {
-    #[derive(Debug, Clone)]
-    struct TestStruct {
-        field: i64,
-    }
-
-    let mut engine = Engine::new();
-
-    engine
-        .register_type_with_name::<TestStruct>("TestStruct")
-        .register_fn("new_ts", || TestStruct { field: 42 })
-        .register_fn("to_string", |ts: TestStruct| format!("TS={}", ts.field))
-        .register_fn("to_debug", |ts: TestStruct| format!("!!!TS={}!!!", ts.field));
-
-    assert_eq!(engine.eval::<String>(r#"let x = new_ts(); "foo" + x"#).unwrap(), "fooTS=42");
-    assert_eq!(engine.eval::<String>(r#"let x = new_ts(); x + "foo""#).unwrap(), "TS=42foo");
-    #[cfg(not(feature = "no_index"))]
-    assert_eq!(engine.eval::<String>(r#"let x = [new_ts()]; "foo" + x"#).unwrap(), "foo[!!!TS=42!!!]");
+    // Substrings by character position go through `chars`, as in Rust.
+    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(1).take(5).collect::<String>()"#).unwrap(), "❤❤ he");
+    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(1).collect::<String>()"#).unwrap(), "❤❤ hello! ❤❤❤");
+    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(99).collect::<String>()"#).unwrap(), "");
+    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(1).take(999).collect::<String>()"#).unwrap(), "❤❤ hello! ❤❤❤");
+    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(4).take(6).collect::<String>()"#).unwrap(), "hello!");
+    assert_eq!(engine.eval::<String>(r#"let x = "hello! \u{2764}\u{2764}\u{2764}"; x.chars().rev().take(2).collect::<String>()"#).unwrap(), "❤❤");
+    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.replace('l', "")"#).unwrap(), "❤❤❤ heo! ❤❤❤");
+    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.replace("\u{2764}\u{2764}", "")"#).unwrap(), "❤ hello! ❤");
+    assert_eq!(engine.eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().position(|c| c == '\u{2764}').unwrap()"#).unwrap(), 0);
+    assert_eq!(engine.eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(5).position(|c| c == '\u{2764}').unwrap() + 5"#).unwrap(), 11);
+    assert!(engine.eval::<bool>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(999).position(|c| c == '\u{2764}').is_none()"#).unwrap());
+    assert!(engine.eval::<bool>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().position(|c| c == 'x').is_none()"#).unwrap());
+    // `find` gives a byte offset.
+    assert_eq!(engine.eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.find('h').unwrap()"#).unwrap(), 10);
 }
 
 #[test]
 fn test_string_fn() {
     let mut engine = Engine::new();
-
-    engine.register_fn("set_to_x", |ch: &mut char| *ch = 'X');
-
-    #[cfg(not(feature = "no_index"))]
-    #[cfg(not(feature = "no_object"))]
-    assert_eq!(engine.eval::<String>(r#"let x="foo"; x[0].set_to_x(); x"#).unwrap(), "Xoo");
-    #[cfg(not(feature = "no_index"))]
-    assert_eq!(engine.eval::<String>(r#"let x="foo"; set_to_x(x[0]); x"#).unwrap(), "foo");
 
     engine
         .register_fn("foo1", |s: &str| s.len() as INT)
@@ -226,36 +179,36 @@ fn test_string_split() {
     let engine = Engine::new();
 
     // `split` is Rust's iterator of the parts.
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.split(' ').count()"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u2764\u2764\u2764 hello! \u2764\u2764\u2764"; x.split("hello").count()"#).unwrap(), 2);
+    assert_eq!(engine.eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.split(' ').count()"#).unwrap(), 3);
+    assert_eq!(engine.eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.split("hello").count()"#).unwrap(), 2);
 
     // Verify that split works on const strings (regression test for issue #1081).
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split(",").count()"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.splitn(2, ",").count()"#).unwrap(), 2);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.split(',').count()"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a,b,c"; x.splitn(2, ',').count()"#).unwrap(), 2);
-    assert_eq!(engine.eval::<INT>(r#"const x = "a b c"; x.split_whitespace().count()"#).unwrap(), 3);
+    assert_eq!(engine.eval::<INT>(r#"const X: &str = "a,b,c"; X.split(",").count()"#).unwrap(), 3);
+    assert_eq!(engine.eval::<INT>(r#"const X: &str = "a,b,c"; X.splitn(2, ",").count()"#).unwrap(), 2);
+    assert_eq!(engine.eval::<INT>(r#"const X: &str = "a,b,c"; X.split(',').count()"#).unwrap(), 3);
+    assert_eq!(engine.eval::<INT>(r#"const X: &str = "a,b,c"; X.splitn(2, ',').count()"#).unwrap(), 2);
+    assert_eq!(engine.eval::<INT>(r#"const X: &str = "a b c"; X.split_whitespace().count()"#).unwrap(), 3);
 }
 
 #[test]
 fn test_string_interpolated() {
-    // Make sure strings interpolation works even under raw
-    let engine = Engine::new_raw();
+    let engine = Engine::new();
 
-    assert_eq!(engine.eval::<String>("`${}`").unwrap(), "");
+    assert_eq!(engine.eval::<String>(r#"format!("")"#).unwrap(), "");
 
     assert_eq!(
         engine
             .eval::<String>(
-                "
+                r#"
                     let x = 40;
-                    `hello ${x+2} worlds!`
-                "
+                    format!("hello {} worlds!", x + 2)
+                "#
             )
             .unwrap(),
         "hello 42 worlds!"
     );
 
+    // A plain string literal does not interpolate.
     assert_eq!(
         engine
             .eval::<String>(
@@ -271,69 +224,36 @@ fn test_string_interpolated() {
     assert_eq!(
         engine
             .eval::<String>(
-                "
-                    const x = 42;
-                    `hello ${x} worlds!`
-                "
+                r#"
+                    const X: i64 = 42;
+                    format!("hello {} worlds!", X)
+                "#
             )
             .unwrap(),
         "hello 42 worlds!"
     );
 
-    assert_eq!(engine.eval::<String>("`hello ${}world!`").unwrap(), "hello world!");
-
-    assert_eq!(engine.eval::<String>(r"`hello \${world}`").unwrap(), "hello ${world}");
-
-    assert_eq!(engine.eval::<String>(r"`price: \$5`").unwrap(), r"price: \$5");
+    assert_eq!(engine.eval::<String>(r#"format!("hello {{world}}")"#).unwrap(), "hello {world}");
 
     assert_eq!(
         engine
             .eval::<String>(
-                r"
+                r#"
                   let x = 7;
-                  `literal \${a} value ${x}`
-                "
+                  format!("literal {{a}} value {x}")
+                "#
             )
             .unwrap(),
-        "literal ${a} value 7"
-    );
-
-    assert_eq!(engine.eval::<String>(r"`\\$x`").unwrap(), r"\\$x");
-    assert_eq!(engine.eval::<String>(r"`trailing$`").unwrap(), "trailing$");
-
-    assert_eq!(engine.eval::<String>(r"`trailing\$`").unwrap(), r"trailing\$");
-
-    assert_eq!(
-        engine
-            .eval::<String>(
-                "
-                    const x = 42;
-                    `${x} worlds!`
-                "
-            )
-            .unwrap(),
-        "42 worlds!"
+        "literal {a} value 7"
     );
 
     assert_eq!(
         engine
             .eval::<String>(
-                "
-                    const x = 42;
-                    `hello ${x}`
-                "
-            )
-            .unwrap(),
-        "hello 42"
-    );
-
-    assert_eq!(
-        engine
-            .eval::<String>(
-                "
-                    const x = 20;
-                    `hello ${let y = x + 1; `${y * 2}`} worlds!`
-                "
+                r#"
+                    const X: i64 = 20;
+                    format!("hello {} worlds!", { let y = X + 1; format!("{}", y * 2) })
+                "#
             )
             .unwrap(),
         "hello 42 worlds!"
@@ -345,16 +265,17 @@ fn test_string_interpolated() {
                 r#"
                     let x = 42;
                     let y = 123;
-                
-                `
-Undeniable logic:
-1) Hello, ${let w = `${x} world`; if x > 1 { w += "s" } w}!
-2) If ${y} > ${x} then it is ${y > x}!
-`
+                    let w = {
+                        let mut w = format!("{x} world");
+                        if x > 1 { w += "s"; }
+                        w
+                    };
+
+                    format!("\nUndeniable logic:\n1) Hello, {w}!\n2) If {y} > {x} then it is {}!\n", y > x)
                 "#
             )
             .unwrap(),
-        "Undeniable logic:\n1) Hello, 42 worlds!\n2) If 123 > 42 then it is true!\n",
+        "\nUndeniable logic:\n1) Hello, 42 worlds!\n2) If 123 > 42 then it is true!\n",
     );
 }
 

@@ -61,24 +61,19 @@ fn main() -> Result<(), Box<EvalAltResult>> {
         println!();
     }
 
+    // A script reaches the type through the functions registered for it,
+    // called by name. `update`'s `&mut` first parameter takes `x` by reference.
     let result = engine.eval::<i64>(
         "
-            let x = new_ts();
+            let mut x = new_ts();
 
-            x.x = 42;
+            update(x);
 
-            for n in x {
-                x.x += n;
-                print(`n = ${n}, total = ${x.x}`);
-            }
-
-            x.update();
-
-            x.calc(x.x)
+            calc(x, 42)
         ",
     )?;
 
-    println!("result: {result}"); // prints 1085764
+    println!("result: {result}"); // prints 42042
 
     Ok(())
 }

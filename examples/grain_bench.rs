@@ -7,7 +7,7 @@
 //!
 //! # Catching a regression
 //!
-//! `cargo run --release --example bench -- --check` exits non-zero if any case
+//! `cargo run --release --example grain_bench --features grain -- --check` exits non-zero if any case
 //! has fallen below the floor recorded beside it.
 //!
 //! What is compared is the **ratio**, not the time. Absolute milliseconds say
@@ -64,42 +64,41 @@ impl Timing {
 const CASES: &[Case] = &[
     Case {
         name: "tight integer loop",
-        source: "let s = 0; let i = 0; while i < 20000 { s += i; i += 1; } s",
+        source: "let mut s: i64 = 0; let mut i: i64 = 0; while i < 20000 { s += i; i += 1; } s",
         iterations: 20,
         callbacks: false,
-        floor: 1.30,
+        floor: 1.18,
     },
     Case {
         name: "float arithmetic",
-        source: "let x = 0.0; let i = 0; while i < 20000 { x += (i.to_float() * 1.5) / 2.5; i += 1; } x",
+        source: "let mut x: f64 = 0.0; let mut i: i64 = 0; while i < 20000 { x += (i as f64 * 1.5) / 2.5; i += 1; } x",
         iterations: 20,
         callbacks: false,
-        floor: 1.10,
+        floor: 1.36,
     },
     Case {
         name: "script fn calls",
-        source: "fn add(a, b) { a + b } let s = 0; let i = 0; while i < 5000 { s = add(s, i); i += 1; } s",
+        source: "fn add(a: i64, b: i64) -> i64 { a + b } let mut s: i64 = 0; let mut i: i64 = 0; while i < 5000 { s = add(s, i); i += 1; } s",
         iterations: 20,
         callbacks: false,
-        floor: 1.55,
+        floor: 1.49,
     },
-    // The VM scans its case hashes; rawr probes a hash map. Two sizes,
-    // because which of those wins is a question about how many arms there
-    // are, and a `switch` nobody would write is the only place the scan can
-    // lose.
+    // A `match` on an integer lowers to a chain of comparisons, so what it
+    // costs grows with the arms it passes. Two sizes, because whether the VM
+    // keeps its lead is a question about how many arms there are.
     Case {
-        name: "switch, 4 arms",
-        source: "let s = 0; let i = 0; while i < 20000 { \
-                 switch i % 4 { 0 => s += 1, 1 => s += 2, 2 => s += 3, _ => s += 4 } \
+        name: "match, 4 arms",
+        source: "let mut s: i64 = 0; let mut i: i64 = 0; while i < 20000 { \
+                 match i % 4 { 0 => s += 1, 1 => s += 2, 2 => s += 3, _ => s += 4 } \
                  i += 1; } s",
         iterations: 20,
         callbacks: false,
-        floor: 1.40,
+        floor: 1.27,
     },
     Case {
-        name: "switch, 16 arms",
-        source: "let s = 0; let i = 0; while i < 20000 { \
-                 switch i % 16 { \
+        name: "match, 16 arms",
+        source: "let mut s: i64 = 0; let mut i: i64 = 0; while i < 20000 { \
+                 match i % 16 { \
                  0 => s += 1, 1 => s += 2, 2 => s += 3, 3 => s += 4, \
                  4 => s += 5, 5 => s += 6, 6 => s += 7, 7 => s += 8, \
                  8 => s += 9, 9 => s += 10, 10 => s += 11, 11 => s += 12, \
@@ -107,26 +106,28 @@ const CASES: &[Case] = &[
                  i += 1; } s",
         iterations: 20,
         callbacks: false,
-        floor: 1.35,
+        floor: 1.49,
     },
     Case {
         name: "branch heavy",
-        source: "let s = 0; let i = 0; while i < 20000 { if i % 3 == 0 { s += 1; } else if i % 3 == 1 { s += 2; } else { s -= 1; } i += 1; } s",
+        source: "let mut s: i64 = 0; let mut i: i64 = 0; while i < 20000 { if i % 3 == 0 { s += 1; } else if i % 3 == 1 { s += 2; } else { s -= 1; } i += 1; } s",
         iterations: 20,
         callbacks: false,
-        floor: 1.45,
+        floor: 1.33,
     },
     // The one case the VM is expected to lose. Every element is a boundary out
     // of the VM, through rawr's dispatch and back into a second `Vm` with an
     // empty resolution cache — where the walker stays inside itself and reaches
-    // the closure body directly. 1000 crossings per iteration.
+    // the closure body directly. `retain` and `sort_by` are natives; the
+    // typed lowering keeps `iter().map(..)` inside the program, so it would not
+    // cross at all.
     Case {
         name: "native callbacks",
-        source: "let a = []; let i = 0; while i < 500 { a.push(i); i += 1; } \
-                 let b = a.map(|x| x * 2); b.filter(|x| x % 3 == 0).len()",
+        source: "let mut a: Vec<i64> = Vec::new(); let mut i: i64 = 0; while i < 500 { a.push(i); i += 1; } \
+                 a.retain(|x| x % 3 == 0); a.sort_by(|x, y| y.cmp(x)); a.len()",
         iterations: 20,
         callbacks: true,
-        floor: 0.25,
+        floor: 0.36,
     },
 ];
 

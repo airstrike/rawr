@@ -1,32 +1,34 @@
 //! This script calculates the n-th Fibonacci number using a really dumb algorithm
 //! to test the speed of the scripting engine.
 
-const TARGET = 28;
-const REPEAT = 5;
-const ANSWER = 317_811;
+use std::time::Instant;
 
-fn fib(n) {
+const TARGET: i64 = 28;
+const REPEAT: i64 = 5;
+const ANSWER: i64 = 317_811;
+
+fn fib(n: i64) -> i64 {
     if n < 2 {
         n
     } else {
-        fib(n-1) + fib(n-2)
+        fib(n - 1) + fib(n - 2)
     }
 }
 
-print(`Running Fibonacci(${TARGET}) x ${REPEAT} times...`);
-print("Ready... Go!");
+println!("Running Fibonacci({}) x {} times...", TARGET, REPEAT);
+println!("Ready... Go!");
 
-let result;
-let now = timestamp();
+let mut result = 0;
+let now = Instant::now();
 
-for n in 0..REPEAT {
+for _ in 0..REPEAT {
     result = fib(TARGET);
 }
 
-print(`Finished. Run time = ${now.elapsed} seconds.`);
+println!("Finished. Run time = {:?}.", now.elapsed());
 
-print(`Fibonacci number #${TARGET} = ${result}`);
+println!("Fibonacci number #{} = {result}", TARGET);
 
 if result != ANSWER {
-    print(`The answer is WRONG! Should be ${ANSWER}!`);
+    println!("The answer is WRONG! Should be {}!", ANSWER);
 }

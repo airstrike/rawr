@@ -1,12 +1,12 @@
 //! This script defines a function with many parameters.
 
-const KEY = 38;
+const KEY: i64 = 38;
 
-fn f(a, b, c, d, e, f) {
-    let x = global::KEY;        // <- access global module
+fn f(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) -> i64 {
+    let x = KEY;        // <- a constant is visible inside a function
     a - b * c - d * e - f + x
 }
 
 let result = f(100, 5, 2, 9, 6, 32);
 
-print(`result should be 42: ${result}`);
+println!("result should be 42: {result}");

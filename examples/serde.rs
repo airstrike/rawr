@@ -47,23 +47,22 @@ fn main() {
 
     pub fn de() {
         let engine = Engine::new();
+        // A typed script's own struct is not an object map, and neither is a
+        // `HashMap` once it reaches the host, so the script hands back a
+        // tuple and the host deserializes the fields in order.
         let result: Dynamic = engine
             .eval(
                 r#"
-                        #{
-                            a: 42,
-                            b: [ "hello", "world" ],
-                            c: true,
-                            d: #{ x: 123.456, y: 999.0 }
-                        }
+                        (42, vec!["hello".to_string(), "world".to_string()], true, (123.456, 999.0))
                     "#,
             )
             .unwrap();
 
         println!("Source Dynamic: {result:#?}");
 
-        // Convert the 'Dynamic' object map into 'MyStruct'
-        let x: MyStruct = from_dynamic(&result).unwrap();
+        // Convert the 'Dynamic' array into the fields of 'MyStruct'
+        let (a, b, c, (x, y)): (i64, Vec<String>, bool, (f64, f64)) = from_dynamic(&result).unwrap();
+        let x = MyStruct { a, b, c, d: Point { x, y } };
 
         assert_eq!(
             x,

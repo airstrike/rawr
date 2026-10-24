@@ -1,33 +1,34 @@
 //! This script uses the Sieve of Eratosthenes to calculate prime numbers.
 
-let now = timestamp();
+use std::time::Instant;
 
-const ANSWER = 78_498;
-const MAX_NUMBER_TO_CHECK = 1_000_000;
+let now = Instant::now();
 
-let prime_mask = [];
-prime_mask.pad(MAX_NUMBER_TO_CHECK + 1, true);
+const ANSWER: i64 = 78_498;
+const MAX_NUMBER_TO_CHECK: usize = 1_000_000;
+
+let mut prime_mask = vec![true; MAX_NUMBER_TO_CHECK + 1];
 
 prime_mask[0] = false;
 prime_mask[1] = false;
 
-let total_primes_found = 0;
+let mut total_primes_found = 0;
 
 for p in 2..=MAX_NUMBER_TO_CHECK {
     if !prime_mask[p] { continue; }
 
-    //print(p);
+    //println!("{p}");
 
     total_primes_found += 1;
 
-    for i in range(2 * p, MAX_NUMBER_TO_CHECK + 1, p) {
+    for i in (2 * p..=MAX_NUMBER_TO_CHECK).step_by(p) {
         prime_mask[i] = false;
     }
 }
 
-print(`Total ${total_primes_found} primes <= ${MAX_NUMBER_TO_CHECK}`);
-print(`Run time = ${now.elapsed} seconds.`);
+println!("Total {total_primes_found} primes <= {}", MAX_NUMBER_TO_CHECK);
+println!("Run time = {:?}.", now.elapsed());
 
 if total_primes_found != ANSWER {
-    print(`The answer is WRONG! Should be ${ANSWER}!`);
+    println!("The answer is WRONG! Should be {}!", ANSWER);
 }

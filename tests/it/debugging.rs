@@ -13,29 +13,8 @@ fn test_debugging() {
 
     engine.register_debugger(|_, dbg| dbg, |_, _, _, _, _| Ok(rawr::debugger::DebuggerCommand::Continue));
 
-    #[cfg(not(feature = "no_function"))]
     #[cfg(not(feature = "no_index"))]
-    {
-        let r = engine
-            .eval::<Array>(
-                "
-                    fn foo(x) {
-                        if x >= 5 {
-                            back_trace()
-                        } else {
-                            foo(x+1)
-                        }
-                    }
-
-                    foo(0)
-                ",
-            )
-            .unwrap();
-
-        assert_eq!(r.len(), 6);
-
-        assert_eq!(engine.eval::<INT>("len(back_trace())").unwrap(), 0);
-    }
+    assert_eq!(engine.eval::<Array>("back_trace()").unwrap().len(), 0);
 }
 
 #[test]

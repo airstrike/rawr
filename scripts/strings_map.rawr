@@ -1,8 +1,11 @@
-//! This script tests object maps and strings.
+//! This script tests hash maps and strings.
 
-print("Ready... Go!");
+use std::collections::HashMap;
+use std::time::Instant;
 
-let now = timestamp();
+println!("Ready... Go!");
+
+let now = Instant::now();
 
 let adverbs = [ "moderately", "really", "slightly", "very" ];
 
@@ -72,34 +75,34 @@ let animals = [
     "wallaby", "wildebeest"
 ];
 
-let keys = [];
+let mut keys = Vec::new();
 
-for animal in animals {
-    for adjective in adjectives {
-        for adverb in adverbs {
-            keys.push(`${adverb} ${adjective} ${animal}`)
+for animal in &animals {
+    for adjective in &adjectives {
+        for adverb in &adverbs {
+            keys.push(format!("{adverb} {adjective} {animal}"));
         }
     }
 }
 
-let map = #{};
+let mut map = HashMap::new();
 
-let i = 0;
+let mut i = 0;
 
-for key in keys {
-    map[key] = i;
+for key in &keys {
+    map.insert(key.clone(), i);
     i += 1;
 }
 
-let sum = 0;
+let mut sum = 0;
 
-for key in keys {
+for key in &keys {
     sum += map[key];
 }
 
-for key in keys {
+for key in &keys {
     map.remove(key);
 }
 
-print(`Sum = ${sum}`);
-print(`Finished. Run time = ${now.elapsed} seconds.`);
+println!("Sum = {sum}");
+println!("Finished. Run time = {:?}.", now.elapsed());

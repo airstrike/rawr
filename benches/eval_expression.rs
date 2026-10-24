@@ -48,8 +48,8 @@ fn bench_eval_expression_optimized_simple(bench: &mut Bencher) {
             2 > 1 &&
             "something" != "nothing" ||
             "2014-01-20" < "Wed Jul  8 23:07:35 MDT 2015" &&
-            [array, has, spaces].len <= #{prop:name}.len &&
-            modifierTest + 1000 / 2 > (80 * 100 % 2)
+            vec![1, 2, 3].len() <= "name".len() &&
+            5 + 1000 / 2 > (80 * 100 % 2)
         "#;
 
     let mut engine = Engine::new();
@@ -65,8 +65,8 @@ fn bench_eval_expression_optimized_full(bench: &mut Bencher) {
             2 > 1 &&
             "something" != "nothing" ||
             "2014-01-20" < "Wed Jul  8 23:07:35 MDT 2015" &&
-            [array, has, spaces].len <= #{prop:name}.len &&
-            modifierTest + 1000 / 2 > (80 * 100 % 2)
+            vec![1, 2, 3].len() <= "name".len() &&
+            5 + 1000 / 2 > (80 * 100 % 2)
         "#;
 
     let mut engine = Engine::new();
@@ -82,8 +82,8 @@ fn bench_eval_call_expression(bench: &mut Bencher) {
             2 > 1 &&
             "something" != "nothing" ||
             "2014-01-20" < "Wed Jul  8 23:07:35 MDT 2015" &&
-            [array, has, spaces].len <= #{prop:name}.len &&
-            modifierTest + 1000 / 2 > (80 * 100 % 2)
+            vec![1, 2, 3].len() <= "name".len() &&
+            5 + 1000 / 2 > (80 * 100 % 2)
         "#;
 
     let engine = Engine::new();
@@ -97,8 +97,8 @@ fn bench_eval_call(bench: &mut Bencher) {
             2 > 1 &&
             "something" != "nothing" ||
             "2014-01-20" < "Wed Jul  8 23:07:35 MDT 2015" &&
-            [array, has, spaces].len <= #{prop:name}.len &&
-            modifierTest + 1000 / 2 > (80 * 100 % 2)
+            vec![1, 2, 3].len() <= "name".len() &&
+            5 + 1000 / 2 > (80 * 100 % 2)
         "#;
 
     let engine = Engine::new();
@@ -124,7 +124,7 @@ fn bench_eval_deeply_nested(bench: &mut Bencher) {
 #[bench]
 fn bench_eval_loop_number(bench: &mut Bencher) {
     let script = "
-        let s = 0;
+        let mut s = 0;
         for x in 0..10000 {
             s += 1;
         }
@@ -141,9 +141,9 @@ fn bench_eval_loop_number(bench: &mut Bencher) {
 #[bench]
 fn bench_eval_loop_strings_build(bench: &mut Bencher) {
     let script = r#"
-        let s;
+        let mut s = String::new();
         for x in 0..10000 {
-            s = "hello, world!" + "hello, world!";
+            s = "hello, world!".to_string() + "hello, world!";
         }
     "#;
 
@@ -158,9 +158,9 @@ fn bench_eval_loop_strings_build(bench: &mut Bencher) {
 #[bench]
 fn bench_eval_loop_strings_no_build(bench: &mut Bencher) {
     let script = r#"
-        let s;
+        let mut s = String::new();
         for x in 0..10000 {
-            s = "hello" + "";
+            s = "hello".to_string() + "";
         }
     "#;
 
@@ -173,15 +173,15 @@ fn bench_eval_loop_strings_no_build(bench: &mut Bencher) {
 }
 
 #[bench]
-fn bench_eval_switch(bench: &mut Bencher) {
+fn bench_eval_match(bench: &mut Bencher) {
     let script = "
-        let sum = 0;
-        let rem = 0;
+        let mut sum = 0;
+        let mut rem = 0;
 
         for x in 0..10 {
             rem = x % 10;
 
-            sum += switch rem {
+            sum += match rem {
                 0 => 10,
                 1 => 12,
                 2 => 42,
@@ -191,8 +191,8 @@ fn bench_eval_switch(bench: &mut Bencher) {
                 6 => 1,
                 7 => 12,
                 8 => 42,
-                9 => 1,
-            }
+                _ => 1,
+            };
         }
     ";
 
@@ -207,8 +207,8 @@ fn bench_eval_switch(bench: &mut Bencher) {
 #[bench]
 fn bench_eval_nested_if(bench: &mut Bencher) {
     let script = "
-        let sum = 0;
-        let rem = 0;
+        let mut sum = 0;
+        let mut rem = 0;
 
         for x in 0..10 {
             rem = x % 10;
@@ -222,7 +222,7 @@ fn bench_eval_nested_if(bench: &mut Bencher) {
             else if rem == 6 { 1 }
             else if rem == 7 { 12 }
             else if rem == 8 { 42 }
-            else if rem == 9 { 1 };
+            else { 1 };
         }
     ";
 

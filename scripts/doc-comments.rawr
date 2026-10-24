@@ -6,7 +6,7 @@
 /// # Parameters
 ///
 /// * `x` - `i64`
-/// * `y` - `string`
+/// * `y` - `&str`
 /// * `z` - `bool`
 ///
 /// # Notes
@@ -17,13 +17,12 @@
 ///
 /// # Example
 ///
-/// ```rawr
-/// let x = foo(42, "hello", true);
-///
-/// print(x);     // prints 47
+/// ```rust
+/// foo(42, "hello", true);     // prints 47
 /// ```
-fn foo(x, y, z) {
-   print(`hello, world! ${if z { x + y.len() } else { x } }`);
+fn foo(x: i64, y: &str, z: bool) {
+    let n = if z { x + y.len() as i64 } else { x };
+    println!("hello, world! {n}");
 }
 
 foo(39, "bar", true);

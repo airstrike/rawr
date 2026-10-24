@@ -14,16 +14,16 @@ fn marked_impl_proves_the_complete_renderer_neutral_protocol() {
 
         #[widget]
         impl Dial {
-            fn state(&self) -> State { throw "state" }
-            fn children(&self) -> rawr_iced::widget::children::List<Message> { throw "children" }
+            fn state(&self) -> State { panic!("state") }
+            fn children(&self) -> rawr_iced::widget::children::List<Message> { panic!("children") }
             fn diff(&mut self, state: &mut State) { state.clicks += 1; }
-            fn size(&self) -> rawr_iced::widget::layout::Size { throw "size" }
-            fn layout(&mut self, state: &mut State, input: rawr_iced::widget::layout::Input) -> rawr_iced::widget::layout::Node { throw "layout" }
-            fn update(&mut self, state: &mut State, input: rawr_iced::widget::event::Input) -> rawr_iced::widget::event::Outcome<Message> { throw "update" }
+            fn size(&self) -> rawr_iced::widget::layout::Size { panic!("size") }
+            fn layout(&mut self, state: &mut State, input: rawr_iced::widget::layout::Input) -> rawr_iced::widget::layout::Node { panic!("layout") }
+            fn update(&mut self, state: &mut State, input: rawr_iced::widget::event::Input) -> rawr_iced::widget::event::Outcome<Message> { panic!("update") }
             fn draw(&self, state: &State, renderer: &mut rawr_iced::Renderer, input: rawr_iced::widget::draw::Input) { renderer.fill() }
-            fn mouse_interaction(&self, state: &State, input: rawr_iced::widget::mouse::Input) -> iced::mouse::Interaction { throw "mouse" }
-            fn operate(&mut self, state: &mut State, input: rawr_iced::widget::operation::Input) -> rawr_iced::widget::operation::Outcome { throw "operate" }
-            fn overlay(&mut self, state: &mut State, input: rawr_iced::widget::overlay::Input) -> rawr_iced::widget::overlay::Value<Message> { throw "overlay" }
+            fn mouse_interaction(&self, state: &State, input: rawr_iced::widget::mouse::Input) -> iced::mouse::Interaction { panic!("mouse") }
+            fn operate(&mut self, state: &mut State, input: rawr_iced::widget::operation::Input) -> rawr_iced::widget::operation::Outcome { panic!("operate") }
+            fn overlay(&mut self, state: &mut State, input: rawr_iced::widget::overlay::Input) -> rawr_iced::widget::overlay::Value<Message> { panic!("overlay") }
         }
     "#;
     let executable = compiler().compile_executable(source).unwrap();
@@ -61,7 +61,7 @@ fn omitted_hooks_retain_exact_defaults_and_generic_message() {
                 struct Dial;
                 #[widget]
                 impl Dial {
-                    fn size(&self) -> rawr_iced::widget::layout::Size { throw "size" }
+                    fn size(&self) -> rawr_iced::widget::layout::Size { panic!("size") }
                 }
             "#,
         )
@@ -83,7 +83,7 @@ fn canonical_fingerprint_ignores_hook_source_order() {
             struct Dial;
             #[widget]
             impl Dial {
-                fn size(&self) -> rawr_iced::widget::layout::Size { throw "size" }
+                fn size(&self) -> rawr_iced::widget::layout::Size { panic!("size") }
                 fn draw(&self, renderer: &mut rawr_iced::Renderer, input: rawr_iced::widget::draw::Input) { renderer.fill() }
             }
         "#,
@@ -94,7 +94,7 @@ fn canonical_fingerprint_ignores_hook_source_order() {
             #[widget]
             impl Dial {
                 fn draw(&self, renderer: &mut rawr_iced::Renderer, input: rawr_iced::widget::draw::Input) { renderer.fill() }
-                fn size(&self) -> rawr_iced::widget::layout::Size { throw "size" }
+                fn size(&self) -> rawr_iced::widget::layout::Size { panic!("size") }
             }
         "#,
     );
@@ -119,8 +119,8 @@ fn unsupported_hooks_and_inconsistent_messages_are_compile_diagnostics() {
             enum Second { Tick }
             #[widget]
             impl Dial {
-                fn children(&self) -> rawr_iced::widget::children::List<First> { throw "children" }
-                fn update(&mut self, input: rawr_iced::widget::event::Input) -> rawr_iced::widget::event::Outcome<Second> { throw "update" }
+                fn children(&self) -> rawr_iced::widget::children::List<First> { panic!("children") }
+                fn update(&mut self, input: rawr_iced::widget::event::Input) -> rawr_iced::widget::event::Outcome<Second> { panic!("update") }
             }
         "#,
         "constrains Message",
@@ -134,7 +134,7 @@ fn widget_marker_and_hook_signatures_are_closed() {
         r#"
             struct Dial;
             #[widget]
-            impl Dial { fn size(&mut self) -> rawr_iced::widget::layout::Size { throw "size" } }
+            impl Dial { fn size(&mut self) -> rawr_iced::widget::layout::Size { panic!("size") } }
         "#,
         "requires `&self`",
     );
@@ -203,7 +203,7 @@ fn invocation_scoped_renderer_is_rejected_from_storage_and_aliases() {
         "struct Saved { renderer: rawr_iced::Envelope<rawr_iced::Renderer> }",
         "enum Saved { Renderer(rawr_iced::Renderer) }",
         "pub fn save(renderer: &mut rawr_iced::Renderer) { () }",
-        "pub fn make() -> rawr_iced::Renderer { throw \"renderer\" }",
+        "pub fn make() -> rawr_iced::Renderer { panic!(\"renderer\") }",
         r#"
             struct Dial;
             #[widget]
@@ -259,7 +259,7 @@ fn lifecycle_carriers_reject_unowned_lookalikes() {
         struct Dial;
         #[widget]
         impl Dial {
-            fn size(&self) -> rawr_iced::widget::layout::Size { throw "size" }
+            fn size(&self) -> rawr_iced::widget::layout::Size { panic!("size") }
         }
     "#;
     let error = engine.compile_executable(source).unwrap_err();
@@ -280,7 +280,7 @@ fn facade_abi_drift_changes_the_retained_protocol_proof() {
         struct Dial;
         #[widget]
         impl Dial {
-            fn size(&self) -> rawr_iced::widget::layout::Size { throw "size" }
+            fn size(&self) -> rawr_iced::widget::layout::Size { panic!("size") }
         }
     "#;
     let first = compiler_with_abi(1).compile_executable(source).unwrap();
@@ -301,7 +301,7 @@ fn exact_widget_boundaries_select_generic_and_exact_promotions() {
                 struct Dial;
                 enum Message { Tick }
                 #[widget]
-                impl Dial { fn size(&self) -> rawr_iced::widget::layout::Size { throw "size" } }
+                impl Dial { fn size(&self) -> rawr_iced::widget::layout::Size { panic!("size") } }
                 pub fn view() -> iced::Element<Message> { Dial {} }
             "#,
         )
@@ -313,7 +313,7 @@ fn exact_widget_boundaries_select_generic_and_exact_promotions() {
                 enum Message { Tick }
                 #[widget]
                 impl Dial {
-                    fn children(&self) -> rawr_iced::widget::children::List<Message> { throw "children" }
+                    fn children(&self) -> rawr_iced::widget::children::List<Message> { panic!("children") }
                 }
                 pub fn view() -> iced::Element<Message> { Dial {} }
             "#,
@@ -339,7 +339,7 @@ fn exact_widget_message_mismatch_is_a_positioned_compile_error() {
             enum Second { Tick }
             #[widget]
             impl Dial {
-                fn children(&self) -> rawr_iced::widget::children::List<First> { throw "children" }
+                fn children(&self) -> rawr_iced::widget::children::List<First> { panic!("children") }
             }
             pub fn view() -> iced::Element<Second> { Dial {} }
         "#,
@@ -355,7 +355,7 @@ fn structural_widget_sites_ignore_formatting_and_distinguish_children() {
                 struct Dial;
                 enum Message { Tick }
                 #[widget]
-                impl Dial { fn size(&self) -> rawr_iced::widget::layout::Size { throw "size" } }
+                impl Dial { fn size(&self) -> rawr_iced::widget::layout::Size { panic!("size") } }
                 pub fn wrap(value: iced::Element<Message>) -> iced::Element<Message> { value }
                 pub fn view() -> iced::Element<Message> { wrap(Dial {}) }
                 pub fn other() -> iced::Element<Message> { Dial {} }
@@ -371,7 +371,7 @@ fn structural_widget_sites_ignore_formatting_and_distinguish_children() {
                 #[widget]
                 impl Dial {
                     fn size(&self) -> rawr_iced::widget::layout::Size {
-                        throw "size"
+                        panic!("size")
                     }
                 }
 

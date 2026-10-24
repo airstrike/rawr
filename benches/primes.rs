@@ -9,20 +9,19 @@ use test::Bencher;
 // This script uses the Sieve of Eratosthenes to calculate prime numbers.
 
 const SCRIPT: &str = "
-    const MAX_NUMBER_TO_CHECK = 1_000;     // 168 primes <= 1000
+    const MAX_NUMBER_TO_CHECK: usize = 1_000;     // 168 primes <= 1000
 
-    let prime_mask = [];
-    prime_mask.pad(MAX_NUMBER_TO_CHECK, true);
+    let mut prime_mask = vec![true; MAX_NUMBER_TO_CHECK];
 
     prime_mask[0] = false;
     prime_mask[1] = false;
 
-    let total_primes_found = 0;
+    let mut total_primes_found = 0;
 
     for p in 2..MAX_NUMBER_TO_CHECK {
         if prime_mask[p] {
             total_primes_found += 1;
-            let i = 2 * p;
+            let mut i = 2 * p;
 
             while i < MAX_NUMBER_TO_CHECK {
                 prime_mask[i] = false;

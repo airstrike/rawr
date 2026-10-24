@@ -1,35 +1,36 @@
-//! This script defines multiple versions of the same function
-//! for use as method with different data types.
+//! This script implements one trait method for several data types.
+
+trait Calc {
+    fn calc(&self, x: i64) -> i64;
+}
 
 // For strings
-fn string.calc(x) {
-    this.len + x
+impl Calc for &str {
+    fn calc(&self, x: i64) -> i64 {
+        self.len() as i64 + x
+    }
 }
 // For integers
-fn int.calc(x) {
-    this * x
+impl Calc for i64 {
+    fn calc(&self, x: i64) -> i64 {
+        self * x
+    }
 }
 // For booleans
-fn bool.calc(x) {
-    if this { x } else { 0}
+impl Calc for bool {
+    fn calc(&self, x: i64) -> i64 {
+        if *self { x } else { 0 }
+    }
 }
-// For arrays
-fn array.calc(x) {
-    this.len + x
-}
-// For object maps
-fn map.calc(x) {
-    this[x]
-}
-// Catch-all
-fn calc(x) {
-    `${this}: ${x}`
+// For vectors
+impl Calc for Vec<i64> {
+    fn calc(&self, x: i64) -> i64 {
+        self.len() as i64 + x
+    }
 }
 
-print("hello".calc(42));                // 47
-print(42.calc(42));                     // 1764
-print(true.calc(42));                   // 42
-print(false.calc(42));                  // 0
-print([1,2,3].calc(42));                // 45
-print(#{"a": 1, "b": 2}.calc("b"));     // 2
-print('x'.calc(42));                    // x: 42
+println!("{}", "hello".calc(42));           // 47
+println!("{}", 42_i64.calc(42));            // 1764
+println!("{}", true.calc(42));              // 42
+println!("{}", false.calc(42));             // 0
+println!("{}", vec![1, 2, 3].calc(42));     // 45

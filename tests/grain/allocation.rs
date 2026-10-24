@@ -119,61 +119,51 @@ fn measure<T>(f: impl FnOnce() -> T) -> Measured<T> {
     }
 }
 
-/// A synthetic control, shaped like a real script: helper functions, integer
-/// and float arithmetic, arrays, and a loop driving them.
-///
-/// `FOLLOW` is the real one, and the figures that matter are measured against
-/// it. This is here so the per-source-byte and peak/retained ratios have a
-/// second shape to be read against.
+/// A script shaped like a real one: helper functions, integer and float
+/// arithmetic, a vector, and a loop driving them.
 const SCRIPT: &str = r#"
-fn clamp(v, lo, hi) {
+fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
     if v < lo { lo } else if v > hi { hi } else { v }
 }
 
-fn ease(t) {
+fn ease(t: f64) -> f64 {
     let x = clamp(t, 0.0, 1.0);
     x * x * (3.0 - 2.0 * x)
 }
 
-fn blend(a, b, t) {
+fn blend(a: f64, b: f64, t: f64) -> f64 {
     let k = ease(t);
-    (a * (1.0 - k) + b * k)
+    a * (1.0 - k) + b * k
 }
 
-let channels = [0, 0, 0, 0, 0, 0, 0, 0];
-let phase = 0.0;
-let step = 0.125;
+let mut channels: Vec<i64> = vec![0, 0, 0, 0, 0, 0, 0, 0];
+let mut phase: f64 = 0.0;
+let step: f64 = 0.125;
 
 for frame in 0..64 {
     phase += step;
     if phase > 1.0 { phase -= 1.0; }
 
-    for i in 0..channels.len {
+    for i in 0..channels.len() {
         let target = if i % 2 == 0 { 255.0 } else { 64.0 };
         let level = blend(0.0, target, ease(phase));
-        channels[i] = clamp(level.to_int(), 0, 255);
+        channels[i] = (level as i64).clamp(0, 255);
     }
 }
 
 channels
 "#;
 
-/// The script the premise is actually about — byte-identical to
-/// traffic-light's `scripts/follow.rawr`, the one its 24 bytes/source-byte
-/// figure was measured against.
-const FOLLOW: &str = include_str!("fixtures/follow.rawr");
-
 /// Something that lowers all the way, so it can be written and read back.
 ///
-/// `follow.rawr` cannot yet: it still fragments on property reads and index
-/// assignment, and a program holding a fragment refuses to serialize. Until
-/// chained lvalues land, the load figures come from a script shaped like the
-/// parts of it that do lower — locals, arithmetic, branches and a loop.
+/// Locals, arithmetic, branches and a loop, every integer an `i64`: an integer
+/// whose type is only inferred still lowers through compiler-owned support,
+/// and a program holding that support cannot be written.
 const LOADABLE: &str = r#"
-let total = 0;
-let phase = 0;
-let step = 3;
-let i = 0;
+let mut total: i64 = 0;
+let mut phase: i64 = 0;
+let step: i64 = 3;
+let mut i: i64 = 0;
 while i < 64 {
     phase += step;
     if phase > 100 { phase -= 100; }
@@ -183,10 +173,8 @@ while i < 64 {
 total;
 "#;
 
-// `SCRIPT` and `follow.rawr` both use floats, and the second is checked in
-// byte-identical to the script the 24-bytes-per-source-byte figure came from —
-// rewriting it to suit a build would make the number mean something else. So
-// the measurement is a default-build one, and says so.
+// `SCRIPT` uses floats, so the measurement is a default-build one, and says
+// so.
 #[test]
 #[cfg(not(feature = "no_float"))]
 fn allocation_footprint() {
@@ -195,8 +183,6 @@ fn allocation_footprint() {
     let engine_cost = measure(Engine::new);
     let ast = measure(|| engine.compile(SCRIPT).expect("script must compile"));
     let program = measure(|| Compiler::new().compile(&ast.value));
-
-    let follow_ast = measure(|| engine.compile(FOLLOW).expect("follow.rawr must compile"));
 
     let source_bytes = SCRIPT.len() as isize;
     let per_source_byte = ast.bytes as f64 / source_bytes as f64;
@@ -208,9 +194,8 @@ fn allocation_footprint() {
     println!("{:<24} {:>10} {:>10} {:>10}", "Compiler::compile", program.bytes, program.count, program.peak);
 
     // Not comparable to traffic-light's 24.0: that is a 32-bit device figure
-    // measured against minified source, this is a host figure against
-    // unminified source. Comparing them needs follow.rawr measured minified,
-    // the way the server actually ships it.
+    // measured against minified source of another language, this is a host
+    // figure against unminified source.
     println!("\nAST bytes per source byte {per_source_byte:.1}  (host, unminified)");
     println!("AST parser peak / retained {:.2}x  (the peak is what has to fit)", ast.peak as f64 / ast.bytes as f64);
 
@@ -219,51 +204,6 @@ fn allocation_footprint() {
     for (label, n) in labels.iter().zip(ast.buckets) {
         println!("  {label:>6} {n:>8}");
     }
-
-    // What the real script's tree costs, to set against what
-    // tests/grain/projection.rs says a lowering of it would weigh.
-    //
-    // Larger than traffic-light's own 77968 for the same script because this
-    // builds rawr with default features. Theirs sets `no_module`, which drops
-    // a `Namespace` (an inline `StaticVec<Ident>` plus a hash) from every
-    // `Expr::Variable` payload — and this script has 457 of them. A restricted
-    // build is what 77968 should be compared against, not this one.
-    println!("\nfollow.rawr — {} source bytes", FOLLOW.len());
-    println!("{:<24} {:>10} {:>10} {:>10}", "engine.compile (AST)", follow_ast.bytes, follow_ast.count, follow_ast.peak);
-    println!("{:<24} {:>10.1}", "bytes per source byte", follow_ast.bytes as f64 / FOLLOW.len() as f64);
-    println!("{:<24} {:>10.2}x", "parser peak / retained", follow_ast.peak as f64 / follow_ast.bytes as f64);
-    println!("\nfollow.rawr AST live allocations by size class");
-    for (label, n) in labels.iter().zip(follow_ast.buckets) {
-        println!("  {label:>6} {n:>8}");
-    }
-
-    // What loading an artifact costs, against parsing the same script.
-    //
-    // This is the claim the byte encoding exists for. `Program::read` borrows
-    // its instructions from the buffer, so nothing it retains is proportional
-    // to how long the script is — only to the distinct names and constants it
-    // mentions. Parsing retains a node per node.
-    // The measurement the whole project was for: the real script, the real
-    // tree, and the artifact that replaces it.
-    let follow_program = Compiler::new().compile(&follow_ast.value);
-    assert_eq!(follow_program.residual_count(), 0, "follow.rawr must lower completely, or there is nothing to write",);
-    let (follow_artifact, follow_table) = follow_program.write_stripped().expect("follow.rawr must be writable");
-    let follow_loaded = measure(|| rawr::grain::Program::read(&follow_artifact).expect("must load"));
-
-    println!(
-        "\nfollow.rawr: {} source bytes\n  tree      {:>8} bytes retained, {:>5} allocs, {:>8} peak\n  \
-         artifact  {:>8} bytes on the wire ({} of debug table kept off it)\n  \
-         loaded    {:>8} bytes retained, {:>5} allocs",
-        FOLLOW.len(),
-        follow_ast.bytes,
-        follow_ast.count,
-        follow_ast.peak,
-        follow_artifact.len(),
-        follow_table.len(),
-        follow_loaded.bytes,
-        follow_loaded.count,
-    );
-    println!("  {:.1}x less retained, and no parser peak at all", follow_ast.bytes as f64 / follow_loaded.bytes as f64,);
 
     // Measured at several lengths, because the ratio at one length says almost
     // nothing. Repeating the same statements grows the instruction stream while

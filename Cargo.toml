@@ -219,10 +219,6 @@ required-features = ["unstable"]
 name = "serde"
 required-features = ["serde"]
 
-[[example]]
-name = "definitions"
-required-features = ["metadata", "internals"]
-
 # VM-versus-walker timings. Run with `--release`; `-- --check` exits non-zero
 # on a case that has fallen below the floor recorded beside it.
 [[example]]

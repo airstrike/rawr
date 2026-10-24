@@ -1,6 +1,5 @@
 #![cfg(not(feature = "no_function"))]
-use rawr::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, FnPtr, Func, FuncArgs, INT, Scope};
-use std::any::TypeId;
+use rawr::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, Func, FuncArgs, INT, Scope};
 
 #[test]
 fn test_call_fn() {
@@ -13,18 +12,16 @@ fn test_call_fn() {
     let ast = engine
         .compile(
             "
-                fn hello(x, y) {
+                fn hello(x: i64, y: i64) -> i64 {
                     x + y
                 }
-                fn hello(x) {
-                    x *= foo;
-                    foo = 1;
-                    x
+                fn twice(x: i64) -> i64 {
+                    x * 2
                 }
-                fn hello() {
-                    41 + foo
+                fn answer() -> i64 {
+                    42
                 }
-                fn define_var(scale) {
+                fn define_var(scale: i64) -> i64 {
                     let bar = 21;
                     bar * scale
                 }
@@ -35,13 +32,14 @@ fn test_call_fn() {
     let r = engine.call_fn::<INT>(&mut scope, &ast, "hello", (42 as INT, 123 as INT)).unwrap();
     assert_eq!(r, 165);
 
-    let r = engine.call_fn::<INT>(&mut scope, &ast, "hello", (123 as INT,)).unwrap();
-    assert_eq!(r, 5166);
+    let r = engine.call_fn::<INT>(&mut scope, &ast, "twice", (123 as INT,)).unwrap();
+    assert_eq!(r, 246);
 
-    let r = engine.call_fn::<INT>(&mut scope, &ast, "hello", ()).unwrap();
+    let r = engine.call_fn::<INT>(&mut scope, &ast, "answer", ()).unwrap();
     assert_eq!(r, 42);
 
-    assert_eq!(scope.get_value::<INT>("foo").expect("variable foo should exist"), 1);
+    // The scope keeps its variables across calls.
+    assert_eq!(scope.get_value::<INT>("foo").expect("variable foo should exist"), 42);
 
     let r = engine.call_fn::<INT>(&mut scope, &ast, "define_var", (2 as INT,)).unwrap();
     assert_eq!(r, 42);
@@ -73,9 +71,9 @@ fn test_call_fn_scope() {
     let ast = engine
         .compile(
             "
-                fn foo(x) {
+                fn foo(x: i64) -> i64 {
                     let hello = 42;
-                    bar + hello + x
+                    123 + hello + x
                 }
 
                 let bar = 123;
@@ -118,11 +116,11 @@ fn test_call_fn_args() {
 
     let ast = engine
         .compile(
-            "
-                fn hello(x, y, z) {
-                    if x { `hello ${y}` } else { y + z }
+            r#"
+                fn hello(x: bool, y: String, z: i64) -> String {
+                    if x { format!("hello {y}") } else { format!("{y}{z}") }
                 }
-            ",
+            "#,
         )
         .unwrap();
 
@@ -136,104 +134,33 @@ fn test_call_fn_private() {
     let engine = Engine::new();
     let mut scope = Scope::new();
 
-    let ast = engine.compile("fn add(x, n) { x + n }").unwrap();
+    let ast = engine.compile("pub fn add(x: i64, n: i64) -> i64 { x + n }").unwrap();
 
     let r = engine.call_fn::<INT>(&mut scope, &ast, "add", (40 as INT, 2 as INT)).unwrap();
     assert_eq!(r, 42);
 
-    let ast = engine.compile("private fn add(x, n, ) { x + n }").unwrap();
+    // A function without `pub` is private to the script, and the host still calls it.
+    let ast = engine.compile("fn add(x: i64, n: i64, ) -> i64 { x + n }").unwrap();
 
     let r = engine.call_fn::<INT>(&mut scope, &ast, "add", (40 as INT, 2 as INT)).unwrap();
     assert_eq!(r, 42);
-}
-
-#[test]
-#[cfg(not(feature = "no_object"))]
-fn test_fn_ptr_raw() {
-    let mut engine = Engine::new();
-
-    engine
-        .register_fn("mul", |x: &mut INT, y: INT| *x *= y)
-        .register_raw_fn("bar", [TypeId::of::<INT>(), TypeId::of::<FnPtr>(), TypeId::of::<INT>()], move |context, args| {
-            let fp = args[1].take().cast::<FnPtr>();
-            let value = args[2].clone();
-            let this_ptr = args.get_mut(0).unwrap();
-
-            fp.call_raw(&context, Some(this_ptr), [value])
-        });
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                r#"
-                    fn foo(x) { this += x; }
-
-                    let x = 41;
-                    x.bar(foo, 1);
-                    x
-                "#
-            )
-            .unwrap(),
-        42
-    );
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                r#"
-                    fn foo(x, y) { this += x + y; }
-
-                    let x = 40;
-                    let v = 1;
-                    x.bar(Fn("foo").curry(v), 1);
-                    x
-                "#
-            )
-            .unwrap(),
-        42
-    );
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                r#"
-                    private fn foo(x) { this += x; }
-
-                    let x = 41;
-                    x.bar(Fn("foo"), 1);
-                    x
-                "#
-            )
-            .unwrap(),
-        42
-    );
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                r#"
-                    let x = 21;
-                    x.bar(Fn("mul"), 2);
-                    x
-                "#
-            )
-            .unwrap(),
-        42
-    );
 }
 
 #[test]
 fn test_anonymous_fn() {
-    let calc_func = Func::<(INT, INT, INT), INT>::create_from_script(Engine::new(), "fn calc(x, y, z,) { (x + y) * z }", "calc").unwrap();
+    let calc_func = Func::<(INT, INT, INT), INT>::create_from_script(Engine::new(), "fn calc(x: i64, y: i64, z: i64,) -> i64 { (x + y) * z }", "calc").unwrap();
     assert_eq!(calc_func(42, 123, 9).unwrap(), 1485);
 
-    let calc_func = Func::<(INT, String, INT), INT>::create_from_script(Engine::new(), "fn calc(x, y, z) { (x + len(y)) * z }", "calc").unwrap();
+    let calc_func =
+        Func::<(INT, String, INT), INT>::create_from_script(Engine::new(), "fn calc(x: i64, y: String, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc").unwrap();
     assert_eq!(calc_func(42, "hello".to_string(), 9).unwrap(), 423);
 
-    let calc_func = Func::<(INT, String, INT), INT>::create_from_script(Engine::new(), "private fn calc(x, y, z) { (x + len(y)) * z }", "calc").unwrap();
+    let calc_func =
+        Func::<(INT, String, INT), INT>::create_from_script(Engine::new(), "pub fn calc(x: i64, y: String, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc")
+            .unwrap();
     assert_eq!(calc_func(42, "hello".to_string(), 9).unwrap(), 423);
 
-    let calc_func = Func::<(INT, &str, INT), INT>::create_from_script(Engine::new(), "fn calc(x, y, z) { (x + len(y)) * z }", "calc").unwrap();
+    let calc_func = Func::<(INT, &str, INT), INT>::create_from_script(Engine::new(), "fn calc(x: i64, y: &str, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc").unwrap();
     assert_eq!(calc_func(42, "hello", 9).unwrap(), 423);
 }
 
@@ -250,8 +177,8 @@ fn test_call_fn_events() {
     }
 
     const SCRIPT: &str = r#"
-        fn start(data) { 42 + data }
-        fn end(data) { 0 }
+        fn start(data: i64) -> i64 { 42 + data }
+        fn end(_data: i64) -> i64 { 0 }
     "#;
 
     impl Handler {

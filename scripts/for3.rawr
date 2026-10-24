@@ -1,30 +1,33 @@
 //! This script runs for-loops with closures.
 
-const MAX = 100;
-const CHECK = ((MAX - 1) ** 2) * MAX;
+use std::time::Instant;
 
-print("Ready... Go!");
+const MAX: i64 = 100;
+// Each closure keeps its own copy of `i`, so the sum is 0² + 1² + .. + 99².
+const CHECK: i64 = (MAX - 1) * MAX * (2 * MAX - 1) / 6;
 
-let now = timestamp();
+println!("Ready... Go!");
 
-print(`Creating ${MAX} closures...`);
+let now = Instant::now();
 
-let list = [];
+println!("Creating {} closures...", MAX);
+
+let mut list: Vec<Box<dyn Fn() -> i64>> = Vec::new();
 
 // Loop over range
 for i in 0..MAX {
-    list.push(|| i ** 2);
+    list.push(Box::new(move || i * i));
 }
 
-print(`Time = ${now.elapsed} seconds...`);
-print(`Summing ${MAX} closures...`);
+println!("Time = {:?}...", now.elapsed());
+println!("Summing {} closures...", MAX);
 
-let sum = 0;
+let mut sum = 0;
 
 // Loop over array
 for f in list {
-    sum += f.call();
+    sum += f();
 }
 
-print(`Sum = ${sum} (should be ${CHECK})`);
-print(`Finished. Total run time = ${now.elapsed} seconds.`);
+println!("Sum = {sum} (should be {})", CHECK);
+println!("Finished. Total run time = {:?}.", now.elapsed());

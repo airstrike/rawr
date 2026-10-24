@@ -12,41 +12,19 @@ struct Test {
 }
 
 impl Test {
-    pub fn get_x(&mut self) -> INT {
-        self.x
-    }
     pub fn action(&mut self) {
         self.x = 0;
     }
     pub fn update(&mut self, val: INT) {
         self.x = val;
     }
-    pub fn get_nest(&mut self) -> Test {
-        Test { x: 9 }
-    }
-}
-
-#[bench]
-fn bench_type_field(bench: &mut Bencher) {
-    let script = "foo.field";
-
-    let mut engine = Engine::new();
-    engine.set_optimization_level(OptimizationLevel::None);
-
-    engine.register_type_with_name::<Test>("Test");
-    engine.register_get("field", Test::get_x);
-
-    let ast = engine.compile_expression(script).unwrap();
-
-    let mut scope = Scope::new();
-    scope.push("foo", Test { x: 42 });
-
-    bench.iter(|| engine.run_ast_with_scope(&mut scope, &ast).unwrap());
 }
 
 #[bench]
 fn bench_type_method(bench: &mut Bencher) {
-    let script = "foo.action()";
+    // A script reaches a host type through the functions registered for it,
+    // and a `&mut` first parameter takes the variable by reference.
+    let script = "action(foo)";
 
     let mut engine = Engine::new();
     engine.set_optimization_level(OptimizationLevel::None);
@@ -54,17 +32,17 @@ fn bench_type_method(bench: &mut Bencher) {
     engine.register_type_with_name::<Test>("Test");
     engine.register_fn("action", Test::action);
 
-    let ast = engine.compile_expression(script).unwrap();
-
     let mut scope = Scope::new();
     scope.push("foo", Test { x: 42 });
+
+    let ast = engine.compile_expression_with_scope(&scope, script).unwrap();
 
     bench.iter(|| engine.run_ast_with_scope(&mut scope, &ast).unwrap());
 }
 
 #[bench]
 fn bench_type_method_with_params(bench: &mut Bencher) {
-    let script = "foo.update(1)";
+    let script = "update(foo, 1)";
 
     let mut engine = Engine::new();
     engine.set_optimization_level(OptimizationLevel::None);
@@ -72,29 +50,10 @@ fn bench_type_method_with_params(bench: &mut Bencher) {
     engine.register_type_with_name::<Test>("Test");
     engine.register_fn("update", Test::update);
 
-    let ast = engine.compile_expression(script).unwrap();
-
     let mut scope = Scope::new();
     scope.push("foo", Test { x: 42 });
 
-    bench.iter(|| engine.run_ast_with_scope(&mut scope, &ast).unwrap());
-}
-
-#[bench]
-fn bench_type_method_nested(bench: &mut Bencher) {
-    let script = "foo.nest.field";
-
-    let mut engine = Engine::new();
-    engine.set_optimization_level(OptimizationLevel::None);
-
-    engine.register_type_with_name::<Test>("Test");
-    engine.register_get("field", Test::get_x);
-    engine.register_get("nest", Test::get_nest);
-
-    let ast = engine.compile_expression(script).unwrap();
-
-    let mut scope = Scope::new();
-    scope.push("foo", Test { x: 42 });
+    let ast = engine.compile_expression_with_scope(&scope, script).unwrap();
 
     bench.iter(|| engine.run_ast_with_scope(&mut scope, &ast).unwrap());
 }
