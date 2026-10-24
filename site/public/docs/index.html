@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rawr docs</title>
-<meta name="description" content="Documentation for Rawr. Rawr is a scripting language that reads like Rust. The rawr crate embeds it in any Rust program, and rawr-iced runs iced apps that reload when you save.">
-<meta property="og:title" content="Rawr docs">
-<meta property="og:description" content="Documentation for Rawr. Rawr is a scripting language that reads like Rust. The rawr crate embeds it in any Rust program, and rawr-iced runs iced apps that reload when you save.">
+<title>rawr docs</title>
+<meta name="description" content="Documentation for rawr. rawr is a scripting language that reads like Rust. The rawr crate embeds it in any Rust program, and rawr-iced runs iced apps that reload when you save.">
+<meta property="og:title" content="rawr docs">
+<meta property="og:description" content="Documentation for rawr. rawr is a scripting language that reads like Rust. The rawr crate embeds it in any Rust program, and rawr-iced runs iced apps that reload when you save.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -24,7 +24,7 @@
 </head>
 <body>
 <header class="bar">
-  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">Pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
     <a href="/docs" aria-current="true">Docs</a>
     <a href="/play">Playground</a>
@@ -35,7 +35,7 @@
 <nav class="side" aria-label="Docs">
   <p class="cap"><span class="slash">//</span>Docs</p>
   <ol>
-    <li><a href="/docs" aria-current="page">Overview</a><ol><li><a href="#what">What Rawr is</a></li><li><a href="#parts">The parts</a></li><li><a href="#status">Status</a></li><li><a href="#pages">Pages</a></li></ol></li>
+    <li><a href="/docs" aria-current="page">Overview</a><ol><li><a href="#what">What rawr is</a></li><li><a href="#parts">The parts</a></li><li><a href="#status">Status</a></li><li><a href="#pages">Pages</a></li></ol></li>
     <li><a href="/docs/start">Getting started</a></li>
     <li><a href="/docs/language">The language</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
@@ -48,16 +48,16 @@
 <main>
 <article>
 <p class="cap"><span class="slash">//</span>Docs</p>
-<h1>Rawr documentation</h1>
-<p class="lede">Rawr is a scripting language whose programs are Rust. These pages say what it supports today and how to use it.</p>
+<h1>rawr documentation</h1>
+<p class="lede">rawr is a scripting language whose programs are Rust. These pages say what it supports today and how to use it.</p>
 
-<h2 id="what">What Rawr is</h2>
-<p>Rawr is a language first. You write Rust. Rawr runs the files marked <code>// rawr</code> while you develop. It reloads them when you save. Cargo builds the same crate for release.</p>
-<p>A Rawr file is a <code>.rs</code> file whose first line is <code>// rawr</code>. A Rawr project is an ordinary Cargo crate. Rawr supports a growing subset of Rust. It has Rust&rsquo;s structs, enums, traits, generics, closures and <code>match</code>. It checks a program before running it. It reports errors the way rustc does. Each error has a code and points at the code at fault.</p>
-<p>Rawr code runs on an interpreter. Everything it calls into is native Rust. A <code>Vec</code> or a <code>HashMap</code> in Rawr is backed by native code. An iced widget in Rawr is the real iced widget.</p>
-<p>A Rawr program is meant to be valid Rust. The cart example below compiles with rustc and prints the same line. <code>rawr check</code> runs <code>cargo check</code> after its own check, so rustc has the final say on whether code is valid Rust.</p>
+<h2 id="what">What rawr is</h2>
+<p>rawr is a language first. You write Rust. rawr runs the files marked <code>// rawr</code> while you develop. It reloads them when you save. Cargo builds the same crate for release.</p>
+<p>A rawr file is a <code>.rs</code> file whose first line is <code>// rawr</code>. A rawr project is an ordinary Cargo crate. rawr supports a growing subset of Rust. It has Rust&rsquo;s structs, enums, traits, generics, closures and <code>match</code>. It checks a program before running it. It reports errors the way rustc does. Each error has a code and points at the code at fault.</p>
+<p>rawr code runs on an interpreter. Everything it calls into is native Rust. A <code>Vec</code> or a <code>HashMap</code> in rawr is backed by native code. An iced widget in rawr is the real iced widget.</p>
+<p>A rawr program is meant to be valid Rust. The cart example below compiles with rustc and prints the same line. <code>rawr check</code> runs <code>cargo check</code> after its own check, so rustc has the final say on whether code is valid Rust.</p>
 <div class="block">
-  <div class="file"><b>cart.rs</b><span>Rawr</span></div>
+  <div class="file"><b>cart.rs</b><span>rawr</span></div>
   <pre><code data-lang="rust" data-run="cart.rs" id="src-cart">// rawr
 enum Item {
     Book { price: f64 },
@@ -96,7 +96,7 @@ fn main() {
 <table class="wide">
   <tr><th>Part</th><th>What it does</th></tr>
   <tr><td><code>rawr</code> crate</td><td>The language. Any Rust program can embed it. It builds on stable Rust 1.95 or newer. It knows nothing about windows or widgets.</td></tr>
-  <tr><td><code>rawr</code> command</td><td>Runs and checks Rawr programs. It builds on stable Rust. A program that doesn&rsquo;t use iced runs once and exits.</td></tr>
+  <tr><td><code>rawr</code> command</td><td>Runs and checks rawr programs. It builds on stable Rust. A program that doesn&rsquo;t use iced runs once and exits.</td></tr>
   <tr><td><code>rawr-iced</code></td><td>Adds support for <a href="https://github.com/iced-rs/iced">iced</a> apps. Install it and the <code>rawr</code> command hands every program that uses iced to it. It reloads a running app in about 0.2&nbsp;s when you save. It imports the crates in your Cargo.toml without bindings. It renders <code>#[preview]</code> views to PNG.</td></tr>
   <tr><td><code>?play</code> and the playground</td><td>Run a snippet from Discord or from a browser. A snippet that uses iced replies with its rendered frame. A plain program replies with its output.</td></tr>
 </table>
@@ -104,18 +104,18 @@ fn main() {
 <p>For release, <code>cargo build --release</code> builds the same crate natively. No interpreter ships with it.</p>
 
 <h2 id="status">Status</h2>
-<p>Rawr is pre-alpha. The crate and the <code>rawr</code> command build on stable Rust. They have no platform-specific code. Importing your own Rust crates builds them for the host of the pinned toolchain. It needs a Unix system. It has only been tested on Apple Silicon Macs so far. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far. rawr-iced follows iced master and pins one Rust nightly. APIs, commands, file formats and error codes will change without notice.</p>
-<p>Rawr doesn&rsquo;t cover all of Rust yet. <a href="/docs/language#not-supported">The language page</a> lists what is missing today. If Rawr rejects valid Rust that it claims to support, that&rsquo;s a bug. Please report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
+<p>rawr is pre-alpha. The crate and the <code>rawr</code> command build on stable Rust. They have no platform-specific code. Importing your own Rust crates builds them for the host of the pinned toolchain. It needs a Unix system. It has only been tested on Apple Silicon Macs so far. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far. rawr-iced follows iced master and pins one Rust nightly. APIs, commands, file formats and error codes will change without notice.</p>
+<p>rawr doesn&rsquo;t cover all of Rust yet. <a href="/docs/language#not-supported">The language page</a> lists what is missing today. If rawr rejects valid Rust that it claims to support, that&rsquo;s a bug. Please report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
 
 <h2 id="pages">Pages</h2>
 <div class="cards">
-  <a href="/docs/start">Getting started<span>Install Rawr. Run a plain program. Start an iced app.</span></a>
-  <a href="/docs/language">The language<span>The Rust that Rawr supports, what is missing, and where it differs from <code>cargo run</code>.</span></a>
-  <a href="/docs/embedding">Embedding<span>Run Rawr from your own Rust program with <code>rawr::Engine</code>.</span></a>
+  <a href="/docs/start">Getting started<span>Install rawr. Run a plain program. Start an iced app.</span></a>
+  <a href="/docs/language">The language<span>The Rust that rawr supports, what is missing, and where it differs from <code>cargo run</code>.</span></a>
+  <a href="/docs/embedding">Embedding<span>Run rawr from your own Rust program with <code>rawr::Engine</code>.</span></a>
   <a href="/docs/iced">rawr-iced<span>iced apps, hot reload, previews, snapshots and Rust imports.</span></a>
   <a href="/docs/play">?play and the playground<span>Run snippets in Discord and in a browser.</span></a>
   <a href="/docs/cli">Commands<span>Every command of <code>rawr</code> and <code>rawr-iced</code>.</span></a>
-  <a href="/docs/faq">FAQ<span>Answers to common questions about how Rawr works.</span></a>
+  <a href="/docs/faq">FAQ<span>Answers to common questions about how rawr works.</span></a>
 </div>
 <nav class="pager" aria-label="Next and previous pages"><a class="next" href="/docs/start">Next<b>Getting started</b></a></nav>
 </article>
