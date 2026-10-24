@@ -83,7 +83,8 @@ pub enum Error {
         /// Expected `src/main.rs` path.
         expected: PathBuf,
     },
-    /// A Cargo package's crate root does not start with the `// rawr` marker.
+    /// A Cargo package's crate root does not start with the `// rawr` marker,
+    /// and no module its `mod` tree reaches does.
     Unmarked {
         /// Canonical project root.
         root: PathBuf,
@@ -186,7 +187,7 @@ impl fmt::Display for Error {
             ),
             Self::Unmarked { entry, .. } => write!(
                 formatter,
-                "`{}` is not a Rawr file. Its first line is not `// rawr`.",
+                "`{}` is not a Rawr file. Its first line is not `// rawr`, and no module it declares starts with it.",
                 entry.display()
             ),
             Self::EscapesRoot {

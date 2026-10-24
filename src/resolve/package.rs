@@ -1245,11 +1245,9 @@ impl<'a> Resolver<'a> {
     ) -> Option<Result<Target, Failure>> {
         let package = &self.packages[package.index()];
         let alias = package.rust_crate()?;
-        if !package
-            .rust_modules()
-            .iter()
-            .any(|module| modules.starts_with(module.modules()))
-        {
+        let mut item = modules.to_vec();
+        item.push(name.clone());
+        if !package.is_native_path(&item) {
             return None;
         }
         let mut path = Vec::with_capacity(modules.len() + 2);
@@ -1301,10 +1299,7 @@ impl<'a> Resolver<'a> {
         } else {
             return None;
         }
-        let inside = package.rust_modules().iter().any(|module| {
-            absolute.len() > module.modules().len() && absolute.starts_with(module.modules())
-        });
-        inside.then(|| {
+        package.is_native_path(&absolute).then(|| {
             std::iter::once(ImmutableString::from(alias))
                 .chain(absolute)
                 .collect()

@@ -29,6 +29,8 @@ pub struct Package {
     root: PathBuf,
     source: source::Id,
     rust_modules: Vec<RustModule>,
+    /// The crate root, when it is native Rust that declares marked modules.
+    native_root: Option<RustModule>,
     cargo: Option<manifest::cargo::Cargo>,
     pub(crate) rust: Option<manifest::rust::Config>,
 }
@@ -110,14 +112,42 @@ impl Package {
         &self.rust_modules
     }
 
+    /// The crate root when it is native Rust: an unmarked `src/main.rs` (or
+    /// `src/lib.rs`) that declares marked modules. Rawr reads only its `mod`
+    /// declarations; the native build compiles it, and it calls the marked
+    /// modules through the trampolines Rawr generates for them.
+    #[must_use]
+    pub const fn native_root(&self) -> Option<&RustModule> {
+        self.native_root.as_ref()
+    }
+
     /// The crate name the native modules are imported under, when the
-    /// crate has native modules and its root `Cargo.toml` is a package.
+    /// crate has native code and its root `Cargo.toml` is a package.
     #[must_use]
     pub fn rust_crate(&self) -> Option<&str> {
         self.cargo
             .as_ref()
-            .filter(|_| !self.rust_modules.is_empty())
+            .filter(|_| !self.rust_modules.is_empty() || self.native_root.is_some())
             .map(|cargo| cargo.crate_name.as_str())
+    }
+
+    /// Whether `path`, from the crate root, lands in native code: below a
+    /// native module, or in the island module a native root's shadow crate
+    /// adds (`__rawr_island`).
+    pub(crate) fn is_native_path<S: AsRef<str>>(&self, path: &[S]) -> bool {
+        let below = |modules: &[ImmutableString]| {
+            path.len() > modules.len()
+                && modules
+                    .iter()
+                    .zip(path)
+                    .all(|(module, segment)| module.as_str() == segment.as_ref())
+        };
+        self.rust_modules
+            .iter()
+            .any(|module| below(&module.modules))
+            || (self.native_root.is_some()
+                && path.len() > 1
+                && path[0].as_ref() == super::island::MODULE)
     }
 
     /// The root `Cargo.toml` path and exact text, when it declares a `[package]`.
@@ -239,6 +269,31 @@ impl Graph {
             .filter(|dependency| dependency.alias.as_str() == alias)
             .flat_map(|dependency| dependency.features.iter().cloned())
             .collect()
+    }
+
+    /// What native code sees of the marked modules, when the crate root is
+    /// native Rust (D501): a save that changes it needs a new native build.
+    #[must_use]
+    pub fn island_shape(&self) -> Option<super::island::Shape> {
+        self.island_shadow().map(|shadow| shadow.shape)
+    }
+
+    /// The generated files that stand for the marked modules in a native
+    /// root's shadow crate.
+    pub(crate) fn island_shadow(&self) -> Option<super::island::Shadow> {
+        let entry = self.entry_package();
+        let root = entry.native_root()?;
+        let module_root = root.path().parent()?;
+        let sources = self.parsed_units().filter(|(source, _)| {
+            source.package() == entry.name()
+                && !(source.modules().is_empty() && source.path() == root.path())
+        });
+        Some(super::island::shadow(
+            module_root,
+            sources.map(|(source, unit)| {
+                (source.modules(), source.path(), source.text(), unit.items())
+            }),
+        ))
     }
 
     /// Every source with its parse.
@@ -416,6 +471,7 @@ impl<'a> Builder<'a> {
             root: root.clone(),
             source: source::Id::from_index(0),
             rust_modules: Vec::new(),
+            native_root: None,
             cargo: None,
             rust: None,
         });
@@ -425,6 +481,30 @@ impl<'a> Builder<'a> {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| root.clone());
+        // An unmarked root that declares a marked module is native Rust
+        // (D501): Rawr reads only its `mod` declarations, as the root of the
+        // marked modules, and the native build compiles the rest.
+        let canonical = self.canonical_source(request.source.clone(), &root, None)?;
+        let text = self.read_to_string(&canonical).map_err(|source| {
+            Error::resource(
+                self.evidence.clone(),
+                error::resource_message("read Rawr source", canonical.clone(), &source),
+                source,
+                None,
+            )
+        })?;
+        let read = if !crate::project::is_marked(&text) && self.reaches_marked(&module_root, &text)
+        {
+            let declarations = super::island::root_text(&text);
+            self.packages[package.0].native_root = Some(RustModule {
+                modules: Box::default(),
+                path: canonical,
+                text,
+            });
+            declarations
+        } else {
+            text
+        };
         let root_source = self.load_module(
             package,
             &name,
@@ -433,14 +513,55 @@ impl<'a> Builder<'a> {
             Box::default(),
             request.source,
             None,
-            None,
+            Some(read),
         )?;
         self.packages[package.0].source = root_source;
         if let Some(cargo) = cargo {
             self.attach_cargo(package, cargo);
         }
-        self.check_native_direction(package)?;
+        if self.packages[package.0].native_root.is_none() {
+            self.check_native_direction(package)?;
+        }
         Ok(package)
+    }
+
+    /// Whether the native crate root `text` reaches a marked module through
+    /// its `mod` declarations and those of the native modules it declares,
+    /// as project discovery decides.
+    fn reaches_marked(&self, module_root: &Path, text: &str) -> bool {
+        let mut pending = vec![(Vec::<ImmutableString>::new(), text.to_owned())];
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some((modules, text)) = pending.pop() {
+            for declaration in super::polyglot::declarations(&text) {
+                if declaration.explicit_path || declaration.disabled {
+                    continue;
+                }
+                let mut child = modules.clone();
+                child.extend(declaration.path.iter().map(|name| name.as_str().into()));
+                let mut base = module_root.to_path_buf();
+                for segment in &child {
+                    base.push(segment.as_str());
+                }
+                let found = [base.with_extension("rs"), base.join("mod.rs")]
+                    .into_iter()
+                    .filter(|path| self.is_file(path))
+                    .collect::<Vec<_>>();
+                let [path] = found.as_slice() else {
+                    continue;
+                };
+                if !seen.insert(path.clone()) {
+                    continue;
+                }
+                let Ok(text) = self.read_to_string(path) else {
+                    continue;
+                };
+                if crate::project::is_marked(&text) {
+                    return true;
+                }
+                pending.push((child, text));
+            }
+        }
+        false
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -646,10 +767,12 @@ impl<'a> Builder<'a> {
         Ok(id)
     }
 
-    /// In a marked crate, native code must not depend on marked code: a
-    /// native module's `crate::…` and `super::…` paths must not land in a
-    /// marked module (the crate root included). The native part is built
-    /// without the marked modules, so such a path would not compile there.
+    /// In a crate whose root is marked, native code must not depend on
+    /// marked code: a native module's `crate::…` and `super::…` paths must
+    /// not land in a marked module (the crate root included). That native
+    /// part is built without the marked modules, so such a path would not
+    /// compile there. A native root's crate has trampolines for its marked
+    /// modules instead (D501), and is not checked.
     fn check_native_direction(&mut self, package: Id) -> Result<(), Error> {
         let name = self.packages[package.0].name.clone();
         let marked = self
@@ -739,9 +862,10 @@ impl<'a> Builder<'a> {
             format!(
                 "native module `{}` uses `{used}`. \
                  `{used}` is in the marked module `{}` (`{}`). \
-                 Rawr builds the native modules without the marked ones. \
-                 Native code cannot use marked code. \
-                 Move the item into a native module, or mark `{}` with `// rawr`.",
+                 With a marked crate root, Rawr builds the native modules without the marked ones, \
+                 so native code cannot use marked code. \
+                 Move the item into a native module, mark `{}` with `// rawr`, \
+                 or leave the crate root unmarked so native code calls marked modules through rawr.",
                 spelled(&modules),
                 spelled(&owner),
                 owner_path.display(),
@@ -795,8 +919,9 @@ impl<'a> Builder<'a> {
     }
 
     /// Record one native module and, under Rust's rules, the modules it
-    /// declares. Native code never depends on marked code: a native `mod`
-    /// that resolves to a marked file is an error at load.
+    /// declares. A marked module declared by a native one, other than the
+    /// crate root, is an error at load: Rawr reaches marked modules from the
+    /// root through marked modules only.
     fn load_rust_module(
         &mut self,
         package: Id,
@@ -869,8 +994,9 @@ impl<'a> Builder<'a> {
                         self.evidence.clone(),
                         format!(
                             "native module `crate::{}` declares `mod {};`, which is the marked file `{}`. \
-                             Native Rust cannot depend on a marked module. \
-                             Declare it from a marked module, or remove `// rawr` from its first line.",
+                             Rawr reaches marked modules from the crate root and from marked modules, \
+                             not yet from a native module. \
+                             Declare it from the crate root or a marked module, or remove `// rawr` from its first line.",
                             modules.join("::"),
                             child.path.last().map_or("", String::as_str),
                             child_path.display()
@@ -946,7 +1072,9 @@ impl<'a> Builder<'a> {
             // A marked crate with any Cargo dependency imports Rust: its
             // runner builds each dependency as its own `cargo build` builds
             // it, never one built into an installed binary.
-            let imports = !package.rust_modules.is_empty() || !cargo.dependencies.is_empty();
+            let imports = !package.rust_modules.is_empty()
+                || package.native_root.is_some()
+                || !cargo.dependencies.is_empty();
             if imports {
                 package.rust = Some(manifest::rust::Config::from_cargo(
                     &cargo.path,

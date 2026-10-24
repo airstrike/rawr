@@ -1,5 +1,7 @@
 //! Opaque transformation from the crate's Cargo dependencies to one importer request.
 
+use std::path::Path;
+
 use rawr_import::cargo::config::{Dependency, Environment};
 use rawr_import::cargo::{Limits, Request};
 use rawr_import::extract::Policy;
@@ -185,16 +187,7 @@ fn app_crate_path<'a>(
     };
     absolute.extend(rest.iter().map(String::as_str));
     entry
-        .rust_modules()
-        .iter()
-        .any(|module| {
-            absolute.len() > module.modules().len()
-                && module
-                    .modules()
-                    .iter()
-                    .zip(&absolute)
-                    .all(|(left, right)| left.as_str() == *right)
-        })
+        .is_native_path(&absolute)
         .then(|| std::iter::once(app).chain(absolute).collect())
 }
 
@@ -207,10 +200,16 @@ fn app_crate_path<'a>(
 /// copies), re-exported at the crate root. Rust follows the `.rs` modules'
 /// own `mod` declarations. The marked modules are absent, so the crate
 /// builds without them. Files are rewritten only when they change.
+///
+/// A crate whose root is native (D501) is laid out as Cargo has it: its
+/// root and native modules copied under `target/rawr/crate/src/`, the root
+/// with the island's runtime support at its end, and in place of each
+/// marked file its generated trampolines (`island::shadow`). A save that
+/// changes no trampoline rewrites nothing, so nothing is built again.
 fn app_crate(graph: &Graph, limits: &Limits) -> rawr_import::Result<Option<Dependency>> {
     let entry = graph.entry_package();
     let (Some(alias), Some(cargo)) = (entry.rust_crate(), entry.cargo()) else {
-        if let Some(module) = entry.rust_modules().first() {
+        if let Some(module) = entry.native_root().or_else(|| entry.rust_modules().first()) {
             return Err(rawr_import::Error::Request {
                 field: "app crate",
                 reason: format!(
@@ -230,10 +229,48 @@ fn app_crate(graph: &Graph, limits: &Limits) -> rawr_import::Result<Option<Depen
         .to_path_buf();
     let directory = entry.root().join("target/rawr/crate");
     let copies = directory.join("src");
-    let mut files = vec![
-        (directory.join("Cargo.toml"), app_manifest(cargo)),
-        (directory.join("lib.rs"), app_library(entry, &copies)),
-    ];
+    let mut files = match entry.native_root() {
+        Some(root) => {
+            let shadow = graph
+                .island_shadow()
+                .unwrap_or_else(|| super::island::Shadow {
+                    files: Vec::new(),
+                    shape: super::island::Shape::default(),
+                    refused: Vec::new(),
+                });
+            if !shadow.refused.is_empty() {
+                return Err(rawr_import::Error::Request {
+                    field: "native islands",
+                    reason: shadow.refused.join("\n").into_boxed_str(),
+                });
+            }
+            let relative = root
+                .path()
+                .strip_prefix(&module_root)
+                .unwrap_or(root.path());
+            let mut files = vec![
+                (
+                    directory.join("Cargo.toml"),
+                    app_manifest(cargo, &Path::new("src").join(relative)),
+                ),
+                (copies.join(relative), native_root(root)),
+            ];
+            files.extend(
+                shadow
+                    .files
+                    .into_iter()
+                    .map(|(path, text)| (copies.join(path), text)),
+            );
+            files
+        }
+        None => vec![
+            (
+                directory.join("Cargo.toml"),
+                app_manifest(cargo, Path::new("lib.rs")),
+            ),
+            (directory.join("lib.rs"), app_library(entry, &copies)),
+        ],
+    };
     for module in entry.rust_modules() {
         let Ok(relative) = module.path().strip_prefix(&module_root) else {
             continue;
@@ -261,7 +298,41 @@ fn app_crate(graph: &Graph, limits: &Limits) -> rawr_import::Result<Option<Depen
         .map(Some)
 }
 
-fn app_manifest(cargo: &super::manifest::cargo::Cargo) -> String {
+/// A native crate root as the shadow crate's root: its `mod` declarations
+/// public, so the runner reaches every native module, `#[path]` and
+/// `include_str!` paths absolute, and the island's runtime support at the
+/// end. A `forbid(unsafe_code)` becomes `deny`, which the support module's
+/// own `allow` can lift for its two calls into the runner.
+fn native_root(root: &super::graph::RustModule) -> String {
+    let text = super::polyglot::widened(root.text(), false, root.path());
+    let mut public = String::with_capacity(text.len() + 64);
+    let mut cursor = 0;
+    for declaration in super::polyglot::declarations(&text) {
+        if declaration.path.len() != 1 {
+            continue;
+        }
+        let before = text[..declaration.range.start].trim_end();
+        let Some(keyword) = before.strip_suffix("mod") else {
+            continue;
+        };
+        let visibility = keyword.trim_end();
+        if visibility.ends_with("pub") || visibility.ends_with(')') {
+            continue;
+        }
+        public.push_str(&text[cursor..keyword.len()]);
+        public.push_str("pub ");
+        cursor = keyword.len();
+    }
+    public.push_str(&text[cursor..]);
+    let public = public.replace("#![forbid(unsafe_code)]", "#![deny(unsafe_code)]");
+    let main = root
+        .path()
+        .file_name()
+        .is_some_and(|name| name == "main.rs");
+    format!("{public}\n{}", super::island::support(main))
+}
+
+fn app_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path) -> String {
     use std::fmt::Write as _;
     let mut text = format!(
         "# Generated by Rawr from {:?}: the crate without its marked modules.\n\
@@ -275,8 +346,9 @@ fn app_manifest(cargo: &super::manifest::cargo::Cargo) -> String {
     }
     let _ = write!(
         text,
-        "publish = false\n\n[lib]\nname = {:?}\npath = \"lib.rs\"\n\n[dependencies]\n",
-        cargo.crate_name
+        "publish = false\n\n[lib]\nname = {:?}\npath = {:?}\n\n[dependencies]\n",
+        cargo.crate_name,
+        library.display().to_string(),
     );
     for dependency in &cargo.dependencies {
         let mut fields = Vec::new();

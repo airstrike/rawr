@@ -133,6 +133,12 @@ impl Bootstrap {
         self.binding.0.invoke_main()
     }
 
+    /// The bound catalog native islands call into.
+    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    pub(crate) fn catalog(&self) -> &preview::BoundCatalog {
+        &self.binding.0
+    }
+
     /// Consume this bootstrap and install one complete authority-free state.
     #[must_use]
     pub fn install<T>(self, state: T) -> current::Slot<T> {

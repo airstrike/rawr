@@ -81,10 +81,10 @@
 
 <h2 id="not-marked">&ldquo;Its first line is not <code>// rawr</code>&rdquo;</h2>
 <div class="block diag">
-  <pre><code><span class="e">error[RAWR-ENVIRONMENT-MISSING-SOURCE]</span><span class="h">: `/home/you/app/src/main.rs` is not a Rawr file. Its first line is not `// rawr`.</span>
-  <span class="c">= help:</span> add `// rawr` as the first line of the crate root to run it with Rawr</code></pre>
+  <pre><code><span class="e">error[RAWR-ENVIRONMENT-MISSING-SOURCE]</span><span class="h">: `/home/you/app/src/main.rs` is not a Rawr file. Its first line is not `// rawr`, and no module it declares starts with it.</span>
+  <span class="c">= help:</span> add `// rawr` as the first line of the crate root, or of a module it declares, to run it with Rawr</code></pre>
 </div>
-<p>The crate root must start with <code>// rawr</code> today. Add the line, or run a single file with <code>rawr run path/to/file.rs</code>.</p>
+<p>No file of the crate is marked. Add the line to the crate root, or to a module it declares. You can also run a single file with <code>rawr run path/to/file.rs</code>.</p>
 
 <h2 id="not-installed">A program needs an extension that isn&rsquo;t installed</h2>
 <p>A program with Cargo dependencies needs rawr-import. A program that uses iced needs rawr-iced. <code>rawr run</code> says which one is missing and prints the commands that install it. <a href="/docs/imports#install">Cargo dependencies</a> and <a href="/docs/iced#install">rawr-iced</a> list them too.</p>

@@ -63,6 +63,24 @@ impl BoundCatalog {
         )
     }
 
+    /// The generation's items and runtime model, for native islands.
+    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    pub(crate) const fn authority(&self) -> &program::Authority {
+        &self.authority
+    }
+
+    /// Call `item` with `args` against this catalog's native runtime. A
+    /// receiver or a `&mut` parameter the call changes is changed in `args`.
+    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    pub(crate) fn invoke_item(
+        &self,
+        item: &item::Value,
+        args: &mut [Dynamic],
+    ) -> Result<Dynamic, program::Error> {
+        self.authority
+            .invoke_bound(item, args, self.runtime.clone())
+    }
+
     /// Return compiler-validated previews in stable key order.
     #[must_use]
     pub fn previews(&self) -> &[preview::Definition] {

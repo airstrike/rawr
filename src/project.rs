@@ -22,7 +22,9 @@ const LEGACY_SOURCE: &str = "main.rawr";
 const RUST_ROOTS: [&str; 2] = ["main.rs", "lib.rs"];
 const VCS_BOUNDARY: &str = ".git";
 
-/// A Cargo crate whose root source starts with `// rawr`.
+/// A Cargo crate whose root source starts with `// rawr`, or whose root is
+/// native Rust and declares, directly or through native modules, a module
+/// that starts with it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Project {
     root: root::Directory,
@@ -186,8 +188,10 @@ enum Entry {
 }
 
 /// The entry of the crate at `root`: the first of `src/main.rs` and
-/// `src/lib.rs` that exists, when its first line is the `// rawr` marker.
-/// Only that first line is read.
+/// `src/lib.rs` that exists, when its first line is the `// rawr` marker or
+/// its `mod` tree reaches a file that starts with it. A marked root is
+/// read only to its first line; an unmarked one is read whole, with the
+/// native modules it declares, until a marked module turns up.
 fn entry(root: &Path) -> Result<Entry, Error> {
     if !path_exists(&root.join(CARGO_NAME), Resource::Manifest)? {
         return Ok(Entry::None);
@@ -200,6 +204,7 @@ fn entry(root: &Path) -> Result<Entry, Error> {
         }
         return match marker::file_is_marked(&path) {
             Ok(true) => Ok(Entry::Found(path)),
+            Ok(false) if reaches_marked(&path)? => Ok(Entry::Found(path)),
             Ok(false) => Ok(Entry::Unmarked(path)),
             Err(source) => Err(Error::Unreadable {
                 resource: Resource::Source,
@@ -209,6 +214,56 @@ fn entry(root: &Path) -> Result<Entry, Error> {
         };
     }
     Ok(Entry::None)
+}
+
+/// Whether the unmarked crate root `root` reaches a marked module through
+/// the `mod` declarations of it and of the native modules it declares,
+/// under Rust's file rules (`name.rs` or `name/mod.rs`). `#[path]` and
+/// `#[cfg]`-disabled declarations are Rust's own and are not followed.
+fn reaches_marked(root: &Path) -> Result<bool, Error> {
+    let Some(directory) = root.parent() else {
+        return Ok(false);
+    };
+    let read = |path: &Path| {
+        fs::read_to_string(path).map_err(|source| Error::Unreadable {
+            resource: Resource::Source,
+            path: path.to_path_buf(),
+            source,
+        })
+    };
+    let mut pending = vec![(Vec::<String>::new(), read(root)?)];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some((modules, text)) = pending.pop() {
+        for declaration in crate::package::polyglot::declarations(&text) {
+            if declaration.explicit_path || declaration.disabled {
+                continue;
+            }
+            let mut child = modules.clone();
+            child.extend(declaration.path);
+            let base = child
+                .iter()
+                .fold(directory.to_path_buf(), |path, name| path.join(name));
+            let mut found = Vec::new();
+            for path in [base.with_extension("rs"), base.join("mod.rs")] {
+                if path_exists(&path, Resource::Source)? {
+                    found.push(path);
+                }
+            }
+            // None, or both: Rust reports it when it builds.
+            let [path] = found.as_slice() else {
+                continue;
+            };
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            let text = read(path)?;
+            if marker::is_marked(&text) {
+                return Ok(true);
+            }
+            pending.push((child, text));
+        }
+    }
+    Ok(false)
 }
 
 fn finish_search(
