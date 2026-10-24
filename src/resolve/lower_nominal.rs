@@ -8263,6 +8263,8 @@ struct Parser<'a> {
     allow_endpoint_projection: bool,
     loops: Vec<LoopFrame>,
     closures: Vec<ClosureScope>,
+    /// Where each moved local (by its declaration) was moved, for E0382.
+    moved_at: BTreeMap<Span, Span>,
     closure_count: usize,
     lifted: Vec<LiftedClosure>,
     /// Parameter types of the host callable each call argument fills.
@@ -8560,6 +8562,7 @@ impl<'a> Parser<'a> {
             allow_endpoint_projection: false,
             loops: Vec::new(),
             closures: Vec::new(),
+            moved_at: BTreeMap::new(),
             closure_count: 0,
             lifted: Vec::new(),
             closure_hints: Vec::new(),
@@ -10613,6 +10616,7 @@ impl<'a> Parser<'a> {
         for (argument, parameter) in arguments.iter_mut().zip(function.parameters.iter()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
+            self.move_local(argument);
         }
         let output = instantiate(
             &function.output.as_ref().map_or(Ty::Unit, Ty::from_resolved),
@@ -11766,7 +11770,7 @@ impl<'a> Parser<'a> {
     /// by the value's type.
     fn call_trait_method(
         &mut self,
-        value: ParsedExpr,
+        mut value: ParsedExpr,
         self_ty: Ty,
         trait_name: &ImmutableString,
         function: &item::Function,
@@ -11872,6 +11876,7 @@ impl<'a> Parser<'a> {
         for (argument, parameter) in arguments.iter_mut().zip(function.parameters.iter()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
+            self.move_local(argument);
         }
         let output = instantiate(
             &function.output.as_ref().map_or(Ty::Unit, Ty::from_resolved),
@@ -11957,7 +11962,8 @@ impl<'a> Parser<'a> {
             receiver,
             crate::item::Receiver::Owned(_) | crate::item::Receiver::OwnedMutable(_)
         ) {
-            // The method takes its own copy, as a move or copy does.
+            // The method takes the value, as a move or copy does.
+            self.move_local(&mut value);
             let temporary = self.temporary("receiver");
             let mut source = origin::Fragment::plain(format!("({{\nlet {temporary} = "));
             source.push(value.rendered_source());
@@ -14573,6 +14579,7 @@ impl<'a> Parser<'a> {
             if item.imported_identity().is_some() && !argument.ty.is_imported_static_operand() {
                 self.consume_imported_value(argument, &item.path(), call)?;
             }
+            self.move_local(argument);
         }
         let output = self.inference.resolve(&signature.output);
         self.reject_invocation(
@@ -16297,6 +16304,7 @@ impl<'a> Parser<'a> {
             if item.imported_identity().is_some() {
                 self.consume_imported_value(argument, &item.path(), call)?;
             }
+            self.move_local(argument);
         }
         let output = self.inference.resolve(&signature.output);
         self.reject_invocation(&output, call, "returned from its scoped receiver operation")?;
@@ -16537,7 +16545,108 @@ impl<'a> Parser<'a> {
             });
         }
         binding.available = false;
+        let declaration = binding.declaration;
+        self.moved_at.insert(declaration, receiver.span);
         Ok(())
+    }
+
+    /// Rust's move out of a local. A by-value use of a local whose type is
+    /// not `Copy` leaves the local moved, so a later use is rustc's E0382.
+    /// The use reads `__rawr_move(local)`, which leaves `()` in the slot, so
+    /// the value drops with its new owner. A closure's capture moves only in
+    /// a `move` closure or async block, which owns it.
+    fn move_local(&mut self, value: &mut ParsedExpr) {
+        let Some(Lvalue::Binding { binding: name, .. }) = &value.lvalue else {
+            return;
+        };
+        if !value.prelude.is_empty() || value.source.as_str() != name.as_str() {
+            return;
+        }
+        let name = name.clone();
+        let Some(binding) = self.bindings.get(name.as_str()) else {
+            return;
+        };
+        if !matches!(binding.kind, BindingKind::Local) {
+            return;
+        }
+        let declaration = binding.declaration;
+        if self.closures.last().is_some_and(|scope| {
+            !scope.owns_captures && scope.outer.get(name.as_str()) == Some(&declaration)
+        }) {
+            return;
+        }
+        if !self.moves_by_value(&value.ty) {
+            return;
+        }
+        if let Some(binding) = self.bindings.get_mut(name.as_str()) {
+            binding.available = false;
+        }
+        self.moved_at.insert(declaration, value.span);
+        value.source = origin::Fragment::call(crate::engine::KEYWORD_MOVE, [value.source.clone()]);
+    }
+
+    /// Whether a `move` closure or async block written at `at` takes the
+    /// local `name` out of its scope, which then has it moved.
+    fn move_capture(&mut self, name: &ImmutableString, at: Span) -> bool {
+        let Some(binding) = self.bindings.get(name.as_str()) else {
+            return false;
+        };
+        let declaration = binding.declaration;
+        if !matches!(binding.kind, BindingKind::Local)
+            || self.aliases.contains_key(name.as_str())
+            || self.entry_aliases.contains_key(name.as_str())
+            || !binding.available
+            || self.closures.last().is_some_and(|scope| {
+                !scope.owns_captures && scope.outer.get(name.as_str()) == Some(&declaration)
+            })
+            || !self.moves_by_value(&binding.ty.clone())
+        {
+            return false;
+        }
+        if let Some(binding) = self.bindings.get_mut(name.as_str()) {
+            binding.available = false;
+        }
+        self.moved_at.insert(declaration, at);
+        true
+    }
+
+    /// After branches, a local is available when each branch that goes on
+    /// left it available. A branch that diverges (`return`, `break`, a
+    /// panic) does not go on, as rustc's move check has it.
+    fn merge_branches(&mut self, branches: &[(&BTreeMap<ImmutableString, Binding>, &Ty)]) {
+        let going = branches
+            .iter()
+            .filter(|(_, ty)| !matches!(self.inference.resolve(ty), Ty::Never))
+            .map(|(bindings, _)| *bindings)
+            .collect::<Vec<_>>();
+        if going.is_empty() {
+            return;
+        }
+        for (name, binding) in &mut self.bindings {
+            binding.available = going
+                .iter()
+                .all(|arm| arm.get(name).is_some_and(|binding| binding.available));
+        }
+    }
+
+    /// Whether a value of `ty` moves when used by value: a known type that
+    /// is not `Copy`. References and trait objects are used in place.
+    fn moves_by_value(&self, ty: &Ty) -> bool {
+        let resolved = self.inference.resolve(ty);
+        !matches!(
+            resolved,
+            Ty::Infer(_)
+                | Ty::Unknown
+                | Ty::Never
+                | Ty::Reference { .. }
+                | Ty::Dyn(..)
+                | Ty::Iter(_)
+                | Ty::Callable { .. }
+                | Ty::Support(_)
+                | Ty::Endpoint(_)
+                | Ty::Param(_)
+                | Ty::Projection(..)
+        ) && !self.type_provides(&resolved, capability::Kind::Copy)
     }
 
     fn consume_imported_value(
@@ -16572,6 +16681,8 @@ impl<'a> Parser<'a> {
             });
         }
         binding.available = false;
+        let declaration = binding.declaration;
+        self.moved_at.insert(declaration, value.span);
         Ok(())
     }
 
@@ -16820,6 +16931,7 @@ impl<'a> Parser<'a> {
         }
 
         self.consume_imported_value(&value, &name, value.span)?;
+        self.move_local(&mut value);
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
         // An immutable local iterator stays its chain: what it evaluates is
         // evaluated here, and each use runs it.
@@ -17482,6 +17594,11 @@ impl<'a> Parser<'a> {
         let destructured = self.destructure(&syntax, &whole, &ty);
         self.place_root = None;
         rendered.push_text(destructured?);
+        // The bindings own the parts now: the whole is dropped, so a part
+        // that is moved on drops with its new owner.
+        if !whole.is_empty() && !syntax.has_ref_mut() && self.moves_by_value(&ty) {
+            rendered.push_text(format!(" {}({whole});", crate::engine::KEYWORD_MOVE));
+        }
         let rendered = self.with_field_entries(pending, rendered);
         self.write_output(rendered, span(start, value.span.end()));
         self.last_type = Ty::Unit;
@@ -18295,6 +18412,7 @@ impl<'a> Parser<'a> {
         )?;
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
+        self.move_local(&mut replacement);
         let rendered = match lvalue {
             Lvalue::Binding { .. } => {
                 let mut rendered = origin::Fragment::plain(format!("{binding_name} = "));
@@ -20346,11 +20464,12 @@ impl<'a> Parser<'a> {
             });
         }
         self.bindings = original_bindings;
-        for (name, binding) in &mut self.bindings {
-            binding.available = arm_bindings
-                .iter()
-                .all(|arm| arm.get(name).is_some_and(|binding| binding.available));
-        }
+        let merged = arm_bindings
+            .iter()
+            .zip(&arms)
+            .map(|(bindings, (_, _, action, _))| (bindings, &action.value.ty))
+            .collect::<Vec<_>>();
+        self.merge_branches(&merged);
 
         let output_type = self.coerce_branches(
             &mut arms
@@ -20602,6 +20721,27 @@ impl<'a> Parser<'a> {
         let frame = self.loops.pop().expect("the loop pushed its frame");
         let body = body?;
         let inner = std::mem::replace(&mut self.bindings, original);
+        // A body that goes on to its next iteration with a local of the
+        // loop's scope moved uses the moved value there, as rustc's E0382.
+        if !matches!(self.inference.resolve(&body.value.ty), Ty::Never)
+            && let Some((name, binding)) = self.bindings.iter().find(|(name, binding)| {
+                binding.available
+                    && inner.get(*name).is_some_and(|after| {
+                        after.declaration == binding.declaration && !after.available
+                    })
+            })
+        {
+            let moved = self
+                .moved_at
+                .get(&binding.declaration)
+                .copied()
+                .unwrap_or(binding.declaration);
+            return Err(Error::MovedValue {
+                name: name.clone(),
+                moved,
+                reference: moved,
+            });
+        }
         for (name, binding) in &mut self.bindings {
             binding.available &= inner.get(name).is_some_and(|binding| binding.available);
         }
@@ -22208,14 +22348,10 @@ impl<'a> Parser<'a> {
             self.parse_match_action()?
         };
         let alternative_bindings = std::mem::replace(&mut self.bindings, original_bindings);
-        for (name, binding) in &mut self.bindings {
-            binding.available = consequent_bindings
-                .get(name)
-                .is_some_and(|binding| binding.available)
-                && alternative_bindings
-                    .get(name)
-                    .is_some_and(|binding| binding.available);
-        }
+        self.merge_branches(&[
+            (&consequent_bindings, &consequent.value.ty),
+            (&alternative_bindings, &alternative.value.ty),
+        ]);
         let mut branches = [consequent, alternative];
         let output = self.coerce_branches(
             &mut branches
@@ -22302,14 +22438,10 @@ impl<'a> Parser<'a> {
         };
         let alternative_bindings = self.bindings.clone();
         self.bindings = original_bindings;
-        for (name, binding) in &mut self.bindings {
-            binding.available = consequent_bindings
-                .get(name)
-                .is_some_and(|binding| binding.available)
-                && alternative_bindings
-                    .get(name)
-                    .is_some_and(|binding| binding.available);
-        }
+        self.merge_branches(&[
+            (&consequent_bindings, &consequent.value.ty),
+            (&alternative_bindings, &alternative.value.ty),
+        ]);
 
         let mut branches = [consequent, alternative];
         let output = self.coerce_branches(
@@ -22440,6 +22572,7 @@ impl<'a> Parser<'a> {
         }
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
+        self.move_local(&mut replacement);
         let mut source = origin::Fragment::plain("{ ");
         match lvalue {
             Lvalue::Binding { .. } => {
@@ -26358,7 +26491,7 @@ impl<'a> Parser<'a> {
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn call_owner_method(
         &mut self,
-        value: ParsedExpr,
+        mut value: ParsedExpr,
         owner: type_def::Id,
         owner_name: ImmutableString,
         member: &ImmutableString,
@@ -26434,8 +26567,11 @@ impl<'a> Parser<'a> {
                 receiver::Mode::Mutable => {
                     Some(self.require_mutable_receiver(&value, &definition, member_span)?)
                 }
-                // The method takes its own copy, as a move or copy does.
-                receiver::Mode::Owned => Some(Writeback::Owned),
+                // The method takes the value, as a move or copy does.
+                receiver::Mode::Owned => {
+                    self.move_local(&mut value);
+                    Some(Writeback::Owned)
+                }
             };
             let witnesses = self.witness_arguments(
                 definition.generics(),
@@ -26952,6 +27088,9 @@ impl<'a> Parser<'a> {
             members.push(self.parse_expr()?);
         }
         let end = self.expect(Token::RightParen, "')' after a tuple")?;
+        for member in &mut members {
+            self.move_local(member);
+        }
         let ty = Ty::Tuple(
             members
                 .iter()
@@ -28147,12 +28286,14 @@ impl<'a> Parser<'a> {
             return Ok(value);
         }
         if !binding.available {
-            let resolved = self.inference.resolve(&binding.ty);
-            let item = unavailable_binding_item(&name, &resolved);
-            return Err(Error::InvalidHostOperation {
-                item,
-                reason: format!("owned imported value `{name}` was already moved").into(),
-                operation: name_span,
+            return Err(Error::MovedValue {
+                moved: self
+                    .moved_at
+                    .get(&binding.declaration)
+                    .copied()
+                    .unwrap_or(binding.declaration),
+                name,
+                reference: name_span,
             });
         }
         Ok(ParsedExpr {
@@ -28744,6 +28885,7 @@ impl<'a> Parser<'a> {
         }
         for (value, expected) in args.iter_mut().zip(inputs.iter()) {
             self.coerce_expr(expected, value)?;
+            self.move_local(value);
         }
         let source = origin::Fragment::call(&helper, args.iter().map(ParsedExpr::rendered_source));
         Ok(Some(self.operator_expr(
@@ -29139,6 +29281,9 @@ impl<'a> Parser<'a> {
         for value in elements.iter_mut().skip(skip) {
             self.coerce_expr(&element, value)?;
         }
+        for value in &mut elements {
+            self.move_local(value);
+        }
         let source = match (repeat, counted) {
             (Some(count), _) => {
                 let value = elements.pop().expect("a repeat array has its value");
@@ -29265,6 +29410,7 @@ impl<'a> Parser<'a> {
             _ => ok.clone(),
         };
         self.coerce_expr(&expected, value)?;
+        self.move_local(value);
         let payload = Box::new(self.inference.resolve(&value.ty));
         let (op, ty) = match variant {
             Prelude::Some => (PreludeOp::Some, Ty::Option(payload)),
@@ -31517,6 +31663,7 @@ impl<'a> Parser<'a> {
                 .map(|(name, binding)| (name.clone(), binding.declaration))
                 .collect(),
             captures: BTreeSet::new(),
+            owns_captures: moved,
             asynchronous: async_step.is_some(),
         });
         let outer_loops = std::mem::take(&mut self.loops);
@@ -31702,11 +31849,18 @@ impl<'a> Parser<'a> {
             None => Ty::Fn { inputs, output },
         };
         if moved && !scope.captures.is_empty() {
-            // `move` copies each capture into the closure as it is created.
+            // `move` moves each capture into the closure as it is created,
+            // and copies one that is `Copy`.
             let mut copied = origin::Fragment::plain("{ ");
             for name in &scope.captures {
-                let name = if name == "this" { SELF_CAPTURE } else { name };
-                copied.push_text(format!("let {name} = {name}; "));
+                if name == "this" {
+                    copied.push_text(format!("let {SELF_CAPTURE} = {SELF_CAPTURE}; "));
+                } else if self.move_capture(name, expression) {
+                    let take = crate::engine::KEYWORD_MOVE;
+                    copied.push_text(format!("let {name} = {take}({name}); "));
+                } else {
+                    copied.push_text(format!("let {name} = {name}; "));
+                }
             }
             copied.push(source);
             copied.push_text(" }");
@@ -31786,30 +31940,40 @@ impl<'a> Parser<'a> {
         function: Option<ScriptFunction>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        // `drop(sender)` of a tokio channel's sender without tokio ends it.
+        // `drop(value)` moves the value out and drops it, as Rust's
+        // `std::mem::drop` does. A tokio channel's sender without tokio is
+        // also ended for each copy of it.
         if function.is_none()
             && name.as_str() == "drop"
             && matches!(self.peek(), Token::LeftParen)
-            && let Some(items) = self.models.host_items("rawr_iced::tokio::__drop").map(<[_]>::to_vec)
+            && self.unknown_function(&name, name_span).is_some()
         {
-            let (arguments, end) = self.parse_call_arguments("call arguments")?;
+            let (mut arguments, end) = self.parse_call_arguments("call arguments")?;
+            let call = span(name_span.start(), end);
+            let [argument] = arguments.as_mut_slice() else {
+                return Err(Error::InvalidMethodCall {
+                    owner: "<module>".into(),
+                    method: name,
+                    reason: format!("expects 1 argument, found {}", arguments.len()).into(),
+                    call,
+                });
+            };
             let tokio = matches!(
-                arguments.as_slice(),
-                [argument] if matches!(
-                    self.inference.resolve(&argument.ty),
-                    Ty::Host { proof, .. } if proof.definition.path().starts_with("rawr_iced::tokio::")
-                )
+                self.inference.resolve(&argument.ty),
+                Ty::Host { proof, .. } if proof.definition.path().starts_with("rawr_iced::tokio::")
             );
-            if !tokio {
-                return Err(self
-                    .unknown_function(&name, name_span)
-                    .unwrap_or(Error::UnsupportedNominalSyntax {
-                        construct: "`drop` of a value that is not one of tokio's".into(),
-                        source: span(name_span.start(), end),
-                    }));
+            if tokio
+                && let Some(items) =
+                    self.models.host_items("rawr_iced::tokio::__drop").map(<[_]>::to_vec)
+            {
+                let owner = self.models.item_owner("rawr_iced::tokio::__drop").cloned();
+                return self.call_host_function(&items, owner, arguments, call);
             }
-            let owner = self.models.item_owner("rawr_iced::tokio::__drop").cloned();
-            return self.call_host_function(&items, owner, arguments, span(name_span.start(), end));
+            self.move_local(argument);
+            let mut source = origin::Fragment::plain("{ ");
+            source.push(argument.rendered_source());
+            source.push_text("; () }");
+            return Ok(self.operator_expr(source, Ty::Unit, call));
         }
         // A name that no function of the crate's has is an error at the
         // name, unless the engine or a legacy function serves it.
@@ -31883,6 +32047,7 @@ impl<'a> Parser<'a> {
                 let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
+                self.move_local(argument);
             }
             // The boot returns its sealed startup envelope: script code
             // that calls it gets the tuple back.
@@ -32054,6 +32219,7 @@ impl<'a> Parser<'a> {
                 .expect("unknown fields were rejected");
             let expected = instantiate(&Ty::from_resolved(&declared.ty), &substitution);
             self.coerce_expr(&expected, value)?;
+            self.move_local(value);
             let temporary = self.temporary("field");
             prelude.push_text(format!("let {temporary} = "));
             prelude.push(value.rendered_source());
@@ -32151,6 +32317,7 @@ impl<'a> Parser<'a> {
                 self.parse_name_primary(field, field_span)?
             };
             self.coerce_expr(expected, &mut value)?;
+            self.move_local(&mut value);
             written.push((slot, value));
             if matches!(self.peek(), Token::Comma) {
                 self.next();
@@ -32676,6 +32843,7 @@ impl<'a> Parser<'a> {
         for (argument, parameter) in arguments.iter_mut().zip(definition.parameters()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
+            self.move_local(argument);
         }
         Ok(())
     }
@@ -34279,6 +34447,7 @@ impl<'a> Parser<'a> {
                 &instantiate(&Ty::from_resolved(expected), &substitution),
                 value,
             )?;
+            self.move_local(value);
         }
         let helper = self.push_op(Op::Enum {
             definition: definition.clone(),
@@ -37637,6 +37806,8 @@ impl<'a> Parser<'a> {
 struct ClosureScope {
     outer: BTreeMap<ImmutableString, Span>,
     captures: BTreeSet<ImmutableString>,
+    /// A `move` closure or async block, which owns what it captures.
+    owns_captures: bool,
     /// An async body, where `.await` may appear.
     asynchronous: bool,
 }
