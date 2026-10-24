@@ -27646,7 +27646,7 @@ impl<'a> Parser<'a> {
             Vec::<Vec<Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>>>::new();
         for item in items {
             let checkpoint = self.inference.checkpoint();
-            let hints = self
+            let hints: Vec<Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>> = self
                 .instantiate_host_signature(item, receiver, None)
                 .map(|signature| {
                     signature
@@ -27661,8 +27661,7 @@ impl<'a> Parser<'a> {
                                     Ty::Host { proof, arguments } => Some((proof, arguments.len())),
                                     _ => None,
                                 };
-                                let inputs =
-                                    (!inputs.iter().any(contains_inference)).then_some(inputs);
+                                let inputs = Some(inputs);
                                 (inputs.is_some() || output.is_some()).then_some((inputs, output))
                             }
                             _ => None,
@@ -27671,6 +27670,24 @@ impl<'a> Parser<'a> {
                 })
                 .unwrap_or_default();
             self.inference.rollback(checkpoint);
+            // An input still open gives no parameter types, except a host
+            // type whose arguments are open: `sipper(|progress| ..)` takes
+            // a `Sender<P>` whose `P` the body settles.
+            let hints = hints
+                .into_iter()
+                .map(|hint: Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>| {
+                    hint.and_then(|(inputs, output)| {
+                        let mut fresh = BTreeMap::new();
+                        let inputs = inputs.and_then(|inputs| {
+                            inputs
+                                .iter()
+                                .map(|input| self.open_host_hint(input, &mut fresh))
+                                .collect::<Option<Box<[Ty]>>>()
+                        });
+                        (inputs.is_some() || output.is_some()).then_some((inputs, output))
+                    })
+                })
+                .collect();
             overloads.push(hints);
         }
         let positions = overloads.iter().map(Vec::len).max().unwrap_or_default();
@@ -27709,6 +27726,33 @@ impl<'a> Parser<'a> {
                 })
             })
             .collect();
+    }
+
+    /// A closure parameter hint: `ty` itself when it is settled, or a host
+    /// type whose open arguments become fresh inference variables.
+    fn open_host_hint(&mut self, ty: &Ty, fresh: &mut BTreeMap<usize, Ty>) -> Option<Ty> {
+        if !contains_inference(ty) {
+            return Some(ty.clone());
+        }
+        let Ty::Host { proof, arguments } = ty else {
+            return None;
+        };
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                Ty::Infer(id) => Some(
+                    fresh
+                        .entry(*id)
+                        .or_insert_with(|| self.inference.fresh())
+                        .clone(),
+                ),
+                argument => self.open_host_hint(argument, fresh),
+            })
+            .collect::<Option<Box<[Ty]>>>()?;
+        Some(Ty::Host {
+            proof: proof.clone(),
+            arguments,
+        })
     }
 
     /// The input types of the host callable parameter after `arguments`,
@@ -32605,6 +32649,22 @@ impl<'a> Parser<'a> {
                 ),
                 _ => written,
             };
+            // `tokio::time::sleep(d)` without tokio: the facade's own
+            // (`resolve::std_reexport`).
+            if full.starts_with("tokio::")
+                && matches!(self.peek(), Token::LeftParen | Token::Unit)
+            {
+                let reexported = crate::resolve::std_reexport(&full, &self.models.host);
+                if let Some(items) = (reexported != full)
+                    .then(|| self.models.host_items(&reexported).map(<[_]>::to_vec))
+                    .flatten()
+                {
+                    let owner = self.models.item_owner(&reexported).cloned();
+                    let (arguments, end) = self.parse_call_arguments("call arguments")?;
+                    let call = span(first_span.start(), end);
+                    return self.call_host_function(&items, owner, arguments, call);
+                }
+            }
             if let Some((value, single)) = crate::resolve::float_constant(&full) {
                 return Ok(self.float_constant(
                     value,
