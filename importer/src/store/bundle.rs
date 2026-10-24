@@ -1592,13 +1592,11 @@ fn lock_pinned_with_budget(
 ) -> Result<Guard, Error> {
     #[cfg(unix)]
     {
-        use std::os::fd::AsRawFd as _;
-
-        nix::fcntl::flock(file.as_raw_fd(), nix::fcntl::FlockArg::LockShared).map_err(
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockShared).map_err(
             |source| Error::Io {
                 operation: "pin immutable runner bundle",
                 path: path.clone(),
-                source: std::io::Error::from_raw_os_error(source as i32),
+                source: std::io::Error::from_raw_os_error(source.raw_os_error()),
             },
         )?;
     }
@@ -1667,19 +1665,14 @@ fn prepare_eviction_at(
     })?;
     #[cfg(unix)]
     {
-        use std::os::fd::AsRawFd as _;
-
-        match nix::fcntl::flock(
-            file.as_raw_fd(),
-            nix::fcntl::FlockArg::LockExclusiveNonblock,
-        ) {
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => {}
-            Err(source) if source == nix::errno::Errno::EWOULDBLOCK => return Ok(None),
+            Err(source) if source == rustix::io::Errno::WOULDBLOCK => return Ok(None),
             Err(source) => {
                 return Err(Error::Io {
                     operation: "probe runner bundle eviction lease",
                     path,
-                    source: std::io::Error::from_raw_os_error(source as i32),
+                    source: std::io::Error::from_raw_os_error(source.raw_os_error()),
                 });
             }
         }
@@ -4342,20 +4335,12 @@ mod tests {
 
         #[cfg(unix)]
         {
-            use std::os::fd::AsRawFd as _;
-
             let guard = pin(store.root(), reference).expect("the published bundle pins");
             let contender = File::open(root.join("lease")).expect("the contender lease opens");
-            assert!(nix::fcntl::flock(
-                contender.as_raw_fd(),
-                nix::fcntl::FlockArg::LockExclusiveNonblock,
-            )
+            assert!(rustix::fs::flock(&contender, rustix::fs::FlockOperation::NonBlockingLockExclusive)
             .is_err());
             drop(guard);
-            nix::fcntl::flock(
-                contender.as_raw_fd(),
-                nix::fcntl::FlockArg::LockExclusiveNonblock,
-            )
+            rustix::fs::flock(&contender, rustix::fs::FlockOperation::NonBlockingLockExclusive)
             .expect("the bundle becomes exclusively lockable after its pin drops");
         }
 
@@ -4603,8 +4588,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn blocked_pin_revalidates_the_same_lease_path_after_lock_acquisition() {
-        use std::os::fd::AsRawFd as _;
-
         let (fixture, store) = store("pin-race");
         let execution = execution(22);
         let attempt = Attempt::allocate(store.root(), execution, budget(1024 * 1024, 64))
@@ -4626,7 +4609,7 @@ mod tests {
 
         let path = root.join("lease");
         let exclusive = File::open(&path).expect("the exclusive lease opens");
-        nix::fcntl::flock(exclusive.as_raw_fd(), nix::fcntl::FlockArg::LockExclusive)
+        rustix::fs::flock(&exclusive, rustix::fs::FlockOperation::LockExclusive)
             .expect("the fixture holds the exclusive lease");
         let opened = File::open(&path).expect("the blocked pin opens the old lease inode");
         let worker_root = root.clone();

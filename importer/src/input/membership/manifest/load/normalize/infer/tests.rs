@@ -56,7 +56,7 @@ fn started(rows: Vec<Row>) -> Transcript {
     Transcript::Started {
         mount: rawr_directory::Mount::Known(false),
         rows,
-        end: observed::End::Error(nix::libc::EIO),
+        end: observed::End::Error(libc::EIO),
     }
 }
 fn run(image: &stored::Stored, bins: bool, root: &Path, relative: &Path) -> Vec<(String, PathBuf)> {
@@ -91,7 +91,7 @@ fn bins_preserve_main_encounter_order_skips_and_reached_type_errors() {
             row(b".hidden.rs", 0, None),
             row(b"bad\xff.rs", 0, None),
             row(b"sub", 4, Some(Ok(observed::Kind::Directory))),
-            row(b"a.rs", 0, Some(Err(nix::libc::ENOENT))),
+            row(b"a.rs", 0, Some(Err(libc::ENOENT))),
             row(b"z.rs", 10, Some(Ok(observed::Kind::Symlink))),
             row(b"skip.txt", 8, Some(Ok(observed::Kind::File))),
             row(b"empty", 4, Some(Ok(observed::Kind::Directory))),
@@ -139,13 +139,13 @@ fn spelling_extension_and_absolute_strip_prefix_fallback() {
 fn native_open_error_is_empty_and_main_probe_is_still_required_first() {
     let image = image(
         b"/p/src/bin",
-        Transcript::OpenFailed(nix::libc::EACCES),
+        Transcript::OpenFailed(libc::EACCES),
         vec![(b"/p/src/main.rs", observed::Value::Absent)],
     );
     assert!(run(&image, true, Path::new("/p"), Path::new("")).is_empty());
     let image = self::image(
         b"/p/src/bin",
-        Transcript::OpenFailed(nix::libc::EACCES),
+        Transcript::OpenFailed(libc::EACCES),
         Vec::new(),
     );
     let limits = cargo::Limits::standard();

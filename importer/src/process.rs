@@ -16,8 +16,6 @@ use std::cell::Cell;
 
 use std::os::unix::process::CommandExt as _;
 
-use nix::sys::signal::{killpg, Signal};
-use nix::unistd::Pid;
 
 use crate::{Error, Result};
 
@@ -48,7 +46,7 @@ pub mod runner;
 pub(crate) mod test_launch;
 pub mod value;
 
-pub use groups::retire_on_termination;
+pub use groups::retire_owned;
 
 pub use runner::{Admitted, Candidate, Error as RunnerError, Lifecycle, Owner};
 
@@ -1232,7 +1230,9 @@ impl Drop for ChildLease {
 fn kill_group(pid: u32) {
     if let Ok(pid) = i32::try_from(pid) {
         // ESRCH means nothing is left; a zombie-only group may report EPERM.
-        let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+        if let Some(pid) = rustix::process::Pid::from_raw(pid) {
+            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+        }
     }
 }
 

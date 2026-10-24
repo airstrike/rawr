@@ -169,14 +169,14 @@ fn repeated_open_occurrences_preserve_discarded_and_delivered_native_errors() {
         let mut owner = live::traversal::Owner::new(&mut budget).unwrap();
         let mut capture = owner.begin(fixture.0.as_os_str().as_bytes(), true).unwrap();
         let first = capture.open(missing.as_os_str().as_bytes()).unwrap();
-        assert_eq!(first.opening_error(), Some(nix::libc::ENOENT));
+        assert_eq!(first.opening_error(), Some(libc::ENOENT));
         capture.close(first, Close::Pruned).unwrap();
         let mut second = capture.open(missing.as_os_str().as_bytes()).unwrap();
         assert!(matches!(
             capture.next(&mut second).unwrap(),
             live::traversal::Read::Error {
                 opening: true,
-                code: nix::libc::ENOENT
+                code: libc::ENOENT
             }
         ));
         assert!(matches!(
@@ -213,7 +213,7 @@ fn repeated_open_occurrences_preserve_discarded_and_delivered_native_errors() {
         cursor.next(&mut host, &mut second).unwrap(),
         host::traversal::Read::Error {
             opening: true,
-            code: nix::libc::ENOENT
+            code: libc::ENOENT
         }
     ));
     assert!(matches!(

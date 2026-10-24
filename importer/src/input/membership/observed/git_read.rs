@@ -66,7 +66,7 @@ impl Transcript {
             match events.next() {
                 Some(Event::Open(Err(code))) => {
                     errno(*code)?;
-                    if *code != nix::libc::EINTR {
+                    if *code != libc::EINTR {
                         return ending(events, self.bytes.len(), 0);
                     }
                 }
@@ -112,7 +112,7 @@ impl Transcript {
                 Ok(_) => return Err(Error::Encoding("Git read exceeds request")),
                 Err(code) => {
                     errno(*code)?;
-                    if *code == nix::libc::EINTR {
+                    if *code == libc::EINTR {
                         continue;
                     }
                     if self.role == Role::LooseReference {

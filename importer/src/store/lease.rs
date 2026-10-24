@@ -432,19 +432,14 @@ pub(crate) fn try_execution(
         })?;
     #[cfg(unix)]
     {
-        use std::os::fd::AsRawFd as _;
-
-        match nix::fcntl::flock(
-            file.as_raw_fd(),
-            nix::fcntl::FlockArg::LockExclusiveNonblock,
-        ) {
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => {}
-            Err(source) if source == nix::errno::Errno::EWOULDBLOCK => return Ok(None),
+            Err(source) if source == rustix::io::Errno::WOULDBLOCK => return Ok(None),
             Err(source) => {
                 return Err(Error::Io {
                     operation: "probe dead execution lease",
                     path,
-                    source: std::io::Error::from_raw_os_error(source as i32),
+                    source: std::io::Error::from_raw_os_error(source.raw_os_error()),
                 });
             }
         }
@@ -516,19 +511,14 @@ pub(crate) fn try_key(
         })?;
     #[cfg(unix)]
     {
-        use std::os::fd::AsRawFd as _;
-
-        match nix::fcntl::flock(
-            file.as_raw_fd(),
-            nix::fcntl::FlockArg::LockExclusiveNonblock,
-        ) {
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => {}
-            Err(source) if source == nix::errno::Errno::EWOULDBLOCK => return Ok(None),
+            Err(source) if source == rustix::io::Errno::WOULDBLOCK => return Ok(None),
             Err(source) => {
                 return Err(Error::Io {
                     operation: "probe typed store recovery lease",
                     path,
-                    source: std::io::Error::from_raw_os_error(source as i32),
+                    source: std::io::Error::from_raw_os_error(source.raw_os_error()),
                 });
             }
         }
@@ -711,12 +701,11 @@ pub(super) fn wait_migration(path: &Path) -> Result<(), Error> {
     }
     #[cfg(unix)]
     {
-        use std::os::fd::AsRawFd as _;
-        nix::fcntl::flock(file.as_raw_fd(), nix::fcntl::FlockArg::LockExclusive).map_err(
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive).map_err(
             |source| Error::Io {
                 operation: "wait for legacy store operation",
                 path: path.to_path_buf(),
-                source: std::io::Error::from_raw_os_error(source as i32),
+                source: std::io::Error::from_raw_os_error(source.raw_os_error()),
             },
         )?;
     }

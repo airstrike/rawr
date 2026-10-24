@@ -109,7 +109,7 @@ fn native_error(events: Vec<Event>) -> observed::Record {
 
 #[test]
 fn plain_files_treat_not_found_from_open_gate_and_read_as_absent_only() {
-    for code in [nix::libc::ENOENT, nix::libc::EACCES] {
+    for code in [libc::ENOENT, libc::EACCES] {
         for events in [
             vec![Event::Open(Err(code))],
             vec![Event::Open(Ok(())), Event::Length(Err(code))],
@@ -126,7 +126,7 @@ fn plain_files_treat_not_found_from_open_gate_and_read_as_absent_only() {
         ] {
             for form in [Form::Plain, Form::Relative] {
                 let result = consume(native_error(events.clone()), form);
-                if code == nix::libc::ENOENT {
+                if code == libc::ENOENT {
                     assert_eq!(result, Ok(None))
                 } else {
                     assert_eq!(result, Err(Failure::Io(io::Failure::Native(code))))

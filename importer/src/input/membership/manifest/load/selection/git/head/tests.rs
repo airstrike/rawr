@@ -38,7 +38,7 @@ fn run(exists: observed::Value, files: &[(&[u8], File<'_>)]) -> Result<(), Failu
     }];
     for (path, file) in files {
         let (events, bytes) = match file {
-            File::Absent => (vec![Event::Open(Err(nix::libc::ENOENT))], vec![]),
+            File::Absent => (vec![Event::Open(Err(libc::ENOENT))], vec![]),
             File::Error(code) => (vec![Event::Open(Err(*code))], vec![]),
             File::Bytes(bytes) => {
                 assert!(bytes.len() < 128);
@@ -104,7 +104,7 @@ fn present() -> observed::Value {
 fn head_fast_guard_precedes_store_and_direct_decode_failure_is_tolerated() {
     assert_eq!(run(observed::Value::Absent, &[]), Err(Failure::MissingHead));
     assert_eq!(
-        run(observed::Value::Error(nix::libc::EACCES), &[]),
+        run(observed::Value::Error(libc::EACCES), &[]),
         Err(Failure::MissingHead)
     );
     for bytes in [
@@ -148,10 +148,10 @@ fn head_alternates_preserve_missing_misplaced_and_original_errors() {
         )))
     ));
     assert!(matches!(
-        run(present(), &[(prefix, File::Error(nix::libc::EACCES))]),
+        run(present(), &[(prefix, File::Error(libc::EACCES))]),
         Err(Failure::Find(store::Failure::Find(
             read::Failure::ReadFileContents {
-                code: nix::libc::EACCES,
+                code: libc::EACCES,
                 ..
             }
         )))

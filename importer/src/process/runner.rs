@@ -384,7 +384,7 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
         }
         crate::metrics::record_runner_owned(&crate::metrics::runner::Owned {
             runner_pid,
-            runner_uid: nix::unistd::Uid::effective().as_raw(),
+            runner_uid: rustix::process::geteuid().as_raw(),
             build_request: *inner.manifest.generated.build_request_key().as_bytes(),
             generated_manifest: inner.manifest.generated.digest(),
             generation_key: *inner.key.as_bytes(),

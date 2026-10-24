@@ -72,7 +72,7 @@ impl<'image> Session<'_, host::Host<'image, '_>> {
         self.check()?;
         let file = match self.admission.file(path) {
             Ok(Some(file)) => file,
-            Ok(None) => return self.fail(Error::Host(InputError::Io(nix::libc::ENOENT))),
+            Ok(None) => return self.fail(Error::Host(InputError::Io(libc::ENOENT))),
             Err(error) => return self.fail(Error::Host(error)),
         };
         // The manifest size is an accounting target recorded on the

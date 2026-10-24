@@ -164,7 +164,7 @@ fn legacy_binary_short_circuits_and_has_lib_skips_name_path() {
                 (b"/p/src/x.rs".as_slice(), observed::Value::Absent),
                 (
                     b"/p/src/main.rs".as_slice(),
-                    observed::Value::Error(nix::libc::EACCES),
+                    observed::Value::Error(libc::EACCES),
                 ),
                 (b"/p/src/bin/main.rs".as_slice(), present()),
             ],

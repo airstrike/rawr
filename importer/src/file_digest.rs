@@ -62,9 +62,9 @@ impl Identity {
 
     /// The identity of a regular file from a raw `fstat`.
     #[cfg(unix)]
-    pub(crate) fn of_stat(stat: &nix::sys::stat::FileStat) -> Option<Self> {
-        let kind = u32::from(stat.st_mode) & u32::from(nix::libc::S_IFMT);
-        (kind == u32::from(nix::libc::S_IFREG)).then_some(Self {
+    pub(crate) fn of_stat(stat: &rustix::fs::Stat) -> Option<Self> {
+        let kind = u32::from(stat.st_mode) & u32::from(libc::S_IFMT);
+        (kind == u32::from(libc::S_IFREG)).then_some(Self {
             device: stat.st_dev as u64,
             inode: stat.st_ino,
             length: stat.st_size as u64,
@@ -170,7 +170,7 @@ pub(crate) fn attach(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(nix::libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW);
     }
     let Ok(mut table) = options.open(path) else {
         return;

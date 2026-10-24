@@ -177,7 +177,7 @@ fn worktree() -> Vec<Fact<'static>> {
         Fact::Git(
             "/r/.git/commondir",
             Role::DiscoveryPath,
-            Err(nix::libc::ENOENT),
+            Err(libc::ENOENT),
         ),
         directory("/r/.git/objects", 1),
         directory("/r/.git/refs", 1),
@@ -199,10 +199,10 @@ fn ascends_with_cached_metadata_and_each_reached_candidate_cwd_occurrence() {
         facts.push(if candidate_cwd_error {
             directory("/r/sub/.git", 1)
         } else {
-            Fact::Metadata("/r/sub/.git", true, Err(nix::libc::ENOENT))
+            Fact::Metadata("/r/sub/.git", true, Err(libc::ENOENT))
         });
         let cwd = if candidate_cwd_error {
-            vec![Ok("/initial"), Err(nix::libc::EACCES), Ok("/later")]
+            vec![Ok("/initial"), Err(libc::EACCES), Ok("/later")]
         } else {
             vec![Ok("/initial"), Ok("/later")]
         };
@@ -226,14 +226,14 @@ fn ascends_with_cached_metadata_and_each_reached_candidate_cwd_occurrence() {
 fn bare_attempt_reuses_initial_metadata_and_cwd_after_dot_git_miss() {
     let facts = vec![
         directory("/r", 1),
-        Fact::Metadata("/r/.git", true, Err(nix::libc::ENOENT)),
+        Fact::Metadata("/r/.git", true, Err(libc::ENOENT)),
         Fact::Metadata("/r/HEAD", true, Ok(metadata(observed::Kind::File, 1))),
         Fact::Git(
             "/r/HEAD",
             Role::LooseReference,
             Ok(b"ref: refs/heads/main\n"),
         ),
-        Fact::Git("/r/commondir", Role::DiscoveryPath, Err(nix::libc::ENOENT)),
+        Fact::Git("/r/commondir", Role::DiscoveryPath, Err(libc::ENOENT)),
         directory("/r/objects", 1),
         directory("/r/refs", 1),
         Fact::Absent("/r/index"),
@@ -278,7 +278,7 @@ fn original_errors_and_filesystem_boundary_keep_their_owned_paths() {
     );
     assert_eq!(calls, vec![None]);
     for fact in [
-        Fact::Metadata("/r", true, Err(nix::libc::EACCES)),
+        Fact::Metadata("/r", true, Err(libc::EACCES)),
         Fact::Metadata("/r", true, Ok(metadata(observed::Kind::File, 1))),
     ] {
         assert_eq!(
@@ -288,7 +288,7 @@ fn original_errors_and_filesystem_boundary_keep_their_owned_paths() {
     }
     let facts = vec![
         directory("/r/sub", 1),
-        Fact::Metadata("/r/sub/.git", true, Err(nix::libc::ENOENT)),
+        Fact::Metadata("/r/sub/.git", true, Err(libc::ENOENT)),
         Fact::Absent("/r/sub/HEAD"),
         directory("/r", 2),
     ];
@@ -303,7 +303,7 @@ fn original_errors_and_filesystem_boundary_keep_their_owned_paths() {
     facts.retain(|fact| !matches!(fact, Fact::Identity(_) | Fact::Metadata(_, false, _)));
     facts.extend([
         directory("/r", 1),
-        Fact::Metadata("/r/.git", false, Err(nix::libc::EACCES)),
+        Fact::Metadata("/r/.git", false, Err(libc::EACCES)),
     ]);
     assert_eq!(
         run("/r", facts, &[Ok("/initial"), Ok("/later")], None)
@@ -311,7 +311,7 @@ fn original_errors_and_filesystem_boundary_keep_their_owned_paths() {
             .unwrap(),
         Err(Failure::CheckTrust {
             path: "/r/.git".into(),
-            err: io::Failure::Native(nix::libc::EACCES)
+            err: io::Failure::Native(libc::EACCES)
         })
     );
 }
@@ -319,10 +319,10 @@ fn original_errors_and_filesystem_boundary_keep_their_owned_paths() {
 #[test]
 fn initial_cwd_error_occurrence_refusal_and_missing_facts_do_not_become_absence() {
     assert_eq!(
-        run("/r", vec![], &[Err(nix::libc::EACCES)], None)
+        run("/r", vec![], &[Err(libc::EACCES)], None)
             .0
             .unwrap(),
-        Err(Failure::CurrentDir(io::Failure::Native(nix::libc::EACCES)))
+        Err(Failure::CurrentDir(io::Failure::Native(libc::EACCES)))
     );
     assert!(matches!(
         run("/r", vec![], &[Ok("/initial")], None).0,

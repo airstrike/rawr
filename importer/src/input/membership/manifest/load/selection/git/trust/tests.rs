@@ -124,13 +124,13 @@ fn native_metadata_failure_precedes_identity_and_missing_or_refused_facts_stay_t
     assert_eq!(
         run(
             b"/git",
-            Some(observed::Value::Error(nix::libc::EACCES)),
+            Some(observed::Value::Error(libc::EACCES)),
             None,
             None,
             false
         )
         .unwrap(),
-        Err(io::Failure::Native(nix::libc::EACCES))
+        Err(io::Failure::Native(libc::EACCES))
     );
     assert_eq!(
         run(b"/git\0suffix", None, None, None, false).unwrap(),

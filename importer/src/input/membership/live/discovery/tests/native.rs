@@ -173,7 +173,7 @@ fn native_projection_matches_source_shaped_std_acquisition() {
         Err(error)
             if matches!(
                 error.raw_os_error(),
-                Some(nix::libc::EPERM | nix::libc::EILSEQ)
+                Some(libc::EPERM | libc::EILSEQ)
             ) =>
         {
             eprintln!("non-UTF8 discovery directory creation was refused; native error path exercised, existing-directory success NOT covered");

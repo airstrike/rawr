@@ -72,7 +72,7 @@ fn actual_regular_symlink_missing_and_non_directory_outcomes() {
     let not_directory = acquire(&path.join("child"));
     assert_eq!(
         not_directory.record().value,
-        observed::Value::Error(nix::libc::ENOTDIR)
+        observed::Value::Error(libc::ENOTDIR)
     );
 }
 
@@ -82,7 +82,7 @@ fn actual_directory_and_dev_null_keep_native_type_behavior() {
     let directory = acquire(&fixture.0);
     assert_eq!(
         directory.record().value,
-        observed::Value::Error(nix::libc::EISDIR)
+        observed::Value::Error(libc::EISDIR)
     );
     let empty = acquire(Path::new("/dev/null"));
     assert_eq!(content(&empty), (b"".as_slice(), observed::End::Eof));
@@ -104,7 +104,7 @@ fn actual_non_utf8_filename_keeps_native_bytes_where_filesystem_allows_it() {
         Err(error)
             if matches!(
                 error.raw_os_error(),
-                Some(nix::libc::EPERM | nix::libc::EILSEQ)
+                Some(libc::EPERM | libc::EILSEQ)
             ) =>
         {
             // APFS rejects the invalid native spelling at creation (EILSEQ). Still

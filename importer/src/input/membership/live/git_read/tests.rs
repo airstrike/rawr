@@ -228,7 +228,7 @@ fn configuration_open_failure_retains_buffer_and_completion_refusal_closes_once(
     )
     .unwrap();
     let mut denied = Script::new(b"");
-    denied.opens = [Err(nix::libc::EACCES)].into();
+    denied.opens = [Err(libc::EACCES)].into();
     super::configuration(
         PATH,
         &mut buffer,
@@ -237,7 +237,7 @@ fn configuration_open_failure_retains_buffer_and_completion_refusal_closes_once(
         |outcome, buffer, _| {
             assert!(matches!(
                 outcome,
-                git_read::Configuration::OpenFailed(nix::libc::EACCES)
+                git_read::Configuration::OpenFailed(libc::EACCES)
             ));
             assert_eq!(buffer.bytes(), b"retained");
             Ok(())
@@ -293,9 +293,9 @@ fn git_read_roundtrip_preserves_growth_hints_interruptions_and_exact_eof_probe()
     for length in [0, 128, 129, 20000] {
         let bytes = vec![b'x'; length];
         let mut script = Script::new(&bytes);
-        script.opens = [Err(nix::libc::EINTR), Ok(17)].into();
-        script.lengths = [Err(nix::libc::EIO)].into();
-        script.reads = [Err(nix::libc::EINTR)].into();
+        script.opens = [Err(libc::EINTR), Ok(17)].into();
+        script.lengths = [Err(libc::EIO)].into();
+        script.reads = [Err(libc::EINTR)].into();
         let record = capture(&mut script, Role::LooseReference);
         assert_eq!(script.events.first(), Some(&Native::Open));
         assert_eq!(script.events.last(), Some(&Native::Close));
@@ -310,7 +310,7 @@ fn git_read_roundtrip_preserves_growth_hints_interruptions_and_exact_eof_probe()
         assert!(!script.live);
     }
     let mut script = Script::new(b"abc");
-    script.position = Err(nix::libc::EINTR);
+    script.position = Err(libc::EINTR);
     assert_eq!(
         roundtrip(
             capture(&mut script, Role::LooseReference),
@@ -331,19 +331,19 @@ fn git_read_roundtrip_preserves_growth_hints_interruptions_and_exact_eof_probe()
 #[test]
 fn git_read_errors_keep_open_distinct_and_probe_directory_before_close() {
     let mut denied = Script::new(b"");
-    denied.opens = [Err(nix::libc::EACCES)].into();
+    denied.opens = [Err(libc::EACCES)].into();
     assert_eq!(
         roundtrip(
             capture(&mut denied, Role::LooseReference),
             Role::LooseReference
         ),
-        git_read::Outcome::OpenFailed(nix::libc::EACCES)
+        git_read::Outcome::OpenFailed(libc::EACCES)
     );
     assert_eq!(denied.events, [Native::Open]);
-    for directory in [Ok(true), Ok(false), Err(nix::libc::ENOENT)] {
+    for directory in [Ok(true), Ok(false), Err(libc::ENOENT)] {
         let mut script = Script::new(b"prefix");
         script.directory = directory;
-        script.reads = [Ok(3), Err(nix::libc::EIO)].into();
+        script.reads = [Ok(3), Err(libc::EIO)].into();
         let record = capture(&mut script, Role::LooseReference);
         let observed::Value::GitRead(transcript) = &record.value else {
             panic!("Git read record");
@@ -356,7 +356,7 @@ fn git_read_errors_keep_open_distinct_and_probe_directory_before_close() {
         assert_eq!(
             roundtrip(record, Role::LooseReference),
             git_read::Outcome::ReadFailed {
-                code: nix::libc::EIO,
+                code: libc::EIO,
                 directory: Some(directory)
             }
         );
@@ -386,13 +386,13 @@ fn git_read_path_gate_precedes_buffer_and_is_not_a_content_cap() {
         [Native::Open, Native::Length, Native::Close]
     );
     let mut failed = Script::new(b"");
-    failed.lengths = [Err(nix::libc::EINTR)].into();
+    failed.lengths = [Err(libc::EINTR)].into();
     assert_eq!(
         roundtrip(
             capture(&mut failed, Role::DiscoveryPath),
             Role::DiscoveryPath
         ),
-        git_read::Outcome::GateFailed(nix::libc::EINTR)
+        git_read::Outcome::GateFailed(libc::EINTR)
     );
     let contents = vec![b'a'; 65537];
     let mut changed = Script::new(&contents);
@@ -468,7 +468,7 @@ fn git_read_refusal_keeps_prepaid_cleanup_and_stops_native_work() {
     let mut measured = input::Allocation::new(&limits);
     let graph = node::GraphBudget::new();
     let mut script = Script::new(b"prefix");
-    script.reads = [Ok(3), Err(nix::libc::EIO)].into();
+    script.reads = [Ok(3), Err(libc::EIO)].into();
     acquire(
         PATH,
         Role::LooseReference,
@@ -489,7 +489,7 @@ fn git_read_refusal_keeps_prepaid_cleanup_and_stops_native_work() {
         let mut allocation =
             input::Allocation::with_limits(total.items, bytes, limits.string_bytes);
         let mut script = Script::new(b"prefix");
-        script.reads = [Ok(3), Err(nix::libc::EIO)].into();
+        script.reads = [Ok(3), Err(libc::EIO)].into();
         acquire(
             PATH,
             Role::LooseReference,
@@ -523,7 +523,7 @@ fn git_read_refusal_keeps_prepaid_cleanup_and_stops_native_work() {
             input::Allocation::with_limits(total.items, usize::MAX, limits.string_bytes);
         allocation.bytes(usize::MAX - bytes).unwrap();
         let mut script = Script::new(b"prefix");
-        script.reads = [Ok(3), Err(nix::libc::EIO)].into();
+        script.reads = [Ok(3), Err(libc::EIO)].into();
         let result = acquire(
             PATH,
             Role::LooseReference,

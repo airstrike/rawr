@@ -140,7 +140,7 @@ fn malformed_input_and_format_version_errors_are_not_lenient_io_failures() {
         Err(Failure::Unsigned(_))
     ));
     let partial = run(
-        transcript(b"[core]\nbare=true\n", Some(nix::libc::EIO)),
+        transcript(b"[core]\nbare=true\n", Some(libc::EIO)),
         None,
         false,
     )

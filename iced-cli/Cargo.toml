@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = ["native-runner"]
-native-runner = ["dep:rawr-import", "rawr-import/rustc-driver", "rawr-import/embedded-host"]
+native-runner = ["dep:rawr-import", "rawr-import/rustc-driver", "rawr-import/embedded-host", "dep:nix"]
 # Private nonproduction evidence in the existing normal `rawr` target.
 import-baseline = [
     "native-runner",

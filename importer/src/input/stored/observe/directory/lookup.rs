@@ -2,9 +2,7 @@
 
 use std::ffi::CStr;
 
-use nix::fcntl::{self, AtFlags, OFlag};
-use nix::sys::stat::{self, SFlag};
-use nix::unistd;
+use rustix::fs::{self as stat, AtFlags, Mode, OFlags};
 
 use super::super::super::{Budget, Result};
 use super::super::{io, Error};
@@ -14,14 +12,8 @@ pub(super) struct Lookup {
     identity: Identity,
 }
 
-struct Descriptor(i32);
-
-impl Drop for Descriptor {
-    fn drop(&mut self) {
-        // Reserved before open. Never retry close on a possibly reused number.
-        let _ = raw(unistd::close(self.0));
-    }
-}
+/// Closed once on drop, never retried on a possibly reused number.
+struct Descriptor(std::os::fd::OwnedFd);
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Identity {
@@ -30,7 +22,7 @@ struct Identity {
 }
 
 impl Identity {
-    fn from_stat(value: &stat::FileStat) -> Self {
+    fn from_stat(value: &stat::Stat) -> Self {
         Self {
             device: value.st_dev as u64,
             inode: value.st_ino,
@@ -40,12 +32,12 @@ impl Identity {
 
 #[derive(Clone, Copy)]
 pub(super) struct Metadata {
-    mode: nix::libc::mode_t,
+    mode: libc::mode_t,
     length: u64,
 }
 
 impl Metadata {
-    fn from_stat(value: &stat::FileStat) -> Self {
+    fn from_stat(value: &stat::Stat) -> Self {
         Self {
             mode: value.st_mode,
             length: value.st_size as u64,
@@ -53,13 +45,13 @@ impl Metadata {
     }
 
     pub(super) fn is_dir(self) -> bool {
-        self.mode & SFlag::S_IFMT.bits() == SFlag::S_IFDIR.bits()
+        self.mode & libc::S_IFMT == libc::S_IFDIR
     }
     pub(super) fn is_file(self) -> bool {
-        self.mode & SFlag::S_IFMT.bits() == SFlag::S_IFREG.bits()
+        self.mode & libc::S_IFMT == libc::S_IFREG
     }
     pub(super) fn is_symlink(self) -> bool {
-        self.mode & SFlag::S_IFMT.bits() == SFlag::S_IFLNK.bits()
+        self.mode & libc::S_IFMT == libc::S_IFLNK
     }
     pub(super) const fn len(self) -> u64 {
         self.length
@@ -69,7 +61,7 @@ impl Metadata {
     pub(super) fn from_metadata(value: &std::fs::Metadata) -> Self {
         use std::os::unix::fs::MetadataExt as _;
         Self {
-            mode: value.mode() as nix::libc::mode_t,
+            mode: value.mode() as libc::mode_t,
             length: value.len(),
         }
     }
@@ -80,18 +72,18 @@ impl Lookup {
         budget.paths(1)?;
         let descriptor = loop {
             budget.paths(1)?;
-            match raw(fcntl::open(
+            match raw(stat::open(
                 path,
-                OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW,
-                stat::Mode::empty(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                Mode::empty(),
             )) {
                 Ok(descriptor) => break Descriptor(descriptor),
-                Err(error) if error.raw_os_error() == Some(nix::libc::EINTR) => {}
+                Err(error) if error.raw_os_error() == Some(libc::EINTR) => {}
                 Err(error) => return Err(io("open independent input lookup directory", error)),
             }
         };
         budget.paths(1)?;
-        let metadata = raw(stat::fstat(descriptor.0))
+        let metadata = raw(stat::fstat(&descriptor.0))
             .map_err(|error| io("inspect input lookup directory", error))?;
         if !Metadata::from_stat(&metadata).is_dir() {
             return Err(Error::Drift("lookup descriptor is not a directory").into());
@@ -116,21 +108,17 @@ impl Lookup {
 
     pub(super) fn metadata(&self, name: &CStr, budget: &mut Budget<'_>) -> Result<Metadata> {
         budget.paths(1)?;
-        let metadata = raw(stat::fstatat(
-            self.descriptor.0,
+        let metadata = raw(stat::statat(
+            &self.descriptor.0,
             name,
-            AtFlags::AT_SYMLINK_NOFOLLOW,
+            AtFlags::SYMLINK_NOFOLLOW,
         ))
         .map_err(|error| io("inspect anchored input member", error))?;
         Ok(Metadata::from_stat(&metadata))
     }
 }
 
-fn raw<T>(result: nix::Result<T>) -> std::io::Result<T> {
-    match result {
-        Ok(value) => Ok(value),
-        // Capture native errno before callbacks or descriptor cleanup. The
-        // pinned nix enum cannot represent every Darwin error, including107.
-        Err(_) => Err(std::io::Error::from_raw_os_error(nix::errno::errno())),
-    }
+/// rustix keeps the native errno, Darwin's 107 included.
+fn raw<T>(result: rustix::io::Result<T>) -> std::io::Result<T> {
+    result.map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))
 }

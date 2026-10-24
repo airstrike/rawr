@@ -57,7 +57,7 @@ fn discovery_codec_preserves_each_reachable_acquisition_shape() {
                     acquired(7),
                     acquired(8),
                     Attempt::OpenFailed(NativeError::Os(13)),
-                    Attempt::StatFailed(nix::libc::EINTR),
+                    Attempt::StatFailed(libc::EINTR),
                 ] {
                     values.push(transcript(
                         filename,
@@ -71,12 +71,12 @@ fn discovery_codec_preserves_each_reachable_acquisition_shape() {
             }
             for legacy in [
                 Attempt::OpenFailed(NativeError::Os(13)),
-                Attempt::StatFailed(nix::libc::EINTR),
+                Attempt::StatFailed(libc::EINTR),
             ] {
                 for exists in [
                     Exists::Present,
                     Exists::Failed(NativeError::Os(2)),
-                    Exists::Failed(NativeError::Os(nix::libc::EINTR)),
+                    Exists::Failed(NativeError::Os(libc::EINTR)),
                 ] {
                     values.push(transcript(filename, warn, legacy, After::Fallback(exists)));
                 }
@@ -182,7 +182,7 @@ fn discovery_wire_rejects_bad_tags_flags_branches_errno_and_query_mismatch() {
             )
         });
     }
-    for errno in [0_i32, -1, nix::libc::EINTR] {
+    for errno in [0_i32, -1, libc::EINTR] {
         let mut bytes = base.clone();
         bytes[value + 5..value + 9].copy_from_slice(&errno.to_le_bytes());
         with_budget(|budget| {
@@ -201,7 +201,7 @@ fn discovery_wire_rejects_bad_tags_flags_branches_errno_and_query_mismatch() {
         After::Second(Attempt::OpenFailed(NativeError::Os(13))),
     )));
     let end = second.len();
-    second[end - 4..].copy_from_slice(&nix::libc::EINTR.to_le_bytes());
+    second[end - 4..].copy_from_slice(&libc::EINTR.to_le_bytes());
     with_budget(|budget| assert!(Stored::decode(&second, budget).is_err()));
     for value in [
         transcript(
@@ -230,7 +230,7 @@ fn discovery_wire_rejects_bad_tags_flags_branches_errno_and_query_mismatch() {
         }
     }
     for legacy in [true, false] {
-        let interrupted = Attempt::OpenFailed(NativeError::Os(nix::libc::EINTR));
+        let interrupted = Attempt::OpenFailed(NativeError::Os(libc::EINTR));
         assert!(if legacy {
             Transcript::checked(
                 Filename::Config,

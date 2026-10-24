@@ -1034,7 +1034,7 @@ pub(crate) fn hash(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(nix::libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW);
     }
     let mut source = options
         .open(path)

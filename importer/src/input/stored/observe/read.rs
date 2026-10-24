@@ -1,36 +1,25 @@
 use std::ffi::CStr;
 use std::path::Path;
 
-use nix::fcntl::{self, OFlag};
-use nix::sys::stat;
-use nix::unistd;
+use rustix::fs::{self as stat, Mode, OFlags};
 use sha2::{Digest as _, Sha256};
 
 use super::super::{Budget, Result};
 use super::{io, path, Error};
 
-/// One successful open owns this descriptor, including every error exit.
-struct Descriptor(i32);
+/// One successful open owns this descriptor, including every error exit. A
+/// close error is not retried against a descriptor number that the OS could
+/// already have reused.
+struct Descriptor(std::os::fd::OwnedFd);
 
 enum Extent {
     Initial(usize),
     Opened,
 }
 
-impl Drop for Descriptor {
-    fn drop(&mut self) {
-        // Cleanup is reserved before open. A close error is not retried against
-        // a descriptor number that the OS could already have reused.
-        let _ = raw(unistd::close(self.0));
-    }
-}
-
-fn raw<T>(result: nix::Result<T>) -> std::io::Result<T> {
-    match result {
-        Ok(value) => Ok(value),
-        // Capture actual native errno immediately; nix's enum omits Darwin107.
-        Err(_) => Err(std::io::Error::from_raw_os_error(nix::errno::errno())),
-    }
+/// rustix keeps the native errno, Darwin's 107 included.
+fn raw<T>(result: rustix::io::Result<T>) -> std::io::Result<T> {
+    result.map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))
 }
 
 /// One freshness file's length; the `input_proof_bytes` target is only
@@ -66,7 +55,7 @@ pub(super) fn digest(path: &Path, expected: usize, budget: &mut Budget<'_>) -> R
     let source = open(path, budget)?;
     budget.paths(1)?;
     let opened =
-        raw(stat::fstat(source.0)).map_err(|error| io("inspect bounded input handle", error))?;
+        raw(stat::fstat(&source.0)).map_err(|error| io("inspect bounded input handle", error))?;
     let actual = usize::try_from(opened.st_size as u64).map_err(|_| budget.overflow())?;
     budget.physical("freshness file", expected, actual)?;
     length(opened.st_size as u64, budget)?;
@@ -84,13 +73,13 @@ pub(super) fn digest(path: &Path, expected: usize, budget: &mut Budget<'_>) -> R
     while remaining != 0 {
         budget.paths(1)?;
         let wanted = remaining.min(chunk.len());
-        match raw(unistd::read(source.0, &mut chunk[..wanted])) {
+        match raw(rustix::io::read(&source.0, &mut chunk[..wanted])) {
             Ok(0) => return Err(Error::Drift("input-changed-during-read").into()),
             Ok(count) => {
                 hasher.update(&chunk[..count]);
                 remaining -= count;
             }
-            Err(error) if error.raw_os_error() == Some(nix::libc::EINTR) => {}
+            Err(error) if error.raw_os_error() == Some(libc::EINTR) => {}
             Err(error) => return Err(io("read bounded input", error)),
         }
     }
@@ -98,7 +87,7 @@ pub(super) fn digest(path: &Path, expected: usize, budget: &mut Budget<'_>) -> R
     budget.hash(expected)?;
     let digest: [u8; 32] = hasher.finalize().into();
     if actual == expected
-        && raw(stat::fstat(source.0))
+        && raw(stat::fstat(&source.0))
             .ok()
             .and_then(|after| crate::file_digest::Identity::of_stat(&after))
             == identity
@@ -135,7 +124,7 @@ fn content(path: &Path, extent: Extent, budget: &mut Budget<'_>) -> Result<Vec<u
     let source = open(path, budget)?;
     budget.paths(1)?;
     let opened =
-        raw(stat::fstat(source.0)).map_err(|error| io("inspect bounded input handle", error))?;
+        raw(stat::fstat(&source.0)).map_err(|error| io("inspect bounded input handle", error))?;
     let actual = match extent {
         Extent::Initial(maximum) => {
             let actual = usize::try_from(opened.st_size as u64).map_err(|_| budget.overflow())?;
@@ -162,10 +151,10 @@ fn content(path: &Path, extent: Extent, budget: &mut Budget<'_>) -> Result<Vec<u
         budget.paths(1)?;
         // Like read_exact, request the complete remaining admitted extent. The
         // existing input ceiling is below the supported native read range.
-        match raw(unistd::read(source.0, &mut bytes[offset..])) {
+        match raw(rustix::io::read(&source.0, &mut bytes[offset..])) {
             Ok(0) => return Err(Error::Drift("input-changed-during-read").into()),
             Ok(count) => offset += count,
-            Err(error) if error.raw_os_error() == Some(nix::libc::EINTR) => {}
+            Err(error) if error.raw_os_error() == Some(libc::EINTR) => {}
             Err(error) => return Err(io("read bounded input", error)),
         }
     }
@@ -181,13 +170,13 @@ fn open(path: &Path, budget: &mut Budget<'_>) -> Result<Descriptor> {
     budget.paths(1)?;
     loop {
         budget.paths(1)?;
-        match raw(fcntl::open(
+        match raw(stat::open(
             native,
-            OFlag::O_RDONLY | OFlag::O_CLOEXEC,
-            stat::Mode::from_bits_truncate(0o666),
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::from_bits_truncate(0o666),
         )) {
             Ok(descriptor) => return Ok(Descriptor(descriptor)),
-            Err(error) if error.raw_os_error() == Some(nix::libc::EINTR) => {}
+            Err(error) if error.raw_os_error() == Some(libc::EINTR) => {}
             Err(error) => return Err(io("open bounded input", error)),
         }
     }
@@ -198,7 +187,7 @@ fn probe(source: &Descriptor, budget: &mut Budget<'_>) -> Result<()> {
     let mut extra = [0; 1];
     budget.paths(1)?;
     // Match the legacy single read after read_exact: a probe EINTR is an error.
-    if raw(unistd::read(source.0, &mut extra))
+    if raw(rustix::io::read(&source.0, &mut extra))
         .map_err(|error| io("probe bounded input growth", error))?
         != 0
     {

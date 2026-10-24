@@ -183,7 +183,7 @@ fn original_file_metadata_selects_linked_or_submodule_and_moves_private_director
 
     let mut submodule = prefix.to_vec();
     submodule.extend([
-        ("/privategit/commondir", Fact::ReadError(nix::libc::ENOENT)),
+        ("/privategit/commondir", Fact::ReadError(libc::ENOENT)),
         ("/privategit/objects", Fact::Directory),
         ("/privategit/refs", Fact::Directory),
     ]);
@@ -195,12 +195,12 @@ fn original_file_metadata_selects_linked_or_submodule_and_moves_private_director
     );
 
     let mut denied = prefix.to_vec();
-    denied.push(("/privategit/commondir", Fact::ReadError(nix::libc::EACCES)));
+    denied.push(("/privategit/commondir", Fact::ReadError(libc::EACCES)));
     assert_eq!(
         run("/checkout/.git", observed::Kind::File, &denied),
         Err(Failure::MissingCommonDir {
             missing: "/privategit/commondir".into(),
-            source: io::Failure::Native(nix::libc::EACCES)
+            source: io::Failure::Native(libc::EACCES)
         })
     );
 }
@@ -230,11 +230,11 @@ fn directory_worktree_pair_uses_common_storage_and_retains_plain_buffer_capacity
 #[test]
 fn directory_common_or_gitdir_semantic_errors_fall_back_but_original_refusal_does_not() {
     for tail in [
-        vec![("/r/.git/commondir", Fact::ReadError(nix::libc::EACCES))],
+        vec![("/r/.git/commondir", Fact::ReadError(libc::EACCES))],
         vec![("/r/.git/commondir", Fact::Path(b" \t\n"))],
         vec![
             ("/r/.git/commondir", Fact::Path(b"/common")),
-            ("/r/.git/gitdir", Fact::ReadError(nix::libc::EACCES)),
+            ("/r/.git/gitdir", Fact::ReadError(libc::EACCES)),
         ],
     ] {
         let mut facts = vec![("/r/.git/HEAD", Fact::File), ("/r/.git/HEAD", Fact::Head)];
@@ -280,7 +280,7 @@ fn ordered_head_objects_refs_and_index_checks_produce_the_reached_owned_error_or
     let prefix = [
         ("/r/.git/HEAD", Fact::File),
         ("/r/.git/HEAD", Fact::Head),
-        ("/r/.git/commondir", Fact::ReadError(nix::libc::ENOENT)),
+        ("/r/.git/commondir", Fact::ReadError(libc::ENOENT)),
     ];
     let mut facts = prefix.to_vec();
     facts.push(("/r/.git/objects", Fact::Missing));
@@ -330,7 +330,7 @@ fn ordered_head_objects_refs_and_index_checks_produce_the_reached_owned_error_or
                 &[
                     (&head, Fact::File),
                     (&head, Fact::Head),
-                    (&common, Fact::ReadError(nix::libc::ENOENT)),
+                    (&common, Fact::ReadError(libc::ENOENT)),
                     (&objects, Fact::Directory),
                     (&refs, Fact::Directory),
                     (&index_path, index),

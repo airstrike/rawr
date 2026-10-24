@@ -10,7 +10,7 @@ fn main() -> ExitCode {
     }
     // A stopped CLI retires the runner window and builds it owns.
     #[cfg(feature = "native-runner")]
-    if let Err(error) = rawr_import::process::retire_on_termination() {
+    if let Err(error) = retire_on_termination() {
         eprintln!("warning: child processes may outlive an interrupted rawr: {error}");
     }
     #[cfg(feature = "import-baseline")]
@@ -113,4 +113,31 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// Make SIGINT, SIGTERM and SIGHUP retire every child process group this
+/// process owns (a runner and its window, a Cargo build) before it exits with
+/// the conventional status. Called before any thread starts: threads inherit
+/// the blocked mask, while spawned programs start with an empty one.
+#[cfg(feature = "native-runner")]
+fn retire_on_termination() -> std::io::Result<()> {
+    use nix::sys::signal::{SigSet, Signal};
+
+    let mut signals = SigSet::empty();
+    for signal in [Signal::SIGINT, Signal::SIGTERM, Signal::SIGHUP] {
+        signals.add(signal);
+    }
+    signals.thread_block().map_err(std::io::Error::from)?;
+    std::thread::Builder::new()
+        .name("rawr-termination".into())
+        .spawn(move || {
+            let signal = loop {
+                if let Ok(signal) = signals.wait() {
+                    break signal;
+                }
+            };
+            let _owned = rawr_import::process::retire_owned();
+            std::process::exit(128 + signal as i32);
+        })
+        .map(drop)
 }

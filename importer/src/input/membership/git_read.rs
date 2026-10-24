@@ -71,7 +71,7 @@ pub(super) fn run(
                 Ok(()) => break,
                 Err(code) => {
                     git_read::errno(code)?;
-                    if code != nix::libc::EINTR {
+                    if code != libc::EINTR {
                         return Ok(Outcome::OpenFailed(code));
                     }
                 }
@@ -209,7 +209,7 @@ fn read<S: Source>(
             Ok(_) => return Err(Error::Encoding("Git native read exceeded requested extent")),
             Err(code) => {
                 git_read::errno(code)?;
-                if code != nix::libc::EINTR {
+                if code != libc::EINTR {
                     return Ok(Err(code));
                 }
             }
@@ -307,7 +307,7 @@ pub(super) fn configuration<T>(
                 Ok(()) => break Ok(()),
                 Err(code) => {
                     git_read::errno(code)?;
-                    if code != nix::libc::EINTR {
+                    if code != libc::EINTR {
                         break Err(code);
                     }
                 }

@@ -98,13 +98,13 @@ fn inspect(
     // encodings and metadata fallback for every other value. Its subsequent
     // DirEntry::metadata uses AT_SYMLINK_NOFOLLOW (1074–1102).
     match kind {
-        nix::libc::DT_LNK => return Err(Error::Policy("symlink-input").into()),
-        nix::libc::DT_CHR
-        | nix::libc::DT_FIFO
-        | nix::libc::DT_REG
-        | nix::libc::DT_SOCK
-        | nix::libc::DT_DIR
-        | nix::libc::DT_BLK => {}
+        libc::DT_LNK => return Err(Error::Policy("symlink-input").into()),
+        libc::DT_CHR
+        | libc::DT_FIFO
+        | libc::DT_REG
+        | libc::DT_SOCK
+        | libc::DT_DIR
+        | libc::DT_BLK => {}
         _ => {
             if metadata(budget)?.is_symlink() {
                 return Err(Error::Policy("symlink-input").into());

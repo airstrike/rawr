@@ -49,7 +49,7 @@ impl Record<'_> {
             let mut file = OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
                 .open(path)
                 .map_err(|error| io("create retained resolution record", error))?;
             let mut remaining = self.encoded;
@@ -124,7 +124,7 @@ impl Commitment {
             // NONBLOCK prevents a substituted FIFO from stalling before fstat.
             let mut file = OpenOptions::new()
                 .read(true)
-                .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC | nix::libc::O_NONBLOCK)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
                 .open(path)
                 .map_err(|error| io("open retained resolution record", error))?;
             require_file(&file, self.length, budget)?;
