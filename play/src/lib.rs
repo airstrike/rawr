@@ -1572,14 +1572,14 @@ impl Spin {
             prelude: vec!["gui::label".into()],
         };
         let options = Options::default();
-        // rawr-iced's prelude name, unclaimed here: plain, so `text` is unknown.
-        let unknown = super::run_claimed("text(\"x\")", &options, &claims).unwrap();
-        let super::Outcome::Text(unknown) = unknown else {
-            panic!("a plain program gives text");
+        // rawr-iced's prelude name, unclaimed here: plain, so `text` is an
+        // unknown function, reported at its name before the program runs.
+        let unknown = super::run_claimed("text(\"x\")", &options, &claims).unwrap_err();
+        let PlayError::Compile(unknown) = unknown else {
+            panic!("an unknown function is a compile error: {unknown:?}");
         };
-        assert_eq!(unknown.status, super::plain::PANIC_STATUS);
-        assert!(unknown.text().contains("Function not found: text"), "{unknown:?}");
-        assert!(!unknown.text().contains("(line "), "{unknown:?}");
+        assert!(unknown.contains("unknown function `text`"), "{unknown}");
+        assert!(unknown.contains("play.rs:1:1-1:5"), "{unknown}");
         let plain = super::run_claimed("1 + 2", &options, &claims).unwrap();
         assert!(matches!(plain, super::Outcome::Text(ref output) if output.text() == "3\n"));
         // Claimed by the fake prelude, so handed to the renderer, which
@@ -1588,6 +1588,16 @@ impl Spin {
         assert!(matches!(claimed, PlayError::Compile(_)), "{claimed:?}");
         // The real claims: `text` is rawr-iced's.
         assert!(super::iced_claims().prelude.iter().any(|path| path.ends_with("::text")));
+    }
+
+    #[test]
+    fn unknown_function_in_a_snippet_is_an_error_at_its_name() {
+        let error = super::run("nonexistent(1)", &Options::default()).unwrap_err();
+        let PlayError::Compile(error) = error else {
+            panic!("an unknown function is a compile error: {error:?}");
+        };
+        assert!(error.contains("unknown function `nonexistent`"), "{error}");
+        assert!(error.contains("play.rs:1:1-1:12"), "{error}");
     }
 
     #[test]

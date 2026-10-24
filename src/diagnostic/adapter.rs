@@ -373,6 +373,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::DuplicateMember => code::RESOLVE_DUPLICATE_MEMBER,
         resolve::Category::UnknownMember => code::RESOLVE_UNKNOWN_MEMBER,
         resolve::Category::UnknownFunction => code::RESOLVE_UNKNOWN_FUNCTION,
+        resolve::Category::UnknownVariable => code::RESOLVE_UNKNOWN_VARIABLE,
         resolve::Category::InvalidConstruction => code::RESOLVE_CONSTRUCTION,
         resolve::Category::TypeMismatch => code::RESOLVE_TYPE_MISMATCH,
         resolve::Category::ImmutableBinding => code::RESOLVE_IMMUTABLE_BINDING,
@@ -417,6 +418,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         } => builder.help(format!("import it with `use {path};`")),
         resolve::Error::UnknownFunction { name, .. } => {
             builder.help(format!("declare `fn {name}`, or import it with `use`"))
+        }
+        resolve::Error::UnknownVariable { name, .. } => {
+            builder.help(format!("declare `{name}` with `let`, or import it with `use`"))
         }
         resolve::Error::MissingCapability {
             owner, capability, ..
@@ -598,6 +602,7 @@ fn resolution_message(error: &resolve::Error) -> String {
             format!("unknown member `{owner}::{member}`")
         }
         resolve::Error::UnknownFunction { name, .. } => format!("unknown function `{name}`"),
+        resolve::Error::UnknownVariable { name, .. } => format!("unknown variable `{name}`"),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }

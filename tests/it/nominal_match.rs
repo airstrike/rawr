@@ -699,8 +699,8 @@ fn exhaustiveness_duplicates_unreachable_arms_and_binding_escape_are_rejected() 
         ("enum Message { Tick } pub fn f(message: Message) { match message { _ => (), Message::Tick => () } }", Category::InvalidMatch, "patterns after `_` are unreachable"),
         (
             "enum Message { Value(i64) } pub fn f(message: Message) -> i64 { let selected = match message { Message::Value(value) => value }; value }",
-            Category::UnsupportedNominalSyntax,
-            "unknown variable",
+            Category::UnknownVariable,
+            "Unknown variable 'value'",
         ),
     ];
 

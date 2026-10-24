@@ -8281,8 +8281,6 @@ struct Parser<'a> {
     field_entries: Vec<(origin::Fragment, origin::Fragment)>,
     /// The engine's global modules: the native functions a call may name.
     native_modules: Vec<crate::SharedModule>,
-    /// Calls of names no function of the crate's has, with their spans.
-    unresolved_calls: Vec<(ImmutableString, Span)>,
     /// Patterns matched on `&mut` places whose bindings are in scope.
     write_backs: Vec<WriteBack>,
     /// The expression depth of a let chain's link being read: `&&` there
@@ -8560,7 +8558,6 @@ impl<'a> Parser<'a> {
             last_range: None,
             field_entries: Vec::new(),
             native_modules: engine.global_modules.clone(),
-            unresolved_calls: Vec::new(),
             write_backs: Vec::new(),
             chain_link: None,
             self_changed: std::cell::Cell::new(false),
@@ -8874,58 +8871,52 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_method_body(&mut self, definition: &method::Definition) -> Result<Lowered, Error> {
-        let lowered = self.parse_method_body_unexplained(definition);
-        lowered.map_err(|error| self.explain_unresolved(error))
-    }
-
-    fn parse_function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
-        let lowered = self.parse_function_body_unexplained(definition);
-        lowered.map_err(|error| self.explain_unresolved(error))
-    }
-
-    /// A type mismatch on the untyped value of a call to a name no function
-    /// has: an unknown function, with the library function of that name to
-    /// import when there is one.
-    fn explain_unresolved(&self, error: Error) -> Error {
-        let Error::TypeMismatch {
-            actual, expression, ..
-        } = &error
-        else {
-            return error;
-        };
-        if actual.as_str() != "<dynamic>" {
-            return error;
-        }
-        self.unknown_call_at(*expression).unwrap_or(error)
-    }
-
-    /// The unknown function a call starting at `expression` names, with the
-    /// library function of that name to import when there is one. `None`
-    /// for a call a native module serves.
-    fn unknown_call_at(&self, expression: Span) -> Option<Error> {
-        let (name, call) = self
-            .unresolved_calls
-            .iter()
-            .find(|(_, call)| call.start() == expression.start())?;
+    /// The error for a call of `name` when no function of the crate's has
+    /// that name. It is `None` when the engine has a native function of that
+    /// name, as `Engine::register_fn` makes, or the program has a legacy
+    /// function of it. Those take their arguments untyped at runtime. The
+    /// error offers the library function of that name to import when there
+    /// is one.
+    fn unknown_function(&self, name: &ImmutableString, at: Span) -> Option<Error> {
         let native = self.native_modules.iter().any(|module| {
             module
                 .iter_fn()
                 .any(|(_, metadata)| metadata.name.as_str() == name.as_str())
         });
-        if native {
+        if native || self.models.legacy_functions.contains(name) {
             return None;
         }
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
         imports.sort_by_key(|path| (path.len(), path.clone()));
+        let written = crate::tokenizer::demangle_names(name);
         Some(Error::UnknownFunction {
-            name: name.clone(),
+            name: written.as_ref().into(),
             import: imports.into_iter().next().map(Into::into),
-            reference: Span::new(call.start(), text_end(call.start(), name)),
+            reference: Span::new(at.start(), text_end(at.start(), &written)),
         })
     }
 
-    fn parse_method_body_unexplained(
+    /// A path that names no local, constant or function in scope. A library
+    /// function of that name is offered to import.
+    fn unknown_variable(&self, name: &ImmutableString, at: Span) -> Error {
+        let written = crate::tokenizer::demangle_names(name);
+        let reference = Span::new(at.start(), text_end(at.start(), &written));
+        let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
+        if imports.is_empty() {
+            return Error::UnknownVariable {
+                name: written.as_ref().into(),
+                reference,
+            };
+        }
+        imports.sort_by_key(|path| (path.len(), path.clone()));
+        Error::UnknownFunction {
+            name: written.as_ref().into(),
+            import: imports.into_iter().next().map(Into::into),
+            reference,
+        }
+    }
+
+    fn parse_method_body(
         &mut self,
         definition: &method::Definition,
     ) -> Result<Lowered, Error> {
@@ -9050,7 +9041,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_function_body_unexplained(
+    fn parse_function_body(
         &mut self,
         definition: &item::Function,
     ) -> Result<Lowered, Error> {
@@ -25917,12 +25908,6 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let Some(definition_id) = self.inference.resolve(&value.ty).script() else {
-                // `nonexistent(x).scale(2.0)`: the call names no function.
-                if matches!(self.inference.resolve(&value.ty), Ty::Unknown)
-                    && let Some(error) = self.unknown_call_at(value.span)
-                {
-                    return Err(error);
-                }
                 return Err(self.unsupported("field access on a non-nominal value"));
             };
             // A scripted widget's `map` and `boxed` (`erasure_with`).
@@ -27831,7 +27816,7 @@ impl<'a> Parser<'a> {
         }
         self.record_capture(&name);
         let Some(binding) = self.bindings.get(name.as_str()) else {
-            return Err(self.unsupported("unknown variable in nominal expression"));
+            return Err(self.unknown_variable(&name, name_span));
         };
         let (declaration, ty) = (binding.declaration, binding.ty.clone());
         if let Some(element) = self.aliased_element(&name, declaration, &ty, name_span)? {
@@ -27845,7 +27830,7 @@ impl<'a> Parser<'a> {
             return Ok(value);
         }
         let Some(binding) = self.bindings.get(name.as_str()) else {
-            return Err(self.unsupported("unknown variable in nominal expression"));
+            return Err(self.unknown_variable(&name, name_span));
         };
         // A local holding a map entry's `&mut`: the entry, read again.
         if let Some((_, tokens)) = self
@@ -31526,6 +31511,13 @@ impl<'a> Parser<'a> {
         function: Option<ScriptFunction>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // A name that no function of the crate's has is an error at the
+        // name, unless the engine or a legacy function serves it.
+        if function.is_none()
+            && let Some(error) = self.unknown_function(&name, name_span)
+        {
+            return Err(error);
+        }
         // A non-generic function's parameter types are each argument's
         // expected type.
         if let Some(function) = &function
@@ -31562,14 +31554,6 @@ impl<'a> Parser<'a> {
                 argument.span,
                 "passed to an ordinary or unresolved function",
             )?;
-        }
-        // A name that is no function of the crate's: an engine's native
-        // function may still take it at runtime, untyped. Should its value
-        // be needed as a type, the error names the function
-        // (`explain_unresolved`).
-        if function.is_none() && !self.models.legacy_functions.contains(&name) {
-            self.unresolved_calls
-                .push((name.clone(), span(name_span.start(), end)));
         }
         let mut witnesses = Vec::new();
         let mut opens_startup = false;

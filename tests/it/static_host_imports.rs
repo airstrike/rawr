@@ -178,8 +178,8 @@ pub fn many_task() -> Task<Message> { Task::perform(combine(1, " rawr"), loaded)
     let error = engine.compile_executable(&missing).unwrap_err();
     assert!(matches!(
         error.err_type(),
-        ParseErrorType::Resolution(resolve::Error::InvalidHostOperation { item, .. })
-            if item == "missing"
+        ParseErrorType::Resolution(resolve::Error::UnknownFunction { name, .. })
+            if name == "missing"
     ));
     assert!(!error.primary_span().is_none());
 }

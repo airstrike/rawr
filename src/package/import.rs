@@ -842,6 +842,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         R::DuplicateItem { .. }
         | R::UnknownType { .. }
         | R::UnknownFunction { .. }
+        | R::UnknownVariable { .. }
         | R::UnknownImport { .. }
         | R::InvalidImport { .. }
         | R::LoweringUnavailable { .. }

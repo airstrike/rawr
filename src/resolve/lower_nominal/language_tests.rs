@@ -8197,9 +8197,53 @@ pub fn unit() -> Task<Message> { let none = Task::<()>::none(); none.map(|_| Mes
         .unwrap_or_else(|error| panic!("{error}"));
 }
 
+/// The message and the line and column of the error compiling `source`.
+fn rejected_at(source: &str) -> (String, Option<usize>, Option<usize>) {
+    let error = Engine::new()
+        .compile(source)
+        .expect_err("Rust rejects this program");
+    let position = error.position();
+    (error.to_string(), position.line(), position.position())
+}
+
 #[test]
-fn language_method_on_an_unknown_call_names_the_function() {
-    let error = rejected("pub fn run() -> i64 { let x = nonexistent_widget(1).scale(2.0); 0 } run()");
-    assert!(error.contains("nonexistent_widget"), "{error}");
+fn language_unknown_call_is_an_error_at_its_name() {
+    let (error, line, column) = rejected_at("pub fn run() -> i64 { nonexistent(1) }");
+    assert!(error.contains("Unknown function 'nonexistent'"), "{error}");
+    assert_eq!((line, column), (Some(1), Some(23)), "{error}");
+}
+
+#[test]
+fn language_unknown_call_bound_to_a_local_is_an_error_at_its_name() {
+    let (error, line, column) =
+        rejected_at("fn main() {\n    let x = nonexistent(1);\n    println!(\"{x}\");\n}");
+    assert!(error.contains("Unknown function 'nonexistent'"), "{error}");
+    assert!(!error.contains("dynamic"), "{error}");
+    assert_eq!((line, column), (Some(2), Some(13)), "{error}");
+}
+
+#[test]
+fn language_method_on_an_unknown_call_is_an_error_at_its_name() {
+    let (error, line, column) =
+        rejected_at("pub fn run() -> i64 { nonexistent_widget(1).scale(2.0); 0 }");
+    assert!(error.contains("Unknown function 'nonexistent_widget'"), "{error}");
     assert!(!error.contains("non-nominal"), "{error}");
+    assert_eq!((line, column), (Some(1), Some(23)), "{error}");
+}
+
+#[test]
+fn language_unknown_variable_is_an_error_at_its_name() {
+    let (error, line, column) = rejected_at("pub fn run() -> i64 { let y = missing + 1; y }");
+    assert!(error.contains("Unknown variable 'missing'"), "{error}");
+    assert_eq!((line, column), (Some(1), Some(31)), "{error}");
+}
+
+#[test]
+fn language_registered_function_is_known_to_the_checker() {
+    let mut engine = Engine::new();
+    engine.register_fn("triple", |x: i64| x * 3);
+    let value = engine
+        .eval::<i64>("pub fn run() -> i64 { let x = triple(2); x + 1 } run()")
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(value, 7);
 }
