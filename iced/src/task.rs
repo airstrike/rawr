@@ -61,6 +61,7 @@ enum PreparedKind {
         abort: Arc<Abort>,
     },
     Script(item::Value),
+    Send { sender: Sender, value: Dynamic },
 }
 
 /// One value a Rust task yields, turned into a Rawr value on the UI thread.
@@ -150,6 +151,9 @@ pub enum Step {
 #[derive(Clone)]
 pub struct Sip {
     task: Arc<Mutex<Option<iced::Task<Step>>>>,
+    /// A script sipper's builder, `async |progress| ..`, in place of a
+    /// Rust task.
+    script: Option<item::Value>,
     witness: Option<host::runtime::Witness>,
 }
 
@@ -193,6 +197,17 @@ impl Sip {
     }
 }
 
+/// iced's `task::Sender` that a script sipper's builder sends its progress
+/// through: each value goes to the `Task::sip` that runs the sipper.
+#[derive(Clone)]
+pub struct Sender(Arc<dyn Fn(Dynamic) -> iced::Task<runtime::Message> + Send + Sync>);
+
+impl fmt::Debug for Sender {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Sender")
+    }
+}
+
 impl fmt::Debug for Sip {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("Sipper(<native>)")
@@ -222,6 +237,7 @@ where
     Dynamic::from(host::runtime::Unwitnessed::new(move |witness| {
         Dynamic::from(Sip {
             task,
+            script: None,
             witness: Some(witness),
         })
     }))
@@ -341,6 +357,8 @@ pub fn imported(task: iced::Task<Materialize>) -> Dynamic {
 /// operations. They run in iced's runtime and touch no Rawr authority.
 #[derive(Clone, Debug)]
 pub(crate) enum Native {
+    /// A timer, as tokio's `sleep`: on a recording's clock while it runs.
+    Sleep(std::time::Duration),
     Exit,
     LatestWindow,
     ScaleFactor(iced::window::Id),
@@ -371,6 +389,9 @@ pub(crate) enum Native {
 impl Native {
     fn lower(self) -> iced::Task<Result<Dynamic, Error>> {
         match self {
+            Self::Sleep(duration) => {
+                iced::Task::future(sleep(duration)).map(|()| Ok(Dynamic::UNIT))
+            }
             Self::Exit => iced::exit(),
             Self::LatestWindow => {
                 iced::window::latest().map(|id| Ok(rawr::option::from(id)))
@@ -450,6 +471,9 @@ enum Kind {
     /// An async body, not yet started: its step function
     /// (`rawr::future`). Each step runs on the UI thread.
     Script(item::Value),
+    /// `sender.send(value)`: the value goes to the sipper's progress, and
+    /// the task gives `()`.
+    Send { sender: Sender, value: Dynamic },
 }
 
 /// Current executable authority used only while a symbolic plan is lowered.
@@ -569,7 +593,8 @@ impl Plan {
             | Kind::Discard(_)
             | Kind::Sip { .. }
             | Kind::Abortable { .. }
-            | Kind::Script(_) => None,
+            | Kind::Script(_)
+            | Kind::Send { .. } => None,
             Kind::Done(payload) => Some(payload),
         }
     }
@@ -645,6 +670,7 @@ impl Plan {
                 abort,
             },
             Kind::Script(step) => PreparedKind::Script(step),
+            Kind::Send { sender, value } => PreparedKind::Send { sender, value },
         };
         Ok(Prepared { kind, witness })
     }
@@ -693,8 +719,37 @@ impl Plan {
             } => lowering.sip(&sipper, on_progress, on_output, next),
             Kind::Abortable { plan, abort } => abort.attach(plan.lower_with(lowering, next)?),
             Kind::Script(step) => lowering.script(step, Dynamic::UNIT, next),
+            Kind::Send { sender, value } => lowering.send(&sender, value, next),
         })
     }
+}
+
+/// Wait `duration`. On a recording's simulated clock, the wait ends when the
+/// clock passes it, and it keeps the clock running until then. Elsewhere a
+/// thread sleeps, so no particular executor is needed.
+fn sleep(duration: std::time::Duration) -> iced::futures::future::BoxFuture<'static, ()> {
+    use iced::futures::FutureExt as _;
+
+    if let Some(now) = crate::snapshot::clock::now() {
+        let deadline = now + duration;
+        let armed = crate::snapshot::clock::Armed::new();
+        return iced::futures::future::poll_fn(move |_| {
+            let _ = &armed;
+            match crate::snapshot::clock::now() {
+                Some(now) if now < deadline => std::task::Poll::Pending,
+                _ => std::task::Poll::Ready(()),
+            }
+        })
+        .boxed();
+    }
+    let (sender, receiver) = iced::futures::channel::oneshot::channel();
+    let _ = std::thread::Builder::new()
+        .name("rawr sleep".into())
+        .spawn(move || {
+            std::thread::sleep(duration);
+            let _ = sender.send(());
+        });
+    receiver.map(|_| ()).boxed()
 }
 
 /// The continuation of a discarded task: nothing.
@@ -812,6 +867,9 @@ impl Lowering {
         on_output: item::Value,
         next: Next,
     ) -> iced::Task<runtime::Message> {
+        if let Some(builder) = &sipper.script {
+            return self.sip_script(builder, on_progress, on_output, next);
+        }
         let Some(task) = sipper.take() else {
             return self.fail(Error::Spent);
         };
@@ -832,6 +890,34 @@ impl Lowering {
                 Err(error) => lowering.fail(error),
             }
         })
+    }
+
+    /// iced's `Task::sip` over a script sipper: its builder runs with a
+    /// `Sender` whose values go through `on_progress` to `next`, and the
+    /// output of the task it returns goes through `on_output`.
+    fn sip_script(
+        &self,
+        builder: &item::Value,
+        on_progress: item::Value,
+        on_output: item::Value,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
+        let progress = self.mapped(on_progress, next.clone());
+        let sender = Sender(progress);
+        let plan = self
+            .authority
+            .map(Dynamic::from(sender), builder)
+            .and_then(Plan::from_dynamic)
+            .and_then(|plan| plan.lower_with(self, self.mapped(on_output, next)));
+        plan.unwrap_or_else(|error| self.fail(error))
+    }
+
+    /// `sender.send(value)`: the progress first, then the sending body
+    /// goes on, from a step the UI thread runs, so a loop of sends never
+    /// nests.
+    fn send(&self, sender: &Sender, value: Dynamic, next: Next) -> iced::Task<runtime::Message> {
+        let progress = (sender.0)(value);
+        progress.chain(dispatch::on_ui(self.owner, move || next(Dynamic::UNIT)))
     }
 
     /// Run an async body's next step here, on the UI thread: from its
@@ -950,6 +1036,7 @@ impl Prepared {
                 abort.attach(plan.lower_with(context, lowering, next))
             }
             PreparedKind::Script(step) => lowering.script(step, Dynamic::UNIT, next),
+            PreparedKind::Send { sender, value } => lowering.send(&sender, value, next),
         }
     }
 }
@@ -1258,6 +1345,13 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
     builder
         .bind_type_attestation("iced::Task", |value, expected| {
             let plan = value.read_lock::<Plan>()?;
+            // `sender.send(value)` is a method, which mints no witness. Its
+            // task gives `()` and nothing else.
+            if matches!(plan.kind, Kind::Send { .. }) {
+                return expected.attest(
+                    expected.argument_count() == 1 && expected.argument_matches(0, &Dynamic::UNIT),
+                );
+            }
             if expected.argument_count() != 1
                 || !plan
                     .done_payload()
@@ -1329,6 +1423,17 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             )))
         })
         .expect("the iced facade must retain the exact Task::perform item");
+    rawr.bind_with_context("rawr_iced::time::sleep", |call, args| {
+        let [duration] = args else {
+            return Err(arity("time::sleep", 1, args.len()));
+        };
+        let duration = take_value::<std::time::Duration>(duration, "time::Duration")?;
+        Ok(Dynamic::from(Plan {
+            kind: Kind::Native(Native::Sleep(duration)),
+            witness: Some(call.output_witness().map_err(witness_error)?),
+        }))
+    })
+    .expect("the rawr_iced facade must retain time::sleep");
     rawr.bind_with_context("rawr_iced::task::script", |call, args| {
         let [step] = args else {
             return Err(arity("task::script", 1, args.len()));
@@ -1412,6 +1517,45 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             }))
         })
         .expect("the iced facade must retain Task::sip");
+    builder
+        .bind_with_context("iced::task::sipper", |call, args| {
+            let [builder] = args else {
+                return Err(arity("task::sipper", 1, args.len()));
+            };
+            let builder = take_value::<item::Value>(builder, "a symbolic function")?;
+            Ok(Dynamic::from(Sip {
+                task: Arc::new(Mutex::new(None)),
+                script: Some(builder),
+                witness: Some(call.output_witness().map_err(witness_error)?),
+            }))
+        })
+        .expect("the iced facade must retain task::sipper");
+    // A sender carries no type of its own: the `Task::sip` that made it
+    // checks each value it sends through the progress mapper.
+    builder
+        .bind_type_attestation("iced::task::Sender", |value, expected| {
+            expected.attest(value.read_lock::<Sender>().is_some())
+        })
+        .expect("the iced facade must declare task::Sender exactly once");
+    builder
+        .bind_with_context("iced::task::Sender::send", |_call, args| {
+            let [sender, value] = args else {
+                return Err(arity("task::Sender::send", 2, args.len()));
+            };
+            let sender = sender.read_lock::<Sender>().map(|sender| sender.clone()).ok_or_else(|| {
+                EvalAltResult::ErrorRuntime("expected a `task::Sender`".into(), Position::NONE)
+            })?;
+            Ok(Dynamic::from(Plan {
+                kind: Kind::Send {
+                    sender,
+                    value: value.take(),
+                },
+                // A method mints no witness; the sending body awaits this
+                // task at once.
+                witness: None,
+            }))
+        })
+        .expect("the iced facade must retain task::Sender::send");
     builder
         .bind_type_attestation("iced::task::Sipper", |value, expected| {
             let sipper = value.read_lock::<Sip>()?;

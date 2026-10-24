@@ -196,6 +196,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.required_type::<task::Plan>("Task", &["Message"], &[])?;
     // A Rust `impl Sipper<Output, Progress>`, and iced's `task::Handle`.
     builder.type_::<task::Sip>("task::Sipper", &["Output", "Progress"], &[])?;
+    // The `task::Sender` a script sipper's builder sends its progress with.
+    builder.type_::<task::Sender>("task::Sender", &["Progress"], &[])?;
     builder.type_::<task::Handle>(
         "task::Handle",
         &[],
@@ -1111,6 +1113,7 @@ fn extension_with_exports(
         "task",
         "subscription",
         "theme",
+        "time",
         "widget",
         "widget::children",
         "widget::draw",
@@ -1154,6 +1157,11 @@ fn extension_with_exports(
         "task::script",
         script_signature(&exports.task)?,
     )?)?;
+    // tokio's `time::sleep`, for a program without tokio (`resolve::std_reexport`).
+    let mut sleep = signature::Builder::new();
+    sleep.parameter(external_type(&exports.duration, [])?);
+    sleep.output(external_type(&exports.task, [type_ref::Type::unit()])?);
+    builder.item(item::Definition::function("time::sleep", sleep.finish())?)?;
     builder.item(item::Definition::function(
         "theme::custom",
         extension_theme_signature(&exports.theme)?,
@@ -1325,6 +1333,7 @@ pub(crate) fn install_test_runtime(registry: &mut host::runtime::Registry) {
 
 struct Exports {
     task: host::type_def::Export,
+    duration: host::type_def::Export,
     subscription: host::type_def::Export,
     theme: host::type_def::Export,
     element: host::type_def::Export,
@@ -1338,6 +1347,7 @@ impl Exports {
     fn new(iced: &facade::Definition) -> Result<Self, host::Error> {
         Ok(Self {
             task: iced.export_type("Task")?,
+            duration: iced.export_type("time::Duration")?,
             subscription: iced.export_type("Subscription")?,
             theme: iced.export_type("Theme")?,
             element: iced.export_type("Element")?,
@@ -1618,6 +1628,24 @@ fn declare_sippers(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let task = |message: &str| type_ref::Type::applied("Task", [parameter(message)?]);
     let sipper = || type_ref::Type::applied("task::Sipper", [parameter("Output")?, parameter("Progress")?]);
     let handle = || type_ref::Type::registered("task::Handle");
+
+    // `sipper(async |mut progress| { progress.send(value).await; .. })`.
+    let sender = || type_ref::Type::applied("task::Sender", [parameter("Progress")?]);
+    let mut script = signature::Builder::new();
+    script.type_parameter("Output", &[])?;
+    script.type_parameter("Progress", &[])?;
+    script.parameter(type_ref::Type::callable(sender()?, task("Output")?));
+    script.output(sipper()?);
+    builder.item(item::Definition::function("task::sipper", script.finish())?)?;
+    let mut send = signature::Builder::new();
+    send.type_parameter("Progress", &[])?;
+    send.parameter(parameter("Progress")?);
+    send.output(type_ref::Type::applied("Task", [type_ref::Type::unit()])?);
+    builder.item(item::Definition::method(
+        "task::Sender::send",
+        receiver::Mode::Shared,
+        send.finish(),
+    )?)?;
 
     let mut sip = signature::Builder::new();
     sip.type_parameter("Output", &[])?;
