@@ -41,6 +41,10 @@ use std::vec::IntoIter;
 const SENTINEL: &str = "__rawr_nominal_op_";
 const METHOD_SENTINEL: &str = "__rawr_nominal_method_";
 const FUNCTION_SENTINEL: &str = "__rawr_nominal_function_";
+/// A rewrite's target for a script function's own name where the lowered
+/// text calls something else by it: the call reaches only the runtime's
+/// functions (`rewrite_call`).
+const NATIVE_ONLY: &str = "\0rawr.native-only";
 const DISPATCH_SENTINEL: &str = "__rawr_nominal_dispatch_";
 /// The generated function from a type witness to that type's default.
 const DEFAULT_DISPATCHER: &str = "__rawr_nominal_default";
@@ -570,17 +574,27 @@ fn lower_with_context(
             )
         })
         .collect();
-    symbol_rewrites.extend(program.items.iter().filter_map(|shell| {
-        if !program.source.is_aggregate() {
-            return None;
-        }
-        matches!(shell.kind, item::Kind::Function(_)).then(|| {
+    // A script's functions keep their names, for the host to call. The
+    // lowered text calls them by a sentinel, so a name the lowering writes
+    // for std (`abs(x)` of `x.abs()`, `v.push(x)`) is never one of them,
+    // and that name reaches only the runtime's own function, as rustc
+    // resolves a method before any free function.
+    let aggregate = program.source.is_aggregate();
+    symbol_rewrites.extend(program.items.iter().flat_map(|shell| {
+        let item::Kind::Function(function) = &shell.kind else {
+            return Vec::new();
+        };
+        if aggregate {
             let key = shell
                 .key
                 .as_ref()
                 .expect("resolved functions retain stable item keys");
-            (function_name(shell.id).into(), private_function_name(key))
-        })
+            return vec![(function_name(shell.id).into(), private_function_name(key))];
+        }
+        vec![
+            (function_name(shell.id).into(), function.name.text.clone()),
+            (function.name.text.clone(), NATIVE_ONLY.into()),
+        ]
     }));
     let mut generated = location::Generated::new();
     let mut closures = Vec::new();
@@ -663,11 +677,7 @@ fn lower_with_context(
         let lowered = parser
             .parse_function_body(definition)
             .map_err(|error| LoweringFailure::original(shell.source, error.into()))?;
-        let generated_name = if program.source.is_aggregate() {
-            function_name(shell.id)
-        } else {
-            definition.name.text.to_string()
-        };
+        let generated_name = function_name(shell.id);
         let body = write_function(
             &mut generated,
             shell.source,
@@ -855,7 +865,9 @@ fn lower_with_context(
     rewrite_statements(ast.statements_mut(), &rewrites, &nominal_patterns);
     ast.for_each_fn_def_mut(|function| {
         rewrite_statements(function.body.statements_mut(), &rewrites, &nominal_patterns);
-        if let Some(name) = rewrites.get(&function.name) {
+        if let Some(name) = rewrites.get(&function.name)
+            && name.as_str() != NATIVE_ONLY
+        {
             function.name = name.clone();
         }
     });
@@ -2280,11 +2292,7 @@ impl Models {
                 let script = ScriptFunction {
                     key: key.clone(),
                     definition: function.clone(),
-                    generated: if program.source.is_aggregate() {
-                        function_name(shell.id).into()
-                    } else {
-                        function.name.text.clone()
-                    },
+                    generated: function_name(shell.id).into(),
                 };
                 functions.insert((shell.source, function.name.text.clone()), script.clone());
                 functions_by_key.insert(key, script);
@@ -39457,11 +39465,7 @@ fn rewrite_expr(
         }
         // A closure carries its own function definition.
         #[cfg(not(feature = "no_function"))]
-        ast::Expr::DynamicConstant(value, ..) => {
-            if let Some(pointer) = value.downcast_mut::<crate::FnPtr>() {
-                rewrite_pointer(pointer, rewrites, patterns);
-            }
-        }
+        ast::Expr::DynamicConstant(value, ..) => rewrite_constant(value, rewrites, patterns),
         #[cfg(feature = "no_function")]
         ast::Expr::DynamicConstant(..) => {}
         ast::Expr::BoolConstant(..)
@@ -39473,6 +39477,26 @@ fn rewrite_expr(
         | ast::Expr::Property(..) => {}
         #[cfg(not(feature = "no_float"))]
         ast::Expr::FloatConstant(..) => {}
+    }
+}
+
+/// A constant the optimizer folded: a closure, or an array holding one
+/// (a `fn` pointer choice is `[index, closure]`).
+#[cfg(not(feature = "no_function"))]
+fn rewrite_constant(
+    value: &mut Dynamic,
+    rewrites: &BTreeMap<ImmutableString, ImmutableString>,
+    patterns: &BTreeMap<ImmutableString, NominalPattern>,
+) {
+    if let Some(pointer) = value.downcast_mut::<crate::FnPtr>() {
+        rewrite_pointer(pointer, rewrites, patterns);
+        return;
+    }
+    #[cfg(not(feature = "no_index"))]
+    if let Some(array) = value.downcast_mut::<crate::Array>() {
+        for element in array.iter_mut() {
+            rewrite_constant(element, rewrites, patterns);
+        }
     }
 }
 
@@ -39529,7 +39553,12 @@ fn rewrite_call(
     for arg in &mut call.args {
         rewrite_expr(arg, rewrites, patterns);
     }
-    if let Some(name) = rewrites.get(&call.name) {
+    if let Some(name) = rewrites.get(&call.name)
+        && name.as_str() == NATIVE_ONLY
+    {
+        let arguments = call.args.len() + usize::from(is_method);
+        call.hashes = FnCallHashes::from_native_only(calc_fn_hash(None, &call.name, arguments));
+    } else if let Some(name) = rewrites.get(&call.name) {
         call.name = name.clone();
         call.hashes = if is_method {
             #[cfg(not(feature = "no_function"))]

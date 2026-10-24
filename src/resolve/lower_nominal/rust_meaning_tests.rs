@@ -62,3 +62,38 @@ fn language_rust_meaning_f32_holds_f32_values() {
     );
     assert_eq!(value, "true true false 0.10000000149011612 true 1.0000001 false");
 }
+
+#[test]
+fn language_rust_meaning_method_calls_never_reach_a_same_named_fn() {
+    // rustc resolves `x.abs()` to `i64::abs` and `s.len()` to `str::len`;
+    // a free `fn abs` or `fn len` is reached only by a free call.
+    let value = text(
+        r#"
+        fn abs(x: i64) -> i64 { x + 1000 }
+        fn len() -> usize { 99 }
+        fn sqrt(x: f64) -> f64 { x + 1000.0 }
+        fn sign(x: i64) -> i64 { 55 }
+        fn to_string() -> String { String::from("mine") }
+        fn push(x: i64) {}
+        fn contains(x: i64) -> bool { true }
+        let a: i64 = -5;
+        let s = String::from("hey");
+        let mut v = vec![1];
+        v.push(2);
+        format!(
+            "{} {} {} {} {} {} {:?} {} {} {}",
+            a.abs(),
+            abs(a),
+            s.len(),
+            len(),
+            16.0_f64.sqrt(),
+            (-3_i64).signum(),
+            v,
+            v.contains(&7),
+            5.to_string(),
+            to_string(),
+        )
+        "#,
+    );
+    assert_eq!(value, "5 995 3 99 4 -1 [1, 2] false 5 mine");
+}
