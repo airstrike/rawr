@@ -343,6 +343,16 @@ mod tests {
 
     #[test]
     fn deeply_nested_builder_chains_compile() {
+        // Deep parses need a main-thread-sized stack, not the 2 MiB test-thread default.
+        std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(deeply_nested_builder_chains)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn deeply_nested_builder_chains() {
         let mut view = String::from("Node::new(0)");
         for _ in 0..40 {
             view = format!("Node::new(1).child({view}).pad(1).width(1)");
