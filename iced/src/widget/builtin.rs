@@ -667,10 +667,27 @@ impl widget::Descriptor for marker::Radio {
     }
 }
 
+/// The index of a pick list's selection among `options`: the option equal
+/// to `selected`, as iced's `PartialEq` finds it, or else the first whose
+/// label is the selection's.
+fn selected_option(
+    options: &[Dynamic],
+    selected: Option<&Dynamic>,
+    label: Option<&str>,
+    labels: &[String],
+) -> Option<usize> {
+    let selected = selected?;
+    options
+        .iter()
+        .position(|option| host::value::structural_equal(option, selected))
+        .or_else(|| labels.iter().position(|option| Some(option.as_str()) == label))
+}
+
 impl widget::Descriptor for marker::PickList {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         // iced picks among indexes into the options, labelled by the
-        // script's `to_string`; the selection is the option of its label.
+        // script's `to_string`; the selection is the option equal to it, as
+        // iced's `PartialEq` finds it, or else the option of its label.
         let label = |option: &Dynamic| match context.invoke(&self.to_string, &mut [option.clone()])
         {
             None => Ok(String::new()),
@@ -685,8 +702,8 @@ impl widget::Descriptor for marker::PickList {
             }
         };
         let selected = match self.selected.as_ref().map(label).transpose() {
-            Ok(selected) => {
-                selected.and_then(|selected| labels.iter().position(|label| *label == selected))
+            Ok(label) => {
+                selected_option(&self.options, self.selected.as_ref(), label.as_deref(), &labels)
             }
             Err(error) => {
                 return widget::diagnostic(format!("pick_list to_string failed: {error}"))
@@ -3442,5 +3459,23 @@ mod tests {
                 assert_eq!(style.native()(&theme), expected(&theme));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod pick_list_tests {
+    use super::*;
+
+    #[test]
+    fn a_selection_is_the_option_equal_to_it_not_the_first_of_its_label() {
+        // Two options share a label: the second is the one selected (D428).
+        let options = [Dynamic::from(1_i64), Dynamic::from(2_i64)];
+        let labels = ["same".to_string(), "same".to_string()];
+        let selected = Dynamic::from(2_i64);
+        assert_eq!(selected_option(&options, Some(&selected), Some("same"), &labels), Some(1));
+        // A selection among none of the options shows by its label.
+        let other = Dynamic::from(3_i64);
+        assert_eq!(selected_option(&options, Some(&other), Some("same"), &labels), Some(0));
+        assert_eq!(selected_option(&options, None, None, &labels), None);
     }
 }
