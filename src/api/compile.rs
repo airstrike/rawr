@@ -244,6 +244,25 @@ impl Engine {
         .map(program::Executable::into_ast)
     }
 
+    /// [`Engine::compile_unit`], with the [`program::Positions`] that map a
+    /// runtime error's position back to `source`.
+    #[doc(hidden)]
+    pub fn compile_unit_with_positions(
+        &self,
+        unit: crate::parse::Unit,
+        source: crate::diagnostic::Source,
+    ) -> ParseResult<(AST, program::Positions)> {
+        let program = crate::resolve::resolve_with_evidence(unit, &self.host_registry, source)?;
+        crate::resolve::lower_with_engine(
+            self,
+            program,
+            Some(&Scope::new()),
+            #[cfg(not(feature = "no_optimize"))]
+            self.optimization_level,
+        )
+        .map(program::Executable::into_ast_with_positions)
+    }
+
     /// Compile one exact retained source snapshot into a preview catalog.
     #[doc(hidden)]
     pub fn compile_preview_catalog_source(

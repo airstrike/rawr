@@ -644,6 +644,21 @@ fn without_positions(line: &str) -> String {
     out
 }
 
+/// Whether `line` and `column` (1-based, in `program`) fall in text the
+/// user wrote. Text that [`wrap`] or a plain program's wrapping added is
+/// not theirs.
+fn in_source(program: &str, source: &str, line: usize, column: usize) -> bool {
+    let source = without_tests(source);
+    let Some(index) = line.checked_sub(1) else {
+        return false;
+    };
+    let (Some(wrapped), Some(own)) = (program.split('\n').nth(index), source.split('\n').nth(index))
+    else {
+        return false;
+    };
+    added_span(wrapped, own).is_none_or(|(start, length)| column <= start || column > start + length)
+}
+
 /// Where `wrapped` adds text to `own`: the char column it starts at and its
 /// length in chars.
 fn added_span(wrapped: &str, own: &str) -> Option<(usize, usize)> {
@@ -718,7 +733,8 @@ fn classify(text: &str, limits: &Limits) -> PlayError {
             limits.call_depth
         )
     } else if lower.contains("too large") {
-        let what = text.rsplit(": ").next().unwrap_or(text);
+        // A position here counts in the lowered program, so it is dropped.
+        let what = without_positions(text.rsplit(": ").next().unwrap_or(text));
         format!(
             "size limit exceeded: {what} (strings up to {} bytes, arrays and maps up to {} items)",
             limits.string_size, limits.array_size
@@ -1375,6 +1391,24 @@ fn view() -> impl Widget<()> {
         assert_eq!(output.status, 1);
         assert_eq!(output.text(), "before\nError: \"bad\"\n");
         assert!(!output.limit);
+    }
+
+    #[test]
+    fn run_plain_runtime_errors_point_at_the_users_text() {
+        let output = text("let a = [1,2,3]; let i = 5; println!(\"{}\", a[i]);");
+        let shown = output.text();
+        assert!(shown.contains(" --> play.rs:1:44"), "{shown}");
+        assert!(!shown.contains("(line "), "{shown}");
+        let output = text("let x: u8 = 255; let y = x + 1; y");
+        let shown = output.text();
+        assert!(shown.contains("attempt to add with overflow\n --> play.rs:1:26"), "{shown}");
+        let limited = text("let mut s = String::new(); loop { s.push_str(\"xxxxxxxxxxxxxxxx\"); }");
+        assert!(limited.limit && !limited.text().contains("(line "), "{}", limited.text());
+        // The wrapping's own text is never a position in the user's.
+        let program = super::plain::program("1 + 2");
+        assert!(!super::in_source(&program, "1 + 2", 1, 3));
+        assert!(super::in_source(&program, "1 + 2", 1, 25));
+        assert!(!super::in_source(&program, "1 + 2", 3, 1));
     }
 
     #[test]

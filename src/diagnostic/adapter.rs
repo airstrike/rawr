@@ -123,6 +123,25 @@ impl Report {
             .finish())
     }
 
+    /// Transform an evaluator error at `original`, a span in `source` that
+    /// [`crate::program::Positions`] gave. With no span, the report names
+    /// `source` and no position in it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only when `original` falls outside `source`.
+    #[doc(hidden)]
+    pub fn from_evaluation_located(
+        source: Source,
+        original: Option<Span>,
+        error: &EvalAltResult,
+    ) -> Result<Self, Error> {
+        match original {
+            Some(original) => Self::from_evaluation_mapped(source, original, error),
+            None => Ok(evaluation_builder(error).source(source).finish()),
+        }
+    }
+
     /// Transform an evaluator error at a compiler-proven original source span.
     pub(crate) fn from_evaluation_mapped(
         source: Source,

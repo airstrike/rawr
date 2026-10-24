@@ -98,10 +98,52 @@ struct Locations {
     entries: Box<[Location]>,
 }
 
+#[derive(Clone, Copy)]
 struct Location {
     generated: crate::Span,
     original: crate::Span,
     nesting: usize,
+}
+
+/// The compiler's evidence for one program's source, kept apart from its
+/// [`AST`]: it maps a runtime error's position in the lowered program back
+/// to the source the program was compiled from.
+#[doc(hidden)]
+pub struct Positions {
+    callables: Box<[Location]>,
+    helpers: Box<[Location]>,
+}
+
+impl Positions {
+    /// The source span of `error`'s deepest position. It is `None` when the
+    /// compiler kept no evidence for that position.
+    #[must_use]
+    pub fn translate(&self, error: &crate::EvalAltResult) -> Option<crate::Span> {
+        let position = deepest_position(error);
+        if position.is_none() {
+            return None;
+        }
+        innermost(&self.callables, position).or_else(|| innermost(&self.helpers, position))
+    }
+}
+
+/// The original span of the innermost generated span holding `position`.
+fn innermost(entries: &[Location], position: crate::Position) -> Option<crate::Span> {
+    entries
+        .iter()
+        .filter(|location| {
+            position >= location.generated.start() && position <= location.generated.end()
+        })
+        .min_by_key(|location| {
+            (
+                location.nesting,
+                span_width(location.generated),
+                location.generated.start(),
+                location.original.start(),
+                location.original.end(),
+            )
+        })
+        .map(|location| location.original)
 }
 
 #[cfg_attr(feature = "no_function", allow(dead_code))]
@@ -423,6 +465,24 @@ impl Executable {
         self.ast
     }
 
+    /// This program's [`AST`] and the [`Positions`] of its entry source.
+    pub(crate) fn into_ast_with_positions(self) -> (AST, Positions) {
+        let entry = self.sources.key(self.source.index());
+        let callables = self
+            .callables
+            .values()
+            .filter_map(|callable| callable.locations.as_ref())
+            .filter(|locations| locations.source == entry)
+            .flat_map(|locations| locations.entries.iter().copied())
+            .collect();
+        let helpers = self
+            .helper_locations
+            .get(&entry)
+            .map(|entries| entries.clone())
+            .unwrap_or_default();
+        (self.ast, Positions { callables, helpers })
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn retain_imported(
         &mut self,
@@ -738,28 +798,11 @@ impl Evidence<'_> {
             return None;
         }
         let position = deepest_position(error);
-        let innermost = |entries: &[Location]| {
-            entries
-                .iter()
-                .filter(|location| {
-                    position >= location.generated.start() && position <= location.generated.end()
-                })
-                .min_by_key(|location| {
-                    (
-                        location.nesting,
-                        span_width(location.generated),
-                        location.generated.start(),
-                        location.original.start(),
-                        location.original.end(),
-                    )
-                })
-                .map(|location| location.original)
-        };
         // The callable's own body, else a builtin-type impl function it
         // called.
         self.locations
-            .and_then(|locations| innermost(&locations.entries))
-            .or_else(|| self.helpers.and_then(innermost))
+            .and_then(|locations| innermost(&locations.entries, position))
+            .or_else(|| self.helpers.and_then(|helpers| innermost(helpers, position)))
     }
 }
 
