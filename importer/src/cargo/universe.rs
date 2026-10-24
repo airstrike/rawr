@@ -2533,6 +2533,40 @@ fn unit_projection_owned(
             limits,
             allocation,
         )?;
+        unit_keys[index] = Some(digest);
+    }
+    // A unit's key names its dependencies' keys, as Cargo's `-C metadata`
+    // does, so a crate over two variants of one dependency (a host and a
+    // target build over two `libc` feature sets) is two units without
+    // `--target`.
+    let mut local_keys = unit_keys.clone();
+    for index in super::unit::dependency_order(units)? {
+        let Some(local) = local_keys[index].take() else {
+            continue;
+        };
+        let mut bytes = local.as_bytes().to_vec();
+        let mut dependencies = Vec::new();
+        for dependency in json_object(&units[index], "Cargo unit")?
+            .get("dependencies")
+            .and_then(JsonValue::as_array)
+            .ok_or_else(|| json_schema("Cargo unit dependencies are absent"))?
+        {
+            let target = dependency
+                .get("index")
+                .and_then(JsonValue::as_u64)
+                .and_then(|index| usize::try_from(index).ok())
+                .filter(|index| *index < units.len())
+                .ok_or_else(|| json_schema("Cargo unit dependency index is invalid"))?;
+            let key = unit_keys[target]
+                .ok_or_else(|| json_schema("protected Cargo unit edge escaped the cohort"))?;
+            dependencies.push(key);
+        }
+        dependencies.sort_unstable();
+        for dependency in dependencies {
+            bytes.extend_from_slice(dependency.as_bytes());
+        }
+        let digest =
+            projection_digest_bytes(b"rawr.import.cargo.protected-unit-key/v2", &bytes);
         if protected_keys.contains(&digest) {
             return Err(json_schema("Cargo unit identity is ambiguous"));
         }
@@ -4608,7 +4642,7 @@ mod tests {
         .expect("streamed unit projection derives");
         assert_eq!(
             std::str::from_utf8(projection.value()).expect("projection is UTF-8 JSON"),
-            "{\"units\":[{\"dependencies\":[],\"features\":[\"base\"],\"is_std\":false,\"mode\":\"build\",\"pkg_id\":\"886d85edf17bc9a89402bfd45334a90963f8179902804ceba5d77b7a7a98d5e2\",\"target\":{\"crate_types\":[\"rlib\"],\"kind\":[\"lib\"],\"src_path\":\"$SELF/src/lib.rs\"},\"unit\":\"267a0ac98c7fce364264a34ba4e3b086ee4be686a3ab2c71898b70ad14e3932a\"}],\"version\":1}"
+            "{\"units\":[{\"dependencies\":[],\"features\":[\"base\"],\"is_std\":false,\"mode\":\"build\",\"pkg_id\":\"886d85edf17bc9a89402bfd45334a90963f8179902804ceba5d77b7a7a98d5e2\",\"target\":{\"crate_types\":[\"rlib\"],\"kind\":[\"lib\"],\"src_path\":\"$SELF/src/lib.rs\"},\"unit\":\"fa330279f54c2e2424a0729ab5dc194c4619f9c19ca6bb2fed134b889a1a4cfa\"}],\"version\":1}"
         );
     }
 
