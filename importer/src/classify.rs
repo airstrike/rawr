@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 5;
-const CLASSIFIER_VERSION: u32 = 11;
+const CLASSIFIER_VERSION: u32 = 12;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3218,9 +3218,10 @@ impl<P: api::Phase> Context<'_, P> {
         if signature.safety() != model::Safety::Safe {
             return Err(representability::reject::Kind::UnsafeFunction.into());
         }
-        // An `async fn` method borrows its receiver across the await, so
-        // only a free or associated `async fn` crosses, as a `Task`.
-        if signature.async_function() && !matches!(signature.receiver(), model::Receiver::None) {
+        // An `async fn` method that borrows its receiver holds the borrow
+        // across its awaits, so it does not cross; one that takes `self`
+        // by value crosses as a `Task`, as a free `async fn` does.
+        if signature.async_function() && matches!(signature.receiver(), model::Receiver::Reference { .. }) {
             return Err(representability::reject::Kind::AsyncFunction.into());
         }
         if signature.variadic() {
@@ -3254,9 +3255,13 @@ impl<P: api::Phase> Context<'_, P> {
                 input => self.convert_input(input)?,
             });
         }
-        // A free function's Rust future crosses as iced's `Task<T>`.
+        // A Rust future crosses as iced's `Task<T>` from a free function, or
+        // from a method that takes `self` by value and so owns what the
+        // future holds.
         let output = match signature.receiver() {
-            model::Receiver::None => self.convert_output(signature.output()),
+            model::Receiver::None | model::Receiver::Value { .. } => {
+                self.convert_output(signature.output())
+            }
             _ => self.convert(signature.output()),
         };
         let output = match output {
