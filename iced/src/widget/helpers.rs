@@ -544,6 +544,7 @@ fn bind_containers(builder: &mut host::runtime::Builder) {
                     align_y: iced::Alignment::Start,
                     style: None,
                     id: None,
+                    clip: false,
                 };
                 if let Some(x) = x {
                     container.width = iced::Length::Fill;

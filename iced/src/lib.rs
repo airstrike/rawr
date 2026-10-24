@@ -1116,6 +1116,13 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         builders(&mut builder, owner, "extend", [children()?])?;
     }
     padding_builders(&mut builder, "widget::Container")?;
+    // `clip(true)`: children drawn outside its bounds are cut.
+    builders(
+        &mut builder,
+        "widget::Container",
+        "clip",
+        [type_ref::Type::builtin(type_ref::Builtin::Bool)],
+    )?;
     builders(
         &mut builder,
         "widget::Container",

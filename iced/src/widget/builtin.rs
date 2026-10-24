@@ -409,7 +409,8 @@ impl widget::Descriptor for marker::Container {
             .width(self.width)
             .height(self.height)
             .align_x(self.align_x)
-            .align_y(self.align_y);
+            .align_y(self.align_y)
+            .clip(self.clip);
         if let Some(id) = &self.id {
             container = container.id(id.clone());
         }
@@ -1201,6 +1202,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 align_y: iced::Alignment::Start,
                 style: None,
                 id: None,
+                clip: false,
             }))
         })
         .expect("the iced facade must retain the exact container item");
@@ -1235,6 +1237,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                     align_y,
                     style: None,
                     id: None,
+                    clip: false,
                 }))
             })
             .expect("the iced facade must retain the exact center items");
@@ -2021,6 +2024,13 @@ fn bind_row_builders(builder: &mut host::runtime::Builder) {
 }
 
 fn bind_container_builders(builder: &mut host::runtime::Builder) {
+    builder
+        .bind("iced::widget::Container::clip", |args| {
+            let mut container = take_container(args, "Container::clip")?;
+            container.clip = exact_bool(args[1], "Container::clip")?;
+            Ok(Dynamic::from(container))
+        })
+        .expect("the iced facade must retain the exact Container::clip item");
     builder
         .bind("iced::widget::Container::padding", |args| {
             let mut container = take_container(args, "Container::padding")?;

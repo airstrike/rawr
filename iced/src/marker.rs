@@ -173,6 +173,7 @@ pub(crate) struct Container {
     pub(crate) align_y: iced::Alignment,
     pub(crate) style: Option<container::Source>,
     pub(crate) id: Option<iced::widget::Id>,
+    pub(crate) clip: bool,
 }
 
 #[derive(Clone)]

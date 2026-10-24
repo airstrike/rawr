@@ -2529,7 +2529,8 @@ impl canvas::Program<Message> for State {
     assert!(error.contains("canvas"), "{error}");
 }
 
-/// `row(..).wrap()`, as layout writes it, and `row::Wrapping`'s builders.
+/// `row(..).wrap()`, as layout writes it, `row::Wrapping`'s builders, and
+/// a container that clips them.
 const WRAPPED_ROW: &str = r#"
 use iced::widget::{column, container, row, text};
 use iced::{Center, Fill, Widget};
@@ -2558,6 +2559,8 @@ impl State {
                 .spacing(20)
                 .align_y(Center)
                 .wrap(),
+            container(row![text("left"), text("right")].wrap().vertical_spacing(10).align_x(Center))
+                .clip(true),
             row![text("left"), text("right")]
                 .wrap()
                 .vertical_spacing(10)
