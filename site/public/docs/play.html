@@ -40,7 +40,7 @@
     <li><a href="/docs/language">The language</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
     <li><a href="/docs/iced">rawr-iced</a></li>
-    <li><a href="/docs/play" aria-current="page">?play and the playground</a><ol><li><a href="#discord">In Discord</a></li><li><a href="#shapes">Snippet shapes</a></li><li><a href="#settle">When the frame is taken</a></li><li><a href="#limits">Limits</a></li><li><a href="#playground">The playground</a></li><li><a href="#add-bot">Adding the bot to a server</a></li></ol></li>
+    <li><a href="/docs/play" aria-current="page">?play and the playground</a><ol><li><a href="#discord">In Discord</a></li><li><a href="#shapes">Snippet shapes</a></li><li><a href="#settle">When the frame is taken</a></li><li><a href="#tokio">tokio</a></li><li><a href="#limits">Limits</a></li><li><a href="#playground">The playground</a></li><li><a href="#add-bot">Adding the bot to a server</a></li></ol></li>
     <li><a href="/docs/cli">Commands</a></li>
     <li><a href="/docs/faq">FAQ</a></li>
   </ol>
@@ -216,6 +216,86 @@ impl Fill {
   <div class="run"><button type="button" class="runbtn" data-source="src-fill" data-out="out-fill" data-alt="A progress bar that eases from 0% to 100%, drawn by rawr-iced on the server" aria-label="Run fill.rs" hidden></button><span class="quiet" id="out-fill" aria-live="polite">(plays a bar filling up)</span></div>
 </div>
 <p>The playground shows the same GIF. A share link&rsquo;s preview image is the last frame.</p>
+
+<h2 id="tokio">tokio</h2>
+<p>An app&rsquo;s async code can use tokio without a <code>Cargo.toml</code>. ?play has its own tokio built in. Its timers run on the simulated clock. So a GIF shows each wait, and the wait takes no real time.</p>
+<ul>
+  <li><code>tokio::time</code> has <code>sleep</code>, <code>interval</code> with <code>tick().await</code>, <code>timeout</code>, <code>Instant</code> and <code>Duration</code>.</li>
+  <li><code>tokio::sync::mpsc</code> has <code>channel</code> and <code>unbounded_channel</code>. A sender&rsquo;s <code>clone()</code> makes another sender.</li>
+  <li><code>tokio::sync</code> also has <code>oneshot</code>, <code>watch</code> and <code>Mutex</code>.</li>
+  <li><code>tokio::task::yield_now</code> is there.</li>
+  <li><code>tokio::join!</code>, <code>tokio::try_join!</code> and <code>tokio::select!</code> take up to 5 futures.</li>
+</ul>
+<p>This app adds up what a producer sends over a channel. Its GIF shows the sum after 400&nbsp;ms of simulated time.</p>
+<div class="block">
+  <div class="file"><b>channel.rs</b></div>
+  <pre><code data-lang="rust">use iced::widget::text;
+use iced::{Task, Widget};
+use std::time::Duration;
+use tokio::sync::mpsc;
+
+pub fn main() -&gt; iced::Result {
+    iced::application(Sum::start, Sum::update, Sum::view).run()
+}
+
+#[derive(Default)]
+struct Sum {
+    total: Option&lt;u32&gt;,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Total(u32),
+}
+
+async fn total() -&gt; u32 {
+    let (sender, mut receiver) = mpsc::channel(2);
+    let producer = async move {
+        for n in 1..=4 {
+            sender.send(n).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        drop(sender);
+    };
+    let consumer = async move {
+        let mut sum = 0;
+        while let Some(n) = receiver.recv().await {
+            sum += n;
+        }
+        sum
+    };
+    let (_, sum) = tokio::join!(producer, consumer);
+    sum
+}
+
+impl Sum {
+    fn start() -&gt; (Self, Task&lt;Message&gt;) {
+        (Self::default(), Task::perform(total(), Message::Total))
+    }
+
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Total(total) =&gt; self.total = Some(total),
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl Widget&lt;Message&gt; {
+        text(match self.total {
+            Some(total) =&gt; format!("sum {total}"),
+            None =&gt; "adding up".to_string(),
+        })
+    }
+}</code></pre>
+</div>
+<p>Some things work differently from tokio.</p>
+<ul>
+  <li>Async code runs on iced&rsquo;s UI thread, one step at a time. <code>tokio::spawn</code> is an error that says so. <code>tokio::join!</code> runs futures at once instead.</li>
+  <li>A channel closes once each of its senders is dropped with <code>drop(sender)</code>. A sender that is only moved stays open until the function that made it returns.</li>
+  <li>A <code>select!</code> branch whose pattern does not match goes to the <code>else</code> branch, or panics without one. tokio would wait for the other branches instead. A branch can&rsquo;t have an <code>if</code> condition.</li>
+  <li>A <code>Mutex</code> is locked with <code>mutex.lock().await</code> in async code. A value read with <code>*mutex.lock().await</code> in an expression is read without waiting for the lock.</li>
+  <li>A plain program has no async code, so only an app can use tokio.</li>
+</ul>
+<p><code>tokio::fs</code>, <code>tokio::net</code>, <code>tokio::process</code>, <code>tokio::signal</code> and <code>tokio::io</code> don&rsquo;t exist in ?play. A snippet that names them gets an unknown name error.</p>
 
 <h2 id="limits">Limits</h2>
 <p>Snippets are untrusted. Each one runs in its own process with these limits on the hosted bot and playground:</p>
