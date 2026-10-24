@@ -348,26 +348,23 @@ impl Definition {
     pub(crate) fn imported(
         path: host::path::Path,
         identity: import::Identity,
-        copy: bool,
-        default: bool,
-        debug: bool,
-        clone: bool,
+        implemented: &[capability::Kind],
         parameters: Box<[ImmutableString]>,
         defaults: Box<[Option<host::type_ref::Type>]>,
         shape: Shared<Shape>,
     ) -> Result<Self, host::Error> {
         validate_parameters(&path, &parameters)?;
+        let copy = implemented.contains(&capability::Kind::Copy);
         Ok(Self {
             path,
             identity: Identity::Imported(identity),
             parameters,
             capabilities: capability::Set::from_explicit(
-                copy.then_some([capability::Kind::Clone, capability::Kind::Copy])
-                    .into_iter()
-                    .flatten()
-                    .chain(default.then_some(capability::Kind::Default))
-                    .chain(debug.then_some(capability::Kind::Debug))
-                    .chain((clone && !copy).then_some(capability::Kind::Clone))
+                implemented
+                    .iter()
+                    .copied()
+                    // A `Copy` type is `Clone`, as Rust requires.
+                    .chain(copy.then_some(capability::Kind::Clone))
                     // A handle is plain data, and cargo check holds the
                     // Rust type to the `Send` an iced Message needs.
                     .chain([capability::Kind::Send, capability::Kind::Static]),

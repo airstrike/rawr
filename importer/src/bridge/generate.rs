@@ -45,7 +45,7 @@ struct Arguments<'slice, 'value, 'arena> { values: &'slice mut [&'value mut Dyna
 
 #[derive(Clone, Copy)]
 struct NativeHandle { epoch: [u8; 32], slot: u32, generation: u64 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
 
 /// Rust's `Debug` text of a stored value, for a type that implements it.
 type DebugText = fn(&dyn Any) -> Option<String>;
@@ -140,6 +140,72 @@ impl<T> WithoutClone for &DebugProbe<T> {
     }
 }
 
+/// `==` of two stored values of one type, for a type that implements
+/// `PartialEq`.
+type EqualValues = fn(&dyn Any, &dyn Any) -> Option<bool>;
+
+fn equal_values<T: PartialEq + 'static>(lhs: &dyn Any, rhs: &dyn Any) -> Option<bool> {
+    Some(lhs.downcast_ref::<T>()? == rhs.downcast_ref::<T>()?)
+}
+
+#[allow(dead_code)]
+trait ViaEqual {
+    fn native_equal(&self) -> Option<EqualValues>;
+}
+
+impl<T: PartialEq + 'static> ViaEqual for DebugProbe<T> {
+    fn native_equal(&self) -> Option<EqualValues> {
+        Some(equal_values::<T>)
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutEqual {
+    fn native_equal(&self) -> Option<EqualValues>;
+}
+
+impl<T> WithoutEqual for &DebugProbe<T> {
+    fn native_equal(&self) -> Option<EqualValues> {
+        None
+    }
+}
+
+/// The hash of a stored value, for a type that implements `Hash`.
+type HashValue = fn(&dyn Any) -> Option<u64>;
+
+fn hash_value<T: std::hash::Hash + 'static>(value: &dyn Any) -> Option<u64> {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::hash::DefaultHasher::new();
+    value.downcast_ref::<T>()?.hash(&mut hasher);
+    Some(hasher.finish())
+}
+
+#[allow(dead_code)]
+trait ViaHash {
+    fn native_hash(&self) -> Option<HashValue>;
+}
+
+impl<T: std::hash::Hash + 'static> ViaHash for DebugProbe<T> {
+    fn native_hash(&self) -> Option<HashValue> {
+        Some(hash_value::<T>)
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutHash {
+    fn native_hash(&self) -> Option<HashValue>;
+}
+
+impl<T> WithoutHash for &DebugProbe<T> {
+    fn native_hash(&self) -> Option<HashValue> {
+        None
+    }
+}
+
+/// A stored value's `PartialEq` and `Hash`, when its type has them.
+#[derive(Clone, Copy, Default)]
+struct Relations { equal: Option<EqualValues>, hash: Option<HashValue> }
+
 /// Store `value` in the arena, remembering its `Debug` text and its
 /// `Clone` when its type has them.
 #[allow(unused_macros)]
@@ -147,16 +213,22 @@ macro_rules! insert_native {
     ($arena:expr, $value:expr) => {{
         #[allow(unused_imports)]
         use $crate::{
-            ViaClone as _, ViaDebug as _, ViaDisplay as _, WithoutClone as _, WithoutDebug as _,
-            WithoutDisplay as _,
+            ViaClone as _, ViaDebug as _, ViaDisplay as _, ViaEqual as _, ViaHash as _,
+            WithoutClone as _, WithoutDebug as _, WithoutDisplay as _, WithoutEqual as _,
+            WithoutHash as _,
         };
         let value = $value;
         let debug = (&$crate::debug_probe(&value)).native_debug();
         let display = (&$crate::debug_probe(&value)).native_display();
         let clone = (&$crate::debug_probe(&value)).native_clone();
+        let relations = $crate::Relations {
+            equal: (&$crate::debug_probe(&value)).native_equal(),
+            hash: (&$crate::debug_probe(&value)).native_hash(),
+        };
         let handle = $arena.insert_debug(value, debug, clone);
         if let Ok(handle) = &handle {
             $arena.set_display(*handle, display);
+            $arena.set_relations(*handle, relations);
         }
         handle
     }};
@@ -282,7 +354,7 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, debug: None, display: None, clone: None, witness: None, project: None, mapper: None });
+                self.slots.push(NativeSlot { generation: 1, value: None, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None });
                 slot
             }
         };
@@ -292,6 +364,7 @@ impl Arena {
         entry.debug = None;
         entry.display = None;
         entry.clone = None;
+        entry.relations = Relations::default();
         entry.witness = None;
         entry.project = None;
         entry.mapper = None;
@@ -319,6 +392,50 @@ impl Arena {
     fn set_display(&mut self, handle: NativeHandle, display: Option<DebugText>) {
         if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
             entry.display = display;
+        }
+    }
+
+    #[allow(dead_code)]
+    fn set_relations(&mut self, handle: NativeHandle, relations: Relations) {
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
+            entry.relations = relations;
+        }
+    }
+
+    /// The live value of `handle`, with its slot.
+    fn live(&self, handle: NativeHandle) -> Option<(&NativeSlot, &dyn Any)> {
+        let entry = self.slots.get(handle.slot as usize)?;
+        if handle.epoch != self.epoch || handle.generation != entry.generation {
+            return None;
+        }
+        Some((entry, entry.value.as_deref()?))
+    }
+
+    /// `==` of two values of one type by its `PartialEq`.
+    fn equal(&self, lhs: NativeHandle, rhs: NativeHandle) -> Option<bool> {
+        let (entry, lhs) = self.live(lhs)?;
+        let (_, rhs) = self.live(rhs)?;
+        if lhs.type_id() != rhs.type_id() {
+            return None;
+        }
+        (entry.relations.equal?)(lhs, rhs)
+    }
+
+    /// The order a hashed collection keeps two values of one type in: by
+    /// hash, then by `Debug` text when two unequal values share one.
+    fn compare(&self, lhs: NativeHandle, rhs: NativeHandle) -> Option<std::cmp::Ordering> {
+        let (left, lhs) = self.live(lhs)?;
+        let (right, rhs) = self.live(rhs)?;
+        if lhs.type_id() != rhs.type_id() {
+            return None;
+        }
+        let hash = left.relations.hash?;
+        match hash(lhs)?.cmp(&hash(rhs)?) {
+            std::cmp::Ordering::Equal if (left.relations.equal?)(lhs, rhs)? => {
+                Some(std::cmp::Ordering::Equal)
+            }
+            std::cmp::Ordering::Equal => (left.debug?)(lhs)?.partial_cmp(&(right.debug?)(rhs)?),
+            ordering => Some(ordering),
         }
     }
 
@@ -813,10 +930,25 @@ fn native_attestation(
     })
 }
 
+/// `==` of two imported values by their Rust type's `PartialEq`.
+fn native_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
+    let lhs = lhs.read_lock::<NativeHandle>().map(|value| *value)?;
+    let rhs = rhs.read_lock::<NativeHandle>().map(|value| *value)?;
+    NATIVE_ARENA.with(|arena| arena.try_borrow().ok()?.as_ref()?.equal(lhs, rhs))
+}
+
+/// The order of two imported values that key a hashed collection.
+fn native_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
+    let lhs = lhs.read_lock::<NativeHandle>().map(|value| *value)?;
+    let rhs = rhs.read_lock::<NativeHandle>().map(|value| *value)?;
+    NATIVE_ARENA.with(|arena| arena.try_borrow().ok()?.as_ref()?.compare(lhs, rhs))
+}
+
 fn imported_runtime(
     engine: &__rawr_internal::Engine,
     definitions: &[__rawr_internal::host::facade::Definition],
 ) -> Result<__rawr_internal::host::runtime::Registry, __rawr_internal::host::runtime::Error> {
+    __rawr_internal::host::value::register_imported::<NativeHandle>(native_equal, native_compare);
     let mut registry = __rawr_internal::host::runtime::Registry::new();
     let mut native = engine.begin_imported_runtime()?;
     native.authenticate_structural(definitions, STRUCTURAL_ROWS)?;

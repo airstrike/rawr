@@ -41,6 +41,12 @@ static ENCODERS: RwLock<BTreeMap<TypeId, (&'static str, Encode)>> = RwLock::new(
 static DECODERS: RwLock<BTreeMap<&'static str, Decode>> = RwLock::new(BTreeMap::new());
 
 #[cfg(not(feature = "no_std"))]
+type Compare = fn(&Dynamic, &Dynamic) -> Option<std::cmp::Ordering>;
+
+#[cfg(not(feature = "no_std"))]
+static ORDERINGS: RwLock<BTreeMap<TypeId, Compare>> = RwLock::new(BTreeMap::new());
+
+#[cfg(not(feature = "no_std"))]
 static DEFAULTS: RwLock<BTreeMap<TypeId, fn() -> Dynamic>> = RwLock::new(BTreeMap::new());
 
 /// Let a derived `Default` build a host value field by the type's own
@@ -78,6 +84,41 @@ pub(crate) fn register_equality<T: PartialEq + Clone + 'static>() {
     #[cfg(not(feature = "no_std"))]
     if let Ok(mut equalities) = EQUALITIES.write() {
         equalities.insert(TypeId::of::<T>(), equal::<T>);
+    }
+}
+
+/// Let a generated bridge compare its imported values, which are handles
+/// of one Rust type `T` whatever value each holds: `==` by the value's own
+/// `PartialEq`, and the order a hashed collection keeps them in.
+#[doc(hidden)]
+pub fn register_imported<T: 'static>(
+    equal: fn(&Dynamic, &Dynamic) -> Option<bool>,
+    compare: fn(&Dynamic, &Dynamic) -> Option<std::cmp::Ordering>,
+) {
+    #[cfg(not(feature = "no_std"))]
+    if let (Ok(mut equalities), Ok(mut orderings)) = (EQUALITIES.write(), ORDERINGS.write()) {
+        equalities.insert(TypeId::of::<T>(), equal);
+        orderings.insert(TypeId::of::<T>(), compare);
+    }
+    #[cfg(feature = "no_std")]
+    let _ = (equal, compare);
+}
+
+/// The order of two host values of one type that registered one.
+pub(crate) fn host_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
+    #[cfg(not(feature = "no_std"))]
+    {
+        let ty = lhs.type_id();
+        if ty != rhs.type_id() {
+            return None;
+        }
+        let compare = *ORDERINGS.read().ok()?.get(&ty)?;
+        compare(lhs, rhs)
+    }
+    #[cfg(feature = "no_std")]
+    {
+        let _ = (lhs, rhs);
+        None
     }
 }
 
@@ -142,5 +183,31 @@ pub(crate) fn decode_host(name: &str, bytes: &[u8]) -> Option<Dynamic> {
     {
         let _ = (name, bytes);
         None
+    }
+}
+
+#[cfg(all(test, not(feature = "no_std")))]
+mod tests {
+    use super::{host_compare, host_equal, register_imported};
+    use crate::Dynamic;
+
+    /// A bridge's handle, which compares by what it stands for.
+    #[derive(Clone, Copy)]
+    struct Handle(u8);
+
+    #[test]
+    fn imported_values_compare_by_the_relations_their_bridge_registered() {
+        fn equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
+            Some(lhs.read_lock::<Handle>()?.0 == rhs.read_lock::<Handle>()?.0)
+        }
+        fn compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
+            Some(lhs.read_lock::<Handle>()?.0.cmp(&rhs.read_lock::<Handle>()?.0))
+        }
+        register_imported::<Handle>(equal, compare);
+        let (one, two) = (Dynamic::from(Handle(1)), Dynamic::from(Handle(2)));
+        assert_eq!(host_equal(&one, &one.clone()), Some(true));
+        assert_eq!(host_equal(&one, &two), Some(false));
+        assert_eq!(host_compare(&two, &one), Some(std::cmp::Ordering::Greater));
+        assert_eq!(host_compare(&one, &Dynamic::from(1_u8)), None);
     }
 }

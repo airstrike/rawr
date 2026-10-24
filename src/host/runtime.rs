@@ -2819,10 +2819,7 @@ mod tests {
             facade.imported_type(
                 path,
                 host::type_def::import::Identity::new(*identity),
-                false,
-                false,
-                false,
-                false,
+                &[],
                 parameters.clone(),
                 Box::default(),
                 shape,

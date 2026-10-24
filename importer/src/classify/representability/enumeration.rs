@@ -21,6 +21,9 @@ pub struct Plan {
     default: bool,
     debug: bool,
     clone: bool,
+    partial_eq: bool,
+    eq: bool,
+    hash: bool,
 }
 
 impl Variant {
@@ -82,6 +85,9 @@ impl Plan {
         default: bool,
         debug: bool,
         clone: bool,
+        partial_eq: bool,
+        eq: bool,
+        hash: bool,
     ) -> Self {
         Self {
             parameters,
@@ -91,6 +97,9 @@ impl Plan {
             default,
             debug,
             clone,
+            partial_eq,
+            eq,
+            hash,
         }
     }
 
@@ -130,6 +139,24 @@ impl Plan {
     #[must_use]
     pub const fn cloneable(&self) -> bool {
         self.clone
+    }
+
+    /// Whether the crate implements `PartialEq` for the type.
+    #[must_use]
+    pub const fn partial_eq(&self) -> bool {
+        self.partial_eq
+    }
+
+    /// Whether the crate implements `Eq` for the type.
+    #[must_use]
+    pub const fn eq(&self) -> bool {
+        self.eq
+    }
+
+    /// Whether the crate implements `Hash` for the type.
+    #[must_use]
+    pub const fn hash(&self) -> bool {
+        self.hash
     }
 
     /// Drop the variant fields `keep` refuses. A variant that lost one cannot

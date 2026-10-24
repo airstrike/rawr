@@ -102,10 +102,7 @@ fn structure(engine: &mut Engine) -> identity::Selector {
         .imported_type(
             "Cell",
             host::type_def::import::Identity::new([61; 32]),
-            false,
-            false,
-            false,
-            false,
+            &[],
             Box::default(),
             Box::default(),
             Shared::new(host::type_def::Shape::Struct {

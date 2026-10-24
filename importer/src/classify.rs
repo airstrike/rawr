@@ -3112,6 +3112,9 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements(definition, "Default"),
             self.implements_for_any(definition, "Debug"),
             self.implements_for_any(definition, "Clone"),
+            self.implements_for_any(definition, "PartialEq"),
+            self.implements_for_any(definition, "Eq"),
+            self.implements_for_any(definition, "Hash"),
         ))
     }
 
@@ -3195,6 +3198,9 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements(definition, "Default"),
             self.implements_for_any(definition, "Debug"),
             self.implements_for_any(definition, "Clone"),
+            self.implements_for_any(definition, "PartialEq"),
+            self.implements_for_any(definition, "Eq"),
+            self.implements_for_any(definition, "Hash"),
         ))
     }
 

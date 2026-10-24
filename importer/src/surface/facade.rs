@@ -158,6 +158,13 @@ pub struct TypeDefinition {
     default: bool,
     debug: bool,
     clone: bool,
+    /// Whether the native type implements `PartialEq`, `Eq` and `Hash`.
+    #[serde(default)]
+    partial_eq: bool,
+    #[serde(default)]
+    eq: bool,
+    #[serde(default)]
+    hash: bool,
     shape: Shape,
 }
 
@@ -714,6 +721,9 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         default: false,
         debug: false,
         clone: false,
+        partial_eq: false,
+        eq: false,
+        hash: false,
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -776,6 +786,9 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 default: false,
                 debug: false,
                 clone: false,
+                partial_eq: false,
+                eq: false,
+                hash: false,
                 shape: Shape::Struct {
                     form: Form::Unit,
                     constructor: None,
@@ -813,6 +826,9 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         default: false,
         debug: false,
         clone: false,
+        partial_eq: false,
+        eq: false,
+        hash: false,
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -1707,6 +1723,18 @@ impl TypeDefinition {
     pub const fn default(&self) -> bool {
         self.default
     }
+    /// Return whether the native type implements `PartialEq`.
+    pub const fn partial_eq(&self) -> bool {
+        self.partial_eq
+    }
+    /// Return whether the native type implements `Eq`.
+    pub const fn eq(&self) -> bool {
+        self.eq
+    }
+    /// Return whether the native type implements `Hash`.
+    pub const fn hash(&self) -> bool {
+        self.hash
+    }
     /// Return whether the native type implements `Debug`.
     pub const fn debug(&self) -> bool {
         self.debug
@@ -1821,7 +1849,7 @@ fn type_definition(
         .identity()
         .definition()
         .ok_or(super::Error::ForeignIdentity)?;
-    let (parameters, defaults, copyable, default, debug, clone, shape) = match outcome
+    let (parameters, defaults, copyable, default, debug, clone, compare, shape) = match outcome
         .representability()
     {
         Representability::Struct(plan) => (
@@ -1831,6 +1859,7 @@ fn type_definition(
             plan.default(),
             plan.debug(),
             plan.cloneable(),
+            [plan.partial_eq(), plan.eq(), plan.hash()],
             Shape::Struct {
                 form: form(plan.form()),
                 constructor: plan
@@ -1861,7 +1890,8 @@ fn type_definition(
                 plan.default(),
                 plan.debug(),
                 plan.cloneable(),
-                    Shape::Enum {
+                [plan.partial_eq(), plan.eq(), plan.hash()],
+                Shape::Enum {
                     variants: variants.into_boxed_slice(),
                 },
             )
@@ -1884,6 +1914,9 @@ fn type_definition(
         default,
         debug,
         clone,
+        partial_eq: compare[0],
+        eq: compare[1],
+        hash: compare[2],
         shape,
     }))
 }

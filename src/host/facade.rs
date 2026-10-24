@@ -365,10 +365,7 @@ impl Builder {
         &mut self,
         path: &str,
         identity: host::type_def::import::Identity,
-        copy: bool,
-        default: bool,
-        debug: bool,
-        clone: bool,
+        implemented: &[crate::capability::Kind],
         parameters: Box<[ImmutableString]>,
         defaults: Box<[Option<host::type_ref::Type>]>,
         shape: crate::Shared<host::type_def::Shape>,
@@ -379,7 +376,7 @@ impl Builder {
         self.ensure_vacant(&path, "type")?;
         let definition =
             host::type_def::Definition::imported(
-                path, identity, copy, default, debug, clone, parameters, defaults, shape,
+                path, identity, implemented, parameters, defaults, shape,
             )?;
         self.insert_type(definition)?;
         Ok(self)
@@ -2445,10 +2442,7 @@ mod imported_allocation_tests {
                 .imported_type(
                     "nested::Marker",
                     host::type_def::import::Identity::new([2; 32]),
-                    false,
-                    false,
-                    false,
-                    false,
+                    &[],
                     Box::default(),
                     Box::default(),
                     host::type_def::Shape::Struct {
@@ -2656,10 +2650,7 @@ mod imported_allocation_tests {
                 .imported_type(
                     "Opaque",
                     host::type_def::import::Identity::new(identity),
-                    false,
-                    false,
-                    false,
-                    false,
+                    &[],
                     Box::default(),
                     Box::default(),
                     shape,

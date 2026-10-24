@@ -1444,25 +1444,32 @@ fn build(
     }
 
     for entry in &facade.entries {
-        let (parameters, defaults, copy, default, debug, clone) = match entry
-            .outcome
-            .representability()
-        {
+        let (parameters, defaults, implemented) = match entry.outcome.representability() {
             Representability::Struct(plan) => (
                 names(plan.parameters(), allocation)?,
                 defaults(&types, plan.parameters(), allocation)?,
-                plan.copy(),
-                plan.default(),
-                plan.debug(),
-                plan.cloneable(),
+                implemented([
+                    plan.copy(),
+                    plan.default(),
+                    plan.debug(),
+                    plan.cloneable(),
+                    plan.partial_eq(),
+                    plan.eq(),
+                    plan.hash(),
+                ]),
             ),
             Representability::Enum(plan) => (
                 names(plan.parameters(), allocation)?,
                 defaults(&types, plan.parameters(), allocation)?,
-                plan.copy(),
-                plan.default(),
-                plan.debug(),
-                plan.cloneable(),
+                implemented([
+                    plan.copy(),
+                    plan.default(),
+                    plan.debug(),
+                    plan.cloneable(),
+                    plan.partial_eq(),
+                    plan.eq(),
+                    plan.hash(),
+                ]),
             ),
             Representability::Value(_)
             | Representability::Function(_)
@@ -1558,10 +1565,7 @@ fn build(
         builder.imported_type(
             entry.relative.as_ref(),
             imported_identity(entry.definition),
-            copy,
-            default,
-            debug,
-            clone,
+            &implemented,
             parameters,
             defaults,
             shape,
@@ -1940,6 +1944,26 @@ fn names(
         names.push(parameter.name().into());
     }
     Ok(names.into_boxed_slice())
+}
+
+/// The traits a crate implements for a type, in the order `copy`,
+/// `default`, `debug`, `clone`, `partial_eq`, `eq` and `hash`, as the
+/// capabilities they give it.
+pub(crate) fn implemented(traits: [bool; 7]) -> Vec<crate::capability::Kind> {
+    use crate::capability::Kind;
+    [
+        Kind::Copy,
+        Kind::Default,
+        Kind::Debug,
+        Kind::Clone,
+        Kind::PartialEq,
+        Kind::Eq,
+        Kind::Hash,
+    ]
+    .into_iter()
+    .zip(traits)
+    .filter_map(|(kind, implemented)| implemented.then_some(kind))
+    .collect()
 }
 
 /// Each parameter's default type, or none when no parameter has one.

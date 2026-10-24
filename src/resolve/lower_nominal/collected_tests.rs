@@ -317,10 +317,7 @@ fn executable_use_collection_retains_profile_event_mapper_seals() {
         .imported_type(
             "Signal",
             identity,
-            false,
-            false,
-            false,
-            false,
+            &[],
             Box::from(["Message".into()]),
             Box::default(),
             Shared::new(host::type_def::Shape::Opaque),
@@ -382,10 +379,7 @@ fn executable_use_collection_requires_and_retains_exact_structural_adapters() {
         .imported_type(
             "Cell",
             host::type_def::import::Identity::new([11; 32]),
-            false,
-            false,
-            false,
-            false,
+            &[],
             Box::default(),
             Box::default(),
             Shared::new(host::type_def::Shape::Struct {
@@ -809,10 +803,7 @@ fn cloning_an_imported_value_leaves_it_available() {
         .imported_type(
             "Connection",
             identity,
-            false,
-            false,
-            false,
-            true,
+            &[crate::capability::Kind::Clone],
             Box::default(),
             Box::default(),
             Shared::new(host::type_def::Shape::Opaque),
@@ -872,10 +863,7 @@ fn defaulted_facade() -> facade::Definition {
             .imported_type(
                 path,
                 identity,
-                true,
-                false,
-                false,
-                true,
+                &[crate::capability::Kind::Copy, crate::capability::Kind::Clone],
                 parameters,
                 defaults,
                 Shared::new(host::type_def::Shape::Opaque),
@@ -934,3 +922,66 @@ fn an_imported_type_written_without_its_defaulted_arguments_takes_them() {
     );
 }
 
+#[test]
+fn an_imported_type_compares_and_keys_a_map_by_the_traits_its_crate_implements() {
+    use crate::capability::Kind;
+    let finger = host::type_def::import::Identity::new([0x71; 32]);
+    let instant = host::type_def::import::Identity::new([0x72; 32]);
+    let mut builder = facade::Builder::new("touch", facade::Abi::new(1).unwrap()).unwrap();
+    let mut allocation = host::TestImportAllocation::default();
+    for (path, identity, implemented) in [
+        ("Finger", finger, &[Kind::Copy, Kind::PartialEq, Kind::Eq, Kind::Hash][..]),
+        ("Instant", instant, &[Kind::Clone][..]),
+    ] {
+        builder
+            .imported_type(
+                path,
+                identity,
+                implemented,
+                Box::default(),
+                Box::default(),
+                Shared::new(host::type_def::Shape::Opaque),
+                &mut allocation,
+            )
+            .unwrap();
+    }
+    for (name, identity, id) in [("finger", finger, 3), ("instant", instant, 4)] {
+        let mut make = signature::Builder::new();
+        make.output(type_ref::Type::imported(identity, []));
+        builder
+            .item(
+                item::Definition::function(name, make.finish())
+                    .unwrap()
+                    .imported(selector(id)),
+            )
+            .unwrap();
+    }
+    let mut engine = Engine::new();
+    engine.register_host_facade(builder.finish().unwrap()).unwrap();
+    engine
+        .compile_executable(
+            "use std::collections::HashMap;
+             use touch::{finger, Finger};
+             pub fn run() -> bool {
+                 let mut fingers: HashMap<Finger, i64> = HashMap::new();
+                 fingers.insert(finger(), 1);
+                 finger() != finger()
+             }",
+        )
+        .unwrap();
+    let error = engine
+        .compile_executable(
+            "use touch::instant;
+             pub fn run() -> bool { instant() == instant() }",
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("PartialEq"), "{error}");
+    let error = engine
+        .compile_executable(
+            "use std::collections::HashMap;
+             use touch::{instant, Instant};
+             pub fn run() { let mut times: HashMap<Instant, i64> = HashMap::new(); times.insert(instant(), 1); }",
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("Hash + Eq"), "{error}");
+}

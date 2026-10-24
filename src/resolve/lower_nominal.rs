@@ -39034,6 +39034,8 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
         (Union::Float(lhs, ..), Union::Float(rhs, ..)) => (**lhs).partial_cmp(&**rhs),
         #[cfg(not(feature = "no_index"))]
         (Union::Array(lhs, ..), Union::Array(rhs, ..)) => lexicographic(lhs, rhs),
+        // An imported value keying a hashed collection.
+        (Union::Variant(..), Union::Variant(..)) => crate::host::value::host_compare(lhs, rhs),
         // A derived `PartialOrd`: fields in declaration order; an enum's
         // variants by declaration order, then their payloads.
         (Union::Struct(lhs, ..), Union::Struct(rhs, ..)) if lhs.identity() == rhs.identity() => {
@@ -41990,10 +41992,7 @@ pub fn run() -> i64 {
             .imported_type(
                 "Pair",
                 pair_identity,
-                false,
-                false,
-                false,
-                false,
+                &[],
                 Box::default(),
                 Box::default(),
                 pair_shape,
@@ -42004,10 +42003,7 @@ pub fn run() -> i64 {
             .imported_type(
                 "domain::State",
                 state_identity,
-                false,
-                false,
-                false,
-                false,
+                &[],
                 Box::default(),
                 Box::default(),
                 host::type_def::Shape::Struct {
@@ -42047,10 +42043,7 @@ pub fn run() -> i64 {
             .imported_type(
                 "Holder",
                 host::type_def::import::Identity::new([0x34; 32]),
-                false,
-                false,
-                false,
-                false,
+                &[],
                 Box::default(),
                 Box::default(),
                 host::type_def::Shape::Struct {
@@ -42071,10 +42064,7 @@ pub fn run() -> i64 {
             .imported_type(
                 "CopyPair",
                 copy_identity,
-                true,
-                false,
-                true,
-                true,
+                &[crate::capability::Kind::Copy, crate::capability::Kind::Debug, crate::capability::Kind::Clone],
                 Box::default(),
                 Box::default(),
                 host::type_def::Shape::Struct {
@@ -42095,10 +42085,7 @@ pub fn run() -> i64 {
             .imported_type(
                 "Choice",
                 host::type_def::import::Identity::new([0x32; 32]),
-                false,
-                false,
-                false,
-                true,
+                &[crate::capability::Kind::Clone],
                 Box::default(),
                 Box::default(),
                 host::type_def::Shape::Enum(Box::from([
@@ -42221,10 +42208,7 @@ pub fn run() -> i64 {
                 .imported_type(
                     alias,
                     identity,
-                    false,
-                    false,
-                    false,
-                    false,
+                    &[],
                     Box::default(),
                     Box::default(),
                     shape.clone(),
