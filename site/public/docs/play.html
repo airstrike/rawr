@@ -141,7 +141,7 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
 <table>
   <tr><th>The snippet uses</th><th>What happens</th></tr>
   <tr><td><code>include_str!("notes.txt")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `include_str!` here: ?play has no files</code>.</td></tr>
-  <tr><td><code>include_bytes!("cat.png")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `include_bytes!` here: ?play has no files</code>.</td></tr>
+  <tr><td><code>include_bytes!("cat.png")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `include_bytes!` here: ?play has no files</code>. Inside an app&rsquo;s <code>.fonts(..)</code> setting it is skipped instead, as <a href="#images">Images in memory</a> explains.</td></tr>
   <tr><td><code>image("cat.png")</code> or <code>svg("logo.svg")</code></td><td>The image draws as a missing file. <code>Handle::from_path</code> does the same. The Discord reply adds the note <code>?play has no files. Paths given to image and svg do not exist here.</code></td></tr>
   <tr><td><code>env!("HOME")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `env!` here: ?play has no files. It has no environment variable `HOME` either</code>.</td></tr>
   <tr><td><code>std::fs</code>, <code>std::env</code>, <code>std::net</code> or <code>std::thread</code></td><td>The snippet doesn&rsquo;t compile. Rawr has none of these modules. The error for <code>std::fs</code> is <code>unknown type `std::fs`</code>.</td></tr>
@@ -340,6 +340,7 @@ impl Dots {
 
 <h3 id="images">Images in memory</h3>
 <p>?play has no files, so an image or svg path draws as a missing file. <code>include_str!</code> and <code>include_bytes!</code> fail with <code>?play has no files</code>. <code>rawr run</code> reads all three from disk.</p>
+<p>An app&rsquo;s window settings in <code>main</code> are the exception. ?play skips <code>.fonts(..)</code>, <code>.font(..)</code>, <code>.window_size(..)</code> and iced&rsquo;s other window settings. Their arguments are never compiled. So <code>.fonts([include_bytes!("icons.ttf").as_slice()])</code> gives no error. The font isn&rsquo;t loaded, so text set in it falls back to another font.</p>
 <p>Write the image&rsquo;s bytes into the snippet instead. <code>svg::Handle::from_memory</code> takes svg text as bytes. <code>image::Handle::from_bytes</code> takes the bytes of a PNG or JPEG file. <code>image::Handle::from_rgba</code> takes a width, a height and 4 bytes for each pixel. Bytes are an array at runtime, so they can be at most 65,536 bytes long. An RGBA image of that size is 128 by 128 pixels.</p>
 <div class="block">
   <div class="file"><b>circle.rs</b></div>

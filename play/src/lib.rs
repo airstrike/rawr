@@ -1726,6 +1726,20 @@ impl Spin {
     }
 
     #[test]
+    fn play_skips_an_apps_font_settings_unread() {
+        // iced's checkbox example loads its icon font in `main`. The window
+        // settings are skipped, so the `include_bytes!` there is never
+        // compiled, and the app draws as it would without them.
+        let plain = include_str!("../tests/fixtures/checkbox.rs");
+        let with_fonts = plain.replace(
+            ".run()",
+            r#".fonts([include_bytes!("../fonts/icons.ttf").as_slice()]).window_size((640, 480)).run()"#,
+        );
+        assert_ne!(plain, with_fonts);
+        assert_eq!(image(&with_fonts).bytes, image(plain).bytes);
+    }
+
+    #[test]
     fn an_app_with_an_inline_module_renders() {
         let source = include_str!("../tests/fixtures/counter.rs")
             .replace("text(self.value)", "text(label::of(self.value))");
