@@ -8,12 +8,12 @@
 .runbtn:hover { background: var(--pink); color: var(--bg); }
 .runbtn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .runbtn svg { display: block; width: 12px; height: 12px; }
-.runbtn .stop { display: none; }
+.runbtn .busy { display: none; }
 .runbtn[aria-disabled="true"] { cursor: progress; }
 .runbtn[aria-disabled="true"] .play { display: none; }
-.runbtn[aria-disabled="true"] .stop { display: block; animation: runbtn-pulse 0.8s ease-in-out infinite alternate; }
+.runbtn[aria-disabled="true"] .busy { display: block; animation: runbtn-pulse 0.8s ease-in-out infinite alternate; }
 @keyframes runbtn-pulse { from { opacity: 1; } to { opacity: 0.3; } }
-@media (prefers-reduced-motion: reduce) { .runbtn[aria-disabled="true"] .stop { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .runbtn[aria-disabled="true"] .busy { animation: none; } }
 
 /* Before Run the static output keeps its rows but is hidden. */
 .run .pending { visibility: hidden; }
