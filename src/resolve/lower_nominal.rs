@@ -914,6 +914,7 @@ fn lower_with_context(
                 format!("{what} is not supported in Rawr yet").into(),
             ))),
             position,
+            crate::types::parse_error::Rendered::default(),
         );
         return Err(match generated.translate(Span::new(position, position)) {
             Ok(translated) => LoweringFailure::generated(translated.source, translated.span, error),

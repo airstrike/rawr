@@ -607,7 +607,12 @@ impl TryFrom<ImmutableString> for FnPtr {
         } else if is_reserved_keyword_or_symbol(&value).0
             || Token::lookup_symbol_from_syntax(&value).is_some()
         {
-            Err(ERR::ErrorParsing(PERR::Reserved(value.to_string()), Position::NONE).into())
+            Err(ERR::ErrorParsing(
+                PERR::Reserved(value.to_string()),
+                Position::NONE,
+                crate::types::parse_error::Rendered::default(),
+            )
+            .into())
         } else {
             Err(ERR::ErrorFunctionNotFound(value.to_string(), Position::NONE).into())
         }

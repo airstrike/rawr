@@ -87,7 +87,7 @@ impl Engine {
     #[must_use]
     fn new_global_runtime_state(&self) -> GlobalRuntimeState {
         GlobalRuntimeState {
-            host_runtime: None,
+            host_runtime: self.host_runtime.clone(),
             host_invocation: None,
             #[cfg(not(feature = "no_module"))]
             imports: crate::ThinVec::new(),

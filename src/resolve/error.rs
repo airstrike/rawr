@@ -764,7 +764,11 @@ impl From<Error> for crate::ParseError {
     fn from(error: Error) -> Self {
         let position = error.primary_span().start();
 
-        Self(Box::new(crate::PERR::Resolution(error)), position)
+        Self(
+            Box::new(crate::PERR::Resolution(error)),
+            position,
+            crate::types::Rendered::default(),
+        )
     }
 }
 

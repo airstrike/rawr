@@ -351,10 +351,75 @@ fn resolution_report_at(
     error: &resolve::Error,
     primary: Span,
 ) -> Result<Report, Error> {
-    Ok(resolution_builder(error)
+    Ok(sourced_builder(error, &source, primary)
         .source(source.clone())
         .primary(source, primary, None)?
         .finish())
+}
+
+/// The builder for `error`, which reads `source` where rustc's error for it
+/// depends on how the source names the item.
+fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Builder {
+    let resolve::Error::UnknownMember { owner, member, .. } = error else {
+        return resolution_builder(error);
+    };
+    let builder = match member_kind(source, primary, member) {
+        Member::Field => Report::error(
+            code::RESOLVE_NO_FIELD,
+            format!("no field `{member}` on type `{owner}`"),
+        ),
+        Member::Method => Report::error(
+            code::RESOLVE_NO_METHOD,
+            format!("no method named `{member}` found for `{owner}` in the current scope"),
+        ),
+        Member::Associated => {
+            let item = if member.starts_with(char::is_uppercase) {
+                "variant or associated item"
+            } else {
+                "function or associated item"
+            };
+            Report::error(
+                code::RESOLVE_NO_METHOD,
+                format!("no {item} named `{member}` found for `{owner}` in the current scope"),
+            )
+        }
+    };
+    match resolution_builder(error).finish().help() {
+        Some(help) => builder.help(help),
+        None => builder,
+    }
+}
+
+/// How source names a member: `value.member()`, `value.member` or
+/// `Type::member`.
+enum Member {
+    Method,
+    Field,
+    Associated,
+}
+
+fn member_kind(source: &Source, at: Span, member: &str) -> Member {
+    let start = at.start();
+    let (Some(line), Some(column)) = (start.line(), start.position()) else {
+        return Member::Method;
+    };
+    let Some(text) = source.text().split('\n').nth(line.saturating_sub(1)) else {
+        return Member::Method;
+    };
+    let characters: Vec<char> = text.chars().collect();
+    let column = column.saturating_sub(1).min(characters.len());
+    let before: String = characters[..column].iter().collect();
+    if before.trim_end().ends_with("::") {
+        return Member::Associated;
+    }
+    let end = (column + member.chars().count()).min(characters.len());
+    let after: String = characters[end..].iter().collect();
+    let after = after.trim_start();
+    if after.starts_with('(') || after.starts_with("::") {
+        Member::Method
+    } else {
+        Member::Field
+    }
 }
 
 fn resolution_report_with_sources(
@@ -362,7 +427,7 @@ fn resolution_report_with_sources(
     secondary_source: Option<Source>,
     error: &resolve::Error,
 ) -> Result<Report, Error> {
-    let builder = resolution_builder(error);
+    let builder = sourced_builder(error, &source, error.primary_span());
     let secondary_message = error.secondary_span().map(|_| match error {
         resolve::Error::MovedValue { .. } => "value moved here",
         _ => "first declaration or related definition is here",
@@ -803,6 +868,7 @@ mod tests {
                 previous_declaration: generated_previous,
             })),
             generated_declaration.start(),
+            Default::default(),
         );
         let translated = Span::new(Position::new(2, 8), Position::new(2, 12));
         let source = Source::new("src/lib.rs", "fn one() {}\nfn view() {}\n")
@@ -823,7 +889,11 @@ mod tests {
 
     #[test]
     fn unmapped_generated_error_retains_context_without_a_fabricated_label() {
-        let error = ParseError(Box::new(ParseErrorType::UnexpectedEOF), Position::new(9, 4));
+        let error = ParseError(
+            Box::new(ParseErrorType::UnexpectedEOF),
+            Position::new(9, 4),
+            Default::default(),
+        );
         let report =
             Report::from_parse_unpositioned(&error, "generated diagnostic has no origin proof");
 
