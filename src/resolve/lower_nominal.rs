@@ -26136,6 +26136,10 @@ impl<'a> Parser<'a> {
             let same_head = match (&self.inference.resolve(&value.ty), &self_ty) {
                 (Ty::Script(value, _), Ty::Script(written, _)) => value == written,
                 (Ty::Keyed(value, _), Ty::Keyed(written, _)) => value == written,
+                // `Task::<Message>::none()`: a facade type's arguments.
+                (Ty::Host { proof: value, .. }, Ty::Host { proof: written, .. }) => {
+                    value.definition.path() == written.definition.path()
+                }
                 (Ty::Array { .. }, Ty::Array { .. })
                 | (Ty::Option(_), Ty::Option(_))
                 | (Ty::Result(..), Ty::Result(..))

@@ -8189,6 +8189,8 @@ fn count() -> Task<u32> { Task::done(7) }
 pub fn numbers() -> Task<Message> { count().map(Message::Number) }
 pub fn bytes() -> Task<Message> { Task::done(7u8).map(Message::Byte) }
 pub fn none() -> Task<Message> { Task::<Message>::none() }
+pub fn discarded() -> i64 { let _ = Task::<Message>::none(); 1 }
+pub fn unit() -> Task<Message> { let none = Task::<()>::none(); none.map(|_| Message::Byte(1)) }
 "#,
         )
         .unwrap_or_else(|error| panic!("{error}"));
