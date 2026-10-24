@@ -44,14 +44,62 @@ pub fn target_directory<'a>(
     workspace_root(project).join("target")
 }
 
+/// The project's Cargo build directory, where Cargo keeps intermediate
+/// artifacts: `CARGO_BUILD_BUILD_DIR`, then `build.build-dir` from the Cargo
+/// config files, else the target directory. `{workspace-root}` and
+/// `{cargo-cache-home}` expand as Cargo expands them; a path with any other
+/// template is Cargo's to place, and the target directory stands for it.
+pub fn build_directory<'a>(
+    project: &Path,
+    environment: impl Fn(&str) -> Option<&'a str> + Copy,
+    cargo_home: Option<&Path>,
+) -> PathBuf {
+    let expand = |value: &str, base: &Path| -> Option<PathBuf> {
+        let root = workspace_root(project);
+        let value = value.replace("{workspace-root}", &root.to_string_lossy());
+        let value = match cargo_home {
+            Some(home) => value.replace("{cargo-cache-home}", &home.to_string_lossy()),
+            None => value,
+        };
+        (!value.contains('{')).then(|| base.join(value))
+    };
+    if let Some(value) = environment("CARGO_BUILD_BUILD_DIR").filter(|value| !value.is_empty()) {
+        if let Some(path) = expand(value, project) {
+            return path;
+        }
+        return target_directory(project, environment, cargo_home);
+    }
+    let configs = project
+        .ancestors()
+        .map(|directory| directory.join(".cargo"))
+        .chain(cargo_home.map(Path::to_path_buf));
+    for directory in configs {
+        for name in ["config.toml", "config"] {
+            let Some(value) = configured(&directory.join(name), "build-dir") else {
+                continue;
+            };
+            let base = if directory.ends_with(".cargo") {
+                directory.parent().unwrap_or(&directory).to_path_buf()
+            } else {
+                directory.clone()
+            };
+            if let Some(path) = expand(&value, &base) {
+                return path;
+            }
+            return target_directory(project, environment, cargo_home);
+        }
+    }
+    target_directory(project, environment, cargo_home)
+}
+
 fn configured_target_dir(path: &Path) -> Option<String> {
+    configured(path, "target-dir")
+}
+
+fn configured(path: &Path, key: &str) -> Option<String> {
     let text = fs::read_to_string(path).ok()?;
     let document = text.parse::<DocumentMut>().ok()?;
-    document
-        .get("build")?
-        .get("target-dir")?
-        .as_str()
-        .map(str::to_owned)
+    document.get("build")?.get(key)?.as_str().map(str::to_owned)
 }
 
 /// The project itself when its manifest declares `[workspace]` or none
@@ -87,7 +135,7 @@ fn workspace_root(project: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::target_directory;
+    use super::{build_directory, target_directory};
     use std::fs;
     use std::path::Path;
 
@@ -147,6 +195,29 @@ mod tests {
         let environment = |key: &str| (key == "CARGO_TARGET_DIR").then_some("/elsewhere");
         assert_eq!(
             target_directory(&project, environment, None),
+            Path::new("/elsewhere")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_build_directory_is_the_target_directory_unless_configured() {
+        let root = fixture("build");
+        let project = root.join("app");
+        write(&project.join("Cargo.toml"), "[package]\nname = \"app\"\n[workspace]\n");
+        let none = |_: &str| None;
+        assert_eq!(build_directory(&project, none, None), project.join("target"));
+        write(
+            &project.join(".cargo/config.toml"),
+            "[build]\nbuild-dir = \"{workspace-root}/intermediate\"\n",
+        );
+        assert_eq!(
+            build_directory(&project, none, None),
+            project.join("intermediate")
+        );
+        let environment = |key: &str| (key == "CARGO_BUILD_BUILD_DIR").then_some("/elsewhere");
+        assert_eq!(
+            build_directory(&project, environment, None),
             Path::new("/elsewhere")
         );
         fs::remove_dir_all(root).unwrap();

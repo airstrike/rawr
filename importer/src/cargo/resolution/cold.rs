@@ -689,8 +689,10 @@ pub(in crate::cargo) fn build(
             source,
         }
     };
-    let shared = crate::deps::directory(&rawr)
-        .map_err(io("create the project's Cargo build directory", &rawr))?;
+    let build =
+        crate::location::build_directory(&request.project_root, request.config.environment());
+    let shared = crate::deps::directory(&build)
+        .map_err(io("create the project's Cargo build directory", &build))?;
     let mut prefix = prefix(request, paths.config(), allocation)?;
     // The shared directory overrides the reserved config's bundle build root;
     // relocation then fills that root with the files this resolution reads.
@@ -698,7 +700,7 @@ pub(in crate::cargo) fn build(
     let tail = cargo::cargo_build_arguments(paths.manifest(), &request.target, &request.profile);
     let command = cargo::cargo_build_command(request, prefix, tail, environment)?;
     let _lock =
-        crate::deps::lock(&shared).map_err(io("lock shared Cargo build directory", &shared))?;
+        crate::deps::lock(&rawr).map_err(io("lock shared Cargo build directory", &rawr))?;
     let bytes = native
         .run(&command, limits.process)?
         .checked(Program::Cargo)?;
@@ -707,15 +709,11 @@ pub(in crate::cargo) fn build(
     Ok((bytes, command.into_environment()))
 }
 
-/// Build in `shared`, deciding freshness by content: every resolution's harness
-/// crate is one unit there.
-pub(in crate::cargo) fn shared_arguments(shared: &Path) -> [OsString; 3] {
+/// Build in `shared`, the project's own build directory, with Cargo's own
+/// freshness rules, so its units are the ones `cargo build` checks.
+pub(in crate::cargo) fn shared_arguments(shared: &Path) -> [OsString; 2] {
     let value = toml_edit::Value::from(shared.to_string_lossy().as_ref()).to_string();
-    [
-        "--config".into(),
-        format!("build.build-dir={value}").into(),
-        "-Zchecksum-freshness".into(),
-    ]
+    ["--config".into(), format!("build.build-dir={value}").into()]
 }
 
 pub(in crate::cargo) fn require_configs(layout: &layout::Layout) -> Result<()> {

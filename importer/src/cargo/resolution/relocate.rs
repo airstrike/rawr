@@ -34,6 +34,9 @@ pub(in crate::cargo) fn relocate(
         let Ok(relative) = Path::new(path).strip_prefix(shared) else {
             return Ok(());
         };
+        if relative.starts_with(RAWR) {
+            return Ok(());
+        }
         let destination = bundle.join(relative);
         copy_tree(Path::new(path), &destination, from, to)?;
         // rustc names dep-info `<stem without lib>.d`; a build script's is
@@ -104,12 +107,36 @@ pub(in crate::cargo) fn relocate(
             code: "relocated-cargo-message",
             reason: error.to_string().into_boxed_str(),
         })?;
-        relocated.extend_from_slice(line.replace(from, to).as_bytes());
+        relocated.extend_from_slice(replace_build_paths(&line, from, to).as_bytes());
         if chunk.ends_with(b"\n") {
             relocated.push(b'\n');
         }
     }
     Ok(relocated.into_boxed_slice())
+}
+
+/// `<target>/rawr`: the shared build directory is the project's target
+/// directory, which also holds Rawr's store and generated sources. Those are
+/// not build output and keep their paths.
+const RAWR: &str = "rawr";
+
+/// `text` with every path under `from` moved under `to`, except paths under
+/// `from/rawr`.
+fn replace_build_paths(text: &str, from: &str, to: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(found) = rest.find(from) {
+        let after = &rest[found + from.len()..];
+        let reserved = after
+            .strip_prefix('/')
+            .and_then(|after| after.strip_prefix(RAWR))
+            .is_some_and(|after| after.is_empty() || after.starts_with('/'));
+        out.push_str(&rest[..found]);
+        out.push_str(if reserved { from } else { to });
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A path spelled identically in JSON, dep-info and script output.
@@ -176,7 +203,7 @@ fn copy_tree(source: &Path, destination: &Path, from: &str, to: &str) -> Result<
             Some("output" | "root-output")
         ) {
             let text = fs::read(source).map_err(io("read shared build text", source))?;
-            let text = String::from_utf8_lossy(&text).replace(from, to);
+            let text = replace_build_paths(&String::from_utf8_lossy(&text), from, to);
             fs::write(destination, &text).map_err(io("write relocated build text", destination))?;
             Some(Sha256::digest(text).into())
         } else {
@@ -222,6 +249,16 @@ fn copy_tree(source: &Path, destination: &Path, from: &str, to: &str) -> Result<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn paths_under_the_rawr_directory_keep_their_place() {
+        let text = "/p/target/debug/deps/a.d /p/target/rawr/store/x.rs /p/target/rawr";
+        assert_eq!(
+            super::replace_build_paths(text, "/p/target", "/b"),
+            "/b/debug/deps/a.d /p/target/rawr/store/x.rs /p/target/rawr"
+        );
+        assert_eq!(super::replace_build_paths("/p/target/rawrx", "/p/target", "/b"), "/b/rawrx");
+    }
+
     use std::fs;
 
     #[test]

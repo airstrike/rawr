@@ -21,3 +21,19 @@ pub fn rawr_directory(project: &Path, environment: &crate::cargo::config::Enviro
     )
     .join("rawr")
 }
+
+/// The project's Cargo build directory, where `cargo build` keeps its
+/// dependency units. Rawr's runner and resolution builds compile there, so
+/// they share every unit with `cargo build`.
+#[must_use]
+pub fn build_directory(
+    project: &Path,
+    environment: &crate::cargo::config::Environment,
+) -> PathBuf {
+    let project = fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
+    rawr_location::build_directory(
+        &project,
+        |key| environment.value_of(key),
+        environment.cargo_home().ok().flatten().as_deref(),
+    )
+}
