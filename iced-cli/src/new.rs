@@ -55,15 +55,12 @@ pub fn toolchain() -> String {
 }
 
 /// The `.cargo/config.toml` [`create`] writes: `build.target` names the
-/// host, as Rawr's builds do, so `cargo build` and `rawr run` compile the
-/// same units into `target/<host>/debug` and each reuses the other's.
-#[cfg(feature = "native-runner")]
+/// host (Cargo's `host-tuple`, so the file holds on any machine), as Rawr's
+/// builds do, so `cargo build` and `rawr run` compile the same units into
+/// `target/<host>/debug` and each reuses the other's.
 #[must_use]
 pub fn cargo_config() -> String {
-    format!(
-        "[build]\ntarget = \"{}\"\n",
-        rawr_import::cargo::toolchain::HOST.trim()
-    )
+    "[build]\ntarget = \"host-tuple\"\n".to_owned()
 }
 
 /// The Cargo package name for a crate in the directory `directory`, as

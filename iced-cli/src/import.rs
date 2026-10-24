@@ -106,7 +106,7 @@ fn same_build_as(
             crate::new::toolchain()
         ));
     }
-    if target != Some(host) {
+    if !matches!(target, Some(target) if target == host || target == "host-tuple") {
         needed.push(format!(
             "It builds for {}, so add `.cargo/config.toml`:\n\n{}",
             target.map_or_else(|| "no named target".to_owned(), |target| format!("`{target}`")),
@@ -621,6 +621,7 @@ mod tests {
         let pinned = format!("{channel}-{host}");
         assert_eq!(super::same_build_as(root, Some(&pinned), Some(host), &[]), Ok(()));
         assert_eq!(super::same_build_as(root, None, Some(host), &[]), Ok(()));
+        assert_eq!(super::same_build_as(root, None, Some("host-tuple"), &[]), Ok(()));
         let error = super::same_build_as(root, Some(&pinned), None, &[]).unwrap_err();
         assert!(error.contains(".cargo/config.toml"), "{error}");
         assert!(!error.contains("rust-toolchain.toml"), "{error}");
