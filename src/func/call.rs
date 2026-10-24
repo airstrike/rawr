@@ -1346,6 +1346,27 @@ impl Engine {
                     .unwrap_or(Dynamic::FALSE));
             }
 
+            // Handle __rawr_move(x): the local's value, leaving `()` in it.
+            // A shared local (one a closure captured) gives its value up for
+            // every holder, so the value drops with its new owner.
+            crate::engine::KEYWORD_MOVE if num_args == 1 => {
+                let arg = first_arg.unwrap();
+                if !matches!(arg, Expr::Variable(..)) {
+                    let (value, ..) = self.get_arg_value(global, caches, scope, this_ptr, arg)?;
+                    return Ok(value.flatten());
+                }
+                let mut value = match self.search_namespace(global, caches, scope, this_ptr, arg)? {
+                    crate::eval::Target::RefMut(slot) => std::mem::take(slot),
+                    #[cfg(not(feature = "no_closure"))]
+                    crate::eval::Target::SharedValue { mut guard, .. } => {
+                        std::mem::take(&mut *guard)
+                    }
+                    target => target.take_or_clone(),
+                };
+                value.set_access_mode(crate::types::dynamic::AccessMode::ReadWrite);
+                return Ok(value.flatten());
+            }
+
             // Handle is_def_var(fn_name)
             KEYWORD_IS_DEF_VAR if num_args == 1 => {
                 let arg = first_arg.unwrap();
