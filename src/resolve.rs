@@ -1162,17 +1162,23 @@ fn resolve_import_binding(
 /// module as its own: `std::time::Instant` is `iced::time::Instant`, as
 /// iced's `time` re-exports std's types.
 pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableString {
-    // tokio's `sleep` in a program that does not import tokio is the
-    // facade's own, which follows a recording's clock.
-    const REEXPORTS: [(&str, &str); 3] = [
+    // tokio in a program that does not import it, as a `?play` snippet, is
+    // rawr-iced's: its timers follow a recording's clock. Its `Instant` is
+    // the facade's, which reads that clock too, and its `Duration` is std's.
+    const REEXPORTS: [(&str, &str); 5] = [
         ("std::time", "iced::time"),
         ("core::time", "iced::time"),
-        ("tokio::time::sleep", "rawr_iced::time::sleep"),
+        ("tokio::time::Instant", "iced::time::Instant"),
+        ("tokio::time::Duration", "iced::time::Duration"),
+        ("tokio", "rawr_iced::tokio"),
     ];
     if host.entry(qualified).is_some() {
         return qualified.into();
     }
     for (std, facade) in REEXPORTS {
+        if std.starts_with("tokio") && host.facade_fingerprint("tokio").is_some() {
+            continue;
+        }
         if let Some(rest) = qualified.strip_prefix(std)
             && (rest.is_empty() || rest.starts_with("::"))
         {

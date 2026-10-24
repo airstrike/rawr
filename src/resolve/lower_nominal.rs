@@ -31511,6 +31511,31 @@ impl<'a> Parser<'a> {
         function: Option<ScriptFunction>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // `drop(sender)` of a tokio channel's sender without tokio ends it.
+        if function.is_none()
+            && name.as_str() == "drop"
+            && matches!(self.peek(), Token::LeftParen)
+            && let Some(items) = self.models.host_items("rawr_iced::tokio::__drop").map(<[_]>::to_vec)
+        {
+            let (arguments, end) = self.parse_call_arguments("call arguments")?;
+            let tokio = matches!(
+                arguments.as_slice(),
+                [argument] if matches!(
+                    self.inference.resolve(&argument.ty),
+                    Ty::Host { proof, .. } if proof.definition.path().starts_with("rawr_iced::tokio::")
+                )
+            );
+            if !tokio {
+                return Err(self
+                    .unknown_function(&name, name_span)
+                    .unwrap_or(Error::UnsupportedNominalSyntax {
+                        construct: "`drop` of a value that is not one of tokio's".into(),
+                        source: span(name_span.start(), end),
+                    }));
+            }
+            let owner = self.models.item_owner("rawr_iced::tokio::__drop").cloned();
+            return self.call_host_function(&items, owner, arguments, span(name_span.start(), end));
+        }
         // A name that no function of the crate's has is an error at the
         // name, unless the engine or a legacy function serves it.
         if function.is_none()
@@ -33128,6 +33153,26 @@ impl<'a> Parser<'a> {
                 ),
                 _ => written,
             };
+            // `tokio::spawn` has no place to run without tokio.
+            if matches!(
+                full.as_str(),
+                "tokio::spawn"
+                    | "tokio::task::spawn"
+                    | "tokio::task::spawn_blocking"
+                    | "tokio::task::spawn_local"
+            ) && crate::resolve::std_reexport("tokio::task::yield_now", &self.models.host)
+                != "tokio::task::yield_now"
+            {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "`{full}` in a program without a tokio dependency, whose async code runs \
+                         on iced's UI thread; run futures at once with `tokio::join!`, or return \
+                         a `Task` from `update`"
+                    )
+                    .into(),
+                    source: span(first_span.start(), path_end),
+                });
+            }
             // `tokio::time::sleep(d)` without tokio: the facade's own
             // (`resolve::std_reexport`).
             if full.starts_with("tokio::")

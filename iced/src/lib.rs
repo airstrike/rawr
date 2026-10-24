@@ -96,6 +96,7 @@ const OWNED_EQ_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
 /// `{:?}` of the facade's value types prints Rust's `Debug` text.
 fn register_debug() {
     use rawr::host::debug::register;
+    tokio_facade::register_debug();
     register::<iced::Border>();
     register::<iced::Color>();
     register::<iced::ContentFit>();
@@ -1164,11 +1165,8 @@ fn extension_with_exports(
         "task::script",
         script_signature(&exports.task)?,
     )?)?;
-    // tokio's `time::sleep`, for a program without tokio (`resolve::std_reexport`).
-    let mut sleep = signature::Builder::new();
-    sleep.parameter(external_type(&exports.duration, [])?);
-    sleep.output(external_type(&exports.task, [type_ref::Type::unit()])?);
-    builder.item(item::Definition::function("time::sleep", sleep.finish())?)?;
+    // tokio, for a program without tokio (`resolve::std_reexport`).
+    tokio_facade::declare(&mut builder, &exports.task, &exports.duration, &exports.instant)?;
     builder.item(item::Definition::function(
         "theme::custom",
         extension_theme_signature(&exports.theme)?,
@@ -1302,6 +1300,7 @@ pub fn runtime_facades() -> Result<[host::runtime::Facade; 2], host::Error> {
     let mut rawr_builder = host::runtime::Builder::new(rawr);
     subscription::bind(&mut iced_builder, &mut rawr_builder);
     task::bind(&mut iced_builder, &mut rawr_builder);
+    tokio_facade::bind(&mut rawr_builder);
     theme::bind(&mut iced_builder, &mut rawr_builder);
     widget::bind(&mut iced_builder, &mut rawr_builder);
     Ok([iced_builder.finish(), rawr_builder.finish()])
@@ -1341,6 +1340,7 @@ pub(crate) fn install_test_runtime(registry: &mut host::runtime::Registry) {
 struct Exports {
     task: host::type_def::Export,
     duration: host::type_def::Export,
+    instant: host::type_def::Export,
     subscription: host::type_def::Export,
     theme: host::type_def::Export,
     element: host::type_def::Export,
@@ -1355,6 +1355,7 @@ impl Exports {
         Ok(Self {
             task: iced.export_type("Task")?,
             duration: iced.export_type("time::Duration")?,
+            instant: iced.export_type("time::Instant")?,
             subscription: iced.export_type("Subscription")?,
             theme: iced.export_type("Theme")?,
             element: iced.export_type("Element")?,

@@ -63,6 +63,7 @@ enum PreparedKind {
     Script(item::Value),
     Send { sender: Sender, value: Dynamic },
     Join { plans: Box<[Prepared]>, fallible: bool },
+    Select(Box<[Prepared]>),
 }
 
 /// One value a Rust task yields, turned into a Rawr value on the UI thread.
@@ -354,12 +355,85 @@ pub fn imported(task: iced::Task<Materialize>) -> Dynamic {
     }))
 }
 
+/// What makes a tokio future, for [`Native::Tokio`].
+#[derive(Clone)]
+pub(crate) struct Factory(
+    pub(crate) Arc<dyn Fn() -> iced::futures::future::BoxFuture<'static, Dynamic> + Send + Sync>,
+);
+
+impl fmt::Debug for Factory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Factory")
+    }
+}
+
+/// The task of a tokio future `make` makes. A method's task has no
+/// witness: its output is a value Rawr code gave it, as `recv` gives what
+/// `send` took.
+pub(crate) fn tokio_task(
+    witness: Option<host::runtime::Witness>,
+    make: impl Fn() -> iced::futures::future::BoxFuture<'static, Dynamic> + Send + Sync + 'static,
+) -> Dynamic {
+    Dynamic::from(Plan {
+        kind: Kind::Native(Native::Tokio(Factory(Arc::new(make)))),
+        witness,
+    })
+}
+
+/// tokio's `join!` (or `try_join!`) and `select!` over `values`, each a
+/// `Task`.
+pub(crate) fn tokio_combined(
+    witness: host::runtime::Witness,
+    values: &mut [&mut Dynamic],
+    join: Option<bool>,
+    path: &str,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    let plans = values
+        .iter_mut()
+        .map(|plan| take(plan, path))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_boxed_slice();
+    Ok(Dynamic::from(Plan {
+        kind: match join {
+            Some(fallible) => Kind::Join { plans, fallible },
+            None => Kind::Select(plans),
+        },
+        witness: Some(witness),
+    }))
+}
+
+/// tokio's `time::timeout`: `plan`'s output in `Ok`, unless `duration`
+/// ends first, which gives `Err(elapsed)`.
+pub(crate) fn tokio_timeout(
+    witness: host::runtime::Witness,
+    plan: &mut Dynamic,
+    duration: std::time::Duration,
+    elapsed: Dynamic,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    let plan = take(plan, "time::timeout")?;
+    let timer = Plan {
+        kind: Kind::Native(Native::Tokio(Factory(Arc::new(move || {
+            let elapsed = elapsed.clone();
+            let sleep = crate::tokio_facade::sleep(duration);
+            Box::pin(async move {
+                sleep.await;
+                elapsed
+            })
+        })))),
+        witness: None,
+    };
+    Ok(Dynamic::from(Plan {
+        kind: Kind::Select(Box::new([plan, timer])),
+        witness: Some(witness),
+    }))
+}
+
 /// iced's own tasks: `exit`, `window::latest`/`close` and the focus
 /// operations. They run in iced's runtime and touch no Rawr authority.
 #[derive(Clone, Debug)]
 pub(crate) enum Native {
-    /// A timer, as tokio's `sleep`: on a recording's clock while it runs.
-    Sleep(std::time::Duration),
+    /// A tokio future, made each time the task runs (`tokio_facade`).
+    Tokio(Factory),
     Exit,
     LatestWindow,
     ScaleFactor(iced::window::Id),
@@ -390,9 +464,7 @@ pub(crate) enum Native {
 impl Native {
     fn lower(self) -> iced::Task<Result<Dynamic, Error>> {
         match self {
-            Self::Sleep(duration) => {
-                iced::Task::future(crate::tokio_facade::sleep(duration)).map(|()| Ok(Dynamic::UNIT))
-            }
+            Self::Tokio(factory) => iced::Task::future((factory.0)()).map(Ok),
             Self::Exit => iced::exit(),
             Self::LatestWindow => {
                 iced::window::latest().map(|id| Ok(rawr::option::from(id)))
@@ -478,6 +550,10 @@ enum Kind {
     /// `futures::future::join` (or `try_join`, which ends at the first
     /// `Err`): the plans run at once, and the task gives their outputs.
     Join { plans: Box<[Plan]>, fallible: bool },
+    /// tokio's `select!` and `timeout`: the plans run at once, and the
+    /// first output ends the others. Plan `i` of `n` gives `Err` `i` times
+    /// around its output, and then `Ok` unless it is the last.
+    Select(Box<[Plan]>),
 }
 
 /// Current executable authority used only while a symbolic plan is lowered.
@@ -599,7 +675,8 @@ impl Plan {
             | Kind::Abortable { .. }
             | Kind::Script(_)
             | Kind::Send { .. }
-            | Kind::Join { .. } => None,
+            | Kind::Join { .. }
+            | Kind::Select(_) => None,
             Kind::Done(payload) => Some(payload),
         }
     }
@@ -685,6 +762,14 @@ impl Plan {
                     .into_boxed_slice(),
                 fallible,
             },
+            Kind::Select(plans) => PreparedKind::Select(
+                plans
+                    .into_vec()
+                    .into_iter()
+                    .map(|plan| plan.prepare_application(authority))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+            ),
         };
         Ok(Prepared { kind, witness })
     }
@@ -745,6 +830,14 @@ impl Plan {
                         .collect::<Result<Vec<_>, _>>()?,
                 )
             }
+            Kind::Select(plans) => {
+                let raced = Raced::new(plans.len(), next);
+                let mut tasks = Vec::with_capacity(plans.len());
+                for (index, plan) in plans.into_vec().into_iter().enumerate() {
+                    tasks.push(raced.run(index, plan.lower_with(lowering, raced.slot(index))?));
+                }
+                iced::Task::batch(tasks)
+            }
         })
     }
 }
@@ -788,6 +881,72 @@ impl Joined {
             drop(state);
             let outputs = Dynamic::from_array(outputs);
             next(if joined.1 { rawr::result::ok(outputs) } else { outputs })
+        })
+    }
+}
+
+/// A select's plans while they run. The first output wins: it goes on in
+/// the shape [`Kind::Select`] gives, and every other plan is aborted.
+#[derive(Clone)]
+struct Raced(Arc<Mutex<Race>>);
+
+struct Race {
+    next: Option<Next>,
+    winner: Option<usize>,
+    handles: Vec<Option<iced::task::Handle>>,
+}
+
+impl Raced {
+    fn new(count: usize, next: Next) -> Self {
+        Self(Arc::new(Mutex::new(Race {
+            next: Some(next),
+            winner: None,
+            handles: vec![None; count],
+        })))
+    }
+
+    /// Plan `index`'s task, abortable by a win of another plan. A plan
+    /// lowered after another won (one whose output was ready) does not
+    /// run, and a plan that won as it was lowered goes on.
+    fn run(&self, index: usize, task: iced::Task<runtime::Message>) -> iced::Task<runtime::Message> {
+        let mut race = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        match race.winner {
+            Some(winner) if winner == index => task,
+            Some(_) => iced::Task::none(),
+            None => {
+                let (task, handle) = task.abortable();
+                race.handles[index] = Some(handle);
+                task
+            }
+        }
+    }
+
+    fn slot(&self, index: usize) -> Next {
+        let raced = self.clone();
+        Arc::new(move |output| {
+            let mut race = raced.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(next) = race.next.take() else {
+                return iced::Task::none();
+            };
+            race.winner = Some(index);
+            let count = race.handles.len();
+            for (other, handle) in race.handles.iter_mut().enumerate() {
+                if other != index
+                    && let Some(handle) = handle.take()
+                {
+                    handle.abort();
+                }
+            }
+            drop(race);
+            let mut output = if index + 1 < count {
+                rawr::result::ok(output)
+            } else {
+                output
+            };
+            for _ in 0..index {
+                output = rawr::result::err(output);
+            }
+            next(output)
         })
     }
 }
@@ -1086,6 +1245,18 @@ impl Prepared {
                         .enumerate()
                         .map(|(index, plan)| plan.lower_with(context, lowering, joined.slot(index))),
                 )
+            }
+            PreparedKind::Select(plans) => {
+                let raced = Raced::new(plans.len(), next);
+                let tasks = plans
+                    .into_vec()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, plan)| {
+                        raced.run(index, plan.lower_with(context, lowering, raced.slot(index)))
+                    })
+                    .collect::<Vec<_>>();
+                iced::Task::batch(tasks)
             }
         }
     }
@@ -1402,6 +1573,10 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
                     expected.argument_count() == 1 && expected.argument_matches(0, &Dynamic::UNIT),
                 );
             }
+            // A tokio method's task gives a value Rawr code gave it.
+            if plan.witness.is_none() && matches!(plan.kind, Kind::Native(Native::Tokio(_))) {
+                return expected.attest(expected.argument_count() == 1);
+            }
             if expected.argument_count() != 1
                 || !plan
                     .done_payload()
@@ -1473,17 +1648,6 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             )))
         })
         .expect("the iced facade must retain the exact Task::perform item");
-    rawr.bind_with_context("rawr_iced::time::sleep", |call, args| {
-        let [duration] = args else {
-            return Err(arity("time::sleep", 1, args.len()));
-        };
-        let duration = take_value::<std::time::Duration>(duration, "time::Duration")?;
-        Ok(Dynamic::from(Plan {
-            kind: Kind::Native(Native::Sleep(duration)),
-            witness: Some(call.output_witness().map_err(witness_error)?),
-        }))
-    })
-    .expect("the rawr_iced facade must retain time::sleep");
     rawr.bind_with_context("rawr_iced::task::script", |call, args| {
         let [step] = args else {
             return Err(arity("task::script", 1, args.len()));
