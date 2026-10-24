@@ -801,6 +801,7 @@ fn native_account_retains_facades_extensions_structural_and_event_metadata() {
     assert!(extended.0 > facades.0 && extended.1 > facades.1);
     let row = runner::StructuralRow::new(
         "native",
+        "",
         identity::Selector::StructConstructor(identity::Form::Unit).fingerprint(),
         [31; 32],
         [32; 32],
@@ -867,6 +868,7 @@ fn runtime_fixture() -> (
         definitions,
         runner::StructuralRow::new(
             "native",
+            "",
             identity::Selector::StructConstructor(identity::Form::Unit).fingerprint(),
             [31; 32],
             [32; 32],

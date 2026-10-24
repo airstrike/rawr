@@ -11824,7 +11824,7 @@ impl<'a> Parser<'a> {
                 let definition = self
                     .models
                     .host
-                    .structural(&path, &selector)
+                    .structural(&path, &selector, operation.kind)
                     .cloned()
                     .ok_or_else(|| {
                         let error = Error::InvalidHostOperation {
@@ -20292,6 +20292,14 @@ impl<'a> Parser<'a> {
         let Ty::Host { proof, .. } = ty else {
             return None;
         };
+        // An imported Rust enum's variants, each matched through the
+        // bridge (`imported_variant_pattern`).
+        #[cfg(feature = "rust-import")]
+        if proof.definition.identity().imported().is_some()
+            && let crate::host::type_def::Shape::Enum(variants) = proof.definition.shape()
+        {
+            return Some(variants.iter().map(|variant| variant.name().into()).collect());
+        }
         let path = proof.definition.path();
         let own = crate::host::type_ref::Type::registered(path.as_str()).ok();
         let bool_ty = crate::host::type_ref::Type::builtin(crate::host::type_ref::Builtin::Bool);
@@ -20655,6 +20663,13 @@ impl<'a> Parser<'a> {
                 expression: pattern.owner_span,
             });
         }
+        #[cfg(feature = "rust-import")]
+        if !pattern.host_struct
+            && proof.definition.identity().imported().is_some()
+            && matches!(proof.definition.shape(), crate::host::type_def::Shape::Enum(_))
+        {
+            return self.imported_variant_pattern(pattern, value, ty, out);
+        }
         // A facade struct's fields, each read and matched on its type.
         if pattern.host_struct {
             let names = pattern.named.as_ref().map(|(names, _)| names.as_ref()).unwrap_or_default();
@@ -20770,6 +20785,141 @@ impl<'a> Parser<'a> {
             _ => Err(Error::InvalidMatch {
                 owner: owner_path.as_str().into(),
                 reason: format!("`{variant}` has one field").into(),
+                pattern: at,
+            }),
+        }
+    }
+
+    /// `Enum::Variant`, `Enum::Variant(p, ..)` or `Enum::Variant { f: p, .. }`
+    /// on an imported Rust enum. The bridge's matcher gives `Some` of the
+    /// variant's fields, cloned, when the value is that variant; each field
+    /// is matched as any pattern on its type.
+    #[cfg(feature = "rust-import")]
+    fn imported_variant_pattern(
+        &mut self,
+        pattern: &EnumPatternSyntax,
+        value: origin::Fragment,
+        ty: &Ty,
+        out: &mut HostPattern,
+    ) -> Result<(), Error> {
+        let Ty::Host { proof, arguments } = ty else {
+            unreachable!("imported variant patterns match imported values");
+        };
+        let definition = proof.definition.clone();
+        let path: ImmutableString = definition.path().as_str().into();
+        let crate::host::type_def::Shape::Enum(variants) = definition.shape() else {
+            unreachable!("imported variant patterns match enums");
+        };
+        let at = pattern.variant_span;
+        let Some(variant) = variants
+            .iter()
+            .find(|variant| variant.name() == pattern.variant.as_str())
+            .cloned()
+        else {
+            return Err(Error::UnknownMember {
+                owner: path,
+                member: pattern.variant.clone(),
+                reference: at,
+            });
+        };
+        let mut parameters = definition
+            .parameters()
+            .iter()
+            .cloned()
+            .zip(arguments.iter().cloned())
+            .collect();
+        let mut fields = Vec::with_capacity(variant.fields().len());
+        for field in variant.fields() {
+            fields.push(self.instantiate_host_type(
+                field.ty(),
+                &mut parameters,
+                &path,
+                proof.owner.as_ref(),
+                Some(&definition),
+            )?);
+        }
+        let payload = if fields.is_empty() {
+            Ty::Unit
+        } else {
+            Ty::Tuple(fields.clone().into_boxed_slice())
+        };
+        let imported = ImportedOperation {
+            kind: crate::host::structural::Kind::Match,
+            operands: vec![(ty.clone(), at, true)].into_boxed_slice(),
+            output: Ty::Option(Box::new(payload)),
+            // The matcher reads the value by its handle and gives new
+            // values, its fields, which take its output's witness.
+            receiver: None,
+        };
+        let helper =
+            self.push_imported_op(&path, variant.imported_identity(), Some(imported), at)?;
+        let matched = origin::Fragment::call(&helper, [value]);
+        let test = self.prelude_op(PreludeOp::IsSome, [matched.clone()]);
+        out.tests.push(test);
+        let inner = self.prelude_op(PreludeOp::Unwrap, [matched]);
+        let rawr_import::surface::identity::Selector::EnumVariant { form, .. } =
+            variant.imported_identity()
+        else {
+            return Err(Error::InvalidHostOperation {
+                item: path,
+                reason: "imported enum variant lost its exact form".into(),
+                operation: at,
+            });
+        };
+        let field_at = |index: usize| {
+            let mut field = inner.clone().surrounded("(", ")");
+            field.push_text(format!("[{index}]"));
+            field
+        };
+        match (form, &pattern.named) {
+            // `Variant { .. }` matches any variant's fields, as in Rust.
+            (_, Some((names, true))) if names.is_empty() => Ok(()),
+            (rawr_import::surface::identity::Form::Named { .. }, Some((names, _))) => {
+                for ((name, name_span), member) in names.iter().zip(pattern.payload.iter()) {
+                    let Some(index) = variant
+                        .fields()
+                        .iter()
+                        .position(|field| field.name() == name.as_str())
+                    else {
+                        return Err(Error::UnknownMember {
+                            owner: format!("{path}::{}", pattern.variant).into(),
+                            member: name.clone(),
+                            reference: *name_span,
+                        });
+                    };
+                    self.host_pattern(member, field_at(index), &fields[index], out)?;
+                }
+                Ok(())
+            }
+            (rawr_import::surface::identity::Form::Tuple { .. }, None)
+                if !pattern.payload.is_empty() =>
+            {
+                let discard = PatternSyntax::Discard { span: at };
+                let members = tuple_members(&pattern.payload, fields.len(), &discard)?;
+                if members.len() != fields.len() {
+                    return Err(Error::InvalidMatch {
+                        owner: path,
+                        reason: format!(
+                            "`{}` has {} field(s), the pattern {}",
+                            pattern.variant,
+                            fields.len(),
+                            members.len()
+                        )
+                        .into(),
+                        pattern: at,
+                    });
+                }
+                for (index, member) in members.into_iter().enumerate() {
+                    self.host_pattern(member, field_at(index), &fields[index], out)?;
+                }
+                Ok(())
+            }
+            (rawr_import::surface::identity::Form::Unit, None) if pattern.payload.is_empty() => {
+                Ok(())
+            }
+            _ => Err(Error::InvalidMatch {
+                owner: path,
+                reason: format!("the pattern does not have `{}`'s form", pattern.variant).into(),
                 pattern: at,
             }),
         }

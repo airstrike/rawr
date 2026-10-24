@@ -745,8 +745,27 @@ fn attest_inner(
         && let Some(witness) = witness.argument_witness(index)
     {
         arena.attest(handle, witness)?;
+    } else if let Some((inner, index)) = inner_tuple(value)
+        && let Some(tuple) = witness.argument_witness(index)
+    {
+        // A variant's fields, as its matcher gives them.
+        for (member, element) in inner.iter().enumerate() {
+            if let Some(handle) = element.read_lock::<NativeHandle>().map(|value| *value)
+                && let Some(witness) = tuple.argument_witness(member)
+            {
+                arena.attest(handle, witness)?;
+            }
+        }
     }
     Ok(())
+}
+
+/// The members of the tuple inside an `Option`'s `Some`.
+fn inner_tuple(value: &Dynamic) -> Option<(Vec<Dynamic>, usize)> {
+    let mut copy = value.clone();
+    let inner = __rawr_internal::option::take(&mut copy).flatten()?;
+    let members = inner.as_array_ref().ok()?.to_vec();
+    Some((members, 0))
 }
 
 fn runtime_project(
@@ -2594,6 +2613,17 @@ fn assemble_accounted<B: crate::surface::Runner>(
         .checked_add(coverage.retained_usage().1)
         .ok_or(request::Error::Allocation)?;
     account.exceeded(GENERATED_COMBINED_RESOURCE, limits.json_bytes, combined);
+    // Each variant's matcher, after the entries the inventory pairs with
+    // plans one to one.
+    for plan in &key.request.plans {
+        if has_matcher(plan) {
+            entries.push(crate::runner::manifest::Entry::new(
+                matcher_identity(plan),
+                signature(plan)?,
+                1,
+            ));
+        }
+    }
     let generated = crate::runner::manifest::GeneratedManifest::with_coverage(
         key.build,
         file_records,
@@ -2960,8 +2990,9 @@ fn render_source(
         })?;
         write!(
             output,
-            "    __rawr_internal::package::import::runner::StructuralRow::new({:?}, ",
+            "    __rawr_internal::package::import::runner::StructuralRow::new({:?}, {:?}, ",
             plan.export().root_alias(),
+            structural_owner(plan),
         )
         .map_err(|_| request::Error::Encoding)?;
         byte_array(output, selector)?;
@@ -2975,6 +3006,29 @@ fn render_source(
         byte_array(output, &signature(plan)?)?;
         writeln!(output, ", {}, {kind}),", arguments(plan)?)
             .map_err(|_| request::Error::Encoding)?;
+        if has_matcher(plan) {
+            write!(
+                output,
+                "    __rawr_internal::package::import::runner::StructuralRow::new({:?}, {:?}, ",
+                plan.export().root_alias(),
+                structural_owner(plan),
+            )
+            .map_err(|_| request::Error::Encoding)?;
+            byte_array(output, selector)?;
+            output
+                .write_all(b", ")
+                .map_err(|_| request::Error::Encoding)?;
+            byte_array(output, &matcher_identity(plan))?;
+            output
+                .write_all(b", ")
+                .map_err(|_| request::Error::Encoding)?;
+            byte_array(output, &signature(plan)?)?;
+            writeln!(
+                output,
+                ", 1, __rawr_internal::package::import::runner::StructuralKind::Match),"
+            )
+            .map_err(|_| request::Error::Encoding)?;
+        }
     }
     output
         .write_all(b"];\n\n")
@@ -3038,6 +3092,23 @@ fn render_source(
                 adapter_name(plan)
             )
             .map_err(|_| request::Error::Encoding)?;
+            if has_matcher(plan) {
+                write!(file, "    Adapter {{ identity: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, &matcher_identity(plan))?;
+                write!(file, ", signature: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, &signature(plan)?)?;
+                write!(file, ", selector: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
+                write!(file, ", instance: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, &[0; 32])?;
+                writeln!(
+                    file,
+                    ", bound: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
+                    plan.export().root_alias(),
+                    matcher_name(plan)
+                )
+                .map_err(|_| request::Error::Encoding)?;
+            }
         }
         file.write_all(b"];\n\n")
             .map_err(|_| request::Error::Encoding)?;
@@ -3046,6 +3117,7 @@ fn render_source(
             let plan = &plans[*index];
             let start = span_offset(&file)?;
             render_adapter(plan, plans, profile, facade.as_ref(), &mut file)?;
+            render_matcher(plan, &mut file)?;
             let end = span_offset(&file)?;
             spans.push((plan.identity(), path.clone(), start..end));
         }
@@ -3431,6 +3503,102 @@ fn copy_scalar(ty: &convert::Type) -> bool {
         convert::Type::Result(ok, err) => copy_scalar(ok) && copy_scalar(err),
         _ => false,
     }
+}
+
+/// A variant of a non-generic enum also has a matcher: the variant's
+/// fields, cloned, when a value is that variant (`render_matcher`).
+fn has_matcher(plan: &Plan) -> bool {
+    matches!(plan.operation(), Operation::EnumVariant { parameters, .. } if parameters.is_empty())
+}
+
+/// The entry identity of a variant's matcher: its constructor's, tagged.
+fn matcher_identity(plan: &Plan) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"rawr-variant-matcher");
+    hasher.update(plan.identity().as_bytes());
+    hasher.finalize().into()
+}
+
+fn matcher_name(plan: &Plan) -> String {
+    format!("{}_match", adapter_name(plan))
+}
+
+/// `Some` of the variant's fields, cloned, when the value the first
+/// argument holds is that variant; otherwise `None`.
+fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Error> {
+    let Operation::EnumVariant {
+        name, form, fields, ..
+    } = plan.operation()
+    else {
+        return Ok(());
+    };
+    if !has_matcher(plan) {
+        return Ok(());
+    }
+    let path = rust_path(plan);
+    let bound = (0..fields.len())
+        .map(|index| format!("field_{index}"))
+        .collect::<Vec<_>>();
+    let pattern = match form {
+        crate::api::model::FieldForm::Unit => format!("{path}::{name}"),
+        crate::api::model::FieldForm::Tuple => format!("{path}::{name}({})", bound.join(", ")),
+        crate::api::model::FieldForm::Record => format!(
+            "{path}::{name} {{ {} }}",
+            fields
+                .iter()
+                .zip(&bound)
+                .map(|(field, local)| format!("{}: {local}", field.name()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let cloned = match bound.len() {
+        0 => "()".to_string(),
+        1 => format!("(Clone::clone({}),)", bound[0]),
+        _ => format!(
+            "({})",
+            bound
+                .iter()
+                .map(|local| format!("Clone::clone({local})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
+        matcher_name(plan)
+    )
+    .map_err(|_| request::Error::Encoding)?;
+    writeln!(
+        output,
+        "    let handle = native_handle(arguments, 0, false)?;\n    #[allow(unreachable_patterns)]\n    let output = arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?;\n    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};"
+    )
+    .map_err(|_| request::Error::Encoding)?;
+    if fields.is_empty() {
+        output
+            .write_all(b"    let () = fields;\n    Ok(__rawr_internal::option::some(Dynamic::from(())))\n}\n\n")
+            .map_err(|_| request::Error::Encoding)?;
+        return Ok(());
+    }
+    output
+        .write_all(b"    let mut values = Vec::new();\n")
+        .map_err(|_| request::Error::Encoding)?;
+    for (index, field) in fields.iter().enumerate() {
+        let mut converted = String::new();
+        render_to_dynamic(field.ty(), &format!("fields.{index}"), 0, &mut converted)?;
+        writeln!(output, "    values.push(({converted})?);")
+            .map_err(|_| request::Error::Encoding)?;
+    }
+    output
+        .write_all(b"    Ok(__rawr_internal::option::some(Dynamic::from_array(values)))\n}\n\n")
+        .map_err(|_| request::Error::Encoding)
+}
+
+/// The path below the crate root of the type a structural adapter
+/// belongs to: `echo::Event` for its variant `Connected`.
+fn structural_owner(plan: &Plan) -> String {
+    plan.export().path().collect::<Vec<_>>().join("::")
 }
 
 fn structural_kind(plan: &Plan) -> Option<String> {

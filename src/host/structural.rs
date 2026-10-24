@@ -11,6 +11,8 @@ pub(crate) enum Kind {
     Constructor,
     Field { copy: bool },
     Variant,
+    /// A variant's fields when the value is that variant, else `None`.
+    Match,
 }
 
 /// One generated-adapter admission retained by the compiler and runtime.

@@ -95,6 +95,7 @@ impl Witness {
         let ty = match (&*self.ty, index) {
             (Type::Option(element), 0) | (Type::Result(element, _), 0) => (**element).clone(),
             (Type::Result(_, error), 1) => (**error).clone(),
+            (Type::Tuple(members), index) => members.get(index)?.clone(),
             _ => self.ty.arguments().get(index)?.clone(),
         };
         Some(Self::issue(self.authority, ty))

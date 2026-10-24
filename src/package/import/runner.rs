@@ -152,6 +152,7 @@ pub enum StructuralKind {
     Constructor,
     Field { copy: bool },
     Variant,
+    Match,
 }
 
 /// One scalar-only generated structural row awaiting manifest authentication.
@@ -159,6 +160,9 @@ pub enum StructuralKind {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct StructuralRow {
     root: &'static str,
+    /// The owning type's path below the root, `echo::Event`, which tells
+    /// two types' variants or fields of one name apart.
+    owner: &'static str,
     selector: [u8; 32],
     identity: [u8; 32],
     signature: [u8; 32],
@@ -331,6 +335,7 @@ impl StructuralRow {
     #[must_use]
     pub const fn new(
         root: &'static str,
+        owner: &'static str,
         selector: [u8; 32],
         identity: [u8; 32],
         signature: [u8; 32],
@@ -339,6 +344,7 @@ impl StructuralRow {
     ) -> Self {
         Self {
             root,
+            owner,
             selector,
             identity,
             signature,
@@ -728,6 +734,7 @@ fn authenticate_structural(
                 StructuralKind::Constructor => host::structural::Kind::Constructor,
                 StructuralKind::Field { copy } => host::structural::Kind::Field { copy },
                 StructuralKind::Variant => host::structural::Kind::Variant,
+                StructuralKind::Match => host::structural::Kind::Match,
             },
         );
         if adapters
@@ -781,7 +788,17 @@ fn structural_path<'facade>(
     row: &StructuralRow,
 ) -> Result<(&'facade host::path::Path, StructuralKind), Error> {
     let mut found = None;
-    for definition in facade.types() {
+    let owned = |definition: &host::type_def::Definition| {
+        row.owner.is_empty() || {
+            let path = definition.path();
+            let path = path.as_str();
+            path == row.owner
+                || path
+                    .strip_suffix(row.owner)
+                    .is_some_and(|prefix| prefix.ends_with("::"))
+        }
+    };
+    for definition in facade.types().filter(|definition| owned(definition)) {
         let candidate = match definition.shape() {
             host::type_def::Shape::Struct {
                 constructor,
@@ -799,9 +816,15 @@ fn structural_path<'facade>(
                     )
                 }))
                 .next(),
+            // A variant's selector names its constructor and its matcher.
             host::type_def::Shape::Enum(variants) => variants.iter().find_map(|variant| {
-                (variant.imported_identity().fingerprint() == row.selector)
-                    .then_some(StructuralKind::Variant)
+                (variant.imported_identity().fingerprint() == row.selector).then_some(
+                    if row.kind == StructuralKind::Match {
+                        StructuralKind::Match
+                    } else {
+                        StructuralKind::Variant
+                    },
+                )
             }),
             host::type_def::Shape::Opaque | host::type_def::Shape::Trait(_) => None,
         };
