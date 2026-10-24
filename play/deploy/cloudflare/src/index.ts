@@ -108,6 +108,18 @@ const OLD_HOST = "rawr-bot.airstrike.fyi";
 const MOVED: Record<string, string> = { "/": "/bot", "/invite": "/bot/invite", "/health": "/bot/health" };
 
 /**
+ * Docs pages that moved when the docs were split by task. The FAQ's answers
+ * went to /docs/how-it-works and elsewhere (docs.js follows a moved anchor),
+ * and rawr-iced's and ?play's pages became directories.
+ */
+export const DOCS_MOVED: Record<string, string> = {
+  "/docs/faq": "/docs/how-it-works",
+  "/docs/faq.html": "/docs/how-it-works",
+  "/docs/iced.html": "/docs/iced",
+  "/docs/play.html": "/docs/play",
+};
+
+/**
  * A share's preview: its PNG, a plain program's output (JSON), or a failure
  * (kept forever for a code error or a limit).
  */
@@ -821,6 +833,9 @@ export default {
       return new Response(request.method === "HEAD" ? null : html, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
       });
+    }
+    if (DOCS_MOVED[path]) {
+      return Response.redirect(`${SITE}${DOCS_MOVED[path]}${url.search}`, 301);
     }
     if (path !== "/bot/health") {
       return env.ASSETS.fetch(request);
