@@ -2346,7 +2346,13 @@ fn parse_generic_params(input: &mut TokenStream) -> ParseResult<Vec<crate::item:
 
 /// `use<'a, T>` among `impl Trait` bounds: Rust's precise capturing, which
 /// Rawr's types need no record of. Where it ends, when it was there.
-fn skip_precise_capture(input: &mut TokenStream) -> ParseResult<Option<Position>> {
+///
+/// `Option<impl Future + use<>>` ends in `>>`, one token: its second `>`
+/// closes the enclosing list, which `split` then records.
+fn skip_precise_capture(
+    input: &mut TokenStream,
+    split: Option<&mut Option<Position>>,
+) -> ParseResult<Option<Position>> {
     if !matches!(input.peek(), Some((Token::Use, _))) {
         return Ok(None);
     }
@@ -2355,6 +2361,13 @@ fn skip_precise_capture(input: &mut TokenStream) -> ParseResult<Option<Position>
     loop {
         match input.next() {
             Some((Token::GreaterThan, position)) => return Ok(Some(after(position, 1))),
+            Some((Token::RightShift, position)) if split.is_some() => {
+                let end = after(position, 1);
+                if let Some(split) = split {
+                    *split = Some(end);
+                }
+                return Ok(Some(end));
+            }
             Some((Token::EOF, position)) => {
                 return Err(PERR::MissingToken(">".into(), "to close `use<..>`".into())
                     .into_err(position));
@@ -2374,7 +2387,7 @@ fn parse_bounds(
     loop {
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             parse_lifetime(input)?;
-        } else if skip_precise_capture(input)?.is_some() {
+        } else if skip_precise_capture(input, closing.as_deref_mut())?.is_some() {
         } else if let Some((Token::Identifier(name) | Token::Reserved(name), position)) =
             input.peek()
             && is_fn_trait(name)
@@ -3002,7 +3015,7 @@ fn parse_type_split(
                 path.span = Span::new(start, lifetime.span.end());
                 continue;
             }
-            if let Some(end) = skip_precise_capture(input)? {
+            if let Some(end) = skip_precise_capture(input, Some(split))? {
                 path.span = Span::new(start, end);
                 continue;
             }
@@ -3099,7 +3112,7 @@ fn skip_fn_bounds(
             path.span = Span::new(start, lifetime.span.end());
             continue;
         }
-        if let Some(end) = skip_precise_capture(input)? {
+        if let Some(end) = skip_precise_capture(input, Some(split))? {
             path.span = Span::new(start, end);
             continue;
         }
@@ -3385,7 +3398,7 @@ fn parse_iterator_type(
             span = Span::new(start, lifetime.span.end());
             continue;
         }
-        if let Some(end) = skip_precise_capture(input)? {
+        if let Some(end) = skip_precise_capture(input, Some(split))? {
             span = Span::new(start, end);
             continue;
         }

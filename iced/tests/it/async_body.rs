@@ -259,3 +259,16 @@ async fn total() -> i64 {
     );
     assert_eq!(loaded(&source), 4 + 3 + 100 + 1 + 7);
 }
+
+#[test]
+fn an_optional_future_with_precise_capture_parses_and_runs() {
+    let source = app(
+        r#"
+fn tick(ready: bool) -> Option<impl Future<Output = i64> + use<>> {
+    if ready { Some(async move { Task::done(20).await + 1 }) } else { None }
+}
+"#,
+        "async { let a = match tick(true) { Some(future) => future.await, None => 0 }; a + tick(false).map_or(5, |_| 0) }",
+    );
+    assert_eq!(loaded(&source), 26);
+}
