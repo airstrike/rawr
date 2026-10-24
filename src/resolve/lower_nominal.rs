@@ -11204,13 +11204,12 @@ impl<'a> Parser<'a> {
                 ident(&format!("__{name}{count}")),
                 (Token::LeftParen, at),
             ]);
+            // Each future is an argument as written, so a local moves in.
             for (index, future) in futures.into_iter().enumerate() {
                 if index > 0 {
                     spliced.push((Token::Comma, at));
                 }
-                spliced.push((Token::LeftParen, at));
                 spliced.extend(future);
-                spliced.push((Token::RightParen, at));
             }
             spliced.push((Token::RightParen, at));
         }
@@ -14292,7 +14291,11 @@ impl<'a> Parser<'a> {
             });
         }
         self.hint_closures(&items, None);
-        let (arguments, end) = self.parse_call_arguments("host function arguments")?;
+        let (mut arguments, end) = self.parse_call_arguments("host function arguments")?;
+        // The written arguments move into the call, as Rust's do.
+        for argument in &mut arguments {
+            self.move_local(argument);
+        }
         let call = span(name_span.start(), end);
         self.call_host_function(&items, owner, arguments, call)
     }
@@ -14579,7 +14582,6 @@ impl<'a> Parser<'a> {
             if item.imported_identity().is_some() && !argument.ty.is_imported_static_operand() {
                 self.consume_imported_value(argument, &item.path(), call)?;
             }
-            self.move_local(argument);
         }
         let output = self.inference.resolve(&signature.output);
         self.reject_invocation(
@@ -31805,6 +31807,19 @@ impl<'a> Parser<'a> {
         let inputs: Box<[Ty]> = parameters.into_iter().map(|(_, ty, _)| ty).collect();
         let output = Box::new(annotated.unwrap_or_else(|| body.ty.clone()));
         let expression = span(start.start(), body.span.end());
+        // `move` moves each capture that is not `Copy` into the closure as
+        // it is created, and copies the others.
+        let moving = if moved {
+            scope
+                .captures
+                .iter()
+                .filter(|name| *name != "this")
+                .filter(|name| self.move_capture(name, expression))
+                .cloned()
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
         let ty = match &self.callable {
             Some(callable) => {
                 self.closure_count += 1;
@@ -31826,6 +31841,12 @@ impl<'a> Parser<'a> {
                         } else {
                             SELF_CAPTURE
                         }));
+                    } else if moving.contains(name) {
+                        lifted_parameters.push(name.clone());
+                        captures.push(origin::Fragment::call(
+                            crate::engine::KEYWORD_MOVE,
+                            [origin::Fragment::plain(name.as_str())],
+                        ));
                     } else {
                         lifted_parameters.push(name.clone());
                         captures.push(origin::Fragment::plain(name.as_str()));
@@ -31849,13 +31870,11 @@ impl<'a> Parser<'a> {
             None => Ty::Fn { inputs, output },
         };
         if moved && !scope.captures.is_empty() {
-            // `move` moves each capture into the closure as it is created,
-            // and copies one that is `Copy`.
             let mut copied = origin::Fragment::plain("{ ");
             for name in &scope.captures {
                 if name == "this" {
                     copied.push_text(format!("let {SELF_CAPTURE} = {SELF_CAPTURE}; "));
-                } else if self.move_capture(name, expression) {
+                } else if moving.contains(name) {
                     let take = crate::engine::KEYWORD_MOVE;
                     copied.push_text(format!("let {name} = {take}({name}); "));
                 } else {
@@ -31966,6 +31985,7 @@ impl<'a> Parser<'a> {
                 && let Some(items) =
                     self.models.host_items("rawr_iced::tokio::__drop").map(<[_]>::to_vec)
             {
+                self.move_local(argument);
                 let owner = self.models.item_owner("rawr_iced::tokio::__drop").cloned();
                 return self.call_host_function(&items, owner, arguments, call);
             }
@@ -33633,7 +33653,10 @@ impl<'a> Parser<'a> {
                     .flatten()
                 {
                     let owner = self.models.item_owner(&reexported).cloned();
-                    let (arguments, end) = self.parse_call_arguments("call arguments")?;
+                    let (mut arguments, end) = self.parse_call_arguments("call arguments")?;
+                    for argument in &mut arguments {
+                        self.move_local(argument);
+                    }
                     let call = span(first_span.start(), end);
                     return self.call_host_function(&items, owner, arguments, call);
                 }
