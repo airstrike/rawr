@@ -208,8 +208,8 @@ impl Parsed {
         let unreadable = || PlayError::Compile("the snippet cannot be read".to_owned());
         let mut evidence = diagnostic(&program).ok_or_else(unreadable)?;
         let mut note = None;
-        let ast = match engine.compile_unit(unit, evidence.clone()) {
-            Ok(ast) => ast,
+        let (ast, positions) = match engine.compile_unit_with_positions(unit, evidence.clone()) {
+            Ok(compiled) => compiled,
             Err(error) => {
                 let report = rawr::diagnostic::Report::from_parse(evidence.clone(), &error);
                 let owner = report.as_ref().ok().and_then(|report| unprintable(report, source));
@@ -225,7 +225,7 @@ impl Parsed {
                 evidence = diagnostic(&program).ok_or_else(unreadable)?;
                 let compiled = engine
                     .parse_unit(&program)
-                    .and_then(|unit| engine.compile_unit(unit, evidence.clone()));
+                    .and_then(|unit| engine.compile_unit_with_positions(unit, evidence.clone()));
                 compiled.map_err(|error| {
                     match rawr::diagnostic::Report::from_parse(evidence.clone(), &error) {
                         Ok(report) => PlayError::Compile(crate::report(&report, &program, source)),
@@ -286,9 +286,19 @@ impl Parsed {
                         _ => {
                             // A panic: Rust's exit status.
                             output.status = PANIC_STATUS;
-                            rawr::diagnostic::Report::from_evaluation(Some(evidence), &error)
-                                .map(|report| crate::report(&report, &program, source))
-                                .unwrap_or(text)
+                            // The user's span of the error. A position in
+                            // the wrapping is dropped.
+                            let original = positions.translate(&error).filter(|span| {
+                                let start = span.start();
+                                start.line().zip(start.position()).is_some_and(|(line, column)| {
+                                    crate::in_source(&program, source, line, column)
+                                })
+                            });
+                            rawr::diagnostic::Report::from_evaluation_located(evidence, original, &error)
+                                .map_or_else(
+                                    |_| crate::without_positions(&text),
+                                    |report| crate::report(&report, &program, source),
+                                )
                         }
                     };
                     output.push(Stream::Stderr, &format!("{}\n", message.trim_end()));

@@ -45,7 +45,7 @@ struct Arguments<'slice, 'value, 'arena> { values: &'slice mut [&'value mut Dyna
 
 #[derive(Clone, Copy)]
 struct NativeHandle { epoch: [u8; 32], slot: u32, generation: u64 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, debug: Option<DebugText>, clone: Option<CloneValue>, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]> }
 
 /// Rust's `Debug` text of a stored value, for a type that implements it.
 type DebugText = fn(&dyn Any) -> Option<String>;
@@ -85,6 +85,32 @@ impl<T> WithoutDebug for &DebugProbe<T> {
     }
 }
 
+fn display_text<T: std::fmt::Display + 'static>(value: &dyn Any) -> Option<String> {
+    value.downcast_ref::<T>().map(ToString::to_string)
+}
+
+#[allow(dead_code)]
+trait ViaDisplay {
+    fn native_display(&self) -> Option<DebugText>;
+}
+
+impl<T: std::fmt::Display + 'static> ViaDisplay for DebugProbe<T> {
+    fn native_display(&self) -> Option<DebugText> {
+        Some(display_text::<T>)
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutDisplay {
+    fn native_display(&self) -> Option<DebugText>;
+}
+
+impl<T> WithoutDisplay for &DebugProbe<T> {
+    fn native_display(&self) -> Option<DebugText> {
+        None
+    }
+}
+
 /// A copy of a stored value, for a type that implements `Clone`.
 type CloneValue = fn(&dyn Any) -> Option<Box<dyn Any>>;
 
@@ -120,12 +146,35 @@ impl<T> WithoutClone for &DebugProbe<T> {
 macro_rules! insert_native {
     ($arena:expr, $value:expr) => {{
         #[allow(unused_imports)]
-        use $crate::{ViaClone as _, ViaDebug as _, WithoutClone as _, WithoutDebug as _};
+        use $crate::{
+            ViaClone as _, ViaDebug as _, ViaDisplay as _, WithoutClone as _, WithoutDebug as _,
+            WithoutDisplay as _,
+        };
         let value = $value;
         let debug = (&$crate::debug_probe(&value)).native_debug();
+        let display = (&$crate::debug_probe(&value)).native_display();
         let clone = (&$crate::debug_probe(&value)).native_clone();
-        $arena.insert_debug(value, debug, clone)
+        let handle = $arena.insert_debug(value, debug, clone);
+        if let Ok(handle) = &handle {
+            $arena.set_display(*handle, display);
+        }
+        handle
     }};
+}
+
+/// `to_string()` and `{}` of an imported value print its Rust `Display`
+/// text.
+impl std::fmt::Display for NativeHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = NATIVE_ARENA.with(|arena| {
+            let arena = arena.try_borrow().ok()?;
+            arena.as_ref()?.display(*self)
+        });
+        match text {
+            Some(text) => f.write_str(&text),
+            None => f.write_str("NativeHandle"),
+        }
+    }
 }
 
 /// `{:?}` of an imported value prints its Rust `Debug` text.
@@ -233,7 +282,7 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, debug: None, clone: None, witness: None, project: None, mapper: None });
+                self.slots.push(NativeSlot { generation: 1, value: None, debug: None, display: None, clone: None, witness: None, project: None, mapper: None });
                 slot
             }
         };
@@ -241,6 +290,7 @@ impl Arena {
         if entry.value.is_some() { return Err(Error::StaleHandle); }
         entry.value = Some(Box::new(value));
         entry.debug = None;
+        entry.display = None;
         entry.clone = None;
         entry.witness = None;
         entry.project = None;
@@ -263,6 +313,21 @@ impl Arena {
             return None;
         }
         (entry.debug?)(entry.value.as_deref()?)
+    }
+
+    #[allow(dead_code)]
+    fn set_display(&mut self, handle: NativeHandle, display: Option<DebugText>) {
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize) {
+            entry.display = display;
+        }
+    }
+
+    fn display(&self, handle: NativeHandle) -> Option<String> {
+        let entry = self.slots.get(handle.slot as usize)?;
+        if handle.epoch != self.epoch || handle.generation != entry.generation {
+            return None;
+        }
+        (entry.display?)(entry.value.as_deref()?)
     }
 
     fn insert_projectable<T: 'static>(&mut self, value: T, project: Project, mapper: [u8; 16]) -> Result<NativeHandle, Error> {
@@ -400,6 +465,7 @@ impl Arena {
 
 fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::host::debug::register::<NativeHandle>();
+    __rawr_internal::host::display::register::<NativeHandle>();
     NATIVE_ARENA.with(|arena| *arena.borrow_mut() = Some(Arena::new(epoch)));
 }
 
@@ -408,6 +474,26 @@ fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Result<T,
         let mut arena = arena.try_borrow_mut().map_err(|_| Error::Stale)?;
         call(arena.as_mut().ok_or(Error::Stale)?)
     })
+}
+
+/// Turn one value a Rust task or future yielded into a Rawr value, on the
+/// thread that owns the arena. An imported value takes the witness of the
+/// task's output type.
+#[allow(dead_code)]
+fn materialize(
+    witness: Option<&__rawr_internal::host::runtime::Witness>,
+    convert: impl FnOnce(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>,
+) -> Result<Dynamic, String> {
+    with_arena(|arena| {
+        let mut values: [&mut Dynamic; 0] = [];
+        let mut arguments = Arguments { values: &mut values, arena };
+        let output = convert(&mut arguments)?;
+        if let (Some(handle), Some(witness)) = (output.read_lock::<NativeHandle>().map(|value| *value), witness) {
+            arguments.arena.attest(handle, witness.clone())?;
+        }
+        Ok(output)
+    })
+    .map_err(|error| format!("{error:?}"))
 }
 
 fn take_primitive<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
@@ -608,6 +694,23 @@ fn runtime_invoke(
             .and_then(|handle| arena.witness(handle).cloned());
         let mut arguments = Arguments { values, arena };
         let output = (adapter.invoke)(&mut arguments)?;
+        // A projected iced Task takes this call's output witness.
+        let output = match output.try_cast_result::<__rawr_internal::host::runtime::Unwitnessed>() {
+            Ok(pending) => {
+                // A method's task takes its witness from its receiver's.
+                let witness = call
+                    .output_witness()
+                    .ok()
+                    .or_else(|| {
+                        receiver
+                            .as_ref()
+                            .and_then(|witness| call.transform_native_witness(witness).ok())
+                    })
+                    .ok_or(Error::Stale)?;
+                pending.witness(witness).ok_or(Error::Stale)?
+            }
+            Err(output) => output,
+        };
         if let Some(handle) = output.read_lock::<NativeHandle>().map(|value| *value) {
             let witness = match adapter.witness {
                 1 => call.output_witness().ok(),
@@ -619,10 +722,59 @@ fn runtime_invoke(
             if let Some(witness) = witness {
                 arguments.arena.attest(handle, witness)?;
             }
+        } else if let Ok(witness) = call.output_witness() {
+            // A Rust value inside an `Option` or a `Result` takes the
+            // witness of its own type argument.
+            attest_inner(&output, &witness, arguments.arena)?;
         }
         Ok(output)
     })
     .map_err(runtime_error)
+}
+
+fn attest_inner(
+    value: &Dynamic,
+    witness: &__rawr_internal::host::runtime::Witness,
+    arena: &mut Arena,
+) -> Result<(), Error> {
+    let mut copy = value.clone();
+    let inner = if __rawr_internal::option::is(value) {
+        __rawr_internal::option::take(&mut copy).flatten().map(|inner| (inner, 0))
+    } else if __rawr_internal::result::is(value) {
+        match __rawr_internal::result::take(&mut copy) {
+            Some(Ok(inner)) => Some((inner, 0)),
+            Some(Err(inner)) => Some((inner, 1)),
+            None => None,
+        }
+    } else {
+        None
+    };
+    if let Some((inner, index)) = inner
+        && let Some(handle) = inner.read_lock::<NativeHandle>().map(|value| *value)
+        && let Some(witness) = witness.argument_witness(index)
+    {
+        arena.attest(handle, witness)?;
+    } else if let Some((inner, index)) = inner_tuple(value)
+        && let Some(tuple) = witness.argument_witness(index)
+    {
+        // A variant's fields, as its matcher gives them.
+        for (member, element) in inner.iter().enumerate() {
+            if let Some(handle) = element.read_lock::<NativeHandle>().map(|value| *value)
+                && let Some(witness) = tuple.argument_witness(member)
+            {
+                arena.attest(handle, witness)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The members of the tuple inside an `Option`'s `Some`.
+fn inner_tuple(value: &Dynamic) -> Option<(Vec<Dynamic>, usize)> {
+    let mut copy = value.clone();
+    let inner = __rawr_internal::option::take(&mut copy).flatten()?;
+    let members = inner.as_array_ref().ok()?.to_vec();
+    Some((members, 0))
 }
 
 fn runtime_project(
@@ -2470,6 +2622,17 @@ fn assemble_accounted<B: crate::surface::Runner>(
         .checked_add(coverage.retained_usage().1)
         .ok_or(request::Error::Allocation)?;
     account.exceeded(GENERATED_COMBINED_RESOURCE, limits.json_bytes, combined);
+    // Each variant's matcher, after the entries the inventory pairs with
+    // plans one to one.
+    for plan in &key.request.plans {
+        if has_matcher(plan) {
+            entries.push(crate::runner::manifest::Entry::new(
+                matcher_identity(plan),
+                signature(plan)?,
+                1,
+            ));
+        }
+    }
     let generated = crate::runner::manifest::GeneratedManifest::with_coverage(
         key.build,
         file_records,
@@ -2836,8 +2999,9 @@ fn render_source(
         })?;
         write!(
             output,
-            "    __rawr_internal::package::import::runner::StructuralRow::new({:?}, ",
+            "    __rawr_internal::package::import::runner::StructuralRow::new({:?}, {:?}, ",
             plan.export().root_alias(),
+            structural_owner(plan),
         )
         .map_err(|_| request::Error::Encoding)?;
         byte_array(output, selector)?;
@@ -2851,6 +3015,29 @@ fn render_source(
         byte_array(output, &signature(plan)?)?;
         writeln!(output, ", {}, {kind}),", arguments(plan)?)
             .map_err(|_| request::Error::Encoding)?;
+        if has_matcher(plan) {
+            write!(
+                output,
+                "    __rawr_internal::package::import::runner::StructuralRow::new({:?}, {:?}, ",
+                plan.export().root_alias(),
+                structural_owner(plan),
+            )
+            .map_err(|_| request::Error::Encoding)?;
+            byte_array(output, selector)?;
+            output
+                .write_all(b", ")
+                .map_err(|_| request::Error::Encoding)?;
+            byte_array(output, &matcher_identity(plan))?;
+            output
+                .write_all(b", ")
+                .map_err(|_| request::Error::Encoding)?;
+            byte_array(output, &signature(plan)?)?;
+            writeln!(
+                output,
+                ", 1, __rawr_internal::package::import::runner::StructuralKind::Match),"
+            )
+            .map_err(|_| request::Error::Encoding)?;
+        }
     }
     output
         .write_all(b"];\n\n")
@@ -2914,6 +3101,23 @@ fn render_source(
                 adapter_name(plan)
             )
             .map_err(|_| request::Error::Encoding)?;
+            if has_matcher(plan) {
+                write!(file, "    Adapter {{ identity: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, &matcher_identity(plan))?;
+                write!(file, ", signature: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, &signature(plan)?)?;
+                write!(file, ", selector: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
+                write!(file, ", instance: ").map_err(|_| request::Error::Encoding)?;
+                byte_array(&mut file, &[0; 32])?;
+                writeln!(
+                    file,
+                    ", bound: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
+                    plan.export().root_alias(),
+                    matcher_name(plan)
+                )
+                .map_err(|_| request::Error::Encoding)?;
+            }
         }
         file.write_all(b"];\n\n")
             .map_err(|_| request::Error::Encoding)?;
@@ -2922,6 +3126,7 @@ fn render_source(
             let plan = &plans[*index];
             let start = span_offset(&file)?;
             render_adapter(plan, plans, profile, facade.as_ref(), &mut file)?;
+            render_matcher(plan, &mut file)?;
             let end = span_offset(&file)?;
             spans.push((plan.identity(), path.clone(), start..end));
         }
@@ -3293,16 +3498,116 @@ fn witness_mode(plan: &Plan) -> u8 {
     }
 }
 
-/// Whether `ty` is Copy as the compiler sees it: a scalar, or an `Option`
-/// or `Result` of scalars, as a `cpu_cores: Option<usize>` field is.
+/// Whether `ty` is Copy as the compiler sees it: a scalar, an imported
+/// Copy type, or an `Option` or `Result` of them, as a `cpu_cores:
+/// Option<usize>` field is.
 fn copy_scalar(ty: &convert::Type) -> bool {
     match ty {
         convert::Type::Unit => true,
         convert::Type::Builtin(builtin) => builtin.rust_name().is_some(),
+        convert::Type::Nominal { definition, .. } => {
+            COPY_TYPES.with_borrow(|copy| copy.contains(definition.as_bytes()))
+        }
         convert::Type::Option(inner) => copy_scalar(inner),
         convert::Type::Result(ok, err) => copy_scalar(ok) && copy_scalar(err),
         _ => false,
     }
+}
+
+/// A variant of a non-generic enum also has a matcher: the variant's
+/// fields, cloned, when a value is that variant (`render_matcher`).
+fn has_matcher(plan: &Plan) -> bool {
+    matches!(plan.operation(), Operation::EnumVariant { parameters, .. } if parameters.is_empty())
+}
+
+/// The entry identity of a variant's matcher: its constructor's, tagged.
+fn matcher_identity(plan: &Plan) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"rawr-variant-matcher");
+    hasher.update(plan.identity().as_bytes());
+    hasher.finalize().into()
+}
+
+fn matcher_name(plan: &Plan) -> String {
+    format!("{}_match", adapter_name(plan))
+}
+
+/// `Some` of the variant's fields, cloned, when the value the first
+/// argument holds is that variant; otherwise `None`.
+fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Error> {
+    let Operation::EnumVariant {
+        name, form, fields, ..
+    } = plan.operation()
+    else {
+        return Ok(());
+    };
+    if !has_matcher(plan) {
+        return Ok(());
+    }
+    let path = rust_path(plan);
+    let bound = (0..fields.len())
+        .map(|index| format!("field_{index}"))
+        .collect::<Vec<_>>();
+    let pattern = match form {
+        crate::api::model::FieldForm::Unit => format!("{path}::{name}"),
+        crate::api::model::FieldForm::Tuple => format!("{path}::{name}({})", bound.join(", ")),
+        crate::api::model::FieldForm::Record => format!(
+            "{path}::{name} {{ {} }}",
+            fields
+                .iter()
+                .zip(&bound)
+                .map(|(field, local)| format!("{}: {local}", field.name()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let cloned = match bound.len() {
+        0 => "()".to_string(),
+        1 => format!("(Clone::clone({}),)", bound[0]),
+        _ => format!(
+            "({})",
+            bound
+                .iter()
+                .map(|local| format!("Clone::clone({local})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
+        matcher_name(plan)
+    )
+    .map_err(|_| request::Error::Encoding)?;
+    writeln!(
+        output,
+        "    let handle = native_handle(arguments, 0, false)?;\n    #[allow(unreachable_patterns)]\n    let output = arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?;\n    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};"
+    )
+    .map_err(|_| request::Error::Encoding)?;
+    if fields.is_empty() {
+        output
+            .write_all(b"    let () = fields;\n    Ok(__rawr_internal::option::some(Dynamic::from(())))\n}\n\n")
+            .map_err(|_| request::Error::Encoding)?;
+        return Ok(());
+    }
+    output
+        .write_all(b"    let mut values = Vec::new();\n")
+        .map_err(|_| request::Error::Encoding)?;
+    for (index, field) in fields.iter().enumerate() {
+        let mut converted = String::new();
+        render_to_dynamic(field.ty(), &format!("fields.{index}"), 0, &mut converted)?;
+        writeln!(output, "    values.push(({converted})?);")
+            .map_err(|_| request::Error::Encoding)?;
+    }
+    output
+        .write_all(b"    Ok(__rawr_internal::option::some(Dynamic::from_array(values)))\n}\n\n")
+        .map_err(|_| request::Error::Encoding)
+}
+
+/// The path below the crate root of the type a structural adapter
+/// belongs to: `echo::Event` for its variant `Connected`.
+fn structural_owner(plan: &Plan) -> String {
+    plan.export().path().collect::<Vec<_>>().join("::")
 }
 
 fn structural_kind(plan: &Plan) -> Option<String> {
@@ -3482,8 +3787,19 @@ fn render_adapter(
                     .map_err(|_| request::Error::Encoding)?;
                 render_replay_insert(replay, facade, output)?;
             } else {
+                // A Rust future is made when its task first runs, on
+                // iced's executor, as tokio's `sleep` needs.
+                let lazy = matches!(
+                    substitute(signature.output(), signature, substitutions)?,
+                    convert::Type::Nominal { definition, .. }
+                        if *definition == crate::surface::identity::Definition::future()
+                );
                 output
-                    .write_all(b"    let output = ")
+                    .write_all(if lazy {
+                        b"    let output = __rawr_profile_host::task::lazy(move || ".as_slice()
+                    } else {
+                        b"    let output = ".as_slice()
+                    })
                     .map_err(|_| request::Error::Encoding)?;
                 render_function_path(
                     plan,
@@ -3506,9 +3822,16 @@ fn render_adapter(
                     .map_err(|_| request::Error::Encoding)?;
                 function_argument_list(signature, substitutions, functions, mappers, None, output)?;
                 output
-                    .write_all(b");\n")
+                    .write_all(if lazy { b"));\n".as_slice() } else { b");\n".as_slice() })
                     .map_err(|_| request::Error::Encoding)?;
-                render_give_with(signature, substitutions, "output", output)?;
+                let returned = substitute(signature.output(), signature, substitutions)?;
+                if let Some((sipped, progress)) = sipper_output(returned) {
+                    render_give_sipper(sipped, progress, "output", output)?;
+                } else if let Some(element) = facade_task_output(returned, facade) {
+                    render_give_task(element, "output", output)?;
+                } else {
+                    render_give_with(signature, substitutions, "output", output)?;
+                }
             }
         }
         Operation::Method {
@@ -3677,7 +4000,15 @@ fn render_adapter(
                         .write_all(b"))?;\n")
                         .map_err(|_| request::Error::Encoding)?;
                 }
-                render_give_with(signature, substitutions, "output", output)?;
+                // A method that takes `self` by value may give a Rust
+                // future, as `Response::text` does.
+                let returned = substitute(signature.output(), signature, substitutions)?;
+                match facade_task_output(returned, facade) {
+                    Some(element) if matches!(receiver, Receiver::Owned) => {
+                        render_give_task(element, "output", output)?;
+                    }
+                    _ => render_give_with(signature, substitutions, "output", output)?,
+                }
             }
         }
         Operation::Constant { ty, associated, .. } => {
@@ -4514,8 +4845,13 @@ fn render_rust_type(
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => output
             .write_all(b"std::ops::RangeInclusive<i64>")
             .map_err(|_| request::Error::Encoding),
-        convert::Type::Builtin(convert::Builtin::String) => output
+        convert::Type::Builtin(
+            convert::Builtin::String | convert::Builtin::Text,
+        ) => output
             .write_all(b"String")
+            .map_err(|_| request::Error::Encoding),
+        convert::Type::Builtin(convert::Builtin::Str) => output
+            .write_all(b"&str")
             .map_err(|_| request::Error::Encoding),
         convert::Type::Builtin(builtin) => output
             .write_all(builtin.rust_name().unwrap_or_default().as_bytes())
@@ -4962,11 +5298,20 @@ fn render_take(
     ty: &convert::Type,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    // A `&str` input lends the string taken from Rawr.
+    if matches!(ty, convert::Type::Builtin(convert::Builtin::Str)) {
+        return writeln!(
+            output,
+            "    let argument_{local}_owned = take_string(arguments, {index})?;\n    let argument_{local} = argument_{local}_owned.as_str();"
+        )
+        .map_err(|_| request::Error::Encoding);
+    }
     let helper = match ty {
         convert::Type::Builtin(convert::Builtin::String) => "take_string",
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_range",
         convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => "take_int",
         convert::Type::Builtin(convert::Builtin::F32) => "take_f32",
+        ty if is_duration(ty) => "take_primitive",
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         convert::Type::FunctionItem { .. } => {
             return Err(request::Error::Drift {
@@ -5002,6 +5347,7 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
+        ty if is_duration(ty) => writeln!(output, "    Ok(Dynamic::from({value}))"),
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => {
             writeln!(
                 output,
@@ -5013,6 +5359,10 @@ fn render_give(
         }
         convert::Type::Builtin(convert::Builtin::F32) => {
             writeln!(output, "    Ok(Dynamic::from(f64::from({value})))")
+        }
+        // An output Rawr cannot hold: its `Display` text.
+        convert::Type::Builtin(convert::Builtin::Text) => {
+            writeln!(output, "    Ok(Dynamic::from({value}.to_string()))")
         }
         convert::Type::Unit | convert::Type::Builtin(_) => {
             writeln!(output, "    Ok(Dynamic::from({value}))")
@@ -5078,10 +5428,13 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from)"
         ),
-        convert::Type::Builtin(convert::Builtin::String) => write!(
+        convert::Type::Builtin(
+            convert::Builtin::String | convert::Builtin::Str | convert::Builtin::Text,
+        ) => write!(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
         ),
+        ty if is_duration(ty) => cast(output, "std::time::Duration"),
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
             "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take(handle))"
@@ -5128,6 +5481,9 @@ fn render_to_dynamic(
 ) -> Result<(), request::Error> {
     use std::fmt::Write as _;
     match ty {
+        ty if is_duration(ty) => {
+            write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
+        }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(
             output,
             "insert_native!(arguments.arena, {value}).map(Dynamic::from)"
@@ -5170,6 +5526,91 @@ fn render_to_dynamic(
             });
         }
     }
+    .map_err(|_| request::Error::Encoding)
+}
+
+/// Rust's `std::time::Duration`, which crosses by value.
+fn is_duration(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Nominal { definition, .. }
+        if *definition == crate::surface::identity::Definition::duration())
+}
+
+/// The `Output` and `Progress` of an `impl Sipper<Output, Progress>` output.
+fn sipper_output(ty: &convert::Type) -> Option<(&convert::Type, &convert::Type)> {
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = ty
+    else {
+        return None;
+    };
+    match arguments.as_ref() {
+        [output, progress] if *definition == crate::surface::identity::Definition::sipper() => {
+            Some((output, progress))
+        }
+        _ => None,
+    }
+}
+
+/// Project a Rust sipper into iced's facade `task::Sipper`. Its progress and
+/// its output become Rawr values on the UI thread, never in the stream.
+fn render_give_sipper(
+    sipped: &convert::Type,
+    progress: &convert::Type,
+    value: &str,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let mut on_progress = String::new();
+    render_to_dynamic(progress, "value", 0, &mut on_progress)?;
+    let mut on_output = String::new();
+    render_to_dynamic(sipped, "value", 0, &mut on_output)?;
+    writeln!(
+        output,
+        "    Ok(__rawr_profile_host::task::sipper(\n        {value},\n        |value| -> __rawr_profile_host::task::Materialize {{ Box::new(move |witness| materialize(witness, move |arguments| {on_progress})) }},\n        |value| -> __rawr_profile_host::task::Materialize {{ Box::new(move |witness| materialize(witness, move |arguments| {on_output})) }},\n    ))"
+    )
+    .map_err(|_| request::Error::Encoding)
+}
+
+/// The `T` of an output that is the iced facade's `Task<T>`.
+fn facade_task_output<'a>(
+    ty: &'a convert::Type,
+    facade: Option<&crate::surface::facade::Plan>,
+) -> Option<&'a convert::Type> {
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = ty
+    else {
+        return None;
+    };
+    let [element] = arguments.as_ref() else {
+        return None;
+    };
+    if *definition == crate::surface::identity::Definition::future() {
+        return Some(element);
+    }
+    facade?
+        .facades()
+        .filter(|facade| facade.root() == "iced")
+        .flat_map(crate::surface::facade::Facade::types)
+        .any(|ty| ty.identity() == definition.as_bytes() && ty.path() == "Task")
+        .then_some(element)
+}
+
+/// Project an iced `Task<T>`, or a Rust future of `T`, into the facade's
+/// `Task`. Each `T` it yields becomes a Rawr value on the UI thread, never
+/// in the stream.
+fn render_give_task(
+    element: &convert::Type,
+    value: &str,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let mut converted = String::new();
+    render_to_dynamic(element, "value", 0, &mut converted)?;
+    writeln!(
+        output,
+        "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::imported(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| materialize(witness, move |arguments| {converted}))\n    }})))"
+    )
     .map_err(|_| request::Error::Encoding)
 }
 
@@ -5352,6 +5793,10 @@ thread_local! {
     /// finds has its exact type (`chrono::DateTime<chrono::Local>`).
     static TYPE_PATHS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], String>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The imported types that are Copy, by identity, as the compiler reads
+    /// a field of one through a shared borrow.
+    static COPY_TYPES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 /// Fills `TYPE_PATHS` for one generation and empties it when dropped.
@@ -5369,6 +5814,12 @@ impl TypePaths {
                 }
             }
         });
+        COPY_TYPES.with_borrow_mut(|copy| {
+            copy.clear();
+            for owner in facade.into_iter().flat_map(crate::surface::facade::Plan::facades) {
+                copy.extend(owner.types().filter(|ty| ty.copy()).map(|ty| *ty.identity()));
+            }
+        });
         Self
     }
 }
@@ -5376,6 +5827,7 @@ impl TypePaths {
 impl Drop for TypePaths {
     fn drop(&mut self) {
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
+        COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
     }
 }
 
@@ -5384,7 +5836,10 @@ impl Drop for TypePaths {
 fn concrete_type(ty: &convert::Type) -> Option<String> {
     Some(match ty {
         convert::Type::Unit => "()".to_owned(),
-        convert::Type::Builtin(convert::Builtin::String) => "String".to_owned(),
+        convert::Type::Builtin(convert::Builtin::String | convert::Builtin::Text) => {
+            "String".to_owned()
+        }
+        convert::Type::Builtin(convert::Builtin::Str) => "&str".to_owned(),
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => {
             "std::ops::RangeInclusive<i64>".to_owned()
         }
@@ -5858,7 +6313,9 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         ) => "Dynamic::from(0_i64)",
         convert::Type::Builtin(convert::Builtin::F32) => "Dynamic::from(0.0_f64)",
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "Dynamic::from(0_i64..=0_i64)",
-        convert::Type::Builtin(convert::Builtin::String) => "Dynamic::from(\"\")",
+        convert::Type::Builtin(
+            convert::Builtin::String | convert::Builtin::Str | convert::Builtin::Text,
+        ) => "Dynamic::from(\"\")",
         convert::Type::Option(_) => "__rawr_internal::option::none()",
         // `Result` has no `Default`, as in Rust.
         convert::Type::Result(..)
@@ -5937,6 +6394,32 @@ mod tests {
     };
     use crate::classify::representability::convert::{Builtin, Constant, Type};
     use crate::classify::representability::signature::{Kind, Parameter, Signature};
+
+    #[test]
+    fn a_str_input_is_lent_and_a_display_output_is_its_text() {
+        let mut take = Vec::new();
+        super::render_take(1, 1, &Type::Builtin(Builtin::Str), &mut take).unwrap();
+        let take = String::from_utf8(take).unwrap();
+        assert!(take.contains("let argument_1_owned = take_string(arguments, 1)?;"), "{take}");
+        assert!(take.contains("let argument_1 = argument_1_owned.as_str();"), "{take}");
+        let mut give = Vec::new();
+        super::render_give(&Type::Builtin(Builtin::Text), "output", &mut give).unwrap();
+        let give = String::from_utf8(give).unwrap();
+        assert!(give.contains("Dynamic::from(output.to_string())"), "{give}");
+    }
+
+    #[test]
+    fn an_imported_copy_type_is_read_as_a_copy() {
+        let nominal = |byte| Type::Nominal {
+            definition: crate::surface::identity::Definition::authenticated([byte; 32]),
+            arguments: Box::default(),
+        };
+        super::COPY_TYPES.with_borrow_mut(|copy| copy.insert([3; 32]));
+        assert!(super::copy_scalar(&nominal(3)));
+        assert!(super::copy_scalar(&Type::Option(Box::new(nominal(3)))));
+        assert!(!super::copy_scalar(&nominal(4)));
+        super::COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
+    }
 
     #[test]
     fn an_option_of_a_scalar_is_read_as_a_copy() {

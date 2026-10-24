@@ -1,6 +1,7 @@
 //! Deterministic chrome-free snapshots of compiler-proven previews.
 
 mod artifact;
+pub mod clock;
 mod commit;
 mod encoding;
 mod error;
@@ -116,6 +117,351 @@ pub fn render_application(
         height: image.height(),
         bytes: image.encode()?,
     })
+}
+
+/// A wall-clock deadline that can move later, shared by its clones: a
+/// recording moves it once the view changes, and an engine's progress
+/// callback reads the same one.
+#[derive(Clone, Debug)]
+pub struct Deadline {
+    base: std::time::Instant,
+    /// Nanoseconds from `base`.
+    after: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Deadline {
+    /// A deadline at `at`.
+    #[must_use]
+    pub fn new(at: std::time::Instant) -> Self {
+        let base = std::time::Instant::now();
+        let deadline = Self {
+            base,
+            after: std::sync::Arc::default(),
+        };
+        deadline.extend(at);
+        deadline
+    }
+
+    /// The instant it is at.
+    #[must_use]
+    pub fn at(&self) -> std::time::Instant {
+        let after = self.after.load(std::sync::atomic::Ordering::Relaxed);
+        self.base + std::time::Duration::from_nanos(after)
+    }
+
+    /// Whether the wall clock has reached it.
+    #[must_use]
+    pub fn past(&self) -> bool {
+        std::time::Instant::now() >= self.at()
+    }
+
+    /// Move it to `at`, if that is later.
+    pub fn extend(&self, at: std::time::Instant) {
+        let after = at.saturating_duration_since(self.base).as_nanos();
+        let after = u64::try_from(after).unwrap_or(u64::MAX);
+        self.after
+            .fetch_max(after, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// How [`record_application`] runs an application on its simulated clock.
+#[derive(Clone, Debug)]
+pub struct Motion {
+    /// Simulated time between frames.
+    pub step: std::time::Duration,
+    /// Most frames recorded.
+    pub frames: usize,
+    /// Most frames after the boot or a message before the next message is
+    /// applied, when they never settle.
+    pub phase: usize,
+    /// Longest simulated time recorded after the last message.
+    pub span: std::time::Duration,
+    /// The wall-clock instant recording stops at.
+    pub deadline: Deadline,
+    /// Where `deadline` moves once a frame differs from the first: an
+    /// animation's longer budget. No later than `deadline` keeps it.
+    pub extended: std::time::Instant,
+    /// Set from outside to stop recording before the next frame, keeping
+    /// the frames so far: someone else is waiting for the renderer.
+    pub cut: Option<&'static std::sync::atomic::AtomicBool>,
+    /// The scale frames are drawn at once a frame differs from the first,
+    /// when lower than the canvas's: an animation's frames can be smaller
+    /// than a still image.
+    pub animation_scale: Option<f32>,
+}
+
+/// One frame of a [`Recording`].
+#[derive(Clone, Debug)]
+pub struct Frame {
+    /// Physical width in pixels.
+    pub width: u32,
+    /// Physical height in pixels.
+    pub height: u32,
+    /// RGBA8 pixels, row by row.
+    pub rgba: Vec<u8>,
+    /// Simulated time since the recording began.
+    pub time: std::time::Duration,
+    /// What ran before it: 0 for the boot, `i` once the `i`th message is
+    /// applied.
+    pub phase: usize,
+    /// Pixels per logical pixel it was drawn at.
+    pub scale: f32,
+}
+
+impl Frame {
+    /// Whether `other` has the same size and pixels.
+    #[must_use]
+    pub fn same_image(&self, other: &Frame) -> bool {
+        (self.width, self.height) == (other.width, other.height) && self.rgba == other.rgba
+    }
+}
+
+/// Why a [`Recording`] ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Ending {
+    /// The last frame is settled: no stream the clock drives runs, and
+    /// nothing asked to be redrawn.
+    Settled,
+    /// The `stop` predicate ended it.
+    Stopped,
+    /// It ran [`Motion::frames`] frames or [`Motion::span`] after the last
+    /// message.
+    Cap,
+    /// The frames ran out before every message was applied. The last frame
+    /// is drawn after all of them.
+    Messages,
+    /// The wall clock reached [`Motion::deadline`], moved to
+    /// [`Motion::extended`] when the view changed.
+    Deadline,
+    /// [`Motion::cut`] was set.
+    Cut,
+}
+
+/// The frames an application drew on a simulated clock.
+#[derive(Clone, Debug)]
+pub struct Recording {
+    /// The frames, in order. Their sizes differ when the content's does.
+    pub frames: Vec<Frame>,
+    /// The theme's background color, RGBA8.
+    pub background: [u8; 4],
+    /// Why it ended.
+    pub ending: Ending,
+}
+
+/// Record a booted application on a simulated clock: a frame every
+/// [`Motion::step`], each drawn as [`render_application`] draws one.
+///
+/// The boot's Task runs first, then each of `messages` in turn. After each
+/// of them the frames run until the view settles, so each message's
+/// transition shows. `time::every` ticks and `window::frames` fire as the
+/// clock moves, and `Instant::now()` reads it. Freeze the clock with
+/// [`clock::freeze`] before the application boots so its boot reads the
+/// same clock; otherwise it freezes here. After the last message, `stop`
+/// sees the frames recorded since and ends the recording when it returns
+/// `true`. `each` sees every frame recorded so far, with the background,
+/// after each frame; the time it takes counts against the deadline.
+pub fn record_application(
+    adapter: &mut crate::program::Adapter,
+    messages: Vec<crate::runtime::Message>,
+    canvas: Canvas,
+    bound: (u32, u32),
+    theme: Option<&str>,
+    motion: Motion,
+    stop: &mut dyn FnMut(&[Frame]) -> bool,
+    each: &mut dyn FnMut(&[Frame], [u8; 4]),
+) -> Result<Recording, Error> {
+    use iced::time::Instant;
+    use iced::window::RedrawRequest;
+
+    let _frozen = clock::now().is_none().then(clock::freeze);
+    let start = clock::now().expect("the clock is frozen");
+    let mut renderer = headless::Renderer::with_canvas(canvas)?;
+    adapter.deliver(Vec::new());
+    let theme = theme
+        .and_then(|name| {
+            iced::Theme::ALL
+                .iter()
+                .find(|theme| theme.to_string() == name)
+                .cloned()
+        })
+        .unwrap_or_else(|| adapter.theme().native().clone());
+    let background = iced::theme::Base::base(&theme).background_color.into_rgba8();
+    let framing = renderer.framing();
+    let declared = iced::Size::new(bound.0 as f32, bound.1 as f32);
+    let mut trees = headless::Trees::default();
+    let mut scale = None;
+    let mut streams = Streams::default();
+    let mut frames: Vec<Frame> = Vec::new();
+    let last = messages.len();
+    let mut messages = messages.into_iter();
+    let mut now: Instant = start;
+    let mut changed = false;
+    let ending = 'record: {
+        for phase in 0..=last {
+            if phase > 0 {
+                adapter.deliver(messages.next());
+            }
+            let first = frames.len();
+            let began = now;
+            loop {
+                if motion.deadline.past() {
+                    break 'record Ending::Deadline;
+                }
+                if motion.cut.is_some_and(|cut| cut.load(std::sync::atomic::Ordering::Relaxed)) {
+                    break 'record Ending::Cut;
+                }
+                let capped = frames.len() >= motion.frames;
+                if capped && phase < last {
+                    adapter.deliver(messages.by_ref());
+                }
+                if phase == last && (capped || now - began >= motion.span) {
+                    break 'record Ending::Cap;
+                }
+                streams.sync(adapter);
+                clock::set(now);
+                // The content sizes the image; the view, with its
+                // diagnostic overlays, fills it.
+                let mut view = |published: Vec<crate::runtime::Message>, content: bool| {
+                    adapter.deliver(published);
+                    framing(if content { adapter.content() } else { adapter.view() })
+                };
+                let (image, request, size) =
+                    renderer.frame(&mut view, &mut trees, declared, now, &theme, &mut scale)?;
+                if motion.deadline.past() {
+                    break 'record Ending::Deadline;
+                }
+                let mut frame = Frame {
+                    width: image.width(),
+                    height: image.height(),
+                    rgba: image.into_bytes(),
+                    time: now - start,
+                    phase: if capped { last } else { phase },
+                    scale: scale.unwrap_or(1.0),
+                };
+                // The view changed: an animation gets the longer budget,
+                // and its frames from this one on are drawn at its scale.
+                // This frame is drawn again, so it matches the later frames
+                // that show the same picture.
+                if !changed && frames.first().is_some_and(|first| !first.same_image(&frame)) {
+                    changed = true;
+                    motion.deadline.extend(motion.extended);
+                    let lowered = motion
+                        .animation_scale
+                        .and_then(|lower| scale.map(|scale| scale.min(lower)));
+                    if let Some(lowered) = lowered.filter(|lowered| Some(*lowered) != scale) {
+                        scale = Some(lowered);
+                        let image = renderer.redraw(&mut view, &mut trees, size, &theme, lowered)?;
+                        frame.width = image.width();
+                        frame.height = image.height();
+                        frame.rgba = image.into_bytes();
+                        frame.scale = lowered;
+                    }
+                }
+                frames.push(frame);
+                each(&frames, background);
+                if capped {
+                    break 'record Ending::Messages;
+                }
+                let armed = clock::armed();
+                if !armed && request == RedrawRequest::Wait {
+                    if phase == last {
+                        break 'record Ending::Settled;
+                    }
+                    break;
+                }
+                if phase == last && stop(&frames[first..]) {
+                    break 'record Ending::Stopped;
+                }
+                if phase < last && frames.len() - first >= motion.phase {
+                    break;
+                }
+                // Wait for a redraw asked for later, unless the clock
+                // drives a stream.
+                now = match request {
+                    RedrawRequest::At(at) if !armed && at > now + motion.step => at,
+                    _ => now + motion.step,
+                };
+                clock::set(now);
+                let ticks = streams.tick(now);
+                adapter.deliver(ticks);
+            }
+        }
+        unreachable!("the last phase ends the recording")
+    };
+    Ok(Recording {
+        frames,
+        background,
+        ending,
+    })
+}
+
+/// The streams of an application's subscription, run by hand on a
+/// recording's clock.
+#[derive(Default)]
+struct Streams {
+    running: Vec<Running>,
+}
+
+struct Running {
+    id: u64,
+    input: iced::futures::channel::mpsc::UnboundedSender<iced::advanced::subscription::Event>,
+    output: iced::futures::stream::BoxStream<'static, crate::runtime::Message>,
+}
+
+impl Streams {
+    /// Start each stream the subscription has that is not running, and stop
+    /// each running one it no longer has.
+    fn sync(&mut self, adapter: &crate::program::Adapter) {
+        use iced::advanced::subscription::{into_recipes, Hasher};
+        use iced::futures::StreamExt as _;
+        use std::hash::Hasher as _;
+
+        let mut next: Vec<Running> = Vec::new();
+        for recipe in into_recipes(adapter.lower_subscription(std::convert::identity)) {
+            let mut hasher = Hasher::default();
+            recipe.hash(&mut hasher);
+            let id = hasher.finish();
+            if next.iter().any(|running| running.id == id) {
+                continue;
+            }
+            if let Some(at) = self.running.iter().position(|running| running.id == id) {
+                next.push(self.running.swap_remove(at));
+                continue;
+            }
+            let (input, events) = iced::futures::channel::mpsc::unbounded();
+            let output = recipe.stream(events.boxed());
+            next.push(Running { id, input, output });
+        }
+        self.running = next;
+    }
+
+    /// Show each stream a frame at `now` and take every message ready.
+    fn tick(&mut self, now: iced::time::Instant) -> Vec<crate::runtime::Message> {
+        use iced::futures::{FutureExt as _, StreamExt as _};
+
+        /// Most messages one frame takes.
+        const MOST: usize = 4096;
+        let window = iced::window::Id::unique();
+        let mut ready = Vec::new();
+        self.running.retain_mut(|running| {
+            let _ = running
+                .input
+                .unbounded_send(iced::advanced::subscription::Event::Interaction {
+                    window,
+                    event: iced::Event::Window(iced::window::Event::RedrawRequested(now)),
+                    status: iced::event::Status::Ignored,
+                });
+            while ready.len() < MOST {
+                match running.output.next().now_or_never() {
+                    Some(Some(message)) => ready.push(message),
+                    Some(None) => return false,
+                    None => break,
+                }
+            }
+            true
+        });
+        ready
+    }
 }
 
 /// Snapshot operation selected by the host.

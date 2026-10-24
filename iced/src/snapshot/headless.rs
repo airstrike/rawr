@@ -68,8 +68,22 @@ impl Renderer {
         let Some(canvas) = self.canvas.filter(|canvas| canvas.fit) else {
             return declared;
         };
+        let interface = self.settle(view, declared);
+        self.fit(interface, declared, canvas).1
+    }
+
+    /// The size `canvas` fits a settled `interface` to within `declared`,
+    /// and the interface laid out at the width it measured with.
+    fn fit(
+        &mut self,
+        mut interface: UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
+        declared: Size,
+        canvas: super::Canvas,
+    ) -> (
+        UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
+        Size,
+    ) {
         let fallback = Size::new(canvas.fallback.0 as f32, canvas.fallback.1 as f32);
-        let mut interface = self.settle(view, declared);
         let mut size = self.measure(&mut interface);
         if size.width >= declared.width {
             let width = fallback.width.min(declared.width);
@@ -80,7 +94,8 @@ impl Renderer {
         if size.height >= declared.height {
             size.height = fallback.height.min(declared.height);
         }
-        Size::new(size.width.ceil().max(1.0), size.height.ceil().max(1.0))
+        let size = Size::new(size.width.ceil().max(1.0), size.height.ceil().max(1.0));
+        (interface, size)
     }
 
     /// The size of the root container `framing` adds.
@@ -159,6 +174,15 @@ impl Renderer {
         unreachable!("the frames end at the cap")
     }
 
+    /// The pixels per logical pixel for an image of `size`: the canvas
+    /// scale while the larger side stays within `max_pixels`, never below 1x.
+    fn scale(&self, size: Size) -> f32 {
+        self.canvas.map_or(SCALE, |canvas| {
+            let largest = size.width.max(size.height);
+            canvas.scale.min(canvas.max_pixels as f32 / largest).max(1.0)
+        })
+    }
+
     /// Draw `view` at `size` once it settles.
     pub(super) fn render(
         &mut self,
@@ -166,13 +190,119 @@ impl Renderer {
         theme: &iced::Theme,
         size: Size,
     ) -> Result<image::Image, Error> {
-        // Rasterize at the canvas scale while the larger side stays within
-        // `max_pixels`, never below 1x.
-        let scale = self.canvas.map_or(SCALE, |canvas| {
-            let largest = size.width.max(size.height);
-            canvas.scale.min(canvas.max_pixels as f32 / largest).max(1.0)
-        });
+        let scale = self.scale(size);
         let mut interface = self.settle(view, size);
+        self.draw(&mut interface, theme, size, scale)
+    }
+
+    /// One frame of a recording at the clock's `now`, over the widget trees
+    /// of the frame before. `view(published, true)` gives the content to
+    /// measure and `view(published, false)` the view to draw, each settled
+    /// within the frame (each message its widgets publish applied while the
+    /// clock stands still). The image is sized as the canvas sizes the
+    /// content and drawn at `scale` (the first frame's, once set). Gives
+    /// when the drawn interface asked to be redrawn, and the logical size.
+    pub(super) fn frame(
+        &mut self,
+        view: &mut dyn FnMut(Vec<runtime::Message>, bool) -> iced::Element<'static, runtime::Message>,
+        trees: &mut Trees,
+        declared: Size,
+        now: time::Instant,
+        theme: &iced::Theme,
+        scale: &mut Option<f32>,
+    ) -> Result<(image::Image, window::RedrawRequest, Size), Error> {
+        let size = match self.canvas.filter(|canvas| canvas.fit) {
+            Some(canvas) => {
+                let mut content = |published| view(published, true);
+                let cache = std::mem::take(&mut trees.content);
+                let (interface, _) = self.settle_at(&mut content, declared, cache, now);
+                let (interface, size) = self.fit(interface, declared, canvas);
+                trees.content = interface.into_cache();
+                size
+            }
+            None => declared,
+        };
+        let mut drawn = |published| view(published, false);
+        let cache = std::mem::take(&mut trees.view);
+        let (mut interface, request) = self.settle_at(&mut drawn, size, cache, now);
+        let scale = *scale.get_or_insert_with(|| self.scale(size));
+        let image = self.draw(&mut interface, theme, size, scale)?;
+        trees.view = interface.into_cache();
+        Ok((image, request, size))
+    }
+
+    /// The last [`Self::frame`]'s view at `size`, drawn again at `scale`.
+    /// It is built over that frame's trees with nothing published, so the
+    /// app's State and the clock are untouched.
+    pub(super) fn redraw(
+        &mut self,
+        view: &mut dyn FnMut(Vec<runtime::Message>, bool) -> iced::Element<'static, runtime::Message>,
+        trees: &mut Trees,
+        size: Size,
+        theme: &iced::Theme,
+        scale: f32,
+    ) -> Result<image::Image, Error> {
+        let cache = std::mem::take(&mut trees.view);
+        let mut interface = UserInterface::build(view(Vec::new(), false), size, cache, &mut self.raw);
+        let image = self.draw(&mut interface, theme, size, scale);
+        trees.view = interface.into_cache();
+        image
+    }
+
+    /// `view` settled at `now` over `cache`, as [`Self::settle`] settles it
+    /// but with the clock held: a frame that publishes a message or changes
+    /// the interface is rebuilt, and the first that does neither ends it.
+    /// Gives when the interface asked to be redrawn; one still changing
+    /// after [`FRAMES`] asks for the next frame.
+    fn settle_at(
+        &mut self,
+        view: &mut View<'_>,
+        size: Size,
+        mut cache: user_interface::Cache,
+        now: time::Instant,
+    ) -> (
+        UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
+        window::RedrawRequest,
+    ) {
+        let mut published = Vec::new();
+        for frame in 1.. {
+            let element = view(std::mem::take(&mut published));
+            let mut interface = UserInterface::build(element, size, cache, &mut self.raw);
+            let mut messages = shell::Bus::new();
+            let (state, _) = interface.update(
+                &window::Headless,
+                &shell::Waker::noop(),
+                &[Event::Window(window::Event::RedrawRequested(now))],
+                mouse::Cursor::Unavailable,
+                &mut self.raw,
+                &mut messages,
+            );
+            if let user_interface::State::Updated {
+                change: user_interface::Change::None,
+                redraw_request,
+                ..
+            } = state
+                && messages.is_empty()
+            {
+                return (interface, redraw_request);
+            }
+            if frame == FRAMES {
+                return (interface, window::RedrawRequest::NextFrame);
+            }
+            published = messages.drain().map(|(message, _)| message).collect();
+            cache = interface.into_cache();
+        }
+        unreachable!("the frames end at the cap")
+    }
+
+    /// Draw a settled `interface` at `size` and `scale`.
+    fn draw(
+        &mut self,
+        interface: &mut UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
+        theme: &iced::Theme,
+        size: Size,
+        scale: f32,
+    ) -> Result<image::Image, Error> {
         let base = theme.base();
         interface.draw(
             &mut self.raw,
@@ -186,10 +316,81 @@ impl Renderer {
             (size.width * scale).round() as u32,
             (size.height * scale).round() as u32,
         );
-        let bytes = self.raw.screenshot(physical, scale, base.background_color);
-        drop(interface);
+        let mut bytes = self.raw.screenshot(physical, scale, base.background_color);
+        if let Some(canvas) = self.canvas.filter(|canvas| canvas.margin > 0) {
+            let margin = (canvas.margin as f32 * scale).round() as u32;
+            fill_margin(&mut bytes, physical.width, physical.height, margin);
+        }
         image::Image::new(physical.width, physical.height, bytes)
     }
+}
+
+/// Paint the canvas's margin, `margin` pixels on each side of an image
+/// `width` by `height`, with the content's own background: the color its
+/// edge is all in, as a canvas filling the view draws. A content edge of
+/// several colors keeps the theme's background there.
+fn fill_margin(rgba: &mut [u8], width: u32, height: u32, margin: u32) {
+    let (width, height, margin) = (width as usize, height as usize, margin as usize);
+    if width <= 2 * margin || height <= 2 * margin {
+        return;
+    }
+    let pixel = |rgba: &[u8], x: usize, y: usize| {
+        let at = (y * width + x) * 4;
+        [rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]]
+    };
+    let (left, right) = (margin, width - margin - 1);
+    let (top, bottom) = (margin, height - margin - 1);
+    let edge = pixel(rgba, left, top);
+    let uniform = (left..=right)
+        .all(|x| pixel(rgba, x, top) == edge && pixel(rgba, x, bottom) == edge)
+        && (top..=bottom).all(|y| pixel(rgba, left, y) == edge && pixel(rgba, right, y) == edge);
+    if !uniform {
+        return;
+    }
+    for y in 0..height {
+        for x in 0..width {
+            if (left..=right).contains(&x) && (top..=bottom).contains(&y) {
+                continue;
+            }
+            let at = (y * width + x) * 4;
+            rgba[at..at + 4].copy_from_slice(&edge);
+        }
+    }
+}
+
+#[cfg(test)]
+mod margin_tests {
+    #[test]
+    fn a_uniform_content_edge_colors_the_margin() {
+        let (side, margin) = (6_u32, 1_u32);
+        let mut rgba = [9_u8, 9, 9, 255].repeat((side * side) as usize);
+        for y in 1..5 {
+            for x in 1..5 {
+                let at = ((y * side + x) * 4) as usize;
+                rgba[at..at + 4].copy_from_slice(&[20, 18, 24, 255]);
+            }
+        }
+        let center = ((2 * side + 2) * 4) as usize;
+        rgba[center..center + 4].copy_from_slice(&[255, 0, 0, 255]);
+        super::fill_margin(&mut rgba, side, side, margin);
+        assert_eq!(&rgba[0..4], &[20, 18, 24, 255]);
+        assert_eq!(&rgba[center..center + 4], &[255, 0, 0, 255]);
+
+        // A content edge of two colors keeps the theme's margin.
+        let mut mixed = [9_u8, 9, 9, 255].repeat((side * side) as usize);
+        let edge = ((side + 1) * 4) as usize;
+        mixed[edge..edge + 4].copy_from_slice(&[1, 2, 3, 255]);
+        super::fill_margin(&mut mixed, side, side, margin);
+        assert_eq!(&mixed[0..4], &[9, 9, 9, 255]);
+    }
+}
+
+/// The widget trees a recording builds each frame over: the content it
+/// measures and the view it draws.
+#[derive(Default)]
+pub(super) struct Trees {
+    content: user_interface::Cache,
+    view: user_interface::Cache,
 }
 
 /// A view to render: given the messages the last frame published, the

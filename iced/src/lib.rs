@@ -12,6 +12,7 @@ pub mod application;
 pub mod control;
 
 pub mod diagnostic;
+mod dispatch;
 mod effect;
 pub mod features;
 
@@ -28,7 +29,12 @@ pub mod runtime;
 pub mod snapshot;
 pub mod subscription;
 pub mod task;
+#[cfg(test)]
+mod task_thread_tests;
+mod io_facade;
+mod path_facade;
 pub mod theme;
+mod tokio_facade;
 pub mod widget;
 
 /// What brings a program to rawr-iced, as data: the manifest the
@@ -95,6 +101,12 @@ const OWNED_EQ_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
 /// `{:?}` of the facade's value types prints Rust's `Debug` text.
 fn register_debug() {
     use rawr::host::debug::register;
+    tokio_facade::register_debug();
+    path_facade::register_debug();
+    io_facade::register_debug();
+    // `{}` of a facade type with `to_string` prints its Rust `Display`.
+    rawr::host::display::register::<iced::ContentFit>();
+    rawr::host::display::register::<iced::font::Family>();
     register::<iced::Border>();
     register::<iced::Color>();
     register::<iced::ContentFit>();
@@ -119,6 +131,7 @@ fn register_debug() {
     #[cfg(feature = "svg")]
     register::<iced::widget::svg::Handle>();
     register::<iced::Event>();
+    register::<task::Handle>();
     register::<iced::Font>();
     register::<iced::keyboard::Event>();
     register::<iced::keyboard::Key>();
@@ -169,6 +182,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("theme")?;
     builder.module("theme::palette")?;
     builder.module("time")?;
+    builder.module("task")?;
+    builder.module("subscription")?;
     builder.module("widget")?;
     builder.module("widget::button")?;
     builder.module("widget::checkbox")?;
@@ -176,6 +191,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::component")?;
     builder.module("widget::container")?;
     builder.module("widget::progress_bar")?;
+    builder.module("widget::float")?;
     builder.module("widget::radio")?;
     builder.module("widget::rule")?;
     // `widget::svg` holds `svg::Status` and `svg::Style`, which Rawr's style
@@ -193,6 +209,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::operation")?;
     builder.module("widget::operation::scrollable")?;
     builder.module("window")?;
+    builder.module("futures")?;
+    builder.module("futures::future")?;
     builder.module("event")?;
     builder.module("keyboard")?;
     builder.module("keyboard::key")?;
@@ -207,6 +225,15 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
 
     builder.type_::<marker::Result>("Result", &[], &[])?;
     builder.required_type::<task::Plan>("Task", &["Message"], &[])?;
+    // A Rust `impl Sipper<Output, Progress>`, and iced's `task::Handle`.
+    builder.type_::<task::Sip>("task::Sipper", &["Output", "Progress"], &[])?;
+    // The `task::Sender` a script sipper's builder sends its progress with.
+    builder.type_::<task::Sender>("task::Sender", &["Progress"], &[])?;
+    builder.type_::<task::Handle>(
+        "task::Handle",
+        &[],
+        &[capability::Kind::Debug, capability::Kind::Clone],
+    )?;
     builder.stream_plan_type("Subscription", "Message")?;
     builder.value_type::<theme::Value>(
         "Theme",
@@ -253,7 +280,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             capability::Kind::Static,
         ],
     )?;
-    builder.private_type::<marker::Application>("Application", &["State", "Message"], &[])?;
+    // iced's `Application` builder, which `iced::application` returns.
+    builder.type_::<marker::Application>("Application", &["State", "Message"], &[])?;
     builder.private_type::<marker::container::Style>("widget::container::Builtin", &[], &[])?;
     builder.default_value_type::<iced::widget::container::Style>(
         "widget::container::Style",
@@ -288,6 +316,13 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             _ => builder.value_type::<iced::Radians>(path, &[], capabilities)?,
         };
     }
+    // `Degrees::RANGE` and `Radians::RANGE`, a `RangeInclusive` of the angle.
+    // Source cannot name it, as Rawr's ranges are of numbers.
+    builder.private_type::<marker::AngleRange>(
+        "RangeInclusive",
+        &["T"],
+        &[capability::Kind::Clone, capability::Kind::Send, capability::Kind::Static],
+    )?;
     builder.default_value_type::<iced::mouse::Interaction>(
         "mouse::Interaction",
         &[],
@@ -300,6 +335,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         builder.project(path, "Element", &["Message"])?;
     }
     builder.trait_::<marker::Function>("Function", &[])?;
+    // iced's `Program` trait, which an `Application` builds.
+    builder.trait_::<marker::Program>("Program", &[])?;
     builder.type_::<marker::Column>("widget::Column", &["Message"], &[])?;
     builder.type_::<marker::Row>("widget::Row", &["Message"], &[])?;
     builder.type_::<marker::Container>("widget::Container", &["Message"], &[])?;
@@ -525,6 +562,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.project("widget::text::Rich", "Element", &["Message"])?;
     builder.type_::<marker::Pin>("widget::Pin", &["Message"], &[])?;
     builder.project("widget::Pin", "Element", &["Message"])?;
+    builder.type_::<marker::Float>("widget::Float", &["Message"], &[])?;
+    builder.project("widget::Float", "Element", &["Message"])?;
     builder.type_::<marker::MouseArea>("widget::MouseArea", &["Message"], &[])?;
     builder.project("widget::MouseArea", "Element", &["Message"])?;
     builder.default_value_type::<iced::font::Weight>(
@@ -553,7 +592,17 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         &[],
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
-    builder.value_type::<marker::Animation>("Animation", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<marker::Animation>(
+        "Animation",
+        &["T"],
+        &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    )?;
     builder.value_type::<marker::Easing>("animation::Easing", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.value_type::<marker::Instant>("time::Instant", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.project("widget::Column", "Element", &["Message"])?;
@@ -648,6 +697,16 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         "Task::perform",
         task_perform_signature()?,
     )?)?;
+    builder.item(item::Definition::associated_function(
+        "Task::future",
+        task_future_signature()?,
+    )?)?;
+    builder.item(item::Definition::method(
+        "Task::discard",
+        receiver::Mode::Owned,
+        task_discard_signature()?,
+    )?)?;
+    declare_sippers(&mut builder)?;
     builder.item(item::Definition::method(
         "Task::chain",
         receiver::Mode::Owned,
@@ -748,6 +807,12 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             generic_empty_signature(owner)?,
         )?)?;
     }
+    // iced's `keyed_column(pairs)`: a Column whose children carry the key
+    // of their `(key, element)` pair.
+    builder.item(item::Definition::function(
+        "widget::keyed_column",
+        keyed_children_signature("widget::Column")?,
+    )?)?;
     builder.item(item::Definition::function(
         "widget::container",
         container_signature()?,
@@ -789,6 +854,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     for name in ["widget::slider", "widget::vertical_slider"] {
         for number in [type_ref::Builtin::I64, type_ref::Builtin::F64] {
             builder.item(item::Definition::function(name, slider_signature(number)?)?)?;
+        }
+        for angle in ["Degrees", "Radians"] {
+            builder.item(item::Definition::function(name, angle_slider_signature(angle)?)?)?;
         }
     }
     declare_progress(&mut builder)?;
@@ -948,6 +1016,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     pixels_builders(&mut builder, "widget::Toggler", "spacing")?;
     length_builders(&mut builder, "widget::Toggler", &["width"])?;
     pixels_builders(&mut builder, "widget::Checkbox", "size")?;
+    pixels_builders(&mut builder, "widget::Checkbox", "text_size")?;
     pixels_builders(&mut builder, "widget::Checkbox", "spacing")?;
     length_builders(&mut builder, "widget::Checkbox", &["width"])?;
     // iced's slider takes `width(impl Into<Length>)` and `height(impl
@@ -1061,11 +1130,18 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     if features::on(Feature::Canvas) {
         declare_canvas(&mut builder)?;
     }
+    widget::custom::declare::declare(&mut builder)?;
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
     declare_checkbox_icon(&mut builder)?;
     declare_angles(&mut builder)?;
+    for path in DEFAULTED {
+        builder.item(item::Definition::associated_function(
+            format!("{path}::default"),
+            output_signature(path)?,
+        )?)?;
+    }
     declare_scrollable(&mut builder)?;
     declare_table(&mut builder)?;
     // `font::Family::to_string` and `ContentFit::to_string`: their
@@ -1112,6 +1188,7 @@ fn extension_with_exports(
         "task",
         "subscription",
         "theme",
+        "time",
         "widget",
         "widget::children",
         "widget::draw",
@@ -1151,6 +1228,16 @@ fn extension_with_exports(
         "subscription::batch",
         external_batch_signature(&exports.subscription)?,
     )?)?;
+    builder.item(item::Definition::function(
+        "task::script",
+        script_signature(&exports.task)?,
+    )?)?;
+    // tokio, for a program without tokio (`resolve::std_reexport`).
+    tokio_facade::declare(&mut builder, &exports.task, &exports.duration, &exports.instant)?;
+    // std's `path` and `ffi` types (`resolve::std_reexport`).
+    path_facade::declare(&mut builder)?;
+    // std's `io` errors (`resolve::std_reexport`).
+    io_facade::declare(&mut builder)?;
     builder.item(item::Definition::function(
         "theme::custom",
         extension_theme_signature(&exports.theme)?,
@@ -1284,6 +1371,9 @@ pub fn runtime_facades() -> Result<[host::runtime::Facade; 2], host::Error> {
     let mut rawr_builder = host::runtime::Builder::new(rawr);
     subscription::bind(&mut iced_builder, &mut rawr_builder);
     task::bind(&mut iced_builder, &mut rawr_builder);
+    tokio_facade::bind(&mut rawr_builder);
+    path_facade::bind(&mut rawr_builder);
+    io_facade::bind(&mut rawr_builder);
     theme::bind(&mut iced_builder, &mut rawr_builder);
     widget::bind(&mut iced_builder, &mut rawr_builder);
     Ok([iced_builder.finish(), rawr_builder.finish()])
@@ -1322,6 +1412,8 @@ pub(crate) fn install_test_runtime(registry: &mut host::runtime::Registry) {
 
 struct Exports {
     task: host::type_def::Export,
+    duration: host::type_def::Export,
+    instant: host::type_def::Export,
     subscription: host::type_def::Export,
     theme: host::type_def::Export,
     element: host::type_def::Export,
@@ -1335,6 +1427,8 @@ impl Exports {
     fn new(iced: &facade::Definition) -> Result<Self, host::Error> {
         Ok(Self {
             task: iced.export_type("Task")?,
+            duration: iced.export_type("time::Duration")?,
+            instant: iced.export_type("time::Instant")?,
             subscription: iced.export_type("Subscription")?,
             theme: iced.export_type("Theme")?,
             element: iced.export_type("Element")?,
@@ -1361,6 +1455,22 @@ fn external_batch_signature(
     let plan = external_type(export, [type_ref::Type::parameter("Message")?])?;
     signature.parameter(plan.clone());
     signature.output(plan);
+    Ok(signature.finish())
+}
+
+/// The `Task` an async body runs as: its step function, which takes `()`
+/// or the frame it resumes from (`rawr::future`), and the body's output.
+fn script_signature(
+    export: &host::type_def::Export,
+) -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Resume", &[])?;
+    signature.type_parameter("Output", &[])?;
+    signature.parameter(type_ref::Type::callable(
+        type_ref::Type::parameter("Resume")?,
+        type_ref::Type::parameter("Output")?,
+    ));
+    signature.output(external_type(export, [type_ref::Type::parameter("Output")?])?);
     Ok(signature.finish())
 }
 
@@ -1591,6 +1701,156 @@ fn task_perform_signature() -> Result<signature::Definition, host::Error> {
     Ok(signature.finish())
 }
 
+/// iced's `Task::sip(sipper, on_progress, on_output)`, `Task::abortable()`
+/// with its `task::Handle`, and `Subscription::run(builder)` over a Rust
+/// function that returns a sipper.
+fn declare_sippers(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let parameter = |name: &str| type_ref::Type::parameter(name);
+    let task = |message: &str| type_ref::Type::applied("Task", [parameter(message)?]);
+    let sipper = || type_ref::Type::applied("task::Sipper", [parameter("Output")?, parameter("Progress")?]);
+    let handle = || type_ref::Type::registered("task::Handle");
+
+    // `futures::future::join(a, b)` and `try_join(a, b)`, which iced
+    // re-exports: both futures run at once.
+    let mut join = signature::Builder::new();
+    join.type_parameter("A", &[])?;
+    join.type_parameter("B", &[])?;
+    join.parameter(task("A")?);
+    join.parameter(task("B")?);
+    join.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::tuple([parameter("A")?, parameter("B")?])?],
+    )?);
+    builder.item(item::Definition::function("futures::future::join", join.finish())?)?;
+    let fallible = |name: &str| -> Result<type_ref::Type, host::Error> {
+        type_ref::Type::applied(
+            "Task",
+            [type_ref::Type::result(parameter(name)?, parameter("E")?)],
+        )
+    };
+    let mut try_join = signature::Builder::new();
+    try_join.type_parameter("A", &[])?;
+    try_join.type_parameter("B", &[])?;
+    try_join.type_parameter("E", &[])?;
+    try_join.parameter(fallible("A")?);
+    try_join.parameter(fallible("B")?);
+    try_join.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::result(
+            type_ref::Type::tuple([parameter("A")?, parameter("B")?])?,
+            parameter("E")?,
+        )],
+    )?);
+    builder.item(item::Definition::function(
+        "futures::future::try_join",
+        try_join.finish(),
+    )?)?;
+
+    // `sipper(async |mut progress| { progress.send(value).await; .. })`.
+    let sender = || type_ref::Type::applied("task::Sender", [parameter("Progress")?]);
+    let mut script = signature::Builder::new();
+    script.type_parameter("Output", &[])?;
+    script.type_parameter("Progress", &[])?;
+    script.parameter(type_ref::Type::callable(sender()?, task("Output")?));
+    script.output(sipper()?);
+    builder.item(item::Definition::function("task::sipper", script.finish())?)?;
+    let mut send = signature::Builder::new();
+    send.type_parameter("Progress", &[])?;
+    send.parameter(parameter("Progress")?);
+    send.output(type_ref::Type::applied("Task", [type_ref::Type::unit()])?);
+    builder.item(item::Definition::method(
+        "task::Sender::send",
+        receiver::Mode::Shared,
+        send.finish(),
+    )?)?;
+
+    let mut sip = signature::Builder::new();
+    sip.type_parameter("Output", &[])?;
+    sip.type_parameter("Progress", &[])?;
+    sip.type_parameter("Message", &[])?;
+    sip.parameter(sipper()?);
+    sip.parameter(type_ref::Type::callable(parameter("Progress")?, parameter("Message")?));
+    sip.parameter(type_ref::Type::callable(parameter("Output")?, parameter("Message")?));
+    sip.output(task("Message")?);
+    builder.item(item::Definition::associated_function("Task::sip", sip.finish())?)?;
+
+    let mut abortable = signature::Builder::new();
+    abortable.type_parameter("Message", &[])?;
+    abortable.output(type_ref::Type::tuple([task("Message")?, handle()?])?);
+    builder.item(item::Definition::method(
+        "Task::abortable",
+        receiver::Mode::Owned,
+        abortable.finish(),
+    )?)?;
+
+    let mut abort_on_drop = signature::Builder::new();
+    abort_on_drop.output(handle()?);
+    builder.item(item::Definition::method(
+        "task::Handle::abort_on_drop",
+        receiver::Mode::Owned,
+        abort_on_drop.finish(),
+    )?)?;
+    let mut abort = signature::Builder::new();
+    abort.output(type_ref::Type::unit());
+    builder.item(item::Definition::method(
+        "task::Handle::abort",
+        receiver::Mode::Shared,
+        abort.finish(),
+    )?)?;
+    let mut is_aborted = signature::Builder::new();
+    is_aborted.output(type_ref::Type::builtin(type_ref::Builtin::Bool));
+    builder.item(item::Definition::method(
+        "task::Handle::is_aborted",
+        receiver::Mode::Shared,
+        is_aborted.finish(),
+    )?)?;
+
+    // `Subscription::run(builder)`: the compiler passes the sipper the
+    // Rust function returns and the function's path, which is the
+    // subscription's identity, as iced's is the function pointer.
+    // The source name the compiler routes to the stream operation.
+    let mut source = signature::Builder::new();
+    source.type_parameter("Output", &[])?;
+    source.type_parameter("Progress", &[])?;
+    source.parameter(sipper()?);
+    source.output(type_ref::Type::applied("Subscription", [parameter("Progress")?])?);
+    builder.item(item::Definition::associated_function("Subscription::run", source.finish())?)?;
+    let mut run = signature::Builder::new();
+    run.type_parameter("Output", &[])?;
+    run.type_parameter("Progress", &[])?;
+    run.parameter(sipper()?);
+    run.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
+    run.output(parameter("Progress")?);
+    builder.item(item::Definition::stream_operation(
+        "subscription::run",
+        run.finish(),
+        host::stream::Version::new(1),
+    )?)?;
+    Ok(())
+}
+
+/// `Task::future(future)`. A Rust future crosses into Rawr as a `Task` of
+/// its output, so this takes that task.
+fn task_future_signature() -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Output", &[])?;
+    let task = type_ref::Type::applied("Task", [type_ref::Type::parameter("Output")?])?;
+    signature.parameter(task.clone());
+    signature.output(task);
+    Ok(signature.finish())
+}
+
+fn task_discard_signature() -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Message", &[])?;
+    signature.type_parameter("Other", &[])?;
+    signature.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::parameter("Other")?],
+    )?);
+    Ok(signature.finish())
+}
+
 fn task_chain_signature() -> Result<signature::Definition, host::Error> {
     task_batch_signature()
 }
@@ -1677,6 +1937,21 @@ fn children_signature(output: &str) -> Result<signature::Definition, host::Error
     let mut signature = signature::Builder::new();
     signature.type_parameter("Message", &[])?;
     signature.parameter(children()?);
+    signature.output(type_ref::Type::applied(
+        output,
+        [type_ref::Type::parameter("Message")?],
+    )?);
+    Ok(signature.finish())
+}
+
+fn keyed_children_signature(output: &str) -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Key", &[])?;
+    signature.type_parameter("Message", &[])?;
+    signature.parameter(type_ref::Type::slice(type_ref::Type::tuple([
+        type_ref::Type::parameter("Key")?,
+        type_ref::Type::applied("Element", [type_ref::Type::parameter("Message")?])?,
+    ])?));
     signature.output(type_ref::Type::applied(
         output,
         [type_ref::Type::parameter("Message")?],
@@ -1779,6 +2054,24 @@ fn slider_signature(number: type_ref::Builtin) -> Result<signature::Definition, 
     Ok(signature.finish())
 }
 
+/// `slider(Degrees::RANGE, degrees, on_change)`, or over `Radians`.
+fn angle_slider_signature(angle: &str) -> Result<signature::Definition, host::Error> {
+    let angle = || type_ref::Type::registered(angle);
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Message", &[])?;
+    signature.parameter(type_ref::Type::applied("RangeInclusive", [angle()?])?);
+    signature.parameter(angle()?);
+    signature.parameter(type_ref::Type::callable(
+        angle()?,
+        type_ref::Type::parameter("Message")?,
+    ));
+    signature.output(type_ref::Type::applied(
+        "widget::Slider",
+        [angle()?, type_ref::Type::parameter("Message")?],
+    )?);
+    Ok(signature.finish())
+}
+
 /// iced's `progress_bar(range, value)`, and `transition(value, init, view)`
 /// with the `Animation` it takes. A Rawr view is drawn once per state, so a
 /// transition shows its value settled: `interpolate` is that value.
@@ -1798,30 +2091,7 @@ fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
     )?)?;
     length_builders(builder, "widget::ProgressBar", &["length", "girth"])?;
 
-    builder.item(item::Definition::associated_function(
-        "Animation::new",
-        repeated_builtin_signature(type_ref::Builtin::F64, 1, "Animation")?,
-    )?)?;
-    for name in ["very_quick", "quick", "slow", "very_slow"] {
-        builder.item(item::Definition::method(
-            format!("Animation::{name}"),
-            receiver::Mode::Owned,
-            output_signature("Animation")?,
-        )?)?;
-    }
-    builder.item(item::Definition::method(
-        "Animation::easing",
-        receiver::Mode::Owned,
-        fixed_builder_signature("Animation", type_ref::Type::registered("animation::Easing")?)?,
-    )?)?;
-    let mut interpolate = signature::Builder::new();
-    interpolate.parameter(type_ref::Type::registered("time::Instant")?);
-    interpolate.output(type_ref::Type::builtin(type_ref::Builtin::F64));
-    builder.item(item::Definition::method(
-        "Animation::interpolate",
-        receiver::Mode::Owned,
-        interpolate.finish(),
-    )?)?;
+    declare_animation(builder)?;
     for name in EASINGS {
         builder.item(item::Definition::associated_value(
             format!("animation::Easing::{name}"),
@@ -1835,11 +2105,11 @@ fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
     // `impl Fn() -> Animation`: a callable of no inputs takes `()`.
     transition.parameter(type_ref::Type::callable(
         type_ref::Type::unit(),
-        type_ref::Type::registered("Animation")?,
+        float_animation()?,
     ));
     transition.parameter(type_ref::Type::callable(
         type_ref::Type::tuple([
-            type_ref::Type::registered("Animation")?,
+            float_animation()?,
             type_ref::Type::registered("time::Instant")?,
         ])?,
         type_ref::Type::applied("Element", [type_ref::Type::parameter("Message")?])?,
@@ -1849,6 +2119,99 @@ fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
         [type_ref::Type::parameter("Message")?],
     )?);
     builder.item(item::Definition::function("widget::transition", transition.finish())?)?;
+    Ok(())
+}
+
+/// iced's `Animation<f32>`, as `transition` takes it.
+fn float_animation() -> Result<type_ref::Type, host::Error> {
+    type_ref::Type::applied("Animation", [type_ref::Type::builtin(type_ref::Builtin::F64)])
+}
+
+/// iced's `Animation<T>` of a `bool` or an `f32`: `new`, its builders, `go`
+/// and `go_mut` at an `Instant`, `is_animating`, `value`, `remaining` and
+/// `interpolate`. A `bool` animation interpolates between two numbers; a
+/// number animation interpolates its own value.
+fn declare_animation(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    let t = || type_ref::Type::parameter("T");
+    let animation = || type_ref::Type::applied("Animation", [t()?]);
+    let instant = || type_ref::Type::registered("time::Instant");
+    let duration = || type_ref::Type::registered("time::Duration");
+    let f64 = || type_ref::Type::builtin(type_ref::Builtin::F64);
+    let method = |builder: &mut facade::Builder,
+                  name: &str,
+                  mode: receiver::Mode,
+                  inputs: Vec<type_ref::Type>,
+                  output: type_ref::Type|
+     -> Result<(), host::Error> {
+        let mut signature = signature::Builder::new();
+        signature.type_parameter("T", &[])?;
+        for input in inputs {
+            signature.parameter(input);
+        }
+        signature.output(output);
+        builder.item(item::Definition::method(
+            format!("Animation::{name}"),
+            mode,
+            signature.finish(),
+        )?)?;
+        Ok(())
+    };
+    let mut new = signature::Builder::new();
+    new.type_parameter("T", &[])?;
+    new.parameter(t()?).output(animation()?);
+    builder.item(item::Definition::associated_function("Animation::new", new.finish())?)?;
+    for name in [
+        "very_quick",
+        "quick",
+        "slow",
+        "very_slow",
+        "repeat_forever",
+        "auto_reverse",
+    ] {
+        method(builder, name, receiver::Mode::Owned, Vec::new(), animation()?)?;
+    }
+    method(
+        builder,
+        "easing",
+        receiver::Mode::Owned,
+        vec![type_ref::Type::registered("animation::Easing")?],
+        animation()?,
+    )?;
+    for name in ["duration", "delay"] {
+        method(builder, name, receiver::Mode::Owned, vec![duration()?], animation()?)?;
+    }
+    method(
+        builder,
+        "repeat",
+        receiver::Mode::Owned,
+        vec![type_ref::Type::builtin(type_ref::Builtin::I64)],
+        animation()?,
+    )?;
+    method(builder, "go", receiver::Mode::Owned, vec![t()?, instant()?], animation()?)?;
+    method(
+        builder,
+        "go_mut",
+        receiver::Mode::Mutable,
+        vec![t()?, instant()?],
+        type_ref::Type::unit(),
+    )?;
+    method(
+        builder,
+        "is_animating",
+        receiver::Mode::Shared,
+        vec![instant()?],
+        type_ref::Type::builtin(type_ref::Builtin::Bool),
+    )?;
+    method(builder, "value", receiver::Mode::Shared, Vec::new(), t()?)?;
+    method(builder, "remaining", receiver::Mode::Shared, vec![instant()?], duration()?)?;
+    method(builder, "interpolate", receiver::Mode::Shared, vec![instant()?], f64())?;
+    method(
+        builder,
+        "interpolate",
+        receiver::Mode::Shared,
+        vec![f64(), f64(), instant()?],
+        f64(),
+    )?;
     Ok(())
 }
 
@@ -2130,6 +2493,26 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
             )?)?;
         }
     }
+    // `offset.x = 2.0` and `Size { width: 1.0, height: 2.0 }`: a field
+    // set through its owned builder.
+    for (owner, fields) in [
+        ("Size", &["width", "height"][..]),
+        ("Point", &["x", "y"][..]),
+        ("Vector", &["x", "y"][..]),
+    ] {
+        for field in fields {
+            for input in PIXELS {
+                let mut setter = signature::Builder::new();
+                setter.parameter(type_ref::Type::builtin(input));
+                setter.output(type_ref::Type::registered(owner)?);
+                builder.item(item::Definition::method(
+                    format!("{owner}::{field}"),
+                    receiver::Mode::Owned,
+                    setter.finish(),
+                )?)?;
+            }
+        }
+    }
     builder.item(item::Definition::intrinsic_macro(
         "color",
         repeated_builtin_signature(type_ref::Builtin::I64, 1, "Color")?,
@@ -2207,6 +2590,32 @@ fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
         "widget::pin",
         unary_widget_signature("widget::Pin")?,
     )?)?;
+    builder.item(item::Definition::function(
+        "widget::float",
+        unary_widget_signature("widget::Float")?,
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::Float::new",
+        unary_widget_signature("widget::Float")?,
+    )?)?;
+    builders(
+        builder,
+        "widget::Float",
+        "scale",
+        [type_ref::Type::builtin(type_ref::Builtin::F64)],
+    )?;
+    builders(
+        builder,
+        "widget::Float",
+        "translate",
+        [type_ref::Type::callable(
+            type_ref::Type::tuple([
+                type_ref::Type::registered("Rectangle")?,
+                type_ref::Type::registered("Rectangle")?,
+            ])?,
+            type_ref::Type::registered("Vector")?,
+        )],
+    )?;
     pixels_builders(builder, "widget::Pin", "x")?;
     pixels_builders(builder, "widget::Pin", "y")?;
     builders(builder, "widget::Pin", "position", [type_ref::Type::registered("Point")?])?;
@@ -2455,8 +2864,6 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         "widget::canvas::path",
         "widget::canvas::stroke",
         "widget::canvas::fill",
-        "advanced",
-        "advanced::graphics",
         "advanced::graphics::geometry",
     ] {
         builder.module(module)?;
@@ -2492,6 +2899,11 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     builder.type_::<marker::PathBuilder>("widget::canvas::path::Builder", &[], cloned)?;
     builder.type_::<marker::Frame>("widget::canvas::Frame", &[], cloned)?;
     builder.type_::<marker::Geometry>("widget::canvas::Geometry", &[], debug)?;
+    builder.value_type::<marker::CacheGroup>(
+        "widget::canvas::Group",
+        &[],
+        OWNED_VALUE_CAPABILITIES,
+    )?;
     builder.default_type::<marker::Cache>(
         "widget::canvas::Cache",
         &[],
@@ -2529,7 +2941,6 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         &[],
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
-    builder.value_type::<iced::mouse::Cursor>("mouse::Cursor", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.alias("widget::canvas::stroke::Style", "widget::canvas::Style")?;
     builder.alias("widget::canvas::fill::Style", "widget::canvas::Style")?;
     builder.alias("widget::canvas::stroke::Stroke", "widget::canvas::Stroke")?;
@@ -2567,7 +2978,7 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     for name in ["C", "S", "Message"] {
         new.type_parameter(name, &[])?;
     }
-    let parameter = type_ref::Type::parameter;
+    let parameter = |name: &str| type_ref::Type::parameter(name);
     new.parameter(parameter("C")?);
     new.parameter(type_ref::Type::callable(
         type_ref::Type::tuple([
@@ -2729,6 +3140,16 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
             signature(Vec::new(), cache()?),
         )?)?;
     }
+    // `Group::unique()` and `Cache::with_group(group)`: iced batches the
+    // caches of a group, which Rawr draws one by one.
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Group::unique",
+        signature(Vec::new(), ty("widget::canvas::Group")?),
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::canvas::Cache::with_group",
+        signature(vec![ty("widget::canvas::Group")?], cache()?),
+    )?)?;
     builder.item(item::Definition::method(
         "widget::canvas::Cache::clear",
         receiver::Mode::Shared,
@@ -3553,7 +3974,7 @@ fn declare_scrollable(builder: &mut facade::Builder) -> Result<(), host::Error> 
 /// iced's `table(columns, rows)` and `table::column(header, view)`, whose
 /// view makes each row's cell.
 fn declare_table(builder: &mut facade::Builder) -> Result<(), host::Error> {
-    let parameter = type_ref::Type::parameter;
+    let parameter = |name: &str| type_ref::Type::parameter(name);
     let element = || type_ref::Type::applied("Element", [parameter("Message")?]);
     let column = || {
         type_ref::Type::applied("widget::table::Column", [parameter("T")?, parameter("Message")?])
@@ -3614,12 +4035,19 @@ pub(crate) const SCROLLABLE_SOURCES: [&str; 8] = [
     "Resize",
 ];
 
+/// The facade's `Default` types whose `T::default()` is iced's own,
+/// bound in `widget::helpers`.
+pub(crate) const DEFAULTED: [&str; 7] =
+    ["Color", "ContentFit", "Font", "Padding", "Point", "Rectangle", "Vector"];
+
 /// iced's `Degrees` and `Radians`: `Degrees(90.0)`, `Radians::PI`,
 /// `Radians::from(degrees)` and their operators, the methods named for `std::ops`' traits.
 fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let f64 = || type_ref::Type::builtin(type_ref::Builtin::F64);
     let degrees = || type_ref::Type::registered("Degrees");
     let radians = || type_ref::Type::registered("Radians");
+    let vector = || type_ref::Type::registered("Vector");
+    let point = || type_ref::Type::registered("Point");
     for (path, output) in [("Degrees", degrees()?), ("Radians", radians()?)] {
         let mut from = signature::Builder::new();
         from.parameter(f64()).output(output.clone());
@@ -3631,6 +4059,14 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let mut from = signature::Builder::new();
     from.parameter(degrees()?).output(radians()?);
     builder.item(item::Definition::associated_function("Radians::from", from.finish())?)?;
+    // `f32::from(degrees)`: the angle as a number.
+    for path in ["Degrees", "Radians"] {
+        builder.item(item::Definition::method(
+            format!("{path}::into"),
+            receiver::Mode::Owned,
+            output_signature_of(f64()),
+        )?)?;
+    }
     // `Rotation::Floating(angle)` and `Rotation::Solid(angle)`, matched as
     // in Rust, with the angle read in radians or degrees.
     let rotation = || type_ref::Type::registered("Rotation");
@@ -3660,12 +4096,29 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
             output_signature(output)?,
         )?)?;
     }
+    // `*rotation.radians_mut() = angle`: the rotation with its angle
+    // replaced, which Rawr stores back into the place.
+    let mut radians_mut = signature::Builder::new();
+    radians_mut
+        .parameter(rotation()?)
+        .parameter(radians()?)
+        .output(rotation()?);
+    builder.item(item::Definition::associated_function(
+        "Rotation::radians_mut",
+        radians_mut.finish(),
+    )?)?;
     if features::on(Feature::Image) {
         for input in [rotation()?, radians()?, degrees()?] {
             builders(builder, "widget::Image", "rotation", [input])?;
         }
     }
     builder.item(item::Definition::associated_value("Radians::PI", radians()?)?)?;
+    for (path, angle) in [("Degrees", degrees()?), ("Radians", radians()?)] {
+        builder.item(item::Definition::associated_value(
+            format!("{path}::RANGE"),
+            type_ref::Type::applied("RangeInclusive", [angle])?,
+        )?)?;
+    }
     for (owner, name, input, output) in [
         ("Degrees", "mul", f64(), degrees()?),
         ("Radians", "add", radians()?, radians()?),
@@ -3676,6 +4129,14 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
         ("Radians", "div", radians()?, radians()?),
         ("Radians", "div", f64(), radians()?),
         ("Radians", "rem", radians()?, radians()?),
+        // iced's `Vector` arithmetic and a `Point` moved by a `Vector`.
+        ("Vector", "add", vector()?, vector()?),
+        ("Vector", "sub", vector()?, vector()?),
+        ("Vector", "mul", f64(), vector()?),
+        ("Vector", "div", f64(), vector()?),
+        ("Point", "add", vector()?, point()?),
+        ("Point", "sub", vector()?, point()?),
+        ("Point", "sub", point()?, vector()?),
     ] {
         let mut operator = signature::Builder::new();
         operator.parameter(input).output(output);
@@ -3828,7 +4289,7 @@ fn component_instance_signature() -> Result<signature::Definition, host::Error> 
     for name in ["C", "S", "E", "Message"] {
         signature.type_parameter(name, &[])?;
     }
-    let parameter = type_ref::Type::parameter;
+    let parameter = |name: &str| type_ref::Type::parameter(name);
     signature.parameter(parameter("C")?);
     signature.parameter(type_ref::Type::callable(
         type_ref::Type::tuple([
@@ -4398,6 +4859,24 @@ fn declare_styles(builder: &mut facade::Builder) -> Result<(), host::Error> {
         receiver::Mode::Shared,
         reader.finish(),
     )?)?;
+    // `border.width` and `border.color`, read as fields, and
+    // `border::radius(r)`.
+    for (name, output) in [("width", type_ref::Type::builtin(type_ref::Builtin::F64)), ("color", color()?)] {
+        let mut reader = signature::Builder::new();
+        reader.output(output);
+        builder.item(item::Definition::method(
+            format!("Border::{name}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+    }
+    for input in &pixels {
+        let mut function = signature::Builder::new();
+        function
+            .parameter(input.clone())
+            .output(type_ref::Type::registered("border::Radius")?);
+        builder.item(item::Definition::function("border::radius", function.finish())?)?;
+    }
     let border_inputs = [
         ("rounded", &pixels[..]),
         ("width", &pixels[..]),
@@ -4477,6 +4956,21 @@ fn declare_canonical_values(builder: &mut facade::Builder) -> Result<(), host::E
         "Length::FillPortion",
         integer_signature("Length", 1)?,
     )?)?;
+    // iced's `impl From<f32> for Length` and its kin: a fixed length, as
+    // `impl Into<Length>` takes a number.
+    for input in PIXELS {
+        let mut from = signature::Builder::new();
+        from.parameter(type_ref::Type::builtin(input));
+        from.output(type_ref::Type::registered("Length")?);
+        builder.item(item::Definition::associated_function("Length::from", from.finish())?)?;
+    }
+    // A `T: Into<Length>` as the `Length` it converts to: the value, a
+    // `Length` or a number, settled when it runs.
+    let mut into = signature::Builder::new();
+    into.type_parameter("T", &[])?;
+    into.parameter(type_ref::Type::parameter("T")?);
+    into.output(type_ref::Type::registered("Length")?);
+    builder.item(item::Definition::associated_function("Length::__into", into.finish())?)?;
     // `Fit.max(600)`: a length with a bound, as iced's `Length::min` and
     // `Length::max`.
     for name in ["min", "max"] {

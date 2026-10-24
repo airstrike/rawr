@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use rawr::{application, item, program, Dynamic};
 
-use crate::{effect, subscription, task};
+use crate::{dispatch, effect, subscription, task};
 
 /// One Rawr message issued by a particular application instance and generation.
 ///
@@ -34,6 +34,7 @@ pub struct Message {
     subscription_error: Option<Arc<subscription::Error>>,
     subscription: bool,
     task_completion: Option<effect::Completion>,
+    resume: Option<dispatch::Resume>,
 }
 
 impl Message {
@@ -52,6 +53,7 @@ impl Message {
             subscription_error: None,
             subscription: false,
             task_completion: None,
+            resume: None,
         }
     }
 
@@ -69,6 +71,7 @@ impl Message {
             subscription_error: None,
             subscription: false,
             task_completion: None,
+            resume: None,
         }
     }
 
@@ -86,6 +89,7 @@ impl Message {
             subscription_error: None,
             subscription: true,
             task_completion: None,
+            resume: None,
         }
     }
 
@@ -103,6 +107,7 @@ impl Message {
             subscription_error: Some(Arc::new(error)),
             subscription: true,
             task_completion: None,
+            resume: None,
         }
     }
 
@@ -117,6 +122,25 @@ impl Message {
             subscription_error: None,
             subscription: false,
             task_completion: Some(completion),
+            resume: None,
+        }
+    }
+
+    pub(crate) fn resume(
+        owner: effect::Owner,
+        resume: dispatch::Resume,
+        subscription: bool,
+    ) -> Self {
+        Self {
+            instance: owner.instance(),
+            generation: owner.generation(),
+            payload: Dynamic::UNIT,
+            mapping_error: None,
+            task_error: None,
+            subscription_error: None,
+            subscription,
+            task_completion: None,
+            resume: Some(resume),
         }
     }
 
@@ -162,6 +186,12 @@ impl Message {
         self.task_completion.as_ref()
     }
 
+    /// Script work a native task left for the UI thread. The host runs it
+    /// only when the envelope's instance and generation are current.
+    pub(crate) const fn resumption(&self) -> Option<&dispatch::Resume> {
+        self.resume.as_ref()
+    }
+
     pub(crate) fn map_application(
         mut self,
         authority: &rawr::reload::installation::installed::Application,
@@ -171,6 +201,7 @@ impl Message {
             || self.task_error.is_some()
             || self.subscription_error.is_some()
             || self.task_completion.is_some()
+            || self.resume.is_some()
         {
             return self;
         }
@@ -190,6 +221,7 @@ impl Message {
             || self.task_error.is_some()
             || self.subscription_error.is_some()
             || self.task_completion.is_some()
+            || self.resume.is_some()
         {
             return self;
         }
@@ -210,6 +242,7 @@ impl Message {
             || self.task_error.is_some()
             || self.subscription_error.is_some()
             || self.task_completion.is_some()
+            || self.resume.is_some()
         {
             return self;
         }
@@ -241,6 +274,7 @@ impl Message {
             || self.task_error.is_some()
             || self.subscription_error.is_some()
             || self.task_completion.is_some()
+            || self.resume.is_some()
         {
             return self;
         }

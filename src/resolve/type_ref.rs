@@ -152,6 +152,10 @@ pub(super) fn resolve(
                 .map(|segment| segment.name.text.as_str())
                 .collect::<Vec<_>>()
                 .join("::");
+            // `PhantomData<T>` holds nothing: the unit type.
+            if super::std_phantom(&written) && !types.contains_key("PhantomData") {
+                return Ok(Type::Unit(path.span));
+            }
             if let Some(Target::Alias(alias)) = types.get(written.as_str()) {
                 let span = path.span;
                 let mut arguments = Vec::new();
@@ -235,6 +239,20 @@ fn resolve_path(
     #[cfg(feature = "rust-import")] native: Option<super::native::Site<'_>>,
 ) -> Result<Path, Error> {
     let span = parsed.span;
+    // `::image::ImageError` names the crate `image`, never a type or
+    // generic parameter of this program.
+    if parsed.global
+        && let Some(first) = parsed.segments.first()
+        && (matches!(first.name.text.as_str(), "crate" | "self" | "super" | "Self")
+            || parsed.segments.len() == 1
+            || matches!(
+                types.get(first.name.text.as_str()),
+                Some(Target::Script { .. } | Target::Parameter | Target::Alias(_))
+            ))
+    {
+        let first = &first.name.text;
+        return Err(super::not_a_crate(&first, span));
+    }
     if let Some(path) = std_fmt_type(&parsed) {
         return Ok(path);
     }
@@ -258,6 +276,41 @@ fn resolve_path(
         // Traits are crate-wide by name.
         let last = &rest[rest.len() - 1];
         let name = &last.name.text;
+        // iced's `&mut dyn widget::Operation`, which a script widget's
+        // `operate` lends on: the facade's operation handle.
+        if name.as_str() == "Operation" && rest.len() > 1 {
+            let mut handle = parsed.clone();
+            handle.segments = rest.to_vec().into();
+            let resolved = resolve_path(
+                handle,
+                types,
+                host,
+                #[cfg(feature = "rust-import")]
+                native,
+            );
+            if let Ok(path) = &resolved
+                && matches!(&path.target, Target::Host { definition, .. }
+                    if definition.path().as_str() == OPERATION)
+            {
+                return resolved;
+            }
+            // `widget::Operation` through a module `use`, which a type path
+            // does not follow: iced's, when every segment is iced's.
+            if rest[..rest.len() - 1].iter().all(|module| {
+                matches!(module.name.text.as_str(), "iced" | "advanced" | "widget" | "core")
+            }) && let Some(definition) = host.type_(OPERATION)
+            {
+                return Ok(Path {
+                    name: OPERATION.into(),
+                    target: Target::Host {
+                        definition: definition.clone(),
+                        owner: host.type_owner(OPERATION).cloned(),
+                    },
+                    arguments: Box::default(),
+                    span,
+                });
+            }
+        }
         // `Output = i64` bindings, kept as the arguments `=Output<i64>`.
         let mut arguments = Vec::new();
         for argument in &last.arguments {
@@ -342,6 +395,7 @@ fn resolve_path(
             item::type_ref::Path {
                 segments: segments[..index].to_vec().into_boxed_slice(),
                 span: Span::new(span.start(), segments[index].span.start()),
+                global: parsed.global,
             },
             types,
             host,
@@ -383,6 +437,7 @@ fn resolve_path(
                 item::type_ref::Path {
                     segments: prefix.to_vec().into_boxed_slice(),
                     span: Span::new(span.start(), prefix[prefix.len() - 1].span.end()),
+                    global: parsed.global,
                 },
                 types,
                 host,
@@ -437,6 +492,7 @@ fn resolve_path(
     let name = match super::std_collection(&name) {
         Some(collection) if !types.contains_key(name.as_str()) => collection.into(),
         None if super::std_reverse(&name) && !types.contains_key("Reverse") => "Reverse".into(),
+        None if super::std_cell(&name) && !types.contains_key("RefCell") => "RefCell".into(),
         None if !types.contains_key(name.as_str())
             && super::std_range(&name).is_some_and(|range| !types.contains_key(range)) =>
         {
@@ -450,6 +506,7 @@ fn resolve_path(
         || prelude_arity(&parsed).is_some()
         || super::std_collection(&name).is_some()
         || name.as_str() == "Reverse"
+        || name.as_str() == "RefCell"
         || name.as_str() == "RangeInclusive"
         || name.as_str() == item::type_ref::ITER_TYPE
     {
@@ -494,7 +551,7 @@ fn resolve_path(
     let prelude = match name.as_str() {
         "Option" | "Vec" | "Box" => Some(1),
         "Result" | "HashMap" | "BTreeMap" => Some(2),
-        "HashSet" | "BTreeSet" | "Reverse" | "RangeInclusive" => Some(1),
+        "HashSet" | "BTreeSet" | "Reverse" | "RefCell" | "RangeInclusive" => Some(1),
         item::type_ref::ITER_TYPE | item::type_ref::INTO_ITER_TYPE => Some(1),
         name if item::type_ref::array_length(name).is_some() => Some(1),
         _ => None,
@@ -523,6 +580,26 @@ fn resolve_path(
         });
     }
 
+    // iced's `Size<Length>`, which `advanced::Widget::size` returns, is a
+    // type of its own: the facade's `Size` is iced's `Size<f32>`.
+    let target = match &target {
+        Target::Host { definition, owner }
+            if definition.path().as_str() == "iced::Size"
+                && matches!(
+                    &arguments[..],
+                    [Argument::Type(Type::Path(Path { target: Target::Host { definition: length, .. }, .. }))]
+                        if length.path().as_str() == "iced::Length"
+                )
+                && let Some(lengths) = host.type_(LENGTH_SIZE) =>
+        {
+            arguments.clear();
+            Target::Host {
+                definition: lengths.clone(),
+                owner: owner.clone(),
+            }
+        }
+        _ => target,
+    };
     if let Target::Host { definition, .. } = &target {
         if definition.role() == host::type_def::Role::Trait {
             return Err(Error::UnsupportedNominalSyntax {
@@ -531,6 +608,14 @@ fn resolve_path(
             });
         }
         content_messages(definition, &mut arguments, host);
+        // iced's `Shell<'_, Message>`: the facade's Shell takes any message,
+        // so a generic widget's `shell.request_redraw()` needs no witness.
+        if matches!(
+            definition.path().as_str(),
+            "iced::advanced::Shell" | "iced::advanced::overlay::Element"
+        ) {
+            arguments.retain(|argument| !matches!(argument, Argument::Type(_)));
+        }
         // iced's defaulted `Theme` and `Renderer` parameters after the
         // declared ones (`canvas::Geometry<Renderer>`) name the facade's own.
         while arguments
@@ -568,6 +653,12 @@ fn resolve_path(
         span,
     })
 }
+
+/// iced's `widget::Operation`, which `operate` lends.
+const OPERATION: &str = "iced::advanced::widget::Operation";
+
+/// The facade's type for iced's `Size<Length>`.
+pub(crate) const LENGTH_SIZE: &str = "iced::advanced::layout::LengthSize";
 
 /// iced's widgets are generic over their content: `Column<Element<'_,
 /// Message>>`, `Container<'a, W>`, `Button<'a, Message, &str>`. A facade
@@ -681,6 +772,32 @@ fn resolve_impl(
     #[cfg(feature = "rust-import")] native: Option<super::native::Site<'_>>,
 ) -> Result<Path, Error> {
     let span = parsed.span;
+    if let Some(output) = future_output(&parsed) {
+        // A future is iced's `Task` of its output, which runs it.
+        let definition = host.type_(TASK).ok_or_else(|| Error::UnsupportedNominalSyntax {
+            construct: "a future in a program without iced, whose `Task` runs it".into(),
+            source: span,
+        })?;
+        let output = match output {
+            Some(output) => resolve(
+                output.clone(),
+                types,
+                host,
+                #[cfg(feature = "rust-import")]
+                native,
+            )?,
+            None => Type::Unit(span),
+        };
+        return Ok(Path {
+            target: Target::Host {
+                definition: definition.clone(),
+                owner: host.type_owner(TASK).cloned(),
+            },
+            name: TASK.into(),
+            arguments: Box::new([Argument::Type(output)]),
+            span,
+        });
+    }
     let found = parsed.segments[0]
         .arguments
         .iter()
@@ -753,6 +870,37 @@ fn resolve_impl(
         arguments,
         span,
     })
+}
+
+/// The type that runs a future: iced's `Task`.
+const TASK: &str = "iced::Task";
+
+/// `impl Future<Output = T>` (or `std::future::Future`): `Some(Some(T))`,
+/// or `Some(None)` without its `Output`.
+fn future_output(parsed: &item::type_ref::Path) -> Option<Option<&item::type_ref::Type>> {
+    let arguments = &parsed.segments[0].arguments;
+    let bound = arguments.iter().any(|argument| {
+        matches!(argument, item::type_ref::Argument::Type(item::type_ref::Type::Path(bound))
+            if bound.segments.last().is_some_and(|last| last.name.text == "Future")
+                && matches!(
+                    bound.segments.iter().map(|segment| segment.name.text.as_str()).collect::<Vec<_>>()[..],
+                    ["Future"] | ["std" | "core", "future", "Future"]
+                ))
+    });
+    if !bound {
+        return None;
+    }
+    let binding = format!("{}Future=Output", item::type_ref::BINDING_PREFIX);
+    Some(arguments.iter().find_map(|argument| match argument {
+        item::type_ref::Argument::Type(item::type_ref::Type::Path(path)) => match &path.segments[..] {
+            [segment] if segment.name.text == binding.as_str() => match &segment.arguments[..] {
+                [item::type_ref::Argument::Type(ty)] => Some(ty),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }))
 }
 
 /// `fmt::Formatter` and `fmt::Result` (also under `std::` or
@@ -873,6 +1021,20 @@ impl Type {
             return None;
         };
         if path.target != Target::Builtin || path.name.as_str() != "Box" {
+            return None;
+        }
+        path.arguments.iter().find_map(|argument| match argument {
+            Argument::Type(ty) => Some(ty),
+            Argument::Lifetime(_) => None,
+        })
+    }
+
+    /// `T` of `std::cell::RefCell<T>`.
+    pub(crate) fn cell_element(&self) -> Option<&Type> {
+        let Type::Path(path) = self else {
+            return None;
+        };
+        if path.target != Target::Builtin || path.name.as_str() != "RefCell" {
             return None;
         }
         path.arguments.iter().find_map(|argument| match argument {

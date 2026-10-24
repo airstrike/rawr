@@ -11,7 +11,7 @@
     {
       "class_name": "PlayBot",
       // A registry address, not a Dockerfile, so deploy never calls docker.
-      "image": "registry.cloudflare.com/fce80b8101fbb2f85548560babc6c7bc/rawr-play:0df8be536404",
+      "image": "registry.cloudflare.com/fce80b8101fbb2f85548560babc6c7bc/rawr-play:bdf44e242d63",
       // lite: 1/16 vCPU, 256 MiB. A render peaks well under that (see
       // play/README.md); "basic" (1/4 vCPU, 1 GiB) renders faster.
       "instance_type": "lite",
@@ -27,14 +27,25 @@
   "vars": {
     "PLAY_WORKERS": "1",
     "PLAY_MEMORY_MB": "256",
-    "PLAY_TIMEOUT_MS": "10000",
+    // Whole render, killed after it: an idle animation's 60 s, plus the
+    // start and the GIF's encoding.
+    "PLAY_TIMEOUT_MS": "80000",
     // Script time per render; 2 s was too tight for large canvases on lite.
     "PLAY_TIME_MS": "5000",
+    // An animation's time per render, once its view changes. One render at
+    // a time gets it, and each user (or playground IP) gets 90 s of it in
+    // any 10 minutes; others get PLAY_TIME_MS.
+    "PLAY_ANIMATION_TIME_MS": "15000",
+    // An animation's time when no other render is queued or running. Once
+    // it is past PLAY_ANIMATION_TIME_MS, a newcomer cuts it at its next frame.
+    "PLAY_IDLE_ANIMATION_TIME_MS": "60000",
+    "PLAY_ANIMATION_ALLOWANCE_S": "90",
+    "PLAY_ANIMATION_WINDOW_S": "600",
     // The image's commit (push-image.sh writes it): a running bot started
     // from another image is restarted by the next cron or /health.
     // Turnstile's public site key for /play (the secret is TURNSTILE_SECRET).
     "TURNSTILE_SITEKEY": "0x4AAAAAAFfQTZDPbRvs2kSG",
-    "PLAY_VERSION": "0df8be536404"
+    "PLAY_VERSION": "bdf44e242d63"
   },
   // /play's examples (play/tests/fixtures/*.rs), as text.
   "rules": [{ "type": "Text", "globs": ["**/*.rs"], "fallthrough": false }],

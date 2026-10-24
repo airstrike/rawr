@@ -2,6 +2,8 @@
 
 #[cfg(not(feature = "no_std"))]
 pub mod debug;
+#[cfg(not(feature = "no_std"))]
+pub mod display;
 pub(crate) mod endpoint;
 pub mod value;
 mod error;
@@ -481,11 +483,16 @@ impl Registry {
         &self,
         path: &str,
         selector: &rawr_import::surface::identity::Selector,
+        kind: structural::Kind,
     ) -> Option<&structural::Definition> {
         let fingerprint = selector.fingerprint();
-        self.structural
-            .iter()
-            .find(|definition| definition.path() == path && definition.selector() == &fingerprint)
+        // A variant's selector names its constructor and its matcher.
+        let matcher = kind == structural::Kind::Match;
+        self.structural.iter().find(|definition| {
+            definition.path() == path
+                && definition.selector() == &fingerprint
+                && (definition.kind() == structural::Kind::Match) == matcher
+        })
     }
 
     #[cfg(feature = "rust-import")]
@@ -494,9 +501,20 @@ impl Registry {
         definition: structural::Definition,
         allocation: &mut A,
     ) -> Result<(), rawr_import::surface::Error> {
-        let key = (definition.owner(), definition.path(), definition.selector());
+        let key = (
+            definition.owner(),
+            definition.path(),
+            definition.selector(),
+            definition.kind(),
+        );
         let index = match self.structural.binary_search_by(|candidate| {
-            (candidate.owner(), candidate.path(), candidate.selector()).cmp(&key)
+            (
+                candidate.owner(),
+                candidate.path(),
+                candidate.selector(),
+                candidate.kind(),
+            )
+                .cmp(&key)
         }) {
             Ok(_) => {
                 return Err(rawr_import::surface::Error::AdapterPlan {

@@ -1,5 +1,9 @@
 //! `rawr-play <file.rs|-> [--size WxH] [--theme dark|light] [--message M]...
-//! [--format png|jpg|webp] [--time-ms N] [--memory-mb N] [--fonts DIR] -o <out|->`
+//! [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->`
+//!
+//! `--time-ms N` is the wall-clock budget for a render. `--animation-ms N`
+//! is a full app's budget once its view changes (never less than
+//! `--time-ms`).
 //!
 //! `--fonts DIR` draws with iced's embedded faces and the fonts in `DIR`
 //! only, never the system's (the `?play` container's fonts; tests use it so
@@ -8,11 +12,19 @@
 //! `-` reads the snippet from stdin or writes the result to stdout. The bot
 //! runs one of these per render, so `--memory-mb` caps the whole process.
 //!
-//! A snippet that uses iced writes its image. A plain program writes its
+//! A snippet that uses iced writes its image. A full app whose view changes
+//! writes a GIF in any format, and a file named `.png`, `.jpg` or `.webp`
+//! is written with a `.gif` extension instead. `--still` writes the last
+//! frame as a still image. A note on the image (such as why an animation
+//! was cut) goes to stderr as a `note: ` line when writing to stdout. A
+//! plain program writes its
 //! output instead, as one JSON object (`rawr_play::Output::to_json`):
 //! `{"kind":"text","status":0,"output":[{"stream":"stdout","text":".."}],..}`.
 //! A result starting with `{` is text; no image starts with it. Errors
 //! (diagnostics, bad options) go to stderr with exit status 1, as before.
+//!
+//! `SIGUSR1` stops an animation's recording before its next frame. The
+//! frames so far are kept, and the note says someone else was waiting.
 //!
 //! `rawr-play decrypt-server <token>...` prints the guild ID behind each
 //! server token on the bot's dashboard, and `rawr-play encrypt-server <id>...`
@@ -23,7 +35,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: rawr-play <file.rs|-> [--size WxH] [--theme dark|light] \
-[--message EXPR]... [--format png|jpg|webp] [--time-ms N] [--memory-mb N] [--fonts DIR] -o <out|->";
+[--message EXPR]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->";
 
 /// Print the guild ID behind each token, or the token for each guild ID.
 fn server_tokens(decrypt: bool, values: &[String]) -> Result<(), String> {
@@ -60,6 +72,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     if let Some(command @ ("decrypt-server" | "encrypt-server")) = args.first().map(String::as_str) {
         return server_tokens(command == "decrypt-server", &args[1..]);
     }
+    stop_on_signal();
     let mut input = None;
     let mut output = None;
     let mut format = None;
@@ -80,8 +93,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--theme" => options.theme = value("--theme")?.parse()?,
             "--message" => options.messages.push(value("--message")?),
             "--format" => format = Some(value("--format")?.parse()?),
+            "--still" => options.still = true,
             "--time-ms" => {
                 options.limits.time = std::time::Duration::from_millis(number(value("--time-ms")?)?);
+            }
+            "--animation-ms" => {
+                options.limits.animation =
+                    std::time::Duration::from_millis(number(value("--animation-ms")?)?);
             }
             "--memory-mb" => limit_memory(number(value("--memory-mb")?)?)?,
             "--fonts" => {
@@ -112,11 +130,32 @@ fn run(args: Vec<String>) -> Result<(), String> {
         std::fs::read_to_string(&input).map(|text| source = text)
     };
     read.map_err(|error| format!("cannot read {input}: {error}"))?;
+    let mut output = output;
+    let mut note = None;
     let (bytes, summary) = match rawr_play::run(&source, &options).map_err(|error| error.to_string())? {
-        rawr_play::Outcome::Image(png) => {
-            let bytes = rawr_play::encode(&png, format).map_err(|error| error.to_string())?;
-            let summary = format!("{}x{}, {} bytes", png.width, png.height, bytes.len());
-            (bytes, summary)
+        rawr_play::Outcome::Image(image) => {
+            note = image.note;
+            match image.picture {
+                rawr_play::Picture::Still(png) => {
+                    let bytes = rawr_play::encode(&png, format).map_err(|error| error.to_string())?;
+                    let summary = format!("{}x{}, {} bytes", png.width, png.height, bytes.len());
+                    (bytes, summary)
+                }
+                rawr_play::Picture::Animated(gif) => {
+                    if let Some((stem, "png" | "jpg" | "jpeg" | "webp")) = output.rsplit_once('.') {
+                        output = format!("{stem}.gif");
+                    }
+                    let play = if gif.looping { "loops" } else { "plays once" };
+                    let summary = format!(
+                        "GIF {}x{}, {} frames, {play}, {} bytes",
+                        gif.width,
+                        gif.height,
+                        gif.frames,
+                        gif.bytes.len()
+                    );
+                    (gif.bytes, summary)
+                }
+            }
         }
         rawr_play::Outcome::Text(output) => {
             let bytes = output.to_json().into_bytes();
@@ -130,13 +169,36 @@ fn run(args: Vec<String>) -> Result<(), String> {
             .write_all(&bytes)
             .and_then(|()| stdout.flush())
             .map_err(|error| format!("cannot write the result: {error}"))?;
+        if let Some(note) = note {
+            eprintln!("{}{note}", rawr_play::message::NOTE);
+        }
     } else {
         std::fs::write(&output, &bytes)
             .map_err(|error| format!("cannot write {output}: {error}"))?;
         println!("{output} ({summary})");
+        if let Some(note) = note {
+            println!("{}{note}", rawr_play::message::NOTE);
+        }
     }
     Ok(())
 }
+
+/// Set [`rawr_play::CUT`] on `SIGUSR1`: the bot asks a long animation to
+/// stop and keep its frames.
+#[cfg(unix)]
+fn stop_on_signal() {
+    extern "C" fn cut(_: libc::c_int) {
+        rawr_play::CUT.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    // SAFETY: the handler only stores to an atomic, which is
+    // async-signal-safe.
+    unsafe {
+        libc::signal(libc::SIGUSR1, cut as extern "C" fn(libc::c_int) as libc::sighandler_t);
+    }
+}
+
+#[cfg(not(unix))]
+fn stop_on_signal() {}
 
 /// Cap this process's address space, so an allocation past it fails and the
 /// process aborts instead of exhausting the host.

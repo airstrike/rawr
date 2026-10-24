@@ -8,7 +8,13 @@
 //! Env: `DISCORD_TOKEN` (or a file at `DISCORD_TOKEN_FILE`, else
 //! `~/.config/rawr-play/token`), `PLAY_WORKERS` (default 2),
 //! `PLAY_TIME_MS` (script time per render, default 2000),
-//! `PLAY_TIMEOUT_MS` (whole render, default 10000), `PLAY_MEMORY_MB`
+//! `PLAY_TIMEOUT_MS` (whole render, default 10000),
+//! `PLAY_ANIMATION_TIME_MS` (an animation's time per render, default 15000),
+//! `PLAY_IDLE_ANIMATION_TIME_MS` (an animation's time when nothing else is
+//! queued or running, default 60000),
+//! `PLAY_ANIMATION_ALLOWANCE_S` (animation time per user per window,
+//! default 90), `PLAY_ANIMATION_WINDOW_S` (that window, default 600),
+//! `PLAY_MEMORY_MB`
 //! (address space per render on Linux, default 1024), `PLAY_FORMAT`
 //! (png, webp or jpg; default png: Discord shows it unchanged), `PLAY_USER_PER_MIN` (default 4),
 //! `PLAY_CHANNEL_PER_MIN` (default 12), `PLAY_CHANNELS` (comma-separated
@@ -32,6 +38,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use rawr_play::budget::{self, Budgets, Grant};
 use rawr_play::channels::{self, Channels, Parents, Store};
 use rawr_play::message::{self, Done, RateLimit, Reply};
 use rawr_play::server::ServerKey;
@@ -45,7 +52,7 @@ use serenity::all::{
 };
 use serenity::async_trait;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Semaphore;
+use tokio::sync::{watch, Semaphore};
 
 /// Replies kept for re-rendering on edit.
 const REMEMBERED: usize = 1024;
@@ -85,19 +92,60 @@ struct Renderer {
     timeout: Duration,
     /// `PLAY_FONTS`: the renderer draws with these fonts only.
     fonts: Option<String>,
+    /// Who may render an animation for longer, and the one longer render.
+    budgets: Mutex<Budgets>,
+    /// Renders queued or running, Discord's and the playground's. A render
+    /// that starts alone may use the idle budget; a newcomer cuts it.
+    pending: watch::Sender<usize>,
+}
+
+/// One render counted in [`Renderer::pending`] until dropped.
+struct Pending<'a>(&'a watch::Sender<usize>);
+
+impl<'a> Pending<'a> {
+    fn new(pending: &'a watch::Sender<usize>) -> Self {
+        pending.send_modify(|count| *count += 1);
+        Self(pending)
+    }
+}
+
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|count| *count -= 1);
+    }
+}
+
+/// A render's grant, finished when the render ends or is dropped.
+struct Held<'a> {
+    budgets: &'a Mutex<Budgets>,
+    grant: Grant,
+    started: Instant,
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        let took = self.started.elapsed();
+        self.budgets
+            .lock()
+            .unwrap()
+            .finish(&self.grant, took, Instant::now());
+    }
 }
 
 impl Renderer {
-    /// Render in a child process; the child is killed when the timeout
-    /// drops it. `None`: a playground render found the playground busy.
+    /// Render in a child process for `user`; the child is killed when the
+    /// timeout drops it. `None`: a playground render found the playground
+    /// busy.
     async fn run(
         &self,
         request: &message::Request,
         format: rawr_play::Format,
         web: bool,
+        user: Option<String>,
     ) -> Option<Rendered> {
+        let _pending = Pending::new(&self.pending);
         let _web = if web {
-            let gate = tokio::time::timeout(Duration::from_secs(15), self.web.acquire()).await;
+            let gate = tokio::time::timeout(self.timeout, self.web.acquire()).await;
             let gate = gate.ok()?.ok()?;
             while self.discord_waiting.load(Ordering::Acquire) > 0 {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -119,7 +167,24 @@ impl Renderer {
             });
         };
         let started = Instant::now();
-        let (result, outcome) = self.spawn(request, format).await;
+        let alone = *self.pending.borrow() == 1;
+        let (grant, animation) = {
+            let mut budgets = self.budgets.lock().unwrap();
+            (budgets.grant(user.as_deref(), started, alone), budgets.animation)
+        };
+        let mut request = request.clone();
+        request.options.limits.animation = grant.animation;
+        let held = Held {
+            budgets: &self.budgets,
+            grant,
+            started,
+        };
+        let idle = held.grant.idle.then_some(started);
+        let (mut result, outcome) = self.spawn(&request, format, idle).await;
+        if let Ok(Done::Image(_, note)) = &mut result {
+            *note = budget::annotate(note.take(), &held.grant, animation, started.elapsed());
+        }
+        drop(held);
         Some(Rendered {
             result,
             outcome,
@@ -127,10 +192,13 @@ impl Renderer {
         })
     }
 
+    /// Run one render. `idle`: it started then on the idle budget, so a
+    /// newcomer cuts it once it is past the animation budget.
     async fn spawn(
         &self,
         request: &message::Request,
         format: rawr_play::Format,
+        idle: Option<Instant>,
     ) -> (Result<Done, String>, Outcome) {
         let child = tokio::process::Command::new(&self.path)
             .args(request.args(format, self.memory_mb))
@@ -153,12 +221,34 @@ impl Renderer {
         };
         let code = request.code.clone().into_bytes();
         let mut stdin = child.stdin.take().expect("stdin is piped");
+        let id = child.id();
         let run = async move {
             let _ = stdin.write_all(&code).await;
             drop(stdin);
             child.wait_with_output().await
         };
-        match tokio::time::timeout(self.timeout, run).await {
+        let run = tokio::time::timeout(self.timeout, run);
+        let finished = match (idle, id) {
+            (Some(started), Some(id)) => {
+                let cutting = async {
+                    let mut pending = self.pending.subscribe();
+                    if pending.wait_for(|count| *count > 1).await.is_ok() {
+                        let at = self.budgets.lock().unwrap().cut_at(started, Instant::now());
+                        tokio::time::sleep_until(at.into()).await;
+                        cut(id);
+                    }
+                    std::future::pending::<()>().await;
+                };
+                tokio::pin!(run);
+                tokio::select! {
+                    biased;
+                    finished = &mut run => finished,
+                    () = cutting => unreachable!("the cut never finishes"),
+                }
+            }
+            _ => run.await,
+        };
+        match finished {
             Ok(Ok(output)) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let success = output.status.success();
@@ -184,6 +274,22 @@ impl Renderer {
         }
     }
 }
+
+/// Ask render process `id` to stop before its next frame and keep the
+/// frames so far.
+#[cfg(unix)]
+fn cut(id: u32) {
+    if let Ok(id) = libc::pid_t::try_from(id) {
+        // SAFETY: kill only sends a signal; the child is still ours, since
+        // it has not been waited for.
+        unsafe {
+            libc::kill(id, libc::SIGUSR1);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn cut(_: u32) {}
 
 /// What the reporter task shares with the handler.
 struct Shared {
@@ -310,13 +416,17 @@ impl EventHandler for Handler {
                 .await;
             return;
         }
-        let reply = self.reply(request, msg.guild_id).await;
+        // Serenity re-sends typing every 7 s until it is dropped; Discord
+        // shows it for 10 s.
+        let typing = msg.channel_id.start_typing(&context.http);
+        let reply = self.reply(request, msg.guild_id, msg.author.id.get()).await;
+        typing.stop();
         let builder = CreateMessage::new().reference_message(&msg);
         let builder = match reply {
             Reply::Image(image, note) => {
                 let builder = builder.add_file(self.attachment(image));
                 match note {
-                    Some(note) => builder.content(format!("-# {note}")),
+                    Some(note) => builder.content(subtext(&note)),
                     None => builder,
                 }
             }
@@ -360,9 +470,12 @@ impl EventHandler for Handler {
                 .rate_limited(event.guild_id.map(GuildId::get));
             return;
         }
-        let builder = match self.reply(request, event.guild_id).await {
+        let typing = event.channel_id.start_typing(&context.http);
+        let reply = self.reply(request, event.guild_id, user).await;
+        typing.stop();
+        let builder = match reply {
             Reply::Image(image, note) => EditMessage::new()
-                .content(note.map_or_else(String::new, |note| format!("-# {note}")))
+                .content(note.map_or_else(String::new, |note| subtext(&note)))
                 .remove_all_attachments()
                 .new_attachment(self.attachment(image)),
             Reply::Text(text) => EditMessage::new().content(text).remove_all_attachments(),
@@ -634,7 +747,12 @@ impl Handler {
     }
 
     fn attachment(&self, image: Vec<u8>) -> CreateAttachment {
-        CreateAttachment::bytes(image, format!("play.{}", self.format.extension()))
+        let extension = if message::is_gif(&image) {
+            "gif"
+        } else {
+            self.format.extension()
+        };
+        CreateAttachment::bytes(image, format!("play.{extension}"))
     }
 
     fn remember(&self, request: MessageId, reply: MessageId) {
@@ -653,20 +771,29 @@ impl Handler {
         &self,
         request: Result<message::Request, String>,
         guild: Option<GuildId>,
+        user: u64,
     ) -> Reply {
         match request {
             Err(error) => Reply::Text(message::error_text(&error)),
-            Ok(request) => self.render(&request, guild).await,
+            Ok(request) => self.render(&request, guild, user).await,
         }
     }
 
-    async fn render(&self, request: &message::Request, guild: Option<GuildId>) -> Reply {
-        let Some(rendered) = self.shared.renderer.run(request, self.format, false).await else {
+    async fn render(&self, request: &message::Request, guild: Option<GuildId>, user: u64) -> Reply {
+        let user = (user != 0).then(|| format!("discord:{user}"));
+        let Some(rendered) = self.shared.renderer.run(request, self.format, false, user).await else {
             return Reply::Text(message::error_text("render pool is busy"));
         };
         self.shared.record(rendered.outcome, rendered.millis, guild);
         match rendered.result {
-            Ok(Done::Image(image)) => Reply::Image(image, message::image_note(&request.code)),
+            Ok(Done::Image(image, note)) => {
+                let notes: Vec<String> = message::image_note(&request.code)
+                    .map(str::to_owned)
+                    .into_iter()
+                    .chain(note)
+                    .collect();
+                Reply::Image(image, (!notes.is_empty()).then(|| notes.join("\n")))
+            }
             Ok(Done::Text(output)) => Reply::Text(message::output_text(&output)),
             Err(text) => Reply::Text(message::error_text(&text)),
         }
@@ -716,6 +843,12 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                     match (request.method(), request.uri().path()) {
                         (&Method::GET, "/health") => text(StatusCode::OK, "ok".into()),
                         (&Method::POST, "/render") => {
+                            let user = rawr_play::web::user(
+                                request
+                                    .headers()
+                                    .get(rawr_play::web::USER_HEADER)
+                                    .and_then(|value| value.to_str().ok()),
+                            );
                             let limit = rawr_play::web::MAX_CODE * 2 + 16 * 1024;
                             let body =
                                 match Limited::new(request.into_body(), limit).collect().await {
@@ -732,7 +865,7 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                                 Err(error) => return text(StatusCode::BAD_REQUEST, error),
                             };
                             let format = rawr_play::Format::Png;
-                            let Some(rendered) = shared.renderer.run(&render, format, true).await
+                            let Some(rendered) = shared.renderer.run(&render, format, true, user).await
                             else {
                                 return text(
                                     StatusCode::SERVICE_UNAVAILABLE,
@@ -745,7 +878,20 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                                 .unwrap()
                                 .record_web(rendered.outcome, rendered.millis);
                             match rendered.result {
-                                Ok(Done::Image(image)) => reply(StatusCode::OK, "image/png", image),
+                                Ok(Done::Image(image, note)) => {
+                                    let kind = if rawr_play::message::is_gif(&image) {
+                                        "image/gif"
+                                    } else {
+                                        "image/png"
+                                    };
+                                    let mut response = Response::builder()
+                                        .status(StatusCode::OK)
+                                        .header("content-type", kind);
+                                    if let Some(note) = note {
+                                        response = response.header("x-play-note", note.replace('\n', " "));
+                                    }
+                                    response.body(Full::new(Bytes::from(image)))
+                                }
                                 Ok(Done::Text(output)) => reply(
                                     StatusCode::OK,
                                     "application/json",
@@ -764,6 +910,14 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                 .await;
         });
     }
+}
+
+/// `note` as Discord subtext, one `-# ` line per line.
+fn subtext(note: &str) -> String {
+    note.lines()
+        .map(|line| format!("-# {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Read every file in `dir` once and drop the bytes: the kernel keeps them
@@ -856,17 +1010,38 @@ async fn main() {
     let workers = usize::try_from(env_u64("PLAY_WORKERS", 2))
         .unwrap_or(2)
         .max(1);
+    let still = Duration::from_millis(env_u64("PLAY_TIME_MS", 2_000));
     let shared = Arc::new(Shared {
         renderer: Renderer {
             path: renderer,
             workers: Semaphore::new(workers),
             web: Semaphore::new(1),
             discord_waiting: AtomicUsize::new(0),
+            pending: watch::Sender::new(0),
             memory_mb: env_u64("PLAY_MEMORY_MB", 1024),
             timeout: Duration::from_millis(env_u64("PLAY_TIMEOUT_MS", 10_000)),
             fonts: std::env::var("PLAY_FONTS")
                 .ok()
                 .filter(|dir| !dir.is_empty()),
+            budgets: Mutex::new(Budgets::new(
+                still,
+                Duration::from_millis(env_u64(
+                    "PLAY_ANIMATION_TIME_MS",
+                    budget::ANIMATION.as_millis() as u64,
+                )),
+                Duration::from_millis(env_u64(
+                    "PLAY_IDLE_ANIMATION_TIME_MS",
+                    budget::IDLE.as_millis() as u64,
+                )),
+                Duration::from_secs(env_u64(
+                    "PLAY_ANIMATION_ALLOWANCE_S",
+                    budget::ALLOWANCE.as_secs(),
+                )),
+                Duration::from_secs(env_u64(
+                    "PLAY_ANIMATION_WINDOW_S",
+                    budget::WINDOW.as_secs(),
+                )),
+            )),
         },
         channels: tokio::sync::Mutex::new(
             Channels::from_json("", only.clone()).unwrap_or_default(),
@@ -884,7 +1059,7 @@ async fn main() {
         reporting: AtomicBool::new(false),
     });
     let mut defaults = rawr_play::Options::default();
-    defaults.limits.time = Duration::from_millis(env_u64("PLAY_TIME_MS", 2_000));
+    defaults.limits.time = still;
     // Read the bundled fonts once, so the page cache holds them before the
     // first render maps them (a cold first CJK render ran past its budget).
     if let Some(dir) = shared.renderer.fonts.clone() {

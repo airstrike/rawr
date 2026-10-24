@@ -92,6 +92,21 @@ export async function checkPass(key: string, value: string | null, nowMs: number
   return same(match[2], await hmac(key, `pass ${expires}`));
 }
 
+/** The header that names a render's caller to the bot, for its animation allowance. */
+export const USER_HEADER = "x-play-user";
+
+/**
+ * The bot's render request for `body`, naming its caller `user` (a hash of
+ * the IP). The bot counts an animation's longer time against it.
+ */
+export function renderRequest(body: string, user: string): Request {
+  return new Request("http://container/render", {
+    method: "POST",
+    headers: { "content-type": "application/json", [USER_HEADER]: user },
+    body,
+  });
+}
+
 /** The named cookie's value in a Cookie header, or null. */
 export function cookie(header: string | null, name: string): string | null {
   for (const part of (header ?? "").split(";")) {
@@ -185,6 +200,11 @@ export function pngSize(bytes: Uint8Array): { width: number; height: number } | 
   if (bytes.length < 24 || signature.some((b, i) => bytes[i] !== b)) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
+/** A share's render request asking for a still image: the last frame as a PNG, never a GIF. */
+export function stillBody(share: string): string {
+  return JSON.stringify({ ...JSON.parse(share), still: true });
 }
 
 /** The first non-blank line of the code, trimmed, at most 150 characters. */

@@ -19,9 +19,12 @@ import {
   PASS_SECONDS,
   passCookie,
   pngSize,
+  stillBody,
   previewHeaders,
   purgeSelection,
   parseSnippet,
+  renderRequest,
+  USER_HEADER,
   same,
   shareId,
   type Snippet,
@@ -34,7 +37,7 @@ const OG = {
   description: "use iced::widget::{button, column};",
   url: "https://rawr.airstrike.fyi/play/abcDEF1234",
   image: "https://rawr.airstrike.fyi/play/abcDEF1234.png",
-  alt: "The first frame",
+  alt: "The last frame",
   width: 328,
   height: 382,
 };
@@ -191,7 +194,7 @@ test("link preview tags", () => {
   assert.ok(tags.includes('<meta property="og:image:width" content="328">'));
   assert.ok(tags.includes('<meta property="og:image:height" content="382">'));
   assert.ok(tags.includes('<meta name="twitter:card" content="summary_large_image">'));
-  assert.ok(tags.includes('<meta property="og:image:alt" content="The first frame">'));
+  assert.ok(tags.includes('<meta property="og:image:alt" content="The last frame">'));
   assert.ok(tags.includes("&#34;hi&#34; &#60;b&#62;"));
   const unsized = ogTags({ ...OG, width: undefined, height: undefined }, escape);
   assert.ok(!unsized.includes("og:image:width"), "no size until the preview is rendered");
@@ -264,7 +267,7 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   assert.deepEqual(at("docs/index.html"), ["cart.rs"]);
   assert.deepEqual(at("docs/start.html"), ["cart.rs"]);
   assert.deepEqual(at("docs/language.html"), ["parse.rs", "generics.rs", "closures.rs"]);
-  assert.deepEqual(at("docs/play.html"), ["", "circle.rs"]);
+  assert.deepEqual(at("docs/play.html"), ["", "fill.rs", "dots.rs", "circle.rs", "channel.rs"]);
   // The docs' cart.rs is the landing page's, so it is one entry.
   assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
   assert.equal(hashes.length, blocks.length - 2);
@@ -316,4 +319,18 @@ test("the playground shows text results as a terminal", () => {
   assert.ok(page.includes('const terminal = (result)'));
   assert.ok(page.includes('type.startsWith("application/json")'));
   assert.ok(page.includes("ignored for programs without iced"));
+});
+
+test("a share preview asks for a still image", () => {
+  const body = JSON.parse(stillBody(JSON.stringify({ code: "x", messages: ["Message::A"] })));
+  assert.deepEqual(body, { code: "x", messages: ["Message::A"], still: true });
+});
+
+test("a render request names its caller for the animation allowance", async () => {
+  const request = renderRequest('{"code":"x"}', "abc123");
+  assert.equal(request.method, "POST");
+  assert.equal(request.url, "http://container/render");
+  assert.equal(request.headers.get(USER_HEADER), "abc123");
+  assert.equal(request.headers.get("content-type"), "application/json");
+  assert.equal(await request.text(), '{"code":"x"}');
 });

@@ -31,6 +31,9 @@ struct Active {
     owner: Owner,
     stamp: Arc<()>,
     handle: iced::task::Handle,
+    /// The script handles of the task's abortable plans, which report the
+    /// task aborted when its owner retires it.
+    aborts: Vec<Arc<crate::task::Abort>>,
 }
 
 impl Owner {
@@ -72,12 +75,23 @@ impl Tasks {
         owner: Owner,
         task: iced::Task<runtime::Message>,
     ) -> iced::Task<runtime::Message> {
+        self.track_with(owner, task, Vec::new())
+    }
+
+    /// `track`, with the script handles of the task's abortable plans.
+    pub(crate) fn track_with(
+        &mut self,
+        owner: Owner,
+        task: iced::Task<runtime::Message>,
+        aborts: Vec<Arc<crate::task::Abort>>,
+    ) -> iced::Task<runtime::Message> {
         let stamp = Arc::new(());
         let (task, handle) = task.abortable();
         self.active.push(Active {
             owner,
             stamp: stamp.clone(),
             handle,
+            aborts,
         });
         task.chain(iced::Task::done(runtime::Message::task_completed(
             Completion { owner, stamp },
@@ -93,6 +107,11 @@ impl Tasks {
         };
         self.active.swap_remove(index);
         true
+    }
+
+    /// A task is still running: retiring the owner cancels it.
+    pub(crate) fn is_running(&self) -> bool {
+        !self.active.is_empty()
     }
 
     #[cfg(test)]
@@ -113,6 +132,9 @@ impl Drop for Tasks {
     fn drop(&mut self) {
         for active in &self.active {
             active.handle.abort();
+            for abort in &active.aborts {
+                abort.abort();
+            }
         }
     }
 }
@@ -240,7 +262,9 @@ mod tests {
             let mut messages = Vec::new();
             while let Some(action) = stream.next().await {
                 match action {
-                    iced_test::runtime::Action::Output(message) => messages.push(message),
+                    iced_test::runtime::Action::Output(message) => {
+                        messages.extend(crate::dispatch::inline(message));
+                    }
                     action => panic!("expected a task output, found {action:?}"),
                 }
             }

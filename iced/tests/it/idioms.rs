@@ -1226,3 +1226,84 @@ struct Picture {
     );
     find(&adapter, "true");
 }
+
+/// iced's websocket example lists its messages with `.map(text)`: `text`
+/// as a value is the closure that calls it.
+#[test]
+fn an_overloaded_helper_passes_as_a_function_value() {
+    let adapter = boot(
+        r#"let lines = vec![String::from("first"), String::from("second")];
+        column(lines.iter().map(text))"#,
+    );
+    find(&adapter, "first");
+    find(&adapter, "second");
+}
+
+#[test]
+fn task_map_takes_a_narrow_variant_and_none_takes_a_turbofish() {
+    let adapter = boot_with(
+        r#"text("tasks")"#,
+        r#"
+use iced::Task;
+#[derive(Debug, Clone)] enum Counted { Number(u32), Ratio(f32), Scaled(f32), Nothing }
+fn count() -> Task<u32> { Task::done(7) }
+pub fn numbers() -> Task<Counted> { count().map(Counted::Number) }
+pub fn ratios() -> Task<Counted> { Task::done(0.5f32).map(Counted::Ratio) }
+pub fn none() -> Task<Counted> { Task::<Counted>::none() }
+pub fn discarded() -> bool { let _ = Task::<Counted>::none(); true }
+pub fn scaled() -> Task<Counted> {
+    iced::window::latest().and_then(iced::window::scale_factor).map(Counted::Scaled)
+}
+pub fn pick(counted: Counted) -> Task<Counted> {
+    match counted {
+        Counted::Number(_) => Task::<Counted>::none(),
+        Counted::Ratio(_) => count().map(Counted::Number),
+        Counted::Scaled(_) | Counted::Nothing => Task::batch([Task::<Counted>::none(), Task::done(Counted::Nothing)]),
+    }
+}
+"#,
+    );
+    find(&adapter, "tasks");
+}
+
+#[test]
+fn float_scales_translates_and_styles_its_content() {
+    let adapter = boot(
+        r#"
+        column![
+            iced::widget::float(text("Big text")).scale(10.0),
+            iced::widget::Float::new(text("moved"))
+                .translate(|bounds: iced::Rectangle, viewport: iced::Rectangle| {
+                    iced::Vector::new(bounds.width - viewport.width, 2.0)
+                })
+                .style(|theme: &Theme| iced::widget::float::Style {
+                    shadow: iced::Shadow::default(),
+                    ..iced::widget::float::Style::default()
+                }),
+        ]
+        "#,
+    );
+    find(&adapter, "Big text");
+    find(&adapter, "moved");
+}
+
+#[test]
+fn keyed_column_keys_each_child_by_its_pair() {
+    let adapter = boot(
+        r#"
+        column![
+            iced::widget::keyed_column(
+                ["first", "second"]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, label)| (index as i64, text(*label).boxed())),
+            )
+            .spacing(10),
+            iced::widget::keyed_column(vec![("third", text("third").boxed())]),
+        ]
+        "#,
+    );
+    find(&adapter, "first");
+    find(&adapter, "second");
+    find(&adapter, "third");
+}

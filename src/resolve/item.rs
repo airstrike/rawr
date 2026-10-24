@@ -227,6 +227,8 @@ pub(crate) struct Body {
     pub lowering: Lowering,
     pub syntax: crate::item::BodySyntax,
     pub constant: bool,
+    /// `async fn`: the body runs as an `async move` block.
+    pub asynchronous: bool,
     /// The text `span` selects when Rawr wrote the body itself; `None`
     /// for a body in its source.
     pub text: Option<crate::ImmutableString>,

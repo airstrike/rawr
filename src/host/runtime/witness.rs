@@ -85,6 +85,22 @@ impl Witness {
         self.authority == authority && self.ty.arguments() == ty.arguments()
     }
 
+    /// The witness of this type's argument at `index`, under the same
+    /// authority: a `Task<T>` witness gives the witness of each `T` its
+    /// native task yields. An `Option<T>` has `T` at 0, and a `Result<T, E>`
+    /// has `T` at 0 and `E` at 1.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn argument_witness(&self, index: usize) -> Option<Self> {
+        let ty = match (&*self.ty, index) {
+            (Type::Option(element), 0) | (Type::Result(element, _), 0) => (**element).clone(),
+            (Type::Result(_, error), 1) => (**error).clone(),
+            (Type::Tuple(members), index) => members.get(index)?.clone(),
+            _ => self.ty.arguments().get(index)?.clone(),
+        };
+        Some(Self::issue(self.authority, ty))
+    }
+
     #[cfg(not(feature = "no_function"))]
     pub(crate) fn argument(&self, index: usize) -> Option<&Type> {
         self.ty.arguments().get(index)
@@ -94,5 +110,23 @@ impl Witness {
 impl fmt::Debug for Witness {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("Witness(<private>)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Authority, Type, Witness};
+
+    #[test]
+    fn option_and_result_witnesses_give_their_inner_types() {
+        let authority = Authority::issue();
+        let option = Witness::issue(authority, Type::option(Type::unit()));
+        assert!(option.argument_witness(0).unwrap().matches(authority, &Type::unit()));
+        assert!(option.argument_witness(1).is_none());
+
+        let ok = Type::option(Type::unit());
+        let result = Witness::issue(authority, Type::result(ok.clone(), Type::unit()));
+        assert!(result.argument_witness(0).unwrap().matches(authority, &ok));
+        assert!(result.argument_witness(1).unwrap().matches(authority, &Type::unit()));
     }
 }

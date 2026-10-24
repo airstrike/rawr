@@ -82,6 +82,9 @@ pub(crate) struct Table {
 /// every function of two or more inputs.
 pub(crate) struct Function;
 
+/// iced's `Program` trait, which source names only as `impl Program<..>`.
+pub(crate) struct Program;
+
 /// iced's `component::Component` trait, which script types implement.
 pub(crate) struct ComponentTrait;
 
@@ -256,6 +259,7 @@ pub(crate) struct Checkbox {
     pub(crate) on_toggle: Option<item::Value>,
     pub(crate) style: Option<Source<checkbox::Status, checkbox::Style>>,
     pub(crate) size: Option<f32>,
+    pub(crate) text_size: Option<f32>,
     pub(crate) width: Option<iced::Length>,
     pub(crate) spacing: Option<f32>,
     pub(crate) icon: Option<iced::widget::checkbox::Icon>,
@@ -336,15 +340,32 @@ pub(crate) struct ComboBox {
     pub(crate) size: Option<f32>,
 }
 
-/// A slider over `i64`, or over `f64` when `float`; its numbers are kept
-/// as `f64` either way.
+/// The number a slider moves over.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SliderNumber {
+    Integer,
+    Float,
+    Degrees,
+    Radians,
+}
+
+/// iced's `Degrees::RANGE` or `Radians::RANGE`, a `RangeInclusive` of
+/// an angle.
+#[derive(Clone)]
+pub(crate) enum AngleRange {
+    Degrees(std::ops::RangeInclusive<iced::Degrees>),
+    Radians(std::ops::RangeInclusive<iced::Radians>),
+}
+
+/// A slider over `i64`, `f64`, `Degrees` or `Radians`; its numbers are
+/// kept as `f64` in every case.
 #[derive(Clone)]
 pub(crate) struct Slider {
     pub(crate) witness: rawr::host::runtime::Witness,
     pub(crate) identity: widget::Identity,
     pub(crate) range: std::ops::RangeInclusive<f64>,
     pub(crate) value: f64,
-    pub(crate) float: bool,
+    pub(crate) number: SliderNumber,
     pub(crate) on_change: item::Value,
     pub(crate) step: f64,
     pub(crate) default: Option<f64>,
@@ -404,22 +425,36 @@ pub(crate) struct Transition {
     pub(crate) view: item::Value,
 }
 
-/// iced's `Animation<f32>`, settled: no time passes in a Rawr view, so it
-/// interpolates to its value.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Animation(pub(crate) f64);
+/// iced's `Animation<T>` of a `bool` or an `f32`.
+#[derive(Clone, Debug)]
+pub(crate) enum Animation {
+    Bool(iced::Animation<bool>),
+    Float(iced::Animation<f32>),
+}
 
-/// `animation::Easing`: a settled animation has no curve to follow.
+impl PartialEq for Animation {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Bool(left), Self::Bool(right)) => left.value() == right.value(),
+            (Self::Float(left), Self::Float(right)) => left.value() == right.value(),
+            _ => false,
+        }
+    }
+}
+
+/// `animation::Easing`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Easing;
+pub(crate) struct Easing(pub(crate) iced::animation::Easing);
 
 /// `time::Instant`: a moment, as `Instant::now()`, a frame or a tick reads it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Instant(pub(crate) iced::time::Instant);
 
 impl Instant {
+    /// The present, or the simulated time while a recording's clock is
+    /// frozen.
     pub(crate) fn now() -> Self {
-        Self(iced::time::Instant::now())
+        Self(crate::snapshot::clock::now().unwrap_or_else(iced::time::Instant::now))
     }
 }
 
@@ -476,6 +511,19 @@ pub(crate) struct Pin {
     pub(crate) position: iced::Point,
     pub(crate) width: iced::Length,
     pub(crate) height: iced::Length,
+}
+
+/// iced's `float(content)`: content drawn scaled and moved above the rest.
+#[derive(Clone)]
+pub(crate) struct Float {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) child: widget::Value,
+    pub(crate) scale: f32,
+    /// A Rawr `Fn(Rectangle, Rectangle) -> Vector`.
+    pub(crate) translate: Option<rawr::item::Value>,
+    /// A Rawr `Fn(&Theme) -> float::Style`.
+    pub(crate) style: Option<rawr::item::Value>,
 }
 
 /// iced's `mouse_area(content)`: the messages of each mouse event.
@@ -633,6 +681,11 @@ pub(crate) struct Geometry {
 /// share it, so `clear` through `&self` empties every copy.
 #[derive(Clone, Default)]
 pub(crate) struct Cache(pub(crate) std::sync::Arc<std::sync::Mutex<Option<Geometry>>>);
+
+#[cfg(feature = "canvas")]
+/// `canvas::Group`: caches iced draws together, which Rawr draws one by one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CacheGroup;
 
 #[cfg(feature = "canvas")]
 impl std::fmt::Debug for Cache {

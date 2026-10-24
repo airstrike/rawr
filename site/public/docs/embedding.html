@@ -119,6 +119,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
   <tr><td><code>()</code></td><td>The unit return of a function such as <code>main</code>.</td></tr>
   <tr><td><code>rawr::Dynamic</code></td><td>Any value. A struct or enum defined in Rawr comes back as a <code>Dynamic</code>. Rust code can hold it and pass it back. It can&rsquo;t read the fields.</td></tr>
 </table>
+<p>Register a Rust function before you compile a script that calls it. The check knows the names registered on the engine that compiles the script. A call to any other name is an <code>unknown function</code> error at the name, as in rustc.</p>
 <p>Typed Rawr code knows the return type of a Rust function registered with <code>Engine::register_fn</code> when it is <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>String</code> or <code>()</code>. The check doesn&rsquo;t know any other return type. To use Rust types and functions from Rawr today, use rawr-iced&rsquo;s <a href="/docs/iced#rust-crates">Rust imports</a>.</p>
 
 <h2 id="output">Capturing output</h2>

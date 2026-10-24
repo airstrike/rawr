@@ -11,14 +11,14 @@ use std::path::{Component, Path, PathBuf};
 pub const COUNTER_SOURCE: &str = include_str!("../assets/counter/src/main.rs");
 
 /// The `Cargo.toml` [`create`] writes for the package `name`. Its iced
-/// names `advanced`, the one iced feature Rawr's runner adds, so the
-/// runner leaves the project's iced features as they are.
+/// names `advanced` and `sipper`, the two iced features Rawr's runner adds,
+/// so the runner leaves the project's iced features as they are.
 #[must_use]
 pub fn manifest(name: &str) -> String {
     format!(
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
          [dependencies]\niced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\", \
-         features = [\"advanced\"] }}\n",
+         features = [\"advanced\", \"sipper\"] }}\n",
         rawr_iced::native::ICED_REVISION
     )
 }
@@ -751,7 +751,7 @@ mod tests {
         assert_eq!(manifest, super::manifest("my-counter"));
         assert!(manifest.starts_with("[package]\nname = \"my-counter\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"));
         assert!(manifest.contains(&format!(
-            "iced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\", features = [\"advanced\"] }}",
+            "iced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\", features = [\"advanced\", \"sipper\"] }}",
             rawr_iced::native::ICED_REVISION
         )));
         #[cfg(feature = "native-runner")]

@@ -996,6 +996,26 @@ fn resolve_imports(
                 declaration: None,
             });
         }
+        // `use ::image::ColorType;` names the crate `image`, never a name
+        // of this program or one another `use` brought in.
+        let global = parsed.global();
+        if global
+            && let Some(first) = parsed
+                .bindings()
+                .first()
+                .and_then(|(_, path)| path.first().cloned())
+            && (matches!(first.as_str(), "crate" | "self" | "super" | "Self")
+                || local_declarations.contains_key(&first))
+        {
+            return Err(not_a_crate(&first, prefix_span(&parsed.tree)));
+        }
+        let through_module = |path: ImmutableString| {
+            if global {
+                path
+            } else {
+                through_module(path)
+            }
+        };
         if let crate::item::UseTree::Group { prefix, .. } = &parsed.tree {
             let prefix = through_module(parsed_path(prefix));
             match host.entry(&std_reexport(&prefix, host)) {
@@ -1019,7 +1039,12 @@ fn resolve_imports(
         }
         for (name, path) in parsed.bindings() {
             let qualified = through_module(path.join("::").into());
-            bindings.push(resolve_import_binding(name, qualified, host)?);
+            let module_only = parsed.binds_module_only(&name);
+            let mut binding = resolve_import_binding(name, qualified, host)?;
+            if module_only && matches!(binding.target, item::Import::ModuleItem { .. }) {
+                binding.target = item::Import::Module;
+            }
+            bindings.push(binding);
         }
         for (name, qualified) in globbed {
             bindings.push(resolve_import_binding(name, qualified.into(), host)?);
@@ -1073,7 +1098,7 @@ fn module_header_types(
             continue;
         };
         let name = parsed_path(path);
-        if path.segments.len() < 2 || types.contains_key(&name) {
+        if path.segments.len() < 2 || path.global || types.contains_key(&name) {
             continue;
         }
         let Some(binding) = uses
@@ -1137,8 +1162,14 @@ fn resolve_import_binding(
                 owner: owner.clone(),
             }
         }
-        // `use std::fmt;`, for hand-written `Debug` and `Display` impls.
-        None if std_fmt_import(&qualified) => item::Import::Module,
+        // `use std::fmt;`, for hand-written `Debug` and `Display` impls,
+        // and `use tokio::join;`, a macro Rawr expands.
+        None if std_fmt_import(&qualified)
+            || tokio_macro(&qualified, host).is_some()
+            || qualified.contains("::") && hasher_alias(&qualified).is_some() =>
+        {
+            item::Import::Module
+        }
         None => {
             return Err(Error::UnknownImport {
                 path: qualified,
@@ -1157,8 +1188,26 @@ fn resolve_import_binding(
 /// module as its own: `std::time::Instant` is `iced::time::Instant`, as
 /// iced's `time` re-exports std's types.
 pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableString {
-    const REEXPORTS: [(&str, &str); 2] = [("std::time", "iced::time"), ("core::time", "iced::time")];
+    // tokio in a program that does not import it, as a `?play` snippet, is
+    // rawr-iced's: its timers follow a recording's clock. Its `Instant` is
+    // the facade's, which reads that clock too, and its `Duration` is std's.
+    const REEXPORTS: [(&str, &str); 8] = [
+        ("std::time", "iced::time"),
+        ("std::path", "rawr_iced::path"),
+        ("std::ffi", "rawr_iced::ffi"),
+        ("std::io", "rawr_iced::io"),
+        ("core::time", "iced::time"),
+        ("tokio::time::Instant", "iced::time::Instant"),
+        ("tokio::time::Duration", "iced::time::Duration"),
+        ("tokio", "rawr_iced::tokio"),
+    ];
+    if host.entry(qualified).is_some() {
+        return qualified.into();
+    }
     for (std, facade) in REEXPORTS {
+        if std.starts_with("tokio") && host.facade_fingerprint("tokio").is_some() {
+            continue;
+        }
         if let Some(rest) = qualified.strip_prefix(std)
             && (rest.is_empty() || rest.starts_with("::"))
         {
@@ -1169,6 +1218,45 @@ pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableS
         }
     }
     qualified.into()
+}
+
+/// A `RefCell` at runtime, as a host type whose values are cells names it.
+#[doc(hidden)]
+pub use lower_nominal::cell::Cell;
+
+/// A `RefCell` of `value`, for a host type whose values are cells, as
+/// rawr-iced's tokio `Mutex` is.
+#[doc(hidden)]
+#[must_use]
+pub fn cell_new(value: crate::Dynamic) -> crate::Dynamic {
+    lower_nominal::cell_new(value)
+}
+
+/// Whether the `RefCell` `value` is borrowed; `None` when it is no cell.
+#[doc(hidden)]
+#[must_use]
+pub fn cell_held(value: &crate::Dynamic) -> Option<bool> {
+    lower_nominal::cell_held(value)
+}
+
+/// A mutable borrow of the `RefCell` `value`, as `borrow_mut` makes one,
+/// when nothing borrows it; `None` while something does.
+#[doc(hidden)]
+#[must_use]
+pub fn cell_lock(value: &crate::Dynamic) -> Option<crate::Dynamic> {
+    lower_nominal::cell_lock(value)
+}
+
+/// The macro `path` names when it is tokio's `join`, `try_join` or
+/// `select` in a program without tokio, whose tokio is rawr-iced's
+/// (`std_reexport`). Rawr expands them itself.
+pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static str> {
+    let name = path.strip_prefix("tokio::")?;
+    let name = ["join", "try_join", "select"]
+        .into_iter()
+        .find(|macro_name| *macro_name == name)?;
+    (host.facade_fingerprint("tokio").is_none() && host.entry("rawr_iced::tokio").is_some())
+        .then_some(name)
 }
 
 /// `std::fmt` (or `core::fmt`) and its `Debug`, `Display` and `Formatter`,
@@ -1216,6 +1304,10 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "time"
                 | "time::Duration"
                 | "time::Instant"
+                | "marker"
+                | "marker::PhantomData"
+                | "cell"
+                | "cell::RefCell"
         )
     ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
         || rest.is_some_and(|rest| {
@@ -1304,6 +1396,9 @@ pub(crate) fn std_reverse(path: &str) -> bool {
 /// name), `collections::HashMap`, `std::collections::HashMap`; the
 /// collection's name.
 pub(crate) fn std_collection(path: &str) -> Option<&'static str> {
+    if let Some(collection) = hasher_alias(path) {
+        return Some(collection);
+    }
     let name = path
         .strip_prefix("std::collections::")
         .or_else(|| path.strip_prefix("collections::"))
@@ -1311,6 +1406,22 @@ pub(crate) fn std_collection(path: &str) -> Option<&'static str> {
     ["HashMap", "HashSet", "BTreeMap", "BTreeSet"]
         .into_iter()
         .find(|collection| *collection == name)
+}
+
+/// A crate's alias of std's `HashMap` or `HashSet` with its own hasher:
+/// `rustc_hash::FxHashMap<K, V>` is `HashMap<K, V, FxBuildHasher>`. Rawr
+/// reads it as its own map, whose hasher it does not expose; `cargo
+/// build` compiles the crate's. The bare name, as `use` binds it, or the
+/// full path; the std collection's name.
+pub(crate) fn hasher_alias(path: &str) -> Option<&'static str> {
+    const ALIASES: [(&str, &str); 2] = [("FxHashMap", "HashMap"), ("FxHashSet", "HashSet")];
+    let name = ["rustc_hash::", "fxhash::"]
+        .into_iter()
+        .find_map(|krate| path.strip_prefix(krate))
+        .unwrap_or(path);
+    ALIASES
+        .into_iter()
+        .find_map(|(alias, collection)| (alias == name).then_some(collection))
 }
 
 /// `std::cmp::Ordering` as a type path is written: `Ordering` (imported,
@@ -1349,11 +1460,44 @@ pub(crate) fn std_time(path: &str) -> Option<&'static str> {
     ["Duration", "Instant"].into_iter().find(|time| *time == name)
 }
 
+/// `std::cell::RefCell` as a path is written.
+pub(crate) fn std_cell(path: &str) -> bool {
+    matches!(
+        path,
+        "RefCell" | "cell::RefCell" | "std::cell::RefCell" | "core::cell::RefCell"
+    )
+}
+
+/// `std::marker::PhantomData` as a path is written.
+pub(crate) fn std_phantom(path: &str) -> bool {
+    matches!(
+        path,
+        "PhantomData"
+            | "marker::PhantomData"
+            | "std::marker::PhantomData"
+            | "core::marker::PhantomData"
+    )
+}
+
 pub(crate) fn std_ordering(path: &str) -> bool {
     matches!(
         path,
         "Ordering" | "cmp::Ordering" | "std::cmp::Ordering" | "core::cmp::Ordering"
     )
+}
+
+/// A path that starts with `::` names an outside crate, as in Rust (E0433):
+/// `first` is a name of this program instead.
+pub(crate) fn not_a_crate(first: &str, reference: Span) -> Error {
+    Error::InvalidImport {
+        path: format!("::{first}").into(),
+        reason: format!(
+            "a path that starts with `::` names an outside crate, and `{first}` is not one"
+        )
+        .into(),
+        reference,
+        declaration: None,
+    }
 }
 
 fn parsed_path(path: &crate::item::type_ref::Path) -> ImmutableString {
@@ -1709,6 +1853,7 @@ fn resolve_item(
                     lowering: item::Lowering::Unavailable,
                     syntax: parsed.body_syntax,
                     constant: false,
+                    asynchronous: false,
                     text: None,
                     elide: None,
                 },
@@ -1808,6 +1953,7 @@ fn resolve_function(
             lowering: item::Lowering::Unavailable,
             syntax: parsed.body_syntax,
             constant: parsed.constant,
+            asynchronous: parsed.asynchronous,
             text: None,
             elide: None,
         },
@@ -1900,6 +2046,7 @@ fn erase_trait_generics(
                 span,
             }]),
             span,
+            global: false,
         });
         for parameter in function.parameters.iter_mut() {
             substitute(&mut parameter.ty, &generic.name.text, &erased);
@@ -2682,6 +2829,24 @@ fn declare_facade_traits(
                 }
                 _ => {}
             }
+            // A facade trait a bound names (`R: advanced::Renderer`) is
+            // declared too, so a bounded value has its methods.
+            let generics: Vec<&[item::Generic]> = match &shell.kind {
+                item::Kind::Struct(own) => vec![&own.generics[..]],
+                item::Kind::Enum(own) => vec![&own.generics[..]],
+                item::Kind::Impl(own) => std::iter::once(&own.generics[..])
+                    .chain(own.functions.iter().map(|function| &function.generics[..]))
+                    .collect(),
+                item::Kind::Trait(own) => own
+                    .functions
+                    .iter()
+                    .map(|function| &function.generics[..])
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for generic in generics.into_iter().flatten() {
+                implemented.extend(generic.traits.iter().map(|name| name.text.clone()));
+            }
         }
         let declarations = host
             .trait_types()
@@ -2897,6 +3062,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             lowering: item::Lowering::Unavailable,
             syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: false,
+            asynchronous: false,
             text: None,
             elide: None,
         },
@@ -3969,6 +4135,38 @@ fn resolve_bounds_with_arguments(
                 })
             {
                 traits.push(last.name.clone());
+                continue;
+            }
+            // iced's `advanced` traits by their module path:
+            // `renderer::Renderer`, `advanced::widget::Widget<M, T, R>`.
+            if let [prefix @ .., last] = &bound.segments[..]
+                && !prefix.is_empty()
+                && prefix.iter().all(|module| {
+                    module.arguments.is_empty()
+                        && matches!(
+                            module.name.text.as_str(),
+                            "iced" | "core" | "advanced" | "widget" | "renderer" | "graphics" | "mesh"
+                        )
+                })
+                && matches!(last.name.text.as_str(), "Renderer" | "Widget" | "Meta")
+                && last
+                    .arguments
+                    .iter()
+                    .all(|argument| matches!(argument, crate::item::type_ref::Argument::Type(_)))
+            {
+                traits.push(last.name.clone());
+                if !last.arguments.is_empty() {
+                    trait_arguments.push((
+                        last.name.clone(),
+                        last.arguments
+                            .iter()
+                            .filter_map(|argument| match argument {
+                                crate::item::type_ref::Argument::Type(ty) => Some(ty.clone()),
+                                crate::item::type_ref::Argument::Lifetime(_) => None,
+                            })
+                            .collect(),
+                    ));
+                }
                 continue;
             }
             return Err(Error::UnsupportedNominalSyntax {

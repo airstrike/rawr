@@ -123,6 +123,25 @@ impl Report {
             .finish())
     }
 
+    /// Transform an evaluator error at `original`, a span in `source` that
+    /// [`crate::program::Positions`] gave. With no span, the report names
+    /// `source` and no position in it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only when `original` falls outside `source`.
+    #[doc(hidden)]
+    pub fn from_evaluation_located(
+        source: Source,
+        original: Option<Span>,
+        error: &EvalAltResult,
+    ) -> Result<Self, Error> {
+        match original {
+            Some(original) => Self::from_evaluation_mapped(source, original, error),
+            None => Ok(evaluation_builder(error).source(source).finish()),
+        }
+    }
+
     /// Transform an evaluator error at a compiler-proven original source span.
     pub(crate) fn from_evaluation_mapped(
         source: Source,
@@ -344,9 +363,10 @@ fn resolution_report_with_sources(
     error: &resolve::Error,
 ) -> Result<Report, Error> {
     let builder = resolution_builder(error);
-    let secondary_message = error
-        .secondary_span()
-        .map(|_| "first declaration or related definition is here");
+    let secondary_message = error.secondary_span().map(|_| match error {
+        resolve::Error::MovedValue { .. } => "value moved here",
+        _ => "first declaration or related definition is here",
+    });
     let mut builder = builder.source(source.clone());
     if !error.primary_span().is_none() {
         builder = builder.primary(source.clone(), error.primary_span(), None)?;
@@ -373,6 +393,8 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::DuplicateMember => code::RESOLVE_DUPLICATE_MEMBER,
         resolve::Category::UnknownMember => code::RESOLVE_UNKNOWN_MEMBER,
         resolve::Category::UnknownFunction => code::RESOLVE_UNKNOWN_FUNCTION,
+        resolve::Category::UnknownVariable => code::RESOLVE_UNKNOWN_VARIABLE,
+        resolve::Category::MovedValue => code::RESOLVE_MOVED_VALUE,
         resolve::Category::InvalidConstruction => code::RESOLVE_CONSTRUCTION,
         resolve::Category::TypeMismatch => code::RESOLVE_TYPE_MISMATCH,
         resolve::Category::ImmutableBinding => code::RESOLVE_IMMUTABLE_BINDING,
@@ -418,6 +440,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnknownFunction { name, .. } => {
             builder.help(format!("declare `fn {name}`, or import it with `use`"))
         }
+        resolve::Error::UnknownVariable { name, .. } => {
+            builder.help(format!("declare `{name}` with `let`, or import it with `use`"))
+        }
+        resolve::Error::MovedValue { name, .. } => builder.help(format!(
+            "`{name}` was moved before this use; clone it before the move to keep a copy"
+        )),
         resolve::Error::MissingCapability {
             owner, capability, ..
         } => builder.help(format!("derive `{capability}` for `{owner}`")),
@@ -598,6 +626,8 @@ fn resolution_message(error: &resolve::Error) -> String {
             format!("unknown member `{owner}::{member}`")
         }
         resolve::Error::UnknownFunction { name, .. } => format!("unknown function `{name}`"),
+        resolve::Error::UnknownVariable { name, .. } => format!("unknown variable `{name}`"),
+        resolve::Error::MovedValue { name, .. } => format!("use of moved value: `{name}`"),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }

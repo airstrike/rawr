@@ -1,6 +1,7 @@
 # rawr-play
 
-Run a Rawr snippet. A snippet that uses iced renders to a PNG. A plain
+Run a Rawr snippet. A snippet that uses iced renders to a PNG. A full app
+whose view changes over time renders to a GIF (see `src/motion.rs`). A plain
 program runs and returns its output as text. One long-running process links
 `rawr` and `rawr-iced` as libraries. It runs no rustc and no importer per request. A
 snippet is checked as Rawr, its view is evaluated headlessly, and the result
@@ -47,7 +48,10 @@ echo 'text("hi")' | cargo run -p rawr-play -- - --format webp -o - > target/play
 ```
 
 The format follows `--format png|jpg|webp`, else the output extension, else
-PNG. A plain program writes JSON where an image would go. The JSON is one
+PNG. An animated render is always a GIF. A file named `.png`, `.jpg` or
+`.webp` is then written with a `.gif` extension instead. `--still` writes
+the last frame as a still image. A note on the image goes to stderr as a
+`note: ` line when the result goes to stdout. A plain program writes JSON where an image would go. The JSON is one
 object that starts with `{`, and no image does:
 
 ```json
@@ -64,8 +68,9 @@ exit status 1.
 
 ## Formats
 
-UI renders are flat colour and text. Lossless WebP is the smallest and
-Discord previews it inline, so the bot sends WebP by default (`PLAY_FORMAT`):
+UI renders are flat colour and text. The bot sends PNG by default, and
+`PLAY_FORMAT` picks another format. Discord shows a PNG unchanged. Lossless
+WebP is the smallest of the three:
 
 | Sample | PNG | WebP (lossless) | JPEG q90 |
 | --- | --- | --- | --- |
@@ -121,6 +126,10 @@ Object's storage), else the file `PLAY_CONFIG_FILE`, else
 | `DISCORD_TOKEN` | — | Bot token; else read from `DISCORD_TOKEN_FILE`, else `~/.config/rawr-play/token` |
 | `PLAY_WORKERS` | 2 | Renders running at once |
 | `PLAY_TIME_MS` | 2000 | Script time budget per render (engine deadline) |
+| `PLAY_ANIMATION_TIME_MS` | 15000 | An animation's time budget, once its view changes |
+| `PLAY_IDLE_ANIMATION_TIME_MS` | 60000 | An animation's time budget when no other render is queued or running |
+| `PLAY_ANIMATION_ALLOWANCE_S` | 90 | Animation time per user in each window |
+| `PLAY_ANIMATION_WINDOW_S` | 600 | The rolling window for the allowance |
 | `PLAY_TIMEOUT_MS` | 10000 | Whole render; the render process is killed after it |
 | `PLAY_MEMORY_MB` | 1024 | Address-space cap per render process (Linux) |
 | `PLAY_FORMAT` | png | Reply image: png, webp (lossless) or jpg; PNG is shown unchanged by Discord |
@@ -162,8 +171,59 @@ that render only and the bot replies "out of memory".
 A plain program runs under the same process limits. Its Engine has the same
 limits as a render. Its output is capped at 64 KiB.
 
+### Animation time
+
+Every render starts on the still budget, `PLAY_TIME_MS` (5 s on
+Cloudflare). A full app whose view changes may record up to
+`PLAY_ANIMATION_TIME_MS` (15 s). The switch happens at the second distinct
+frame. The app's scripts and the recording share that deadline. The
+simulated clock is unchanged, so the same snippet gives the same frames.
+Once the view changes, frames are drawn at 1x, half the scale of a still
+PNG. Each frame is encoded into the GIF as soon as it is recorded, so the
+encoding counts against the same deadline. A frame stores only the
+rectangle that changed, with its unchanged pixels transparent. Assembling
+the GIF after the deadline costs at most one more frame's encoding.
+`PLAY_TIMEOUT_MS` (80 s on Cloudflare) leaves room for the idle budget's
+60 s plus the start. The bot shows Discord's typing indicator while a
+render runs.
+
+The longer budget has three limits (`src/budget.rs`):
+
+- Each user gets 90 s of animation time in any 10 minutes. A Discord user
+  is keyed by ID. A playground caller is keyed by its IP's hash, which the
+  Worker sends in `x-play-user`. A render that runs past the still budget
+  counts its whole time. It may take the allowance to zero but not below.
+  A user with less than the still budget left gets the still budget.
+- One render at a time holds the longer budget, across Discord and the
+  playground. Others get the still budget while it runs.
+- A render that starts with no other render queued or running may use
+  `PLAY_IDLE_ANIMATION_TIME_MS` (60 s) instead, as far as its user's
+  allowance reaches. The allowance fits one full idle render.
+
+A newcomer does not wait for an idle render. When a request arrives, the
+bot sends the idle render's process `SIGUSR1`. It sends it at once when the
+render is past `PLAY_ANIMATION_TIME_MS`, and otherwise when the render gets
+there. The process stops recording before its next frame and keeps the
+frames so far.
+
+The CLI takes the budgets as `--time-ms` and `--animation-ms`. `SIGUSR1`
+cuts its recording the same way.
+
+The notes on an animated reply:
+
+| Case | Note |
+| --- | --- |
+| Frame or span cap | `Animation shown for the first 5 s.` |
+| The wall clock cut it | `Rendering stopped after 15 s, so the animation shows its first 2.3 s.` |
+| …and the user's allowance was used up | adds `Your animation time is used up for now. It frees up in 4 minutes.` |
+| …and another render held the longer budget | adds `Another animation was rendering at the same time. Run it again shortly for up to 15 s.` |
+| Someone else was waiting for an idle render | `Rendering stopped after 21.4 s, so the animation shows its first 2.3 s. It was cut short because someone else was waiting.` |
+| An idle render ran past 15 s otherwise | adds `The bot was otherwise idle, so this animation could render for up to 60 s.` |
+
+The landing page's Run results are not cached when the clock cut them.
+
 Inside, a fresh Engine has: 1,000,000 operations per evaluation, call depth
-of at most 32, 64 KiB strings, 65,536-element arrays, 10,000-element maps, and a
+of at most 32, 64 KiB strings, 65,536-element arrays and maps, and a
 wall-clock deadline checked from the progress callback. Canvas sides are at
 most 2048. Each limit gets a plain reply such as `operation limit exceeded:
 more than 1000000 operations (an endless loop?)`.
@@ -243,7 +303,8 @@ rendered once (concurrent first requests share the render; a share warms
 it), kept in the Durable Object's SQLite (at most 1 MiB) and in the edge
 cache, and served `immutable`, since an id is a content hash. A snippet that
 does not render gets an error card (`public/og/play-error.png`, drawn from
-`og/error.rs`), kept too. A plain program's share keeps its output. Its
+`og/error.rs`), kept too. The preview asks for `still`, so an animated
+snippet's preview is its last frame as a PNG. A plain program's share keeps its output. Its
 link shows the site's card (`site/public/og/card.png`), and its first line
 of output is the description; a busy or unreachable renderer is retried after
 ten minutes. Uncached previews are limited per IP (10 a minute, 60 an hour),
@@ -256,7 +317,8 @@ counter.
 Renders go Worker → Durable Object → the bot's HTTP port (`PLAY_HTTP_PORT`,
 8080, reachable only through the Durable Object) → the same child-process
 renderer as `?play`, with the same limits. The bot's `POST /render` answers
-with `image/png`, or with `application/json` for a plain program's output.
+with `image/png` or `image/gif`, or with `application/json` for a plain
+program's output. A note on an animation comes in the `x-play-note` header.
 Playground renders share the pool
 but run one at a time and never ahead of a waiting Discord render. Each IP
 (kept only as an HMAC) gets 6 runs a minute and 60 an hour, and 10 shares a
@@ -282,10 +344,12 @@ both the image and `vars.PLAY_VERSION`; the Durable Object records the
 version it started, and the cron or `GET /bot/health` restarts a container
 started from any other.
 
-The image is `play/Dockerfile`: a `rust:1-slim-bookworm` stage that
-cross-compiles from the build host's architecture to linux/amd64 (or arm64),
-and a `gcr.io/distroless/cc-debian12:nonroot` runtime with the two stripped
-binaries. `push-image.sh` builds it with Apple's `container` (no Docker
+The image is `play/Dockerfile`. Its Rust stages run on the build host's
+architecture. They cross-compile to linux/amd64 (or arm64) when the host
+differs, and build natively when it matches. The dependencies compile in a
+layer of their own (cargo-chef), so a cached build recompiles only the
+workspace crates. The runtime is `gcr.io/distroless/cc-debian12:nonroot`
+with the two stripped binaries. `push-image.sh` builds it with Apple's `container` (no Docker
 needed), pushes it to `registry.cloudflare.com` and writes its address into
 `wrangler.jsonc`; since `image` is then a registry address, `wrangler
 deploy` never calls Docker.
@@ -308,7 +372,50 @@ npm run release:worker     # Worker and site only, no new image
 ```
 
 It refuses to run while the Worker or site sources have uncommitted changes.
-It retries the deploy when Cloudflare answers 100146.
+`deploy.sh` does the part after the image: the tests, the deploy, the wait
+for the bot and the smoke test. It retries the deploy when Cloudflare
+answers 100146 or a 500.
+
+### Release from GitHub Actions
+
+`.github/workflows/release.yml` releases from GitHub instead of a Mac. Once
+it is switched on, it is the main path. For now it runs only by hand, from
+the Actions tab (Run workflow). After the first good run, uncomment its
+`push` trigger to release every push to main that touches the bot's sources
+or the site.
+
+The job runs on `ubuntu-latest`, which is x86-64, so the image builds
+natively with Docker Buildx. Buildx keeps its layers in the GitHub Actions
+cache, so a later run recompiles only the workspace crates. The job frees
+disk space and adds 24 GB of swap first. It builds with one rustc job,
+because rawr's thin-LTO compile needs most of the runner's 16 GB.
+
+The job pushes the image as `rawr-play:<commit>`. It writes that image and
+`PLAY_VERSION` into its own copy of `wrangler.jsonc` and runs `deploy.sh`.
+It never commits, so the committed `wrangler.jsonc` keeps the last image
+`release.sh` pushed. A local `npm run release:worker` would deploy that older
+image, so release from one place at a time. The job never sees the Discord
+token, which stays among the Worker's secrets.
+
+The repository needs one secret and one variable, under Settings → Secrets
+and variables → Actions:
+
+- The secret `CLOUDFLARE_API_TOKEN` holds a Cloudflare API token.
+- The variable `CLOUDFLARE_ACCOUNT_ID` is `fce80b8101fbb2f85548560babc6c7bc`.
+  It is not a secret.
+
+Make the token in the Cloudflare dashboard from the "Edit Cloudflare Workers"
+template. Scope it to this account and to the `airstrike.fyi` zone. Then add
+the account permission Containers: Edit. That gives these permissions:
+
+- Account: Workers Scripts: Edit (the Worker, its Durable Object and cron).
+- Account: Containers: Edit (the registry push and the container rollout).
+- Account: Account Settings: Read.
+- Zone: Workers Routes: Edit (the two custom domains).
+- Zone: Zone: Read.
+
+The template's other permissions (Workers KV, R2, Tail and Memberships) are
+harmless but unused.
 
 `instance_type` is `lite` (1/16 vCPU, 256 MiB): a render's peak RSS was
 27 MB for a 640x400 app, 41 MB for 100k widgets stopped at the time limit

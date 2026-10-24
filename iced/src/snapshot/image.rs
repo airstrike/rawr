@@ -53,6 +53,10 @@ impl Image {
         &self.bytes
     }
 
+    pub(super) fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
     pub(super) fn write(&self, path: &Path) -> Result<(), Error> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|source| Error::io(parent, source))?;

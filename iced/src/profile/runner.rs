@@ -18,6 +18,8 @@ const SEMANTIC_TYPES: &[&str] = &[
     "Subscription",
     "Task",
     "Theme",
+    "task::Handle",
+    "task::Sipper",
 ];
 const SEMANTIC_ITEMS: &[&str] = &["Length::Fill", "Length::Fixed"];
 const SEMANTIC_ITEM_ROOTS: &[&str] = &[
@@ -32,10 +34,10 @@ const COMPATIBILITY_SEMANTIC_POLICY: &[u8] = b"rawr.iced.compatibility-applicati
 const COMPATIBILITY_RUNTIME_BINDING: &[u8] = b"rawr.iced.compatibility-runtime-binding/v2";
 const TEXT_ENDPOINT_DISPOSITION: &[u8] =
     b"rawr.iced.compatibility-text-endpoint/suppressed-by-D271/v1";
-const COMPATIBILITY_PROJECTIONS: usize = 32;
+const COMPATIBILITY_PROJECTIONS: usize = 35;
 const COMPATIBILITY_ABI: u32 = 16;
 const COMPATIBILITY_DIGEST: [u8; 16] = [
-    61, 237, 120, 160, 162, 80, 97, 89, 215, 66, 151, 74, 194, 69, 37, 231,
+    233, 202, 162, 52, 62, 205, 126, 207, 189, 146, 67, 205, 150, 148, 216, 140,
 ];
 
 /// One exact target-argument substitution sealed into a generated projection table.
@@ -2987,6 +2989,17 @@ impl<'proof> Decoration<'proof> {
 
 impl rawr::package::import::runner::Profile for Decoration<'_> {
     fn ready(&self, facade: &facade::Facade, installed: &[host::facade::Definition]) -> bool {
+        // A crate that returns a Rust future or sipper names iced's types,
+        // so it waits for the iced facade.
+        if facade.root() != ROOT
+            && !installed.iter().any(|definition| definition.root() == ROOT)
+            && facade.items().any(|item| {
+                item.signature().inputs().iter().any(names_projected)
+                    || names_projected(item.signature().output())
+            })
+        {
+            return false;
+        }
         self.projections.iter().all(|projection| {
             let Some((source, _)) = self.source_site(&projection.source) else {
                 return false;
@@ -3082,9 +3095,39 @@ impl rawr::package::import::runner::Profile for Decoration<'_> {
     fn semantic_type(
         &self,
         facade: &facade::Facade,
+        installed: &[host::facade::Definition],
         identity: &[u8; 32],
         arguments: Box<[host::type_ref::Type]>,
     ) -> Result<Option<host::type_ref::Type>, host::Error> {
+        // A Rust future or sipper has no Rust type to name, and any crate
+        // may return one. The importer names it; iced's facade declares it.
+        let projected = if identity == rawr_import::surface::identity::Definition::future().as_bytes() {
+            Some("Task")
+        } else if identity == rawr_import::surface::identity::Definition::sipper().as_bytes() {
+            Some("task::Sipper")
+        } else if identity == rawr_import::surface::identity::Definition::duration().as_bytes() {
+            Some("time::Duration")
+        } else {
+            None
+        };
+        if let Some(path) = projected {
+            if facade.root() == ROOT {
+                return if arguments.is_empty() {
+                    host::type_ref::Type::registered(path).map(Some)
+                } else {
+                    host::type_ref::Type::applied(path, arguments).map(Some)
+                };
+            }
+            // Another crate's facade names the installed iced facade's type.
+            let iced = installed
+                .iter()
+                .find(|definition| definition.root() == ROOT)
+                .ok_or_else(|| host::Error::UnknownFacadeType {
+                    item: "a Rust future or sipper".into(),
+                    ty: format!("iced::{path}").into(),
+                })?;
+            return host::type_ref::Type::external(iced.export_type(path)?, arguments).map(Some);
+        }
         let Some(path) = self.semantic_type_path(facade, identity) else {
             return Ok(None);
         };
@@ -3841,3 +3884,44 @@ mod hot_outcome_tests;
 
 #[cfg(all(test, unix))]
 mod observation_tests;
+
+/// Whether `ty` names a Rust future or sipper, which iced's facade declares.
+fn names_projected(ty: &facade::Type) -> bool {
+    match ty {
+        facade::Type::Nominal {
+            identity,
+            arguments,
+        } => {
+            rawr_import::surface::identity::Definition::is_projected(identity)
+                || arguments.iter().any(names_projected)
+        }
+        facade::Type::FunctionItem { input, output } | facade::Type::Result(input, output) => {
+            names_projected(input) || names_projected(output)
+        }
+        facade::Type::Option(element) => names_projected(element),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod digest_tests {
+    /// The pinned compatibility digest is the semantic facade's own. A
+    /// facade change moves it; the failure prints the new value.
+    #[test]
+    fn compatibility_digest_is_the_semantic_facade_digest() {
+        let semantic = crate::facade().expect("the iced facade builds");
+        assert_eq!(
+            semantic.fingerprint().compatibility_digest(),
+            super::COMPATIBILITY_DIGEST,
+            "update COMPATIBILITY_DIGEST to the left value"
+        );
+        assert_eq!(
+            semantic
+                .types()
+                .map(|definition| definition.projections().len())
+                .sum::<usize>(),
+            super::COMPATIBILITY_PROJECTIONS,
+            "update COMPATIBILITY_PROJECTIONS to the left value"
+        );
+    }
+}

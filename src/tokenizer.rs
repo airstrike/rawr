@@ -86,7 +86,7 @@ pub enum Token {
     /// A string constant.
     StringConstant(Box<SmartString>),
     /// A byte string constant: Rust's `b"…"`, `br"…"` or `br#"…"#`.
-    ByteStringConstant(Box<[u8]>),
+    ByteStringConstant(Box<Vec<u8>>),
     /// An interpolated string.
     InterpolatedString(Box<SmartString>),
     /// `{`
@@ -2652,9 +2652,9 @@ fn parse_rust_string(
     Some(if !bytes {
         Token::StringConstant(Box::new(text.into()))
     } else if raw {
-        Token::ByteStringConstant(text.into_bytes().into())
+        Token::ByteStringConstant(Box::new(text.into_bytes()))
     } else {
-        Token::ByteStringConstant(out.into())
+        Token::ByteStringConstant(Box::new(out))
     })
 }
 

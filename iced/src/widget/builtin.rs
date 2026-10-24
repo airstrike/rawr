@@ -130,6 +130,9 @@ impl widget::Descriptor for marker::Checkbox {
         if let Some(size) = self.size {
             checkbox = checkbox.size(size);
         }
+        if let Some(text_size) = self.text_size {
+            checkbox = checkbox.text_size(text_size);
+        }
         if let Some(width) = self.width {
             checkbox = checkbox.width(width);
         }
@@ -196,11 +199,19 @@ impl widget::Descriptor for marker::Slider {
             Err(diagnostic) => return diagnostic,
         };
         let mapper = context.message_mapper(self.on_change.clone());
-        // iced's slider over this slider's number: `i64`, or `f64`.
+        // iced's slider over this slider's number: `i64`, or `f64`. An
+        // angle's slider moves over its `f64` and hands back the angle.
+        let number = self.number;
         macro_rules! native {
             ($slider:path, $number:ty, $along:ident, $across:ident) => {{
                 let range = (*self.range.start() as $number)..=(*self.range.end() as $number);
-                let on_change = move |value: $number| mapper.map(Dynamic::from(value));
+                let on_change = move |value: $number| {
+                    mapper.map(match number {
+                        marker::SliderNumber::Degrees => Dynamic::from(iced::Degrees(value as f32)),
+                        marker::SliderNumber::Radians => Dynamic::from(iced::Radians(value as f32)),
+                        _ => Dynamic::from(value),
+                    })
+                };
                 let mut slider = $slider(range, self.value as $number, on_change).step(self.step as $number);
                 if let Some(default) = self.default {
                     slider = slider.default(default as $number);
@@ -221,7 +232,7 @@ impl widget::Descriptor for marker::Slider {
                 slider.boxed()
             }};
         }
-        match (self.vertical, self.float) {
+        match (self.vertical, number != marker::SliderNumber::Integer) {
             (false, false) => native!(iced::widget::slider, rawr::INT, width, height),
             (false, true) => native!(iced::widget::slider, f64, width, height),
             (true, false) => native!(iced::widget::vertical_slider, rawr::INT, height, width),
@@ -259,7 +270,7 @@ impl widget::Descriptor for marker::ProgressBar {
 impl widget::Descriptor for marker::Transition {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut arguments = [
-            Dynamic::from(marker::Animation(self.value)),
+            Dynamic::from(marker::Animation::Float(iced::Animation::new(self.value as f32))),
             Dynamic::from(marker::Instant::now()),
         ];
         match context.invoke(&self.view, &mut arguments) {
@@ -544,6 +555,10 @@ fn bind_attestations(builder: &mut host::runtime::Builder) {
     builder
         .bind_type_attestation("iced::Element", |value, expected| {
             let value = value.read_lock::<widget::Value>()?;
+            // A wrapping widget's forwarded call, whose Message is erased.
+            if expected.argument_name(0).as_deref() == Some(super::custom::ERASED) {
+                return expected.attest(value.witness().is_some());
+            }
             (expected.argument_count() == 1)
                 .then(|| expected.attest_witness(value.witness()))
                 .flatten()
@@ -1065,6 +1080,14 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             })
             .expect("the iced facade must retain the exact column functions");
     }
+    builder
+        .bind_with_context("iced::widget::keyed_column", |call, args| {
+            if args.len() != 1 {
+                return Err(arity("keyed_column", 1, args.len()));
+            }
+            new_column(call, take_keyed_children(args[0])?)
+        })
+        .expect("the iced facade must retain the exact keyed_column function");
     for path in [
         "iced::widget::row",
         "iced::widget::Row::with_children",
@@ -1226,6 +1249,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 on_toggle: None,
                 style: None,
                 size: None,
+                text_size: None,
                 width: None,
                 spacing: None,
                 icon: None,
@@ -1259,15 +1283,22 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 if args.len() != 3 {
                     return Err(arity("slider", 3, args.len()));
                 }
-                let float = args[0].is::<std::ops::RangeInclusive<rawr::FLOAT>>();
-                let range = number_range(args[0], "slider")?;
-                let value = number(args[1], "slider value")?;
+                let (number, range, value) = if args[0].is::<marker::AngleRange>() {
+                    angle_slider(args)?
+                } else {
+                    let float = args[0].is::<std::ops::RangeInclusive<rawr::FLOAT>>();
+                    (
+                        if float { marker::SliderNumber::Float } else { marker::SliderNumber::Integer },
+                        number_range(args[0], "slider")?,
+                        number(args[1], "slider value")?,
+                    )
+                };
                 Ok(Dynamic::from(marker::Slider {
                     witness: call.output_witness().map_err(witness_error)?,
                     identity: widget::Identity::unique(),
                     range,
                     value,
-                    float,
+                    number,
                     on_change: take::<rawr::item::Value>(args[2], "symbolic message mapper")?,
                     step: 1.0,
                     default: None,
@@ -2017,6 +2048,16 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain every border function");
         builder
             .bind(format!("iced::Border::{name}"), move |args| {
+                // `border.width` and `border.color`, read as fields.
+                if let [border] = args {
+                    let border = border
+                        .read_lock::<iced::Border>()
+                        .ok_or_else(|| runtime_error("expected `iced::Border`".to_string()))?;
+                    return Ok(match name {
+                        "width" => Dynamic::from(f64::from(border.width)),
+                        _ => Dynamic::from(border.color),
+                    });
+                }
                 if args.len() != 2 {
                     return Err(arity(name, 2, args.len()));
                 }
@@ -2025,6 +2066,14 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Border builder");
     }
+    builder
+        .bind("iced::border::radius", |args| {
+            let [radius] = args else {
+                return Err(arity("border::radius", 1, args.len()));
+            };
+            Ok(Dynamic::from(iced::border::radius(pixels(radius, "border::radius")?)))
+        })
+        .expect("the iced facade must retain border::radius");
 }
 
 fn bind_space_builders(builder: &mut host::runtime::Builder) {
@@ -2213,6 +2262,13 @@ fn bind_intrinsic_control_builders(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(checkbox))
         })
         .expect("the iced facade must retain the exact Checkbox::size item");
+    builder
+        .bind("iced::widget::Checkbox::text_size", |args| {
+            let mut checkbox = take_checkbox(args, "Checkbox::text_size")?;
+            checkbox.text_size = Some(pixels(args[1], "Checkbox::text_size")?);
+            Ok(Dynamic::from(checkbox))
+        })
+        .expect("the iced facade must retain the exact Checkbox::text_size item");
     builder
         .bind("iced::widget::Checkbox::width", |args| {
             let mut checkbox = take_checkbox(args, "Checkbox::width")?;
@@ -2409,6 +2465,43 @@ pub(super) fn take_children(value: &mut Dynamic) -> Result<Vec<widget::Value>, B
         .into_iter()
         .map(|mut child| take::<widget::Value>(&mut child, "iced::Element"))
         .collect()
+}
+
+/// The children of `keyed_column(..)`: a list of `(key, element)` pairs,
+/// each element keyed by its pair's key.
+fn take_keyed_children(value: &mut Dynamic) -> Result<Vec<widget::Value>, Box<EvalAltResult>> {
+    let pairs = value.take().into_array().map_err(|actual| {
+        runtime_error(format!("expected a list of keyed widgets, found `{actual}`"))
+    })?;
+    pairs
+        .into_iter()
+        .map(|pair| {
+            let mut pair = pair.into_array().map_err(|actual| {
+                runtime_error(format!("expected a `(key, widget)` pair, found `{actual}`"))
+            })?;
+            let [key, child] = pair.as_mut_slice() else {
+                return Err(runtime_error(format!(
+                    "expected a `(key, widget)` pair, found {} values",
+                    pair.len()
+                )));
+            };
+            let child = take::<widget::Value>(child, "iced::Element")?;
+            Ok(child.keyed(key_value(key)))
+        })
+        .collect()
+}
+
+/// The reconciliation key of one Rawr value. An integer or a string keys
+/// by itself. Any other value keys by its `Debug` text, which is the
+/// canonical text of an imported value such as a `Uuid`.
+fn key_value(key: &Dynamic) -> widget::key::Value {
+    if let Ok(key) = key.as_int() {
+        widget::key::Value::integer(key)
+    } else if let Ok(key) = key.as_immutable_string_ref() {
+        widget::key::Value::string(key.clone())
+    } else {
+        widget::key::Value::string(format!("{key:?}").into())
+    }
 }
 
 fn new_column(
@@ -2719,33 +2812,7 @@ fn bind_progress(builder: &mut host::runtime::Builder) {
             }))
         })
         .expect("the iced facade must retain the exact transition item");
-    builder
-        .bind("iced::Animation::new", |args| {
-            if args.len() != 1 {
-                return Err(arity("Animation::new", 1, args.len()));
-            }
-            Ok(Dynamic::from(marker::Animation(number(args[0], "Animation::new")?)))
-        })
-        .expect("the iced facade must retain the exact Animation::new item");
-    for name in ["very_quick", "quick", "slow", "very_slow", "easing"] {
-        let path = format!("iced::Animation::{name}");
-        builder
-            .bind(path.clone(), move |args| {
-                take::<marker::Animation>(args[0], "iced::Animation").map(Dynamic::from)
-            })
-            .expect("the iced facade must retain every Animation builder");
-    }
-    builder
-        .bind("iced::Animation::interpolate", |args| {
-            let marker::Animation(value) = take::<marker::Animation>(args[0], "iced::Animation")?;
-            Ok(Dynamic::from(value))
-        })
-        .expect("the iced facade must retain the exact Animation::interpolate item");
-    for name in crate::EASINGS {
-        builder
-            .bind(format!("iced::animation::Easing::{name}"), |_| Ok(Dynamic::from(marker::Easing)))
-            .expect("the iced facade must retain every Easing value");
-    }
+    super::animation::bind(builder);
 }
 
 impl Witnessed for marker::Text {
@@ -3050,6 +3117,26 @@ pub(super) fn number(value: &Dynamic, operation: &str) -> Result<f64, Box<EvalAl
             value.type_name()
         ))),
     }
+}
+
+/// `slider(Degrees::RANGE, degrees, on_change)`, or over `Radians`: the
+/// angle's number, its range and its value in that unit.
+fn angle_slider(
+    args: &mut [&mut Dynamic],
+) -> Result<(marker::SliderNumber, std::ops::RangeInclusive<f64>, f64), Box<EvalAltResult>> {
+    let range = take::<marker::AngleRange>(args[0], "iced::RangeInclusive")?;
+    Ok(match range {
+        marker::AngleRange::Degrees(range) => (
+            marker::SliderNumber::Degrees,
+            f64::from(range.start().0)..=f64::from(range.end().0),
+            f64::from(take::<iced::Degrees>(args[1], "iced::Degrees")?.0),
+        ),
+        marker::AngleRange::Radians(range) => (
+            marker::SliderNumber::Radians,
+            f64::from(range.start().0)..=f64::from(range.end().0),
+            f64::from(take::<iced::Radians>(args[1], "iced::Radians")?.0),
+        ),
+    })
 }
 
 /// An ascending `RangeInclusive` of `i64` or `f64`.

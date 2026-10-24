@@ -163,18 +163,21 @@ fn startup_maps_nested_components_while_batch_and_chain_keep_iced_ordering() {
     let first = activated.remove(0);
     let parallel = activated.remove(0);
     assert!(parallel.succeed(3));
-    apply(&application, &mut state, next_task_message(&mut stream));
+    let message = next_script_message(&mut state, &mut stream);
+    apply(&application, &mut state, message);
     assert!(harness.operations.try_recv().is_err());
 
     assert!(first.succeed(1));
-    apply(&application, &mut state, next_task_message(&mut stream));
+    let message = next_script_message(&mut state, &mut stream);
+    apply(&application, &mut state, message);
     let second = harness
         .operations(&mut stream, 1)
         .pop()
         .expect("the chained second operation must activate after the first ends");
     assert_eq!(second.input, 2);
     assert!(second.succeed(2));
-    apply(&application, &mut state, next_task_message(&mut stream));
+    let message = next_script_message(&mut state, &mut stream);
+    apply(&application, &mut state, message);
 
     let completion = next_task_message(&mut stream);
     let transition = state.update(completion).unwrap();
@@ -200,7 +203,7 @@ fn controlled_failure_is_diagnostic_and_never_reaches_the_mapper_or_update() {
 
     assert_eq!(operation.input, 9);
     assert!(operation.fail());
-    let failure = next_task_message(&mut stream);
+    let failure = next_script_message(&mut state, &mut stream);
     let follow_up =
         <program::Application as iced::Program>::update(&application, &mut state, failure);
     assert!(iced_test::runtime::task::into_stream(follow_up).is_none());
@@ -381,6 +384,19 @@ fn next_task_message(
             None => panic!("controlled task ended before its expected output"),
         }
     })
+}
+
+/// The next message the task yields once the script steps it hands back
+/// have run on this thread.
+fn next_script_message(
+    state: &mut program::Adapter,
+    stream: &mut iced_test::futures::BoxStream<iced_test::runtime::Action<runtime::Message>>,
+) -> runtime::Message {
+    loop {
+        if let Some(message) = state.take_script_step(next_task_message(stream)) {
+            return message;
+        }
+    }
 }
 
 fn execution_message(

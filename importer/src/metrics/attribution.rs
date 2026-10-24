@@ -884,7 +884,7 @@ mod tests {
         });
         let plan = serde_json::json!({
             "schema": 8,
-            "protocol_schema": 20,
+            "protocol_schema": 21,
             "canonical_items": 1,
             "canonical_bytes": 1,
             "compiler_commit": "compiler",

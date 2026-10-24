@@ -19,6 +19,9 @@ rawr = { path = "..", features = ["sync"] }
 # Reads rawr-iced's manifest (its claims and prelude) as `rawr` does.
 rawr-cli = { path = "../cli" }
 rawr-iced = { path = "../iced" }
+# An animated render, as a GIF.
+color_quant = "1.1"
+gif = "0.13"
 image-webp = "0.2.4"
 jpeg-encoder = "0.6"
 png = "0.18.1"
@@ -33,7 +36,7 @@ hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 serenity = { version = "0.12.5", default-features = false, features = ["cache", "client", "gateway", "model", "rustls_backend"], optional = true }
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"], optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [lib]

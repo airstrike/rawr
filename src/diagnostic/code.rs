@@ -68,6 +68,8 @@ codes!(Resolve;
     (RESOLVE_DUPLICATE_MEMBER, "RAWR-RESOLVE-DUPLICATE-MEMBER", "Duplicate nominal member."),
     (RESOLVE_UNKNOWN_MEMBER, "RAWR-RESOLVE-UNKNOWN-MEMBER", "Unknown nominal member."),
     (RESOLVE_UNKNOWN_FUNCTION, "RAWR-RESOLVE-UNKNOWN-FUNCTION", "Unknown function."),
+    (RESOLVE_UNKNOWN_VARIABLE, "RAWR-RESOLVE-UNKNOWN-VARIABLE", "Unknown variable."),
+    (RESOLVE_MOVED_VALUE, "RAWR-RESOLVE-MOVED-VALUE", "Use of a moved value."),
     (RESOLVE_CONSTRUCTION, "RAWR-RESOLVE-CONSTRUCTION", "Invalid nominal construction."),
     (RESOLVE_TYPE_MISMATCH, "RAWR-RESOLVE-TYPE-MISMATCH", "Resolved type mismatch."),
     (RESOLVE_IMMUTABLE_BINDING, "RAWR-RESOLVE-IMMUTABLE-BINDING", "Mutation of an immutable binding."),

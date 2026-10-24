@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 5;
-const CLASSIFIER_VERSION: u32 = 7;
+const CLASSIFIER_VERSION: u32 = 12;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -707,14 +707,19 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         &self,
         generics: &model::Generics,
     ) -> Result<Box<[representability::signature::Parameter]>, Failure> {
-        self.declared_parameters(generics)
+        self.declared_parameters(generics, &[])
     }
 
+    /// The generic parameters, but those in `strings`, which take a `String`.
     fn declared_parameters(
         &self,
         generics: &model::Generics,
+        strings: &[u32],
     ) -> Result<Box<[representability::signature::Parameter]>, Failure> {
-        for parameter in generics.parameters() {
+        for parameter in generics
+            .parameters()
+            .filter(|parameter| !strings.contains(&parameter.index()))
+        {
             if matches!(parameter.kind(), model::ParameterKind::Lifetime { .. }) {
                 return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
             }
@@ -730,7 +735,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         parameters
             .try_reserve_exact(generics.parameters().len())
             .map_err(|_| Error::Allocation)?;
-        for parameter in generics.parameters() {
+        for parameter in generics
+            .parameters()
+            .filter(|parameter| !strings.contains(&parameter.index()))
+        {
             let kind = match parameter.kind() {
                 model::ParameterKind::Type { .. } => representability::signature::Kind::Type,
                 model::ParameterKind::Const { .. } => representability::signature::Kind::Constant,
@@ -747,11 +755,65 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         Ok(parameters.into_boxed_slice())
     }
 
+    /// The synthetic parameters of `impl AsRef<str>` or `impl Into<String>`
+    /// arguments. Rawr passes a `String`, which is both.
+    fn string_parameters(&self, generics: &model::Generics) -> Vec<u32> {
+        generics
+            .parameters()
+            .filter(|parameter| parameter.name().starts_with("impl "))
+            .filter(|parameter| {
+                let declared = match parameter.kind() {
+                    model::ParameterKind::Type { bounds, .. } => bounds.iter().collect::<Vec<_>>(),
+                    _ => return false,
+                };
+                let predicated = generics.predicates().filter_map(|predicate| match predicate {
+                    model::Predicate::Bound {
+                        ty: model::Type::Parameter { index, .. },
+                        bound,
+                    } if *index == parameter.index() => Some(bound),
+                    _ => None,
+                });
+                let traits = declared
+                    .into_iter()
+                    .chain(predicated)
+                    .filter_map(|bound| match bound {
+                        model::Bound::Trait {
+                            trait_id,
+                            arguments,
+                            polarity: model::Polarity::Positive,
+                            ..
+                        } => Some((trait_id, arguments)),
+                        _ => None,
+                    })
+                    .filter(|(trait_id, _)| self.definition_name(trait_id) != Some("Sized"))
+                    .collect::<Vec<_>>();
+                !traits.is_empty()
+                    && traits.iter().all(|(trait_id, arguments)| {
+                        let target = arguments.iter().rev().find_map(|argument| match argument {
+                            model::Argument::Type(ty) => Some(ty),
+                            _ => None,
+                        });
+                        match (self.definition_name(trait_id), target) {
+                            (Some("AsRef"), Some(model::Type::Primitive(name))) => &**name == "str",
+                            (Some("Into"), Some(model::Type::Definition { id, .. })) => self
+                                .graph
+                                .definition_index(id)
+                                .and_then(|index| self.graph.definitions().nth(index))
+                                .is_some_and(is_string),
+                            _ => false,
+                        }
+                    })
+            })
+            .map(model::Parameter::index)
+            .collect()
+    }
+
     fn function_parameters(
         &self,
         generics: &model::Generics,
+        strings: &[u32],
     ) -> Result<FunctionParameters, Failure> {
-        let mut parameters = self.declared_parameters(generics)?;
+        let mut parameters = self.declared_parameters(generics, strings)?;
         if generics.predicates().len() == 0 {
             return Ok(FunctionParameters {
                 parameters,
@@ -2329,6 +2391,10 @@ fn type_nameable(
             if !nameable {
                 return (false, assumed);
             }
+            // iced's facade names a future or a sipper; no Rust definition does.
+            if crate::surface::identity::Definition::is_projected(definition.as_bytes()) {
+                return (true, assumed);
+            }
             let (nameable, leaned) = definition_nameable(*definition, root, names);
             (nameable, assumed | leaned)
         }
@@ -3152,7 +3218,12 @@ impl<P: api::Phase> Context<'_, P> {
         if signature.safety() != model::Safety::Safe {
             return Err(representability::reject::Kind::UnsafeFunction.into());
         }
-        if signature.async_function() {
+        // An `async fn` method that borrows its receiver holds the borrow
+        // across its awaits, so it does not cross; one that takes `self`
+        // by value crosses as a `Task`, as a free `async fn` does.
+        if signature.async_function()
+            && matches!(signature.receiver(), model::Receiver::Reference { .. })
+        {
             return Err(representability::reject::Kind::AsyncFunction.into());
         }
         if signature.variadic() {
@@ -3161,27 +3232,50 @@ impl<P: api::Phase> Context<'_, P> {
         if signature.abi() != "\"Rust\"" {
             return Err(representability::reject::Kind::ForeignAbi.into());
         }
-        if !receiver_binder_is_exact(signature) {
+        if !receiver_binder_is_exact(signature) && !late_binders_lend_strings(signature) {
             return Err(representability::reject::Kind::HigherRankedBinder.into());
         }
+        let strings = self.string_parameters(generics);
         let FunctionParameters {
             parameters,
             callable: callable_class,
             binders,
             predicates,
-        } = self.function_parameters(generics)?;
+        } = self.function_parameters(generics, &strings)?;
         let mut inputs = Vec::new();
         self.retain_array::<representability::convert::Type>(signature.inputs().len())?;
         inputs
             .try_reserve_exact(signature.inputs().len())
             .map_err(|_| Error::Allocation)?;
         for input in signature.inputs() {
-            inputs.push(self.convert_input(input)?);
+            inputs.push(match input {
+                model::Type::Parameter { index, .. } if strings.contains(index) => {
+                    representability::convert::Type::Builtin(
+                        representability::convert::Builtin::String,
+                    )
+                }
+                input => self.convert_input(input)?,
+            });
         }
+        // A Rust future crosses as iced's `Task<T>` from a free function, or
+        // from a method that takes `self` by value and so owns what the
+        // future holds.
+        let output = match signature.receiver() {
+            model::Receiver::None | model::Receiver::Value { .. } => {
+                self.convert_output(signature.output())
+            }
+            _ => self.convert(signature.output()),
+        };
+        let output = match output {
+            Ok(output) => output,
+            // An output Rawr cannot hold whose type implements `Display`,
+            // as `DelayedFormat<StrftimeItems<'a>>`, is its text.
+            Err(error) => self.display_output(signature.output()).ok_or(error)?,
+        };
         let signature_plan = representability::signature::Signature::new(
             parameters,
             inputs.into_boxed_slice(),
-            self.convert(signature.output())?,
+            output,
         );
         let receiver = match signature.receiver() {
             model::Receiver::None => None,
@@ -3230,6 +3324,13 @@ impl<P: api::Phase> Context<'_, P> {
                 definition_is_public(definition)?;
                 if is_string(definition) && arguments.is_empty() {
                     Type::Builtin(Builtin::String)
+                } else if id.unit().crate_name() == "core"
+                    && definition.display_path().eq(["core", "time", "Duration"])
+                {
+                    Type::Nominal {
+                        definition: crate::surface::identity::Definition::duration(),
+                        arguments: Box::default(),
+                    }
                 } else if is_i64_range(definition, arguments) {
                     Type::Builtin(Builtin::InclusiveRange)
                 } else if let Some(element) = option_element(definition, arguments) {
@@ -3311,7 +3412,182 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
+    /// A function's output. A Rust future, an `impl Future<Output = T>` or
+    /// a type that implements `Future`, is iced's `Task<T>`: the bridge
+    /// runs it natively and the facade's `Task` carries it.
+    fn convert_output(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        if let model::Type::ImplTrait { bounds, .. } = ty
+            && let Some(sipper) = self.sipper_bound(bounds)
+        {
+            return sipper;
+        }
+        let output = match ty {
+            model::Type::ImplTrait { bounds, .. } => self.future_bound_output(bounds),
+            model::Type::Definition { id, arguments } if arguments.is_empty() => {
+                self.future_impl_output(id)
+            }
+            _ => None,
+        };
+        let Some(output) = output else {
+            return self.convert(ty);
+        };
+        Ok(representability::convert::Type::Nominal {
+            definition: crate::surface::identity::Definition::future(),
+            arguments: Box::from([self.convert(output)?]),
+        })
+    }
+
+    /// An `impl Sipper<Output, Progress>`, or an `impl Straw<T, Progress,
+    /// Error>`, which is a sipper of `Result<T, Error>`. It crosses as iced's
+    /// `task::Sipper<Output, Progress>`. `Never`, sipper's `Infallible`, is
+    /// `()` there, since such a sipper never finishes.
+    fn sipper_bound(
+        &self,
+        bounds: &[model::Predicate],
+    ) -> Option<Result<representability::convert::Type, Failure>> {
+        use representability::convert::Type;
+        bounds.iter().find_map(|predicate| {
+            let model::Predicate::Bound {
+                bound:
+                    model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        ..
+                    },
+                ..
+            } = predicate
+            else {
+                return None;
+            };
+            let definition = self
+                .graph
+                .definition_index(trait_id)
+                .and_then(|index| self.graph.definitions().nth(index))?;
+            if trait_id.unit().crate_name() != "sipper" {
+                return None;
+            }
+            let name = definition.display_path().last()?;
+            let types = arguments
+                .iter()
+                .filter_map(|argument| match argument {
+                    model::Argument::Type(ty) => Some(ty),
+                    model::Argument::Lifetime(_) | model::Argument::Const(_) => None,
+                })
+                .collect::<Vec<_>>();
+            let converted = (|| match (name, types.as_slice()) {
+                ("Sipper", [.., output, progress]) => {
+                    Ok((self.convert_never(output)?, self.convert(progress)?))
+                }
+                ("Straw", [.., output, progress, error]) => Ok((
+                    Type::Result(
+                        Box::new(self.convert_never(output)?),
+                        Box::new(self.convert_never(error)?),
+                    ),
+                    self.convert(progress)?,
+                )),
+                _ => Err(representability::reject::Kind::OpaqueType.into()),
+            })();
+            Some(converted.map(|(output, progress)| Type::Nominal {
+                definition: crate::surface::identity::Definition::sipper(),
+                arguments: Box::from([output, progress]),
+            }))
+        })
+    }
+
+    /// `()` for `Never`, `core::convert::Infallible`, which has no values.
+    fn convert_never(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        if let model::Type::Definition { id, .. } = ty
+            && id.unit().crate_name() == "core"
+            && self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .is_some_and(|definition| definition.display_path().last() == Some("Infallible"))
+        {
+            return Ok(representability::convert::Type::Unit);
+        }
+        self.convert(ty)
+    }
+
+    /// `T` of an `impl Future<Output = T>` bound list.
+    fn future_bound_output<'a>(&self, bounds: &'a [model::Predicate]) -> Option<&'a model::Type> {
+        let future = bounds.iter().any(|predicate| {
+            matches!(predicate, model::Predicate::Bound {
+                bound: model::Bound::Trait { trait_id, polarity: model::Polarity::Positive, .. },
+                ..
+            } if self.is_core_trait(trait_id, "Future"))
+        });
+        if !future {
+            return None;
+        }
+        bounds.iter().find_map(|predicate| match predicate {
+            model::Predicate::ProjectionEquality {
+                projection: model::Type::Projection { trait_id, .. },
+                ty,
+            } if self.is_core_trait(trait_id, "Future") => Some(ty),
+            _ => None,
+        })
+    }
+
+    /// `T` of a type's own `impl Future<Output = T>`, such as tokio's `Sleep`.
+    fn future_impl_output(&self, id: &api::identity::Definition) -> Option<&model::Type> {
+        self.graph.implementations().find_map(|implementation| {
+            if implementation.polarity() != model::Polarity::Positive
+                || !exact_definition(implementation.self_type(), id)
+            {
+                return None;
+            }
+            let model::Trait::Trait { id: trait_id, .. } = implementation.trait_ref() else {
+                return None;
+            };
+            if !self.is_core_trait(trait_id, "Future") {
+                return None;
+            }
+            implementation.associated().find_map(|associated| {
+                let definition = self
+                    .graph
+                    .definition_index(associated)
+                    .and_then(|index| self.graph.definitions().nth(index))?;
+                match definition.kind() {
+                    model::Kind::AssociatedType {
+                        default: model::Default::Present(ty),
+                        ..
+                    } if definition.display_path().last() == Some("Output") => Some(ty),
+                    _ => None,
+                }
+            })
+        })
+    }
+
+    fn is_core_trait(&self, id: &api::identity::Definition, name: &str) -> bool {
+        id.unit().authority().sysroot().is_some()
+            && id.unit().crate_name() == "core"
+            && self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .is_some_and(|definition| definition.display_path().last() == Some(name))
+    }
+
+    /// `Text` for an output of a crate type that implements `Display`.
+    fn display_output(&self, ty: &model::Type) -> Option<representability::convert::Type> {
+        let model::Type::Definition { id, .. } = ty else {
+            return None;
+        };
+        let index = self.graph.definition_index(id)?;
+        self.implements_for_any(index, "Display").then_some(
+            representability::convert::Type::Builtin(representability::convert::Builtin::Text),
+        )
+    }
+
     fn convert_input(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        // `&str`: Rawr's string, lent to the call.
+        if is_str_reference(ty) {
+            return Ok(representability::convert::Type::Builtin(
+                representability::convert::Builtin::Str,
+            ));
+        }
         let model::Type::FunctionPointer(signature) = ty else {
             return self.convert(ty);
         };
@@ -3401,6 +3677,33 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
         | model::Receiver::Reference { .. }
         | model::Receiver::Explicit { .. } => binders.next().is_none(),
     }
+}
+
+/// `&str` or `&'a str`.
+fn is_str_reference(ty: &model::Type) -> bool {
+    matches!(ty, model::Type::Reference { mutability: model::Mutability::Shared, ty, .. }
+        if matches!(&**ty, model::Type::Primitive(name) if &**name == "str"))
+}
+
+/// A method whose own lifetimes only lend its `&str` inputs, as chrono's
+/// `format<'a>(&self, fmt: &'a str)`: each input that borrows is a `&str`,
+/// and the output does not borrow, or is a `Display` value Rawr keeps as
+/// its text.
+fn late_binders_lend_strings(signature: &model::Signature) -> bool {
+    let receiver_binders = usize::from(matches!(
+        signature.receiver(),
+        model::Receiver::Reference {
+            lifetime: model::Lifetime::Late { .. },
+            ..
+        }
+    ));
+    signature.binders().len() > receiver_binders
+        && signature.inputs().any(is_str_reference)
+        && signature.inputs().all(|input| match input {
+            model::Type::Reference { .. } => is_str_reference(input),
+            _ => true,
+        })
+        && !matches!(signature.output(), model::Type::Reference { .. })
 }
 
 fn exact_definition(ty: &model::Type, id: &api::identity::Definition) -> bool {
@@ -4377,13 +4680,20 @@ mod tests {
         );
         let function_cases = [
             (unsafe_signature, Kind::UnsafeFunction),
+            // A free `async fn` and one that takes `self` by value cross as
+            // a `Task`; one that borrows its receiver holds the borrow
+            // across its awaits and does not.
             (
                 safe(
                     true,
                     false,
                     "\"Rust\"",
                     Box::default(),
-                    model::Receiver::None,
+                    model::Receiver::Reference {
+                        lifetime: model::Lifetime::Static,
+                        mutability: model::Mutability::Shared,
+                        ty: model::Type::Tuple(Box::default()),
+                    },
                 ),
                 Kind::AsyncFunction,
             ),

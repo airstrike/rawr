@@ -842,6 +842,8 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         R::DuplicateItem { .. }
         | R::UnknownType { .. }
         | R::UnknownFunction { .. }
+        | R::UnknownVariable { .. }
+        | R::MovedValue { .. }
         | R::UnknownImport { .. }
         | R::InvalidImport { .. }
         | R::LoweringUnavailable { .. }
@@ -1729,7 +1731,11 @@ fn ty_ok(
         Type::Nominal {
             definition,
             arguments,
-        } => declared.contains(definition) && arguments.iter().all(|ty| ty_ok(ty, declared)),
+        } => {
+            (declared.contains(definition)
+                || rawr_import::surface::identity::Definition::is_projected(definition.as_bytes()))
+                && arguments.iter().all(|ty| ty_ok(ty, declared))
+        }
         Type::FunctionItem { input, output } | Type::Result(input, output) => {
             ty_ok(input, declared) && ty_ok(output, declared)
         }
@@ -1785,7 +1791,7 @@ impl Types {
                 Builtin::F64 => host::type_ref::Builtin::F64,
                 Builtin::I64 => host::type_ref::Builtin::I64,
                 Builtin::InclusiveRange => host::type_ref::Builtin::InclusiveRange,
-                Builtin::String => host::type_ref::Builtin::String,
+                Builtin::String | Builtin::Str | Builtin::Text => host::type_ref::Builtin::String,
                 Builtin::I8 => host::type_ref::Builtin::I8,
                 Builtin::I16 => host::type_ref::Builtin::I16,
                 Builtin::I32 => host::type_ref::Builtin::I32,

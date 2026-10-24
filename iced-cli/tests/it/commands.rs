@@ -78,9 +78,7 @@ fn new_creates_the_exact_marked_crate_in_a_missing_target() {
     );
     assert_eq!(
         fs::read_to_string(target.join("Cargo.toml")).unwrap(),
-        "[package]\nname = \"counter\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
-         [dependencies]\niced = { git = \"https://github.com/iced-rs/iced\", \
-         rev = \"be88873d38544455e26c7a104eb757da2cbbac6b\" }\n"
+        rawr_iced_cli::new::manifest("counter")
     );
     assert!(!target.join("rawr.toml").exists());
     let stdout = String::from_utf8_lossy(&output.stdout);

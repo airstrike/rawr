@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [61, 237, 120, 160, 162, 80, 97, 89, 215, 66, 151, 74, 194, 69, 37, 231]
+        [233, 202, 162, 52, 62, 205, 126, 207, 189, 146, 67, 205, 150, 148, 216, 140]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
@@ -447,12 +447,13 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert!(padding_inputs.contains(&host::type_ref::Type::builtin(host::type_ref::Builtin::I64)));
     assert!(padding_inputs.contains(&host::type_ref::Type::builtin(host::type_ref::Builtin::F64)));
     assert!(padding_inputs.contains(&host::type_ref::Type::registered("iced::Padding").unwrap()));
-    // `slider` over `i64`, and over `f64` as iced's `f32` sliders.
+    // `slider` over `i64`, over `f64` as iced's `f32` sliders, and over
+    // `Degrees` and `Radians`.
     let sliders = second
         .items()
         .filter(|item| item.path() == "iced::widget::slider")
         .collect::<Vec<_>>();
-    assert_eq!(sliders.len(), 2);
+    assert_eq!(sliders.len(), 4);
     for (slider, range, number) in [
         (sliders[0], host::type_ref::Builtin::InclusiveRange, host::type_ref::Builtin::I64),
         (sliders[1], host::type_ref::Builtin::FloatInclusiveRange, host::type_ref::Builtin::F64),
@@ -567,12 +568,11 @@ struct Controls { input: TextInput<Message>, checkbox: Checkbox<Message>, toggle
             if path == "iced::widget::Value"
     ));
 
-    let error = engine.compile("use iced::Application;").unwrap_err();
-    assert!(matches!(
-        error.err_type(),
-        ParseErrorType::Resolution(resolve::Error::UnknownImport { path, .. })
-            if path == "iced::Application"
-    ));
+    // iced's `Application` builder and `Program` trait are nameable, as
+    // iced master exports them.
+    engine
+        .compile("use iced::{Application, Program};")
+        .unwrap_or_else(|error| panic!("{error}"));
 
     for path in [
         "iced::widget::button::Builtin",

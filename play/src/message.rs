@@ -94,6 +94,8 @@ impl Request {
             format.extension().to_owned(),
             "--time-ms".to_owned(),
             options.limits.time.as_millis().to_string(),
+            "--animation-ms".to_owned(),
+            options.limits.animation_budget().as_millis().to_string(),
             "--memory-mb".to_owned(),
             memory_mb.to_string(),
             "-o".to_owned(),
@@ -101,6 +103,9 @@ impl Request {
         ]);
         for message in &options.messages {
             args.extend(["--message".to_owned(), message.clone()]);
+        }
+        if options.still {
+            args.push("--still".to_owned());
         }
         args
     }
@@ -123,8 +128,8 @@ fn code_block(content: &str) -> Option<String> {
 /// What the bot sends back.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Reply {
-    /// Attach this PNG, with a note to send beside it.
-    Image(Vec<u8>, Option<&'static str>),
+    /// Attach this image, with a note to send beside it.
+    Image(Vec<u8>, Option<String>),
     /// Send this text (already fenced and within [`MAX_REPLY`]).
     Text(String),
 }
@@ -133,8 +138,8 @@ pub enum Reply {
 /// plain program's output.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Done {
-    /// The encoded image.
-    Image(Vec<u8>),
+    /// The encoded image, and the note `rawr-play` gave with it.
+    Image(Vec<u8>, Option<String>),
     /// The program's output.
     Text(Output),
 }
@@ -146,10 +151,31 @@ pub enum Done {
 #[must_use]
 pub fn reply(success: bool, stdout: Vec<u8>, stderr: &str) -> Reply {
     match outcome(success, stdout, stderr) {
-        Ok(Done::Image(image)) => Reply::Image(image, None),
+        Ok(Done::Image(image, note)) => Reply::Image(image, note),
         Ok(Done::Text(output)) => Reply::Text(output_text(&output)),
         Err(text) => Reply::Text(error_text(&text)),
     }
+}
+
+/// How `rawr-play` starts a line of stderr that notes something about the
+/// image it wrote.
+pub const NOTE: &str = "note: ";
+
+/// Whether `bytes` are a GIF.
+#[must_use]
+pub fn is_gif(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"GIF8")
+}
+
+/// The note lines of a successful `rawr-play`'s stderr, joined.
+fn note(stderr: &str) -> Option<String> {
+    let notes: Vec<&str> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(NOTE))
+        .map(str::trim)
+        .filter(|note| !note.is_empty())
+        .collect();
+    (!notes.is_empty()).then(|| notes.join("\n"))
 }
 
 /// The result of a finished `rawr-play` process, or its error text
@@ -163,7 +189,7 @@ pub fn outcome(success: bool, stdout: Vec<u8>, stderr: &str) -> Result<Done, Str
         if stdout.len() > MAX_ATTACHMENT {
             return Err("the image is too large to upload; try a smaller size".to_owned());
         }
-        return Ok(Done::Image(stdout));
+        return Ok(Done::Image(stdout, note(stderr)));
     }
     let stderr = stderr.trim();
     if success || stderr.is_empty() || stderr.contains("memory allocation") {
@@ -388,7 +414,8 @@ mod tests {
         let args = request.args(Format::Webp, 512);
         assert_eq!(
             args.join(" "),
-            "- --size 320x200 --theme light --format webp --time-ms 2000 --memory-mb 512 -o - \
+            "- --size 320x200 --theme light --format webp --time-ms 2000 --animation-ms 2000 \
+             --memory-mb 512 -o - \
              --message Message::Increment"
         );
     }
@@ -396,6 +423,12 @@ mod tests {
     #[test]
     fn message_reply_decision() {
         assert_eq!(reply(true, vec![1, 2, 3], ""), Reply::Image(vec![1, 2, 3], None));
+        let noted = reply(true, b"GIF89a".to_vec(), "note: Animation shown for the first 5 s.\n");
+        assert_eq!(
+            noted,
+            Reply::Image(b"GIF89a".to_vec(), Some("Animation shown for the first 5 s.".into()))
+        );
+        assert!(super::is_gif(b"GIF89a") && !super::is_gif(b"\x89PNG"));
         let Reply::Text(text) = reply(false, Vec::new(), "error: ```oops```\n") else {
             panic!("errors reply with text");
         };

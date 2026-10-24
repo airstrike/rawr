@@ -5,6 +5,8 @@ mod debugger;
 mod eval_context;
 mod expr;
 mod global_state;
+#[cfg(not(feature = "no_function"))]
+pub(crate) mod machine;
 mod stmt;
 mod target;
 

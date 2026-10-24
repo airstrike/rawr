@@ -222,16 +222,22 @@ impl Authority {
         let authority = self.clone();
         let operation: crate::ImmutableString = proof.path().into();
         let output = proof.output().clone();
+        // The future runs only the native work. Validation and the mapper
+        // run in `Finish`, which the host calls on the script thread.
         Ok(crate::host::operation::Pending::new(async move {
             let output_value = selected.start(arguments).await;
-            output
-                .validate(&output_value, authority.executable.model(), &runtime)
-                .map_err(|source| crate::host::operation::Error::Output { operation, source })?;
-            let mut arguments = [output_value];
-            let payload = authority
-                .invoke_bound(&mapper, &mut arguments, runtime.clone())
-                .map_err(crate::host::operation::Error::Mapper)?;
-            Ok(payload)
+            Ok(crate::host::operation::Finish::new(move || {
+                output
+                    .validate(&output_value, authority.executable.model(), &runtime)
+                    .map_err(|source| crate::host::operation::Error::Output {
+                        operation,
+                        source,
+                    })?;
+                let mut arguments = [output_value];
+                authority
+                    .invoke_bound(&mapper, &mut arguments, runtime.clone())
+                    .map_err(crate::host::operation::Error::Mapper)
+            }))
         }))
     }
 

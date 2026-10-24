@@ -1662,6 +1662,7 @@ fn terminal_replay_failure(error: &Error) -> bool {
             | crate::Error::Allocation { .. }
             | crate::Error::Limit { .. }
             | crate::Error::Process { .. }
+            | crate::Error::NonSendFuture { .. }
             | crate::Error::InputAccountRefused => true,
             crate::Error::Request { .. }
             | crate::Error::Path { .. }
@@ -1682,12 +1683,21 @@ fn terminal_replay_failure(error: &Error) -> bool {
     }
 }
 
+/// An importer failure as a node reports it. A failure in the user's own
+/// Rust code is said as it is.
+fn importer_message(error: &crate::Error) -> String {
+    match error {
+        crate::Error::NonSendFuture { .. } => error.to_string(),
+        error => format!("node transform could not obtain importer authority: {error}"),
+    }
+}
+
 /// Independent typed-node, replay, or store failure.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("candidate-owned corruption: {0}")]
     CandidateCorrupt(Box<Corruption>),
-    #[error("node transform could not obtain importer authority: {0}")]
+    #[error("{}", importer_message(.0))]
     Importer(#[source] Box<crate::Error>),
     #[error("node store I/O failed while attempting to {operation} at {path}")]
     Io {

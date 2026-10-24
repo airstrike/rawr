@@ -16,8 +16,8 @@ fn boot(source: &str) -> program::Adapter {
 
 const DOTS: &str = r#"
 use iced::mouse;
-use iced::widget::canvas::{self, Action, Cache, Event, Frame, Geometry, LineCap, Path, Stroke};
-use iced::widget::{column, text};
+use iced::widget::canvas::{Action, Cache, Event, Frame, Geometry, LineCap, Path, Stroke};
+use iced::widget::{canvas, column, text};
 use iced::{Color, Element, Fill, Point, Rectangle, Renderer, Theme, Vector};
 
 #[derive(Default)]
@@ -259,6 +259,67 @@ pub fn main() -> iced::Result {
 #[test]
 fn a_program_that_borrows_its_state_draws() {
     let adapter = boot(BORROWED);
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.draw(&iced::Theme::Dark);
+    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+}
+
+/// the_matrix's shape: a Program whose State is a `RefCell` of caches,
+/// filled on the first draw through `borrow_mut`.
+const CELLED: &str = r#"
+use std::cell::RefCell;
+use iced::mouse;
+use iced::widget::canvas;
+use iced::{Color, Fill, Point, Rectangle, Renderer, Theme, Widget};
+
+#[derive(Default)]
+struct Matrix {
+    tick: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+impl<Message> canvas::Program<Message> for Matrix {
+    type State = RefCell<Vec<canvas::Cache>>;
+
+    fn draw(
+        &self,
+        state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut caches = state.borrow_mut();
+        if caches.is_empty() {
+            let group = canvas::Group::unique();
+            caches.resize_with(3, || canvas::Cache::with_group(group));
+        }
+        vec![caches[self.tick % caches.len()].draw(renderer, bounds.size(), |frame| {
+            frame.fill_rectangle(Point::ORIGIN, frame.size(), Color::BLACK);
+        })]
+    }
+}
+
+impl Matrix {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        canvas(self).width(Fill).height(Fill)
+    }
+}
+
+pub fn main() -> iced::Result {
+    iced::application(Matrix::default, Matrix::update, Matrix::view).run()
+}
+"#;
+
+#[test]
+fn a_program_state_in_a_ref_cell_draws() {
+    let adapter = boot(CELLED);
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.draw(&iced::Theme::Dark);
     let mut simulator = iced_test::simulator(adapter.view());
     simulator.draw(&iced::Theme::Dark);
     assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());

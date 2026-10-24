@@ -502,6 +502,58 @@ fn master_duration_and_instant_operators_compute_as_rust() {
     find(&adapter, "true true");
 }
 
+/// std's `PathBuf`, `Path`, `OsStr` and `OsString`, as iced's editor and
+/// todos examples use them.
+const PATHS: &str = r#"
+use std::ffi;
+use std::path::{Path, PathBuf};
+use iced::widget::{column, text};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {}
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let mut path = PathBuf::from("/notes");
+        path.push("todo.md");
+        let file = Some(path.clone());
+        let extension = file
+            .clone()
+            .and_then(|path| path.extension())
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("rs");
+        let parent = path.parent().map(|dir| dir.display().to_string()).unwrap_or_default();
+        let name = ffi::OsString::from("todo.md");
+        let same = path.file_name() == Some(name) && self.file.is_none();
+        column![
+            text(format!("{} {extension} {parent}", path.display())),
+            text(format!("{same} {}", path.to_path_buf().join("x").to_string_lossy())),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn std_path_and_ffi_types_compute_as_rust() {
+    let adapter = boot(PATHS);
+    find(&adapter, "/notes/todo.md md /notes");
+    find(&adapter, "true /notes/todo.md/x");
+}
+
 /// Closure parameters take their types from the library function's other
 /// arguments, as Rust infers them.
 const INFERRED: &str = r#"
@@ -545,6 +597,257 @@ fn master_closure_parameters_take_the_types_of_the_other_arguments() {
     let adapter = boot(INFERRED);
     find(&adapter, "BETA");
     find(&adapter, "version 1");
+}
+
+/// An array of the script's own enum where iced takes `impl Borrow<[T]>`,
+/// as ferris passes its rotation strategies.
+const ARRAY_OPTIONS: &str = r#"
+use iced::widget::{column, pick_list};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    choice: Choice,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Picked(Choice),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Choice {
+    #[default]
+    Floating,
+    Solid,
+}
+
+impl std::fmt::Display for Choice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Choice::Floating => "floating",
+            Choice::Solid => "solid",
+        })
+    }
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Picked(choice) => self.choice = choice,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            pick_list(Some(self.choice), [Choice::Floating, Choice::Solid], Choice::to_string)
+                .on_select(Message::Picked)
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_pick_list_takes_an_array_of_script_values() {
+    let adapter = boot(ARRAY_OPTIONS);
+    find(&adapter, "floating");
+}
+
+/// `slider(Degrees::RANGE, ..)` over the rotation's degrees, as ferris
+/// writes it, and an associated const of the script's own.
+const ANGLE_SLIDER: &str = r#"
+use iced::widget::{column, slider, text};
+use iced::{Degrees, Radians, Rotation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    rotation: Rotation,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    RotationChanged(Degrees),
+    RadiansChanged(Radians),
+}
+
+struct Turn;
+
+impl Turn {
+    const QUARTER: f32 = 90.0;
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::RotationChanged(rotation) => self.rotation = Rotation::Floating(rotation.into()),
+            Message::RadiansChanged(rotation) => self.rotation = Rotation::Solid(rotation),
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            slider(Degrees::RANGE, self.rotation.degrees(), Message::RotationChanged),
+            slider(Radians::RANGE, self.rotation.radians(), Message::RadiansChanged),
+            text(format!("quarter {}", Turn::QUARTER)),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_slider_moves_over_an_angle_range() {
+    let adapter = boot(ANGLE_SLIDER);
+    find(&adapter, "quarter 90");
+}
+
+/// `Checkbox::text_size`, and `T::default()` of iced's `Default` types,
+/// as ferris writes them.
+const CHECKBOX_AND_DEFAULTS: &str = r#"
+use iced::widget::{checkbox, column, text};
+use iced::{Color, ContentFit, Point, Vector, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Toggled(bool),
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let point = Point::default() + Vector::default();
+        column![
+            checkbox(true).label("Spin!").text_size(12).on_toggle(Message::Toggled),
+            text(format!(
+                "{} {:?} {}",
+                ContentFit::default(),
+                Color::default() == Color::TRANSPARENT,
+                point.x,
+            )),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_checkbox_text_size_and_facade_defaults() {
+    let adapter = boot(CHECKBOX_AND_DEFAULTS);
+    find(&adapter, "Spin!");
+    find(&adapter, "Contain true 0");
+}
+
+/// std's `io::Error` and `io::ErrorKind`, as editor and markdown use them.
+const IO_ERRORS: &str = r#"
+use iced::widget::{column, text};
+use iced::Widget;
+use std::io;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+#[derive(Debug, Clone)]
+pub enum Error {
+    DialogClosed,
+    IoError(io::ErrorKind),
+}
+
+fn classify(error: io::Error) -> Error {
+    Error::IoError(error.kind())
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let missing = classify(io::Error::new(io::ErrorKind::NotFound, String::from("gone")));
+        let other = io::Error::other(format!("unsupported uri: {}", "x"));
+        let same = matches!(missing, Error::IoError(io::ErrorKind::NotFound));
+        column![
+            text(format!("{missing:?} {same}")),
+            text(format!("{} {:?} {}", other, other.kind(), io::ErrorKind::TimedOut)),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn std_io_errors_compute_as_rust() {
+    let adapter = boot(IO_ERRORS);
+    find(&adapter, "IoError(NotFound) true");
+    find(&adapter, "unsupported uri: x Other timed out");
+}
+
+/// iced's `Application` builder returned by a function of the crate, as
+/// todos writes it.
+const APPLICATION_BUILDER: &str = r#"
+use iced::widget::{button, column, text};
+use iced::{Application, Program, Theme, Widget};
+
+pub fn main() -> iced::Result {
+    application().run()
+}
+
+fn application() -> Application<impl Program<Message = Message, Theme = Theme>> {
+    iced::application(Counter::default, Counter::update, Counter::view)
+        .title(Counter::title)
+}
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+}
+
+impl Counter {
+    fn title(&self) -> String {
+        format!("Count {}", self.value)
+    }
+
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Increment => self.value += 1,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            text(format!("value {}", self.value + 7)),
+            button("+").on_press(Message::Increment),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_application_builder_from_a_function() {
+    let adapter = boot(APPLICATION_BUILDER);
+    find(&adapter, "value 7");
 }
 
 const RICH: &str = r#"
@@ -1685,6 +1988,151 @@ fn master_rotations_match_and_turn_images() {
     find(&adapter, "true");
 }
 
+/// iced master's layout example sizes a square by `impl Into<Length> + Copy`.
+#[test]
+fn master_impl_into_length_takes_a_number() {
+    let adapter = boot(
+        r#"
+use iced::widget::{column, container, text};
+use iced::{Length, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+fn square(size: impl Into<Length> + Copy) -> impl Widget<Message> {
+    container(text("square")).width(size).height(size)
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        column![square(50), square(40.5), square(Length::Fill)]
+    }
+}
+"#,
+    );
+    find(&adapter, "square");
+}
+
+/// iced master's gallery example fades with an `Animation<bool>`.
+#[test]
+fn master_bool_animations_go_and_interpolate() {
+    let mut adapter = boot(
+        r#"
+use iced::animation;
+use iced::time::{Instant, milliseconds};
+use iced::widget::{button, column, text};
+use iced::{Animation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct State {
+    fade_in: Animation<bool>,
+    now: Instant,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let now = Instant::now();
+        Self {
+            fade_in: Animation::new(false)
+                .easing(animation::Easing::EaseIn)
+                .duration(milliseconds(200)),
+            now,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Show,
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Show => self.fade_in.go_mut(true, self.now),
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let opacity = self.fade_in.interpolate(0.0, 1.0, self.now);
+        column![
+            button(text("Show")).on_press(Message::Show),
+            text(format!(
+                "{} {} {opacity:.1}",
+                self.fade_in.value(),
+                self.fade_in.is_animating(self.now)
+            )),
+        ]
+    }
+}
+"#,
+    );
+    find(&adapter, "false false 0.0");
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.click("Show").unwrap();
+    let show = simulator.into_messages().next().expect("the button emits");
+    adapter.update(show).unwrap();
+    find(&adapter, "true true 0.0");
+}
+
+/// iced master's ferris example turns its rotation through
+/// `*self.rotation.radians_mut() = ..`.
+#[test]
+fn master_rotation_radians_mut_writes_the_place() {
+    let adapter = boot(
+        r#"
+use iced::widget::{column, text};
+use iced::{Degrees, Radians, Rotation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct State {
+    rotation: Rotation,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let mut rotation = Rotation::Solid(Radians(1.0));
+        *rotation.radians_mut() = Radians(2.0);
+        let mut state = Self { rotation };
+        *state.rotation.radians_mut() = (state.rotation.radians() + Radians::PI) % (2.0 * Radians::PI);
+        state
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let solid = match self.rotation {
+            Rotation::Solid(_) => "solid",
+            Rotation::Floating(_) => "floating",
+        };
+        column![text(format!("{solid} {:.1}", f32::from(self.rotation.degrees())))]
+    }
+}
+"#,
+    );
+    find(&adapter, "solid 294.6");
+}
+
 /// iced master's delineate example matches `Some(Point { x, y })`.
 #[test]
 fn master_facade_struct_patterns_bind_their_fields() {
@@ -1864,4 +2312,165 @@ impl State {
 "#,
     );
     find(&adapter, "resizes 0");
+}
+
+/// iced master's gallery and markdown examples start an animation with
+/// `.go(true, now)` at the end of its builders.
+#[test]
+fn master_animation_go_builds_a_started_animation() {
+    let adapter = boot(
+        r#"
+use iced::animation;
+use iced::time::{Instant, milliseconds};
+use iced::widget::text;
+use iced::{Animation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct State {
+    fade_in: Animation<bool>,
+    now: Instant,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let now = Instant::now();
+        Self {
+            fade_in: Animation::new(false)
+                .duration(milliseconds(700))
+                .easing(animation::Easing::EaseIn)
+                .go(true, now),
+            now,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        text(format!("{} {}", self.fade_in.value(), self.fade_in.is_animating(self.now)))
+    }
+}
+"#,
+    );
+    find(&adapter, "true true");
+}
+
+/// A generative piece scales a `Vector` by an `f32` and moves a `Point` by
+/// it, as iced's `Mul<f32>` and `Add<Vector>` allow.
+#[test]
+fn vectors_scale_by_f32_and_move_points() {
+    let adapter = boot(
+        r#"
+use iced::widget::text;
+use iced::{Point, Vector, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let fade: f32 = 0.25 + 0.25;
+        let moved = Vector::new(1.5, 2.0) * 2.0 * fade * 2.0;
+        let at = Point::new(1.0, 1.0) + moved - Vector::new(1.0, 0.0);
+        let back = at - Point::ORIGIN;
+        text(format!("{} {} {}", moved.x, moved.y, back.y))
+    }
+}
+"#,
+    );
+    find(&adapter, "3 4 5");
+}
+
+/// A generative piece fades a `color!` by an alpha it computes, as iced's
+/// macro takes any `f32` there.
+#[test]
+fn color_takes_a_runtime_alpha() {
+    let adapter = boot(
+        r#"
+use iced::widget::text;
+use iced::{color, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let fade: f32 = 0.25 + 0.25;
+        let tint = color!(0xffc8a8, fade);
+        let rgba = color!(255, 200, 168, fade * 0.5);
+        text(format!("{} {} {}", tint.a, rgba.a, tint.r))
+    }
+}
+"#,
+    );
+    find(&adapter, "0.5 0.25 1");
+}
+
+/// `use iced::widget::canvas::{self, ..}` imports the module only, so
+/// `canvas(..)` is not the function there, as rustc says.
+#[test]
+fn a_module_import_does_not_bring_its_function() {
+    let error = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check_source(
+            r#"
+use iced::widget::canvas::{self, Frame, Geometry};
+use iced::{mouse, Rectangle, Renderer, Theme, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        canvas(self)
+    }
+}
+
+impl canvas::Program<Message> for State {
+    type State = ();
+
+    fn draw(&self, _: &(), r: &Renderer, _: &Theme, b: Rectangle, _: mouse::Cursor) -> Vec<Geometry> {
+        vec![Frame::new(r, b.size()).into_geometry()]
+    }
+}
+"#,
+        )
+        .err()
+        .expect("rustc rejects calling a module")
+        .to_string();
+    assert!(error.contains("canvas"), "{error}");
 }

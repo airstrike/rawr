@@ -2,12 +2,14 @@
 
 mod adapter;
 mod angle;
+mod animation;
 pub(crate) mod builtin;
 #[cfg(feature = "canvas")]
 mod canvas;
 pub mod children;
 mod column;
 mod component;
+pub(crate) mod custom;
 pub(crate) mod diagnostic;
 pub mod draw;
 pub mod event;
@@ -50,6 +52,7 @@ pub(crate) fn bind(
         canvas::bind(iced);
     }
     component::bind(iced);
+    custom::bind(iced);
     protocol::bind(iced, rawr);
     script::bind(iced);
 }
@@ -65,6 +68,7 @@ pub(crate) fn bind_profile(
         canvas::bind(iced);
     }
     component::bind(iced);
+    custom::bind(iced);
     protocol::bind_profile(iced, rawr);
     script::bind(iced);
 }
@@ -545,6 +549,36 @@ impl MappingAuthority {
             Self::Application { authority, .. } => authority.bind_widget(descriptor),
             Self::Preview { catalog, key, .. } => catalog.bind_widget(key, descriptor),
         }
+    }
+}
+
+/// The view shown when the app's view failed: what failed, and why, so a
+/// headless render (?play, a snapshot) says it without the window's
+/// diagnostic panel.
+pub(crate) fn unavailable(reason: impl Into<String>) -> Value {
+    Value::new(Unavailable {
+        identity: Identity::unique(),
+        reason: reason.into(),
+    })
+}
+
+struct Unavailable {
+    identity: Identity,
+    reason: String,
+}
+
+impl Descriptor for Unavailable {
+    fn lower(&self, _context: &Context<'_>) -> iced::Element<'static, runtime::Message> {
+        iced::widget::column![
+            iced::widget::text("Rawr view unavailable"),
+            iced::widget::text(self.reason.clone()).size(14),
+        ]
+        .spacing(8)
+        .boxed()
+    }
+
+    fn identity(&self) -> Identity {
+        self.identity.clone()
     }
 }
 

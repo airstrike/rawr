@@ -798,3 +798,48 @@ fn symbolic_lowering_records_the_facade_of_every_called_item() {
     let ordinary = engine.compile_executable(source).unwrap();
     assert_eq!(symbolic.dependencies.as_ref(), ordinary.host_dependencies());
 }
+
+#[test]
+fn cloning_an_imported_value_leaves_it_available() {
+    let identity = host::type_def::import::Identity::new([0x51; 32]);
+    let mut builder = facade::Builder::new("native", facade::Abi::new(1).unwrap()).unwrap();
+    builder
+        .imported_type(
+            "Connection",
+            identity,
+            false,
+            false,
+            false,
+            true,
+            Box::default(),
+            Shared::new(host::type_def::Shape::Opaque),
+            &mut host::TestImportAllocation::default(),
+        )
+        .unwrap();
+    let mut connect = signature::Builder::new();
+    connect.output(type_ref::Type::imported(identity, []));
+    builder
+        .item(
+            item::Definition::function("connect", connect.finish())
+                .unwrap()
+                .imported(selector(1)),
+        )
+        .unwrap();
+    let mut engine = Engine::new();
+    engine
+        .register_host_facade(builder.finish().unwrap())
+        .unwrap();
+    engine
+        .compile_executable(
+            "use native::{connect, Connection};
+             pub fn run() -> Connection { let c = connect(); let probe = c.clone(); let kept = probe; c }",
+        )
+        .unwrap();
+    let error = engine
+        .compile_executable(
+            "use native::{connect, Connection};
+             pub fn run() -> Connection { let c = connect(); let moved = c; c }",
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("already moved"), "{error}");
+}

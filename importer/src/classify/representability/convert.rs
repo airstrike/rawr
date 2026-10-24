@@ -20,6 +20,11 @@ pub enum Builtin {
     U64,
     Usize,
     F32,
+    /// A `&str` input: Rawr's string, lent to the Rust call.
+    Str,
+    /// An output Rawr cannot hold whose type implements `Display`, as
+    /// chrono's `DelayedFormat<StrftimeItems<'a>>`: its text, a `String`.
+    Text,
 }
 
 impl Builtin {
@@ -64,7 +69,7 @@ impl Builtin {
             Self::U32 => "u32",
             Self::U64 => "u64",
             Self::Usize => "usize",
-            Self::InclusiveRange | Self::String => return None,
+            Self::InclusiveRange | Self::String | Self::Str | Self::Text => return None,
         })
     }
 

@@ -401,6 +401,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "color_quant"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1104,6 +1110,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gif"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
+dependencies = [
+ "color_quant",
+ "weezl",
+]
+
+[[package]]
 name = "gl_generator"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1482,6 +1498,7 @@ dependencies = [
  "iced_core",
  "iced_futures",
  "iced_selector",
+ "sipper",
  "thiserror 2.0.19",
 ]
 
@@ -3045,6 +3062,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.19",
+ "tokio",
  "unicode-script",
 ]
 
@@ -3139,6 +3157,8 @@ name = "rawr-play"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "color_quant",
+ "gif",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -3711,6 +3731,16 @@ name = "siphasher"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
+
+[[package]]
+name = "sipper"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd9862a04ccfd6a22a4a2da230e9c273f9349ae4d1ffa0392f59d6f8a93777f5"
+dependencies = [
+ "futures",
+ "pin-project-lite",
+]
 
 [[package]]
 name = "skrifa"

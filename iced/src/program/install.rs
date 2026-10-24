@@ -15,7 +15,12 @@ pub struct Outcome {
     evidence: Box<[compatibility::Evidence]>,
     task: iced::Task<runtime::Message>,
     inputs: rawr::reload::scheduler::publication::Retired,
+    /// The replaced owner had a running task, which the reload cancelled.
+    cancelled: bool,
 }
+
+/// What the window notes when a reload cancelled a running task.
+pub(crate) const CANCELLED_NOTE: &str = "The reload cancelled a running task.";
 
 /// An application replacement could not transactionally become current.
 #[derive(Debug)]
@@ -162,18 +167,30 @@ impl Host {
                             adapter.activate_prepared(&context, &authority)
                         })
                 };
+                let retired = retired.release();
+                let cancelled = retired.has_running_tasks();
                 match timing {
                     Some(timing) => {
                         timing.observe_unwind(rawr::timing::Phase::EffectRetirement, || {
-                            drop(retired.release())
+                            drop(retired)
                         });
                     }
-                    None => drop(retired.release()),
+                    None => drop(retired),
+                }
+                // The view was read before the cancelled task's handles
+                // reported it aborted: read it again.
+                if cancelled {
+                    let mut mutation = self.slot.mutation();
+                    let (adapter, context) = mutation.parts();
+                    if let Some(authority) = adapter.authority(&context) {
+                        adapter.settle_authority_observed(&authority, None);
+                    }
                 }
                 Ok(rawr::reload::scheduler::Admission::Current(Outcome {
                     evidence,
                     task,
                     inputs,
+                    cancelled,
                 }))
             }
             rawr::reload::scheduler::Admission::Current(Err(rejected)) => {
@@ -257,6 +274,22 @@ impl Outcome {
     #[must_use = "compatibility evidence explains the committed replacement"]
     pub const fn evidence(&self) -> &[compatibility::Evidence] {
         &self.evidence
+    }
+
+    /// The reload cancelled a task the replaced owner was running.
+    #[must_use]
+    pub const fn cancelled(&self) -> bool {
+        self.cancelled
+    }
+
+    /// The window's note for this reload: an edit to `main`'s statements
+    /// before the entry (`prelude`), and a cancelled task.
+    pub(crate) fn note(&self, prelude: Option<String>) -> Option<String> {
+        let cancelled = self.cancelled.then(|| CANCELLED_NOTE.to_owned());
+        match (prelude, cancelled) {
+            (Some(prelude), Some(cancelled)) => Some(format!("{prelude} {cancelled}")),
+            (prelude, cancelled) => prelude.or(cancelled),
+        }
     }
 
     /// Consume the committed replacement into startup work for iced.

@@ -448,6 +448,29 @@ pub struct UseMember {
 }
 
 impl Use {
+    /// Whether the import starts with `::`, which names an outside crate.
+    #[must_use]
+    pub fn global(&self) -> bool {
+        match &self.tree {
+            UseTree::Path(path, _)
+            | UseTree::Group { prefix: path, .. }
+            | UseTree::Glob { prefix: path, .. } => path.global,
+        }
+    }
+
+    /// Whether `name` is bound by `self` in a group, `use a::m::{self}`,
+    /// which imports only the module `m`, not a function of its name.
+    #[must_use]
+    pub fn binds_module_only(&self, name: &Name) -> bool {
+        let UseTree::Group { members, .. } = &self.tree else {
+            return false;
+        };
+        members.iter().any(|member| {
+            member.name.text == "self"
+                && member.alias.as_ref().unwrap_or(&member.name).span == name.span
+        })
+    }
+
     /// Each local name this import binds, with the full path it names.
     #[must_use]
     pub fn bindings(&self) -> Vec<(Name, Box<[ImmutableString]>)> {
@@ -644,6 +667,9 @@ pub struct Function {
     /// `const NAME: T = value;`, lowered as a zero-argument function whose
     /// body span covers `value`; uses evaluate it, as Rust inlines it.
     pub(crate) constant: bool,
+    /// `async fn`: the declared output is the future's, and the body runs
+    /// as an `async move` block.
+    pub(crate) asynchronous: bool,
     /// Complete item span.
     pub span: Span,
 }

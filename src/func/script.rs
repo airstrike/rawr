@@ -118,15 +118,20 @@ impl Engine {
         }
 
         // Evaluate the function
-        let mut _result: RawrResult = self
-            .eval_stmt_block(
+        let evaluated = match &fn_def.machine {
+            Some(machine) => {
+                self.run_machine(global, caches, scope, this_ptr, machine, orig_scope_len)
+            }
+            None => self.eval_stmt_block(
                 global,
                 caches,
                 scope,
                 this_ptr,
                 fn_def.body.statements(),
                 rewind_scope,
-            )
+            ),
+        };
+        let mut _result: RawrResult = evaluated
             .or_else(|err| match *err {
                 // Convert return statement to return value
                 ERR::Return(x, ..) => Ok(x),

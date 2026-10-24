@@ -214,6 +214,24 @@ fn rust_module_privacy_paths_and_constants() {
 }
 
 #[test]
+fn crate_paths_reach_root_imports_from_inline_modules() {
+    let project = Project::new("crate-root-import");
+    project.write(
+        "src/main.rs",
+        "mod preset;\nuse preset::Preset;\nconst BASE: i64 = 2;\nmod grid {\n    use crate::Preset;\n    use crate::BASE;\n    pub fn size(preset: Preset) -> i64 { preset.cells + BASE + inner::extra() }\n    mod inner {\n        use crate::Preset;\n        use super::super::BASE;\n        pub fn extra() -> i64 { let p = Preset { cells: 10 }; p.cells * BASE }\n    }\n}\npub fn answer() -> i64 { grid::size(Preset { cells: 3 }) }\n",
+    );
+    project.write("src/preset.rs", "pub struct Preset { pub cells: i64 }\n");
+    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let engine = Shared::new(Engine::new());
+
+    let executable = engine.compile_package_executable(&target).unwrap_or_else(|error| panic!("{error}"));
+    let authority = engine.authorize(executable).unwrap();
+    let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
+
+    assert_eq!(authority.invoke(&answer, &mut []).unwrap().as_int().unwrap(), 3 + 2 + 20);
+}
+
+#[test]
 fn aggregate_compile_rejects_non_entry_statements_at_their_source() {
     let project = Project::new("module-statements");
     project.write("src/main.rs", "mod controls;\n");

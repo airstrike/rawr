@@ -535,6 +535,18 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
             )?)?;
         }
     }
+    // iced's `Float::style(impl Fn(&Theme) -> Style)`: a Rawr function.
+    builder.item(item::Definition::method(
+        "widget::Float::style",
+        receiver::Mode::Owned,
+        crate::builder_signature(
+            "widget::Float",
+            type_ref::Type::callable(
+                type_ref::Type::registered("Theme")?,
+                type_ref::Type::registered("widget::float::Style")?,
+            ),
+        )?,
+    )?)?;
     // iced's svg has no pinned style function: only a Rawr one.
     if crate::features::on(crate::features::Feature::Svg) {
         builder.item(item::Definition::method(
@@ -597,6 +609,41 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder) {
     #[cfg(feature = "svg")]
     if crate::features::on(crate::features::Feature::Svg) {
         bind_style::<crate::marker::Svg, _, _>(iced, "Svg", |svg, style| svg.style = Some(style));
+    }
+    iced.bind("iced::widget::Float::style", |args| {
+        let [float, style] = args else {
+            return Err(arity("Float::style", 2, args.len()));
+        };
+        let mut float = take::<crate::marker::Float>(float, "iced::widget::Float")?;
+        float.style = Some(take(style, "style function")?);
+        Ok(Dynamic::from(float))
+    })
+    .expect("the iced facade must retain Float::style");
+}
+
+/// iced's style function of the theme alone, as a float's: a Rawr function
+/// evaluated once per theme. `Ok(None)` without an authority.
+pub(crate) fn theme_style<T: Clone + Send + Sync + 'static>(
+    function: &rawr::item::Value,
+    context: &widget::Context<'_>,
+    widget: &str,
+) -> Result<Option<Arc<T>>, iced::Element<'static, runtime::Message>> {
+    let style = cached::<T>(context, function).map(Ok).or_else(|| {
+        let theme = Dynamic::from(context.theme().clone());
+        context.invoke(function, &mut [theme]).map(|style| {
+            style.and_then(|mut style| {
+                take::<T>(&mut style, widget)
+                    .map(|style| remember(context, function, style))
+                    .map_err(|error| error.to_string())
+            })
+        })
+    });
+    match style {
+        Some(Ok(style)) => Ok(Some(style)),
+        Some(Err(error)) => {
+            Err(widget::diagnostic(format!("{widget} style failed: {error}")).lower(context))
+        }
+        None => Ok(None),
     }
 }
 
@@ -710,6 +757,7 @@ const DEFAULTS: &[&str] = &[
     "widget::toggler::Style",
     "widget::svg::Style",
     "widget::progress_bar::Style",
+    "widget::float::Style",
 ];
 
 fn bind_defaults(iced: &mut host::runtime::Builder) {
@@ -728,6 +776,11 @@ fn bind_defaults(iced: &mut host::runtime::Builder) {
     }
     default(iced, "iced::Shadow::default", Shadow::default);
     default(iced, "iced::widget::svg::Style::default", svg::Style::default);
+    default(
+        iced,
+        "iced::widget::float::Style::default",
+        iced::widget::float::Style::default,
+    );
     default(
         iced,
         "iced::widget::button::Style::default",
@@ -1047,6 +1100,10 @@ fields! {
         bottom_left: f32,
     }
     "widget::svg::Style" => svg::Style { color: Option<Color> }
+    "widget::float::Style" => iced::widget::float::Style {
+        shadow: Shadow,
+        shadow_border_radius: iced::border::Radius,
+    }
     "widget::container::Style" => container::Style {
         background: Option<Background>,
         text_color: Option<Color>,
@@ -1151,6 +1208,11 @@ fn declare_types(builder: &mut facade::Builder) -> Result<(), host::Error> {
     builder.type_::<text_input::Style>("widget::text_input::Style", &[], owned)?;
     builder.type_::<toggler::Style>("widget::toggler::Style", &[], owned)?;
     builder.type_::<progress_bar::Style>("widget::progress_bar::Style", &[], owned)?;
+    builder.type_::<iced::widget::float::Style>(
+        "widget::float::Style",
+        &[],
+        crate::OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
     builder.type_::<svg::Style>(
         "widget::svg::Style",
         &[],

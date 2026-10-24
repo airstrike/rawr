@@ -1484,6 +1484,14 @@ impl Preview {
         if message.instance() != self.instance || message.generation() != catalog.generation() {
             return (task::Plan::none(), false);
         }
+        // Script work a native task left for the UI thread runs here, after
+        // the freshness check. A stale request was dropped above.
+        if let Some(resume) = message.resumption() {
+            return match resume.run() {
+                Some(message) => self.update_state(catalog, message),
+                None => (task::Plan::none(), false),
+            };
+        }
         if let Some(error) = message.mapping_error() {
             self.record(
                 diagnostic::Stage::Update,
@@ -4123,6 +4131,9 @@ fn filter(label: &'static str, kind: Filter, current: Filter) -> Element<'static
             let mut messages = Vec::new();
             while let Some(action) = stream.next().await {
                 match action {
+                    iced_test::runtime::Action::Output(Message::Script(message)) => {
+                        messages.extend(crate::dispatch::inline(message).map(Message::Script));
+                    }
                     iced_test::runtime::Action::Output(message) => messages.push(message),
                     action => panic!("expected message output, found {action:?}"),
                 }

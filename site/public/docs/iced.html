@@ -70,6 +70,7 @@
   <li><code>.centered()</code>.</li>
 </ul>
 <p>Window and renderer settings such as <code>.window_size(..)</code>, <code>.font(..)</code> and <code>.style(..)</code> are accepted. rawr-iced doesn&rsquo;t apply them yet.</p>
+<p>The builder may come from a function of your own, as iced&rsquo;s todos example writes it. <code>fn application() -&gt; Application&lt;impl Program&lt;Message = Message, Theme = Theme&gt;&gt;</code> returns the chain, and <code>main</code> ends with <code>application().run()</code>. Rawr reads the chain as if <code>main</code> held it. <code>main</code> must be the function&rsquo;s only caller. <code>use iced::{Application, Program};</code> imports the two names.</p>
 <p><code>update</code> can return nothing or a <code>Task&lt;Message&gt;</code>. This app uses the builder, a <code>Task</code>, a text input and a list built at run time:</p>
 <div class="block">
   <div class="file"><b>src/main.rs</b></div>
@@ -228,8 +229,112 @@ fn main() -&gt; iced::Result {
 }</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-sun" data-out="out-sun" data-alt="A yellow sun with twelve pink rays, drawn by rawr-iced on the server" aria-label="Run sun.rs" hidden></button><b>rawr run sun.rs</b><span class="quiet" id="out-sun" aria-live="polite">(opens a window)</span></div>
 </div>
+<h3 id="custom-widgets">Widgets of your own</h3>
+<p>A type can implement iced&rsquo;s <code>advanced::Widget</code> trait, as iced&rsquo;s <code>custom_widget</code>, <code>custom_quad</code>, <code>geometry</code> and <code>loupe</code> examples do. A value of that type goes in a view like any other widget. The trait is iced master&rsquo;s, so <code>layout</code> sets <code>tree.size</code> and returns nothing.</p>
+<ul>
+  <li><code>size</code>, <code>layout</code> and <code>draw</code> are required. <code>update</code>, <code>mouse_interaction</code>, <code>tag</code>, <code>state</code>, <code>diff</code>, <code>operate</code> and <code>overlay</code> are optional. A method the impl leaves out runs iced&rsquo;s own default, without calling your code.</li>
+  <li><code>draw</code> fills quads with <code>renderer.fill_quad</code>. It draws meshes with <code>draw_mesh</code>. <code>renderer::Quad</code> takes its <code>bounds</code>, <code>border</code>, <code>shadow</code> and <code>snap</code>. <code>with_translation</code> and <code>with_transformation</code> run their closure where they are written, as in iced.</li>
+  <li><code>update</code> receives iced&rsquo;s events. Its <code>Shell</code> publishes a message, requests a redraw or captures the event.</li>
+  <li>A widget can wrap an <code>Element</code>, as loupe does. It forwards <code>size</code>, <code>layout</code>, <code>draw</code>, <code>update</code>, <code>operate</code>, <code>overlay</code> and the rest to it. iced shows the first overlay its <code>overlay</code> returns. The wrapped widget draws in its place among the widget&rsquo;s own drawing, inside the transformation and clipping around it.</li>
+  <li>A widget keeps a State of its own with <code>tree::Tag::of::&lt;State&gt;()</code> and <code>tree::State::new(value)</code>. <code>tree.state.downcast_ref::&lt;State&gt;()</code> reads it. <code>let state = tree.state.downcast_mut::&lt;State&gt;();</code> changes it. A reload keeps the State while its type and its fields stay the same. A change to them starts it again from <code>state</code>.</li>
+  <li><code>Size&lt;Length&gt;</code>, <code>layout::Limits</code>, <code>Layout</code>, <code>Transformation</code>, <code>Rectangle::expand</code>, <code>graphics::color::pack</code> and <code>iced::Never</code> work as in iced. <code>iced::run((), view)</code> runs a view whose Message is <code>Never</code>.</li>
+</ul>
+<p>A widget&rsquo;s drawing is kept while its <code>draw</code> runs and shown when <code>draw</code> returns. A call that fails shows its error in the widget&rsquo;s bounds. Its drawing and its Shell requests are dropped.</p>
+<p>A panic in a wrapped <code>Element</code>&rsquo;s own code is an error of the call that reached it. ?play and snapshots draw with tiny-skia, which does not draw meshes. A mesh shows in a window.</p>
+<div class="block">
+  <div class="file"><b>circle.rs</b></div>
+  <pre><code data-lang="rust" data-run="widget.rs" id="src-widget">use iced::advanced::layout::{self, Layout};
+use iced::advanced::renderer;
+use iced::advanced::widget::{self, Widget};
+use iced::widget::{center, column, slider, text};
+use iced::{border, mouse, Center, Color, Length, Rectangle, Size};
+
+struct Circle {
+    radius: f32,
+}
+
+impl widget::Meta for Circle {}
+
+impl&lt;Message, Theme, Renderer&gt; Widget&lt;Message, Theme, Renderer&gt; for Circle
+where
+    Renderer: renderer::Renderer,
+{
+    fn size(&amp;self) -&gt; Size&lt;Length&gt; {
+        Size {
+            width: Length::Shrink,
+            height: Length::Shrink,
+        }
+    }
+
+    fn layout(&amp;mut self, tree: &amp;mut widget::Tree, _renderer: &amp;Renderer, _limits: &amp;layout::Limits) {
+        tree.size = Size::new(self.radius * 2.0, self.radius * 2.0);
+    }
+
+    fn draw(
+        &amp;self,
+        _tree: &amp;widget::Tree,
+        renderer: &amp;mut Renderer,
+        _theme: &amp;Theme,
+        _style: &amp;renderer::Style,
+        layout: Layout,
+        _cursor: mouse::Cursor,
+        _viewport: &amp;Rectangle,
+    ) {
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: layout.bounds(),
+                border: border::rounded(self.radius),
+                ..renderer::Quad::default()
+            },
+            Color::from_rgb8(0xff, 0x2e, 0x93),
+        );
+    }
+}
+
+struct App {
+    radius: f32,
+}
+
+impl Default for App {
+    fn default() -&gt; Self {
+        App { radius: 50.0 }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Radius(f32),
+}
+
+impl App {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Radius(radius) =&gt; self.radius = radius,
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl iced::Widget&lt;Message&gt; {
+        let radius = self.radius;
+        center(
+            column![
+                Circle { radius },
+                text!("Radius: {radius:.0}"),
+                slider(10.0..=100.0, radius, Message::Radius),
+            ]
+            .spacing(20)
+            .width(300)
+            .align_x(Center),
+        )
+    }
+}
+
+fn main() -&gt; iced::Result {
+    iced::run(App::update, App::view)
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-widget" data-out="out-widget" data-alt="A pink circle of radius 50 above its radius and a slider, drawn by a widget written in Rawr" aria-label="Run widget.rs" hidden></button><b>rawr run widget.rs</b><span class="quiet" id="out-widget" aria-live="polite">(opens a window)</span></div>
+</div>
 <h3 id="subscriptions">Subscriptions</h3>
-<p>A <code>.subscription(..)</code> method returns a <code>Subscription&lt;Message&gt;</code>. <code>iced::time::every</code>, <code>iced::keyboard::listen</code>, <code>iced::event::listen</code> and <code>iced::window::frames</code> work. Subscriptions combine with <code>map</code> and <code>filter_map</code>.</p>
+<p>A <code>.subscription(..)</code> method returns a <code>Subscription&lt;Message&gt;</code>. <code>iced::time::every</code>, <code>iced::keyboard::listen</code>, <code>iced::event::listen</code> and <code>iced::window::frames</code> work. Subscriptions combine with <code>map</code> and <code>filter_map</code>. <code>Subscription::run(builder)</code> takes a Rust function that returns a sipper, as <a href="#async">Async code</a> describes.</p>
 <div class="block">
   <pre><code data-lang="rust">use iced::Subscription;
 use iced::time::{self, Duration};
@@ -333,8 +438,54 @@ impl App {
 <p>Rawr uses the dependencies as cargo resolves them. Workspace inheritance works. A path dependency is built natively, even if its files start with <code>// rawr</code>. Only the crate you run is interpreted.</p>
 <p>A module of your crate whose first line is not <code>// rawr</code> is native Rust too. <code>rawr run</code> builds it with cargo and rebuilds it when you save it. Native code must not use code from marked files. Rawr reports an error if it does.</p>
 <p>Rawr reads only the items your code uses. A custom iced widget written in Rust is imported like any other item. The crates compile with the pinned nightly on the first run, so that run takes longer.</p>
-<p>A Rawr struct can hold a value of an imported type. It can <code>#[derive(Default)]</code> when the crate implements <code>Default</code> for that type. The field then takes the crate&rsquo;s <code>default()</code>, as in Rust. It can also derive <code>Debug</code>, <code>Clone</code> and <code>Copy</code> when the crate implements them for that type. <code>{:?}</code> of an imported value prints the crate&rsquo;s <code>Debug</code> text. A Message can hold an imported value, and a <code>match</code> can bind it.</p>
+<p>A Rawr struct can hold a value of an imported type. It can <code>#[derive(Default)]</code> when the crate implements <code>Default</code> for that type. The field then takes the crate&rsquo;s <code>default()</code>, as in Rust. It can also derive <code>Debug</code>, <code>Clone</code> and <code>Copy</code> when the crate implements them for that type. <code>{:?}</code> of an imported value prints the crate&rsquo;s <code>Debug</code> text. <code>to_string()</code> and <code>{}</code> of an imported value print its <code>Display</code> text. A Message can hold an imported value, and a <code>match</code> can bind it.</p>
+<p>A Rust method that takes a <code>&amp;str</code> takes a Rawr string. A method whose result Rawr cannot hold returns that result&rsquo;s <code>Display</code> text instead, when its type has one. So chrono&rsquo;s <code>now.format(&quot;%H:%M:%S&quot;)</code> is a <code>String</code>.</p>
+<p>A field of an imported type that is <code>Copy</code> reads as a copy, as in Rust. <code>.clone()</code> of an imported value leaves the original usable, as in Rust.</p>
+<p>A <code>match</code> or <code>if let</code> can match a variant of an imported enum, as in <code>echo::Event::Connected(connection) =&gt; ..</code>. The pattern takes the variant&rsquo;s fields as clones. A path through a native module, such as <code>download::Progress</code> in a field, names the type even beside a function called <code>download</code>.</p>
 <p>An edit to your Rawr code applies to a running app whose State holds a value of an imported type. The value keeps its state across the edit. An edit to the dependency&rsquo;s Rust code starts a new app, and its State starts again from its default. The window then names the imported type that did not carry over.</p>
+
+<h2 id="async">Async code</h2>
+<p>An app runs futures as iced tasks. A Rust function that returns a future gives a <code>Task</code>. That covers an <code>async fn</code> in a Rust crate and <code>tokio::time::sleep</code>. A Rust method that takes <code>self</code> by value and returns a future gives one too, as reqwest&rsquo;s <code>Response::text</code> does. A Rust function that returns an iced <code>Task</code>, such as <code>system::information()</code>, gives that task.</p>
+<div class="block">
+  <pre><code data-lang="rust">// rawr
+mod fetch; // native Rust: pub async fn size(url: String) -&gt; usize
+
+fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
+    match message {
+        Message::Load =&gt; Task::perform(fetch::size(self.url.clone()), Message::Loaded),
+        Message::Loaded(size) =&gt; {
+            self.size = Some(size);
+            Task::none()
+        }
+    }
+}</code></pre>
+</div>
+<p><code>Task::perform</code>, <code>Task::future</code>, <code>Task::sip</code>, <code>Task::abortable</code> with <code>task::Handle</code> and <code>Subscription::run</code> work. <code>Task::sip</code> and <code>Subscription::run</code> take a Rust sipper. The Rawr code that maps a task&rsquo;s values runs on the UI thread.</p>
+<p>A variant passed as a function keeps its payload&rsquo;s type. So <code>.map(Message::Number)</code> maps a <code>Task&lt;u32&gt;</code> when <code>Number</code> holds a <code>u32</code>. <code>Task::&lt;Message&gt;::none()</code> names the task&rsquo;s message type with a turbofish, as in Rust.</p>
+<p>A task&rsquo;s future runs on iced&rsquo;s thread pool, so it must be <code>Send</code>, as iced requires. <code>rawr check</code> names the Rust function whose future is not.</p>
+<p>A reload cancels the tasks the app is running. Their handles report <code>is_aborted()</code>, and the status line says that a running task was cancelled. The State keeps what it held, so a download the reload cancelled still shows as running until a message changes it.</p>
+<h3 id="async-rawr">Async Rawr code</h3>
+<p>Rawr code can be async too. <code>async fn</code>, <code>async</code> blocks, <code>async move</code> blocks and async closures work. <code>.await</code> takes a future&rsquo;s output inside them. An <code>async fn</code> returns <code>impl Future&lt;Output = T&gt;</code> of its declared output, as in Rust. Rawr runs such a future as iced&rsquo;s <code>Task&lt;T&gt;</code>, so <code>Task::perform</code> takes it.</p>
+<div class="block">
+  <pre><code data-lang="rust">use iced::task::sipper;
+use std::time::Duration;
+
+fn start() -&gt; (Download, Task&lt;Message&gt;) {
+    let download = sipper(async |mut progress| {
+        for step in 0..=10 {
+            progress.send(step as f32 * 10.0).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+    (Download::default(), Task::sip(download, Message::Progress, |_| Message::Done))
+}</code></pre>
+</div>
+<p><code>iced::task::sipper</code> takes an async closure. The closure sends its progress with <code>progress.send(value).await</code>. <code>Task::sip</code> maps each value it sends, and then its output.</p>
+<p>An async body runs on the UI thread, one step at a time. It stops at each <code>.await</code> and goes on from there once the future ends. Its locals keep their values in between, and no work it did runs again. <code>.await</code> works in a loop, a branch, a <code>match</code> arm and a call&rsquo;s arguments. <code>?</code> returns from the async body, as in Rust.</p>
+<p><code>futures::future::join</code> and <code>try_join</code> run two futures at once, through iced&rsquo;s <code>iced::futures</code>. <code>try_join</code> ends at the first <code>Err</code>.</p>
+<p>A program that does not depend on tokio still has tokio&rsquo;s timers, channels, <code>Mutex</code> and <code>join!</code>, <code>try_join!</code> and <code>select!</code>. Rawr runs its own tokio for them. In <code>?play</code> its timers follow the recording&rsquo;s clock, so the GIF shows each step. <a href="/docs/play#tokio">?play&rsquo;s tokio</a> lists what it has. A program that depends on tokio uses the real crate instead.</p>
+<p>A reload that changes an async body cancels the task that runs it. A suspended body never goes on with the new code.</p>
+<p><code>tokio::task::spawn_blocking</code> with a Rawr closure does not work yet. A Rust async method that borrows its receiver does not cross either.</p>
 
 <h2 id="diagnostics">Diagnostics</h2>
 <p><code>rawr check</code> checks an app without opening a window. Errors look like rustc&rsquo;s. Delete the <code>Decrement</code> arm from the counter and it reports the missing arm:</p>
@@ -354,27 +505,29 @@ impl App {
 <p>Most of iced&rsquo;s everyday widgets and modules work. A missing one fails the check with <code>unknown import</code>.</p>
 <h3 id="available-widgets">Available</h3>
 <ul>
-  <li>Layout: <code>column!</code>, <code>row!</code>, <code>Column</code>, <code>Row</code>, <code>container</code>, <code>center</code>, <code>stack</code>, <code>space</code>, <code>scrollable</code>, <code>responsive</code>, <code>pin</code> and <code>lazy</code>.</li>
-  <li>Controls: <code>button</code>, <code>checkbox</code>, <code>toggler</code>, <code>radio</code>, <code>slider</code>, <code>vertical_slider</code>, <code>pick_list</code>, <code>combo_box</code>, <code>text_input</code> and <code>progress_bar</code>.</li>
+  <li>Layout: <code>column!</code>, <code>row!</code>, <code>Column</code>, <code>Row</code>, <code>container</code>, <code>center</code>, <code>stack</code>, <code>space</code>, <code>scrollable</code>, <code>responsive</code>, <code>pin</code> and <code>lazy</code>. <code>keyed_column</code> takes pairs of a key and an element and returns a <code>Column</code>. A key may be a number, a string or another value such as a <code>Uuid</code>. A child keeps its state when it moves to another place in the list.</li>
+  <li>Controls: <code>button</code>, <code>checkbox</code>, <code>toggler</code>, <code>radio</code>, <code>slider</code>, <code>vertical_slider</code>, <code>pick_list</code>, <code>combo_box</code>, <code>text_input</code> and <code>progress_bar</code>. <code>pick_list</code> takes its options as a <code>Vec</code>, a slice or an array.</li>
   <li>Display: <code>text</code>, <code>image</code>, <code>svg</code>, <code>qr_code</code>, <code>rule</code> and <code>tooltip</code>. <code>Svg::style</code> takes a style function. <code>image::Handle</code> has <code>from_path</code>, <code>from_bytes</code> and <code>from_rgba</code>. <code>svg::Handle</code> has <code>from_path</code> and <code>from_memory</code>.</li>
   <li>Rich text: <code>rich_text</code>, <code>rich_text!</code> and <code>span</code>. A string works as a span. <code>on_link_click</code> maps a span&rsquo;s link to a message. A span without a link needs no link type.</li>
-  <li>Drawing: <code>canvas</code>, as <a href="#canvas">above</a>.</li>
+  <li>Drawing: <code>canvas</code>, as <a href="#canvas">above</a>, and widgets of your own, as <a href="#custom-widgets">above</a>.</li>
   <li>Interaction: <code>mouse_area</code>, <code>opaque</code>, <code>hover</code>, <code>sensor</code>, <code>component</code> and <code>widget::operation</code>.</li>
+  <li><code>float</code> draws its content scaled and moved above the rest. It takes <code>scale</code>, <code>translate</code> with a function of the content&rsquo;s bounds and the viewport, and <code>style</code> with a function of the theme that returns a <code>float::Style</code>.</li>
   <li><code>selector::find</code> with a widget <code>Id</code>. Its <code>Target</code> has <code>bounds</code> and <code>visible_bounds</code>.</li>
   <li>Modules: <code>iced::time</code>, <code>iced::keyboard</code>, <code>iced::event</code>, <code>iced::window</code>, <code>iced::mouse</code>, <code>iced::font</code>, <code>iced::border</code> and <code>iced::theme</code>. <code>font::list()</code> lists the system&rsquo;s font families. <code>Seed::LIGHT</code> and iced&rsquo;s other built-in seeds are in <code>iced::theme::palette</code>. <code>Color</code>, <code>color!</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code> and the other alignment names work, also by their full paths such as <code>iced::Center</code>. <code>space::horizontal()</code> and <code>space::vertical()</code> work. <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>.</li>
 </ul>
-<p>An available widget may still miss some of its methods. For example, <code>Rotation::radians_mut</code> is not there yet.</p>
+<p>An available widget may still miss some of its methods. <code>Rotation::radians_mut</code> works, so <code>*rotation.radians_mut() = angle</code> turns a rotation in place. <code>Animation&lt;T&gt;</code> animates a <code>bool</code> or a number with <code>go</code>, <code>go_mut</code>, <code>is_animating</code> and <code>interpolate</code> at an <code>Instant</code>. <code>go</code> also ends a chain of builders, as in <code>Animation::new(false).quick().go(true, now)</code>. A <code>Vector</code> adds, subtracts, and scales by an <code>f32</code>. A <code>Point</code> moves by a <code>Vector</code>, and two points differ by one. <code>color!(0xffc8a8, alpha)</code> and <code>color!(r, g, b, alpha)</code> take any <code>f32</code> alpha. A helper such as <code>text</code> passes as a function, as in <code>.map(text)</code>. A canvas program&rsquo;s State may be a <code>RefCell</code>. <code>canvas::Group</code> and <code>Cache::with_group</code> work. A function of yours that takes <code>impl Into&lt;Length&gt;</code> takes a number or a <code>Length</code>.</p>
+<h3 id="main-statements">Statements before the app</h3>
+<p><code>main</code> may run statements before <code>iced::application</code> or <code>iced::run</code>, such as <code>tracing_subscriber::fmt::init();</code>. They run once, when <code>rawr run</code> starts, as Rust runs <code>main</code> once. A reset or a reload boots the app again without them. An edit to them takes effect when <code>rawr run</code> restarts, and the window says so. <code>#[cfg(..)]</code> on a statement and <code>cfg!</code> follow the machine Rawr runs on.</p>
 <h3 id="not-available">Not available yet</h3>
 <ul>
-  <li><code>iced::advanced</code>&rsquo;s widget traits. A custom widget other than a canvas program is written in Rust and imported. Its type cannot borrow yet, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>
-  <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code>, <code>grid</code>, <code>float</code> and <code>keyed_column</code>.</li>
-  <li><code>iced::gradient</code>, <code>iced::clipboard</code>, <code>iced::task</code> streams, <code>Task::future</code> and <code>Animation</code>.</li>
+  <li>A widget type of your own that borrows, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>
+  <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code> and <code>grid</code>.</li>
+  <li><code>iced::gradient</code>, <code>iced::clipboard</code> and <code>application::timed</code>.</li>
   <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
-  <li><code>async fn</code> and <code>.await</code>. An imported function that returns a future or a <code>Task</code>, as <code>tokio::time::sleep</code> and <code>system::information</code> do, cannot be called yet.</li>
-  <li>Statements before the <code>iced::application</code> call in <code>main</code>, such as <code>tracing_subscriber::fmt::init();</code>.</li>
+  <li><code>tokio::task::spawn_blocking</code> with a Rawr closure. Other async code works, as <a href="#async">Async code</a> describes.</li>
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
-<p>iced master has 56 examples. 24 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>delineate</code>, <code>events</code>, <code>exit</code>, <code>lazy</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>table</code>, <code>text</code>, <code>tooltip</code>, <code>url_handler</code> and <code>vectorial_text</code>. Ten of the others need <code>async</code> code or a future from a Rust crate. Five call <code>tracing_subscriber::fmt::init()</code> before the app starts. Four implement their own widget through <code>iced::advanced</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
+<p>iced master has 56 examples. 32 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>custom_quad</code>, <code>custom_widget</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>geometry</code>, <code>lazy</code>, <code>loupe</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code>, <code>vectorial_text</code> and <code>websocket</code>. Six of the others use <code>async</code> code and now stop at other gaps. Two need <code>iced::application::timed</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/embedding">Previous<b>Embedding</b></a><a class="next" href="/docs/play">Next<b>?play and the playground</b></a></nav>
 </article>
 </main>

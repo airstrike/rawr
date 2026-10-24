@@ -10,9 +10,10 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 # A project's runner builds rawr-iced against the project's own iced, so it
-# adds only `advanced` (the profile reads `iced::advanced::Widget`); every
-# other iced feature comes from the project, and the features below follow it.
-iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced"] }
+# adds only `advanced` (the profile reads `iced::advanced::Widget`) and
+# `sipper` (Rust sippers cross as `task::Sipper`); every other iced feature
+# comes from the project, and the features below follow it.
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced", "sipper"] }
 iced_runtime = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
 # Reads image headers for the `image` widget; its codecs are the project's.
 image = { version = "0.25", default-features = false, optional = true }
@@ -22,6 +23,10 @@ rawr_import = { package = "rawr-import", path = "../importer" }
 rawr-watch = { path = "../watch" }
 sha2 = "0.10.9"
 thiserror = "2"
+# tokio's timers and channels for Rawr code without a tokio dependency (src/tokio_facade.rs).
+# No `fs`, `net`, `process`, `signal` or `io-std`. `test-util` pauses a
+# recording's clock.
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "test-util", "time"] }
 # Fallback lists for bundled fonts (src/snapshot/fonts.rs); the version cosmic-text uses.
 unicode-script = "0.5"
 

@@ -37,7 +37,7 @@
   <ol>
     <li><a href="/docs">Overview</a></li>
     <li><a href="/docs/start">Getting started</a></li>
-    <li><a href="/docs/language" aria-current="page">The language</a><ol><li><a href="#overview">How a program runs</a></li><li><a href="#items">Items</a></li><li><a href="#types">Types</a></li><li><a href="#generics-traits">Generics and traits</a></li><li><a href="#patterns">Patterns and control flow</a></li><li><a href="#closures">Closures</a></li><li><a href="#macros">Macros</a></li><li><a href="#std">The standard library</a></li><li><a href="#not-supported">Not supported yet</a></li><li><a href="#differences">Differences from cargo run</a></li></ol></li>
+    <li><a href="/docs/language" aria-current="page">The language</a><ol><li><a href="#overview">How a program runs</a></li><li><a href="#items">Items</a></li><li><a href="#types">Types</a></li><li><a href="#generics-traits">Generics and traits</a></li><li><a href="#patterns">Patterns and control flow</a></li><li><a href="#moves">Moves</a></li><li><a href="#closures">Closures</a></li><li><a href="#macros">Macros</a></li><li><a href="#std">The standard library</a></li><li><a href="#not-supported">Not supported yet</a></li><li><a href="#differences">Differences from cargo run</a></li></ol></li>
     <li><a href="/docs/embedding">Embedding</a></li>
     <li><a href="/docs/iced">rawr-iced</a></li>
     <li><a href="/docs/play">?play and the playground</a></li>
@@ -80,13 +80,14 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>fn</code>. A function can be nested inside another function.</li>
   <li><code>struct</code> with named fields, tuple structs and unit structs.</li>
   <li><code>enum</code> with unit, tuple and struct variants.</li>
-  <li><code>impl</code> blocks with methods, associated functions and associated consts.</li>
+  <li><code>impl</code> blocks with methods, associated functions and associated consts. An <code>impl</code> may sit inside a function body. <code>Self</code> works in a method body&rsquo;s type annotations, as in <code>let next: Self = ..</code>.</li>
+  <li><code>unsafe impl Send for T {}</code> and <code>unsafe impl Sync for T {}</code>. Every Rawr value is already <code>Send</code> and <code>Sync</code>, so the impl changes nothing. Rawr checks it as rustc does. <code>impl Send</code> without <code>unsafe</code> is an error. So is <code>unsafe impl</code> of another trait.</li>
   <li><code>trait</code> with default methods, associated types and static functions. Traits can be implemented for your own types and for built-in types such as <code>i64</code>.</li>
   <li><code>const</code> and <code>static</code> items.</li>
   <li><code>type</code> aliases, generic ones included, such as <code>type Pair&lt;T&gt; = (T, T);</code>. A <code>pub type</code> can be imported from another module.</li>
   <li><code>pub</code> and restricted visibility. <code>pub(crate)</code>, <code>pub(super)</code> and <code>pub(in path)</code> all work.</li>
-  <li><code>mod</code>. A <code>mod util;</code> declaration loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. A module without that line is native Rust, and cargo builds it. An inline <code>mod m { .. }</code> works too.</li>
-  <li><code>use</code> with paths and groups, such as <code>use std::collections::{HashMap, HashSet};</code>. A glob of a standard library module such as <code>use std::collections::*;</code> works too.</li>
+  <li><code>mod</code>. A <code>mod util;</code> declaration loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. A module without that line is native Rust, and cargo builds it. An inline <code>mod m { .. }</code> works too. A path through <code>crate::</code> or <code>super::</code> reaches a name that module brings in with <code>use</code>, as in Rust.</li>
+  <li><code>use</code> with paths and groups, such as <code>use std::collections::{HashMap, HashSet};</code>. A glob of a standard library module such as <code>use std::collections::*;</code> works too. A path that starts with <code>::</code> names an outside crate, as in <code>use ::image::ColorType;</code>. It is an error when its first name is not a crate.</li>
   <li><code>#[derive]</code> of <code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. Rawr checks a derive the way rustc does. Deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</li>
 </ul>
 
@@ -175,14 +176,20 @@ fn main() {
   <li>Struct, tuple and enum patterns. <code>..</code> matches the rest.</li>
   <li>Slice patterns such as <code>[first, .., last]</code>.</li>
   <li><code>if let</code>, <code>while let</code> and <code>let .. else</code>.</li>
+  <li>A <code>let</code> whose pattern is an enum with one variant, such as <code>let Wrapper::Named(x) = value;</code>. Rust accepts it because the pattern can&rsquo;t fail, and so does Rawr.</li>
+  <li>Let chains, as in Rust 2024: <code>if let Some(x) = a &amp;&amp; let Some(y) = b &amp;&amp; x &lt; y { .. }</code>. <code>while</code> takes them too.</li>
   <li><code>loop</code>, <code>while</code> and <code>for</code>. Loop labels work. <code>break</code> can carry a value.</li>
   <li>Blocks are expressions. <code>let x = { .. };</code> works.</li>
-  <li>Patterns on <code>&amp;mut</code> places write their bindings back. <code>for p in &amp;mut points { p.x += 1; }</code> changes the elements.</li>
+  <li>Patterns on <code>&amp;mut</code> places write their bindings back. <code>for p in &amp;mut points { p.x += 1; }</code> changes the elements. So does <code>if let State::Running { progress, .. } = &amp;mut self.state { *progress = p; }</code>. This holds in <code>match</code>, <code>if let</code>, <code>while let</code>, <code>let</code> and <code>let .. else</code>. It holds for nested struct, tuple and slice patterns, for <code>ref mut</code>, for <code>match self</code> in a <code>&amp;mut self</code> method, and for a pattern inside another one.</li>
 </ul>
+
+<h2 id="moves">Moves</h2>
+<p>A value that is not <code>Copy</code> moves when it is passed, assigned or stored by value, as in Rust. It drops with its last owner. A use after the move fails the check as rustc&rsquo;s E0382 does. Moving one field out of a struct, as <code>let name = p.name;</code>, leaves the struct&rsquo;s other fields usable. Assigning the field again makes it usable. A <code>match</code> arm whose pattern binds a part by value moves the subject. <code>a + &amp;b</code> moves the <code>String</code> <code>a</code>.</p>
 
 <h2 id="closures">Closures</h2>
 <p>Closures capture their environment. <code>move</code> closures work. A closure that mutates what it captures is <code>FnMut</code>. Functions can take closures as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. They can return them as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>.</p>
 <p>A closure in a variable is a value. It can be passed to a function or to <code>map</code>, copied to another variable, or called from inside another closure. A parameter can be <code>_</code> or another pattern.</p>
+<p>A closure that moves a captured value out, as <code>|| drop(s)</code> does, takes that value in when it is made, as in Rust. Such a closure can be called once. A closure that holds a value that is not <code>Copy</code> is not <code>Copy</code> either, so <code>let g = f;</code> moves it.</p>
 <div class="block">
   <div class="file"><b>closures.rs</b></div>
   <pre><code data-lang="rust" data-run="closures.rs" id="src-closures">fn apply(f: impl Fn(i64) -&gt; i64, x: i64) -&gt; i64 {
@@ -208,6 +215,9 @@ fn main() {
 [1, 9, 25, 49, 81]</span></div>
 </div>
 
+<h3 id="async">Async code</h3>
+<p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. Each <code>.await</code> suspends the body, and it goes on from there with its locals as they were. <a href="/docs/iced#async">Async code</a> describes how an app runs them.</p>
+
 <h2 id="macros">Macros</h2>
 <p>Rawr has a fixed set of built-in macros. You can&rsquo;t define your own with <code>macro_rules!</code>.</p>
 <table>
@@ -223,6 +233,7 @@ fn main() {
   <tr><td><code>vec!</code></td><td>Both forms: <code>vec![1, 2]</code> and <code>vec![0; n]</code>, where <code>n</code> is any <code>usize</code> expression. An array&rsquo;s <code>[0; N]</code> takes a literal or a <code>const</code>.</td></tr>
   <tr><td><code>matches!</code></td><td>Takes a guard: <code>matches!(x, Some(n) if n &gt; 2)</code>.</td></tr>
   <tr><td><code>concat!</code> <code>stringify!</code></td><td>Expand to a string literal.</td></tr>
+  <tr><td><code>cfg!</code></td><td>Tests the machine Rawr runs on: <code>target_os</code>, <code>target_arch</code>, <code>target_family</code>, <code>unix</code> and <code>windows</code>, with <code>not</code>, <code>all</code> and <code>any</code>. No feature is on. <code>#[cfg(..)]</code> on a statement leaves it out the same way.</td></tr>
   <tr><td><code>env!</code></td><td>Reads an environment variable when the program is checked.</td></tr>
   <tr><td><code>include_str!</code> <code>include_bytes!</code></td><td>Read a file relative to the source file.</td></tr>
 </table>
@@ -243,19 +254,21 @@ fn main() {
 <p>Rawr provides part of <code>std</code>. These work today:</p>
 <ul>
   <li><code>String</code> and <code>&amp;str</code>: <code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes as Rust&rsquo;s does.</li>
-  <li><code>Vec</code> and slices: <code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>Vec::with_capacity</code> and more.</li>
+  <li><code>Vec</code> and slices: <code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element, so <code>if let Some(d) = v.iter_mut().find(|d| d.id == id) { d.n += 1; }</code> changes it.</li>
   <li>Iterators: <code>map</code>, <code>filter</code>, <code>enumerate</code>, <code>zip</code>, <code>skip</code>, <code>take</code>, <code>step_by</code>, <code>rev</code>, <code>any</code>, <code>all</code>, <code>position</code>, <code>fold</code>, <code>sum</code>, <code>max</code>, <code>min</code>, <code>count</code>, <code>collect</code> and more. <code>std::iter::once</code> and <code>std::iter::empty</code> start one.</li>
   <li>Arrays: <code>[T; N]::map</code> gives a <code>[U; N]</code>.</li>
-  <li>Numbers: <code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>powi</code>, <code>powf</code>, <code>floor</code>, <code>round</code> and kin. Floats also have <code>sin</code>, <code>cos</code>, <code>tan</code>, their inverses and hyperbolic forms, <code>atan2</code>, <code>hypot</code>, <code>exp</code>, <code>ln</code>, <code>log</code>, <code>log10</code>, <code>to_degrees</code> and <code>to_radians</code>.</li>
+  <li>Numbers: <code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>powi</code>, <code>powf</code>, <code>floor</code>, <code>round</code> and kin. Floats also have <code>sin</code>, <code>cos</code>, <code>tan</code>, their inverses and hyperbolic forms, <code>atan2</code>, <code>hypot</code>, <code>exp</code>, <code>ln</code>, <code>log</code>, <code>log10</code>, <code>to_degrees</code> and <code>to_radians</code>. <code>rem_euclid</code> and <code>div_euclid</code> work on floats and integers. A number&rsquo;s method can be called by its path, as in <code>f32::rem_euclid(x, 1.0)</code>.</li>
   <li><code>std::time::Duration</code> and <code>Instant</code>: <code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code>, <code>duration_since</code>, and the operators <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>{:?}</code> prints Rust&rsquo;s text, such as <code>1.5s</code>.</li>
-  <li><code>std::collections</code>: <code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>.</li>
+  <li><code>std::collections</code>: <code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. A local may hold an entry, as in <code>let n = map.entry(k).or_default(); *n += 1;</code>. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are Rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. <code>cargo build</code> still uses the crate&rsquo;s faster hasher.</li>
+  <li><code>std::cell::RefCell</code>: <code>new</code>, <code>default</code>, <code>borrow</code>, <code>borrow_mut</code>, <code>into_inner</code>, <code>replace</code>, <code>take</code> and <code>clone</code>. A change through a shared reference to a <code>RefCell</code> changes the cell. A borrow ends with its block, as in Rust. A borrow that conflicts with one still held panics with Rust&rsquo;s message.</li>
+  <li><code>std::marker::PhantomData</code>.</li>
   <li><code>std::mem::swap</code>, <code>replace</code> and <code>take</code>.</li>
   <li><code>std::fmt</code> for <code>Display</code> and <code>Debug</code> impls, <code>std::ops</code> for operator traits and <code>std::cmp::Ordering</code>.</li>
   <li><code>From</code> and <code>Into</code> between your own types, and from your own type into a number type such as <code>impl From&lt;Roar&gt; for u32</code>.</li>
   <li><code>From::from</code>, <code>Into::into</code>, <code>Clone::clone</code> and <code>ToString::to_string</code> as values. <code>.map(String::from)</code> is one example. A method of <code>Option</code> or <code>Result</code> works as a value too, as in <code>.map(Result::ok)</code>. So does an associated function of your own type, as in <code>.map(Db::from)</code> or <code>let make = Db::new;</code>.</li>
   <li><code>TryFrom</code> between integer types.</li>
 </ul>
-<p>In an iced app, <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>, which are std&rsquo;s own in iced.</p>
+<p>In an iced app, <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>, which are std&rsquo;s own in iced. <code>std::path</code> has <code>PathBuf</code> and <code>Path</code>, and <code>std::ffi</code> has <code>OsString</code> and <code>OsStr</code>. They are Rust&rsquo;s own types. <code>Path</code> is another name for <code>PathBuf</code>, and <code>OsStr</code> is another name for <code>OsString</code>. They have <code>new</code>, <code>from</code>, <code>push</code>, <code>join</code>, <code>parent</code>, <code>file_name</code>, <code>file_stem</code>, <code>extension</code>, <code>display</code>, <code>to_str</code> and <code>to_string_lossy</code>. An imported Rust function does not take one yet. <code>std::io</code> has <code>Error</code> and <code>ErrorKind</code>. <code>Error::new</code>, <code>Error::other</code>, <code>Error::from</code> and <code>kind</code> work, and <code>{}</code> prints Rust&rsquo;s text. Nothing in it reads or writes a file.</p>
 
 <h2 id="not-supported">Not supported yet</h2>
 <p>These are valid Rust that Rawr rejects today. Each one fails the check with an error that names the construct.</p>
@@ -264,9 +277,10 @@ fn main() {
   <li>A glob import of an enum&rsquo;s variants (<code>use Shape::*;</code>).</li>
   <li><code>const fn</code>.</li>
   <li>Byte literals (<code>b'a'</code>, <code>b"ab"</code>) and <code>char</code> ranges such as <code>'a'..='e'</code>.</li>
-  <li><code>macro_rules!</code>, <code>async</code> and <code>.await</code>.</li>
+  <li><code>macro_rules!</code>.</li>
+  <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>
+  <li><code>async</code> and <code>.await</code> in a program without iced. iced&rsquo;s <code>Task</code> is what runs a future, as <a href="/docs/iced#async">Async code</a> describes.</li>
   <li>A <code>const</code> captured in a format string (<code>"{LIMIT}"</code>). Pass it as an argument instead.</li>
-  <li>A <code>let</code> whose pattern is an enum with one variant, such as <code>let Wrapper::Named(x) = value;</code>. Use <code>match</code> instead.</li>
 </ul>
 <h3 id="missing-types">Types and borrowing</h3>
 <ul>
@@ -280,13 +294,13 @@ fn main() {
 </ul>
 <h3 id="missing-std">Standard library</h3>
 <ul>
-  <li><code>Rc</code>, <code>RefCell</code> and <code>Cell</code>.</li>
-  <li><code>std::marker::PhantomData</code>.</li>
+  <li><code>Rc</code>, <code>Arc</code> and <code>Cell</code>.</li>
+  <li><code>std::io</code> beyond <code>Error</code> and <code>ErrorKind</code>, and <code>std::fs</code>.</li>
   <li><code>VecDeque</code> and <code>BinaryHeap</code>.</li>
   <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
   <li><code>write!</code> into a <code>String</code> through <code>std::fmt::Write</code>.</li>
   <li><code>Formatter::pad</code>.</li>
-  <li><code>f64::NAN</code>, <code>f64::INFINITY</code>, <code>f64::MAX</code>, <code>f64::EPSILON</code>, <code>std::f64::consts</code> and <code>f64::rem_euclid</code>.</li>
+  <li><code>f64::NAN</code>, <code>f64::INFINITY</code> and <code>f64::EPSILON</code>.</li>
   <li><code>char::from(u8)</code> and <code>char::from_u32</code>. <code>byte as char</code> works.</li>
   <li><code>Vec::binary_search</code>.</li>
   <li>The <code>dbg!</code>, <code>line!</code>, <code>file!</code>, <code>column!</code> and <code>module_path!</code> macros.</li>
@@ -305,7 +319,7 @@ fn main() {
 <h3 id="lenient">Code that Rawr accepts and rustc rejects</h3>
 <p>Rawr&rsquo;s check is not rustc. Some code passes <code>rawr check</code> and fails <code>cargo build</code>. <code>rawr check</code> also runs <code>cargo check</code>, which reports these cases. <a href="/docs/cli#rawr">Commands</a> describes its output.</p>
 <ul>
-  <li>There is no borrow checker beyond rejecting two live <code>&amp;mut</code> borrows of one value. Use after move, a shared borrow held across a mutation, and returning a reference to a local are all accepted.</li>
+  <li>There is no borrow checker beyond rejecting two live <code>&amp;mut</code> borrows of one value and a use after a move. A shared borrow held across a mutation and returning a reference to a local are accepted.</li>
   <li><code>String</code> and <code>&amp;str</code> are one type to the checker. Passing <code>"x"</code> where a <code>String</code> is expected is accepted.</li>
   <li>Lifetimes are not checked. A missing lifetime on <code>fn f(a: &amp;str, b: &amp;str) -&gt; &amp;str</code> is accepted.</li>
   <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
@@ -314,6 +328,7 @@ fn main() {
   <li>Out-of-range literals such as <code>let x: u8 = 300</code> are accepted.</li>
   <li>Top-level statements are accepted. Rust allows only items at the top level.</li>
   <li>In iced code, a concrete widget is accepted where an <code>Element</code> is expected.</li>
+  <li><code>.await</code> on an iced <code>Task</code> is accepted. Rust awaits only a future.</li>
 </ul>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/start">Previous<b>Getting started</b></a><a class="next" href="/docs/embedding">Next<b>Embedding</b></a></nav>
 </article>

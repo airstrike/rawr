@@ -53,6 +53,63 @@ fn explicit_done_boot_is_delivered_once_with_current_provenance() {
 }
 
 #[test]
+fn perform_over_a_task_maps_it_and_discard_drops_its_outputs() {
+    // A Rust future crosses as a `Task` of its output, so `Task::perform`
+    // over one is iced's own `Task::future(future).map(f)`.
+    let adapter = boot(
+        r#"
+use iced::Task;
+use iced::widget::{column, text, Column};
+#[derive(Debug, Clone, Copy)] enum Message { Loaded(i64) }
+struct Counter { value: i64 }
+pub fn main() -> iced::Result {
+    iced::application(Counter::boot, Counter::update, Counter::view).run()
+}
+impl Counter {
+    fn boot() -> (Counter, Task<Message>) {
+        let quiet: Task<Message> = Task::future(Task::done(3)).discard();
+        (Counter { value: 0 }, Task::batch([Task::perform(Task::done(5), Message::Loaded), quiet]))
+    }
+    fn update(&mut self, message: Message) {
+        match message { Message::Loaded(value) => self.value += value }
+    }
+    fn view(&self) -> Column<'_, Message> { column![text(self.value)] }
+}
+"#,
+    );
+    let application = program::Application::from_adapter(adapter);
+    let (mut state, startup) = <program::Application as iced::Program>::boot(&application);
+
+    let message = one_message(&mut state, startup).expect("the performed task emits once");
+    let _ = <program::Application as iced::Program>::update(&application, &mut state, message);
+    assert_text(&state, "5");
+}
+
+#[test]
+fn on_press_with_builds_its_message_from_the_closure() {
+    let mut adapter = boot(
+        r#"
+use iced::widget::{button, column, text, Column};
+#[derive(Debug, Clone, Copy)] enum Message { Add(i64) }
+#[derive(Default)] struct Counter { value: i64 }
+pub fn main() -> iced::Result { iced::run(Counter::update, Counter::view) }
+impl Counter {
+    fn update(&mut self, message: Message) {
+        match message { Message::Add(amount) => self.value += amount }
+    }
+    fn view(&self) -> Column<'_, Message> {
+        let amount = 4;
+        column![button("Add").on_press_with(move || Message::Add(amount)), text(self.value)]
+    }
+}
+"#,
+    );
+    let message = click(&adapter, "Add");
+    adapter.update(message).unwrap();
+    assert_text(&adapter, "4");
+}
+
+#[test]
 fn update_none_lowers_to_an_empty_native_task() {
     let adapter = boot(&explicit_source("Counter", "Task<Message>"));
     let application = program::Application::from_adapter(adapter);
@@ -159,7 +216,7 @@ fn batch_and_map_reject_unproven_or_mismatched_message_types() {
     let unknown = contract_source("Task::done(Message::Increment).map(missing)", "");
     assert!(matches!(
         compile_error(&unknown),
-        resolve::Error::UnsupportedNominalSyntax { .. }
+        resolve::Error::UnknownVariable { .. }
     ));
 }
 
@@ -551,7 +608,7 @@ fn one_message(
     state: &mut program::Adapter,
     task: iced::Task<runtime::Message>,
 ) -> Option<runtime::Message> {
-    let outputs = task_outputs(task)?;
+    let outputs = state.drain(task)?;
     exact_script_outputs(state, outputs, 1).pop()
 }
 
@@ -560,27 +617,11 @@ fn messages(
     task: iced::Task<runtime::Message>,
     expected: usize,
 ) -> Vec<runtime::Message> {
-    let Some(outputs) = task_outputs(task) else {
+    let Some(outputs) = state.drain(task) else {
         assert_eq!(expected, 0, "task emitted no native output stream");
         return Vec::new();
     };
     exact_script_outputs(state, outputs, expected)
-}
-
-fn task_outputs(task: iced::Task<runtime::Message>) -> Option<Vec<runtime::Message>> {
-    let mut stream = iced_test::runtime::task::into_stream(task)?;
-    Some(iced_test::futures::futures::executor::block_on(
-        async move {
-            let mut outputs = Vec::new();
-            while let Some(action) = stream.next().await {
-                match action {
-                    iced_test::runtime::Action::Output(message) => outputs.push(message),
-                    action => panic!("expected message output, found {action:?}"),
-                }
-            }
-            outputs
-        },
-    ))
 }
 
 fn exact_script_outputs(
@@ -744,4 +785,101 @@ impl Counter {{
 }}
 "#
     )
+}
+
+/// download_progress's shape: a `Vec` of downloads whose State holds a
+/// native task handle, and `if let .. = &mut self.state { *progress = .. }`
+/// through a nested `match`. The binding writes back into the element.
+const DOWNLOADS: &str = r#"
+use iced::task;
+use iced::widget::{button, column, text};
+use iced::{Task, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(Example::default, Example::update, Example::view).run()
+}
+
+#[derive(Default)]
+struct Example { downloads: Vec<Download> }
+
+#[derive(Debug, Clone)]
+enum Message { Start, Step, Finish }
+
+#[derive(Debug, Clone)]
+pub enum Update { Downloading(f32), Finished(bool) }
+
+struct Download { id: usize, state: State }
+
+enum State { Idle, Downloading { progress: f32, _task: task::Handle }, Finished, Errored }
+
+impl Example {
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Start => {
+                let none: Task<Message> = Task::none();
+                let (_, handle) = none.abortable();
+                self.downloads.push(Download {
+                    id: 0,
+                    state: State::Downloading { progress: 0.0, _task: handle.abort_on_drop() },
+                });
+            }
+            Message::Step => {
+                if let Some(download) = self.downloads.iter_mut().find(|download| download.id == 0) {
+                    download.update(Update::Downloading(42.0));
+                }
+            }
+            Message::Finish => {
+                let Some(download) = self.downloads.get_mut(0) else {
+                    return Task::none();
+                };
+                download.update(Update::Finished(true));
+            }
+        }
+        Task::none()
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let label = match self.downloads.first().map(|download| &download.state) {
+            Some(State::Downloading { progress, .. }) => format!("at {progress}"),
+            Some(State::Finished) => "finished".to_string(),
+            Some(_) => "other".to_string(),
+            None => "none".to_string(),
+        };
+        column![
+            text(label),
+            button("Start").on_press(Message::Start),
+            button("Step").on_press(Message::Step),
+            button("Finish").on_press(Message::Finish),
+        ]
+    }
+}
+
+impl Download {
+    pub fn update(&mut self, update: Update) {
+        if let State::Downloading { progress, .. } = &mut self.state {
+            match update {
+                Update::Downloading(new_progress) => {
+                    *progress = new_progress;
+                }
+                Update::Finished(result) => {
+                    self.state = if result { State::Finished } else { State::Errored };
+                }
+            }
+        }
+    }
+}
+"#;
+
+#[test]
+fn a_mut_pattern_binding_writes_back_through_a_held_handle() {
+    let mut adapter = boot(DOWNLOADS);
+    assert_text(&adapter, "none");
+    for label in ["Start", "Step"] {
+        let message = click(&adapter, label);
+        adapter.update(message).unwrap();
+    }
+    assert_text(&adapter, "at 42");
+    let message = click(&adapter, "Finish");
+    adapter.update(message).unwrap();
+    assert_text(&adapter, "finished");
 }

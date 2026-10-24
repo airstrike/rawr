@@ -152,6 +152,7 @@ pub enum StructuralKind {
     Constructor,
     Field { copy: bool },
     Variant,
+    Match,
 }
 
 /// One scalar-only generated structural row awaiting manifest authentication.
@@ -159,6 +160,9 @@ pub enum StructuralKind {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct StructuralRow {
     root: &'static str,
+    /// The owning type's path below the root, `echo::Event`, which tells
+    /// two types' variants or fields of one name apart.
+    owner: &'static str,
     selector: [u8; 32],
     identity: [u8; 32],
     signature: [u8; 32],
@@ -331,6 +335,7 @@ impl StructuralRow {
     #[must_use]
     pub const fn new(
         root: &'static str,
+        owner: &'static str,
         selector: [u8; 32],
         identity: [u8; 32],
         signature: [u8; 32],
@@ -339,6 +344,7 @@ impl StructuralRow {
     ) -> Self {
         Self {
             root,
+            owner,
             selector,
             identity,
             signature,
@@ -394,9 +400,11 @@ pub trait Profile {
     ) -> Result<(), host::Error>;
 
     /// Map one replaced imported identity to its linked semantic reference.
+    /// `installed` holds the facades built before this one.
     fn semantic_type(
         &self,
         facade: &facade::Facade,
+        installed: &[host::facade::Definition],
         identity: &[u8; 32],
         arguments: Box<[host::type_ref::Type]>,
     ) -> Result<Option<host::type_ref::Type>, host::Error>;
@@ -449,6 +457,7 @@ impl Profile for Ordinary {
     fn semantic_type(
         &self,
         _facade: &facade::Facade,
+        _installed: &[host::facade::Definition],
         _identity: &[u8; 32],
         _arguments: Box<[host::type_ref::Type]>,
     ) -> Result<Option<host::type_ref::Type>, host::Error> {
@@ -725,6 +734,7 @@ fn authenticate_structural(
                 StructuralKind::Constructor => host::structural::Kind::Constructor,
                 StructuralKind::Field { copy } => host::structural::Kind::Field { copy },
                 StructuralKind::Variant => host::structural::Kind::Variant,
+                StructuralKind::Match => host::structural::Kind::Match,
             },
         );
         if adapters
@@ -739,9 +749,14 @@ fn authenticate_structural(
 }
 
 /// Whether a field of type `ty` is read as a copy, as the generated bridge
-/// reads it: a scalar, or an `Option` or `Result` of scalars.
-fn copy_scalar(ty: &host::type_ref::Type) -> bool {
+/// reads it: a scalar, an imported Copy type of `facade`, or an `Option` or
+/// `Result` of them.
+fn copy_scalar(ty: &host::type_ref::Type, facade: &host::facade::Definition) -> bool {
     match ty.shape() {
+        host::type_ref::Shape::Imported { identity, .. } => facade.types().any(|definition| {
+            definition.identity().imported() == Some(identity)
+                && definition.capabilities().contains(crate::capability::Kind::Copy)
+        }),
         host::type_ref::Shape::Unit => true,
         host::type_ref::Shape::Builtin(builtin) => matches!(
             builtin,
@@ -760,8 +775,10 @@ fn copy_scalar(ty: &host::type_ref::Type) -> bool {
                 | host::type_ref::Builtin::Usize
                 | host::type_ref::Builtin::F32
         ),
-        host::type_ref::Shape::Option(inner) => copy_scalar(inner),
-        host::type_ref::Shape::Result(ok, err) => copy_scalar(ok) && copy_scalar(err),
+        host::type_ref::Shape::Option(inner) => copy_scalar(inner, facade),
+        host::type_ref::Shape::Result(ok, err) => {
+            copy_scalar(ok, facade) && copy_scalar(err, facade)
+        }
         _ => false,
     }
 }
@@ -771,7 +788,17 @@ fn structural_path<'facade>(
     row: &StructuralRow,
 ) -> Result<(&'facade host::path::Path, StructuralKind), Error> {
     let mut found = None;
-    for definition in facade.types() {
+    let owned = |definition: &host::type_def::Definition| {
+        row.owner.is_empty() || {
+            let path = definition.path();
+            let path = path.as_str();
+            path == row.owner
+                || path
+                    .strip_suffix(row.owner)
+                    .is_some_and(|prefix| prefix.ends_with("::"))
+        }
+    };
+    for definition in facade.types().filter(|definition| owned(definition)) {
         let candidate = match definition.shape() {
             host::type_def::Shape::Struct {
                 constructor,
@@ -784,14 +811,20 @@ fn structural_path<'facade>(
                 .chain(fields.iter().filter_map(|field| {
                     (field.imported_identity().fingerprint() == row.selector).then_some(
                         StructuralKind::Field {
-                            copy: copy_scalar(field.ty()),
+                            copy: copy_scalar(field.ty(), facade),
                         },
                     )
                 }))
                 .next(),
+            // A variant's selector names its constructor and its matcher.
             host::type_def::Shape::Enum(variants) => variants.iter().find_map(|variant| {
-                (variant.imported_identity().fingerprint() == row.selector)
-                    .then_some(StructuralKind::Variant)
+                (variant.imported_identity().fingerprint() == row.selector).then_some(
+                    if row.kind == StructuralKind::Match {
+                        StructuralKind::Match
+                    } else {
+                        StructuralKind::Variant
+                    },
+                )
             }),
             host::type_def::Shape::Opaque | host::type_def::Shape::Trait(_) => None,
         };
@@ -899,7 +932,7 @@ fn build(
         let shape = match shapes.binary_search_by_key(&identity, |(identity, _)| *identity) {
             Ok(index) => shapes[index].1.clone(),
             Err(index) => {
-                let shape = shape(facade, ty.shape(), profile)
+                let shape = shape(facade, ty.shape(), profile, installed)
                     .map_err(|source| entry_error(facade.root(), ty.path(), source))?;
                 retain_shape(&shape, allocation)?;
                 let shape = crate::Shared::new(shape);
@@ -944,7 +977,7 @@ fn build(
             .rsplit_once("::")
             .is_some_and(|(owner, _)| owned_path(owner));
         if !profile.owns_item(facade, item) && !owner_owned {
-            let definition = item_definition(facade, item, profile)
+            let definition = item_definition(facade, item, profile, installed)
                 .map_err(|source| entry_error(facade.root(), item.path(), source))?;
             builder
                 .item(definition)
@@ -1059,6 +1092,7 @@ fn shape(
     facade: &facade::Facade,
     shape: &facade::Shape,
     profile: &impl Profile,
+    installed: &[host::facade::Definition],
 ) -> Result<host::type_def::Shape, Error> {
     if let Some((form, constructor, fields, constructible)) = shape.struct_parts() {
         return Ok(host::type_def::Shape::Struct {
@@ -1068,7 +1102,7 @@ fn shape(
                 .transpose()?,
             fields: fields
                 .iter()
-                .map(|source| field(facade, source, profile))
+                .map(|source| field(facade, source, profile, installed))
                 .collect::<Result<Vec<_>, _>>()?
                 .into_boxed_slice(),
             constructible,
@@ -1084,7 +1118,7 @@ fn shape(
                     variant
                         .fields()
                         .iter()
-                        .map(|source| field(facade, source, profile))
+                        .map(|source| field(facade, source, profile, installed))
                         .collect::<Result<Vec<_>, Error>>()?
                         .into_boxed_slice(),
                     variant.constructible(),
@@ -1100,10 +1134,11 @@ fn field(
     facade: &facade::Facade,
     field: &facade::Field,
     profile: &impl Profile,
+    installed: &[host::facade::Definition],
 ) -> Result<host::type_def::Field, Error> {
     Ok(host::type_def::Field::new(
         field.name().into(),
-        ty(facade, field.ty(), profile)?,
+        ty(facade, field.ty(), profile, installed)?,
         field.selector().try_clone()?,
     ))
 }
@@ -1112,8 +1147,9 @@ fn item_definition(
     facade: &facade::Facade,
     item: &facade::Item,
     profile: &impl Profile,
+    installed: &[host::facade::Definition],
 ) -> Result<host::item::Definition, Error> {
-    let signature = signature(facade, item.signature(), profile)?;
+    let signature = signature(facade, item.signature(), profile, installed)?;
     let definition = match item.kind() {
         ItemKind::Function => host::item::Definition::function(item.path(), signature)?,
         ItemKind::AssociatedFunction => {
@@ -1130,11 +1166,11 @@ fn item_definition(
         }
         ItemKind::Constant => host::item::Definition::value(
             item.path(),
-            ty(facade, item.signature().output(), profile)?,
+            ty(facade, item.signature().output(), profile, installed)?,
         )?,
         ItemKind::AssociatedConstant => host::item::Definition::associated_value(
             item.path(),
-            ty(facade, item.signature().output(), profile)?,
+            ty(facade, item.signature().output(), profile, installed)?,
         )?,
     };
     Ok(definition.imported(item.selector().try_clone()?))
@@ -1144,15 +1180,16 @@ fn signature(
     facade: &facade::Facade,
     signature: &facade::Signature,
     profile: &impl Profile,
+    installed: &[host::facade::Definition],
 ) -> Result<host::signature::Definition, Error> {
     let mut builder = host::signature::Builder::new();
     for parameter in signature.parameters() {
         builder.type_parameter(parameter, &[])?;
     }
     for input in signature.inputs() {
-        builder.try_parameter(ty(facade, input, profile)?)?;
+        builder.try_parameter(ty(facade, input, profile, installed)?)?;
     }
-    builder.output(ty(facade, signature.output(), profile)?);
+    builder.output(ty(facade, signature.output(), profile, installed)?);
     Ok(builder.finish())
 }
 
@@ -1160,6 +1197,7 @@ fn ty(
     facade: &facade::Facade,
     source: &facade::Type,
     profile: &impl Profile,
+    installed: &[host::facade::Definition],
 ) -> Result<host::type_ref::Type, Error> {
     Ok(match source {
         facade::Type::Unit => host::type_ref::Type::unit(),
@@ -1180,10 +1218,10 @@ fn ty(
         } => {
             let arguments = arguments
                 .iter()
-                .map(|argument| ty(facade, argument, profile))
+                .map(|argument| ty(facade, argument, profile, installed))
                 .collect::<Result<Vec<_>, _>>()?
                 .into_boxed_slice();
-            if let Some(ty) = profile.semantic_type(facade, identity, arguments.clone())? {
+            if let Some(ty) = profile.semantic_type(facade, installed, identity, arguments.clone())? {
                 return Ok(ty);
             }
             host::type_ref::Type::imported_boxed(
@@ -1193,16 +1231,16 @@ fn ty(
         }
         facade::Type::FunctionItem { input, output } => {
             host::type_ref::Type::imported_function_item(
-                ty(facade, input, profile)?,
-                ty(facade, output, profile)?,
+                ty(facade, input, profile, installed)?,
+                ty(facade, output, profile, installed)?,
             )
         }
         facade::Type::Parameter(parameter) => host::type_ref::Type::parameter(parameter.as_ref())?,
         facade::Type::Option(element) => {
-            host::type_ref::Type::option(ty(facade, element, profile)?)
+            host::type_ref::Type::option(ty(facade, element, profile, installed)?)
         }
         facade::Type::Result(ok, err) => {
-            host::type_ref::Type::result(ty(facade, ok, profile)?, ty(facade, err, profile)?)
+            host::type_ref::Type::result(ty(facade, ok, profile, installed)?, ty(facade, err, profile, installed)?)
         }
     })
 }

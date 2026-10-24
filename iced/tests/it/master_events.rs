@@ -137,8 +137,10 @@ fn master_keyboard_and_event_subscriptions_deliver_messages() {
         });
         messages.extend(taken);
     }
-    // Three ticks, Toggle and Reset, and three events.
-    assert_eq!(messages.len(), 8);
+    // Three ticks, three key presses and three events. The stream runs no
+    // script, so each item comes as a script step for the UI thread, where
+    // `filter_map` keeps Toggle and Reset and drops the third key.
+    assert_eq!(messages.len(), 9);
     for message in messages {
         let _ = <program::Application as iced::Program>::update(&application, &mut state, message);
     }
@@ -423,7 +425,9 @@ fn master_listen_with_hands_over_status_and_window() {
             recipe.stream(events()).collect::<Vec<_>>(),
         ));
     }
-    assert_eq!(messages.len(), 3);
+    // Every event comes as a script step; `listen_with` filters on the UI
+    // thread.
+    assert_eq!(messages.len(), 6);
     for message in messages {
         let _ = <program::Application as iced::Program>::update(&application, &mut state, message);
     }

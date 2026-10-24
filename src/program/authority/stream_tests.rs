@@ -292,9 +292,17 @@ fn bool_type() -> host::runtime::type_ref::Type {
 
 fn poll_one(mut issued: host::stream::Issued) -> Result<Dynamic, host::stream::Error> {
     let mut context = Context::from_waker(Waker::noop());
-    match Pin::new(&mut issued).poll_next(&mut context) {
-        Poll::Ready(Some(value)) => value,
-        Poll::Ready(None) => panic!("bound stream ended before its first item"),
-        Poll::Pending => panic!("test stream unexpectedly remained pending"),
+    loop {
+        match Pin::new(&mut issued).poll_next(&mut context) {
+            // The host finishes each item on the script thread; a
+            // `filter_map` that drops it yields nothing.
+            Poll::Ready(Some(arrival)) => match arrival.finish() {
+                Ok(Some(value)) => return Ok(value),
+                Ok(None) => {}
+                Err(error) => return Err(error),
+            },
+            Poll::Ready(None) => panic!("bound stream ended before its first item"),
+            Poll::Pending => panic!("test stream unexpectedly remained pending"),
+        }
     }
 }

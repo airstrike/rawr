@@ -30,6 +30,30 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_operations(builder);
     bind_keyboard(builder);
     bind_events(builder);
+    bind_defaults(builder);
+}
+
+/// `T::default()` of each type in `crate::DEFAULTED`.
+fn bind_defaults(builder: &mut host::runtime::Builder) {
+    fn bind<T: Default + Clone + Send + Sync + 'static>(
+        builder: &mut host::runtime::Builder,
+        path: &str,
+    ) {
+        builder
+            .bind(format!("iced::{path}::default"), |_| Ok(Dynamic::from(T::default())))
+            .expect("the iced facade must retain every DEFAULTED type's default");
+    }
+    for path in crate::DEFAULTED {
+        match path {
+            "Color" => bind::<iced::Color>(builder, path),
+            "ContentFit" => bind::<iced::ContentFit>(builder, path),
+            "Font" => bind::<iced::Font>(builder, path),
+            "Padding" => bind::<iced::Padding>(builder, path),
+            "Point" => bind::<iced::Point>(builder, path),
+            "Rectangle" => bind::<iced::Rectangle>(builder, path),
+            _ => bind::<iced::Vector>(builder, path),
+        }
+    }
 }
 
 /// The readers that match `iced::Event`, `window::Event`, `mouse::Event`,
@@ -894,7 +918,7 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                 .read_lock::<marker::Instant>()
                 .map(|instant| instant.0)
                 .ok_or_else(|| runtime_error("`Instant::elapsed` read a value of another type".to_string()))?;
-            Ok(Dynamic::from(instant.elapsed()))
+            Ok(Dynamic::from(marker::Instant::now().0.saturating_duration_since(instant)))
         })
         .expect("the iced facade must retain Instant::elapsed");
     builder
@@ -985,12 +1009,70 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every field reader");
     }
-    reader::<iced::Size>(builder, "iced::Size::width", |size| size.width);
-    reader::<iced::Size>(builder, "iced::Size::height", |size| size.height);
-    reader::<iced::Point>(builder, "iced::Point::x", |point| point.x);
-    reader::<iced::Point>(builder, "iced::Point::y", |point| point.y);
-    reader::<iced::Vector>(builder, "iced::Vector::x", |vector| vector.x);
-    reader::<iced::Vector>(builder, "iced::Vector::y", |vector| vector.y);
+    // `size.width`, and `Size { width: Length::Fill, .. }`, which makes
+    // iced's `Size<Length>`.
+    for name in ["width", "height"] {
+        let path = format!("iced::Size::{name}");
+        builder
+            .bind(path.clone(), move |args| match args {
+                [size] => {
+                    let size = size
+                        .read_lock::<iced::Size>()
+                        .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                    Ok(Dynamic::from(f64::from(if name == "width" { size.width } else { size.height })))
+                }
+                [size, number] if number.as_float().is_ok() || number.as_int().is_ok() => {
+                    let mut size = super::builtin::take::<iced::Size>(size, "iced::Size")?;
+                    let number = super::builtin::pixels(number, &path)?;
+                    if name == "width" {
+                        size.width = number;
+                    } else {
+                        size.height = number;
+                    }
+                    Ok(Dynamic::from(size))
+                }
+                [_, length] => {
+                    let length = super::builtin::length(length)?;
+                    let mut size = iced::Size::new(iced::Length::Shrink, iced::Length::Shrink);
+                    if name == "width" {
+                        size.width = length;
+                    } else {
+                        size.height = length;
+                    }
+                    Ok(Dynamic::from(super::custom::LengthSize(size)))
+                }
+                _ => Err(arity(&path, 1, args.len())),
+            })
+            .expect("the iced facade must retain every Size field");
+    }
+    // `point.x`, read, or set as a place (`offset.x = 2.0`).
+    fn coordinate<T: Clone + Send + Sync + 'static>(
+        builder: &mut host::runtime::Builder,
+        path: &'static str,
+        field: fn(&mut T) -> &mut f32,
+    ) {
+        builder
+            .bind(path, move |args| match args {
+                [value] => {
+                    let mut value = value
+                        .read_lock::<T>()
+                        .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?
+                        .clone();
+                    Ok(Dynamic::from(f64::from(*field(&mut value))))
+                }
+                [value, number] => {
+                    let mut value = super::builtin::take::<T>(value, path)?;
+                    *field(&mut value) = super::builtin::number(number, path)? as f32;
+                    Ok(Dynamic::from(value))
+                }
+                _ => Err(arity(path, 1, args.len())),
+            })
+            .expect("the iced facade must retain every coordinate");
+    }
+    coordinate::<iced::Point>(builder, "iced::Point::x", |point| &mut point.x);
+    coordinate::<iced::Point>(builder, "iced::Point::y", |point| &mut point.y);
+    coordinate::<iced::Vector>(builder, "iced::Vector::x", |vector| &mut vector.x);
+    coordinate::<iced::Vector>(builder, "iced::Vector::y", |vector| &mut vector.y);
     reader::<iced::Rectangle>(builder, "iced::Rectangle::x", |bounds| bounds.x);
     reader::<iced::Rectangle>(builder, "iced::Rectangle::y", |bounds| bounds.y);
     reader::<iced::Rectangle>(builder, "iced::Rectangle::width", |bounds| bounds.width);
@@ -1271,7 +1353,7 @@ fn into_element(view: Dynamic) -> Result<widget::Value, String> {
     widgets!(
         Text, TextInput, Checkbox, Toggler, Slider, ProgressBar, Transition, Button, Column, Row,
         Container, Tooltip, Scrollable, Logo, Sensor, Space, Radio, PickList, ComboBox, Stack,
-        Pin, MouseArea, Rich
+        Pin, Float, MouseArea, Rich
     );
     #[cfg(feature = "image")]
     widgets!(Image);
@@ -1309,6 +1391,47 @@ impl widget::Descriptor for marker::Pin {
 }
 
 impl Witnessed for marker::Pin {
+    fn witness(&self) -> &host::runtime::Witness {
+        &self.witness
+    }
+}
+
+impl widget::Descriptor for marker::Float {
+    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+        let mut float: iced::widget::Float<'static, _, iced::Theme> =
+            iced::widget::float(self.child.lower(context)).scale(self.scale);
+        if let Some(translate) = &self.translate {
+            let owned = context.owned();
+            let translate = translate.clone();
+            float = float.translate(move |bounds, viewport| {
+                let context = owned.context();
+                let arguments = &mut [Dynamic::from(bounds), Dynamic::from(viewport)];
+                match context.invoke(&translate, arguments) {
+                    Some(Ok(vector)) => vector.try_cast::<iced::Vector>().unwrap_or(iced::Vector::ZERO),
+                    _ => iced::Vector::ZERO,
+                }
+            });
+        }
+        if let Some(function) = &self.style {
+            match super::style::theme_style::<iced::widget::float::Style>(
+                function,
+                context,
+                "iced::widget::float::Style",
+            ) {
+                Ok(Some(style)) => float = float.style(move |_| *style),
+                Ok(None) => {}
+                Err(diagnostic) => return diagnostic,
+            }
+        }
+        float.boxed()
+    }
+
+    fn identity(&self) -> widget::Identity {
+        self.identity.clone()
+    }
+}
+
+impl Witnessed for marker::Float {
     fn witness(&self) -> &host::runtime::Witness {
         &self.witness
     }
@@ -1444,6 +1567,45 @@ fn bind_wrappers(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Pin builder");
     }
+
+    bind_widget_type::<marker::Float>(builder, "iced::widget::Float");
+    for path in ["iced::widget::float", "iced::widget::Float::new"] {
+        builder
+            .bind_with_context(path, move |call, args| {
+                if args.len() != 1 {
+                    return Err(arity(path, 1, args.len()));
+                }
+                Ok(Dynamic::from(marker::Float {
+                    witness: call.output_witness().map_err(witness_error)?,
+                    identity: widget::Identity::unique(),
+                    child: take::<widget::Value>(args[0], "iced::Element")?,
+                    scale: 1.0,
+                    translate: None,
+                    style: None,
+                }))
+            })
+            .expect("the iced facade must retain float");
+    }
+    builder
+        .bind("iced::widget::Float::scale", |args| {
+            if args.len() != 2 {
+                return Err(arity("Float::scale", 2, args.len()));
+            }
+            let mut float = take::<marker::Float>(args[0], "iced::widget::Float")?;
+            float.scale = super::builtin::pixels(args[1], "iced::widget::Float::scale")?;
+            Ok(Dynamic::from(float))
+        })
+        .expect("the iced facade must retain Float::scale");
+    builder
+        .bind("iced::widget::Float::translate", |args| {
+            if args.len() != 2 {
+                return Err(arity("Float::translate", 2, args.len()));
+            }
+            let mut float = take::<marker::Float>(args[0], "iced::widget::Float")?;
+            float.translate = Some(take_function(args[1], "Float::translate")?);
+            Ok(Dynamic::from(float))
+        })
+        .expect("the iced facade must retain Float::translate");
 
     bind_widget_type::<marker::MouseArea>(builder, "iced::widget::MouseArea");
     builder

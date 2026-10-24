@@ -995,11 +995,17 @@ impl<'a> Resolver<'a> {
 
             let globbed = self.glob_paths(context, parsed, &occupied)?;
             for (name, path) in use_paths(parsed).into_iter().chain(globbed) {
+                let module_only = parsed.binds_module_only(&name);
+                // `use ::image::ColorType;` names the crate `image`, never a
+                // module of this crate or one another `use` brought in.
+                if parsed.global() {
+                    self.reject_local_global(context, &path, super::prefix_span(&parsed.tree))?;
+                }
                 // `use keyboard::key;` after `use iced::keyboard;`: a path
                 // through a library module this unit imported, as Rust's
                 // paths start at a name in scope.
                 let path = match path.split_first() {
-                    Some((first, rest)) if !rest.is_empty() => uses
+                    Some((first, rest)) if !rest.is_empty() && !parsed.global() => uses
                         .iter()
                         .flatten()
                         .flat_map(|used: &item::Use| used.bindings.iter())
@@ -1033,6 +1039,8 @@ impl<'a> Resolver<'a> {
                 );
                 let import = match target {
                     Target::Module | Target::Trait => item::Import::Module,
+                    // `use a::m::{self}` imports the module `m` only.
+                    Target::HostModuleItem { .. } if module_only => item::Import::Module,
                     Target::HostModuleItem { definitions, owner } => {
                         item::Import::ModuleItem { definitions, owner }
                     }
@@ -1146,6 +1154,10 @@ impl<'a> Resolver<'a> {
         }
         for path in paths {
             let segments = path_segments(path);
+            if path.global {
+                self.reject_local_global(context, &segments, path.span)?;
+                continue;
+            }
             if segments.len() < 2 || !self.is_script_path(context, &segments) {
                 continue;
             }
@@ -1397,6 +1409,29 @@ impl<'a> Resolver<'a> {
             active.remove(&address);
             return Ok(target);
         }
+        // A private `use` is visible to the module's descendants, as in
+        // Rust: `use crate::Preset;` inside `mod grid` reaches the root's
+        // `use preset::Preset;`.
+        if let Some(alias) = self.aliases.get(&address)
+            && within(context, &address, address.modules.len())
+        {
+            self.validate_module_hops(context, &address, reference)?;
+            if !active.insert(address.clone()) {
+                return Err(Failure {
+                    primary: context.source,
+                    secondary: Some(alias.source),
+                    error: Error::InvalidImport {
+                        path: path.join("::").into(),
+                        reason: "cyclic import".into(),
+                        reference,
+                        declaration: None,
+                    },
+                });
+            }
+            let target = self.resolve_any_path(&alias.context, &alias.path, alias.span, active)?;
+            active.remove(&address);
+            return Ok(target);
+        }
         Err(self.unknown_import(context, path, reference))
     }
 
@@ -1452,6 +1487,30 @@ impl<'a> Resolver<'a> {
             }
         }
         Ok(())
+    }
+
+    /// A path that starts with `::` names an outside crate, as in Rust:
+    /// `::config::GAP` is an error when `config` is a module of this crate.
+    fn reject_local_global(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+        reference: Span,
+    ) -> Result<(), Failure> {
+        let Some(first) = path.first() else {
+            return Ok(());
+        };
+        let local = matches!(first.as_str(), "crate" | "self" | "super" | "Self")
+            || self.is_script_path(context, path)
+            || self.module_alias(context, first).is_some();
+        if !local {
+            return Ok(());
+        }
+        Err(Failure {
+            primary: context.source,
+            secondary: None,
+            error: super::not_a_crate(first, reference),
+        })
     }
 
     fn unknown_import(
@@ -1779,7 +1838,12 @@ fn host_target(
             })
         }
         // `use std::fmt;`, for hand-written `Debug` and `Display` impls.
-        None if super::std_fmt_import(&qualified) => Ok(Target::Module),
+        None if super::std_fmt_import(&qualified)
+            || super::tokio_macro(&qualified, host).is_some()
+            || qualified.contains("::") && super::hasher_alias(&qualified).is_some() =>
+        {
+            Ok(Target::Module)
+        }
         None => {
             #[cfg(feature = "rust-import")]
             let missing = native.filter(|site| site.missing_binding(host, &qualified));

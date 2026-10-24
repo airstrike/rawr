@@ -2,8 +2,20 @@
 
 use rawr::{application, host, item, preview, program, Dynamic, EvalAltResult, Position};
 use std::fmt;
+use std::sync::{Arc, Mutex, PoisonError};
 
-use crate::runtime;
+use crate::{dispatch, effect, runtime};
+
+/// What happens to one output once it reaches the UI thread: the rest of
+/// the plan's mappers and checks, ending in a stamped message.
+type Next = Arc<dyn Fn(Dynamic) -> iced::Task<runtime::Message> + Send + Sync>;
+
+/// The owner and authority a plan is lowered under.
+#[derive(Clone)]
+struct Lowering {
+    owner: effect::Owner,
+    authority: Authority,
+}
 
 /// A cloneable description of work to lower at an iced application boundary.
 #[derive(Clone, Debug)]
@@ -37,12 +49,391 @@ enum PreparedKind {
         plan: Box<Prepared>,
         mapper: item::Value,
     },
+    Imported(Imported),
+    Discard(Box<Prepared>),
+    Sip {
+        sipper: Sip,
+        on_progress: item::Value,
+        on_output: item::Value,
+    },
+    Abortable {
+        plan: Box<Prepared>,
+        abort: Arc<Abort>,
+    },
+    Script(item::Value),
+    Send { sender: Sender, value: Dynamic },
+    Join { plans: Box<[Prepared]>, fallible: bool },
+    Select(Box<[Prepared]>),
+}
+
+/// One value a Rust task yields, turned into a Rawr value on the UI thread.
+/// The witness is the one for the task's output type.
+#[doc(hidden)]
+pub type Materialize =
+    Box<dyn FnOnce(Option<&host::runtime::Witness>) -> Result<Dynamic, String> + Send + 'static>;
+
+/// An iced `Task` a Rust function returned. It runs once: Rust's `Task` is
+/// not `Clone`, and a copy of the plan shares the one native task.
+#[derive(Clone)]
+pub(crate) struct Imported(Arc<Mutex<Option<iced::Task<Materialize>>>>);
+
+impl Imported {
+    fn new(task: iced::Task<Materialize>) -> Self {
+        Self(Arc::new(Mutex::new(Some(task))))
+    }
+
+    fn take(&self) -> Option<iced::Task<Materialize>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
+
+impl fmt::Debug for Imported {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Imported(<native task>)")
+    }
+}
+
+/// A Rust function's output on its way into the facade's `Task`: either an
+/// iced `Task<T>` or a `Future<Output = T>`. Generated bridge code calls
+/// `(&Project::new(output)).into_task()` with [`ViaTask`] and [`ViaFuture`]
+/// in scope; method resolution picks the task impl first.
+#[doc(hidden)]
+pub struct Project<T>(std::cell::Cell<Option<T>>);
+
+impl<T> Project<T> {
+    #[must_use]
+    pub fn new(value: T) -> Self {
+        Self(std::cell::Cell::new(Some(value)))
+    }
+
+    fn take(&self) -> T {
+        self.0
+            .take()
+            .expect("a projected Rust output is taken once")
+    }
+}
+
+/// An iced `Task` crosses as it is, actions and all.
+#[doc(hidden)]
+pub trait ViaTask<T> {
+    fn into_task(&self) -> iced::Task<T>;
+}
+
+impl<T> ViaTask<T> for Project<iced::Task<T>> {
+    fn into_task(&self) -> iced::Task<T> {
+        self.take()
+    }
+}
+
+/// A Rust future crosses as iced's `Task::future`.
+#[doc(hidden)]
+pub trait ViaFuture<T> {
+    fn into_task(&self) -> iced::Task<T>;
+}
+
+impl<F> ViaFuture<F::Output> for &Project<F>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn into_task(&self) -> iced::Task<F::Output> {
+        iced::Task::future(self.take())
+    }
+}
+
+/// One step of a Rust sipper: a progress value, or its output.
+#[doc(hidden)]
+pub enum Step {
+    Progress(Materialize),
+    Output(Materialize),
+}
+
+/// A Rust `impl Sipper<Output, Progress>`, which the facade names
+/// `task::Sipper<Output, Progress>`. It runs once, as Rust's does.
+#[derive(Clone)]
+pub struct Sip {
+    task: Arc<Mutex<Option<iced::Task<Step>>>>,
+    /// A script sipper's builder, `async |progress| ..`, in place of a
+    /// Rust task.
+    script: Option<item::Value>,
+    witness: Option<host::runtime::Witness>,
+}
+
+impl Sip {
+    fn take(&self) -> Option<iced::Task<Step>> {
+        self.task.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+
+    /// The witness of the sipper's `Output` (0) or `Progress` (1).
+    fn witness(&self, index: usize) -> Option<host::runtime::Witness> {
+        self.witness
+            .as_ref()
+            .and_then(|witness| witness.argument_witness(index))
+    }
+
+    /// The sipper's progress as a stream, for `Subscription::run`. Each
+    /// value becomes a Rawr value on the UI thread. Its output ends it.
+    pub(crate) fn progress(
+        &self,
+    ) -> Option<iced::futures::stream::BoxStream<'static, Dynamic>> {
+        use iced::futures::StreamExt as _;
+        let stream = iced_runtime::task::into_stream(self.take()?)?;
+        let witness = self.witness(1);
+        Some(
+            stream
+                .filter_map(move |action| {
+                    let witness = witness.clone();
+                    async move {
+                        match action {
+                            iced_runtime::Action::Output(Step::Progress(materialize)) => {
+                                Some(Dynamic::from(host::runtime::Deferred::new(move || {
+                                    materialize(witness.as_ref())
+                                })))
+                            }
+                            _ => None,
+                        }
+                    }
+                })
+                .boxed(),
+        )
+    }
+}
+
+/// iced's `task::Sender` that a script sipper's builder sends its progress
+/// through: each value goes to the `Task::sip` that runs the sipper.
+#[derive(Clone)]
+pub struct Sender(Arc<dyn Fn(Dynamic) -> iced::Task<runtime::Message> + Send + Sync>);
+
+impl fmt::Debug for Sender {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Sender")
+    }
+}
+
+impl fmt::Debug for Sip {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Sipper(<native>)")
+    }
+}
+
+/// Project a Rust sipper into the facade's `task::Sipper`, as iced's
+/// `Task::sip` runs one. The bridge stamps it with the call's witness.
+#[doc(hidden)]
+#[must_use]
+pub fn sipper<S, O, P>(
+    sipper: S,
+    mut on_progress: impl FnMut(P) -> Materialize + Send + 'static,
+    on_output: impl FnOnce(O) -> Materialize + Send + 'static,
+) -> Dynamic
+where
+    S: iced::task::Sipper<O, P> + Send + 'static,
+    O: Send + 'static,
+    P: Send + 'static,
+{
+    let task = iced::Task::sip(
+        sipper,
+        move |progress| Step::Progress(on_progress(progress)),
+        move |output| Step::Output(on_output(output)),
+    );
+    let task = Arc::new(Mutex::new(Some(task)));
+    Dynamic::from(host::runtime::Unwitnessed::new(move |witness| {
+        Dynamic::from(Sip {
+            task,
+            script: None,
+            witness: Some(witness),
+        })
+    }))
+}
+
+/// iced's `task::Handle`: aborts the task `Task::abortable` returned it
+/// with. `abort_on_drop` gives one that aborts when its last copy drops.
+#[derive(Clone)]
+pub struct Handle {
+    abort: Arc<Abort>,
+    guard: Option<Arc<Guard>>,
+}
+
+/// The native abort handle of one abortable plan, once it is lowered.
+#[derive(Default)]
+pub(crate) struct Abort {
+    aborted: std::sync::atomic::AtomicBool,
+    native: Mutex<Option<iced::task::Handle>>,
+}
+
+struct Guard(Arc<Abort>);
+
+thread_local! {
+    /// The handles of the abortable plans lowered in `collect_aborts`.
+    static LOWERED: std::cell::RefCell<Option<Vec<Arc<Abort>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Lower with `lower`, and the handles of the abortable plans it lowered,
+/// which the task's owner aborts when it retires the task.
+pub(crate) fn collect_aborts<R>(lower: impl FnOnce() -> R) -> (R, Vec<Arc<Abort>>) {
+    let outer = LOWERED.with(|lowered| lowered.replace(Some(Vec::new())));
+    let result = lower();
+    let collected = LOWERED
+        .with(|lowered| lowered.replace(outer))
+        .unwrap_or_default();
+    (result, collected)
+}
+
+impl Abort {
+    pub(crate) fn abort(&self) {
+        self.aborted.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(handle) = self.native.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            handle.abort();
+        }
+    }
+
+    fn is_aborted(&self) -> bool {
+        self.aborted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Make a lowered task abortable through this handle.
+    fn attach(self: &Arc<Self>, task: iced::Task<runtime::Message>) -> iced::Task<runtime::Message> {
+        LOWERED.with(|lowered| {
+            if let Some(lowered) = lowered.borrow_mut().as_mut() {
+                lowered.push(self.clone());
+            }
+        });
+        let (task, handle) = task.abortable();
+        if self.is_aborted() {
+            handle.abort();
+        } else {
+            *self.native.lock().unwrap_or_else(PoisonError::into_inner) = Some(handle);
+        }
+        task
+    }
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl fmt::Debug for Handle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Handle")
+            .field("aborted", &self.abort.is_aborted())
+            .finish()
+    }
+}
+
+impl fmt::Debug for Abort {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Abort")
+    }
+}
+
+/// A task that calls a Rust function returning a future when it first
+/// runs, and then awaits the future. The call happens on iced's executor,
+/// so a future that needs its runtime, as tokio's `sleep` does, finds it.
+#[doc(hidden)]
+pub fn lazy<F>(make: impl FnOnce() -> F + Send + 'static) -> iced::Task<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    iced::Task::future(async move { make().await })
+}
+
+/// Project an iced `Task` from a Rust function into the facade's `Task`.
+/// The bridge stamps it with the call's output witness.
+#[doc(hidden)]
+#[must_use]
+pub fn imported(task: iced::Task<Materialize>) -> Dynamic {
+    let task = Imported::new(task);
+    Dynamic::from(host::runtime::Unwitnessed::new(move |witness| {
+        Dynamic::from(Plan {
+            kind: Kind::Imported(task),
+            witness: Some(witness),
+        })
+    }))
+}
+
+/// What makes a tokio future, for [`Native::Tokio`].
+#[derive(Clone)]
+pub(crate) struct Factory(
+    pub(crate) Arc<dyn Fn() -> iced::futures::future::BoxFuture<'static, Dynamic> + Send + Sync>,
+);
+
+impl fmt::Debug for Factory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Factory")
+    }
+}
+
+/// The task of a tokio future `make` makes. A method's task has no
+/// witness: its output is a value Rawr code gave it, as `recv` gives what
+/// `send` took.
+pub(crate) fn tokio_task(
+    witness: Option<host::runtime::Witness>,
+    make: impl Fn() -> iced::futures::future::BoxFuture<'static, Dynamic> + Send + Sync + 'static,
+) -> Dynamic {
+    Dynamic::from(Plan {
+        kind: Kind::Native(Native::Tokio(Factory(Arc::new(make)))),
+        witness,
+    })
+}
+
+/// tokio's `join!` (or `try_join!`) and `select!` over `values`, each a
+/// `Task`.
+pub(crate) fn tokio_combined(
+    witness: host::runtime::Witness,
+    values: &mut [&mut Dynamic],
+    join: Option<bool>,
+    path: &str,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    let plans = values
+        .iter_mut()
+        .map(|plan| take(plan, path))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_boxed_slice();
+    Ok(Dynamic::from(Plan {
+        kind: match join {
+            Some(fallible) => Kind::Join { plans, fallible },
+            None => Kind::Select(plans),
+        },
+        witness: Some(witness),
+    }))
+}
+
+/// tokio's `time::timeout`: `plan`'s output in `Ok`, unless `duration`
+/// ends first, which gives `Err(elapsed)`.
+pub(crate) fn tokio_timeout(
+    witness: host::runtime::Witness,
+    plan: &mut Dynamic,
+    duration: std::time::Duration,
+    elapsed: Dynamic,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    let plan = take(plan, "time::timeout")?;
+    let timer = Plan {
+        kind: Kind::Native(Native::Tokio(Factory(Arc::new(move || {
+            let elapsed = elapsed.clone();
+            let sleep = crate::tokio_facade::sleep(duration);
+            Box::pin(async move {
+                sleep.await;
+                elapsed
+            })
+        })))),
+        witness: None,
+    };
+    Ok(Dynamic::from(Plan {
+        kind: Kind::Select(Box::new([plan, timer])),
+        witness: Some(witness),
+    }))
 }
 
 /// iced's own tasks: `exit`, `window::latest`/`close` and the focus
 /// operations. They run in iced's runtime and touch no Rawr authority.
 #[derive(Clone, Debug)]
 pub(crate) enum Native {
+    /// A tokio future, made each time the task runs (`tokio_facade`).
+    Tokio(Factory),
     Exit,
     LatestWindow,
     ScaleFactor(iced::window::Id),
@@ -74,6 +465,7 @@ pub(crate) enum Native {
 impl Native {
     fn lower(self) -> iced::Task<Result<Dynamic, Error>> {
         match self {
+            Self::Tokio(factory) => iced::Task::future((factory.0)()).map(Ok),
             Self::Exit => iced::exit(),
             Self::LatestWindow => {
                 iced::window::latest().map(|id| Ok(rawr::option::from(id)))
@@ -136,6 +528,34 @@ enum Kind {
         plan: Box<Plan>,
         mapper: item::Value,
     },
+    /// An iced `Task` a Rust function returned, actions and all.
+    Imported(Imported),
+    /// iced's `Task::discard`: the plan runs, and its outputs go nowhere.
+    Discard(Box<Plan>),
+    /// iced's `Task::sip`: a Rust sipper's progress and output, each mapped.
+    Sip {
+        sipper: Sip,
+        on_progress: item::Value,
+        on_output: item::Value,
+    },
+    /// iced's `Task::abortable`: the plan, abortable through its `Handle`.
+    Abortable {
+        plan: Box<Plan>,
+        abort: Arc<Abort>,
+    },
+    /// An async body, not yet started: its step function
+    /// (`rawr::future`). Each step runs on the UI thread.
+    Script(item::Value),
+    /// `sender.send(value)`: the value goes to the sipper's progress, and
+    /// the task gives `()`.
+    Send { sender: Sender, value: Dynamic },
+    /// `futures::future::join` (or `try_join`, which ends at the first
+    /// `Err`): the plans run at once, and the task gives their outputs.
+    Join { plans: Box<[Plan]>, fallible: bool },
+    /// tokio's `select!` and `timeout`: the plans run at once, and the
+    /// first output ends the others. Plan `i` of `n` gives `Err` `i` times
+    /// around its output, and then `Ok` unless it is the last.
+    Select(Box<[Plan]>),
 }
 
 /// Current executable authority used only while a symbolic plan is lowered.
@@ -168,6 +588,10 @@ pub enum Error {
     Message(application::RuntimeError),
     /// A completed task plan did not produce the selected preview's exact Message.
     PreviewMessage(preview::RuntimeError),
+    /// A Rust task's output could not become a Rawr value.
+    Imported(String),
+    /// A task from Rust was already run. Rust's `Task` is not `Clone`.
+    Spent,
 }
 
 impl Plan {
@@ -246,7 +670,15 @@ impl Plan {
             | Kind::Chain { .. }
             | Kind::Map { .. }
             | Kind::Native(_)
-            | Kind::AndThen { .. } => None,
+            | Kind::AndThen { .. }
+            | Kind::Imported(_)
+            | Kind::Discard(_)
+            | Kind::Sip { .. }
+            | Kind::Abortable { .. }
+            | Kind::Script(_)
+            | Kind::Send { .. }
+            | Kind::Join { .. }
+            | Kind::Select(_) => None,
             Kind::Done(payload) => Some(payload),
         }
     }
@@ -264,13 +696,12 @@ impl Plan {
         generation: program::GenerationId,
         authority: &Authority,
     ) -> Result<iced::Task<runtime::Message>, Error> {
-        let finish = authority.clone();
-        Ok(self.lower_payload(authority)?.map(move |result| {
-            match result.and_then(|payload| finish.finish(payload)) {
-                Ok(payload) => runtime::Message::new(instance, generation, payload),
-                Err(error) => runtime::Message::task_error(instance, generation, error),
-            }
-        }))
+        let lowering = Lowering {
+            owner: effect::Owner::new(instance, generation),
+            authority: authority.clone(),
+        };
+        let finish = lowering.finish();
+        self.lower_with(&lowering, finish)
     }
 
     pub(crate) fn prepare_application(
@@ -307,50 +738,440 @@ impl Plan {
                 plan: Box::new(plan.prepare_application(authority)?),
                 mapper,
             },
+            Kind::Imported(task) => PreparedKind::Imported(task),
+            Kind::Discard(plan) => PreparedKind::Discard(Box::new(plan.prepare_application(authority)?)),
+            Kind::Sip {
+                sipper,
+                on_progress,
+                on_output,
+            } => PreparedKind::Sip {
+                sipper,
+                on_progress,
+                on_output,
+            },
+            Kind::Abortable { plan, abort } => PreparedKind::Abortable {
+                plan: Box::new(plan.prepare_application(authority)?),
+                abort,
+            },
+            Kind::Script(step) => PreparedKind::Script(step),
+            Kind::Send { sender, value } => PreparedKind::Send { sender, value },
+            Kind::Join { plans, fallible } => PreparedKind::Join {
+                plans: plans
+                    .into_vec()
+                    .into_iter()
+                    .map(|plan| plan.prepare_application(authority))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+                fallible,
+            },
+            Kind::Select(plans) => PreparedKind::Select(
+                plans
+                    .into_vec()
+                    .into_iter()
+                    .map(|plan| plan.prepare_application(authority))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+            ),
         };
         Ok(Prepared { kind, witness })
     }
 
-    fn lower_payload(
-        self,
-        authority: &Authority,
-    ) -> Result<iced::Task<Result<Dynamic, Error>>, Error> {
+    /// Lower this plan so that each output goes to `next` on the UI thread.
+    /// Only native work runs in the returned task's stream.
+    fn lower_with(self, lowering: &Lowering, next: Next) -> Result<iced::Task<runtime::Message>, Error> {
         let Self { kind, witness } = self;
-        let task = match kind {
+        let output = witness.as_ref().and_then(|witness| witness.argument_witness(0));
+        let next = lowering.validated(witness, next);
+        Ok(match kind {
             Kind::None => iced::Task::none(),
-            Kind::Done(payload) => iced::Task::done(Ok(payload)),
+            // A ready value is already on the UI thread.
+            Kind::Done(payload) => next(payload),
             Kind::Perform { call, mapper } => {
-                let pending = authority.issue(*call, &mapper).map_err(Error::Operation)?;
-                iced::Task::perform(pending, |result| result.map_err(Error::Operation))
+                let pending = lowering
+                    .authority
+                    .issue(*call, &mapper)
+                    .map_err(Error::Operation)?;
+                lowering.operation(pending, next)
             }
-            Kind::Batch(plans) => plans
-                .into_vec()
-                .into_iter()
-                .map(|plan| plan.lower_payload(authority))
-                .collect::<Result<Vec<_>, _>>()
-                .map(iced::Task::batch)?,
+            Kind::Batch(plans) => iced::Task::batch(
+                plans
+                    .into_vec()
+                    .into_iter()
+                    .map(|plan| plan.lower_with(lowering, next.clone()))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
             Kind::Chain { first, second } => {
-                let first = first.lower_payload(authority)?;
-                let second = second.lower_payload(authority)?;
-                first.chain(second)
+                let first = first.lower_with(lowering, next.clone())?;
+                first.chain(second.lower_with(lowering, next)?)
             }
-            Kind::Map { plan, mapper } => {
-                let authority = authority.clone();
-                plan.lower_payload(&authority)?
-                    .map(move |result| result.and_then(|payload| authority.map(payload, &mapper)))
-            }
-            Kind::Native(native) => native.lower(),
+            Kind::Map { plan, mapper } => plan.lower_with(lowering, lowering.mapped(mapper, next))?,
+            Kind::Native(native) => lowering.resume(native.lower(), next),
             Kind::AndThen { plan, mapper } => {
-                and_then(plan.lower_payload(authority)?, authority.clone(), mapper)
+                let lowering_inner = lowering.clone();
+                let next = Arc::new(move |payload| lowering_inner.and_then(payload, &mapper, next.clone()));
+                plan.lower_with(lowering, next)?
             }
-        };
+            Kind::Imported(task) => lowering.imported(&task, output, next),
+            Kind::Discard(plan) => plan.lower_with(lowering, discard())?,
+            Kind::Sip {
+                sipper,
+                on_progress,
+                on_output,
+            } => lowering.sip(&sipper, on_progress, on_output, next),
+            Kind::Abortable { plan, abort } => abort.attach(plan.lower_with(lowering, next)?),
+            Kind::Script(step) => lowering.script(step, Dynamic::UNIT, next),
+            Kind::Send { sender, value } => lowering.send(&sender, value, next),
+            Kind::Join { plans, fallible } => {
+                let joined = Joined::new(plans.len(), fallible, next);
+                iced::Task::batch(
+                    plans
+                        .into_vec()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, plan)| plan.lower_with(lowering, joined.slot(index)))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+            }
+            Kind::Select(plans) => {
+                let raced = Raced::new(plans.len(), next);
+                let mut tasks = Vec::with_capacity(plans.len());
+                for (index, plan) in plans.into_vec().into_iter().enumerate() {
+                    tasks.push(raced.run(index, plan.lower_with(lowering, raced.slot(index))?));
+                }
+                iced::Task::batch(tasks)
+            }
+        })
+    }
+}
+
+/// The outputs of a join so far. The first output of each plan fills its
+/// slot; once every slot is full, or a `try_join` plan gives an `Err`, the
+/// join gives its one output.
+#[derive(Clone)]
+struct Joined(Arc<Mutex<(Vec<Option<Dynamic>>, Option<Next>)>>, bool);
+
+impl Joined {
+    fn new(count: usize, fallible: bool, next: Next) -> Self {
+        Self(Arc::new(Mutex::new((vec![None; count], Some(next)))), fallible)
+    }
+
+    fn slot(&self, index: usize) -> Next {
+        let joined = self.clone();
+        Arc::new(move |mut output| {
+            let mut state = joined.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let (slots, next) = &mut *state;
+            if next.is_none() || slots[index].is_some() {
+                return iced::Task::none();
+            }
+            if joined.1 {
+                match rawr::result::take(&mut output) {
+                    Some(Ok(value)) => output = value,
+                    Some(Err(error)) => {
+                        let next = next.take().expect("the join has not ended");
+                        drop(state);
+                        return next(rawr::result::err(error));
+                    }
+                    None => return iced::Task::none(),
+                }
+            }
+            slots[index] = Some(output);
+            if slots.iter().any(Option::is_none) {
+                return iced::Task::none();
+            }
+            let outputs = slots.iter_mut().filter_map(Option::take).collect();
+            let next = next.take().expect("the join has not ended");
+            drop(state);
+            let outputs = Dynamic::from_array(outputs);
+            next(if joined.1 { rawr::result::ok(outputs) } else { outputs })
+        })
+    }
+}
+
+/// A select's plans while they run. The first output wins: it goes on in
+/// the shape [`Kind::Select`] gives, and every other plan is aborted.
+#[derive(Clone)]
+struct Raced(Arc<Mutex<Race>>);
+
+struct Race {
+    next: Option<Next>,
+    winner: Option<usize>,
+    handles: Vec<Option<iced::task::Handle>>,
+}
+
+impl Raced {
+    fn new(count: usize, next: Next) -> Self {
+        Self(Arc::new(Mutex::new(Race {
+            next: Some(next),
+            winner: None,
+            handles: vec![None; count],
+        })))
+    }
+
+    /// Plan `index`'s task, abortable by a win of another plan. A plan
+    /// lowered after another won (one whose output was ready) does not
+    /// run, and a plan that won as it was lowered goes on.
+    fn run(&self, index: usize, task: iced::Task<runtime::Message>) -> iced::Task<runtime::Message> {
+        let mut race = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        match race.winner {
+            Some(winner) if winner == index => task,
+            Some(_) => iced::Task::none(),
+            None => {
+                let (task, handle) = task.abortable();
+                race.handles[index] = Some(handle);
+                task
+            }
+        }
+    }
+
+    fn slot(&self, index: usize) -> Next {
+        let raced = self.clone();
+        Arc::new(move |output| {
+            let mut race = raced.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(next) = race.next.take() else {
+                return iced::Task::none();
+            };
+            race.winner = Some(index);
+            let count = race.handles.len();
+            for (other, handle) in race.handles.iter_mut().enumerate() {
+                if other != index
+                    && let Some(handle) = handle.take()
+                {
+                    handle.abort();
+                }
+            }
+            drop(race);
+            let mut output = if index + 1 < count {
+                rawr::result::ok(output)
+            } else {
+                output
+            };
+            for _ in 0..index {
+                output = rawr::result::err(output);
+            }
+            next(output)
+        })
+    }
+}
+
+/// The continuation of a discarded task: nothing.
+fn discard() -> Next {
+    Arc::new(|_| iced::Task::none())
+}
+
+impl Lowering {
+    /// The last step: check the application's Message and stamp it.
+    fn finish(&self) -> Next {
+        let lowering = self.clone();
+        Arc::new(move |payload| match lowering.authority.finish(payload) {
+            Ok(payload) => iced::Task::done(runtime::Message::new(
+                lowering.owner.instance(),
+                lowering.owner.generation(),
+                payload,
+            )),
+            Err(error) => lowering.fail(error),
+        })
+    }
+
+    fn fail(&self, error: Error) -> iced::Task<runtime::Message> {
+        iced::Task::done(runtime::Message::task_error(
+            self.owner.instance(),
+            self.owner.generation(),
+            error,
+        ))
+    }
+
+    /// Check each output against the plan node's witness before `next`.
+    fn validated(&self, witness: Option<host::runtime::Witness>, next: Next) -> Next {
         let Some(witness) = witness else {
-            return Ok(task);
+            return next;
         };
-        let authority = authority.clone();
-        Ok(task.map(move |result| {
-            result.and_then(|payload| authority.validate_output(&witness, payload))
-        }))
+        let lowering = self.clone();
+        Arc::new(move |payload| match lowering.authority.validate_output(&witness, payload) {
+            Ok(payload) => next(payload),
+            Err(error) => lowering.fail(error),
+        })
+    }
+
+    /// Run the script mapper on each output before `next`.
+    fn mapped(&self, mapper: item::Value, next: Next) -> Next {
+        let lowering = self.clone();
+        Arc::new(move |payload| match lowering.authority.map(payload, &mapper) {
+            Ok(payload) => next(payload),
+            Err(error) => lowering.fail(error),
+        })
+    }
+
+    /// iced's `Task<Option<T>>::and_then`: each `Some` given to `mapper`,
+    /// whose plan is lowered here, on the UI thread, and then runs.
+    fn and_then(
+        &self,
+        mut payload: Dynamic,
+        mapper: &item::Value,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
+        let actual = payload.type_name().to_string();
+        let inner = match rawr::option::take(&mut payload) {
+            Some(Some(inner)) => inner,
+            Some(None) => return iced::Task::none(),
+            None => return self.fail(Error::Representation { actual }),
+        };
+        let plan = self
+            .authority
+            .map(inner, mapper)
+            .and_then(Plan::from_dynamic)
+            .and_then(|plan| plan.lower_with(self, next));
+        plan.unwrap_or_else(|error| self.fail(error))
+    }
+
+    /// Hand each output of a native task to `next` on the UI thread.
+    fn resume(&self, task: iced::Task<Result<Dynamic, Error>>, next: Next) -> iced::Task<runtime::Message> {
+        let lowering = self.clone();
+        task.then(move |result| {
+            let next = next.clone();
+            let failed = lowering.clone();
+            dispatch::on_ui(lowering.owner, move || match result {
+                Ok(payload) => next(payload),
+                Err(error) => failed.fail(error),
+            })
+        })
+    }
+
+    /// Run a Rust task's stream natively, actions and all. Each value it
+    /// yields becomes a Rawr value, under the output's witness, on the UI
+    /// thread before `next`.
+    fn imported(
+        &self,
+        task: &Imported,
+        output: Option<host::runtime::Witness>,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
+        let Some(task) = task.take() else {
+            return self.fail(Error::Spent);
+        };
+        let lowering = self.clone();
+        let owner = self.owner;
+        dispatch::each_on_ui(owner, task, move |materialize: Materialize| {
+            match materialize(output.as_ref()) {
+                Ok(payload) => next(payload),
+                Err(error) => lowering.fail(Error::Imported(error)),
+            }
+        })
+    }
+
+    /// iced's `Task::sip`: run a Rust sipper natively. Each progress value and
+    /// its output become Rawr values on the UI thread, where their mappers
+    /// run before `next`.
+    fn sip(
+        &self,
+        sipper: &Sip,
+        on_progress: item::Value,
+        on_output: item::Value,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
+        if let Some(builder) = &sipper.script {
+            return self.sip_script(builder, on_progress, on_output, next);
+        }
+        let Some(task) = sipper.take() else {
+            return self.fail(Error::Spent);
+        };
+        let witnesses = (sipper.witness(1), sipper.witness(0));
+        let mappers = (on_progress, on_output);
+        let lowering = self.clone();
+        let owner = self.owner;
+        dispatch::each_on_ui(owner, task, move |step: Step| {
+            let (materialize, witness, mapper) = match step {
+                Step::Progress(materialize) => (materialize, &witnesses.0, &mappers.0),
+                Step::Output(materialize) => (materialize, &witnesses.1, &mappers.1),
+            };
+            let payload = materialize(witness.as_ref())
+                .map_err(Error::Imported)
+                .and_then(|payload| lowering.authority.map(payload, mapper));
+            match payload {
+                Ok(payload) => next(payload),
+                Err(error) => lowering.fail(error),
+            }
+        })
+    }
+
+    /// iced's `Task::sip` over a script sipper: its builder runs with a
+    /// `Sender` whose values go through `on_progress` to `next`, and the
+    /// output of the task it returns goes through `on_output`.
+    fn sip_script(
+        &self,
+        builder: &item::Value,
+        on_progress: item::Value,
+        on_output: item::Value,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
+        let progress = self.mapped(on_progress, next.clone());
+        let sender = Sender(progress);
+        let plan = self
+            .authority
+            .map(Dynamic::from(sender), builder)
+            .and_then(Plan::from_dynamic)
+            .and_then(|plan| plan.lower_with(self, self.mapped(on_output, next)));
+        plan.unwrap_or_else(|error| self.fail(error))
+    }
+
+    /// `sender.send(value)`: the progress first, then the sending body
+    /// goes on, from a step the UI thread runs, so a loop of sends never
+    /// nests.
+    fn send(&self, sender: &Sender, value: Dynamic, next: Next) -> iced::Task<runtime::Message> {
+        let progress = (sender.0)(value);
+        progress.chain(dispatch::on_ui(self.owner, move || next(Dynamic::UNIT)))
+    }
+
+    /// Run an async body's next step here, on the UI thread: from its
+    /// start with `()`, or from a frame. When it awaits, the awaited task
+    /// runs, and its first output resumes the body, again on the UI thread,
+    /// after the freshness check of the step that hands it back. A stale
+    /// step is dropped, which ends the whole task: a frame never resumes
+    /// against new code. When the body ends, its output goes to `next`.
+    fn script(&self, step: item::Value, resume: Dynamic, next: Next) -> iced::Task<runtime::Message> {
+        let poll = match self.authority.map(resume, &step) {
+            Ok(poll) => poll,
+            Err(error) => return self.fail(error),
+        };
+        match poll.try_cast_result::<rawr::future::Poll>() {
+            Ok(rawr::future::Poll::Ready(output)) => next(output),
+            // A body that never awaits is no machine: it gives its output.
+            Err(output) => next(output),
+            Ok(rawr::future::Poll::Pending { future, frame }) => {
+                let awaited = match Plan::from_dynamic(future) {
+                    Ok(awaited) => awaited,
+                    Err(error) => return self.fail(error),
+                };
+                let lowering = self.clone();
+                // A future gives one output; a task's later outputs resume
+                // nothing.
+                let frame = Arc::new(Mutex::new(Some(frame)));
+                let resume: Next = Arc::new(move |output| {
+                    let Some(frame) = frame.lock().unwrap_or_else(PoisonError::into_inner).take() else {
+                        return iced::Task::none();
+                    };
+                    lowering.script(step.clone(), frame.resume(output), next.clone())
+                });
+                awaited
+                    .lower_with(self, resume)
+                    .unwrap_or_else(|error| self.fail(error))
+            }
+        }
+    }
+
+    /// Await an issued operation natively, then validate its output and run
+    /// its mapper on the UI thread.
+    fn operation(&self, pending: host::operation::Pending, next: Next) -> iced::Task<runtime::Message> {
+        let lowering = self.clone();
+        iced::Task::future(pending).then(move |completed| {
+            let next = next.clone();
+            let failed = lowering.clone();
+            dispatch::on_ui(lowering.owner, move || {
+                match completed.and_then(host::operation::Finish::finish) {
+                    Ok(payload) => next(payload),
+                    Err(error) => failed.fail(Error::Operation(error)),
+                }
+            })
+        })
     }
 }
 
@@ -366,83 +1187,81 @@ impl Prepared {
         context: &rawr::reload::installation::installed::Context<'_>,
         authority: Authority,
     ) -> iced::Task<runtime::Message> {
-        let finish = authority.clone();
-        self.lower_payload(context, &authority).map(move |result| {
-            match result.and_then(|payload| finish.finish(payload)) {
-                Ok(payload) => runtime::Message::new(instance, generation, payload),
-                Err(error) => runtime::Message::task_error(instance, generation, error),
-            }
-        })
+        let lowering = Lowering {
+            owner: effect::Owner::new(instance, generation),
+            authority,
+        };
+        let finish = lowering.finish();
+        self.lower_with(context, &lowering, finish)
     }
 
-    fn lower_payload(
+    fn lower_with(
         self,
         context: &rawr::reload::installation::installed::Context<'_>,
-        authority: &Authority,
-    ) -> iced::Task<Result<Dynamic, Error>> {
+        lowering: &Lowering,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
         let Self { kind, witness } = self;
-        let task = match kind {
+        let output = witness.as_ref().and_then(|witness| witness.argument_witness(0));
+        let next = lowering.validated(witness, next);
+        match kind {
             PreparedKind::None => iced::Task::none(),
-            PreparedKind::Done(payload) => iced::Task::done(Ok(payload)),
-            PreparedKind::Perform { pending } => {
-                let pending = context.operation(pending);
-                iced::Task::perform(pending, |result| result.map_err(Error::Operation))
-            }
+            PreparedKind::Done(payload) => next(payload),
+            PreparedKind::Perform { pending } => lowering.operation(context.operation(pending), next),
             PreparedKind::Batch(plans) => iced::Task::batch(
                 plans
                     .into_vec()
                     .into_iter()
-                    .map(|plan| plan.lower_payload(context, authority)),
+                    .map(|plan| plan.lower_with(context, lowering, next.clone())),
             ),
             PreparedKind::Chain { first, second } => first
-                .lower_payload(context, authority)
-                .chain(second.lower_payload(context, authority)),
+                .lower_with(context, lowering, next.clone())
+                .chain(second.lower_with(context, lowering, next)),
             PreparedKind::Map { plan, mapper } => {
-                let authority = authority.clone();
-                plan.lower_payload(context, &authority)
-                    .map(move |result| result.and_then(|payload| authority.map(payload, &mapper)))
+                plan.lower_with(context, lowering, lowering.mapped(mapper, next))
             }
-            PreparedKind::Native(native) => native.lower(),
+            PreparedKind::Native(native) => lowering.resume(native.lower(), next),
             PreparedKind::AndThen { plan, mapper } => {
-                and_then(plan.lower_payload(context, authority), authority.clone(), mapper)
+                let lowering_inner = lowering.clone();
+                let next = Arc::new(move |payload| lowering_inner.and_then(payload, &mapper, next.clone()));
+                plan.lower_with(context, lowering, next)
             }
-        };
-        let Some(witness) = witness else {
-            return task;
-        };
-        let authority = authority.clone();
-        task.map(move |result| {
-            result.and_then(|payload| authority.validate_output(&witness, payload))
-        })
-    }
-}
-
-/// Each `Some` the task yields, given to `mapper`, whose plan then runs.
-fn and_then(
-    task: iced::Task<Result<Dynamic, Error>>,
-    authority: Authority,
-    mapper: item::Value,
-) -> iced::Task<Result<Dynamic, Error>> {
-    task.then(move |result| {
-        let mut payload = match result {
-            Ok(payload) => payload,
-            Err(error) => return iced::Task::done(Err(error)),
-        };
-        let actual = payload.type_name().to_string();
-        let inner = match rawr::option::take(&mut payload) {
-            Some(Some(inner)) => inner,
-            Some(None) => return iced::Task::none(),
-            None => return iced::Task::done(Err(Error::Representation { actual })),
-        };
-        let next = authority
-            .map(inner, &mapper)
-            .and_then(Plan::from_dynamic)
-            .and_then(|plan| plan.lower_payload(&authority));
-        match next {
-            Ok(task) => task,
-            Err(error) => iced::Task::done(Err(error)),
+            PreparedKind::Imported(task) => lowering.imported(&task, output, next),
+            PreparedKind::Discard(plan) => plan.lower_with(context, lowering, discard()),
+            PreparedKind::Sip {
+                sipper,
+                on_progress,
+                on_output,
+            } => lowering.sip(&sipper, on_progress, on_output, next),
+            PreparedKind::Abortable { plan, abort } => {
+                abort.attach(plan.lower_with(context, lowering, next))
+            }
+            PreparedKind::Script(step) => lowering.script(step, Dynamic::UNIT, next),
+            PreparedKind::Send { sender, value } => lowering.send(&sender, value, next),
+            PreparedKind::Join { plans, fallible } => {
+                let joined = Joined::new(plans.len(), fallible, next);
+                iced::Task::batch(
+                    plans
+                        .into_vec()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, plan)| plan.lower_with(context, lowering, joined.slot(index))),
+                )
+            }
+            PreparedKind::Select(plans) => {
+                let raced = Raced::new(plans.len(), next);
+                let tasks = plans
+                    .into_vec()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, plan)| {
+                        raced.run(index, plan.lower_with(context, lowering, raced.slot(index)))
+                    })
+                    .collect::<Vec<_>>();
+                iced::Task::batch(tasks)
+            }
         }
-    })
+    }
 }
 
 impl Authority {
@@ -512,6 +1331,20 @@ impl Default for Plan {
     }
 }
 
+#[cfg(test)]
+impl Plan {
+    /// A Rust task whose outputs go nowhere, as `Task::discard` of one.
+    pub(crate) fn discarded_rust_task(task: iced::Task<Materialize>) -> Self {
+        Self {
+            kind: Kind::Discard(Box::new(Self {
+                kind: Kind::Imported(Imported::new(task)),
+                witness: None,
+            })),
+            witness: None,
+        }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -532,6 +1365,10 @@ impl fmt::Display for Error {
                     "preview task plan produced invalid Message: {error}"
                 )
             }
+            Self::Imported(error) => {
+                write!(formatter, "a Rust task's output could not cross into Rawr: {error}")
+            }
+            Self::Spent => formatter.write_str("this task from Rust already ran, and a Task runs once"),
         }
     }
 }
@@ -546,6 +1383,7 @@ impl std::error::Error for Error {
             Self::Output(error) => Some(error),
             Self::Message(error) => Some(error),
             Self::PreviewMessage(error) => Some(error),
+            Self::Imported(_) | Self::Spent => None,
         }
     }
 }
@@ -733,6 +1571,17 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
     builder
         .bind_type_attestation("iced::Task", |value, expected| {
             let plan = value.read_lock::<Plan>()?;
+            // `sender.send(value)` is a method, which mints no witness. Its
+            // task gives `()` and nothing else.
+            if matches!(plan.kind, Kind::Send { .. }) {
+                return expected.attest(
+                    expected.argument_count() == 1 && expected.argument_matches(0, &Dynamic::UNIT),
+                );
+            }
+            // A tokio method's task gives a value Rawr code gave it.
+            if plan.witness.is_none() && matches!(plan.kind, Kind::Native(Native::Tokio(_))) {
+                return expected.attest(expected.argument_count() == 1);
+            }
             if expected.argument_count() != 1
                 || !plan
                     .done_payload()
@@ -804,6 +1653,17 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             )))
         })
         .expect("the iced facade must retain the exact Task::perform item");
+    rawr.bind_with_context("rawr_iced::task::script", |call, args| {
+        let [step] = args else {
+            return Err(arity("task::script", 1, args.len()));
+        };
+        let step = take_value::<item::Value>(step, "an async body's step function")?;
+        Ok(Dynamic::from(Plan {
+            kind: Kind::Script(step),
+            witness: Some(call.output_witness().map_err(witness_error)?),
+        }))
+    })
+    .expect("the rawr_iced facade must retain the async body's Task");
     rawr.bind_with_context("rawr_iced::task::batch", |call, args| {
         let mut plans = Vec::with_capacity(args.len());
         for value in args {
@@ -830,6 +1690,179 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             Ok(Dynamic::from(first.chain(second, witness)))
         })
         .expect("the iced facade must retain the exact Task::chain item");
+    builder
+        .bind_with_context("iced::Task::future", |_call, args| {
+            // A Rust future already crossed as a `Task` of its output.
+            let [future] = args else {
+                return Err(arity("Task::future", 1, args.len()));
+            };
+            Ok(Dynamic::from(take(future, "Task::future")?))
+        })
+        .expect("the iced facade must retain Task::future");
+    builder
+        .bind_with_context("iced::Task::discard", |call, args| {
+            let [plan] = args else {
+                return Err(arity("Task::discard", 1, args.len()));
+            };
+            let plan = take(plan, "Task::discard")?;
+            let witness = plan.witness.as_ref().ok_or_else(|| {
+                EvalAltResult::ErrorRuntime(
+                    "Task::discard received an unattested plan".into(),
+                    Position::NONE,
+                )
+            })?;
+            let witness = call.transform_witness(witness).map_err(witness_error)?;
+            Ok(Dynamic::from(Plan {
+                kind: Kind::Discard(Box::new(plan)),
+                witness: Some(witness),
+            }))
+        })
+        .expect("the iced facade must retain Task::discard");
+    builder
+        .bind_with_context("iced::Task::sip", |call, args| {
+            let [sipper, on_progress, on_output] = args else {
+                return Err(arity("Task::sip", 3, args.len()));
+            };
+            let sipper = take_value::<Sip>(sipper, "task::Sipper")?;
+            let on_progress = take_value::<item::Value>(on_progress, "a symbolic function")?;
+            let on_output = take_value::<item::Value>(on_output, "a symbolic function")?;
+            Ok(Dynamic::from(Plan {
+                kind: Kind::Sip {
+                    sipper,
+                    on_progress,
+                    on_output,
+                },
+                witness: Some(call.output_witness().map_err(witness_error)?),
+            }))
+        })
+        .expect("the iced facade must retain Task::sip");
+    for (path, fallible) in [
+        ("iced::futures::future::join", false),
+        ("iced::futures::future::try_join", true),
+    ] {
+        builder
+            .bind_with_context(path, move |call, args| {
+                let plans = args
+                    .iter_mut()
+                    .map(|plan| take(plan, path))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Dynamic::from(Plan {
+                    kind: Kind::Join {
+                        plans: plans.into_boxed_slice(),
+                        fallible,
+                    },
+                    witness: Some(call.output_witness().map_err(witness_error)?),
+                }))
+            })
+            .expect("the iced facade must retain futures::future::join and try_join");
+    }
+    builder
+        .bind_with_context("iced::task::sipper", |call, args| {
+            let [builder] = args else {
+                return Err(arity("task::sipper", 1, args.len()));
+            };
+            let builder = take_value::<item::Value>(builder, "a symbolic function")?;
+            Ok(Dynamic::from(Sip {
+                task: Arc::new(Mutex::new(None)),
+                script: Some(builder),
+                witness: Some(call.output_witness().map_err(witness_error)?),
+            }))
+        })
+        .expect("the iced facade must retain task::sipper");
+    // A sender carries no type of its own: the `Task::sip` that made it
+    // checks each value it sends through the progress mapper.
+    builder
+        .bind_type_attestation("iced::task::Sender", |value, expected| {
+            expected.attest(value.read_lock::<Sender>().is_some())
+        })
+        .expect("the iced facade must declare task::Sender exactly once");
+    builder
+        .bind_with_context("iced::task::Sender::send", |_call, args| {
+            let [sender, value] = args else {
+                return Err(arity("task::Sender::send", 2, args.len()));
+            };
+            let sender = sender.read_lock::<Sender>().map(|sender| sender.clone()).ok_or_else(|| {
+                EvalAltResult::ErrorRuntime("expected a `task::Sender`".into(), Position::NONE)
+            })?;
+            Ok(Dynamic::from(Plan {
+                kind: Kind::Send {
+                    sender,
+                    value: value.take(),
+                },
+                // A method mints no witness; the sending body awaits this
+                // task at once.
+                witness: None,
+            }))
+        })
+        .expect("the iced facade must retain task::Sender::send");
+    builder
+        .bind_type_attestation("iced::task::Sipper", |value, expected| {
+            let sipper = value.read_lock::<Sip>()?;
+            expected.attest_witness(sipper.witness.as_ref())
+        })
+        .expect("the iced facade must declare task::Sipper exactly once");
+    builder
+        .bind_with_context("iced::Task::abortable", |_call, args| {
+            let [plan] = args else {
+                return Err(arity("Task::abortable", 1, args.len()));
+            };
+            let plan = take(plan, "Task::abortable")?;
+            // The abortable task has the receiver's own type and witness.
+            let witness = plan.witness.clone();
+            let abort = Arc::new(Abort::default());
+            let handle = Handle {
+                abort: abort.clone(),
+                guard: None,
+            };
+            let plan = Plan {
+                kind: Kind::Abortable {
+                    plan: Box::new(plan),
+                    abort,
+                },
+                witness,
+            };
+            Ok(Dynamic::from_array(vec![
+                Dynamic::from(plan),
+                Dynamic::from(handle),
+            ]))
+        })
+        .expect("the iced facade must retain Task::abortable");
+    builder
+        .bind("iced::task::Handle::abort_on_drop", |args| {
+            let [handle] = args else {
+                return Err(arity("task::Handle::abort_on_drop", 1, args.len()));
+            };
+            let handle = take_value::<Handle>(handle, "task::Handle")?;
+            let guard = Arc::new(Guard(handle.abort.clone()));
+            Ok(Dynamic::from(Handle {
+                abort: handle.abort,
+                guard: Some(guard),
+            }))
+        })
+        .expect("the iced facade must retain task::Handle::abort_on_drop");
+    builder
+        .bind("iced::task::Handle::abort", |args| {
+            let [handle] = args else {
+                return Err(arity("task::Handle::abort", 1, args.len()));
+            };
+            let handle = handle.read_lock::<Handle>().ok_or_else(|| {
+                EvalAltResult::ErrorRuntime("expected a `task::Handle`".into(), Position::NONE)
+            })?;
+            handle.abort.abort();
+            Ok(Dynamic::UNIT)
+        })
+        .expect("the iced facade must retain task::Handle::abort");
+    builder
+        .bind("iced::task::Handle::is_aborted", |args| {
+            let [handle] = args else {
+                return Err(arity("task::Handle::is_aborted", 1, args.len()));
+            };
+            let handle = handle.read_lock::<Handle>().ok_or_else(|| {
+                EvalAltResult::ErrorRuntime("expected a `task::Handle`".into(), Position::NONE)
+            })?;
+            Ok(Dynamic::from(handle.abort.is_aborted()))
+        })
+        .expect("the iced facade must retain task::Handle::is_aborted");
     builder
         .bind_with_context("iced::Task::map", |call, args| {
             if args.len() != 2 {
@@ -930,6 +1963,63 @@ mod tests {
     use rawr::{host, Dynamic, Engine, Shared};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn a_rust_task_crosses_as_itself_and_a_future_through_task_future() {
+        use super::{Project, ViaFuture as _, ViaTask as _};
+
+        let task = (&Project::new(iced::Task::done(1_i64))).into_task();
+        assert_eq!(outputs(task), [1]);
+        let future = (&Project::new(async { 2_i64 })).into_task();
+        assert_eq!(outputs(future), [2]);
+    }
+
+    #[test]
+    fn a_handle_aborts_its_task_before_or_after_lowering() {
+        use super::Abort;
+        use std::sync::Arc;
+
+        let pending = || iced::Task::future(std::future::pending::<i64>()).map(|_| unreachable!());
+        let after = Arc::new(Abort::default());
+        let task: iced::Task<crate::runtime::Message> = after.attach(pending());
+        after.abort();
+        assert!(outputs(task).is_empty());
+
+        let before = Arc::new(Abort::default());
+        before.abort();
+        let task: iced::Task<crate::runtime::Message> = before.attach(pending());
+        assert!(outputs(task).is_empty());
+    }
+
+    #[test]
+    fn abort_on_drop_aborts_when_its_last_copy_drops() {
+        use super::{Abort, Guard, Handle};
+        use std::sync::Arc;
+
+        let abort = Arc::new(Abort::default());
+        let handle = Handle {
+            abort: abort.clone(),
+            guard: Some(Arc::new(Guard(abort.clone()))),
+        };
+        let copy = handle.clone();
+        drop(handle);
+        assert!(!abort.is_aborted());
+        drop(copy);
+        assert!(abort.is_aborted());
+    }
+
+    fn outputs<T: Send + 'static>(task: iced::Task<T>) -> Vec<T> {
+        let Some(stream) = iced_test::runtime::task::into_stream(task) else {
+            return Vec::new();
+        };
+        iced_test::futures::futures::executor::block_on(stream.collect::<Vec<_>>())
+            .into_iter()
+            .filter_map(|action| match action {
+                iced_test::runtime::Action::Output(output) => Some(output),
+                _ => None,
+            })
+            .collect()
+    }
 
     #[test]
     fn plan_round_trips_through_dynamic_without_losing_its_payload() {
@@ -1218,11 +2308,24 @@ mod tests {
 
     fn one_message(task: iced::Task<crate::runtime::Message>) -> crate::runtime::Message {
         let mut stream = iced_test::runtime::task::into_stream(task).unwrap();
+        // Script steps come back as resume requests, which the host runs
+        // on its own thread; this test thread is that thread.
         iced_test::futures::futures::executor::block_on(async move {
-            match stream.next().await {
-                Some(iced_test::runtime::Action::Output(message)) => message,
-                Some(action) => panic!("expected message output, found {action:?}"),
-                None => panic!("operation task must emit one message"),
+            loop {
+                match stream.next().await {
+                    Some(iced_test::runtime::Action::Output(message)) => {
+                        match message.resumption() {
+                            Some(resume) => {
+                                if let Some(message) = resume.run() {
+                                    return message;
+                                }
+                            }
+                            None => return message,
+                        }
+                    }
+                    Some(action) => panic!("expected message output, found {action:?}"),
+                    None => panic!("operation task must emit one message"),
+                }
             }
         })
     }

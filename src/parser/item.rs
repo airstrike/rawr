@@ -77,7 +77,125 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
         inner.extend(dropped.iter().map(crate::item::Parsed::span));
         items = kept.into_boxed_slice();
     }
+    #[cfg(not(feature = "no_function"))]
+    if let Some(dropped) = inline_application_builder(&mut items) {
+        inner.push(dropped);
+    }
     Ok((items, inner))
+}
+
+/// iced's `Application` builder returned by a function of the file, as
+/// iced's todos example writes it:
+///
+/// ```text
+/// pub fn main() -> iced::Result { application().run() }
+/// fn application() -> Application<impl Program<..>> { iced::application(..).title(..) }
+/// ```
+///
+/// The function's chain takes the call's place in `main`, so `main` holds
+/// the application entry, and the function leaves the file's items. It
+/// applies only when `main` is the function's one caller. The span of the
+/// function that left, which the legacy script does not see either.
+#[cfg(not(feature = "no_function"))]
+fn inline_application_builder(items: &mut Box<[crate::item::Parsed]>) -> Option<Span> {
+    use crate::item::{BodyToken, BodyTokenKind as Kind, Parsed};
+    let identifier = |token: &BodyToken, name: &str| {
+        matches!(token.kind(), Kind::Identifier(text) if text.as_str() == name)
+    };
+    let free = |function: &crate::item::Function| {
+        function.receiver.is_none()
+            && function.parameters.is_empty()
+            && !function.asynchronous
+            && !function.constant
+    };
+    let main = items.iter().position(|item| {
+        matches!(item, Parsed::Function(function) if function.name.text == "main" && free(function))
+    })?;
+    let Parsed::Function(main_function) = &items[main] else {
+        return None;
+    };
+    let tokens = main_function.body_syntax.tokens();
+    let tail = match tokens {
+        [.., last] if matches!(last.kind(), Kind::Semicolon) => tokens.len() - 1,
+        _ => tokens.len(),
+    };
+    let call = tail.checked_sub(5)?;
+    let [name, unit, dot, run, run_unit] = &tokens[call..tail] else {
+        return None;
+    };
+    let Kind::Identifier(builder) = name.kind() else {
+        return None;
+    };
+    if !matches!(unit.kind(), Kind::Unit)
+        || !matches!(dot.kind(), Kind::Dot)
+        || !identifier(run, "run")
+        || !matches!(run_unit.kind(), Kind::Unit)
+        || call > 0 && !matches!(tokens[call - 1].kind(), Kind::Semicolon | Kind::RightBrace)
+    {
+        return None;
+    }
+    let builder = builder.clone();
+    let position = items.iter().position(|item| {
+        matches!(item, Parsed::Function(function) if function.name.text == builder && free(function))
+    })?;
+    let Parsed::Function(function) = &items[position] else {
+        return None;
+    };
+    let chain = function.body_syntax.tokens();
+    if !matches!(chain, [iced, colons, application, ..]
+        if identifier(iced, "iced")
+            && matches!(colons.kind(), Kind::DoubleColon)
+            && identifier(application, "application"))
+        || chain.iter().any(|token| matches!(token.kind(), Kind::Semicolon))
+    {
+        return None;
+    }
+    // `main` must be the function's one caller.
+    // A name after `::` (`iced::application`) is another item's.
+    let mentions = |tokens: &[BodyToken]| {
+        tokens
+            .iter()
+            .enumerate()
+            .filter(|(index, token)| {
+                identifier(token, &builder)
+                    && !index
+                        .checked_sub(1)
+                        .is_some_and(|before| matches!(tokens[before].kind(), Kind::DoubleColon))
+            })
+            .count()
+    };
+    let callers: usize = items
+        .iter()
+        .map(|item| match item {
+            Parsed::Function(function) => mentions(function.body_syntax.tokens()),
+            Parsed::Impl(implementation) => implementation
+                .functions
+                .iter()
+                .map(|function| mentions(function.body_syntax.tokens()))
+                .sum(),
+            _ => 0,
+        })
+        .sum();
+    if callers != 1 {
+        return None;
+    }
+    let mut inlined = tokens[..call].to_vec();
+    for (index, token) in chain.iter().enumerate() {
+        // The entry starts where `main` calls the function.
+        let span = if index == 0 { name.span() } else { token.span() };
+        inlined.push(BodyToken::new(token.kind().clone(), span));
+    }
+    inlined.extend_from_slice(&tokens[call + 2..]);
+    let dropped = function.span;
+    let mut all = core::mem::take(items).into_vec();
+    let removed = all.remove(position);
+    let main = if position < main { main - 1 } else { main };
+    if let Parsed::Function(main_function) = &mut all[main] {
+        main_function.body_syntax = crate::item::BodySyntax::new(inlined);
+    }
+    drop(removed);
+    *items = all.into_boxed_slice();
+    Some(dropped)
 }
 
 /// The attributes of the `rawr` crate, which marked `.rs` files name so
@@ -176,19 +294,22 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                     }
                 }
             }
-            (Token::Identifier(text), position)
+            (Token::Identifier(text), _)
                 if scan.delimiter_depth == 0 && text.as_str() == "unsafe" =>
             {
-                return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
-                    "unsafe".into(),
-                    "`unsafe` items are not supported in Rawr yet".into(),
-                ))
-                .into_err(*position));
+                let start = input.peek().expect("peeked unsafe").1;
+                items.extend(parse_unsafe_item(
+                    input,
+                    &tokenizer_control,
+                    Box::default(),
+                    None,
+                    start,
+                )?);
             }
-            (Token::Reserved(text), position)
+            (Token::Reserved(text), _)
                 if scan.delimiter_depth == 0 && text.as_str() == "async" =>
             {
-                return Err(async_unsupported(*position));
+                items.extend(parse_item(input, &tokenizer_control)?);
             }
             (Token::Reserved(text), _) if scan.delimiter_depth == 0 && text.as_str() == "static" => {
                 let start = input.peek().expect("peeked static").1;
@@ -443,6 +564,22 @@ fn begins_body_item(token: &Token) -> bool {
     }
 }
 
+/// Whether `token` starts an item that may follow a statement in a body.
+#[cfg_attr(feature = "no_function", allow(dead_code))]
+fn begins_statement_item(token: &Token) -> bool {
+    match token {
+        Token::Fn
+        | Token::Struct
+        | Token::Enum
+        | Token::Impl
+        | Token::Mod
+        | Token::Use
+        | Token::Const => true,
+        Token::Identifier(name) => name.as_str() == "trait",
+        _ => false,
+    }
+}
+
 fn is_attribute_marker(token: &Token) -> bool {
     match token {
         Token::Hash => true,
@@ -498,7 +635,99 @@ fn parse_item_with_leading(
         SKIPPED.with_borrow_mut(|skipped| skipped.push(Span::new(start, end)));
         return Ok(None);
     }
-    parse_enabled_item(input, tokenizer_control, attributes, visibility, start).map(Some)
+    if input
+        .peek()
+        .is_some_and(|(token, _)| matches!(token, Token::Identifier(text) if text.as_str() == "unsafe"))
+    {
+        return parse_unsafe_item(input, tokenizer_control, attributes, visibility, start);
+    }
+    match parse_enabled_item(input, tokenizer_control, attributes, visibility, start)? {
+        crate::item::Parsed::Impl(item) => marker_impl(item, None),
+        item => Ok(Some(item)),
+    }
+}
+
+/// `unsafe impl Send for T {}`: the only `unsafe` item Rawr reads. Any
+/// other `unsafe` item is not supported.
+fn parse_unsafe_item(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<Option<crate::item::Parsed>> {
+    let (_, position) = input.next().expect("peeked unsafe");
+    if !matches!(input.peek(), Some((Token::Impl, _))) {
+        return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+            "unsafe".into(),
+            "`unsafe` items other than `unsafe impl Send` and `unsafe impl Sync` are not \
+             supported in Rawr yet"
+                .into(),
+        ))
+        .into_err(position));
+    }
+    let item = parse_impl(input, tokenizer_control, attributes, visibility, start)?;
+    marker_impl(item, Some(position))
+}
+
+/// An impl of an auto trait (`Send`, `Sync`, `Unpin` and the unwind-safety
+/// markers) says what every Rawr value already is, so it is checked as
+/// rustc checks it and then dropped. `unsafe` is required for `Send` and
+/// `Sync` (E0200) and refused elsewhere (E0197, E0199).
+fn marker_impl(
+    item: crate::item::Impl,
+    unsafety: Option<Position>,
+) -> ParseResult<Option<crate::item::Parsed>> {
+    let bad = |message: String, position: Position| {
+        Err(PERR::BadInput(crate::LexError::ImproperSymbol("impl".into(), message)).into_err(position))
+    };
+    let Some(trait_) = item.trait_.as_ref() else {
+        return match unsafety {
+            Some(position) => bad("inherent impls cannot be unsafe, as in Rust (E0197)".into(), position),
+            None => Ok(Some(crate::item::Parsed::Impl(item))),
+        };
+    };
+    let name = trait_
+        .segments
+        .last()
+        .map_or_else(String::new, |last| last.name.text.to_string());
+    if !is_auto_trait(trait_) {
+        return match unsafety {
+            Some(position) => bad(
+                format!("implementing the trait `{name}` is not unsafe, as in Rust (E0199)"),
+                position,
+            ),
+            None => Ok(Some(crate::item::Parsed::Impl(item))),
+        };
+    }
+    let unsafe_trait = matches!(name.as_str(), "Send" | "Sync");
+    match unsafety {
+        None if unsafe_trait => bad(
+            format!("the trait `{name}` requires an `unsafe impl` declaration, as in Rust (E0200)"),
+            trait_.span.start(),
+        ),
+        Some(position) if !unsafe_trait => bad(
+            format!("implementing the trait `{name}` is not unsafe, as in Rust (E0199)"),
+            position,
+        ),
+        _ => {
+            if let Some(function) = item.functions.first() {
+                return bad(
+                    format!("method `{}` is not a member of trait `{name}`, as in Rust (E0407)", function.name.text),
+                    function.name.span.start(),
+                );
+            }
+            if let Some((associated, _)) = item.associated.first() {
+                return bad(
+                    format!("type `{}` is not a member of trait `{name}`, as in Rust (E0437)", associated.text),
+                    associated.span.start(),
+                );
+            }
+            #[cfg(not(feature = "no_std"))]
+            SKIPPED.with_borrow_mut(|skipped| skipped.push(item.span));
+            Ok(None)
+        }
+    }
 }
 
 fn parse_enabled_item(
@@ -542,6 +771,15 @@ fn parse_enabled_item(
         )
         .map(crate::item::Parsed::Function),
         #[cfg(not(feature = "no_function"))]
+        (Token::Reserved(text), _) if text.as_str() == "async" => parse_async_function(
+            input,
+            tokenizer_control,
+            attributes,
+            visibility,
+            start,
+        )
+        .map(crate::item::Parsed::Function),
+        #[cfg(not(feature = "no_function"))]
         (Token::Const, _) => {
             input.next();
             let name = parse_name(input, "after 'const'")?;
@@ -560,13 +798,6 @@ fn parse_enabled_item(
         }
         (Token::Reserved(text), _) if text.as_str() == "static" => {
             parse_static(input, tokenizer_control, attributes, visibility, start)
-        }
-        (Token::Identifier(text), position) if text.as_str() == "unsafe" => {
-            Err(PERR::BadInput(crate::LexError::ImproperSymbol(
-                "unsafe".into(),
-                "`unsafe` items are not supported in Rawr yet".into(),
-            ))
-            .into_err(*position))
         }
         (_, position) => Err(PERR::MissingToken(
             "item".into(),
@@ -1117,6 +1348,7 @@ fn bind_previews(
                     span: bind.span,
                 }]),
                 span: bind.span,
+                global: false,
             });
             preview.bound = true;
             constants.push(crate::item::Parsed::Function(crate::item::Function {
@@ -1133,6 +1365,7 @@ fn bind_previews(
                 body_span: bind.span,
                 body_syntax: crate::item::BodySyntax::new(bind.tokens),
                 constant: true,
+                asynchronous: false,
                 span: bind.span,
             }));
         }
@@ -1252,9 +1485,9 @@ fn parse_use(
     start: Position,
 ) -> ParseResult<crate::item::Use> {
     expect(input, Token::Use, "to start an import")?;
-    // `use ::image as img;`: a leading `::` names an outside crate. Rawr's
-    // first import segment already does.
-    if matches!(input.peek(), Some((Token::DoubleColon, _))) {
+    // `use ::image as img;`: a leading `::` names an outside crate.
+    let global = matches!(input.peek(), Some((Token::DoubleColon, _)));
+    if global {
         input.next();
     }
     let first = parse_use_segment(input, "as the first import path segment")?;
@@ -1303,6 +1536,7 @@ fn parse_use(
     let path = type_ref::Path {
         segments: segments.into_boxed_slice(),
         span: path_span,
+        global,
     };
 
     let tree = if let Some(star) = glob {
@@ -1720,6 +1954,16 @@ fn parse_impl(
                 )?);
                 continue;
             }
+            if matches!(input.peek(), Some((Token::Reserved(text), _)) if text.as_str() == "async") {
+                functions.push(parse_async_function(
+                    input,
+                    tokenizer_control,
+                    attributes,
+                    visibility,
+                    function_start,
+                )?);
+                continue;
+            }
             if matches!(input.peek(), Some((Token::Const, _))) {
                 functions.push(parse_associated_const(
                     input,
@@ -1733,11 +1977,7 @@ fn parse_impl(
             }
         }
 
-        let (token, position) = input.peek().expect("token streams always end with EOF");
-        if matches!(token, Token::Reserved(text) if text.as_str() == "async") {
-            return Err(async_unsupported(*position));
-        }
-        let position = *position;
+        let position = input.peek().expect("token streams always end with EOF").1;
         return Err(PERR::MissingToken(
             "fn".into(),
             "for an associated function inside an impl block".into(),
@@ -2015,6 +2255,64 @@ fn parse_function(
     )
 }
 
+/// `async fn`: a function that returns `impl Future<Output = T>` of its
+/// declared output `T`, and whose body runs as an `async move` block.
+#[cfg(not(feature = "no_function"))]
+fn parse_async_function(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<crate::item::Function> {
+    let (_, at) = input.next().expect("the caller peeked `async`");
+    let mut function = parse_function(
+        input,
+        tokenizer_control,
+        attributes,
+        visibility,
+        start,
+        false,
+    )?;
+    let keyword = token_span(at, "async");
+    let output = function
+        .output
+        .take()
+        .unwrap_or(type_ref::Type::Unit(keyword));
+    function.output = Some(future_type(output, keyword));
+    function.asynchronous = true;
+    Ok(function)
+}
+
+/// `impl Future<Output = output>`, as `parse_impl_bounds` reads it.
+#[cfg(not(feature = "no_function"))]
+fn future_type(output: type_ref::Type, at: Span) -> type_ref::Type {
+    let path = |text: String, arguments: Vec<type_ref::Argument>| type_ref::Path {
+        segments: Box::new([type_ref::Segment {
+            name: crate::item::Name {
+                text: text.into(),
+                span: at,
+            },
+            arguments: arguments.into_boxed_slice(),
+            span: at,
+        }]),
+        span: at,
+        global: false,
+    };
+    let bound = path("Future".into(), Vec::new());
+    let binding = path(
+        format!("{}Future=Output", type_ref::BINDING_PREFIX),
+        vec![type_ref::Argument::Type(output)],
+    );
+    type_ref::Type::Path(path(
+        type_ref::IMPL_TYPE.into(),
+        vec![
+            type_ref::Argument::Type(type_ref::Type::Path(bound)),
+            type_ref::Argument::Type(type_ref::Type::Path(binding)),
+        ],
+    ))
+}
+
 /// Parse a function after its name and `(` (`parameters` is `Some`, holding
 /// a first parameter name already consumed), or after `()` (`None`).
 #[cfg(not(feature = "no_function"))]
@@ -2188,6 +2486,7 @@ fn parse_function_rest(
             body_span: semicolon,
             body_syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: false,
+            asynchronous: false,
             span: Span::new(start, semicolon.end()),
         });
     }
@@ -2209,6 +2508,7 @@ fn parse_function_rest(
         body_span,
         body_syntax,
         constant: false,
+        asynchronous: false,
         span,
     })
 }
@@ -2268,18 +2568,16 @@ fn parse_generic_params(input: &mut TokenStream) -> ParseResult<Vec<crate::item:
 
 /// `Bound + Bound`: trait paths; lifetime bounds are erased. Associated
 /// type equalities (`Shape<Output = i64>`) go to `projections`.
-/// `async fn`, which Rawr does not run yet.
-fn async_unsupported(position: Position) -> crate::ParseError {
-    PERR::BadInput(crate::LexError::ImproperSymbol(
-        "async".into(),
-        "`async` functions are not supported in Rawr yet".into(),
-    ))
-    .into_err(position)
-}
 
 /// `use<'a, T>` among `impl Trait` bounds: Rust's precise capturing, which
 /// Rawr's types need no record of. Where it ends, when it was there.
-fn skip_precise_capture(input: &mut TokenStream) -> ParseResult<Option<Position>> {
+///
+/// `Option<impl Future + use<>>` ends in `>>`, one token: its second `>`
+/// closes the enclosing list, which `split` then records.
+fn skip_precise_capture(
+    input: &mut TokenStream,
+    split: Option<&mut Option<Position>>,
+) -> ParseResult<Option<Position>> {
     if !matches!(input.peek(), Some((Token::Use, _))) {
         return Ok(None);
     }
@@ -2288,6 +2586,13 @@ fn skip_precise_capture(input: &mut TokenStream) -> ParseResult<Option<Position>
     loop {
         match input.next() {
             Some((Token::GreaterThan, position)) => return Ok(Some(after(position, 1))),
+            Some((Token::RightShift, position)) if split.is_some() => {
+                let end = after(position, 1);
+                if let Some(split) = split {
+                    *split = Some(end);
+                }
+                return Ok(Some(end));
+            }
             Some((Token::EOF, position)) => {
                 return Err(PERR::MissingToken(">".into(), "to close `use<..>`".into())
                     .into_err(position));
@@ -2307,7 +2612,7 @@ fn parse_bounds(
     loop {
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             parse_lifetime(input)?;
-        } else if skip_precise_capture(input)?.is_some() {
+        } else if skip_precise_capture(input, closing.as_deref_mut())?.is_some() {
         } else if let Some((Token::Identifier(name) | Token::Reserved(name), position)) =
             input.peek()
             && is_fn_trait(name)
@@ -2613,6 +2918,7 @@ fn parse_associated_const(
             body_span: semicolon,
             body_syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: true,
+            asynchronous: false,
             span: Span::new(start, semicolon.end()),
         });
     }
@@ -2674,6 +2980,7 @@ fn finish_associated_const(
         body_span: Span::new(value_start, semicolon),
         body_syntax: crate::item::BodySyntax::new(tokens),
         constant: true,
+        asynchronous: false,
         span,
     })
 }
@@ -2724,6 +3031,7 @@ fn parse_const_rest(
         body_span: Span::new(value_start, semicolon),
         body_syntax: crate::item::BodySyntax::new(tokens),
         constant: true,
+        asynchronous: false,
         span,
     })
 }
@@ -2849,6 +3157,7 @@ fn parse_type_split(
                 span,
             }]),
             span,
+            global: false,
         }));
     }
 
@@ -2907,6 +3216,7 @@ fn parse_type_split(
                         span,
                     }]),
                     span,
+                    global: false,
                 }))
             }));
             last.arguments = arguments.into_boxed_slice();
@@ -2932,7 +3242,7 @@ fn parse_type_split(
                 path.span = Span::new(start, lifetime.span.end());
                 continue;
             }
-            if let Some(end) = skip_precise_capture(input)? {
+            if let Some(end) = skip_precise_capture(input, Some(split))? {
                 path.span = Span::new(start, end);
                 continue;
             }
@@ -2994,6 +3304,7 @@ fn parse_type_split(
                 .chain(rest.segments.into_vec())
                 .collect(),
             span: Span::new(start, end),
+            global: false,
         }));
     }
 
@@ -3029,7 +3340,7 @@ fn skip_fn_bounds(
             path.span = Span::new(start, lifetime.span.end());
             continue;
         }
-        if let Some(end) = skip_precise_capture(input)? {
+        if let Some(end) = skip_precise_capture(input, Some(split))? {
             path.span = Span::new(start, end);
             continue;
         }
@@ -3137,6 +3448,7 @@ fn parse_impl_bounds(
                 span,
             }]),
             span,
+            global: false,
         }
     });
     let bounds = bounds.into_iter().chain(bindings).collect::<Vec<_>>();
@@ -3155,6 +3467,7 @@ fn parse_impl_bounds(
             span,
         }]),
         span,
+        global: false,
     }))
 }
 
@@ -3224,6 +3537,7 @@ fn lift_impl_parameters(
                         arguments: Box::default(),
                         span: path.span,
                     }]),
+                    global: false,
                 });
             }
             type_ref::Type::Path(path) => {
@@ -3315,7 +3629,7 @@ fn parse_iterator_type(
             span = Span::new(start, lifetime.span.end());
             continue;
         }
-        if let Some(end) = skip_precise_capture(input)? {
+        if let Some(end) = skip_precise_capture(input, Some(split))? {
             span = Span::new(start, end);
             continue;
         }
@@ -3344,6 +3658,7 @@ fn iterator_type(name: &str, item: type_ref::Type, span: Span) -> type_ref::Type
             span,
         }]),
         span,
+        global: false,
     })
 }
 
@@ -3391,6 +3706,7 @@ fn parse_fn_signature(input: &mut TokenStream, start: Position) -> ParseResult<t
             span,
         }]),
         span,
+        global: false,
     })
 }
 
@@ -3534,6 +3850,11 @@ fn parse_path_bindings(
     mut bindings: Option<&mut Vec<(crate::item::Name, type_ref::Type)>>,
 ) -> ParseResult<type_ref::Path> {
     let mut segments = Vec::new();
+    // `::image::ImageError`: a leading `::` names an outside crate.
+    let global = matches!(input.peek(), Some((Token::DoubleColon, _)));
+    if global {
+        input.next();
+    }
 
     loop {
         let name = parse_use_segment(input, "as a type path segment")?;
@@ -3612,6 +3933,7 @@ fn parse_path_bindings(
     Ok(type_ref::Path {
         segments: segments.into_boxed_slice(),
         span: Span::new(first.start(), last.end()),
+        global,
     })
 }
 
@@ -3654,6 +3976,23 @@ fn parse_body_syntax(
     let mut tokens = Vec::new();
     // Whether a statement may start here: a nested `fn` item.
     let mut boundary = true;
+    // Whether the last token can end an expression, and what that depends
+    // on: `pub(crate)` and `extern "C"` lead items, not expressions.
+    let mut ends_expression = false;
+    let mut after_pub = false;
+    let mut after_extern = false;
+    let mut visibility = None;
+    // The delimiter depths inside the braces of open struct literals, as
+    // `S { x: 1 }`, which ends an expression as `1` does.
+    let mut literals: Vec<usize> = Vec::new();
+    // The heads of `if`, `while`, `for`, `match` and `->` whose block has
+    // not opened yet, at their depth: there `x {` opens the block, as in
+    // Rust. `pattern` holds after `let` until `=` and after `for` until
+    // `in`, where `S { x }` is a pattern.
+    let mut heads: Vec<(usize, bool)> = Vec::new();
+    // Whether the last token is a name that a struct literal's `{` may
+    // follow.
+    let mut after_name = false;
     // Each open parenthesis: the callback roles of an `iced::run(..)` or
     // `iced::application(..)` call it opens, and the argument it is at.
     let mut calls: Vec<Option<(&'static [&'static str], usize)>> = Vec::new();
@@ -3719,6 +4058,31 @@ fn parse_body_syntax(
                 continue;
             }
         }
+        // `unsafe impl Send for T {}` is an item; `unsafe { .. }` is a block.
+        #[cfg(not(feature = "no_std"))]
+        if boundary
+            && let Some((Token::Identifier(text), position)) = input.peek()
+            && text.as_str() == "unsafe"
+        {
+            let start = *position;
+            let (token, position) = scan
+                .next(input, tokenizer_control)
+                .expect("peeked unsafe must exist");
+            if matches!(input.peek(), Some((Token::Impl, _))) {
+                let item = parse_impl(input, tokenizer_control, Box::default(), None, start)?;
+                if let Some(item) = marker_impl(item, Some(start))? {
+                    NESTED.with_borrow_mut(|nested| nested.push(item));
+                }
+                continue;
+            }
+            tokens.push(body_token(token, position));
+            boundary = false;
+            ends_expression = false;
+            after_name = false;
+            after_pub = false;
+            after_extern = false;
+            continue;
+        }
         #[cfg(not(feature = "no_std"))]
         if boundary && let Some((Token::Use, position)) = input.peek() {
             let position = *position;
@@ -3726,8 +4090,95 @@ fn parse_body_syntax(
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Use(used)));
             continue;
         }
+        // `{ 2 fn f() {} }`: an expression that is not block-like needs a
+        // `;` before an item, as in Rust.
+        if !boundary
+            && ends_expression
+            && let Some((token, position)) = input.peek()
+            && begins_statement_item(token)
+        {
+            return Err(PERR::MissingToken(
+                Token::SemiColon.into(),
+                "after the expression before this item".into(),
+            )
+            .into_err(*position));
+        }
         if let Some((token, _)) = input.peek() {
             boundary = matches!(token, Token::LeftBrace | Token::RightBrace | Token::SemiColon);
+            let closes_visibility =
+                matches!(token, Token::RightParen) && visibility == Some(scan.delimiter_depth);
+            if closes_visibility {
+                visibility = None;
+            }
+            if matches!(token, Token::LeftParen) && after_pub {
+                visibility = Some(scan.delimiter_depth + 1);
+            }
+            ends_expression = !closes_visibility
+                && match token {
+                    Token::Identifier(name) => !matches!(
+                        name.as_str(),
+                        "unsafe" | "safe" | "extern" | "default" | "auto" | "raw"
+                    ),
+                    Token::StringConstant(_) => !after_extern,
+                    #[cfg(not(feature = "no_float"))]
+                    Token::FloatConstant(_) => true,
+                    Token::IntegerConstant(_)
+                    | Token::CharConstant(_)
+                    | Token::True
+                    | Token::False
+                    | Token::RightParen
+                    | Token::RightBracket => true,
+                    Token::Reserved(word) => word.as_str() == "?",
+                    _ => false,
+                };
+            after_pub = matches!(token, Token::Pub);
+            after_extern = matches!(token, Token::Identifier(name) if name.as_str() == "extern");
+            let depth = scan.delimiter_depth;
+            match token {
+                Token::If | Token::While | Token::Switch | Token::ThinArrow => {
+                    heads.push((depth, false));
+                }
+                Token::For => heads.push((depth, true)),
+                Token::Reserved(word) if word.as_str() == "match" => heads.push((depth, false)),
+                Token::Let => {
+                    if let Some((head, pattern)) = heads.last_mut()
+                        && *head == depth
+                    {
+                        *pattern = true;
+                    }
+                }
+                Token::Equals | Token::In => {
+                    if let Some((head, pattern)) = heads.last_mut()
+                        && *head == depth
+                    {
+                        *pattern = false;
+                    }
+                }
+                Token::SemiColon => {
+                    while heads.last().is_some_and(|(head, _)| *head >= depth) {
+                        heads.pop();
+                    }
+                }
+                Token::LeftBrace => match heads.last() {
+                    Some(&(head, pattern)) if head == depth => {
+                        if !pattern {
+                            heads.pop();
+                        }
+                    }
+                    _ if after_name => literals.push(depth + 1),
+                    _ => {}
+                },
+                Token::RightBrace if literals.last() == Some(&depth) => {
+                    literals.pop();
+                    boundary = false;
+                    ends_expression = true;
+                }
+                _ => {}
+            }
+            after_name = matches!(token, Token::Identifier(name) if !matches!(
+                name.as_str(),
+                "unsafe" | "move" | "async" | "try" | "extern" | "union"
+            ));
         }
         match scan
             .next(input, tokenizer_control)
@@ -3919,6 +4370,7 @@ fn parse_callback_closure(
         body_span,
         body_syntax,
         constant,
+        asynchronous: false,
         span,
     })
 }
@@ -4115,6 +4567,7 @@ fn parse_legacy_function_outline(
             body_span,
             body_syntax,
             constant: false,
+            asynchronous: false,
             span,
         })));
     }
@@ -4232,6 +4685,7 @@ fn parse_use_subtree(
         type_ref::Path {
             segments: segments.to_vec().into_boxed_slice(),
             span,
+            global: false,
         }
     };
     while matches!(input.peek(), Some((Token::DoubleColon, _))) {
@@ -4292,6 +4746,7 @@ fn parse_use_members(
                 prefix: type_ref::Path {
                     segments: prefix.to_vec().into_boxed_slice(),
                     span,
+                    global: false,
                 },
             });
             match input.peek().expect("token streams always end with EOF") {
@@ -4609,6 +5064,35 @@ fn view(state: &Counter) -> iced::widget::Column<'_, Message> { () }
             assert!(error.to_string().contains(expected), "{source}: {error}");
             assert!(!error.position().is_none(), "{source}: {error}");
         }
+    }
+
+    #[test]
+    fn items_after_an_expression_need_a_semicolon_unless_it_is_block_like() {
+        for (source, line, column) in [
+            ("fn main() {\n    let v = { 1\n        struct S { x: i64 }\n    };\n}", 3, 9),
+            ("fn main() {\n    let w = { 2 fn f() {} };\n}", 2, 17),
+            ("fn main() {\n    let s = S { x: 1 } struct B;\n}", 2, 24),
+            ("fn main() {\n    S { x: T { y: 2 } } fn f() {}\n}", 2, 25),
+        ] {
+            let error = Engine::new().parse_unit(source).unwrap_err();
+            assert!(
+                error.to_string().contains("';' after the expression"),
+                "{source}: {error}"
+            );
+            assert_eq!(error.position(), Position::new(line, column), "{source}");
+        }
+
+        let unit = Engine::new()
+            .parse_unit(
+                "fn main() {\n    struct A;\n    let x = 1;\n    if x > 0 {} struct B;\n    \
+                 let w = { loop { break; } fn f() {} 5 };\n    m! { x } enum E { V }\n    \
+                 let f: fn(i64) -> i64 = g;\n    if x == S {} struct C;\n    \
+                 while let S { a } = s {} struct D;\n    match s { S { a } => {} } struct E;\n    \
+                 for S { a } in v {} struct F;\n    let c = |s: S| -> S { s }; struct G;\n    \
+                 unsafe {} struct H;\n}",
+            )
+            .unwrap();
+        assert_eq!(unit.items().len(), 11);
     }
 
     #[test]

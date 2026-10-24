@@ -1,4 +1,6 @@
-//! Evaluator-local authority for scripted drawing operations.
+//! Evaluator-local authority for scripted drawing operations, and the
+//! recorded drawing both kinds of script widget replay: a `#[rawr::widget]`'s
+//! (D82) and an `advanced::Widget`'s.
 
 use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,13 +46,23 @@ enum State {
     Aborted,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Command {
+/// One recorded drawing operation.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Command {
     FillQuad {
         bounds: iced::Rectangle,
         color: iced::Color,
         radius: f32,
     },
+    Quad(iced::advanced::renderer::Quad, iced::Background),
+    Mesh(iced::advanced::graphics::Mesh),
+    StartLayer(iced::Rectangle),
+    EndLayer,
+    StartTransformation(iced::Transformation),
+    EndTransformation,
+    /// A wrapped child's own drawing, in its place among the rest: the
+    /// recorder's index of it, which the replay hands back.
+    Child(usize),
 }
 
 /// A scripted renderer operation did not retain exact invocation authority.
@@ -208,31 +220,80 @@ impl Drop for Transaction {
 }
 
 impl Replay {
-    pub(crate) fn replay<R: iced::advanced::Renderer>(self, renderer: &mut R) {
-        for command in self.commands {
-            match command {
-                Command::FillQuad {
-                    bounds,
-                    color,
-                    radius,
-                } => renderer.fill_quad(
-                    iced::advanced::renderer::Quad {
-                        bounds,
-                        border: iced::Border {
-                            radius: radius.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                    color,
-                ),
-            }
-        }
+    pub(crate) fn replay<R>(self, renderer: &mut R)
+    where
+        R: iced::advanced::Renderer + iced::advanced::graphics::mesh::Renderer,
+    {
+        replay(self.commands, renderer, |_, _| {});
     }
 
     #[cfg(test)]
     pub(crate) const fn len(&self) -> usize {
         self.commands.len()
+    }
+}
+
+/// Draw `commands` on `renderer` in order, with `child` drawing each wrapped
+/// child in its place. A layer or transformation left open is closed at the
+/// end, and an end without its start is dropped, so the renderer's own
+/// stacks stay balanced whatever the script did.
+pub(crate) fn replay<R>(commands: Vec<Command>, renderer: &mut R, mut child: impl FnMut(&mut R, usize))
+where
+    R: iced::advanced::Renderer + iced::advanced::graphics::mesh::Renderer,
+{
+    #[derive(PartialEq)]
+    enum Open {
+        Layer,
+        Transformation,
+    }
+    let mut open = Vec::new();
+    for command in commands {
+        match command {
+            Command::FillQuad {
+                bounds,
+                color,
+                radius,
+            } => renderer.fill_quad(
+                iced::advanced::renderer::Quad {
+                    bounds,
+                    border: iced::Border {
+                        radius: radius.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                color,
+            ),
+            Command::Quad(quad, background) => renderer.fill_quad(quad, background),
+            Command::Mesh(mesh) => renderer.draw_mesh(mesh),
+            Command::StartLayer(bounds) => {
+                renderer.start_layer(bounds);
+                open.push(Open::Layer);
+            }
+            Command::StartTransformation(transformation) => {
+                renderer.start_transformation(transformation);
+                open.push(Open::Transformation);
+            }
+            Command::EndLayer => {
+                if open.last() == Some(&Open::Layer) {
+                    open.pop();
+                    renderer.end_layer();
+                }
+            }
+            Command::EndTransformation => {
+                if open.last() == Some(&Open::Transformation) {
+                    open.pop();
+                    renderer.end_transformation();
+                }
+            }
+            Command::Child(index) => child(renderer, index),
+        }
+    }
+    for open in open.into_iter().rev() {
+        match open {
+            Open::Layer => renderer.end_layer(),
+            Open::Transformation => renderer.end_transformation(),
+        }
     }
 }
 
@@ -678,6 +739,12 @@ mod tests {
     #[derive(Default)]
     struct Recording {
         fills: Vec<(iced::Rectangle, iced::Background, iced::border::Radius)>,
+    }
+
+    impl iced::advanced::graphics::mesh::Renderer for Recording {
+        fn draw_mesh(&mut self, _mesh: iced::advanced::graphics::Mesh) {}
+
+        fn draw_mesh_cache(&mut self, _cache: iced::advanced::graphics::mesh::Cache) {}
     }
 
     impl iced::advanced::Renderer for Recording {

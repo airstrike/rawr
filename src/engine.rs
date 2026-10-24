@@ -27,6 +27,12 @@ pub const KEYWORD_FN_PTR_CURRY: &str = "curry";
 #[cfg(not(feature = "no_closure"))]
 pub const KEYWORD_IS_SHARED: &str = "is_shared";
 pub const KEYWORD_IS_DEF_VAR: &str = "is_def_var";
+/// A move out of a local, which checked Rawr writes where Rust moves a
+/// value that is not `Copy`: the value, with `()` left in the local.
+pub const KEYWORD_MOVE: &str = "__rawr_move";
+/// Rust's `drop(value)`: the value drops here, and the call is `()`, so a
+/// statement of it keeps nothing.
+pub const KEYWORD_DROP: &str = "__rawr_drop";
 #[cfg(not(feature = "no_function"))]
 pub const KEYWORD_IS_DEF_FN: &str = "is_def_fn";
 #[cfg(not(feature = "no_function"))]

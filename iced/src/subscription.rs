@@ -4,7 +4,7 @@ use rawr::{application, host, item, program, Dynamic, EvalAltResult, Position};
 use std::fmt;
 use std::hash::Hash;
 
-use crate::runtime;
+use crate::{dispatch, effect, runtime};
 
 /// A durable subscription plan could not cross or bind at the native boundary.
 #[derive(Debug)]
@@ -113,15 +113,23 @@ where
         INPUT.with(|slot| *slot.borrow_mut() = Some(input));
         let issued = self.recipe.start();
         INPUT.with(|slot| slot.borrow_mut().take());
-        Box::pin(issued.map(move |result| match result {
-            Ok(payload) => emit(runtime::Message::subscription(
-                instance, generation, payload,
-            )),
-            Err(error) => emit(runtime::Message::subscription_error(
-                instance,
-                generation,
-                Error::Stream(error),
-            )),
+        // The stream runs only native work. Each item's mappers run on the
+        // UI thread, after the host's freshness check.
+        let owner = effect::Owner::new(instance, generation);
+        Box::pin(issued.map(move |arrival| {
+            emit(dispatch::deliver_on_ui(owner, move || {
+                match arrival.finish() {
+                    Ok(Some(payload)) => Some(runtime::Message::subscription(
+                        instance, generation, payload,
+                    )),
+                    Ok(None) => None,
+                    Err(error) => Some(runtime::Message::subscription_error(
+                        instance,
+                        generation,
+                        Error::Stream(error),
+                    )),
+                }
+            }))
         }))
     }
 }
@@ -356,8 +364,18 @@ fn bind_events(builder: &mut host::runtime::Builder) {
             _ => None,
         }),
     ] {
+        // A recording's clock runs while `window::frames` is listened to.
+        let frames = path == "iced::window::frames";
         builder
-            .bind_stream_operation(&definition(path), no_arguments, move |_| input(filter), unit)
+            .bind_stream_operation(
+                &definition(path),
+                no_arguments,
+                move |_| match frames && crate::snapshot::clock::now().is_some() {
+                    true => armed(input(filter)),
+                    false => input(filter),
+                },
+                unit,
+            )
             .expect("the iced facade must retain every event stream");
     }
     builder
@@ -379,11 +397,45 @@ fn bind_events(builder: &mut host::runtime::Builder) {
                     .and_then(|value| value.read_lock::<std::time::Duration>().map(|d| *d))
                     .unwrap_or(std::time::Duration::from_secs(1))
                     .max(std::time::Duration::from_millis(1));
-                ticks(duration)
+                match crate::snapshot::clock::now() {
+                    Some(start) => simulated_ticks(duration, start),
+                    None => ticks(duration),
+                }
             },
             unit,
         )
         .expect("the iced facade must retain time::every");
+    // iced's `Subscription::run(builder)`: the progress of the sipper a Rust
+    // function returns. Its identity is the function's path.
+    builder
+        .bind_stream_operation(
+            &definition("iced::subscription::run"),
+            |index, value, writer| match index {
+                0 => {
+                    writer.text("sipper");
+                    Ok(())
+                }
+                1 => {
+                    let path = value.read_lock::<rawr::ImmutableString>().ok_or_else(|| {
+                        host::stream::identity::Error::new("expected the builder's path")
+                    })?;
+                    writer.text(path.as_str());
+                    Ok(())
+                }
+                _ => Err(host::stream::identity::Error::new("unexpected argument")),
+            },
+            |arguments| {
+                let progress = arguments
+                    .get(0)
+                    .and_then(|value| value.read_lock::<crate::task::Sip>().and_then(|sip| sip.progress()));
+                match progress {
+                    Some(progress) => progress.map(Ok).boxed(),
+                    None => stream::empty().boxed(),
+                }
+            },
+            unit,
+        )
+        .expect("the iced facade must retain Subscription::run");
 }
 
 /// A tick every `duration`, from a timer thread that ends with the stream.
@@ -405,6 +457,57 @@ fn ticks(
     });
     receiver
         .map(|()| Ok(Dynamic::from(crate::marker::Instant::now())))
+        .boxed()
+}
+
+/// A tick every `duration` of a recording's clock, from `start`: each frame
+/// the recording draws (a `RedrawRequested` at the clock's time) gives
+/// every tick due by then, each at its own time.
+fn simulated_ticks(
+    duration: std::time::Duration,
+    start: iced::time::Instant,
+) -> iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>> {
+    use iced::advanced::subscription::Event as Input;
+    use iced::futures::stream::{self, StreamExt};
+
+    /// Most ticks one frame gives.
+    const MOST: usize = 1024;
+    let Some(events) = events() else {
+        return stream::empty().boxed();
+    };
+    let mut next = start + duration;
+    armed(
+        events
+            .flat_map(move |event| {
+                let mut due = Vec::new();
+                if let Input::Interaction {
+                    event: iced::Event::Window(iced::window::Event::RedrawRequested(now)),
+                    ..
+                } = event
+                {
+                    while next <= now && due.len() < MOST {
+                        due.push(Ok(Dynamic::from(crate::marker::Instant(next))));
+                        next += duration;
+                    }
+                }
+                stream::iter(due)
+            })
+            .boxed(),
+    )
+}
+
+/// `stream`, counted as driven by the recording's clock while it runs.
+fn armed(
+    stream: iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>>,
+) -> iced::futures::stream::BoxStream<'static, Result<Dynamic, ()>> {
+    use iced::futures::StreamExt;
+
+    let armed = crate::snapshot::clock::Armed::new();
+    stream
+        .map(move |item| {
+            let _ = &armed;
+            item
+        })
         .boxed()
 }
 
