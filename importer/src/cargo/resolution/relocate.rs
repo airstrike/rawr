@@ -19,6 +19,7 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use crate::file_digest::{self, Domain, Identity};
+use crate::input::{escape_environment, escape_path};
 
 use crate::{Error, Result};
 
@@ -29,7 +30,7 @@ pub(in crate::cargo) fn relocate(
     shared: &Path,
     bundle: &Path,
 ) -> Result<Box<[u8]>> {
-    let (from, to) = (plain(shared)?, plain(bundle)?);
+    let (from, to) = (spelled(shared)?, spelled(bundle)?);
     let copy = |path: &str| -> Result<()> {
         let Ok(relative) = Path::new(path).strip_prefix(shared) else {
             return Ok(());
@@ -103,11 +104,12 @@ pub(in crate::cargo) fn relocate(
             }
             _ => {}
         }
+        relocate_strings(&mut message, from, to);
         let line = serde_json::to_string(&message).map_err(|error| Error::Input {
             code: "relocated-cargo-message",
             reason: error.to_string().into_boxed_str(),
         })?;
-        relocated.extend_from_slice(replace_build_paths(&line, from, to).as_bytes());
+        relocated.extend_from_slice(line.as_bytes());
         if chunk.ends_with(b"\n") {
             relocated.push(b'\n');
         }
@@ -120,38 +122,69 @@ pub(in crate::cargo) fn relocate(
 /// not build output and keep their paths.
 const RAWR: &str = "rawr";
 
-/// `text` with every path under `from` moved under `to`, except paths under
-/// `from/rawr`.
-fn replace_build_paths(text: &str, from: &str, to: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(found) = rest.find(from) {
-        let after = &rest[found + from.len()..];
-        let reserved = after
-            .strip_prefix('/')
-            .and_then(|after| after.strip_prefix(RAWR))
-            .is_some_and(|after| after.is_empty() || after.starts_with('/'));
-        out.push_str(&rest[..found]);
-        out.push_str(if reserved { from } else { to });
-        rest = after;
+/// A message's strings name the copies. JSON's own escaping stays serde's.
+fn relocate_strings(value: &mut Value, from: &str, to: &str) {
+    match value {
+        Value::String(text) if text.contains(from) => {
+            *text = replace_build_paths(text, &[(from, to)]);
+        }
+        Value::Array(values) => values
+            .iter_mut()
+            .for_each(|value| relocate_strings(value, from, to)),
+        Value::Object(fields) => fields
+            .values_mut()
+            .for_each(|value| relocate_strings(value, from, to)),
+        _ => {}
     }
-    out.push_str(rest);
+}
+
+/// `text` with every path under a spelling of the shared directory moved under
+/// the same spelling of the bundle, except paths under its `rawr` directory.
+/// Each pair is one spelling of `(from, to)`, and at each place the earliest,
+/// then longest, spelling applies.
+fn replace_build_paths(text: &str, spellings: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut next: Vec<Option<usize>> = spellings.iter().map(|(from, _)| text.find(from)).collect();
+    let mut cursor = 0;
+    while let Some((index, found)) = next
+        .iter()
+        .enumerate()
+        .filter_map(|(index, found)| Some((index, (*found)?)))
+        .min_by_key(|&(index, found)| (found, std::cmp::Reverse(spellings[index].0.len())))
+    {
+        let (from, to) = spellings[index];
+        let end = found + from.len();
+        let after = &text[end..];
+        let separated = after.trim_start_matches(['/', '\\']);
+        let reserved = separated.len() < after.len()
+            && separated
+                .strip_prefix(RAWR)
+                .is_some_and(|after| after.is_empty() || after.starts_with(['/', '\\']));
+        out.push_str(&text[cursor..found]);
+        out.push_str(if reserved { from } else { to });
+        cursor = end;
+        for (slot, (from, _)) in next.iter_mut().zip(spellings) {
+            if slot.is_some_and(|found| found < cursor) {
+                *slot = text[cursor..].find(from).map(|found| cursor + found);
+            }
+        }
+    }
+    out.push_str(&text[cursor..]);
     out
 }
 
-/// A path spelled identically in JSON, dep-info and script output.
-fn plain(path: &Path) -> Result<&str> {
+/// The shared or bundle directory as text. rustc's dep-info escapes a space
+/// (`\ `) and an env-dep value escapes a backslash, so each text file is
+/// rewritten in its own spellings. A control character has no spelling that
+/// survives a dependency rule, so such a path is refused, as is one that is not
+/// UTF-8.
+fn spelled(path: &Path) -> Result<&str> {
     path.to_str()
-        .filter(|text| {
-            !text.is_empty()
-                && !text.chars().any(|c| {
-                    c.is_control() || c.is_whitespace() || matches!(c, '"' | '\\' | ':' | '#')
-                })
-        })
+        .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
         .ok_or_else(|| Error::Path {
             field: "shared Cargo build directory",
             path: path.to_path_buf(),
-            reason: "must be plain UTF-8 to relocate".into(),
+            reason: "must be UTF-8 without control characters to relocate".into(),
         })
 }
 
@@ -193,17 +226,28 @@ fn copy_tree(source: &Path, destination: &Path, from: &str, to: &str) -> Result<
         #[cfg(not(unix))]
         let _ = target;
     } else {
-        let digest = if matches!(
+        let dep_info = matches!(
             destination
                 .extension()
                 .and_then(|extension| extension.to_str()),
             Some("d")
-        ) || matches!(
+        );
+        let digest = if dep_info || matches!(
             destination.file_name().and_then(|name| name.to_str()),
             Some("output" | "root-output")
         ) {
             let text = fs::read(source).map_err(io("read shared build text", source))?;
-            let text = replace_build_paths(&String::from_utf8_lossy(&text), from, to);
+            let text = String::from_utf8_lossy(&text);
+            let text = if dep_info {
+                let rule = (escape_path(from), escape_path(to));
+                let environment = (escape_environment(from), escape_environment(to));
+                replace_build_paths(
+                    &text,
+                    &[(&rule.0, &rule.1), (&environment.0, &environment.1)],
+                )
+            } else {
+                replace_build_paths(&text, &[(from, to)])
+            };
             fs::write(destination, &text).map_err(io("write relocated build text", destination))?;
             Some(Sha256::digest(text).into())
         } else {
@@ -253,17 +297,30 @@ mod tests {
     fn paths_under_the_rawr_directory_keep_their_place() {
         let text = "/p/target/debug/deps/a.d /p/target/rawr/store/x.rs /p/target/rawr";
         assert_eq!(
-            super::replace_build_paths(text, "/p/target", "/b"),
+            super::replace_build_paths(text, &[("/p/target", "/b")]),
             "/b/debug/deps/a.d /p/target/rawr/store/x.rs /p/target/rawr"
         );
-        assert_eq!(super::replace_build_paths("/p/target/rawrx", "/p/target", "/b"), "/b/rawrx");
+        assert_eq!(super::replace_build_paths("/p/target/rawrx", &[("/p/target", "/b")]), "/b/rawrx");
     }
 
     use std::fs;
 
     #[test]
     fn relocation_keeps_metadata_dep_info_and_script_runs_and_names_the_copies() {
-        let root = std::env::temp_dir().join(format!("rawr-relocate-{}", std::process::id()));
+        relocates_under("rawr-relocate");
+    }
+
+    /// A project in `My Counter` (D491): JSON, rustc's dep-info and script
+    /// output each spell the paths their own way.
+    #[test]
+    fn relocation_spells_paths_with_spaces_and_make_characters_per_file() {
+        relocates_under("rawr-relocate My Counter #1 $x:y");
+    }
+
+    fn relocates_under(name: &str) {
+        use crate::input::{escape_environment, escape_path};
+
+        let root = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let (shared, bundle) = (root.join("shared"), root.join("bundle/build/final"));
         let deps = shared.join("t/debug/deps");
@@ -273,32 +330,44 @@ mod tests {
         fs::write(deps.join("liba-1.rlib"), b"link").unwrap();
         fs::write(deps.join("liba-1.rmeta"), b"meta").unwrap();
         fs::write(deps.join("liba-1.o"), b"object").unwrap();
-        let s = shared.display();
-        fs::write(
-            deps.join("a-1.d"),
-            format!("{s}/t/debug/deps/liba-1.rmeta: src/lib.rs {s}/t/debug/build/s-1/out/g.rs\n"),
-        )
-        .unwrap();
+        let s = shared.to_str().unwrap();
+        let dep_info = |s: &str| {
+            let rule = escape_path(s);
+            format!(
+                "{rule}/t/debug/deps/liba-1.rmeta: src/lib.rs {rule}/t/debug/build/s-1/out/g.rs\n\n\
+                 # env-dep:OUT_DIR={}/t/debug/build/s-1/out\n",
+                escape_environment(s)
+            )
+        };
+        fs::write(deps.join("a-1.d"), dep_info(s)).unwrap();
         fs::write(run.join("out/g.rs"), b"pub fn g() {}").unwrap();
         fs::write(
             run.join("output"),
             format!("cargo:rustc-link-search={s}/t/debug/build/s-1/out\n"),
         )
         .unwrap();
+        let json = |path: String| serde_json::to_string(&path).unwrap();
         let messages = format!(
-            "{{\"reason\":\"compiler-artifact\",\"filenames\":[\"{s}/t/debug/deps/liba-1.rlib\",\"{s}/t/debug/deps/liba-1.rmeta\"],\"executable\":null}}\n\
-             {{\"reason\":\"build-script-executed\",\"out_dir\":\"{s}/t/debug/build/s-1/out\"}}\n\
+            "{{\"reason\":\"compiler-artifact\",\"filenames\":[{},{}],\"executable\":null}}\n\
+             {{\"reason\":\"build-script-executed\",\"out_dir\":{}}}\n\
              not json\n\
-             {{\"reason\":\"build-finished\",\"success\":true}}"
+             {{\"reason\":\"build-finished\",\"success\":true}}",
+            json(format!("{s}/t/debug/deps/liba-1.rlib")),
+            json(format!("{s}/t/debug/deps/liba-1.rmeta")),
+            json(format!("{s}/t/debug/build/s-1/out")),
         );
         let relocated = super::relocate(messages.as_bytes(), &shared, &bundle).unwrap();
         let relocated = std::str::from_utf8(&relocated).unwrap();
-        let b = bundle.display();
-        assert!(!relocated.contains(&s.to_string()));
+        let b = bundle.to_str().unwrap();
+        assert!(!relocated.contains(json(s.into()).trim_matches('"')));
         assert!(relocated.contains(&format!(
-            "\"filenames\":[\"{b}/t/debug/deps/liba-1.rmeta\"]"
+            "\"filenames\":[{}]",
+            json(format!("{b}/t/debug/deps/liba-1.rmeta"))
         )));
-        assert!(relocated.contains(&format!("\"out_dir\":\"{b}/t/debug/build/s-1/out\"")));
+        assert!(relocated.contains(&format!(
+            "\"out_dir\":{}",
+            json(format!("{b}/t/debug/build/s-1/out"))
+        )));
         assert!(relocated.ends_with("\nnot json\n{\"reason\":\"build-finished\",\"success\":true}"));
         for line in relocated.lines().filter(|line| *line != "not json") {
             serde_json::from_str::<serde_json::Value>(line).unwrap();
@@ -306,10 +375,7 @@ mod tests {
         let copies = bundle.join("t/debug/deps");
         assert_eq!(fs::read(copies.join("liba-1.rmeta")).unwrap(), b"meta");
         assert!(!copies.join("liba-1.rlib").exists() && !copies.join("liba-1.o").exists());
-        assert_eq!(
-            fs::read_to_string(copies.join("a-1.d")).unwrap(),
-            format!("{b}/t/debug/deps/liba-1.rmeta: src/lib.rs {b}/t/debug/build/s-1/out/g.rs\n")
-        );
+        assert_eq!(fs::read_to_string(copies.join("a-1.d")).unwrap(), dep_info(b));
         let copied = bundle.join("t/debug/build/s-1");
         assert_eq!(fs::read(copied.join("out/g.rs")).unwrap(), b"pub fn g() {}");
         assert_eq!(

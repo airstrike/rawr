@@ -1,4 +1,4 @@
-use super::{Environment, Error, Event, Record, Syntax, Tokens};
+use super::{escape_environment, escape_path, Environment, Error, Event, Record, Syntax, Tokens};
 
 fn reference(text: &str) -> Result<Vec<Event>, Syntax> {
     if text.ends_with("\\\n") {
@@ -6,7 +6,19 @@ fn reference(text: &str) -> Result<Vec<Event>, Syntax> {
     }
     let normalized = text.replace("\\\n", "");
     let rule = normalized.lines().next().ok_or(Syntax::MissingRule)?;
-    let (_, dependencies) = rule.split_once(':').ok_or(Syntax::MissingRule)?;
+    // The target ends at a colon before whitespace or the line's end.
+    let colon = rule
+        .char_indices()
+        .find(|&(at, character)| {
+            character == ':'
+                && rule[at + 1..]
+                    .chars()
+                    .next()
+                    .is_none_or(char::is_whitespace)
+        })
+        .map(|(at, _)| at)
+        .ok_or(Syntax::MissingRule)?;
+    let dependencies = &rule[colon + 1..];
     let mut events = Vec::new();
     let mut token = String::new();
     let mut escaped = false;
@@ -160,4 +172,29 @@ fn environment_bounds_and_malformed_records_keep_precedence_and_fuse() {
             value: Some("long")
         }))
     );
+}
+
+#[test]
+fn rustc_spelled_paths_round_trip_through_the_rule_reader() {
+    let paths = [
+        "/p/My Counter/target/debug/deps/a-1.d",
+        "/p/two  spaces/#1/$HOME/a:b/é.rs",
+        " leading and trailing ",
+        "/p/a: b/c.rs",
+    ];
+    for target in paths {
+        let text = format!(
+            "{}: {}\n\n# env-dep:OUT_DIR={}\n",
+            escape_path(target),
+            paths.map(|path| escape_path(path).into_owned()).join(" "),
+            escape_environment(target),
+        );
+        assert_eq!(decoded(&text).expect("rustc's spelling decodes"), paths, "{text:?}");
+    }
+    assert_eq!(escape_path("/p/a#b$c:d"), "/p/a#b$c:d");
+    assert_eq!(escape_path("/p/My Counter"), "/p/My\\ Counter");
+    assert_eq!(escape_environment("C:\\My Counter\n"), "C:\\\\My Counter\\n");
+    // A drive's colon is part of the target.
+    assert_eq!(decoded("C:/t/a.d: b.rs"), Ok(vec!["b.rs".into()]));
+    assert_eq!(decoded("/p/a:b/x.d:"), Ok(vec![]));
 }

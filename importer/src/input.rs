@@ -25,6 +25,8 @@ pub(crate) mod complete;
 pub(crate) mod config;
 pub mod declaration;
 mod dependency;
+#[cfg(feature = "rustc-driver")]
+pub(crate) use dependency::scan::{escape_environment, escape_path};
 pub mod fingerprint;
 #[cfg(test)]
 mod membership;
