@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>?play and the playground | Rawr docs</title>
+<title>?play and the playground | rawr docs</title>
 <meta name="description" content="A reference for the ?play Discord bot and the browser playground. Snippet shapes, the sandbox, the simulated clock, PNG and GIF output, limits, differences from rawr run and every note the bot prints.">
-<meta property="og:title" content="?play and the playground | Rawr docs">
+<meta property="og:title" content="?play and the playground | rawr docs">
 <meta property="og:description" content="A reference for the ?play Discord bot and the browser playground. Snippet shapes, the sandbox, the simulated clock, PNG and GIF output, limits, differences from rawr run and every note the bot prints.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/play">
@@ -24,7 +24,7 @@
 </head>
 <body>
 <header class="bar">
-  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">Pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
     <a href="/docs" aria-current="true">Docs</a>
     <a href="/play">Playground</a>
@@ -49,7 +49,7 @@
 <article>
 <p class="cap"><span class="slash">//</span>?play and the playground</p>
 <h1>?play and the playground</h1>
-<p class="lede">The <code>?play</code> bot runs a Rawr snippet posted in Discord and replies with the result. <a href="/play">The playground</a> does the same in a browser. Neither needs anything installed.</p>
+<p class="lede">The <code>?play</code> bot runs a rawr snippet posted in Discord and replies with the result. <a href="/play">The playground</a> does the same in a browser. Neither needs anything installed.</p>
 <p>This page is a reference for both. It covers how a snippet is read and what it may touch. It covers the clock an app runs on and when the reply is a PNG or a GIF. It also lists the limits, the ways <code>?play</code> differs from <code>rawr run</code> and every note the bot can print.</p>
 
 <h2 id="discord">In Discord</h2>
@@ -144,7 +144,7 @@ xs.iter().sum::&lt;i64&gt;()</code></pre>
   <tr><td><code>include_bytes!("cat.png")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `include_bytes!` here: ?play has no files</code>. Inside an app&rsquo;s <code>.fonts(..)</code> setting it is skipped instead, as <a href="#images">Images in memory</a> explains.</td></tr>
   <tr><td><code>image("cat.png")</code> or <code>svg("logo.svg")</code></td><td>The image draws as a missing file. <code>Handle::from_path</code> does the same. The Discord reply adds the note <code>?play has no files. Paths given to image and svg do not exist here.</code></td></tr>
   <tr><td><code>env!("HOME")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `env!` here: ?play has no files. It has no environment variable `HOME` either</code>.</td></tr>
-  <tr><td><code>std::fs</code>, <code>std::env</code>, <code>std::net</code> or <code>std::thread</code></td><td>The snippet doesn&rsquo;t compile. Rawr has none of these modules. The error for <code>std::fs</code> is <code>unknown type `std::fs`</code>.</td></tr>
+  <tr><td><code>std::fs</code>, <code>std::env</code>, <code>std::net</code> or <code>std::thread</code></td><td>The snippet doesn&rsquo;t compile. rawr has none of these modules. The error for <code>std::fs</code> is <code>unknown type `std::fs`</code>.</td></tr>
   <tr><td><code>tokio::fs</code>, <code>tokio::net</code>, <code>tokio::process</code>, <code>tokio::signal</code> or <code>tokio::io</code></td><td>The snippet doesn&rsquo;t compile. <a href="#tokio">?play&rsquo;s tokio</a> has none of these modules. The error for <code>tokio::fs</code> is <code>unknown type `tokio::fs`</code>.</td></tr>
   <tr><td><code>use reqwest;</code> or any crate other than <code>iced</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>unknown import `reqwest`</code>.</td></tr>
 </table>
@@ -353,7 +353,7 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
 </div>
 
 <h3 id="crates">No crates</h3>
-<p><code>rawr run</code> imports the crates a project&rsquo;s <code>Cargo.toml</code> names. A snippet has no <code>Cargo.toml</code>, so it can use only Rawr&rsquo;s std, iced and <a href="#tokio">?play&rsquo;s tokio</a>. Keep a snippet to those. Use <code>rawr run</code> for a program that needs another crate.</p>
+<p><code>rawr run</code> imports the crates a project&rsquo;s <code>Cargo.toml</code> names. A snippet has no <code>Cargo.toml</code>, so it can use only rawr&rsquo;s std, iced and <a href="#tokio">?play&rsquo;s tokio</a>. Keep a snippet to those. Use <code>rawr run</code> for a program that needs another crate.</p>
 
 <h3 id="prelude">The prelude</h3>
 <p>A short snippet shouldn&rsquo;t need <code>use</code> lines. So a bare expression or a view with no top-level <code>use</code> gets rawr-iced&rsquo;s prelude imported for it. The prelude has iced&rsquo;s widget functions and macros. <code>text</code>, <code>button</code>, <code>column!</code> and <code>svg</code> are some of them. It also has iced&rsquo;s common types. <code>Color</code>, <code>Length</code>, <code>Fill</code>, <code>Center</code>, <code>Theme</code>, <code>Task</code>, <code>Subscription</code> and <code>Widget</code> are some of those.</p>
@@ -367,7 +367,7 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
 <p>A render has no window, so nobody can click it. Use <code>msg=</code> to apply the message a click would send. In the playground, write one message per line in the messages box.</p>
 
 <h3 id="tokio">tokio</h3>
-<p>A snippet has no <code>Cargo.toml</code>, so it can&rsquo;t depend on tokio. rawr-iced declares its own tokio for it instead. Each item is backed by the real tokio type holding Rawr values. Its timers run on the <a href="#clock">simulated clock</a>, so a GIF shows each wait.</p>
+<p>A snippet has no <code>Cargo.toml</code>, so it can&rsquo;t depend on tokio. rawr-iced declares its own tokio for it instead. Each item is backed by the real tokio type holding rawr values. Its timers run on the <a href="#clock">simulated clock</a>, so a GIF shows each wait.</p>
 <ul>
   <li><code>tokio::time</code> has <code>sleep</code>, <code>interval</code> with <code>tick().await</code>, <code>timeout</code>, <code>Instant</code> and <code>Duration</code>.</li>
   <li><code>tokio::sync::mpsc</code> has <code>channel</code> and <code>unbounded_channel</code>. Their senders have <code>send</code> and <code>clone</code>, and their receivers have <code>recv</code>.</li>
@@ -457,7 +457,7 @@ impl Sum {
 </ul>
 
 <h3 id="sippers">Script sippers</h3>
-<p>A sipper written in Rawr with <code>task::sipper(async |sender| ..)</code> is Rawr&rsquo;s own sipper. Its body runs in steps on the UI thread. Each <code>sender.send(value).await</code> hands the value to the progress mapper, and the body goes on after that. The sipper crate sends through a channel that holds one value, so a fast sender waits for the receiver. Rawr&rsquo;s sipper has no such channel, so it has none of that backpressure. <code>rawr run</code> uses the same sipper for Rawr code. A program that needs the backpressure should send from a Rust sipper in a project and run it with <code>rawr run</code>.</p>
+<p>A sipper written in rawr with <code>task::sipper(async |sender| ..)</code> is rawr&rsquo;s own sipper. Its body runs in steps on the UI thread. Each <code>sender.send(value).await</code> hands the value to the progress mapper, and the body goes on after that. The sipper crate sends through a channel that holds one value, so a fast sender waits for the receiver. rawr&rsquo;s sipper has no such channel, so it has none of that backpressure. <code>rawr run</code> uses the same sipper for rawr code. A program that needs the backpressure should send from a Rust sipper in a project and run it with <code>rawr run</code>.</p>
 
 <h2 id="notes">Notes and replies</h2>
 <p>A note is a short line that comes with the reply. In Discord it shows as small text with the image or below the output. The playground shows an image&rsquo;s note after the run time. It shows a program&rsquo;s note at the end of the output.</p>

@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rawr-iced | Rawr docs</title>
-<meta name="description" content="Write iced apps in Rawr. App shapes, impl Widget, boxed elements, components, canvas drawing, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
-<meta property="og:title" content="rawr-iced | Rawr docs">
-<meta property="og:description" content="Write iced apps in Rawr. App shapes, impl Widget, boxed elements, components, canvas drawing, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
+<title>rawr-iced | rawr docs</title>
+<meta name="description" content="Write iced apps in rawr. App shapes, impl Widget, boxed elements, components, canvas drawing, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
+<meta property="og:title" content="rawr-iced | rawr docs">
+<meta property="og:description" content="Write iced apps in rawr. App shapes, impl Widget, boxed elements, components, canvas drawing, subscriptions, hot reload, #[preview] views, snapshots, Rust crate imports and which parts of iced are available.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/iced">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -24,7 +24,7 @@
 </head>
 <body>
 <header class="bar">
-  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">Pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
     <a href="/docs" aria-current="true">Docs</a>
     <a href="/play">Playground</a>
@@ -49,7 +49,7 @@
 <article>
 <p class="cap"><span class="slash">//</span>rawr-iced</p>
 <h1>rawr-iced</h1>
-<p class="lede">rawr-iced runs <a href="https://github.com/iced-rs/iced">iced</a> apps written in Rawr. The app is a native iced app. Saving a file marked <code>// rawr</code> reloads it while the window stays open.</p>
+<p class="lede">rawr-iced runs <a href="https://github.com/iced-rs/iced">iced</a> apps written in rawr. The app is a native iced app. Saving a file marked <code>// rawr</code> reloads it while the window stays open.</p>
 
 <h2 id="when">When rawr-iced is used</h2>
 <p>The <code>rawr</code> command reads a program once and decides who runs it. A program goes to rawr-iced when it names the <code>iced</code> crate. It also goes there when it imports Rust crates from its <code>Cargo.toml</code>. Every other program runs on the base language. Set <code>RAWR_VERBOSE=1</code> to see which way a program went.</p>
@@ -70,7 +70,7 @@
   <li><code>.centered()</code>.</li>
 </ul>
 <p>Window and renderer settings such as <code>.window_size(..)</code>, <code>.font(..)</code> and <code>.style(..)</code> are accepted. rawr-iced doesn&rsquo;t apply them yet.</p>
-<p>The builder may come from a function of your own, as iced&rsquo;s todos example writes it. <code>fn application() -&gt; Application&lt;impl Program&lt;Message = Message, Theme = Theme&gt;&gt;</code> returns the chain, and <code>main</code> ends with <code>application().run()</code>. Rawr reads the chain as if <code>main</code> held it. <code>main</code> must be the function&rsquo;s only caller. <code>use iced::{Application, Program};</code> imports the two names.</p>
+<p>The builder may come from a function of your own, as iced&rsquo;s todos example writes it. <code>fn application() -&gt; Application&lt;impl Program&lt;Message = Message, Theme = Theme&gt;&gt;</code> returns the chain, and <code>main</code> ends with <code>application().run()</code>. rawr reads the chain as if <code>main</code> held it. <code>main</code> must be the function&rsquo;s only caller. <code>use iced::{Application, Program};</code> imports the two names.</p>
 <p><code>update</code> can return nothing or a <code>Task&lt;Message&gt;</code>. This app uses the builder, a <code>Task</code>, a text input and a list built at run time:</p>
 <div class="block">
   <div class="file"><b>src/main.rs</b></div>
@@ -331,7 +331,7 @@ impl App {
 fn main() -&gt; iced::Result {
     iced::run(App::update, App::view)
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-widget" data-out="out-widget" data-alt="A pink circle of radius 50 above its radius and a slider, drawn by a widget written in Rawr" aria-label="Run widget.rs" hidden></button><b>rawr run widget.rs</b><span class="quiet" id="out-widget" aria-live="polite">(opens a window)</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-widget" data-out="out-widget" data-alt="A pink circle of radius 50 above its radius and a slider, drawn by a widget written in rawr" aria-label="Run widget.rs" hidden></button><b>rawr run widget.rs</b><span class="quiet" id="out-widget" aria-live="polite">(opens a window)</span></div>
 </div>
 <h3 id="subscriptions">Subscriptions</h3>
 <p>A <code>.subscription(..)</code> method returns a <code>Subscription&lt;Message&gt;</code>. <code>iced::time::every</code>, <code>iced::keyboard::listen</code>, <code>iced::event::listen</code> and <code>iced::window::frames</code> work. Subscriptions combine with <code>map</code> and <code>filter_map</code>. <code>Subscription::run(builder)</code> takes a Rust function that returns a sipper, as <a href="#async">Async code</a> describes.</p>
@@ -361,7 +361,7 @@ fn subscription(&amp;self) -&gt; Subscription&lt;Message&gt; {
   <div class="file"><b>Cargo.toml</b></div>
   <pre><code data-lang="toml">rawr-macros = { git = "https://github.com/airstrike/rawr" }</code></pre>
 </div>
-<p>Then write <code>#[rawr::preview(..)]</code>, or write <code>use rawr::preview;</code> and then <code>#[preview(..)]</code>. Under cargo the attribute leaves the item as written. Rawr reads it itself. Cargo doesn&rsquo;t warn about a function that only previews use. The crate is not on crates.io yet.</p>
+<p>Then write <code>#[rawr::preview(..)]</code>, or write <code>use rawr::preview;</code> and then <code>#[preview(..)]</code>. Under cargo the attribute leaves the item as written. rawr reads it itself. Cargo doesn&rsquo;t warn about a function that only previews use. The crate is not on crates.io yet.</p>
 <table>
   <tr><th>Option</th><th>Meaning</th></tr>
   <tr><td><code>name = ".."</code></td><td>The preview&rsquo;s name.</td></tr>
@@ -435,14 +435,14 @@ impl App {
     }
 }</code></pre>
 </div>
-<p>Rawr uses the dependencies as cargo resolves them. Workspace inheritance works. A path dependency is built natively, even if its files start with <code>// rawr</code>. Only the crate you run is interpreted.</p>
-<p>A module of your crate whose first line is not <code>// rawr</code> is native Rust too. <code>rawr run</code> builds it with cargo and rebuilds it when you save it. Native code must not use code from marked files. Rawr reports an error if it does.</p>
-<p>Rawr reads only the items your code uses. A custom iced widget written in Rust is imported like any other item. The crates compile with the pinned nightly on the first run, so that run takes longer.</p>
-<p>A Rawr struct can hold a value of an imported type. It can <code>#[derive(Default)]</code> when the crate implements <code>Default</code> for that type. The field then takes the crate&rsquo;s <code>default()</code>, as in Rust. It can also derive <code>Debug</code>, <code>Clone</code> and <code>Copy</code> when the crate implements them for that type. <code>{:?}</code> of an imported value prints the crate&rsquo;s <code>Debug</code> text. <code>to_string()</code> and <code>{}</code> of an imported value print its <code>Display</code> text. A Message can hold an imported value, and a <code>match</code> can bind it.</p>
-<p>A Rust method that takes a <code>&amp;str</code> takes a Rawr string. A method whose result Rawr cannot hold returns that result&rsquo;s <code>Display</code> text instead, when its type has one. So chrono&rsquo;s <code>now.format(&quot;%H:%M:%S&quot;)</code> is a <code>String</code>.</p>
+<p>rawr uses the dependencies as cargo resolves them. Workspace inheritance works. A path dependency is built natively, even if its files start with <code>// rawr</code>. Only the crate you run is interpreted.</p>
+<p>A module of your crate whose first line is not <code>// rawr</code> is native Rust too. <code>rawr run</code> builds it with cargo and rebuilds it when you save it. Native code must not use code from marked files. rawr reports an error if it does.</p>
+<p>rawr reads only the items your code uses. A custom iced widget written in Rust is imported like any other item. The crates compile with the pinned nightly on the first run, so that run takes longer.</p>
+<p>A rawr struct can hold a value of an imported type. It can <code>#[derive(Default)]</code> when the crate implements <code>Default</code> for that type. The field then takes the crate&rsquo;s <code>default()</code>, as in Rust. It can also derive <code>Debug</code>, <code>Clone</code> and <code>Copy</code> when the crate implements them for that type. <code>{:?}</code> of an imported value prints the crate&rsquo;s <code>Debug</code> text. <code>to_string()</code> and <code>{}</code> of an imported value print its <code>Display</code> text. A Message can hold an imported value, and a <code>match</code> can bind it.</p>
+<p>A Rust method that takes a <code>&amp;str</code> takes a rawr string. A method whose result rawr cannot hold returns that result&rsquo;s <code>Display</code> text instead, when its type has one. So chrono&rsquo;s <code>now.format(&quot;%H:%M:%S&quot;)</code> is a <code>String</code>.</p>
 <p>A field of an imported type that is <code>Copy</code> reads as a copy, as in Rust. <code>.clone()</code> of an imported value leaves the original usable, as in Rust.</p>
 <p>A <code>match</code> or <code>if let</code> can match a variant of an imported enum, as in <code>echo::Event::Connected(connection) =&gt; ..</code>. The pattern takes the variant&rsquo;s fields as clones. A path through a native module, such as <code>download::Progress</code> in a field, names the type even beside a function called <code>download</code>.</p>
-<p>An edit to your Rawr code applies to a running app whose State holds a value of an imported type. The value keeps its state across the edit. An edit to the dependency&rsquo;s Rust code starts a new app, and its State starts again from its default. The window then names the imported type that did not carry over.</p>
+<p>An edit to your rawr code applies to a running app whose State holds a value of an imported type. The value keeps its state across the edit. An edit to the dependency&rsquo;s Rust code starts a new app, and its State starts again from its default. The window then names the imported type that did not carry over.</p>
 
 <h2 id="async">Async code</h2>
 <p>An app runs futures as iced tasks. A Rust function that returns a future gives a <code>Task</code>. That covers an <code>async fn</code> in a Rust crate and <code>tokio::time::sleep</code>. A Rust method that takes <code>self</code> by value and returns a future gives one too, as reqwest&rsquo;s <code>Response::text</code> does. A Rust function that returns an iced <code>Task</code>, such as <code>system::information()</code>, gives that task.</p>
@@ -460,12 +460,12 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
     }
 }</code></pre>
 </div>
-<p><code>Task::perform</code>, <code>Task::future</code>, <code>Task::sip</code>, <code>Task::abortable</code> with <code>task::Handle</code> and <code>Subscription::run</code> work. <code>Task::sip</code> and <code>Subscription::run</code> take a Rust sipper. The Rawr code that maps a task&rsquo;s values runs on the UI thread.</p>
+<p><code>Task::perform</code>, <code>Task::future</code>, <code>Task::sip</code>, <code>Task::abortable</code> with <code>task::Handle</code> and <code>Subscription::run</code> work. <code>Task::sip</code> and <code>Subscription::run</code> take a Rust sipper. The rawr code that maps a task&rsquo;s values runs on the UI thread.</p>
 <p>A variant passed as a function keeps its payload&rsquo;s type. So <code>.map(Message::Number)</code> maps a <code>Task&lt;u32&gt;</code> when <code>Number</code> holds a <code>u32</code>. <code>Task::&lt;Message&gt;::none()</code> names the task&rsquo;s message type with a turbofish, as in Rust.</p>
 <p>A task&rsquo;s future runs on iced&rsquo;s thread pool, so it must be <code>Send</code>, as iced requires. <code>rawr check</code> names the Rust function whose future is not.</p>
 <p>A reload cancels the tasks the app is running. Their handles report <code>is_aborted()</code>, and the status line says that a running task was cancelled. The State keeps what it held, so a download the reload cancelled still shows as running until a message changes it.</p>
-<h3 id="async-rawr">Async Rawr code</h3>
-<p>Rawr code can be async too. <code>async fn</code>, <code>async</code> blocks, <code>async move</code> blocks and async closures work. <code>.await</code> takes a future&rsquo;s output inside them. An <code>async fn</code> returns <code>impl Future&lt;Output = T&gt;</code> of its declared output, as in Rust. Rawr runs such a future as iced&rsquo;s <code>Task&lt;T&gt;</code>, so <code>Task::perform</code> takes it.</p>
+<h3 id="async-rawr">Async rawr code</h3>
+<p>rawr code can be async too. <code>async fn</code>, <code>async</code> blocks, <code>async move</code> blocks and async closures work. <code>.await</code> takes a future&rsquo;s output inside them. An <code>async fn</code> returns <code>impl Future&lt;Output = T&gt;</code> of its declared output, as in Rust. rawr runs such a future as iced&rsquo;s <code>Task&lt;T&gt;</code>, so <code>Task::perform</code> takes it.</p>
 <div class="block">
   <pre><code data-lang="rust">use iced::task::sipper;
 use std::time::Duration;
@@ -483,11 +483,11 @@ fn start() -&gt; (Download, Task&lt;Message&gt;) {
 <p><code>iced::task::sipper</code> takes an async closure. The closure sends its progress with <code>progress.send(value).await</code>. <code>Task::sip</code> maps each value it sends, and then its output.</p>
 <p>An async body runs on the UI thread, one step at a time. It stops at each <code>.await</code> and goes on from there once the future ends. Its locals keep their values in between, and no work it did runs again. <code>.await</code> works in a loop, a branch, a <code>match</code> arm and a call&rsquo;s arguments. <code>?</code> returns from the async body, as in Rust.</p>
 <p><code>futures::future::join</code> and <code>try_join</code> run two futures at once, through iced&rsquo;s <code>iced::futures</code>. <code>try_join</code> ends at the first <code>Err</code>.</p>
-<p>A program that does not depend on tokio still has tokio&rsquo;s timers, channels, <code>Mutex</code> and <code>join!</code>, <code>try_join!</code> and <code>select!</code>. Rawr runs its own tokio for them. In <code>?play</code> its timers follow the recording&rsquo;s clock, so the GIF shows each step. <a href="/docs/play#tokio">?play&rsquo;s tokio</a> lists what it has. A program that depends on tokio uses the real crate instead.</p>
+<p>A program that does not depend on tokio still has tokio&rsquo;s timers, channels, <code>Mutex</code> and <code>join!</code>, <code>try_join!</code> and <code>select!</code>. rawr runs its own tokio for them. In <code>?play</code> its timers follow the recording&rsquo;s clock, so the GIF shows each step. <a href="/docs/play#tokio">?play&rsquo;s tokio</a> lists what it has. A program that depends on tokio uses the real crate instead.</p>
 <p>A reload that changes an async body cancels the task that runs it. A suspended body never goes on with the new code.</p>
 <p>A Rust async method that borrows its receiver does not cross.</p>
 <h3 id="blocking">Blocking work</h3>
-<p><code>tokio::task::spawn_blocking</code> runs a Rawr closure off the UI thread. Its handle is a future of <code>Result&lt;T, JoinError&gt;</code>, as in tokio. So <code>Task::perform</code> takes it, and <code>.await</code> takes its output in an async body.</p>
+<p><code>tokio::task::spawn_blocking</code> runs a rawr closure off the UI thread. Its handle is a future of <code>Result&lt;T, JoinError&gt;</code>, as in tokio. So <code>Task::perform</code> takes it, and <code>.await</code> takes its output in an async body.</p>
 <div class="block">
   <pre><code data-lang="rust">use tokio::task::spawn_blocking;
 
@@ -507,8 +507,8 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
 }</code></pre>
 </div>
 <p>The closure runs on a worker thread of its own when its task starts. It has its own evaluation, so the window keeps drawing while it works. It sees only the values it moved in, and those are its own, so its work never changes the State. A shared handle such as a channel sender stays shared, as in Rust. Its output reaches <code>update</code> on the UI thread, after the same check as every other step of a task. A reload drops the output of a closure that is still running, but it cannot stop the thread. The thread ends when the closure returns.</p>
-<p>A closure that fails fails its task, as a failing <code>update</code> does. So the <code>Result</code> is always <code>Ok</code>, and <code>JoinError</code> exists only so the type can be named. tokio starts the closure when <code>spawn_blocking</code> is called. Rawr starts it when the task runs, which iced does right after <code>update</code> returns it.</p>
-<p><code>std::thread::spawn</code> does not compile, and the error points to <code>spawn_blocking</code>. Its <code>join</code> waits on the calling thread, which would stop the UI thread. Rawr runs a closure off the UI thread only as a task whose output reaches <code>update</code>. In a project that depends on tokio, <code>spawn_blocking</code> with a Rawr closure is not supported yet.</p>
+<p>A closure that fails fails its task, as a failing <code>update</code> does. So the <code>Result</code> is always <code>Ok</code>, and <code>JoinError</code> exists only so the type can be named. tokio starts the closure when <code>spawn_blocking</code> is called. rawr starts it when the task runs, which iced does right after <code>update</code> returns it.</p>
+<p><code>std::thread::spawn</code> does not compile, and the error points to <code>spawn_blocking</code>. Its <code>join</code> waits on the calling thread, which would stop the UI thread. rawr runs a closure off the UI thread only as a task whose output reaches <code>update</code>. In a project that depends on tokio, <code>spawn_blocking</code> with a rawr closure is not supported yet.</p>
 
 <h2 id="diagnostics">Diagnostics</h2>
 <p><code>rawr check</code> checks an app without opening a window. Errors look like rustc&rsquo;s. Delete the <code>Decrement</code> arm from the counter and it reports the missing arm:</p>
@@ -522,7 +522,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
  <span class="c">26 |</span>         }
     <span class="c">|</span> <span class="e">^^^^^^^^</span></code></pre>
 </div>
-<p>The error code names the stage that failed and the kind of error. Codes will change while Rawr is pre-alpha.</p>
+<p>The error code names the stage that failed and the kind of error. Codes will change while rawr is pre-alpha.</p>
 
 <h2 id="available">What of iced is available</h2>
 <p>Most of iced&rsquo;s everyday widgets and modules work. A missing one fails the check with <code>unknown import</code>.</p>
@@ -540,7 +540,7 @@ fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
 </ul>
 <p>An available widget may still miss some of its methods. <code>Rotation::radians_mut</code> works, so <code>*rotation.radians_mut() = angle</code> turns a rotation in place. <code>Animation&lt;T&gt;</code> animates a <code>bool</code> or a number with <code>go</code>, <code>go_mut</code>, <code>is_animating</code> and <code>interpolate</code> at an <code>Instant</code>. <code>go</code> also ends a chain of builders, as in <code>Animation::new(false).quick().go(true, now)</code>. A <code>Vector</code> adds, subtracts, and scales by an <code>f32</code>. A <code>Point</code> moves by a <code>Vector</code>, and two points differ by one. <code>color!(0xffc8a8, alpha)</code> and <code>color!(r, g, b, alpha)</code> take any <code>f32</code> alpha. A helper such as <code>text</code> passes as a function, as in <code>.map(text)</code>. A canvas program&rsquo;s State may be a <code>RefCell</code>. <code>canvas::Group</code> and <code>Cache::with_group</code> work. A function of yours that takes <code>impl Into&lt;Length&gt;</code> takes a number or a <code>Length</code>.</p>
 <h3 id="main-statements">Statements before the app</h3>
-<p><code>main</code> may run statements before <code>iced::application</code> or <code>iced::run</code>, such as <code>tracing_subscriber::fmt::init();</code>. They run once, when <code>rawr run</code> starts, as Rust runs <code>main</code> once. A reset or a reload boots the app again without them. An edit to them takes effect when <code>rawr run</code> restarts, and the window says so. <code>#[cfg(..)]</code> on a statement and <code>cfg!</code> follow the machine Rawr runs on.</p>
+<p><code>main</code> may run statements before <code>iced::application</code> or <code>iced::run</code>, such as <code>tracing_subscriber::fmt::init();</code>. They run once, when <code>rawr run</code> starts, as Rust runs <code>main</code> once. A reset or a reload boots the app again without them. An edit to them takes effect when <code>rawr run</code> restarts, and the window says so. <code>#[cfg(..)]</code> on a statement and <code>cfg!</code> follow the machine rawr runs on.</p>
 <h3 id="not-available">Not available yet</h3>
 <ul>
   <li>A widget type of your own that borrows, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>

@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Embedding | Rawr docs</title>
-<meta name="description" content="Embed Rawr in a Rust program with rawr::Engine. Compile a script, call its functions with call_fn, capture its output with on_output, and set limits.">
-<meta property="og:title" content="Embedding | Rawr docs">
-<meta property="og:description" content="Embed Rawr in a Rust program with rawr::Engine. Compile a script, call its functions with call_fn, capture its output with on_output, and set limits.">
+<title>Embedding | rawr docs</title>
+<meta name="description" content="Embed rawr in a Rust program with rawr::Engine. Compile a script, call its functions with call_fn, capture its output with on_output, and set limits.">
+<meta property="og:title" content="Embedding | rawr docs">
+<meta property="og:description" content="Embed rawr in a Rust program with rawr::Engine. Compile a script, call its functions with call_fn, capture its output with on_output, and set limits.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/embedding">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -23,7 +23,7 @@
 </head>
 <body>
 <header class="bar">
-  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">Pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
     <a href="/docs" aria-current="true">Docs</a>
     <a href="/play">Playground</a>
@@ -47,8 +47,8 @@
 <main>
 <article>
 <p class="cap"><span class="slash">//</span>Embedding</p>
-<h1>Embedding Rawr</h1>
-<p class="lede">The <code>rawr</code> crate is the language. A Rust program creates an <code>Engine</code>, compiles Rawr source and calls the functions it defines.</p>
+<h1>Embedding rawr</h1>
+<p class="lede">The <code>rawr</code> crate is the language. A Rust program creates an <code>Engine</code>, compiles rawr source and calls the functions it defines.</p>
 
 <h2 id="add">Add the crate</h2>
 <p>The crate builds on stable Rust 1.95 or newer. It doesn&rsquo;t depend on iced.</p>
@@ -112,15 +112,15 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
 
 <h2 id="boundary">What crosses the boundary</h2>
 <table class="wide">
-  <tr><th>Rust</th><th>Rawr</th></tr>
+  <tr><th>Rust</th><th>rawr</th></tr>
   <tr><td><code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code></td><td>The same types. Pass integers as <code>i64</code> and floats as <code>f64</code>.</td></tr>
   <tr><td><code>String</code>, <code>&amp;str</code></td><td>Either one can be passed for a <code>String</code> or <code>&amp;str</code> parameter. A returned string comes back as <code>String</code>.</td></tr>
   <tr><td><code>rawr::Array</code></td><td>A <code>Vec</code>. Build one from values converted with <code>.into()</code>.</td></tr>
   <tr><td><code>()</code></td><td>The unit return of a function such as <code>main</code>.</td></tr>
-  <tr><td><code>rawr::Dynamic</code></td><td>Any value. A struct or enum defined in Rawr comes back as a <code>Dynamic</code>. Rust code can hold it and pass it back. It can&rsquo;t read the fields.</td></tr>
+  <tr><td><code>rawr::Dynamic</code></td><td>Any value. A struct or enum defined in rawr comes back as a <code>Dynamic</code>. Rust code can hold it and pass it back. It can&rsquo;t read the fields.</td></tr>
 </table>
 <p>Register a Rust function before you compile a script that calls it. The check knows the names registered on the engine that compiles the script. A call to any other name is an <code>unknown function</code> error at the name, as in rustc.</p>
-<p>Typed Rawr code knows the return type of a Rust function registered with <code>Engine::register_fn</code> when it is <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>String</code> or <code>()</code>. The check doesn&rsquo;t know any other return type. To use Rust types and functions from Rawr today, use rawr-iced&rsquo;s <a href="/docs/iced#rust-crates">Rust imports</a>.</p>
+<p>Typed rawr code knows the return type of a Rust function registered with <code>Engine::register_fn</code> when it is <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>String</code> or <code>()</code>. The check doesn&rsquo;t know any other return type. To use Rust types and functions from rawr today, use rawr-iced&rsquo;s <a href="/docs/iced#rust-crates">Rust imports</a>.</p>
 
 <h2 id="output">Capturing output</h2>
 <p>By default <code>println!</code> and <code>print!</code> write to the process&rsquo;s stdout. <code>eprintln!</code> and <code>eprint!</code> write to stderr. <code>Engine::on_output</code> sends that text to a callback instead. The callback gets the stream and the exact text. <code>println!</code> text includes its newline.</p>

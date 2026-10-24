@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The language | Rawr docs</title>
-<meta name="description" content="The Rust that Rawr supports today. Items, types, generics, traits, patterns, closures, modules, macros and the std surface. What is not supported yet, and where Rawr differs from cargo run.">
-<meta property="og:title" content="The language | Rawr docs">
-<meta property="og:description" content="The Rust that Rawr supports today. Items, types, generics, traits, patterns, closures, modules, macros and the std surface. What is not supported yet, and where Rawr differs from cargo run.">
+<title>The language | rawr docs</title>
+<meta name="description" content="The Rust that rawr supports today. Items, types, generics, traits, patterns, closures, modules, macros and the std surface. What is not supported yet, and where rawr differs from cargo run.">
+<meta property="og:title" content="The language | rawr docs">
+<meta property="og:description" content="The Rust that rawr supports today. Items, types, generics, traits, patterns, closures, modules, macros and the std surface. What is not supported yet, and where rawr differs from cargo run.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/language">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -24,7 +24,7 @@
 </head>
 <body>
 <header class="bar">
-  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">Pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
     <a href="/docs" aria-current="true">Docs</a>
     <a href="/play">Playground</a>
@@ -49,12 +49,12 @@
 <article>
 <p class="cap"><span class="slash">//</span>The language</p>
 <h1>The language</h1>
-<p class="lede">Rawr is written in Rust syntax and checked before it runs. This page lists the Rust that works today, what doesn&rsquo;t work yet and where a program behaves differently from the same code built by cargo.</p>
+<p class="lede">rawr is written in Rust syntax and checked before it runs. This page lists the Rust that works today, what doesn&rsquo;t work yet and where a program behaves differently from the same code built by cargo.</p>
 
 <h2 id="overview">How a program runs</h2>
-<p>Rawr checks a whole program before any of it runs. The check resolves names and types, traits and method calls. It also checks that every <code>match</code> covers every case. A program that fails the check doesn&rsquo;t start.</p>
+<p>rawr checks a whole program before any of it runs. The check resolves names and types, traits and method calls. It also checks that every <code>match</code> covers every case. A program that fails the check doesn&rsquo;t start.</p>
 <p>A program is a Cargo crate or a single <code>.rs</code> file. In a crate, the root file is <code>src/main.rs</code> or <code>src/lib.rs</code>. Its first line is <code>// rawr</code>. A single file is one <code>.rs</code> file you give to <code>rawr run</code>. Its first line may be <code>// rawr</code> but doesn&rsquo;t have to be.</p>
-<p>A single file can hold items, top-level statements, or both. Rawr runs the top-level statements first and then calls <code>fn main</code> if there is one. Cargo would not build a file with top-level statements, so keep them to snippets and the playground.</p>
+<p>A single file can hold items, top-level statements, or both. rawr runs the top-level statements first and then calls <code>fn main</code> if there is one. Cargo would not build a file with top-level statements, so keep them to snippets and the playground.</p>
 <p>This program uses <code>?</code>, a <code>Result</code> from <code>main</code> and a closure. It prints the same output as the Rust binary and exits with the same status.</p>
 <div class="block">
   <div class="file"><b>parse.rs</b></div>
@@ -81,14 +81,14 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>struct</code> with named fields, tuple structs and unit structs.</li>
   <li><code>enum</code> with unit, tuple and struct variants.</li>
   <li><code>impl</code> blocks with methods, associated functions and associated consts. An <code>impl</code> may sit inside a function body. <code>Self</code> works in a method body&rsquo;s type annotations, as in <code>let next: Self = ..</code>.</li>
-  <li><code>unsafe impl Send for T {}</code> and <code>unsafe impl Sync for T {}</code>. Every Rawr value is already <code>Send</code> and <code>Sync</code>, so the impl changes nothing. Rawr checks it as rustc does. <code>impl Send</code> without <code>unsafe</code> is an error. So is <code>unsafe impl</code> of another trait.</li>
+  <li><code>unsafe impl Send for T {}</code> and <code>unsafe impl Sync for T {}</code>. Every rawr value is already <code>Send</code> and <code>Sync</code>, so the impl changes nothing. rawr checks it as rustc does. <code>impl Send</code> without <code>unsafe</code> is an error. So is <code>unsafe impl</code> of another trait.</li>
   <li><code>trait</code> with default methods, associated types and static functions. Traits can be implemented for your own types and for built-in types such as <code>i64</code>.</li>
   <li><code>const</code> and <code>static</code> items.</li>
   <li><code>type</code> aliases, generic ones included, such as <code>type Pair&lt;T&gt; = (T, T);</code>. A <code>pub type</code> can be imported from another module.</li>
   <li><code>pub</code> and restricted visibility. <code>pub(crate)</code>, <code>pub(super)</code> and <code>pub(in path)</code> all work.</li>
   <li><code>mod</code>. A <code>mod util;</code> declaration loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. A module without that line is native Rust, and cargo builds it. An inline <code>mod m { .. }</code> works too. A path through <code>crate::</code> or <code>super::</code> reaches a name that module brings in with <code>use</code>, as in Rust.</li>
   <li><code>use</code> with paths and groups, such as <code>use std::collections::{HashMap, HashSet};</code>. A glob of a standard library module such as <code>use std::collections::*;</code> works too. A path that starts with <code>::</code> names an outside crate, as in <code>use ::image::ColorType;</code>. It is an error when its first name is not a crate.</li>
-  <li><code>#[derive]</code> of <code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. Rawr checks a derive the way rustc does. Deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</li>
+  <li><code>#[derive]</code> of <code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. rawr checks a derive the way rustc does. Deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</li>
 </ul>
 
 <h2 id="types">Types</h2>
@@ -106,7 +106,7 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>as</code> casts between numbers. They truncate and saturate as Rust&rsquo;s do. <code>u8 as char</code> works too.</li>
   <li>A fieldless enum casts to an integer with <code>as</code>. Explicit discriminants such as <code>Red = 1</code> set its values.</li>
 </ul>
-<p>Mixing numeric types without a cast is an error in Rawr too. <code>i32 + i64</code> doesn&rsquo;t pass the check. Indexing a <code>Vec</code> takes a <code>usize</code>.</p>
+<p>Mixing numeric types without a cast is an error in rawr too. <code>i32 + i64</code> doesn&rsquo;t pass the check. Indexing a <code>Vec</code> takes a <code>usize</code>.</p>
 
 <h2 id="generics-traits">Generics and traits</h2>
 <p>Functions, structs, enums and impl blocks can be generic. Bounds work inline and in <code>where</code> clauses. A generic type without the bound it needs fails the check. rustc rejects it too.</p>
@@ -177,7 +177,7 @@ fn main() {
   <li>Struct, tuple and enum patterns. <code>..</code> matches the rest.</li>
   <li>Slice patterns such as <code>[first, .., last]</code>.</li>
   <li><code>if let</code>, <code>while let</code> and <code>let .. else</code>.</li>
-  <li>A <code>let</code> whose pattern is an enum with one variant, such as <code>let Wrapper::Named(x) = value;</code>. Rust accepts it because the pattern can&rsquo;t fail, and so does Rawr.</li>
+  <li>A <code>let</code> whose pattern is an enum with one variant, such as <code>let Wrapper::Named(x) = value;</code>. Rust accepts it because the pattern can&rsquo;t fail, and so does rawr.</li>
   <li>Let chains, as in Rust 2024: <code>if let Some(x) = a &amp;&amp; let Some(y) = b &amp;&amp; x &lt; y { .. }</code>. <code>while</code> takes them too.</li>
   <li><code>loop</code>, <code>while</code> and <code>for</code>. Loop labels work. <code>break</code> can carry a value.</li>
   <li>Blocks are expressions. <code>let x = { .. };</code> works.</li>
@@ -221,7 +221,7 @@ fn main() {
 <p>In an iced app, <code>async fn</code>, <code>async</code> blocks, async closures and <code>.await</code> work. Each <code>.await</code> suspends the body, and it goes on from there with its locals as they were. <a href="/docs/iced#async">Async code</a> describes how an app runs them.</p>
 
 <h2 id="macros">Macros</h2>
-<p>Rawr has a fixed set of built-in macros. You can&rsquo;t define your own with <code>macro_rules!</code>.</p>
+<p>rawr has a fixed set of built-in macros. You can&rsquo;t define your own with <code>macro_rules!</code>.</p>
 <table>
   <tr><th>Macro</th><th>Notes</th></tr>
   <tr><td><code>println!</code> <code>print!</code></td><td>Write to stdout.</td></tr>
@@ -235,7 +235,7 @@ fn main() {
   <tr><td><code>vec!</code></td><td>Both forms: <code>vec![1, 2]</code> and <code>vec![0; n]</code>, where <code>n</code> is any <code>usize</code> expression. An array&rsquo;s <code>[0; N]</code> takes a literal or a <code>const</code>.</td></tr>
   <tr><td><code>matches!</code></td><td>Takes a guard: <code>matches!(x, Some(n) if n &gt; 2)</code>.</td></tr>
   <tr><td><code>concat!</code> <code>stringify!</code></td><td>Expand to a string literal.</td></tr>
-  <tr><td><code>cfg!</code></td><td>Tests the machine Rawr runs on: <code>target_os</code>, <code>target_arch</code>, <code>target_family</code>, <code>unix</code> and <code>windows</code>, with <code>not</code>, <code>all</code> and <code>any</code>. No feature is on. <code>#[cfg(..)]</code> on a statement leaves it out the same way.</td></tr>
+  <tr><td><code>cfg!</code></td><td>Tests the machine rawr runs on: <code>target_os</code>, <code>target_arch</code>, <code>target_family</code>, <code>unix</code> and <code>windows</code>, with <code>not</code>, <code>all</code> and <code>any</code>. No feature is on. <code>#[cfg(..)]</code> on a statement leaves it out the same way.</td></tr>
   <tr><td><code>env!</code></td><td>Reads an environment variable when the program is checked.</td></tr>
   <tr><td><code>include_str!</code> <code>include_bytes!</code></td><td>Read a file relative to the source file.</td></tr>
 </table>
@@ -253,7 +253,7 @@ fn main() {
 <p>Hex debug output (<code>{:x?}</code>) is not supported yet.</p>
 
 <h2 id="std">The standard library</h2>
-<p>Rawr provides part of <code>std</code>. These work today:</p>
+<p>rawr provides part of <code>std</code>. These work today:</p>
 <ul>
   <li><code>String</code> and <code>&amp;str</code>: <code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes as Rust&rsquo;s does.</li>
   <li><code>Vec</code> and slices: <code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element, so <code>if let Some(d) = v.iter_mut().find(|d| d.id == id) { d.n += 1; }</code> changes it.</li>
@@ -261,7 +261,7 @@ fn main() {
   <li>Arrays: <code>[T; N]::map</code> gives a <code>[U; N]</code>.</li>
   <li>Numbers: <code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>powi</code>, <code>powf</code>, <code>floor</code>, <code>round</code> and kin. Floats also have <code>sin</code>, <code>cos</code>, <code>tan</code>, their inverses and hyperbolic forms, <code>atan2</code>, <code>hypot</code>, <code>exp</code>, <code>ln</code>, <code>log</code>, <code>log10</code>, <code>to_degrees</code> and <code>to_radians</code>. <code>rem_euclid</code> and <code>div_euclid</code> work on floats and integers. A number&rsquo;s method can be called by its path, as in <code>f32::rem_euclid(x, 1.0)</code>.</li>
   <li><code>std::time::Duration</code> and <code>Instant</code>: <code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code>, <code>duration_since</code>, and the operators <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>{:?}</code> prints Rust&rsquo;s text, such as <code>1.5s</code>.</li>
-  <li><code>std::collections</code>: <code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. A local may hold an entry, as in <code>let n = map.entry(k).or_default(); *n += 1;</code>. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are Rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. <code>cargo build</code> still uses the crate&rsquo;s faster hasher.</li>
+  <li><code>std::collections</code>: <code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. A local may hold an entry, as in <code>let n = map.entry(k).or_default(); *n += 1;</code>. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. <code>cargo build</code> still uses the crate&rsquo;s faster hasher.</li>
   <li><code>std::cell::RefCell</code>: <code>new</code>, <code>default</code>, <code>borrow</code>, <code>borrow_mut</code>, <code>into_inner</code>, <code>replace</code>, <code>take</code> and <code>clone</code>. A change through a shared reference to a <code>RefCell</code> changes the cell. A borrow ends with its block, as in Rust. A borrow that conflicts with one still held panics with Rust&rsquo;s message.</li>
   <li><code>std::marker::PhantomData</code>.</li>
   <li><code>std::mem::swap</code>, <code>replace</code> and <code>take</code>.</li>
@@ -273,7 +273,7 @@ fn main() {
 <p>In an iced app, <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>, which are std&rsquo;s own in iced. <code>std::path</code> has <code>PathBuf</code> and <code>Path</code>, and <code>std::ffi</code> has <code>OsString</code> and <code>OsStr</code>. They are Rust&rsquo;s own types. <code>Path</code> is another name for <code>PathBuf</code>, and <code>OsStr</code> is another name for <code>OsString</code>. They have <code>new</code>, <code>from</code>, <code>push</code>, <code>join</code>, <code>parent</code>, <code>file_name</code>, <code>file_stem</code>, <code>extension</code>, <code>display</code>, <code>to_str</code> and <code>to_string_lossy</code>. An imported Rust function does not take one yet. <code>std::io</code> has <code>Error</code> and <code>ErrorKind</code>. <code>Error::new</code>, <code>Error::other</code>, <code>Error::from</code> and <code>kind</code> work, and <code>{}</code> prints Rust&rsquo;s text. Nothing in it reads or writes a file.</p>
 
 <h2 id="not-supported">Not supported yet</h2>
-<p>These are valid Rust that Rawr rejects today. Each one fails the check with an error that names the construct.</p>
+<p>These are valid Rust that rawr rejects today. Each one fails the check with an error that names the construct.</p>
 <h3 id="missing-syntax">Syntax and items</h3>
 <ul>
   <li>A glob import of an enum&rsquo;s variants (<code>use Shape::*;</code>).</li>
@@ -307,19 +307,19 @@ fn main() {
   <li><code>Vec::binary_search</code>.</li>
   <li>The <code>dbg!</code>, <code>line!</code>, <code>file!</code>, <code>column!</code> and <code>module_path!</code> macros.</li>
 </ul>
-<p>Rawr reports one error per check. A file with several unsupported constructs shows them one at a time.</p>
+<p>rawr reports one error per check. A file with several unsupported constructs shows them one at a time.</p>
 
 <h2 id="differences">Differences from <code>cargo run</code></h2>
 <p>A program that passes both <code>rawr check</code> and rustc usually prints the same output. These are the known cases where it doesn&rsquo;t.</p>
 <ul>
-  <li><strong><code>HashMap</code> iteration order.</strong> Rawr iterates a <code>HashMap</code> in key order. Rust uses a random order that changes from run to run. Code shouldn&rsquo;t depend on either.</li>
-  <li><strong><code>f32 as f64</code>.</strong> Rawr keeps the short decimal value. <code>0.1f32 as f64</code> prints <code>0.1</code> in Rawr and <code>0.10000000149011612</code> in Rust. Other <code>f32</code> arithmetic and printing match.</li>
-  <li><strong>Width on your own <code>Display</code>.</strong> Rawr pads the output of a user <code>Display</code> impl to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
+  <li><strong><code>HashMap</code> iteration order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust uses a random order that changes from run to run. Code shouldn&rsquo;t depend on either.</li>
+  <li><strong><code>f32 as f64</code>.</strong> rawr keeps the short decimal value. <code>0.1f32 as f64</code> prints <code>0.1</code> in rawr and <code>0.10000000149011612</code> in Rust. Other <code>f32</code> arithmetic and printing match.</li>
+  <li><strong>Width on your own <code>Display</code>.</strong> rawr pads the output of a user <code>Display</code> impl to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
   <li><strong><code>TryFrom</code> errors.</strong> <code>u8::try_from(300i64)</code> prints <code>Err(())</code> with <code>{:?}</code>. Rust prints <code>Err(TryFromIntError(PosOverflow))</code>.</li>
-  <li><strong>Panic messages.</strong> A panic exits with status 101 in both. Rawr writes the message to stderr as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
+  <li><strong>Panic messages.</strong> A panic exits with status 101 in both. rawr writes the message to stderr as a diagnostic with the source span. Rust writes <code>thread 'main' panicked at ..</code>.</li>
 </ul>
-<h3 id="lenient">Code that Rawr accepts and rustc rejects</h3>
-<p>Rawr&rsquo;s check is not rustc. Some code passes <code>rawr check</code> and fails <code>cargo build</code>. <code>rawr check</code> also runs <code>cargo check</code>, which reports these cases. <a href="/docs/cli#rawr">Commands</a> describes its output.</p>
+<h3 id="lenient">Code that rawr accepts and rustc rejects</h3>
+<p>rawr&rsquo;s check is not rustc. Some code passes <code>rawr check</code> and fails <code>cargo build</code>. <code>rawr check</code> also runs <code>cargo check</code>, which reports these cases. <a href="/docs/cli#rawr">Commands</a> describes its output.</p>
 <ul>
   <li>There is no borrow checker beyond rejecting two live <code>&amp;mut</code> borrows of one value and a use after a move. A shared borrow held across a mutation and returning a reference to a local are accepted.</li>
   <li><code>String</code> and <code>&amp;str</code> are one type to the checker. Passing <code>"x"</code> where a <code>String</code> is expected is accepted.</li>

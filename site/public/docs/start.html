@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Getting started | Rawr docs</title>
-<meta name="description" content="Install the rawr crate, the rawr command and rawr-iced. Run a plain Rawr program and start an iced app that reloads when you save.">
-<meta property="og:title" content="Getting started | Rawr docs">
-<meta property="og:description" content="Install the rawr crate, the rawr command and rawr-iced. Run a plain Rawr program and start an iced app that reloads when you save.">
+<title>Getting started | rawr docs</title>
+<meta name="description" content="Install the rawr crate, the rawr command and rawr-iced. Run a plain rawr program and start an iced app that reloads when you save.">
+<meta property="og:title" content="Getting started | rawr docs">
+<meta property="og:description" content="Install the rawr crate, the rawr command and rawr-iced. Run a plain rawr program and start an iced app that reloads when you save.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/start">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -24,7 +24,7 @@
 </head>
 <body>
 <header class="bar">
-  <a class="brand" href="/" aria-label="Rawr home"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span class="cap">Pre-alpha</span></a>
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">Pre-alpha</span></a>
   <nav class="links cap" aria-label="Site">
     <a href="/docs" aria-current="true">Docs</a>
     <a href="/play">Playground</a>
@@ -52,7 +52,7 @@
 <p class="lede">Install what you need. Run a plain program. Then start an iced app and edit it while it runs.</p>
 
 <h2 id="install">Install</h2>
-<p>Rawr installs from git. There are three things you can install. You only need the ones you use.</p>
+<p>rawr installs from git. There are three things you can install. You only need the ones you use.</p>
 
 <h3 id="install-crate">The crate</h3>
 <p>To embed the language in a Rust program, add the crate. It builds on stable Rust 1.95 or newer.</p>
@@ -60,13 +60,13 @@
 <p><a href="/docs/embedding">Embedding</a> shows how to compile a script and call its functions.</p>
 
 <h3 id="install-command">The <code>rawr</code> command</h3>
-<p>The <code>rawr</code> command runs Rawr programs. It builds on stable Rust too.</p>
+<p>The <code>rawr</code> command runs rawr programs. It builds on stable Rust too.</p>
 <div class="block"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre></div>
 <p>The <code>rawr-cli</code> package installs the <code>rawr</code> binary. It also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works too. A program without iced runs once and exits. It doesn&rsquo;t hot reload.</p>
 
 <h3 id="install-iced">rawr-iced</h3>
 <p>rawr-iced adds iced support. Install it and <code>rawr</code> hands every program that uses iced to it.</p>
-<div class="note"><p>Importing your own Rust crates builds them for the host of the pinned toolchain. It needs a Unix system. It has only been tested on Apple Silicon Macs so far. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far. rawr-iced needs the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr builds iced and your own crates with that toolchain too.</p></div>
+<div class="note"><p>Importing your own Rust crates builds them for the host of the pinned toolchain. It needs a Unix system. It has only been tested on Apple Silicon Macs so far. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far. rawr-iced needs the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. rawr builds iced and your own crates with that toolchain too.</p></div>
 <div class="block"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre></div>
@@ -75,7 +75,7 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 <p>Run <code>rawr doctor</code> to see what is installed and where. Run <code>rawr --help</code> to see which commands each binary provides.</p>
 
 <h2 id="first-program">A first program</h2>
-<p>A plain program is one that doesn&rsquo;t use iced. Save this as <code>cart.rs</code>. Its first line is <code>// rawr</code>. That line marks it as a Rawr file.</p>
+<p>A plain program is one that doesn&rsquo;t use iced. Save this as <code>cart.rs</code>. Its first line is <code>// rawr</code>. That line marks it as a rawr file.</p>
 <div class="block">
   <div class="file"><b>cart.rs</b></div>
   <pre><code data-lang="rust" data-run="cart.rs" id="src-cart">// rawr
@@ -115,7 +115,7 @@ fn main() {
 <p><code>rawr check cart.rs</code> runs the check without running the program. It prints <code>Checked</code> and the path when the file is valid.</p>
 
 <h3 id="errors">Errors</h3>
-<p>Rawr reports one error at a time. Each error has a code, a message and the source span. Change <code>item.price()</code> to <code>item.cost()</code> and run it again:</p>
+<p>rawr reports one error at a time. Each error has a code, a message and the source span. Change <code>item.price()</code> to <code>item.cost()</code> and run it again:</p>
 <div class="block diag">
   <div class="file"><b>rawr run cart.rs</b><span>exit 1</span></div>
   <pre><code><span class="e">error[RAWR-RESOLVE-UNKNOWN-MEMBER]</span><span class="h">: unknown member `Item::cost`</span>
@@ -198,7 +198,7 @@ impl Counter {
 
 <h2 id="next">Next steps</h2>
 <ul>
-  <li><a href="/docs/language">The language</a> lists the Rust that Rawr supports today.</li>
+  <li><a href="/docs/language">The language</a> lists the Rust that rawr supports today.</li>
   <li><a href="/docs/iced">rawr-iced</a> covers app shapes, previews, snapshots and Rust imports.</li>
   <li><a href="/docs/cli">Commands</a> lists every command and flag.</li>
   <li><a href="/play">The playground</a> runs snippets in a browser without installing anything.</li>
