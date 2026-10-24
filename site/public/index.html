@@ -364,9 +364,9 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
           <div class="cmd"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre><button type="button" class="copy">Copy</button></div>
           <div class="cmd"><pre><code>cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli</code></pre><button type="button" class="copy">Copy</button></div>
           <div class="cmd"><pre><code>cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre><button type="button" class="copy">Copy</button></div>
-          <div class="cmd"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre><button type="button" class="copy">Copy</button></div>
+          <div class="cmd"><pre><code>rawr new counter --template iced &amp;&amp; cd counter &amp;&amp; rawr run</code></pre><button type="button" class="copy">Copy</button></div>
         </div>
-        <p class="note"><code>rawr new</code> writes a Cargo crate whose <code>src/main.rs</code> starts with <code>// rawr</code> and holds iced&rsquo;s counter. Edit it while the window is open. iced apps need the pinned nightly and a Unix system. They have only been tested on Apple Silicon Macs so far.</p>
+        <p class="note"><code>rawr new --template iced</code> writes a Cargo crate whose <code>src/main.rs</code> starts with <code>// rawr</code> and holds iced&rsquo;s counter. Edit it while the window is open. iced apps need the pinned nightly and a Unix system. They have only been tested on Apple Silicon Macs so far.</p>
       </div>
       <div class="group" role="tabpanel" id="goal-run-panel" aria-labelledby="goal-run" hidden>
         <div class="cmds">

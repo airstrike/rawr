@@ -47,6 +47,18 @@ impl Candidate {
         Ok(Self::from_catalog(catalog, schemas, source))
     }
 
+    /// A generation of any program, a plain one included, with no host
+    /// profile to check its application against.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn from_package_plain(
+        executable: program::Executable,
+        source: source::Graph,
+    ) -> Result<Self, (program::source::Id, preview::Error)> {
+        let schemas = executable.schemas().clone();
+        let catalog = preview::Catalog::from_package_generation_executable_plain(executable)?;
+        Ok(Self::from_catalog(catalog, schemas, source))
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn from_package_checked(
         executable: program::Executable,

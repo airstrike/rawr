@@ -21,8 +21,6 @@ pub mod new;
 #[doc(hidden)]
 pub mod evidence;
 pub mod preview;
-#[cfg(feature = "native-runner")]
-mod release;
 pub mod run;
 pub mod snapshot;
 pub mod watch;
@@ -281,9 +279,8 @@ fn execute_command(
             let created = new::create(path).map_err(Error::New)?;
             Ok(Some(Report {
                 message: format!(
-                    "Created Rawr project at {}\n\nNext:\n  cd {}\n  rawr check\n  rawr run",
-                    created.root().display(),
-                    created.root().display()
+                    "Created an iced crate at {root}\n\nNext:\n  cd {root}\n  rawr run",
+                    root = created.root().display()
                 ),
                 warning: None,
                 successful: true,

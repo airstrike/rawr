@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// Concise CLI help text.
-pub const HELP: &str = "rawr-iced: iced support for the rawr command\n\n`rawr` hands programs that use iced to rawr-iced, which opens them and\nreloads them when you save. rawr-iced also runs the commands below that\n`rawr` does not run itself.\n\nUsage:\n  rawr [run] [path]\n  rawr preview [path] [name]\n  rawr snapshot --check [--verbose] [path]\n  rawr snapshot --update [--verbose] [path]\n  rawr check [path]\n  rawr new <path>\n  rawr doctor [path]\n  rawr mcp\n  rawr init [--claude] [--codex] [path]\n  rawr cache clean [--all]\n\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the CLI version\n      --verbose    Show snapshot storage details";
+pub const HELP: &str = "rawr-iced: iced support for the rawr command\n\n`rawr` hands programs that use iced to rawr-iced, which opens them and\nreloads them when you save. rawr-iced also runs the commands below that\n`rawr` does not run itself.\n\nUsage:\n  rawr [run] [path]\n  rawr preview [path] [name]\n  rawr snapshot --check [--verbose] [path]\n  rawr snapshot --update [--verbose] [path]\n  rawr check [path]\n  rawr new <path> --template iced\n  rawr doctor [path]\n  rawr mcp\n  rawr init [--claude] [--codex] [path]\n  rawr cache clean [--all]\n\nOptions:\n  -h, --help       Show this help\n  -V, --version    Show the CLI version\n      --verbose    Show snapshot storage details";
 
 /// Deterministic snapshot operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,7 +130,7 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Request, E
             }
         }
         Some("init") => init(&mut arguments),
-        Some("new") => required_path("new", "<path>", &mut arguments),
+        Some("new") => new(&mut arguments),
         Some("cache") => match (arguments.next(), arguments.next()) {
             (Some(clean), all)
                 if clean == "clean" && all.as_ref().is_none_or(|all| all == "--all") =>
@@ -286,28 +286,39 @@ fn optional_path(
     }
 }
 
-fn required_path(
-    command: &'static str,
-    argument_name: &'static str,
-    arguments: &mut impl Iterator<Item = OsString>,
-) -> Result<Request, Error> {
-    let Some(argument) = arguments.next() else {
-        return Err(Error::MissingArgument {
-            command,
-            argument: argument_name,
-        });
-    };
-    if argument == "-h" || argument == "--help" {
-        return terminal(Request::Help, arguments);
+/// `new <path> [--template iced]`: rawr-iced writes its one template,
+/// `iced`, which `rawr new --template iced` hands to it.
+fn new(arguments: &mut impl Iterator<Item = OsString>) -> Result<Request, Error> {
+    let mut path = None;
+    while let Some(argument) = arguments.next() {
+        if argument == "-h" || argument == "--help" {
+            return terminal(Request::Help, arguments);
+        }
+        if argument == "--template" {
+            match arguments.next() {
+                Some(name) if name == crate::new::TEMPLATE => continue,
+                Some(name) => return Err(Error::UnknownArgument(name)),
+                None => {
+                    return Err(Error::MissingArgument {
+                        command: "new --template",
+                        argument: crate::new::TEMPLATE,
+                    });
+                }
+            }
+        }
+        if argument.to_string_lossy().starts_with('-') {
+            return Err(Error::UnknownArgument(argument));
+        }
+        if path.is_some() {
+            return Err(Error::ExtraArgument(argument));
+        }
+        path = Some(PathBuf::from(argument));
     }
-    if argument.to_string_lossy().starts_with('-') {
-        return Err(Error::UnknownArgument(argument));
-    }
-    let path = PathBuf::from(argument);
-    match arguments.next() {
-        Some(extra) => Err(Error::ExtraArgument(extra)),
-        None => Ok(Request::Execute(Command::New { path })),
-    }
+    let path = path.ok_or(Error::MissingArgument {
+        command: "new",
+        argument: "<path>",
+    })?;
+    Ok(Request::Execute(Command::New { path }))
 }
 
 fn is_implicit_run_path(argument: &OsStr) -> bool {
@@ -433,6 +444,16 @@ mod tests {
             Request::Execute(Command::New {
                 path: PathBuf::from("counter")
             })
+        );
+        assert_eq!(
+            parse(&["new", "--template", "iced", "counter"]).unwrap(),
+            Request::Execute(Command::New {
+                path: PathBuf::from("counter")
+            })
+        );
+        assert_eq!(
+            parse(&["new", "counter", "--template", "tui"]).unwrap_err(),
+            Error::UnknownArgument(OsString::from("tui"))
         );
         assert_eq!(
             parse(&["doctor", "counter"]).unwrap(),

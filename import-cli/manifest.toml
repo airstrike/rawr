@@ -1,0 +1,8 @@
+# What `rawr-import --rawr-manifest` prints: the programs `rawr` hands to
+# rawr-import. A program with Rust dependencies in its Cargo.toml, or native
+# modules, runs in a runner that links the rawr crate and those
+# dependencies.
+format = 1
+name = "rawr-import"
+sections = ["rust"]
+commands = []

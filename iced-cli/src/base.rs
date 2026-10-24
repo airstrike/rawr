@@ -39,7 +39,7 @@ pub(crate) fn without_cargo(path: &std::path::Path) -> rawr::diagnostic::Report 
         rawr::diagnostic::code::ENVIRONMENT_PROJECT_NOT_FOUND,
         format!(
             "`{}` uses iced, and iced comes from a Cargo project: Rawr runs the program \
-             against the iced its `cargo build` builds. Start one with `rawr new <name>`, \
+             against the iced its `cargo build` builds. Start one with `rawr new <name> --template iced`, \
              or add a Cargo.toml that depends on iced beside the program.",
             path.display()
         ),

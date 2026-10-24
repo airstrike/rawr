@@ -1,13 +1,26 @@
 # The binaries `rawr` hands programs to, so it can say how to install one
 # that is missing. Each entry is the manifest the binary prints for
-# `--rawr-manifest`, plus the commands that install it.
+# `--rawr-manifest`, plus the commands that install it. `rawr` reads them
+# as data and names no binary itself.
+
+[[binary]]
+format = 1
+name = "rawr-import"
+sections = ["rust"]
+commands = []
+install = [
+    "rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src",
+    "cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import-cli",
+    "cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver",
+]
 
 [[binary]]
 format = 1
 name = "rawr-iced"
 crates = ["iced"]
-sections = ["rust"]
-commands = ["preview", "snapshot", "new", "mcp", "init", "doctor", "cache"]
+extends = ["rawr-import"]
+templates = ["iced"]
+commands = ["preview", "snapshot", "mcp", "init", "doctor", "cache"]
 install = [
     "rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src",
     "cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli",

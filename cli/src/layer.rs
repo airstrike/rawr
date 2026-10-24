@@ -37,6 +37,11 @@ pub struct Manifest {
     pub name: String,
     /// What brings a program to it.
     pub claims: Claims,
+    /// The binaries it extends: a program it and one of them both claim
+    /// goes to it.
+    pub extends: Vec<String>,
+    /// The `rawr new` templates it writes.
+    pub templates: Vec<String>,
     /// The commands it adds to `rawr`.
     pub commands: Vec<Provided>,
 }
@@ -107,6 +112,8 @@ impl Manifest {
                 sections: strings("sections")?,
                 prelude: strings("prelude")?,
             },
+            extends: strings("extends")?,
+            templates: strings("templates")?,
             commands: strings("commands")?
                 .iter()
                 .map(|command| {
@@ -169,15 +176,49 @@ pub fn catalog() -> Vec<Known> {
         .collect()
 }
 
+/// Of the `manifests` that claim a program, those no other claiming one
+/// extends: a binary that extends another serves what both claim.
+fn preferred<'a, T>(claiming: Vec<&'a T>, manifest: impl Fn(&T) -> &Manifest) -> Vec<&'a T> {
+    claiming
+        .iter()
+        .copied()
+        .filter(|binary| {
+            !claiming.iter().any(|other| {
+                manifest(other)
+                    .extends
+                    .iter()
+                    .any(|name| *name == manifest(binary).name)
+            })
+        })
+        .collect()
+}
+
+/// The binary of [`CATALOG`] a program with `facts` would go to, if one
+/// claims it.
+#[must_use]
+pub fn known_claimant(facts: &Facts) -> Option<Known> {
+    let known = catalog();
+    let claiming = known
+        .iter()
+        .filter(|known| known.manifest.claims.claim(facts))
+        .collect();
+    preferred(claiming, |known: &Known| &known.manifest)
+        .first()
+        .map(|known| (*known).clone())
+}
+
 /// The binary among `installed` a program with `facts` goes to, if any.
-/// Two binaries claiming one program is a diagnostic.
+/// Two binaries claiming one program is a diagnostic, unless one extends
+/// the other.
 pub fn claimed<'a>(
     installed: &'a [Installed],
     facts: &Facts,
 ) -> Result<Option<&'a Installed>, diagnostic::Report> {
-    let mut claimed = installed
+    let claiming = installed
         .iter()
-        .filter(|binary| binary.manifest.claims.claim(facts));
+        .filter(|binary| binary.manifest.claims.claim(facts))
+        .collect();
+    let mut claimed = preferred(claiming, |binary: &Installed| &binary.manifest).into_iter();
     match (claimed.next(), claimed.next()) {
         (None, _) => Ok(None),
         (Some(binary), None) => Ok(Some(binary)),
@@ -413,15 +454,23 @@ mod tests {
     use std::ffi::OsString;
 
     fn installed(name: &str, crates: &[&str]) -> Installed {
-        let crates = crates
-            .iter()
-            .map(|name| format!("\"{name}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
+        installed_extending(name, crates, &[])
+    }
+
+    fn installed_extending(name: &str, crates: &[&str], extends: &[&str]) -> Installed {
+        let list = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         Installed {
             path: format!("/bin/rawr-{name}").into(),
             manifest: Manifest::parse(&format!(
-                "format = 1\nname = \"rawr-{name}\"\ncrates = [{crates}]\ncommands = [\"go\", \"check --deep\"]\n"
+                "format = 1\nname = \"rawr-{name}\"\ncrates = [{}]\nextends = [{}]\ncommands = [\"go\", \"check --deep\"]\n",
+                list(crates),
+                list(extends),
             ))
             .unwrap(),
         }
@@ -459,6 +508,18 @@ mod tests {
             rendered.contains("this program uses `alpha` and `beta`; rawr-one serves the first and rawr-two the second"),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn a_binary_that_extends_another_takes_a_program_both_claim() {
+        let both = [
+            installed("one", &["alpha"]),
+            installed_extending("two", &["alpha", "beta"], &["rawr-one"]),
+        ];
+        let alpha = facts("fn main() { let extended = alpha::thing(); }\n");
+        assert_eq!(claimed(&both, &alpha).unwrap().unwrap().manifest.name, "rawr-two");
+        let reversed = [both[1].clone(), both[0].clone()];
+        assert_eq!(claimed(&reversed, &alpha).unwrap().unwrap().manifest.name, "rawr-two");
     }
 
     #[test]

@@ -1,7 +1,9 @@
-//! Product transform from one `[rust]` package to a generated iced runner request.
+//! rawr-iced's profile: the transform from a package that uses iced to a
+//! runner request whose runner links rawr-iced and the project's iced. The
+//! runner's owner is rawr-import's; see [`rawr_import_cli::owner`].
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rawr_import::cargo::config::Environment;
 
@@ -9,14 +11,58 @@ use rawr_import::cargo::config::Environment;
 mod baseline;
 pub(crate) mod owner;
 
-/// One generated-owner request paired with its exact runner snapshot.
-pub(crate) struct Prepared {
-    request: rawr_import::bridge::GenerationRequestKey<rawr::package::import::Brand>,
-    snapshot: rawr_import::supervisor::snapshot::Bytes,
-    project: PathBuf,
-    inputs: rawr::reload::source::Inputs,
-    manifests: owner::resident::Manifests,
-    limits: rawr_import::cargo::Limits,
+pub(crate) use rawr_import_cli::Prepared;
+
+/// rawr-iced's profile: the runner links rawr-iced as its profile host and
+/// the project's iced, and the profile reads its evidence from that iced.
+pub(crate) struct Iced {
+    #[cfg(feature = "import-baseline")]
+    fixture: Option<rawr_iced::profile::Fixture>,
+}
+
+impl Iced {
+    pub(crate) const fn new(
+        #[cfg(feature = "import-baseline")] fixture: Option<rawr_iced::profile::Fixture>,
+    ) -> Self {
+        Self {
+            #[cfg(feature = "import-baseline")]
+            fixture,
+        }
+    }
+}
+
+impl rawr_import_cli::Profile for Iced {
+    fn prepare(
+        &self,
+        target: &rawr::project::Target,
+        graph: Option<rawr::package::Graph>,
+        revision: rawr_import::supervisor::Revision,
+        scope: &rawr_import::supervisor::snapshot::attempt::Scope,
+    ) -> Result<Prepared, rawr_import_cli::Error> {
+        prepare_in(
+            target,
+            graph,
+            revision,
+            #[cfg(feature = "import-baseline")]
+            self.fixture,
+            scope,
+        )
+        .map_err(Into::into)
+    }
+
+    /// The window listens on an agent socket under `target/rawr`.
+    fn socket(&self, project: &Path) -> Option<PathBuf> {
+        Some(rawr_iced::reload::agent::socket(project))
+    }
+}
+
+impl From<Error> for rawr_import_cli::Error {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::Rawr(error) => Self::Rawr(error),
+            error => Self::other(error),
+        }
+    }
 }
 
 /// Failure while transforming package evidence into one generated owner.
@@ -58,80 +104,6 @@ pub(crate) fn declared(
     Ok(graph.declares_rust_import().then_some(target))
 }
 
-/// Rawr compiles a project's Rust in the project's own build directory with
-/// the pinned nightly, for the host named as a target. Those are the units
-/// `cargo build` compiles only when the project builds the same way, which
-/// is what `rawr new` sets up; otherwise every crate would be compiled twice.
-/// `Err` names what the project needs, as the files to add.
-pub(crate) fn same_build(root: &std::path::Path) -> Result<(), String> {
-    let environment = Environment::capture().map_err(|error| error.to_string())?;
-    // rustup decides the toolchain from the directory: `RUSTUP_TOOLCHAIN`,
-    // an override, a `rust-toolchain.toml` above it, or the default.
-    let active = std::process::Command::new("rustup")
-        .args(["show", "active-toolchain"])
-        .current_dir(root)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .to_owned()
-        });
-    let target = rawr_import::location::build_target(root, &environment);
-    let overrides = rawr_import::location::rawr_profile_configs(root, &environment);
-    same_build_as(root, active.as_deref(), target.as_deref(), &overrides)
-}
-
-/// [`same_build`] for a project whose toolchain is `active` (`None` when
-/// rustup cannot tell), whose `cargo build` target is `target`, and whose
-/// Cargo config files `overrides` set a profile for the `rawr` crate.
-fn same_build_as(
-    root: &std::path::Path,
-    active: Option<&str>,
-    target: Option<&str>,
-    overrides: &[PathBuf],
-) -> Result<(), String> {
-    let channel = rawr_import::cargo::toolchain::CHANNEL;
-    let host = rawr_import::cargo::toolchain::HOST.trim();
-    let mut needed = Vec::new();
-    if let Some(active) = active
-        && active != channel
-        && !active.starts_with(&format!("{channel}-"))
-    {
-        needed.push(format!(
-            "It builds with `{active}`, so add `rust-toolchain.toml`:\n\n{}",
-            crate::new::toolchain()
-        ));
-    }
-    if !matches!(target, Some(target) if target == host || target == "host-tuple") {
-        needed.push(format!(
-            "It builds for {}, so add `.cargo/config.toml`:\n\n{}",
-            target.map_or_else(|| "no named target".to_owned(), |target| format!("`{target}`")),
-            crate::new::cargo_config()
-        ));
-    }
-    for config in overrides {
-        needed.push(format!(
-            "`{}` sets a profile for the `rawr` crate, and Cargo cannot combine it with \
-             the one Rawr's runner sets. A project inside a Rawr checkout inherits the \
-             checkout's config; move the project out of it, or remove that profile.",
-            config.display()
-        ));
-    }
-    if needed.is_empty() {
-        return Ok(());
-    }
-    Err(format!(
-        "`{}` must build as Rawr builds it, with `{channel}` for `{host}`, or each of its \
-         crates is compiled twice: once by `cargo build` and once by Rawr. {}",
-        root.display(),
-        needed.join("\n")
-    ))
-}
-
 /// The rawr-iced widget features a project's runner builds with.
 ///
 /// The aim is the ones the project's iced has, as its Cargo.toml names them
@@ -155,25 +127,6 @@ fn widgets(graph: &rawr::package::Graph) -> Vec<rawr_iced::features::Feature> {
         .collect()
 }
 
-impl Prepared {
-    /// The limits profile this preparation captured; later routes reuse it.
-    pub(crate) const fn limits(&self) -> rawr_import::cargo::Limits {
-        self.limits
-    }
-
-    /// Consume the proof bundle into the build request and exact source transport.
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        rawr_import::bridge::GenerationRequestKey<rawr::package::import::Brand>,
-        rawr_import::supervisor::snapshot::Bytes,
-        PathBuf,
-        rawr::reload::source::Inputs,
-    ) {
-        (self.request, self.snapshot, self.project, self.inputs)
-    }
-}
-
 /// Resolve, classify, compile, and seal the exact generated iced owner.
 #[cfg(test)]
 pub(crate) fn prepare(
@@ -181,25 +134,9 @@ pub(crate) fn prepare(
     revision: rawr_import::supervisor::Revision,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<Prepared, Error> {
-    prepare_loaded(
-        target,
-        None,
-        revision,
-        #[cfg(feature = "import-baseline")]
-        profile,
-    )
-}
-
-/// [`prepare`] with the target's load when the caller already has it.
-pub(crate) fn prepare_loaded(
-    target: &rawr::project::Target,
-    graph: Option<rawr::package::Graph>,
-    revision: rawr_import::supervisor::Revision,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<Prepared, Error> {
     prepare_in(
         target,
-        graph,
+        None,
         revision,
         #[cfg(feature = "import-baseline")]
         profile,
@@ -250,7 +187,6 @@ fn prepare_transform(
     // The project's `[rust.limits]` accounting targets (standard when
     // unconfigured) are one captured profile for every route of this import.
     let limits = graph.rust_limits();
-    let manifests = owner::resident::Manifests::from_graph(&graph);
     let source = rawr::reload::source::Graph::from_package(&graph);
     let snapshot = rawr::reload::source::Snapshot::from_graph(&source);
     let expected = snapshot.imported(&limits).map_err(Error::Surface)?;
@@ -436,9 +372,9 @@ fn prepare_transform(
                 let completed = match completed {
                     Ok(completed) => completed,
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
-                        if new_demand(&error, &request_demand).is_some() =>
+                        if rawr_import_cli::new_demand(&error, &request_demand).is_some() =>
                     {
-                        crate_demand.extend(new_demand(&error, &request_demand).map(Box::from));
+                        crate_demand.extend(rawr_import_cli::new_demand(&error, &request_demand).map(Box::from));
                         crate_demand.sort_unstable();
                         rawr_import::crate_demand::store(&project, &crate_demand);
                         continue;
@@ -537,31 +473,9 @@ fn prepare_transform(
         runner_target: None,
     });
     let inputs = rawr::reload::source::Inputs::from_graph(&source).with_imported(request.watch());
-    Ok(Prepared {
-        request,
-        snapshot: transport,
-        project,
-        inputs,
-        manifests,
-        limits,
-    })
-}
-
-/// The Rust path a failed compilation missed that a new preparation may
-/// resolve: one below a wholesale crate re-export, or one below a
-/// dependency extracted from demand, when not yet demanded.
-/// A dependency nothing demands is extracted whole and has no more to give.
-fn new_demand<'error>(
-    error: &'error rawr::package::Error,
-    demand: &[Box<str>],
-) -> Option<&'error str> {
-    let root = |path: &str| path.split("::").next().map(str::to_owned);
-    let path = error.rust_demand().or_else(|| {
-        error
-            .rust_miss()
-            .filter(|path| demand.iter().any(|known| root(known) == root(path)))
-    })?;
-    (!demand.iter().any(|known| **known == *path)).then_some(path)
+    Ok(Prepared::new(
+        request, transport, project, inputs, &graph, limits,
+    ))
 }
 
 impl fmt::Display for Error {
@@ -612,27 +526,6 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use rawr_import::cargo::config::Environment;
-
-    #[test]
-    fn a_project_builds_as_rawr_builds_it_or_is_told_what_to_add() {
-        let root = Path::new("/project");
-        let channel = rawr_import::cargo::toolchain::CHANNEL;
-        let host = rawr_import::cargo::toolchain::HOST.trim();
-        let pinned = format!("{channel}-{host}");
-        assert_eq!(super::same_build_as(root, Some(&pinned), Some(host), &[]), Ok(()));
-        assert_eq!(super::same_build_as(root, None, Some(host), &[]), Ok(()));
-        assert_eq!(super::same_build_as(root, None, Some("host-tuple"), &[]), Ok(()));
-        let error = super::same_build_as(root, Some(&pinned), None, &[]).unwrap_err();
-        assert!(error.contains(".cargo/config.toml"), "{error}");
-        assert!(!error.contains("rust-toolchain.toml"), "{error}");
-        let error = super::same_build_as(root, Some("stable-aarch64-apple-darwin"), Some(host), &[])
-            .unwrap_err();
-        assert!(error.contains("rust-toolchain.toml"), "{error}");
-        assert!(error.contains(channel), "{error}");
-        let config = PathBuf::from("/checkout/.cargo/config.toml");
-        let error = super::same_build_as(root, Some(&pinned), Some(host), &[config]).unwrap_err();
-        assert!(error.contains("/checkout/.cargo/config.toml"), "{error}");
-    }
 
     #[test]
     fn real_iced_import_seals_one_generated_profile_owner() {

@@ -52,8 +52,11 @@
 <p class="lede">rawr-iced runs <a href="https://github.com/iced-rs/iced">iced</a> apps written in rawr. The app is a native iced app. Saving a file marked <code>// rawr</code> reloads it while the window stays open.</p>
 
 <h2 id="when">When rawr-iced is used</h2>
-<p>The <code>rawr</code> command reads a program once and decides who runs it. A program goes to rawr-iced when it names the <code>iced</code> crate. It also goes there when it imports Rust crates from its <code>Cargo.toml</code>. Every other program runs on the base language. Set <code>RAWR_VERBOSE=1</code> to see which way a program went.</p>
+<p>The <code>rawr</code> command reads a program once and decides who runs it. A program goes to rawr-iced when it names the <code>iced</code> crate. A program that imports Rust crates from its <code>Cargo.toml</code> but doesn&rsquo;t use iced goes to <a href="/docs/cli#rawr-import">rawr-import</a>. rawr-iced imports an iced app&rsquo;s other crates the same way and adds iced to its runner. Every other program runs on the base language. Set <code>RAWR_VERBOSE=1</code> to see which way a program went.</p>
 <p>rawr-iced follows iced master. It is built against one iced revision. <code>rawr doctor</code> prints that revision. Install rawr-iced as described in <a href="/docs/start#install-iced">Getting started</a>.</p>
+
+<h2 id="new">The <code>iced</code> template</h2>
+<p>rawr-iced offers one template to <code>rawr new</code>. <code>rawr new hello --template iced</code> writes a Cargo crate whose <code>src/main.rs</code> starts with <code>// rawr</code> and holds iced&rsquo;s counter. Its <code>Cargo.toml</code> depends on iced at the revision <code>rawr doctor</code> prints, with every widget rawr offers plus <code>advanced</code> and <code>sipper</code>. It also writes <code>rust-toolchain.toml</code> and <code>.cargo/config.toml</code>, so <code>cargo build</code> and <code>rawr run</code> build one shared iced. <a href="/docs/start#first-app">Getting started</a> shows the files.</p>
 
 <h2 id="shapes">App shapes</h2>
 <p>An app starts from <code>main</code> with one of iced&rsquo;s own entry points.</p>

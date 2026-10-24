@@ -242,6 +242,99 @@ fn a_program_using_iced_without_rawr_iced_says_how_to_install_it() {
     }
 }
 
+/// `rawr new` writes a plain crate with no dependencies, which runs and
+/// checks on the base language with no build and no extension.
+#[test]
+fn a_new_crate_runs_on_the_base() {
+    let sandbox = Sandbox::new("new");
+
+    let created = sandbox.rawr(&["new", "hello"]);
+    let run = sandbox.rawr(&["run", "hello"]);
+    let checked = sandbox.rawr(&["check", "hello"]);
+
+    assert_success(&created);
+    let root = sandbox.work().join("hello");
+    assert!(stdout(&created).starts_with(&format!("Created a Rawr crate at {}", root.display())));
+    let files = tree(&root);
+    assert_eq!(
+        files.keys().cloned().collect::<Vec<_>>(),
+        [PathBuf::from("Cargo.toml"), PathBuf::from("src/main.rs")]
+    );
+    let source = String::from_utf8(files[Path::new("src/main.rs")].clone()).unwrap();
+    assert!(source.starts_with("// rawr\n"));
+    assert!(!source.contains("iced"));
+    assert_success(&run);
+    assert_eq!(
+        stdout(&run),
+        "1. Hello, rawr!\n2. Hello, rawr!\n3. Hello, rawr!\n"
+    );
+    assert_success(&checked);
+    assert_eq!(
+        stdout(&checked),
+        format!("Checked {}\n", root.join("src/main.rs").display())
+    );
+    // A new crate refuses to overwrite one.
+    let again = sandbox.rawr(&["new", "hello"]);
+    assert_eq!(again.status.code(), Some(1));
+    assert!(stderr(&again).contains("refusing non-empty project target"), "{}", stderr(&again));
+}
+
+/// A template comes from the installed binary whose manifest offers it,
+/// with the same arguments; one that is not installed says how to get it.
+#[test]
+fn a_template_is_written_by_the_binary_offering_it() {
+    let sandbox = Sandbox::new("template");
+    sandbox.binary(
+        "shapes",
+        "format = 1\nname = \"rawr-shapes\"\ntemplates = [\"shapes\"]",
+    );
+
+    let handed = sandbox.rawr(&["new", "app", "--template", "shapes"]);
+    let missing = sandbox.rawr(&["new", "app", "--template", "iced"]);
+    let unknown = sandbox.rawr(&["new", "app", "--template", "nothing"]);
+    let help = sandbox.rawr(&["new", "--help"]);
+
+    assert_eq!(handed.status.code(), Some(3));
+    assert_eq!(stdout(&handed), "shapes: new app --template shapes\n");
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(
+        stderr(&missing).starts_with("error: the `iced` template comes with rawr-iced, which is not installed. Install it with:\n"),
+        "{}",
+        stderr(&missing)
+    );
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(stderr(&unknown).contains("no installed binary offers a template named `nothing`"));
+    assert_success(&help);
+    assert!(stdout(&help).contains("shapes       from rawr-shapes"), "{}", stdout(&help));
+    assert!(!sandbox.work().join("app").exists());
+}
+
+/// A program with Rust dependencies goes to rawr-import; without it,
+/// `rawr` says how to install it.
+#[test]
+fn a_program_with_rust_dependencies_without_rawr_import_says_how_to_install_it() {
+    let sandbox = Sandbox::new("missing-import");
+    let root = sandbox.work().join("deps");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"deps\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nitoa = \"1\"\n\n[workspace]\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/main.rs"), "// rawr\nfn main() {}\n").unwrap();
+
+    let output = sandbox.rawr(&["run", "deps"]);
+
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr(&output);
+    assert!(
+        text.contains("this program uses Rust dependencies in Cargo.toml, which rawr-import serves, and it is not installed"),
+        "{text}"
+    );
+    assert!(text.contains(" rawr-import-cli"), "{text}");
+    assert!(!text.contains("iced"), "{text}");
+}
+
 #[test]
 fn a_command_from_rawr_iced_says_how_to_install_it() {
     let sandbox = Sandbox::new("missing-preview");
@@ -333,7 +426,8 @@ fn help_lists_what_installed_binaries_add() {
     let with = sandbox.rawr(&["--help"]);
 
     assert_success(&alone);
-    assert!(stdout(&alone).contains("rawr-iced is not installed. Install it with:"));
+    assert!(stdout(&alone).contains("rawr-iced is not installed. It serves programs that use `iced`. Install it with:"));
+    assert!(stdout(&alone).contains("rawr new <path>"));
     assert!(
         stdout(&with).contains("From rawr-fake"),
         "{}\n{}\n{:?}",

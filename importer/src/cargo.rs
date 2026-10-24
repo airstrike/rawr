@@ -5605,6 +5605,8 @@ mod universe_placement_tests {
 
     fn definition(limits: &Limits) -> universe::Definition {
         universe::Definition::new(
+            "rawr-iced",
+            Some("iced"),
             "fixture",
             1,
             1,

@@ -1360,9 +1360,43 @@ mod __rawr_profile {
         _contract: &ApplicationContract,
         _expected: &[u8; 32],
     ) -> std::io::Result<(Option<__rawr_internal::reload::Candidate>, __rawr_internal::AST)> {
-        engine.compile_package_snapshot(snapshot)
-            .map(|ast| (None, ast))
+        engine.compile_package_snapshot_generation_with_top_level(snapshot)
+            .map(|(candidate, ast)| (Some(candidate), ast))
             .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+
+    /// Run the program's `fn main` once, as Rust runs it, bound to the
+    /// imported runtime: an `Err` from `main` is `Error: {err:?}` on stderr
+    /// with status 1, and a run-time failure is a panic, status 101. The
+    /// status is the process's.
+    pub fn run(program: &mut super::Program) -> i32 {
+        let bound = (|| -> Result<_, String> {
+            let candidate = program.candidate.take().ok_or("generation program unavailable")?;
+            let runtime = super::imported_runtime(&program.engine, &program._facades)
+                .map_err(|error| error.to_string())?;
+            candidate.bind(&program.engine, runtime).map_err(|error| error.to_string())
+        })();
+        let bootstrap = match bound {
+            Ok(bootstrap) => bootstrap,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return 101;
+            }
+        };
+        match bootstrap.invoke_main() {
+            None => 0,
+            Some(Ok(value)) => match value.try_cast::<Result<__rawr_internal::Dynamic, __rawr_internal::Dynamic>>() {
+                Some(Err(error)) => {
+                    eprintln!("Error: {error:?}");
+                    1
+                }
+                _ => 0,
+            },
+            Some(Err(error)) => {
+                eprintln!("error: {error}");
+                101
+            }
+        }
     }
 
     pub fn compile_generation(
@@ -1583,6 +1617,20 @@ fn run_protocol() -> std::io::Result<()> {
                 let retired = retire_program(candidate.program);
                 report_accounts(&mut stream, tag, &payload, [program_account(&program), observed_account(&retired)]);
                 send_frame(&mut stream, 27, &payload)?;
+            }
+            35 if admitted && payload.len() > 32 && payload[..32] == key => {
+                send_frame(&mut stream, 36, &key)?;
+            }
+            20 if admitted && payload.as_slice() == key => {
+                send_frame(&mut stream, 21, &key)?;
+                let status = match &mut program {
+                    Some(program) => __rawr_profile::run(program),
+                    None => 0,
+                };
+                use std::io::Write as _;
+                let _ = std::io::stdout().flush();
+                let _ = std::io::stderr().flush();
+                std::process::exit(status);
             }
             17 if admitted => match invoke_adapter(&key, &payload) {
                 Ok(value) => send_frame(&mut stream, 18, &value)?,
@@ -6742,7 +6790,14 @@ mod tests {
             neutral.contains("runner::install_retained(engine, super::IMPORTED_FACADES, native)")
         );
         assert!(!neutral.contains("runner::install("));
-        assert!(neutral.contains("engine.compile_package_snapshot(snapshot)"));
+        assert!(neutral.contains("engine.compile_package_snapshot_generation_with_top_level(snapshot)"));
+        // A runner with no host profile starts its program by calling `main`
+        // bound to the imported runtime.
+        assert!(neutral.contains("candidate.bind(&program.engine, runtime)"));
+        assert!(neutral.contains("bootstrap.invoke_main()"));
+        let runner = std::str::from_utf8(RUNNER_MAIN).expect("runner source is UTF-8");
+        assert!(runner.contains("20 if admitted && payload.as_slice() == key"));
+        assert!(runner.contains("__rawr_profile::run(program)"));
     }
 
     #[test]

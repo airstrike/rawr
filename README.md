@@ -164,7 +164,12 @@ cargo install --locked --git https://github.com/airstrike/rawr rawr-cli
 ```
 
 `rawr-cli` installs `rawr`. It also installs `cargo-rawr`, so `cargo rawr run`
-works too. A program without iced runs once and exits. It doesn't hot reload.
+works too. A program with no dependencies runs once and exits. It doesn't hot
+reload. `rawr new <name>` writes such a crate.
+
+A program with Rust dependencies in its Cargo.toml goes to rawr-import, which
+runs it in a runner that links Rawr and those dependencies. Install it with
+the pinned nightly below and `rawr-import-cli` in place of `rawr-iced-cli`.
 
 rawr-iced adds iced support. Install it and `rawr` hands programs that use
 iced to it. It needs a Unix system. It has only been tested on Apple Silicon
@@ -187,21 +192,22 @@ An iced program is a Cargo project. `rawr run` builds a runner against the
 project's own iced and its features, in the project's `target/rawr/`, so the
 first `rawr run` of a project compiles iced and Rawr's crates. Edits to Rawr
 code need no build. A program that uses iced without a Cargo.toml is refused;
-`rawr new` starts a project.
+`rawr new <name> --template iced` starts a project.
 
 ## How do I start an iced project?
 
 With rawr-iced installed:
 
 ```sh
-rawr new hello && cd hello && rawr run
+rawr new counter --template iced && cd counter && rawr run
 ```
 
-`rawr new hello` writes a Cargo crate. `hello/Cargo.toml` depends on iced at the
-revision rawr-iced supports, with its `advanced` feature, which Rawr's runner
-needs. `hello/rust-toolchain.toml` pins the nightly Rawr builds with, so
-`cargo build` uses the same compiler. `hello/src/main.rs` starts with `// rawr`
-and holds iced's counter. Edit it while the window is open. `cargo run` builds
+`rawr new counter --template iced` writes a Cargo crate from rawr-iced's
+template. `counter/Cargo.toml` depends on iced at the revision rawr-iced
+supports, with every widget feature plus `advanced` and `sipper`.
+`counter/rust-toolchain.toml` pins the nightly Rawr builds with, so
+`cargo build` uses the same compiler. `counter/src/main.rs` starts with
+`// rawr` and holds iced's counter. Edit it while the window is open. `cargo run` builds
 and runs the same app.
 
 The other commands you will use:
@@ -212,7 +218,7 @@ The other commands you will use:
   compare them with the committed images or replace them.
 - `rawr doctor`: report on the environment and the project.
 
-`rawr new`, `rawr preview` and `rawr snapshot` come with rawr-iced. Every
+`rawr preview`, `rawr snapshot` and the `iced` template come with rawr-iced. Every
 command takes a crate directory, its Cargo.toml or a single `.rs` file.
 `rawr --help` lists them all.
 

@@ -29,6 +29,37 @@ impl Graph {
         request(entry, config, environment, app, limits).map(Some)
     }
 
+    /// The Rust imports with no host profile, resolved in `universe` (the
+    /// importer's plain one). `demand` holds the Rust paths Rawr names below
+    /// wholesale crate re-exports (see [`super::Error::rust_demand`]). The
+    /// runner links the `rawr` crate and the crate's own dependencies only.
+    #[doc(hidden)]
+    pub fn rust_import_plain(
+        &self,
+        environment: Environment,
+        universe: rawr_import::cargo::universe::Catalog,
+        demand: &[Box<str>],
+        limits: &Limits,
+    ) -> rawr_import::Result<Option<Request>> {
+        let entry = self.entry_package();
+        let Some(config) = entry.rust.as_ref() else {
+            return Ok(None);
+        };
+        let app = app_crate(self, limits)?;
+        request_with_profile(
+            entry,
+            config,
+            environment,
+            None,
+            Some(universe),
+            None,
+            app,
+            demand,
+            limits,
+        )
+        .map(Some)
+    }
+
     /// Transform the Rust imports with one host-selected exact framework-profile package.
     /// `demand` holds Rust paths Rawr names below wholesale crate re-exports
     /// (see [`super::Error::rust_demand`]). `framework` is the crate the
@@ -53,7 +84,8 @@ impl Graph {
             entry,
             config,
             environment,
-            Some((profile, universe)),
+            Some(profile),
+            Some(universe),
             framework,
             app,
             demand,
@@ -611,14 +643,15 @@ fn request(
     app: Option<Dependency>,
     limits: &Limits,
 ) -> rawr_import::Result<Request> {
-    request_with_profile(entry, config, environment, None, None, app, &[], limits)
+    request_with_profile(entry, config, environment, None, None, None, app, &[], limits)
 }
 
 fn request_with_profile(
     entry: &super::graph::Package,
     config: &Config,
     environment: Environment,
-    profile: Option<(Dependency, rawr_import::cargo::universe::Catalog)>,
+    profile: Option<Dependency>,
+    universe: Option<rawr_import::cargo::universe::Catalog>,
     framework: Option<(&str, Dependency)>,
     app: Option<Dependency>,
     demand: &[Box<str>],
@@ -663,8 +696,10 @@ fn request_with_profile(
     {
         builder = builder.dependency(framework)?;
     }
-    if let Some((profile, universe)) = profile {
+    if let Some(profile) = profile {
         builder = builder.dependency(profile)?;
+    }
+    if let Some(universe) = universe {
         builder = builder.resolution_universe(universe)?;
     }
     for path in demand {

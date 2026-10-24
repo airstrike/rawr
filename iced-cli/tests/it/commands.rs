@@ -24,7 +24,7 @@ fn check_refuses_a_one_file_iced_program_without_a_cargo_project() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("RAWR-ENVIRONMENT-PROJECT-NOT-FOUND"), "{stderr}");
-    assert!(stderr.contains("`rawr new <name>`"), "{stderr}");
+    assert!(stderr.contains("`rawr new <name> --template iced`"), "{stderr}");
     fs::remove_file(source).unwrap();
 }
 
@@ -83,8 +83,16 @@ fn new_creates_the_exact_marked_crate_in_a_missing_target() {
     assert!(!target.join("rawr.toml").exists());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains(&target.display().to_string()));
-    assert!(stdout.contains("rawr check"));
     assert!(stdout.contains("rawr run"));
+    // The template is a project that imports Rust: it builds as Rawr does.
+    assert_eq!(
+        fs::read_to_string(target.join(".cargo/config.toml")).unwrap(),
+        rawr_iced_cli::new::cargo_config()
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("rust-toolchain.toml")).unwrap(),
+        rawr_iced_cli::new::toolchain()
+    );
 }
 
 #[test]
@@ -222,6 +230,7 @@ fn snapshot_update_check_and_missing_baseline_are_end_to_end() {
         include_str!("../../../iced/examples/package_snapshots/Cargo.toml"),
     )
     .unwrap();
+    build_as_rawr_does(&project);
 
     let updated = rawr_command()
         .args(["snapshot", "--update", project.to_str().unwrap()])
@@ -561,6 +570,14 @@ fn write_crate(root: &Path) {
     .unwrap();
 }
 
+/// The two files a project that imports Rust needs, so `cargo build` and
+/// Rawr's runner build the same units.
+fn build_as_rawr_does(root: &Path) {
+    fs::create_dir_all(root.join(".cargo")).unwrap();
+    fs::write(root.join(".cargo/config.toml"), rawr_iced_cli::new::cargo_config()).unwrap();
+    fs::write(root.join("rust-toolchain.toml"), rawr_iced_cli::new::toolchain()).unwrap();
+}
+
 fn temporary_path(label: &str) -> PathBuf {
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("rawr-cli-{label}-{}-{id}", std::process::id()))
@@ -581,6 +598,7 @@ fn an_iced_program_handed_from_rawr_to_rawr_iced_is_parsed_once() {
         rawr_iced_cli::new::manifest("parse-once"),
     )
     .unwrap();
+    build_as_rawr_does(&root);
     fs::write(
         root.join("src/main.rs"),
         include_str!("../../../iced/examples/scripts/application_counter.rs")

@@ -20,9 +20,20 @@ use crate::{Error, Result};
 const SCHEMA: u32 = 1;
 pub(crate) const BUILD_PROJECTION_SCHEMA: u32 = 4;
 const BUILD_PROJECTION_DOMAIN: &[u8] = b"rawr.import.cargo.protected-source-build/v1";
+/// The profile host whose closure the iced universe governs.
 const ROOT_PACKAGE: &str = "rawr-iced";
-/// The framework crate whose exact package the facade fixes.
+/// The framework crate whose exact package the iced facade fixes.
 const FRAMEWORK_PACKAGE: &str = "iced";
+/// The runtime crate a runner with no host profile links: the plain
+/// universe governs its closure and fixes no framework.
+const PLAIN_ROOT: &str = "rawr";
+const PLAIN_NAME: &str = "rawr.plain/current";
+const PLAIN_VERSION: u32 = 1;
+const PLAIN_ENDPOINT_TABLE: u32 = 1;
+const PLAIN_PROFILE: [u8; 32] = [0; 32];
+/// The plain seed names only its root: every other package is the
+/// project's own Cargo resolution.
+const PLAIN_SEED_BYTES: &[u8] = b"version = 4\n\n[[package]]\nname = \"rawr\"\nversion = \"1.0.0\"\n";
 const RECEIPT_SCHEMA: u32 = 2;
 const ICED_NAME: &str = "rawr.framework.iced/current";
 // Compiler and endpoint proof identity rotate independently of ICED_PROFILE.
@@ -61,6 +72,11 @@ pub(crate) struct BuildProjection {
 #[derive(Clone)]
 pub(crate) struct Definition {
     seed: &'static [u8],
+    /// The package whose lib unit roots the governed closure.
+    root: &'static str,
+    /// The framework package whose exact version and source the facade
+    /// fixes, if any.
+    framework: Option<&'static str>,
     protected: Closure,
     target: &'static str,
     cargo_profile: &'static str,
@@ -326,6 +342,8 @@ impl Definition {
     #[cfg(test)]
     pub(crate) fn fixture_authenticated(seed: &'static [u8], limits: &Limits) -> Self {
         Self::new(
+            ROOT_PACKAGE,
+            Some(FRAMEWORK_PACKAGE),
             "authenticated-fixture",
             1,
             1,
@@ -349,6 +367,8 @@ impl Definition {
         limits: &Limits,
     ) -> Self {
         Self::new(
+            self.root,
+            self.framework,
             "authenticated-fixture",
             1,
             1,
@@ -369,6 +389,8 @@ impl Definition {
         reason = "the universe binds every independent compiler-affecting authority"
     )]
     pub(crate) fn new(
+        root: &'static str,
+        framework: Option<&'static str>,
         name: &'static str,
         version: u32,
         endpoint_table: u32,
@@ -389,7 +411,7 @@ impl Definition {
         // The seed is compiled-in program text, not admitted input; its
         // size is fixed at build time and an accounting target never refuses it.
         let seed_digest = Digest(Sha256::digest(seed).into());
-        let protected = Closure::parse(seed, limits)?;
+        let protected = Closure::parse_rooted(seed, root, limits)?;
         let mut identity = Sha256::new();
         identity.update(b"rawr.import.cargo.resolution-universe/v1");
         identity.update(SCHEMA.to_le_bytes());
@@ -409,6 +431,8 @@ impl Definition {
         }
         Ok(Self {
             seed,
+            root,
+            framework,
             protected,
             target,
             cargo_profile,
@@ -452,7 +476,13 @@ impl Definition {
         // in this evaluation's account across repeated current validations.
         account.parser(bytes.len())?;
         account.hash(bytes.len())?;
-        let closure = Closure::parse_in(&bytes, limits, account, &mut UniverseAccount::new())?;
+        let closure = Closure::parse_in_rooted(
+            &bytes,
+            self.root,
+            limits,
+            account,
+            &mut UniverseAccount::new(),
+        )?;
         let digest = Digest(Sha256::digest(&bytes).into());
         account.holder(Candidate::HOLDER_BYTES)?;
         Ok(Candidate(Arc::new(Locked {
@@ -585,8 +615,9 @@ impl Definition {
         let universe = &mut universe;
         allocation.transform_owned(consumed, |allocation| {
             require_universe(self.identity, metadata.universe, "protected metadata proof")?;
-            let (reachable_units, reachable_packages) = unit_reachability(
+            let (reachable_units, reachable_packages) = unit_reachability_rooted(
                 value,
+                self.root,
                 metadata.packages.value(),
                 limits,
                 allocation,
@@ -656,6 +687,8 @@ impl Catalog {
     #[doc(hidden)]
     pub fn iced_current_v2(limits: &Limits) -> Result<Self> {
         let current = Definition::new(
+            ROOT_PACKAGE,
+            Some(FRAMEWORK_PACKAGE),
             ICED_NAME,
             ICED_VERSION,
             ICED_ENDPOINT_TABLE,
@@ -669,6 +702,27 @@ impl Catalog {
         )?;
         let historical = Historical::new(ICED_HISTORICAL_BYTES, ICED_HISTORICAL, limits)?;
         Self::new(current).with_historical(historical)
+    }
+
+    /// The universe of a runner with no host profile: it governs the
+    /// closure of the `rawr` runtime crate and fixes no framework.
+    #[doc(hidden)]
+    pub fn plain(limits: &Limits) -> Result<Self> {
+        Definition::new(
+            PLAIN_ROOT,
+            None,
+            PLAIN_NAME,
+            PLAIN_VERSION,
+            PLAIN_ENDPOINT_TABLE,
+            PLAIN_PROFILE,
+            PLAIN_SEED_BYTES,
+            ICED_TARGET,
+            ICED_CARGO_PROFILE,
+            ICED_RUSTC_COMMIT,
+            ICED_CARGO_COMMIT,
+            limits,
+        )
+        .map(Self::new)
     }
 
     /// Select one current universe and no implicit predecessors.
@@ -798,7 +852,7 @@ impl Candidate {
         self.0
             .definition
             .protected
-            .require_framework(&self.0.closure)?;
+            .require_framework(self.0.definition.framework, &self.0.closure)?;
         Ok(FinalLock(self.0))
     }
 }
@@ -2355,8 +2409,20 @@ fn normalize_resolve_node(
     })
 }
 
+#[cfg(test)]
 fn unit_reachability(
     value: &JsonValue,
+    packages: &BTreeMap<Arc<str>, ProtectedPackage>,
+    limits: &Limits,
+    allocation: &mut JsonAllocation,
+    universe: &mut UniverseAccount,
+) -> Result<(Budgeted<BTreeSet<usize>>, Budgeted<BTreeSet<Arc<str>>>)> {
+    unit_reachability_rooted(value, ROOT_PACKAGE, packages, limits, allocation, universe)
+}
+
+fn unit_reachability_rooted(
+    value: &JsonValue,
+    root: &str,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
     limits: &Limits,
     allocation: &mut JsonAllocation,
@@ -2382,7 +2448,7 @@ fn unit_reachability(
             "Cargo unit target",
         )?;
         let kinds = json_array(target.get("kind"), "Cargo unit target kinds")?;
-        if package.key.name.as_ref() == ROOT_PACKAGE
+        if package.key.name.as_ref() == root
             && package.key.source.is_empty()
             && mode == "build"
             && kinds.iter().any(|kind| {
@@ -2394,7 +2460,7 @@ fn unit_reachability(
         }
     }
     if PendingUnits::is_empty(&pending) {
-        return Err(json_schema("governed rawr-iced target unit is absent"));
+        return Err(json_schema("the governed root's target unit is absent"));
     }
     let mut edges = 0_usize;
     while let Some(index) = PendingUnits::pop(&mut pending) {
@@ -3169,21 +3235,38 @@ fn json_schema(reason: &str) -> Error {
 }
 
 impl Closure {
+    #[cfg(test)]
     fn parse(bytes: &[u8], limits: &Limits) -> Result<Self> {
-        Self::parse_in(
+        Self::parse_rooted(bytes, ROOT_PACKAGE, limits)
+    }
+
+    fn parse_rooted(bytes: &[u8], root: &str, limits: &Limits) -> Result<Self> {
+        Self::parse_in_rooted(
             bytes,
+            root,
             limits,
             &mut super::ControlAccount::legacy(),
             &mut UniverseAccount::new(),
         )
     }
 
+    #[cfg(test)]
+    fn parse_in(
+        bytes: &[u8],
+        limits: &Limits,
+        account: &mut super::ControlAccount<'_>,
+        universe: &mut UniverseAccount,
+    ) -> Result<Self> {
+        Self::parse_in_rooted(bytes, ROOT_PACKAGE, limits, account, universe)
+    }
+
     /// Parse one lock. The lock size and precharge are recorded on the
     /// request account that admitted the bytes; the package, edge, lookup-work
     /// and string targets are recorded on this closure parse's universe
     /// account. Nothing here refuses on an accounting target.
-    fn parse_in(
+    fn parse_in_rooted(
         bytes: &[u8],
+        root: &str,
         limits: &Limits,
         account: &mut super::ControlAccount<'_>,
         universe: &mut UniverseAccount,
@@ -3255,7 +3338,7 @@ impl Closure {
         universe.exceeded("resolution universe lock lookup work", limits.items, work);
         let mut roots = raw
             .keys()
-            .filter(|key| key.name.as_ref() == ROOT_PACKAGE && key.source.is_empty());
+            .filter(|key| key.name.as_ref() == root && key.source.is_empty());
         let root = roots
             .next()
             .cloned()
@@ -3335,25 +3418,28 @@ impl Closure {
     /// that exact package (version and source); every other package, edge and
     /// checksum is the project's own Cargo resolution. A seed without the
     /// framework package (test fixtures) fixes nothing.
-    fn require_framework(&self, actual: &Self) -> Result<()> {
+    fn require_framework(&self, framework: Option<&str>, actual: &Self) -> Result<()> {
+        let Some(framework) = framework else {
+            return Ok(());
+        };
         let Some(expected) = self
             .packages
             .iter()
-            .find(|package| package.name.as_ref() == FRAMEWORK_PACKAGE)
+            .find(|package| package.name.as_ref() == framework)
         else {
             return Ok(());
         };
         let mismatch = actual.packages.iter().find(|package| {
-            package.name.as_ref() == FRAMEWORK_PACKAGE
+            package.name.as_ref() == framework
                 && (package.version.as_ref(), package.source.as_ref())
                     != (expected.version.as_ref(), expected.source.as_ref())
         });
         match mismatch {
             None => Ok(()),
             Some(actual) => Err(Error::Request {
-                field: "iced dependency",
+                field: "framework dependency",
                 reason: format!(
-                    "this rawr supports iced {}; the project uses iced {}",
+                    "this rawr supports {framework} {}; the project uses {framework} {}",
                     describe_framework(expected),
                     describe_framework(actual),
                 )
@@ -3670,6 +3756,8 @@ mod tests {
 
     fn definition() -> Definition {
         Definition::new(
+            super::ROOT_PACKAGE,
+            Some(super::FRAMEWORK_PACKAGE),
             "fixture",
             1,
             1,
@@ -4410,6 +4498,8 @@ mod tests {
         let first = definition();
         for (version, endpoint_table) in [(2, 1), (1, 2)] {
             let changed = Definition::new(
+                super::ROOT_PACKAGE,
+                Some(super::FRAMEWORK_PACKAGE),
                 "fixture",
                 version,
                 endpoint_table,
@@ -4433,6 +4523,8 @@ mod tests {
 
         let first = definition();
         let changed_closure = Definition::new(
+            super::ROOT_PACKAGE,
+            Some(super::FRAMEWORK_PACKAGE),
             "fixture",
             1,
             1,
@@ -4446,6 +4538,8 @@ mod tests {
         )
         .expect("changed protected closure seals");
         let changed_toolchain = Definition::new(
+            super::ROOT_PACKAGE,
+            Some(super::FRAMEWORK_PACKAGE),
             "fixture",
             1,
             1,
@@ -5632,6 +5726,25 @@ mod tests {
         .expect("the project's own resolution around the same iced is admitted");
     }
 
+    /// A runner with no host profile governs the `rawr` crate's closure
+    /// and fixes no framework: a lock with any iced, or none, is admitted.
+    #[test]
+    fn the_plain_universe_governs_rawr_and_fixes_no_framework() {
+        let limits = Limits::standard();
+        let plain = super::Catalog::plain(&limits).unwrap();
+        let iced = super::Catalog::iced_current_v2(&limits).unwrap();
+        assert_ne!(plain.identity(), iced.identity());
+        assert!(plain.names_package("rawr"));
+        assert!(!plain.names_package("iced"));
+        let project = "version = 4\n\n[[package]]\nname = \"rawr\"\nversion = \"1.25.1\"\n\
+                       dependencies = [\"itoa\"]\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\n\
+                       source = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        admit(plain.current.clone(), project.as_bytes().into())
+            .expect("a project's own resolution around rawr is admitted");
+        let without_root = "version = 4\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\n";
+        assert!(admit(plain.current.clone(), without_root.as_bytes().into()).is_err());
+    }
+
     /// A project on another iced revision (here the airstrike fork
     /// Rawr used before moving to iced master) is refused with both revisions.
     #[test]
@@ -5655,7 +5768,7 @@ mod tests {
         ) else {
             panic!("a second iced revision must be refused");
         };
-        assert_eq!(field, "iced dependency");
+        assert_eq!(field, "framework dependency");
         assert_eq!(
             reason.as_ref(),
             format!(
@@ -5672,6 +5785,8 @@ mod tests {
         let current = super::Catalog::iced_current_v2(&limits).unwrap();
         for (version, endpoint_table) in [(2, 4), (3, 3)] {
             let previous = Definition::new(
+                super::ROOT_PACKAGE,
+                Some(super::FRAMEWORK_PACKAGE),
                 super::ICED_NAME,
                 version,
                 endpoint_table,

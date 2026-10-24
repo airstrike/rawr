@@ -4,7 +4,7 @@ version = "0.1.0"
 rust-version = "1.95.0"
 edition = "2024"
 publish = false
-description = "The rawr command: runs Rawr programs and hands those using iced to rawr-iced"
+description = "The rawr command: runs Rawr programs and hands a program to the installed extension that serves it"
 repository = "https://github.com/airstrike/rawr"
 license = "MIT OR Apache-2.0"
 
