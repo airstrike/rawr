@@ -239,6 +239,20 @@ fn resolve_path(
     #[cfg(feature = "rust-import")] native: Option<super::native::Site<'_>>,
 ) -> Result<Path, Error> {
     let span = parsed.span;
+    // `::image::ImageError` names the crate `image`, never a type or
+    // generic parameter of this program.
+    if parsed.global
+        && let Some(first) = parsed.segments.first()
+        && (matches!(first.name.text.as_str(), "crate" | "self" | "super" | "Self")
+            || parsed.segments.len() == 1
+            || matches!(
+                types.get(first.name.text.as_str()),
+                Some(Target::Script { .. } | Target::Parameter | Target::Alias(_))
+            ))
+    {
+        let first = &first.name.text;
+        return Err(super::not_a_crate(&first, span));
+    }
     if let Some(path) = std_fmt_type(&parsed) {
         return Ok(path);
     }
@@ -381,6 +395,7 @@ fn resolve_path(
             item::type_ref::Path {
                 segments: segments[..index].to_vec().into_boxed_slice(),
                 span: Span::new(span.start(), segments[index].span.start()),
+                global: parsed.global,
             },
             types,
             host,
@@ -422,6 +437,7 @@ fn resolve_path(
                 item::type_ref::Path {
                     segments: prefix.to_vec().into_boxed_slice(),
                     span: Span::new(span.start(), prefix[prefix.len() - 1].span.end()),
+                    global: parsed.global,
                 },
                 types,
                 host,

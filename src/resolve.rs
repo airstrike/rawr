@@ -996,6 +996,26 @@ fn resolve_imports(
                 declaration: None,
             });
         }
+        // `use ::image::ColorType;` names the crate `image`, never a name
+        // of this program or one another `use` brought in.
+        let global = parsed.global();
+        if global
+            && let Some(first) = parsed
+                .bindings()
+                .first()
+                .and_then(|(_, path)| path.first().cloned())
+            && (matches!(first.as_str(), "crate" | "self" | "super" | "Self")
+                || local_declarations.contains_key(&first))
+        {
+            return Err(not_a_crate(&first, prefix_span(&parsed.tree)));
+        }
+        let through_module = |path: ImmutableString| {
+            if global {
+                path
+            } else {
+                through_module(path)
+            }
+        };
         if let crate::item::UseTree::Group { prefix, .. } = &parsed.tree {
             let prefix = through_module(parsed_path(prefix));
             match host.entry(&std_reexport(&prefix, host)) {
@@ -1078,7 +1098,7 @@ fn module_header_types(
             continue;
         };
         let name = parsed_path(path);
-        if path.segments.len() < 2 || types.contains_key(&name) {
+        if path.segments.len() < 2 || path.global || types.contains_key(&name) {
             continue;
         }
         let Some(binding) = uses
@@ -1441,6 +1461,20 @@ pub(crate) fn std_ordering(path: &str) -> bool {
         path,
         "Ordering" | "cmp::Ordering" | "std::cmp::Ordering" | "core::cmp::Ordering"
     )
+}
+
+/// A path that starts with `::` names an outside crate, as in Rust (E0433):
+/// `first` is a name of this program instead.
+pub(crate) fn not_a_crate(first: &str, reference: Span) -> Error {
+    Error::InvalidImport {
+        path: format!("::{first}").into(),
+        reason: format!(
+            "a path that starts with `::` names an outside crate, and `{first}` is not one"
+        )
+        .into(),
+        reference,
+        declaration: None,
+    }
 }
 
 fn parsed_path(path: &crate::item::type_ref::Path) -> ImmutableString {
@@ -1989,6 +2023,7 @@ fn erase_trait_generics(
                 span,
             }]),
             span,
+            global: false,
         });
         for parameter in function.parameters.iter_mut() {
             substitute(&mut parameter.ty, &generic.name.text, &erased);

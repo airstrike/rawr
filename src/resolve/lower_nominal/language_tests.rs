@@ -7721,6 +7721,31 @@ fn language_use_with_a_leading_path_separator() {
 }
 
 #[test]
+fn language_paths_with_a_leading_path_separator() {
+    let value = run(r#"
+        use ::std::cmp::max as larger;
+        fn wait(ms: u64) -> Option<::std::time::Duration> {
+            Some(::std::time::Duration::from_millis(ms))
+        }
+        pub fn run() -> i64 {
+            let a = ::std::cmp::max(1, 2);
+            let b: Vec<::std::collections::HashMap<i64, i64>> =
+                vec![::std::collections::HashMap::new()];
+            larger(a, 0) + wait(30).unwrap().as_millis() as i64 + b.len() as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 33);
+    // A leading `::` names an outside crate, never a function or local.
+    let error = rejected("fn seven() -> i64 { 7 } pub fn run() -> i64 { ::seven::f() } run()");
+    assert!(error.contains("names an outside crate"), "{error}");
+    let error = rejected("pub fn run() -> i64 { let n = 1; ::n::f() } run()");
+    assert!(error.contains("names an outside crate"), "{error}");
+    let error = rejected("struct Seven; pub fn run(x: ::Seven::Inner) -> i64 { 7 } 0");
+    assert!(error.contains("names an outside crate"), "{error}");
+}
+
+#[test]
 fn language_builtin_default_calls() {
     let value = run(r#"
         pub fn run() -> i64 {

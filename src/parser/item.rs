@@ -1126,6 +1126,7 @@ fn bind_previews(
                     span: bind.span,
                 }]),
                 span: bind.span,
+                global: false,
             });
             preview.bound = true;
             constants.push(crate::item::Parsed::Function(crate::item::Function {
@@ -1262,9 +1263,9 @@ fn parse_use(
     start: Position,
 ) -> ParseResult<crate::item::Use> {
     expect(input, Token::Use, "to start an import")?;
-    // `use ::image as img;`: a leading `::` names an outside crate. Rawr's
-    // first import segment already does.
-    if matches!(input.peek(), Some((Token::DoubleColon, _))) {
+    // `use ::image as img;`: a leading `::` names an outside crate.
+    let global = matches!(input.peek(), Some((Token::DoubleColon, _)));
+    if global {
         input.next();
     }
     let first = parse_use_segment(input, "as the first import path segment")?;
@@ -1313,6 +1314,7 @@ fn parse_use(
     let path = type_ref::Path {
         segments: segments.into_boxed_slice(),
         span: path_span,
+        global,
     };
 
     let tree = if let Some(star) = glob {
@@ -2073,6 +2075,7 @@ fn future_type(output: type_ref::Type, at: Span) -> type_ref::Type {
             span: at,
         }]),
         span: at,
+        global: false,
     };
     let bound = path("Future".into(), Vec::new());
     let binding = path(
@@ -2932,6 +2935,7 @@ fn parse_type_split(
                 span,
             }]),
             span,
+            global: false,
         }));
     }
 
@@ -2990,6 +2994,7 @@ fn parse_type_split(
                         span,
                     }]),
                     span,
+                    global: false,
                 }))
             }));
             last.arguments = arguments.into_boxed_slice();
@@ -3077,6 +3082,7 @@ fn parse_type_split(
                 .chain(rest.segments.into_vec())
                 .collect(),
             span: Span::new(start, end),
+            global: false,
         }));
     }
 
@@ -3220,6 +3226,7 @@ fn parse_impl_bounds(
                 span,
             }]),
             span,
+            global: false,
         }
     });
     let bounds = bounds.into_iter().chain(bindings).collect::<Vec<_>>();
@@ -3238,6 +3245,7 @@ fn parse_impl_bounds(
             span,
         }]),
         span,
+        global: false,
     }))
 }
 
@@ -3307,6 +3315,7 @@ fn lift_impl_parameters(
                         arguments: Box::default(),
                         span: path.span,
                     }]),
+                    global: false,
                 });
             }
             type_ref::Type::Path(path) => {
@@ -3427,6 +3436,7 @@ fn iterator_type(name: &str, item: type_ref::Type, span: Span) -> type_ref::Type
             span,
         }]),
         span,
+        global: false,
     })
 }
 
@@ -3474,6 +3484,7 @@ fn parse_fn_signature(input: &mut TokenStream, start: Position) -> ParseResult<t
             span,
         }]),
         span,
+        global: false,
     })
 }
 
@@ -3617,6 +3628,11 @@ fn parse_path_bindings(
     mut bindings: Option<&mut Vec<(crate::item::Name, type_ref::Type)>>,
 ) -> ParseResult<type_ref::Path> {
     let mut segments = Vec::new();
+    // `::image::ImageError`: a leading `::` names an outside crate.
+    let global = matches!(input.peek(), Some((Token::DoubleColon, _)));
+    if global {
+        input.next();
+    }
 
     loop {
         let name = parse_use_segment(input, "as a type path segment")?;
@@ -3695,6 +3711,7 @@ fn parse_path_bindings(
     Ok(type_ref::Path {
         segments: segments.into_boxed_slice(),
         span: Span::new(first.start(), last.end()),
+        global,
     })
 }
 
@@ -4317,6 +4334,7 @@ fn parse_use_subtree(
         type_ref::Path {
             segments: segments.to_vec().into_boxed_slice(),
             span,
+            global: false,
         }
     };
     while matches!(input.peek(), Some((Token::DoubleColon, _))) {
@@ -4377,6 +4395,7 @@ fn parse_use_members(
                 prefix: type_ref::Path {
                     segments: prefix.to_vec().into_boxed_slice(),
                     span,
+                    global: false,
                 },
             });
             match input.peek().expect("token streams always end with EOF") {

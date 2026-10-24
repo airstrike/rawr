@@ -106,6 +106,8 @@ pub struct Path {
     pub segments: Box<[Segment]>,
     /// Complete path span.
     pub span: Span,
+    /// Whether the path starts with `::`, which names an outside crate.
+    pub global: bool,
 }
 
 /// One type path segment and its generic arguments.

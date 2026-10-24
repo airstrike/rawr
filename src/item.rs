@@ -448,6 +448,16 @@ pub struct UseMember {
 }
 
 impl Use {
+    /// Whether the import starts with `::`, which names an outside crate.
+    #[must_use]
+    pub fn global(&self) -> bool {
+        match &self.tree {
+            UseTree::Path(path, _)
+            | UseTree::Group { prefix: path, .. }
+            | UseTree::Glob { prefix: path, .. } => path.global,
+        }
+    }
+
     /// Whether `name` is bound by `self` in a group, `use a::m::{self}`,
     /// which imports only the module `m`, not a function of its name.
     #[must_use]

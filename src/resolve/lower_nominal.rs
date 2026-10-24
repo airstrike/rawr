@@ -2058,6 +2058,9 @@ fn symbolic_input_type(ty: &type_ref::Type) -> Option<Ty> {
 struct Models {
     context: crate::program::source::Id,
     tables: Shared<Tables>,
+    /// The first segment of a path being read that starts with `::`
+    /// (`::image::ImageReader`): an outside crate, which no `use` shadows.
+    global_head: Option<ImmutableString>,
     /// Native closure copies retain the original whole-candidate contribution.
     #[cfg(feature = "rust-import")]
     _imported_owner: Option<crate::package::import::runner::account::support::Owner>,
@@ -2569,6 +2572,7 @@ impl Models {
         Self {
             context: program.source.entry(),
             tables: Shared::new(tables),
+            global_head: None,
             #[cfg(feature = "rust-import")]
             _imported_owner: None,
             #[cfg(test)]
@@ -2697,6 +2701,9 @@ impl Models {
     }
 
     fn import(&self, name: &str) -> Option<&crate::resolve::item::Binding> {
+        if self.global_head.as_ref().is_some_and(|head| head.as_str() == name) {
+            return None;
+        }
         self.imports.get(&(self.context, name.into()))
     }
 
@@ -26815,6 +26822,27 @@ impl<'a> Parser<'a> {
             Token::LeftBracket => self.parse_array(position, Token::RightBracket, Some(0)),
             Token::Reserved(keyword) if keyword.as_str() == "match" => self.parse_match(token_span),
             Token::Identifier(name) => self.parse_name_primary((*name).into(), token_span),
+            // `::image::ImageReader::new(..)`: a leading `::` names an
+            // outside crate, which no `use`, local or function shadows.
+            Token::DoubleColon if matches!(self.peek(), Token::Identifier(_)) => {
+                let (Token::Identifier(name), position) = self.next() else {
+                    unreachable!("an identifier after `::`");
+                };
+                let name: ImmutableString = (*name).into();
+                let name_span = point_span(position);
+                if matches!(name.as_str(), "crate" | "Self")
+                    || self.bindings.get(&name).is_some()
+                    || self.models.function(&name).is_some()
+                    || !matches!(self.peek(), Token::DoubleColon)
+                {
+                    let reference = span(token_span.start(), name_span.end());
+                    return Err(crate::resolve::not_a_crate(&name, reference));
+                }
+                let outer = self.models.global_head.replace(name.clone());
+                let value = self.parse_name_primary(name, name_span);
+                self.models.global_head = outer;
+                value
+            }
             // `<T as Trait>::f(..)`: a trait's function for the type `T`.
             Token::LessThan => {
                 let self_ty = self.parse_local_type()?;
@@ -34538,6 +34566,26 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_local_type(&mut self) -> Result<Ty, Error> {
+        // `::image::ImageError`: a leading `::` names an outside crate,
+        // which no `use` or generic parameter shadows.
+        if matches!(self.peek(), Token::DoubleColon) {
+            let start = self.next().1;
+            let head = match self.peek() {
+                Token::Identifier(name) => ImmutableString::from(name.as_str()),
+                _ => return Err(self.unsupported("a crate name after a leading `::`")),
+            };
+            if matches!(head.as_str(), "crate" | "Self")
+                || self.generics.contains_key(head.as_str())
+                || !matches!(self.peek_second(), Token::DoubleColon)
+            {
+                let reference = span(start, text_end(self.position(), &head));
+                return Err(crate::resolve::not_a_crate(&head, reference));
+            }
+            let outer = self.models.global_head.replace(head);
+            let ty = self.parse_local_type();
+            self.models.global_head = outer;
+            return ty;
+        }
         match self.peek() {
             Token::Underscore => {
                 self.next();
