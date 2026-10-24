@@ -128,6 +128,9 @@ section { border-top: 1px solid var(--line); padding: 64px 0; }
 .note { margin-top: 14px; font-size: 15px; color: var(--dim); }
 .group + .group { margin-top: 36px; }
 .group > .cap { margin-bottom: 10px; }
+.goal-tabs { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 16px; }
+.goal-tabs button[aria-selected="true"] { color: var(--text); border-color: var(--line); background: var(--raised); }
+.goals .group + .group { margin-top: 0; }
 
 table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); background: var(--raised); font-size: 15px; }
 td { padding: 13px 16px; border-top: 1px solid var(--line); vertical-align: top; color: var(--dim); }
@@ -338,41 +341,41 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
   <div class="wrap sec">
     <div class="side">
       <p class="cap"><span class="slash">//</span>Install</p>
-      <h2>Install from git</h2>
-      <p><strong>The language</strong> is an ordinary crate. It builds on stable Rust 1.95 or newer.</p>
-      <p><strong>The <code>rawr</code> command</strong> builds on stable Rust too. It runs programs that don&rsquo;t use iced.</p>
-      <p><strong>rawr-iced</strong> needs more. It needs <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. Rawr also builds your own crates with that toolchain. Importing your own Rust crates builds them for the host of the pinned toolchain. It needs a Unix system. It has only been tested on Apple Silicon Macs so far. The rest of rawr-iced should work wherever iced runs. It has only been tested on macOS so far.</p>
+      <h2>I want to&hellip;</h2>
+      <p>Pick what you&rsquo;re here to do. Each tab lists only the steps it needs.</p>
     </div>
-    <div>
-      <div class="group">
-        <p class="cap">Embed the language</p>
+    <div class="goals">
+      <div class="tabs goal-tabs" role="tablist" aria-label="I want to">
+        <button type="button" role="tab" id="goal-iced" aria-controls="goal-iced-panel" aria-selected="true">Write an iced app</button>
+        <button type="button" role="tab" id="goal-embed" aria-controls="goal-embed-panel" aria-selected="false" tabindex="-1">Integrate Rawr in my library</button>
+        <button type="button" role="tab" id="goal-run" aria-controls="goal-run-panel" aria-selected="false" tabindex="-1">Run Rawr scripts</button>
+        <button type="button" role="tab" id="goal-try" aria-controls="goal-try-panel" aria-selected="false" tabindex="-1">Try it first</button>
+      </div>
+      <div class="group" role="tabpanel" id="goal-iced-panel" aria-labelledby="goal-iced">
+        <div class="cmds">
+          <div class="cmd"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src</code></pre><button type="button" class="copy">Copy</button></div>
+          <div class="cmd"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre><button type="button" class="copy">Copy</button></div>
+          <div class="cmd"><pre><code>cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli</code></pre><button type="button" class="copy">Copy</button></div>
+          <div class="cmd"><pre><code>cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre><button type="button" class="copy">Copy</button></div>
+          <div class="cmd"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre><button type="button" class="copy">Copy</button></div>
+        </div>
+        <p class="note"><code>rawr new</code> writes a Cargo crate whose <code>src/main.rs</code> starts with <code>// rawr</code> and holds iced&rsquo;s counter. Edit it while the window is open. iced apps need the pinned nightly and a Unix system. They have only been tested on Apple Silicon Macs so far.</p>
+      </div>
+      <div class="group" role="tabpanel" id="goal-embed-panel" aria-labelledby="goal-embed" hidden>
         <div class="cmds">
           <div class="cmd"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre><button type="button" class="copy">Copy</button></div>
         </div>
-        <p class="note">Then compile a file and call its <code>main</code>, as <code>examples/cart.rs</code> does above.</p>
+        <p class="note">The language is an ordinary crate on stable Rust 1.95 or newer. Register your library&rsquo;s functions and types with an <code>Engine</code>, then compile a script and call its functions, as <code>examples/cart.rs</code> does above. rawr-iced is built this way on top of iced. <a href="/docs/embedding.html">Embedding guide</a></p>
       </div>
-      <div class="group">
-        <p class="cap">The rawr command</p>
+      <div class="group" role="tabpanel" id="goal-run-panel" aria-labelledby="goal-run" hidden>
         <div class="cmds">
           <div class="cmd"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre><button type="button" class="copy">Copy</button></div>
         </div>
-        <p class="note"><code>rawr-cli</code> installs <code>rawr</code>. A program without iced runs once and exits. It doesn&rsquo;t build anything or hot reload.</p>
+        <p class="note">This installs <code>rawr</code> on stable Rust. A program without iced runs once and exits. It doesn&rsquo;t build anything or hot reload.</p>
       </div>
-      <div class="group">
-        <p class="cap">rawr-iced: toolchain, binary and import driver</p>
-        <div class="cmds">
-          <div class="cmd"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src</code></pre><button type="button" class="copy">Copy</button></div>
-          <div class="cmd"><pre><code>cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli</code></pre><button type="button" class="copy">Copy</button></div>
-          <div class="cmd"><pre><code>cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre><button type="button" class="copy">Copy</button></div>
-        </div>
-        <p class="note"><code>rawr-iced-cli</code> installs <code>rawr-iced</code>. <code>rawr-import</code> installs <code>rawr-import-driver</code> in the same directory. The driver reads your Rust crates for imports. <code>rawr</code> finds <code>rawr-iced</code> next to itself or on <code>PATH</code>. <code>cargo install</code> builds iced into <code>rawr-iced</code>, so it takes a few minutes. After that, an iced app opens in seconds. A project with its own Rust crates compiles them on its first run.</p>
-      </div>
-      <div class="group">
-        <p class="cap">Start an iced project</p>
-        <div class="cmds">
-          <div class="cmd"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre><button type="button" class="copy">Copy</button></div>
-        </div>
-        <p class="note">With rawr-iced installed, <code>rawr new hello</code> writes a Cargo crate. Its <code>src/main.rs</code> starts with <code>// rawr</code> and holds iced&rsquo;s counter. Edit it while the window is open.</p>
+      <div class="group" role="tabpanel" id="goal-try-panel" aria-labelledby="goal-try" hidden>
+        <p class="note">The playground renders a view or a whole iced app in your browser, and the <code>?play</code> bot does the same on Discord. You don&rsquo;t need to install anything.</p>
+        <p class="note"><a class="btn go" href="/play">Open the playground</a></p>
       </div>
     </div>
   </div>
@@ -645,6 +648,32 @@ use iced::widget::{Widget, button, column, text};
       return m;
     });
     el.innerHTML = out + esc(src.slice(last));
+  }
+
+  // The install goals: one tab per thing a reader wants to do.
+  for (const list of document.querySelectorAll(".goal-tabs")) {
+    const tabs = [...list.querySelectorAll('[role="tab"]')];
+    const pick = (tab) => {
+      for (const t of tabs) {
+        const on = t === tab;
+        t.setAttribute("aria-selected", on);
+        t.tabIndex = on ? 0 : -1;
+        document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+      }
+    };
+    list.addEventListener("click", (e) => {
+      const tab = e.target.closest('[role="tab"]');
+      if (tab) pick(tab);
+    });
+    list.addEventListener("keydown", (e) => {
+      const i = tabs.indexOf(document.activeElement);
+      const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+      if (i < 0 || next === undefined) return;
+      e.preventDefault();
+      const tab = tabs[(next + tabs.length) % tabs.length];
+      pick(tab);
+      tab.focus();
+    });
   }
 
   // Each slider: --pos is where the right-hand file starts covering the left.
