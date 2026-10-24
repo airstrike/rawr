@@ -8668,3 +8668,56 @@ fn language_fx_hash_collections_are_rawr_maps() {
     "#);
     assert_eq!(value, 31);
 }
+
+#[test]
+fn language_rc_and_arc_are_shared_pointers() {
+    let value = run(r#"
+        use std::rc::Rc;
+        use std::sync::Arc;
+        struct NoClone { size: i64 }
+        #[derive(Clone)]
+        enum Error { Failed(Arc<NoClone>) }
+        #[derive(Clone)]
+        struct Holder { shared: Arc<NoClone>, text: Arc<String> }
+        fn total(values: &[i64]) -> i64 { values.iter().sum() }
+        fn length(text: &str) -> i64 { text.len() as i64 }
+        pub fn run() -> i64 {
+            let big = Arc::new(NoClone { size: 3 });
+            let holder = Holder { shared: Arc::clone(&big), text: Arc::new(String::from("hi")) };
+            let copy = holder.clone();
+            let wrapped: Option<Arc<String>> = Some(String::from("abc")).map(Arc::new);
+            let error = Error::Failed(Arc::new(NoClone { size: 4 })).clone();
+            let Error::Failed(inner) = error;
+            let numbers = Rc::new(vec![1, 2, 3]);
+            let other = numbers.clone();
+            copy.shared.size * 1000
+                + length(&holder.text) * 100
+                + wrapped.map(|text| text.len() as i64).unwrap_or(0) * 10
+                + total(&other)
+                + inner.size
+        }
+        run()
+    "#);
+    assert_eq!(value, 3240);
+}
+
+#[test]
+fn language_pointer_kinds_do_not_mix() {
+    let error = rejected(r#"
+        use std::sync::Arc;
+        pub fn run() -> i64 {
+            let shared: Arc<i64> = Box::new(1);
+            *shared
+        }
+        run()
+    "#);
+    assert!(error.contains("expected 'Arc<i64>', found 'Box<"), "{error}");
+    let error = rejected(r#"
+        pub fn run() -> i64 {
+            let shared = Arc::new(1);
+            *shared
+        }
+        run()
+    "#);
+    assert!(error.contains("Arc"), "{error}");
+}

@@ -1308,6 +1308,9 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
                 | "marker::PhantomData"
                 | "cell"
                 | "cell::RefCell"
+                | "rc"
+                | "rc::Rc"
+                | "sync::Arc"
         )
     ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
         || rest.is_some_and(|rest| {
@@ -1466,6 +1469,16 @@ pub(crate) fn std_cell(path: &str) -> bool {
         path,
         "RefCell" | "cell::RefCell" | "std::cell::RefCell" | "core::cell::RefCell"
     )
+}
+
+/// `std::rc::Rc` or `std::sync::Arc` as a path is written: the pointer's
+/// name.
+pub(crate) fn std_pointer(path: &str) -> Option<&'static str> {
+    match path {
+        "Rc" | "rc::Rc" | "std::rc::Rc" | "alloc::rc::Rc" => Some("Rc"),
+        "Arc" | "sync::Arc" | "std::sync::Arc" | "alloc::sync::Arc" => Some("Arc"),
+        _ => None,
+    }
 }
 
 /// `std::marker::PhantomData` as a path is written.

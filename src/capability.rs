@@ -671,9 +671,14 @@ pub(crate) fn type_supports(
         type_ref::Type::Path(_) if let Some(element) = ty.reverse_element() => {
             type_supports(element, capability, resolved)
         }
-        // `Box<T>` derives from `T`, and is never `Copy`.
-        type_ref::Type::Path(_) if let Some(element) = ty.box_element() => {
-            capability != Kind::Copy && type_supports(element, capability, resolved)
+        // `Box<T>` derives from `T`, and is never `Copy`. `Rc<T>` and
+        // `Arc<T>` are `Clone` for any `T`, and an `Rc` is not `Send`.
+        type_ref::Type::Path(_) if let Some((pointer, element)) = ty.pointer_element() => {
+            match (pointer, capability) {
+                (_, Kind::Copy) | ("Rc", Kind::Send) => false,
+                ("Rc" | "Arc", Kind::Clone) => true,
+                _ => type_supports(element, capability, resolved),
+            }
         }
         // A function type is `Copy`, `Clone`, `Debug` and the marker `Eq`;
         // Rawr does not compare, hash or default function values.

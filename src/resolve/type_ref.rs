@@ -493,6 +493,11 @@ fn resolve_path(
         Some(collection) if !types.contains_key(name.as_str()) => collection.into(),
         None if super::std_reverse(&name) && !types.contains_key("Reverse") => "Reverse".into(),
         None if super::std_cell(&name) && !types.contains_key("RefCell") => "RefCell".into(),
+        None if let Some(pointer) = super::std_pointer(&name)
+            && !types.contains_key(pointer) =>
+        {
+            pointer.into()
+        }
         None if !types.contains_key(name.as_str())
             && super::std_range(&name).is_some_and(|range| !types.contains_key(range)) =>
         {
@@ -507,6 +512,8 @@ fn resolve_path(
         || super::std_collection(&name).is_some()
         || name.as_str() == "Reverse"
         || name.as_str() == "RefCell"
+        || name.as_str() == "Rc"
+        || name.as_str() == "Arc"
         || name.as_str() == "RangeInclusive"
         || name.as_str() == item::type_ref::ITER_TYPE
     {
@@ -551,7 +558,7 @@ fn resolve_path(
     let prelude = match name.as_str() {
         "Option" | "Vec" | "Box" => Some(1),
         "Result" | "HashMap" | "BTreeMap" => Some(2),
-        "HashSet" | "BTreeSet" | "Reverse" | "RefCell" | "RangeInclusive" => Some(1),
+        "HashSet" | "BTreeSet" | "Reverse" | "RefCell" | "Rc" | "Arc" | "RangeInclusive" => Some(1),
         item::type_ref::ITER_TYPE | item::type_ref::INTO_ITER_TYPE => Some(1),
         name if item::type_ref::array_length(name).is_some() => Some(1),
         _ => None,
@@ -1015,16 +1022,22 @@ impl Type {
         })
     }
 
-    /// `T` of `Box<T>`.
+    /// `T` of `Box<T>`, `Rc<T>` or `Arc<T>`, each the value itself at
+    /// runtime.
     pub(crate) fn box_element(&self) -> Option<&Type> {
+        self.pointer_element().map(|(_, element)| element)
+    }
+
+    /// The pointer's name and `T` of `Box<T>`, `Rc<T>` or `Arc<T>`.
+    pub(crate) fn pointer_element(&self) -> Option<(&str, &Type)> {
         let Type::Path(path) = self else {
             return None;
         };
-        if path.target != Target::Builtin || path.name.as_str() != "Box" {
+        if path.target != Target::Builtin || !matches!(path.name.as_str(), "Box" | "Rc" | "Arc") {
             return None;
         }
         path.arguments.iter().find_map(|argument| match argument {
-            Argument::Type(ty) => Some(ty),
+            Argument::Type(ty) => Some((path.name.as_str(), ty)),
             Argument::Lifetime(_) => None,
         })
     }
