@@ -1050,6 +1050,9 @@ fn app_state(source: &str, at: usize) -> Option<String> {
 }
 
 #[cfg(test)]
+mod tokio_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{render, shape, Options, PlayError, Shape};
 
