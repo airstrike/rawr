@@ -3221,7 +3221,9 @@ impl<P: api::Phase> Context<'_, P> {
         // An `async fn` method that borrows its receiver holds the borrow
         // across its awaits, so it does not cross; one that takes `self`
         // by value crosses as a `Task`, as a free `async fn` does.
-        if signature.async_function() && matches!(signature.receiver(), model::Receiver::Reference { .. }) {
+        if signature.async_function()
+            && matches!(signature.receiver(), model::Receiver::Reference { .. })
+        {
             return Err(representability::reject::Kind::AsyncFunction.into());
         }
         if signature.variadic() {
@@ -4678,15 +4680,18 @@ mod tests {
         );
         let function_cases = [
             (unsafe_signature, Kind::UnsafeFunction),
-            // A free `async fn` crosses as a `Task`; a method borrows its
-            // receiver across the await and does not.
+            // A free `async fn` and one that takes `self` by value cross as
+            // a `Task`; one that borrows its receiver holds the borrow
+            // across its awaits and does not.
             (
                 safe(
                     true,
                     false,
                     "\"Rust\"",
                     Box::default(),
-                    model::Receiver::Value {
+                    model::Receiver::Reference {
+                        lifetime: model::Lifetime::Static,
+                        mutability: model::Mutability::Shared,
                         ty: model::Type::Tuple(Box::default()),
                     },
                 ),
