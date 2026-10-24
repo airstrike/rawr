@@ -667,20 +667,32 @@ impl widget::Descriptor for marker::Radio {
     }
 }
 
-/// The index of a pick list's selection among `options`: the option equal
-/// to `selected`, as iced's `PartialEq` finds it, or else the first whose
-/// label is the selection's.
-fn selected_option(
+/// The index of the first option equal to `selected`, as iced's
+/// `PartialEq` finds it (`option == selected`): through `equal`, the
+/// program's own `eq` (`Call::equal`).
+fn equal_option(
     options: &[Dynamic],
     selected: Option<&Dynamic>,
-    label: Option<&str>,
-    labels: &[String],
-) -> Option<usize> {
-    let selected = selected?;
-    options
-        .iter()
-        .position(|option| host::value::structural_equal(option, selected))
-        .or_else(|| labels.iter().position(|option| Some(option.as_str()) == label))
+    equal: impl Fn(&Dynamic, &Dynamic) -> Result<bool, Box<rawr::EvalAltResult>>,
+) -> Result<Option<usize>, Box<rawr::EvalAltResult>> {
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    for (index, option) in options.iter().enumerate() {
+        if equal(option, selected)? {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+
+/// The index of a pick list's selection: `equal`, the option equal to it,
+/// or else the first option whose label is the selection's `label`.
+fn selected_option(equal: Option<usize>, label: Option<&str>, labels: &[String]) -> Option<usize> {
+    equal.or_else(|| {
+        let label = label?;
+        labels.iter().position(|option| option.as_str() == label)
+    })
 }
 
 impl widget::Descriptor for marker::PickList {
@@ -702,9 +714,7 @@ impl widget::Descriptor for marker::PickList {
             }
         };
         let selected = match self.selected.as_ref().map(label).transpose() {
-            Ok(label) => {
-                selected_option(&self.options, self.selected.as_ref(), label.as_deref(), &labels)
-            }
+            Ok(label) => selected_option(self.equal, label.as_deref(), &labels),
             Err(error) => {
                 return widget::diagnostic(format!("pick_list to_string failed: {error}"))
                     .lower(context)
@@ -1426,12 +1436,16 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 return Err(arity("pick_list", 3, args.len()));
             }
             let selected = optional_message(args[0], "pick_list")?;
-            let options = take::<rawr::Array>(args[1], "&[T]")?;
+            let options = take::<rawr::Array>(args[1], "&[T]")?.into_iter().collect::<Vec<_>>();
+            let equal = equal_option(&options, selected.as_ref(), |option, selected| {
+                call.equal(option, selected)
+            })?;
             Ok(Dynamic::from(marker::PickList {
                 witness: call.output_witness().map_err(witness_error)?,
                 identity: widget::Identity::unique(),
                 selected,
-                options: options.into_iter().collect(),
+                equal,
+                options,
                 to_string: take::<rawr::item::Value>(args[2], "symbolic `to_string`")?,
                 on_select: None,
                 placeholder: None,
@@ -1447,8 +1461,11 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 return Err(arity("radio", 4, args.len()));
             }
             let value = args[1].clone();
-            let selected = optional_message(args[2], "radio")?
-                .is_some_and(|selected| rawr::host::value::structural_equal(&value, &selected));
+            // iced's `Some(value) == selected`: the program's `eq`.
+            let selected = match optional_message(args[2], "radio")? {
+                Some(selected) => call.equal(&value, &selected)?,
+                None => false,
+            };
             Ok(Dynamic::from(marker::Radio {
                 witness: call.output_witness().map_err(witness_error)?,
                 identity: widget::Identity::unique(),
@@ -3471,11 +3488,14 @@ mod pick_list_tests {
         // Two options share a label: the second is the one selected (D428).
         let options = [Dynamic::from(1_i64), Dynamic::from(2_i64)];
         let labels = ["same".to_string(), "same".to_string()];
+        let structural = |lhs: &Dynamic, rhs: &Dynamic| Ok(host::value::structural_equal(lhs, rhs));
         let selected = Dynamic::from(2_i64);
-        assert_eq!(selected_option(&options, Some(&selected), Some("same"), &labels), Some(1));
+        let equal = equal_option(&options, Some(&selected), structural).unwrap();
+        assert_eq!(selected_option(equal, Some("same"), &labels), Some(1));
         // A selection among none of the options shows by its label.
         let other = Dynamic::from(3_i64);
-        assert_eq!(selected_option(&options, Some(&other), Some("same"), &labels), Some(0));
-        assert_eq!(selected_option(&options, None, None, &labels), None);
+        let equal = equal_option(&options, Some(&other), structural).unwrap();
+        assert_eq!(selected_option(equal, Some("same"), &labels), Some(0));
+        assert_eq!(selected_option(None, None, &labels), None);
     }
 }

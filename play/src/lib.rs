@@ -1100,6 +1100,39 @@ mod tests {
         assert_ne!(red.bytes, plain.bytes, "the app's theme is drawn");
     }
 
+    /// A radio and a pick list find the selection through the snippet's
+    /// own `PartialEq`, as iced's `Some(value) == selected` does: a size
+    /// equal by its inches is selected though its name differs.
+    #[test]
+    fn radio_and_pick_list_compare_by_a_hand_written_eq() {
+        let snippet = |selected: &str| {
+            format!(
+                "use iced::widget::{{column, pick_list, radio}};\nuse iced::Widget;\n\
+                 #[derive(Debug, Clone, Copy)] struct Size {{ inches: i64, name: char }}\n\
+                 impl PartialEq for Size {{ fn eq(&self, other: &Self) -> bool {{ self.inches == other.inches }} }}\n\
+                 impl Eq for Size {{}}\n\
+                 impl std::fmt::Display for Size {{ fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{ write!(f, \"{{}}\", self.name) }} }}\n\
+                 fn view() -> impl Widget<()> {{\n\
+                     let selected = Some({selected});\n\
+                     column![\n\
+                         radio(\"one\", Size {{ inches: 1, name: 'a' }}, selected, |_| ()),\n\
+                         radio(\"two\", Size {{ inches: 2, name: 'b' }}, selected, |_| ()),\n\
+                         pick_list(selected, vec![Size {{ inches: 1, name: 'a' }}, Size {{ inches: 2, name: 'b' }}], Size::to_string),\n\
+                     ]\n\
+                 }}\n"
+            )
+        };
+        let options = Options {
+            size: Some((120, 120)),
+            ..Options::default()
+        };
+        let by_inches = render(&snippet("Size { inches: 2, name: 'z' }"), &options).unwrap();
+        let same = render(&snippet("Size { inches: 2, name: 'b' }"), &options).unwrap();
+        let other = render(&snippet("Size { inches: 3, name: 'b' }"), &options).unwrap();
+        assert_eq!(by_inches.bytes, same.bytes, "`z` is equal to `b` by its `eq`");
+        assert_ne!(other.bytes, same.bytes, "a size of other inches selects no radio");
+    }
+
     #[test]
     fn render_expression_shape() {
         let source = r#"column![text("hi"), button("go")]"#;

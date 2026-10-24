@@ -5,7 +5,12 @@ use super::type_ref::Type;
 use super::witness;
 use super::Witness;
 use crate::receiver;
+use crate::{Dynamic, EvalAltResult};
 use std::fmt;
+
+/// Rust's `PartialEq` of two values as the calling program compares them:
+/// a crate type by its own `eq` where it has one.
+pub type Equal<'a> = dyn Fn(&Dynamic, &Dynamic) -> Result<bool, Box<EvalAltResult>> + 'a;
 
 /// Invocation-local authority for issuing exact host instantiation witnesses.
 ///
@@ -17,6 +22,7 @@ pub struct Call<'a> {
     operation: Operation<'a>,
     invocation: Option<&'a invocation::Proof>,
     event_mapper: Option<&'a [u8; 16]>,
+    equal: Option<&'a Equal<'a>>,
 }
 
 enum Operation<'a> {
@@ -76,6 +82,7 @@ impl<'a> Call<'a> {
             },
             invocation,
             event_mapper: None,
+            equal: None,
         }
     }
 
@@ -89,6 +96,7 @@ impl<'a> Call<'a> {
             operation: Operation::Projection { source, target },
             invocation: None,
             event_mapper: None,
+            equal: None,
         }
     }
 
@@ -104,6 +112,7 @@ impl<'a> Call<'a> {
             operation: Operation::Projection { source, target },
             invocation: None,
             event_mapper: Some(mapper),
+            equal: None,
         }
     }
 
@@ -129,6 +138,31 @@ impl<'a> Call<'a> {
             },
             invocation: None,
             event_mapper: None,
+            equal: None,
+        }
+    }
+
+    /// This call, comparing values with `equal`: the calling program's
+    /// `PartialEq`.
+    pub(super) fn with_equal(mut self, equal: Option<&'a Equal<'a>>) -> Self {
+        self.equal = equal;
+        self
+    }
+
+    /// Whether `lhs == rhs`, as Rust's `PartialEq` of the calling program
+    /// finds it: a crate type with a hand-written `impl PartialEq` is
+    /// compared by its own `eq`, called as `lhs.eq(&rhs)`. A widget whose
+    /// Rust counterpart compares values (a radio's value with the
+    /// selection) compares them through this. Without the calling program
+    /// (a call from Rust) the values compare as a derived `PartialEq` does.
+    ///
+    /// # Errors
+    ///
+    /// The error of a hand-written `eq` that failed, as a panic in it.
+    pub fn equal(&self, lhs: &Dynamic, rhs: &Dynamic) -> Result<bool, Box<EvalAltResult>> {
+        match self.equal {
+            Some(equal) => equal(lhs, rhs),
+            None => Ok(crate::host::value::structural_equal(lhs, rhs)),
         }
     }
 

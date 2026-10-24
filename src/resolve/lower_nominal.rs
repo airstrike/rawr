@@ -5093,6 +5093,14 @@ impl ExecutableOp {
                     )
                     .into());
                 };
+                // A facade callback compares script values as this program
+                // does: a crate type by its own `eq` (`Call::equal`).
+                let comparison = Comparison {
+                    models,
+                    context: Some(&context),
+                    total: false,
+                };
+                let equal = |lhs: &Dynamic, rhs: &Dynamic| comparison.equal(lhs, rhs);
                 proof.invoke_prepared(
                     runtime,
                     requirement
@@ -5100,6 +5108,7 @@ impl ExecutableOp {
                     context.host_invocation(),
                     args,
                     &models.runtime,
+                    Some(&equal),
                 )
             }
             Self::Endpoint { contract, .. } => {
@@ -5148,6 +5157,7 @@ impl ExecutableOp {
                     context.host_invocation(),
                     &mut [&mut call, &mut **mapper],
                     &models.runtime,
+                    None,
                 )
             }
             Self::Stream { selected, target } => {

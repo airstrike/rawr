@@ -319,6 +319,9 @@ pub(crate) struct PickList {
     pub(crate) witness: rawr::host::runtime::Witness,
     pub(crate) identity: widget::Identity,
     pub(crate) selected: Option<Dynamic>,
+    /// The index of the option equal to `selected`, by the program's own
+    /// `PartialEq` (`Call::equal`).
+    pub(crate) equal: Option<usize>,
     pub(crate) options: Vec<Dynamic>,
     pub(crate) to_string: item::Value,
     pub(crate) on_select: Option<item::Value>,

@@ -106,7 +106,7 @@ impl super::Registry {
         site.source
             .validate(args[0], model, self)
             .map_err(|cause| error(format!("private event source: {cause}")))?;
-        let output = self.invoke(requirement, args, None)?;
+        let output = self.invoke(requirement, args, None, None)?;
         site.target
             .validate(&output, model, self)
             .map_err(|cause| error(format!("private event target: {cause}")))?;

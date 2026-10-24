@@ -184,7 +184,7 @@ impl Proof {
             }
         }
 
-        let result = runtime.invoke(requirement, args, None);
+        let result = runtime.invoke(requirement, args, None, None);
 
         for (index, (operand, value)) in self.operands.iter().zip(args.iter()).enumerate() {
             let observable =

@@ -11,7 +11,7 @@ pub(crate) mod widget;
 mod unwitnessed;
 mod witness;
 
-pub use call::{Call, Error as WitnessError};
+pub use call::{Call, Equal, Error as WitnessError};
 pub use type_ref::Error as ValueError;
 pub use unwitnessed::{Deferred, Unwitnessed};
 pub use witness::Witness;
@@ -1280,6 +1280,7 @@ impl Registry {
         requirement: &Requirement,
         args: &mut [&mut Dynamic],
         invocation: Option<&invocation::Proof>,
+        equal: Option<&Equal<'_>>,
     ) -> Result<Dynamic, Box<EvalAltResult>> {
         let binding = match requirement.bound.get(self.witness) {
             Some(binding) => binding,
@@ -1302,7 +1303,8 @@ impl Registry {
                 &requirement.output,
                 requirement.receiver,
                 invocation,
-            ),
+            )
+            .with_equal(equal),
             #[cfg(feature = "rust-import")]
             Binding::Event(ref key) => {
                 let [source] = requirement.operands.as_ref() else {
