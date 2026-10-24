@@ -471,9 +471,19 @@ mod seed {
         let tokens = tokens(text);
         let mut bindings: Vec<(&str, Vec<&str>)> = Vec::new();
         let mut qualified: Vec<Vec<&str>> = Vec::new();
+        // `mod download;`: a path `download::Progress` names the module,
+        // even beside `use download::download;`, a function of the same
+        // name in the value namespace.
+        let mut modules: Vec<&str> = Vec::new();
         let mut index = 0;
         while index < tokens.len() {
             match tokens[index] {
+                Token::Ident("mod") => {
+                    if let Some(Token::Ident(name)) = tokens.get(index + 1) {
+                        modules.push(name);
+                    }
+                    index += 2;
+                }
                 Token::Ident("use") => {
                     let (prefix, next) = path(&tokens, index + 1);
                     index = next;
@@ -541,7 +551,7 @@ mod seed {
             let mut full = bindings
                 .iter()
                 .rev()
-                .find(|(local, _)| *local == segments[0])
+                .find(|(local, _)| *local == segments[0] && !modules.contains(local))
                 .map_or_else(|| vec![segments[0]], |(_, full)| full.clone());
             full.extend_from_slice(&segments[1..]);
             paths.push(full.into_iter().map(str::to_owned).collect());
@@ -559,6 +569,13 @@ mod seed {
             paths.sort();
             paths.dedup();
             paths
+        }
+
+        #[test]
+        fn seed_keeps_a_module_path_beside_a_function_of_its_name() {
+            let text = "mod download;\nuse download::download;\n\
+                enum Update { Downloading(download::Progress) }\n";
+            assert_eq!(joined(text), ["download::Progress", "download::download"]);
         }
 
         #[test]
