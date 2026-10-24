@@ -15338,10 +15338,11 @@ impl<'a> Parser<'a> {
         if scoped {
             self.require_invocation_receiver(&receiver, member_span)?;
         }
-        // `tree.size = size`: a facade field set in place, through the
-        // field's owned builder, which returns the changed value.
+        // `tree.size = size` and `self.shadow.offset.x = x`: a facade
+        // field of a place is a place, set through the field's owned
+        // builder, which returns the changed value.
         if self.pending_arguments.is_none()
-            && assignment_token(&self.peek())
+            && !matches!(self.peek(), Token::LeftParen | Token::Unit)
             && receiver.lvalue.is_some()
             && items.iter().any(|item| {
                 item.receiver() == Some(receiver::Mode::Owned)
@@ -15352,10 +15353,24 @@ impl<'a> Parser<'a> {
         }
         // A facade type's field: a parameterless shared-receiver reader,
         // written `value.field` as in Rust.
-        let field = self.pending_arguments.is_none()
+        let written_field = self.pending_arguments.is_none()
             && !matches!(self.peek(), Token::LeftParen | Token::Unit);
+        // A field read for a pattern (`let Radius { top_left, .. } = r`)
+        // passes no arguments: the reader, when the field has one.
+        let read = !written_field
+            && self
+                .pending_arguments
+                .as_ref()
+                .is_some_and(|(arguments, _)| arguments.is_empty())
+            && items.iter().any(|item| {
+                item.receiver() == Some(receiver::Mode::Shared) && item.signature().parameters().is_empty()
+            });
+        if read {
+            self.pending_arguments = None;
+        }
+        let field = written_field || read;
         let items = field_or_builder(items.clone(), field);
-        if field
+        if written_field
             && (definition.identity().imported().is_some()
                 || items.iter().any(|item| {
                     item.receiver() != Some(receiver::Mode::Shared)

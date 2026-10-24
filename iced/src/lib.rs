@@ -2296,6 +2296,26 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
             )?)?;
         }
     }
+    // `offset.x = 2.0` and `Size { width: 1.0, height: 2.0 }`: a field
+    // set through its owned builder.
+    for (owner, fields) in [
+        ("Size", &["width", "height"][..]),
+        ("Point", &["x", "y"][..]),
+        ("Vector", &["x", "y"][..]),
+    ] {
+        for field in fields {
+            for input in PIXELS {
+                let mut setter = signature::Builder::new();
+                setter.parameter(type_ref::Type::builtin(input));
+                setter.output(type_ref::Type::registered(owner)?);
+                builder.item(item::Definition::method(
+                    format!("{owner}::{field}"),
+                    receiver::Mode::Owned,
+                    setter.finish(),
+                )?)?;
+            }
+        }
+    }
     builder.item(item::Definition::intrinsic_macro(
         "color",
         repeated_builtin_signature(type_ref::Builtin::I64, 1, "Color")?,
