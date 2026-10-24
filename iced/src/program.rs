@@ -501,7 +501,7 @@ impl Draft {
                     source.clone(),
                 );
                 diagnostics.push(diagnostic::Entry::new(diagnostic::Stage::View, report));
-                (widget::diagnostic("Rawr view unavailable"), None)
+                (widget::unavailable(error.to_string()), None)
             }
         };
         let instance = application::Instance::new();

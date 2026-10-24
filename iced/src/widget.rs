@@ -545,6 +545,36 @@ impl MappingAuthority {
     }
 }
 
+/// The view shown when the app's view failed: what failed, and why, so a
+/// headless render (?play, a snapshot) says it without the window's
+/// diagnostic panel.
+pub(crate) fn unavailable(reason: impl Into<String>) -> Value {
+    Value::new(Unavailable {
+        identity: Identity::unique(),
+        reason: reason.into(),
+    })
+}
+
+struct Unavailable {
+    identity: Identity,
+    reason: String,
+}
+
+impl Descriptor for Unavailable {
+    fn lower(&self, _context: &Context<'_>) -> iced::Element<'static, runtime::Message> {
+        iced::widget::column![
+            iced::widget::text("Rawr view unavailable"),
+            iced::widget::text(self.reason.clone()).size(14),
+        ]
+        .spacing(8)
+        .boxed()
+    }
+
+    fn identity(&self) -> Identity {
+        self.identity.clone()
+    }
+}
+
 pub(crate) fn diagnostic(message: impl Into<String>) -> Value {
     Value::new(Diagnostic {
         identity: Identity::unique(),
