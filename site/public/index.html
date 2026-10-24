@@ -336,10 +336,10 @@ fn main() {
       <div class="block diag">
         <div class="file"><b>rawr run</b><span>exit 1</span></div>
         <pre><code><span class="e">error[E0599]</span><span class="h">: no method named `cost` found for `Item` in the current scope</span>
- <span class="c">--&gt;</span> src/main.rs:23:21-23:25
+ <span class="c">--&gt;</span> /home/you/cart/src/main.rs:23:21-23:25
  <span class="c">23 |</span>         sum += item.cost();
     <span class="c">|</span>                     <span class="e">^^^^</span></code></pre>
-        <p class="fig-note">Change <code>item.price()</code> to <code>item.cost()</code> in the cart above. The error points to the line, and nothing runs.</p>
+        <p class="fig-note">Change <code>item.price()</code> to <code>item.cost()</code> in the cart above. The error points to the line, and nothing runs. Then <code>cargo check</code> reports rustc&rsquo;s version of the same error.</p>
       </div>
       <p class="note">The <code>rawr</code> command needs Rust 1.95 or newer. <a href="/docs/start">Get started</a> walks through a first crate.</p>
     </div>
@@ -353,7 +353,7 @@ fn main() {
       <h2>iced apps that reload when you save</h2>
       <p>rawr-iced is an extension for <a href="https://github.com/iced-rs/iced">iced</a> apps. With it installed, <code>rawr run</code> opens an iced app in a window. iced draws the window, and rawr interprets the marked files.</p>
       <p>Saving a marked file swaps the new code into the running app. The window stays open. The app keeps its state when the new code is compatible with it. Otherwise the app starts again from its initial state. A save that fails the check leaves the last good version running and shows the error in the window.</p>
-      <p>On RawrGallery on an Apple Silicon Mac, an edit to a marked file was live in about 0.2&nbsp;s. An edit to a native module or a dependency is rebuilt by Cargo first, which took about 8&nbsp;s there.</p>
+      <p>In RawrGallery, a gallery app built with rawr-iced, an edit to a marked file was live in about 0.2&nbsp;s on an Apple Silicon Mac. An edit to a native module or a dependency is rebuilt by Cargo first, which took about 8&nbsp;s there.</p>
       <p>Cargo compiles the app for release. The release build doesn&rsquo;t need the interpreter.</p>
       <div class="actions"><a class="btn" href="/docs/iced">Set up rawr-iced</a></div>
     </div>
