@@ -10,7 +10,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     assert_eq!(first.abi().get(), 16);
     assert_eq!(
         first.fingerprint().compatibility_digest(),
-        [233, 202, 162, 52, 62, 205, 126, 207, 189, 146, 67, 205, 150, 148, 216, 140]
+        [7, 43, 107, 194, 215, 49, 89, 246, 238, 252, 50, 154, 121, 25, 203, 133]
     );
     assert_eq!(extension.fingerprint(), second_extension.fingerprint());
     assert_eq!(extension.abi().get(), 4);
@@ -115,7 +115,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
     }
     for path in [
         "iced::widget::button::Builtin",
-        "iced::widget::text::Style",
+        "iced::widget::text::Builtin",
         "iced::widget::container::Builtin",
     ] {
         let style = second.types().find(|ty| ty.path() == path).unwrap();
@@ -278,7 +278,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
             "iced::widget::Button::style",
             "iced::widget::button::Builtin",
         ),
-        ("iced::widget::Text::style", "iced::widget::text::Style"),
+        ("iced::widget::Text::style", "iced::widget::text::Builtin"),
         (
             "iced::widget::Container::style",
             "iced::widget::container::Builtin",
@@ -313,7 +313,7 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
         (
             "text",
             &["base", "primary", "secondary", "success", "warning", "danger"][..],
-            "iced::widget::text::Style",
+            "iced::widget::text::Builtin",
         ),
         (
             "container",
@@ -576,7 +576,7 @@ struct Controls { input: TextInput<Message>, checkbox: Checkbox<Message>, toggle
 
     for path in [
         "iced::widget::button::Builtin",
-        "iced::widget::text::Style",
+        "iced::widget::text::Builtin",
         "iced::widget::container::Builtin",
     ] {
         let error = engine.compile(format!("use {path};")).unwrap_err();
