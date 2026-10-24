@@ -15139,7 +15139,10 @@ impl<'a> Parser<'a> {
                 Ty::Reference { target, .. } => *target,
                 ty => ty,
             };
-            let source = receiver.rendered_source();
+            // In parentheses, so the copy is not a move of the receiver.
+            let mut source = origin::Fragment::plain("(");
+            source.push(receiver.rendered_source());
+            source.push_text(")");
             return Ok(self.operator_expr(source, owned, span(receiver.span.start(), end)));
         }
         if self.models.host_items(&path).is_none()
