@@ -100,6 +100,7 @@ Error: "\"forty\": invalid digit found in string"
   <li>Arrays such as <code>[0; 3]</code> and slices such as <code>&amp;v[1..3]</code>.</li>
   <li><code>Option</code> and <code>Result</code> with their usual methods and the <code>?</code> operator.</li>
   <li><code>Box&lt;T&gt;</code> and <code>Box&lt;dyn Trait&gt;</code>.</li>
+  <li><code>std::rc::Rc&lt;T&gt;</code> and <code>std::sync::Arc&lt;T&gt;</code>, imported with <code>use</code>. <code>Rc::new</code>, <code>Arc::clone(&amp;a)</code> and <code>.clone()</code> work, and so does <code>.map(Arc::new)</code>. Fields and methods reach through them, and <code>&amp;Arc&lt;String&gt;</code> passes where <code>&amp;str</code> is expected. An <code>Rc</code> or <code>Arc</code> is <code>Clone</code> whatever it holds. A value is not copied when one is cloned, as in Rust.</li>
   <li><code>impl Trait</code> in argument and return position. This covers <code>impl Fn(i64) -&gt; i64</code> and <code>impl Iterator&lt;Item = i64&gt;</code>.</li>
   <li>Function pointers such as <code>fn(i64) -&gt; i64</code>. A function coerces to its pointer type with <code>double as fn(i64) -&gt; i64</code>.</li>
   <li><code>as</code> casts between numbers. They truncate and saturate as Rust&rsquo;s do. <code>u8 as char</code> works too.</li>
@@ -168,7 +169,7 @@ fn main() {
   <div class="run"><button type="button" class="runbtn" data-source="src-generics" data-out="out-generics" aria-label="Run generics.rs" hidden></button><b>rawr run generics.rs</b><span id="out-generics" aria-live="polite">3.5 m
 9</span></div>
 </div>
-<p>Trait objects work through <code>Box&lt;dyn Trait&gt;</code>. A <code>Vec&lt;Box&lt;dyn Shape&gt;&gt;</code> can hold different types that implement <code>Shape</code>. Implementing <code>Iterator</code> for your own type gives it <code>map</code>, <code>filter</code>, <code>collect</code> and the other adapters. Operator traits from <code>std::ops</code> such as <code>Add</code> work.</p>
+<p>Trait objects work through <code>Box&lt;dyn Trait&gt;</code>. A <code>Vec&lt;Box&lt;dyn Shape&gt;&gt;</code> can hold different types that implement <code>Shape</code>. Implementing <code>Iterator</code> for your own type gives it <code>map</code>, <code>filter</code>, <code>collect</code> and the other adapters. Implementing <code>FromIterator</code> for your own type lets <code>collect()</code> build it, as in <code>let life: Life = cells.into_iter().collect();</code>. Operator traits from <code>std::ops</code> such as <code>Add</code> work.</p>
 
 <h2 id="patterns">Patterns and control flow</h2>
 <ul>
@@ -189,6 +190,7 @@ fn main() {
 <h2 id="closures">Closures</h2>
 <p>Closures capture their environment. <code>move</code> closures work. A closure that mutates what it captures is <code>FnMut</code>. Functions can take closures as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. They can return them as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>.</p>
 <p>A closure in a variable is a value. It can be passed to a function or to <code>map</code>, copied to another variable, or called from inside another closure. A parameter can be <code>_</code> or another pattern.</p>
+<p>A closure&rsquo;s parameters take their types from where it is passed, as in Rust. A function that takes <code>impl Fn(f32) -&gt; Color</code> gives its closure an <code>f32</code>, so <code>|r| Color { r, ..base }</code> works.</p>
 <p>A closure that moves a captured value out, as <code>|| drop(s)</code> does, takes that value in when it is made, as in Rust. Such a closure can be called once. A closure that holds a value that is not <code>Copy</code> is not <code>Copy</code> either, so <code>let g = f;</code> moves it.</p>
 <div class="block">
   <div class="file"><b>closures.rs</b></div>
@@ -255,7 +257,7 @@ fn main() {
 <ul>
   <li><code>String</code> and <code>&amp;str</code>: <code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes as Rust&rsquo;s does.</li>
   <li><code>Vec</code> and slices: <code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element, so <code>if let Some(d) = v.iter_mut().find(|d| d.id == id) { d.n += 1; }</code> changes it.</li>
-  <li>Iterators: <code>map</code>, <code>filter</code>, <code>enumerate</code>, <code>zip</code>, <code>skip</code>, <code>take</code>, <code>step_by</code>, <code>rev</code>, <code>any</code>, <code>all</code>, <code>position</code>, <code>fold</code>, <code>sum</code>, <code>max</code>, <code>min</code>, <code>count</code>, <code>collect</code> and more. <code>std::iter::once</code> and <code>std::iter::empty</code> start one.</li>
+  <li>Iterators: <code>map</code>, <code>filter</code>, <code>enumerate</code>, <code>zip</code>, <code>skip</code>, <code>take</code>, <code>step_by</code>, <code>rev</code>, <code>any</code>, <code>all</code>, <code>position</code>, <code>fold</code>, <code>sum</code>, <code>max</code>, <code>min</code>, <code>count</code>, <code>collect</code> and more. <code>std::iter::once</code> and <code>std::iter::empty</code> start one. An iterator can be cloned and walked again, as in <code>for c in columns.clone()</code>.</li>
   <li>Arrays: <code>[T; N]::map</code> gives a <code>[U; N]</code>.</li>
   <li>Numbers: <code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>powi</code>, <code>powf</code>, <code>floor</code>, <code>round</code> and kin. Floats also have <code>sin</code>, <code>cos</code>, <code>tan</code>, their inverses and hyperbolic forms, <code>atan2</code>, <code>hypot</code>, <code>exp</code>, <code>ln</code>, <code>log</code>, <code>log10</code>, <code>to_degrees</code> and <code>to_radians</code>. <code>rem_euclid</code> and <code>div_euclid</code> work on floats and integers. A number&rsquo;s method can be called by its path, as in <code>f32::rem_euclid(x, 1.0)</code>.</li>
   <li><code>std::time::Duration</code> and <code>Instant</code>: <code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code>, <code>duration_since</code>, and the operators <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>{:?}</code> prints Rust&rsquo;s text, such as <code>1.5s</code>.</li>
@@ -294,7 +296,7 @@ fn main() {
 </ul>
 <h3 id="missing-std">Standard library</h3>
 <ul>
-  <li><code>Rc</code>, <code>Arc</code> and <code>Cell</code>.</li>
+  <li><code>Cell</code>, <code>Weak</code> and <code>Mutex</code>.</li>
   <li><code>std::io</code> beyond <code>Error</code> and <code>ErrorKind</code>, and <code>std::fs</code>.</li>
   <li><code>VecDeque</code> and <code>BinaryHeap</code>.</li>
   <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
