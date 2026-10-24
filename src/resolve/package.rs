@@ -1845,11 +1845,13 @@ pub(super) fn collect_item_type_paths<'a>(
 ) {
     match item {
         crate::item::Parsed::Struct(item) => {
+            output.extend(item.generics.iter().flat_map(|generic| generic.bounds.iter()));
             for field in &item.fields {
                 collect_type_paths(&field.ty, output);
             }
         }
         crate::item::Parsed::Enum(item) => {
+            output.extend(item.generics.iter().flat_map(|generic| generic.bounds.iter()));
             for variant in &item.variants {
                 for ty in &variant.payload {
                     collect_type_paths(ty, output);
@@ -1858,11 +1860,10 @@ pub(super) fn collect_item_type_paths<'a>(
         }
         crate::item::Parsed::Impl(item) => {
             collect_type_paths(&item.owner, output);
-            // `impl component::Component<..> for C`: a facade trait by its
-            // module.
-            if let Some(trait_) = &item.trait_ {
-                output.push(trait_);
-            }
+            // `impl component::Component<..> for C`, or a bound's
+            // `renderer::Renderer`: a facade trait by its module.
+            output.extend(item.trait_.iter());
+            output.extend(item.generics.iter().flat_map(|generic| generic.bounds.iter()));
             for function in &item.functions {
                 collect_function_type_paths(function, output);
             }

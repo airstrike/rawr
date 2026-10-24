@@ -768,6 +768,21 @@ fn master_component_is_named_from_widget() {
     find(&adapter, "show");
 }
 
+/// An impl names `Component` only through an import, as rustc's E0405 has
+/// it.
+#[test]
+fn master_component_unimported_is_unknown() {
+    for header in ["Component<'a, ()> for Shower", "Component<()> for Shower"] {
+        let source = COMPONENT
+            .replace("struct Component;", "struct Shower;")
+            .replace("component(Component)", "component(Shower)")
+            .replace("component::Component<'a, ()> for Component", header);
+        assert!(source.contains(header), "{source}");
+        let error = rejected(&source);
+        assert!(error.contains("Unknown type 'Component'"), "{error}");
+    }
+}
+
 #[test]
 fn generic_view_helpers_take_their_callers_message() {
     let adapter = boot(

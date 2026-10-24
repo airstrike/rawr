@@ -12,6 +12,9 @@ pub(crate) struct Shell {
     pub key: Option<item::Key>,
     pub span: Span,
     pub kind: Kind,
+    /// The declarations of the facade traits the item names through its
+    /// scope (`use iced::widget::Component;`, `component::Component`).
+    pub facades: Box<[crate::ImmutableString]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

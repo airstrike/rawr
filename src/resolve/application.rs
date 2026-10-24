@@ -728,6 +728,7 @@ fn prelude_function(
     Some(item::Shell {
         id: crate::item::Id::from_index(items.len() + synthesized),
         source: main.source,
+        facades: Box::default(),
         key: Some(crate::item::Key::new(
             key.package().into(),
             key.modules().into(),
@@ -797,6 +798,7 @@ fn boot_function(
     Ok(item::Shell {
         id: crate::item::Id::from_index(items.len()),
         source: main.source,
+        facades: Box::default(),
         key: Some(crate::item::Key::new(
             update.package().into(),
             update.modules().into(),
@@ -885,6 +887,7 @@ fn unit_update(
     Some(item::Shell {
         id: crate::item::Id::from_index(items.len()),
         source: main.source,
+        facades: Box::default(),
         key: Some(crate::item::Key::new(
             view.package().into(),
             view.modules().into(),
@@ -981,6 +984,7 @@ fn default_boot(
     Some(item::Shell {
         id: crate::item::Id::from_index(items.len() + synthesized),
         source: main.source,
+        facades: Box::default(),
         key: Some(crate::item::Key::new(
             update.package().into(),
             update.modules().into(),
@@ -1151,6 +1155,7 @@ fn theme_function(
     Some(item::Shell {
         id: crate::item::Id::from_index(items.len() + synthesized),
         source: main.source,
+        facades: Box::default(),
         key: Some(crate::item::Key::new(
             update.package().into(),
             update.modules().into(),

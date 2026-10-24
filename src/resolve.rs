@@ -1564,6 +1564,7 @@ fn resolve_item(
     #[cfg(feature = "rust-import")] native: Option<native::Site<'_>>,
 ) -> Result<item::Shell, Error> {
     let span = parsed.span();
+    let facades = facade_traits(&parsed, types, host);
     let kind = match parsed {
         crate::item::Parsed::TypeAlias(alias) => {
             return Err(Error::UnsupportedNominalSyntax {
@@ -1887,7 +1888,34 @@ fn resolve_item(
         key,
         span,
         kind,
+        facades,
     })
+}
+
+/// The declarations of the facade traits an impl's header or a type's
+/// bounds name through `types`: `use iced::widget::Component;` or
+/// `component::Component`, never a bare name the scope lacks (rustc's
+/// E0405).
+fn facade_traits(
+    parsed: &crate::item::Parsed,
+    types: &BTreeMap<ImmutableString, type_ref::Target>,
+    host: &host::Registry,
+) -> Box<[ImmutableString]> {
+    let (generics, trait_) = match parsed {
+        crate::item::Parsed::Struct(own) => (&own.generics, None),
+        crate::item::Parsed::Enum(own) => (&own.generics, None),
+        crate::item::Parsed::Impl(own) => (&own.generics, own.trait_.as_ref()),
+        _ => return Box::default(),
+    };
+    generics
+        .iter()
+        .flat_map(|generic| generic.bounds.iter())
+        .chain(trait_)
+        .filter_map(|path| match type_ref::host_trait(path, types, host)?.shape() {
+            host::type_def::Shape::Trait(declaration) => Some(declaration.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn resolve_function(
@@ -2826,7 +2854,7 @@ fn self_parameter(span: Span) -> type_ref::Type {
     })
 }
 
-/// The facade traits the crate's impls implement (iced's
+/// The facade traits the crate's items name (iced's
 /// `component::Component`), resolved from their declarations as the
 /// crate's own traits are; a crate trait of the same name shadows one.
 fn declare_facade_traits(
@@ -2835,51 +2863,22 @@ fn declare_facade_traits(
 ) -> Result<(), LocatedError> {
     #[cfg(not(feature = "no_function"))]
     {
-        let mut declared = std::collections::BTreeSet::new();
-        let mut implemented = std::collections::BTreeSet::new();
-        for shell in items.iter() {
-            match &shell.kind {
-                item::Kind::Trait(own) => {
-                    declared.insert(own.name.text.clone());
-                }
-                item::Kind::Impl(own) => {
-                    if let Some(item::TraitImpl::User { name, .. }) = &own.trait_ {
-                        implemented.insert(name.text.clone());
-                    }
-                }
-                _ => {}
-            }
-            // A facade trait a bound names (`R: advanced::Renderer`) is
-            // declared too, so a bounded value has its methods.
-            let generics: Vec<&[item::Generic]> = match &shell.kind {
-                item::Kind::Struct(own) => vec![&own.generics[..]],
-                item::Kind::Enum(own) => vec![&own.generics[..]],
-                item::Kind::Impl(own) => std::iter::once(&own.generics[..])
-                    .chain(own.functions.iter().map(|function| &function.generics[..]))
-                    .collect(),
-                item::Kind::Trait(own) => own
-                    .functions
-                    .iter()
-                    .map(|function| &function.generics[..])
-                    .collect(),
-                _ => Vec::new(),
-            };
-            for generic in generics.into_iter().flatten() {
-                implemented.extend(generic.traits.iter().map(|name| name.text.clone()));
-            }
-        }
-        let declarations = host
-            .trait_types()
-            .filter_map(|(definition, _)| match definition.shape() {
-                host::type_def::Shape::Trait(declaration) => Some(declaration.clone()),
+        let declared = items
+            .iter()
+            .filter_map(|shell| match &shell.kind {
+                item::Kind::Trait(own) => Some(own.name.text.clone()),
                 _ => None,
             })
-            .collect::<Vec<_>>();
+            .collect::<std::collections::BTreeSet<_>>();
+        let declarations = items
+            .iter()
+            .flat_map(|shell| shell.facades.iter().cloned())
+            .collect::<std::collections::BTreeSet<_>>();
         for declaration in declarations {
             let Some(parsed) = crate::parser::parse_trait(&declaration) else {
                 continue;
             };
-            if declared.contains(&parsed.name.text) || !implemented.contains(&parsed.name.text) {
+            if declared.contains(&parsed.name.text) {
                 continue;
             }
             let shell = resolve_item(
@@ -4242,38 +4241,15 @@ fn resolve_trait(
 ) -> Result<item::TraitImpl, Error> {
     let span = path.span;
     // `impl Trait for Type` of a trait declared in the crate, by name, or
-    // of a std trait Rawr implements by hand (`impl fmt::Display for ..`).
+    // of a facade trait script types may implement, by its declared name
+    // through the scope (`impl component::Component<'a, M> for C`); an
+    // unimported name is unknown once every item is resolved.
     // `impl Convert<i64> for C`: a generic trait's arguments.
-    if let [segment] = &path.segments[..]
-        && segment
-            .arguments
-            .iter()
-            .all(|argument| matches!(argument, crate::item::type_ref::Argument::Type(_)))
-    {
-        let arguments = segment
-            .arguments
-            .iter()
-            .filter_map(|argument| match argument {
-                crate::item::type_ref::Argument::Type(ty) => Some(type_ref::resolve(
-                    ty.clone(),
-                    types,
-                    host,
-                    #[cfg(feature = "rust-import")]
-                    native,
-                )),
-                crate::item::type_ref::Argument::Lifetime(_) => None,
-            })
-            .collect::<Result<_, _>>()?;
-        return Ok(item::TraitImpl::User {
-            name: segment.name.clone(),
-            arguments,
-        });
-    }
-    // `impl component::Component<'a, M> for C`: a facade trait script types
-    // may implement, by its declared name.
-    if let Some(definition) = type_ref::host_trait(&path, types, host)
-        && matches!(definition.shape(), host::type_def::Shape::Trait(_))
-        && let Some(last) = path.segments.last()
+    if let Some(last) = path.segments.last()
+        && (path.segments.len() == 1
+            || type_ref::host_trait(&path, types, host).is_some_and(|definition| {
+                matches!(definition.shape(), host::type_def::Shape::Trait(_))
+            }))
     {
         let arguments = last
             .arguments
