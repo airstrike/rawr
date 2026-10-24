@@ -8293,6 +8293,13 @@ fn language_unknown_variable_is_an_error_at_its_name() {
 }
 
 #[test]
+fn language_untyped_legacy_function_is_known_to_the_checker() {
+    Engine::new()
+        .compile("fn sink(value) {} pub fn run() { sink(1); }")
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 fn language_registered_function_is_known_to_the_checker() {
     let mut engine = Engine::new();
     engine.register_fn("triple", |x: i64| x * 3);

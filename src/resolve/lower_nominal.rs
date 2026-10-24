@@ -2508,6 +2508,26 @@ impl Models {
                     .or_insert_with(|| Nominal::clone(nominal));
             }
         }
+        #[cfg_attr(feature = "no_function", allow(unused_mut))]
+        let mut legacy_functions = program
+            .items
+            .iter()
+            .filter_map(|shell| match &shell.kind {
+                item::Kind::LegacyFunction(function) => Some(function.name.text.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        // `fn sink(value) {}` stays in the legacy script, outside the items:
+        // its functions are legacy functions too.
+        #[cfg(not(feature = "no_function"))]
+        legacy_functions.extend(
+            program
+                .scripts
+                .iter()
+                .filter_map(|script| script.ast.as_ref())
+                .flat_map(crate::AST::iter_functions)
+                .map(|function| ImmutableString::from(function.name)),
+        );
         let tables = Tables {
             runtime,
             host,
@@ -2553,14 +2573,7 @@ impl Models {
             functions,
             functions_by_key,
             widgets,
-            legacy_functions: program
-                .items
-                .iter()
-                .filter_map(|shell| match &shell.kind {
-                    item::Kind::LegacyFunction(function) => Some(function.name.text.clone()),
-                    _ => None,
-                })
-                .collect(),
+            legacy_functions,
             sources: program.source.table().clone(),
             application_runtime,
             boot: program
@@ -41613,7 +41626,7 @@ pub fn run() { consume(produce()); }
                     reason,
                     ..
                 }) if reason.contains("signature-only support")
-            ));
+            ), "{source}: {error:?}");
         }
     }
 

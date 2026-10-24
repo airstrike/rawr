@@ -515,6 +515,18 @@ fn canonical_module_targets_cannot_escape_or_alias() {
     assert_eq!(report.labels().len(), 2);
 }
 
+/// A marked file's untyped `fn sink(value)` is not Rust, but Rawr still
+/// knows the function its call names.
+#[test]
+fn marked_untyped_function_is_known_to_its_caller() {
+    let project = Project::new("untyped-sink");
+    project.write("src/main.rs", "fn sink(value) {}\nfn main() { sink(1); }\n");
+    let target = rawr::project::Target::discover(project.path()).unwrap();
+    Engine::new()
+        .compile_package_executable(&target)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
 struct Project {
     root: PathBuf,
 }
