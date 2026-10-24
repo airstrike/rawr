@@ -92,7 +92,7 @@ mod without_metadata {
             .unwrap_err();
 
         assert!(matches!(err.as_ref(), rawr::EvalAltResult::ErrorParsing(
-            rawr::ParseErrorType::BadInput(rawr::LexError::UnexpectedInput(token)), pos)
+            rawr::ParseErrorType::BadInput(rawr::LexError::UnexpectedInput(token)), pos, _)
                 if token == "[" && *pos == rawr::Position::new(1, 7)));
     }
 
