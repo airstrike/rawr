@@ -382,23 +382,35 @@ fn rejected(items: &str) -> String {
     }
 }
 
-/// tokio waits on the other branches when one's value does not match its
-/// pattern; rawr's select would end there, so it refuses the pattern.
+/// tokio disables a branch whose value does not match its pattern and
+/// keeps waiting on the others, and goes to `else` once every branch is
+/// disabled.
 #[test]
-fn tokio_select_refuses_a_pattern_that_can_fail_beside_other_branches() {
-    let error = rejected(
+fn tokio_select_waits_on_the_others_when_a_pattern_does_not_match() {
+    shows_at(
         "use tokio::sync::mpsc;
 use tokio::time::sleep;
 async fn run() -> String {
     let (sender, mut receiver) = mpsc::channel::<i64>(1);
     drop(sender);
-    tokio::select! {
+    let first = tokio::select! {
         Some(n) = receiver.recv() => format!(\"got {n}\"),
         _ = sleep(Duration::from_millis(300)) => \"timed out\".to_string(),
-    }
+    };
+    let (sender, mut receiver) = mpsc::channel::<i64>(1);
+    drop(sender);
+    let (other, mut closed) = mpsc::channel::<i64>(1);
+    drop(other);
+    let second = tokio::select! {
+        Some(n) = receiver.recv() => format!(\"got {n}\"),
+        Some(n) = closed.recv() => format!(\"also {n}\"),
+        else => \"both closed\".to_string(),
+    };
+    format!(\"{first}, {second}\")
 }",
+        "timed out, both closed",
+        Duration::from_millis(300),
     );
-    assert!(error.contains("`select!` branch whose pattern can fail to match"), "{error}");
 }
 
 #[test]

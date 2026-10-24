@@ -316,7 +316,7 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
   <li><code>tokio::sync::watch</code> has <code>channel</code> with <code>send</code>, <code>subscribe</code>, <code>changed</code>, <code>borrow</code> and <code>borrow_and_update</code>.</li>
   <li><code>tokio::sync::Mutex</code> has <code>new</code> and <code>lock().await</code>.</li>
   <li><code>tokio::task</code> has <code>yield_now</code> and <code>spawn_blocking</code>.</li>
-  <li><code>tokio::join!</code>, <code>tokio::try_join!</code> and <code>tokio::select!</code> take up to 5 futures. <code>select!</code> accepts <code>biased;</code>. <code>use tokio::join;</code> makes <code>join!</code> tokio&rsquo;s.</li>
+  <li><code>tokio::join!</code>, <code>tokio::try_join!</code> and <code>tokio::select!</code> take up to 5 futures. <code>select!</code> accepts <code>biased;</code>. A <code>select!</code> branch whose pattern doesn&rsquo;t match its value is disabled, and the others keep running, as in tokio. Once every branch is disabled, the <code>else</code> branch runs, or the program panics when there is none. A branch can&rsquo;t have an <code>if</code> condition. <code>use tokio::join;</code> makes <code>join!</code> tokio&rsquo;s.</li>
 </ul>
 <p>It doesn&rsquo;t have <code>JoinSet</code>, <code>Notify</code>, <code>Semaphore</code>, <code>RwLock</code>, <code>broadcast</code> or <code>time::sleep_until</code>. A <code>Mutex</code> has no <code>try_lock</code> or <code>into_inner</code>. A plain program has no async code, so only an app can use tokio.</p>
 <p><code>rawr run</code> uses the same stand-in for a program that doesn&rsquo;t depend on tokio. There its timers run on the real clock. A project whose <code>Cargo.toml</code> depends on tokio gets the real crate.</p>
@@ -391,9 +391,8 @@ impl Sum {
 <p><code>tokio::task::spawn_blocking(move || ..)</code> runs a closure on a worker thread, as <a href="/docs/iced/reference#blocking">iced&rsquo;s blocking work</a> describes. <code>Task::perform</code> takes its handle, and <code>.await</code> takes its output. In a recording the worker reads the simulated clock, and the recording waits for the closure to end. So its output is ready at the instant its task started, and a GIF is the same on every run. A closure that takes long uses up the snippet&rsquo;s time limit, as the same work in <code>update</code> would. <code>std::thread::spawn</code> doesn&rsquo;t compile, and its error points to <code>spawn_blocking</code>.</p>
 
 <h3 id="tokio-differences">Where ?play&rsquo;s tokio behaves differently</h3>
-<p>Two things work differently from the real tokio.</p>
+<p>One thing works differently from the real tokio.</p>
 <ul>
-  <li><strong>A <code>select!</code> branch pattern that can fail to match is refused when there are other branches.</strong> The real tokio would keep waiting for the other branches, which rawr can&rsquo;t do yet. A <code>select!</code> of one branch keeps its pattern: when it doesn&rsquo;t match, the <code>else</code> branch runs, or the program panics when there is none, as in tokio. A branch can&rsquo;t have an <code>if</code> condition either. Give each branch a pattern that always matches. <code>value = receiver.recv()</code> is one. Then match on <code>value</code> in the branch&rsquo;s body.</li>
   <li><strong>A read through a lock doesn&rsquo;t wait.</strong> <code>let mut held = mutex.lock().await;</code> waits until no other task holds the lock. A read inside a larger expression reads without waiting. <code>*mutex.lock().await + 1</code> is one such read. This keeps <code>+=</code> from locking twice. When a task must hold the lock across an <code>.await</code>, bind the guard with <code>let</code> first.</li>
 </ul>
 

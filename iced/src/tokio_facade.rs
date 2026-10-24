@@ -558,6 +558,26 @@ pub(crate) fn declare(
             join,
             task_of(selected)?,
         )?;
+        // A select with a pattern that can fail: each future gives `Some`
+        // of its value when its pattern matches, and `None` disables it.
+        let options = outputs
+            .iter()
+            .map(|output| Type::option(output.clone()))
+            .collect::<Vec<_>>();
+        let mut selected = options[count - 1].clone();
+        for output in options[..count - 1].iter().rev() {
+            selected = Type::result(output.clone(), selected);
+        }
+        function(
+            builder,
+            &format!("tokio::__select_some{count}"),
+            names,
+            options
+                .into_iter()
+                .map(|option| task_of(option))
+                .collect::<Result<Vec<_>, _>>()?,
+            task_of(selected)?,
+        )?;
     }
     Ok(())
 }
@@ -931,16 +951,17 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
     });
 
     for count in 2..=MOST_FUTURES {
-        for (name, join) in [
-            ("__join", Some(false)),
-            ("__try_join", Some(true)),
-            ("__select", None),
+        for (name, join, filtered) in [
+            ("__join", Some(false), false),
+            ("__try_join", Some(true), false),
+            ("__select", None, false),
+            ("__select_some", None, true),
         ] {
             let path = format!("rawr_iced::tokio::{name}{count}");
             let what = path.clone();
             rawr.bind_with_context(&path, move |call, args| {
                 let witness = witness(call)?;
-                task::tokio_combined(witness, args, join, &what)
+                task::tokio_combined(witness, args, join, filtered, &what)
             })
             .unwrap_or_else(|_| panic!("the rawr_iced facade must retain {path}"));
         }

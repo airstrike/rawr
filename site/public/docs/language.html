@@ -356,7 +356,7 @@ fn main() {
 <h3 id="refused">Code that rawr refuses rather than run differently</h3>
 <p>These programs are valid Rust. rawr can&rsquo;t yet run them with Rust&rsquo;s meaning, so its check stops with an error that says what isn&rsquo;t supported.</p>
 <ul>
-  <li>A <code>tokio::select!</code> of two or more branches where a branch&rsquo;s pattern can fail to match, as <code>Some(n) = receiver.recv()</code> can. tokio would keep waiting on the other branches. Bind the value with <code>value = receiver.recv()</code> and match it in the branch&rsquo;s body.</li>
+  <li>A <code>tokio::select!</code> branch with an <code>if</code> condition. Check the condition before the <code>select!</code>, or in the branch&rsquo;s body.</li>
 </ul>
 <h3 id="lenient">Code that rawr accepts and rustc rejects</h3>
 <p>rawr&rsquo;s check is not rustc. Some code passes <code>rawr check</code> and fails <code>cargo build</code>. <code>rawr check</code> also runs <code>cargo check</code>, which reports these cases. <a href="/docs/cli#rawr">Commands</a> describes its output.</p>

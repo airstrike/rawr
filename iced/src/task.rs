@@ -63,7 +63,10 @@ enum PreparedKind {
     Script(item::Value),
     Send { sender: Sender, value: Dynamic },
     Join { plans: Box<[Prepared]>, fallible: bool },
-    Select(Box<[Prepared]>),
+    Select {
+        plans: Box<[Prepared]>,
+        filtered: bool,
+    },
     Blocking(item::Value),
 }
 
@@ -382,11 +385,13 @@ pub(crate) fn tokio_task(
 }
 
 /// tokio's `join!` (or `try_join!`) and `select!` over `values`, each a
-/// `Task`.
+/// `Task`. A `filtered` select's tasks give `Option`s, and a `None` is a
+/// branch whose pattern did not match.
 pub(crate) fn tokio_combined(
     witness: host::runtime::Witness,
     values: &mut [&mut Dynamic],
     join: Option<bool>,
+    filtered: bool,
     path: &str,
 ) -> Result<Dynamic, Box<EvalAltResult>> {
     let plans = values
@@ -397,7 +402,7 @@ pub(crate) fn tokio_combined(
     Ok(Dynamic::from(Plan {
         kind: match join {
             Some(fallible) => Kind::Join { plans, fallible },
-            None => Kind::Select(plans),
+            None => Kind::Select { plans, filtered },
         },
         witness: Some(witness),
     }))
@@ -424,7 +429,10 @@ pub(crate) fn tokio_timeout(
         witness: None,
     };
     Ok(Dynamic::from(Plan {
-        kind: Kind::Select(Box::new([plan, timer])),
+        kind: Kind::Select {
+            plans: Box::new([plan, timer]),
+            filtered: false,
+        },
         witness: Some(witness),
     }))
 }
@@ -618,8 +626,12 @@ enum Kind {
     Join { plans: Box<[Plan]>, fallible: bool },
     /// tokio's `select!` and `timeout`: the plans run at once, and the
     /// first output ends the others. Plan `i` of `n` gives `Err` `i` times
-    /// around its output, and then `Ok` unless it is the last.
-    Select(Box<[Plan]>),
+    /// around its output, and then `Ok` unless it is the last. When
+    /// `filtered`, each plan gives an `Option`, and a `None` (a value its
+    /// branch's pattern did not match) disables that plan while the others
+    /// go on, as tokio does; once every plan is disabled, the last `None`
+    /// goes on, which the select's `else` takes.
+    Select { plans: Box<[Plan]>, filtered: bool },
     /// tokio's `task::spawn_blocking(f)`: the closure `f` runs on a worker
     /// thread of its own when the task first runs, and the task gives
     /// `Ok` of its output.
@@ -749,7 +761,7 @@ impl Plan {
             | Kind::Script(_)
             | Kind::Send { .. }
             | Kind::Join { .. }
-            | Kind::Select(_)
+            | Kind::Select { .. }
             | Kind::Blocking(_) => None,
             Kind::Done(payload) => Some(payload),
         }
@@ -836,14 +848,15 @@ impl Plan {
                     .into_boxed_slice(),
                 fallible,
             },
-            Kind::Select(plans) => PreparedKind::Select(
-                plans
+            Kind::Select { plans, filtered } => PreparedKind::Select {
+                plans: plans
                     .into_vec()
                     .into_iter()
                     .map(|plan| plan.prepare_application(authority))
                     .collect::<Result<Vec<_>, _>>()?
                     .into_boxed_slice(),
-            ),
+                filtered,
+            },
             Kind::Blocking(work) => PreparedKind::Blocking(work),
         };
         Ok(Prepared { kind, witness })
@@ -905,8 +918,8 @@ impl Plan {
                         .collect::<Result<Vec<_>, _>>()?,
                 )
             }
-            Kind::Select(plans) => {
-                let raced = Raced::new(plans.len(), next);
+            Kind::Select { plans, filtered } => {
+                let raced = Raced::new(plans.len(), filtered, next);
                 let mut tasks = Vec::with_capacity(plans.len());
                 for (index, plan) in plans.into_vec().into_iter().enumerate() {
                     tasks.push(raced.run(index, plan.lower_with(lowering, raced.slot(index))?));
@@ -962,7 +975,9 @@ impl Joined {
 }
 
 /// A select's plans while they run. The first output wins: it goes on in
-/// the shape [`Kind::Select`] gives, and every other plan is aborted.
+/// the shape [`Kind::Select`] gives, and every other plan is aborted. In a
+/// filtered select a `None` disables its plan instead, unless every other
+/// plan is disabled already.
 #[derive(Clone)]
 struct Raced(Arc<Mutex<Race>>);
 
@@ -970,14 +985,17 @@ struct Race {
     next: Option<Next>,
     winner: Option<usize>,
     handles: Vec<Option<iced::task::Handle>>,
+    /// Each plan a `None` disabled, in a filtered select.
+    disabled: Option<Vec<bool>>,
 }
 
 impl Raced {
-    fn new(count: usize, next: Next) -> Self {
+    fn new(count: usize, filtered: bool, next: Next) -> Self {
         Self(Arc::new(Mutex::new(Race {
             next: Some(next),
             winner: None,
             handles: vec![None; count],
+            disabled: filtered.then(|| vec![false; count]),
         })))
     }
 
@@ -1001,6 +1019,19 @@ impl Raced {
         let raced = self.clone();
         Arc::new(move |output| {
             let mut race = raced.0.lock().unwrap_or_else(PoisonError::into_inner);
+            if race.next.is_none() {
+                return iced::Task::none();
+            }
+            if let Some(disabled) = &mut race.disabled
+                && output
+                    .read_lock::<rawr::option::Value>()
+                    .is_some_and(|option| option.is_none())
+            {
+                disabled[index] = true;
+                if !disabled.iter().all(|disabled| *disabled) {
+                    return iced::Task::none();
+                }
+            }
             let Some(next) = race.next.take() else {
                 return iced::Task::none();
             };
@@ -1330,8 +1361,8 @@ impl Prepared {
                         .map(|(index, plan)| plan.lower_with(context, lowering, joined.slot(index))),
                 )
             }
-            PreparedKind::Select(plans) => {
-                let raced = Raced::new(plans.len(), next);
+            PreparedKind::Select { plans, filtered } => {
+                let raced = Raced::new(plans.len(), filtered, next);
                 let tasks = plans
                     .into_vec()
                     .into_iter()

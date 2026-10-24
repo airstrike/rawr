@@ -11416,20 +11416,57 @@ impl<'a> Parser<'a> {
         }
         let count = futures.len();
         // tokio disables a branch whose value does not match its pattern and
-        // waits for the others; rawr's select ends there. With one branch
-        // the two agree: it goes to `else`, or panics.
-        if name == "select"
+        // waits for the others. Each future of such a select gives `Some`
+        // of its value when its pattern matches it and `None` otherwise,
+        // which disables it (`__select_some`). With one branch tokio goes
+        // to `else`, or panics, as the plain select does.
+        let filtered = name == "select"
             && count > 1
-            && let Some((pattern, _)) = branches.iter().find(|(pattern, _)| refutable_tokens(pattern))
-        {
-            let at = pattern.first().map_or(start.start(), |(_, position)| *position);
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "a `select!` branch whose pattern can fail to match beside other \
-                            branches, for which tokio keeps waiting on the others; bind the \
-                            value (`value = future`) and match it in the branch's body"
-                    .into(),
-                source: point_span(at),
-            });
+            && branches.iter().any(|(pattern, _)| refutable_tokens(pattern));
+        if filtered {
+            let selected = || ident("__rawr_selected");
+            for (future, (pattern, _)) in futures.iter_mut().zip(&branches) {
+                let awaited = std::iter::once((Token::LeftParen, at))
+                    .chain(std::mem::take(future))
+                    .chain([(Token::RightParen, at), (Token::Period, at), reserved("await")]);
+                let mut wrapped = vec![reserved("async"), (Token::LeftBrace, at)];
+                if refutable_tokens(pattern) {
+                    // `let v = (future).await; if matches!(&v, pattern)
+                    // { Some(v) } else { None }`
+                    wrapped.extend([(Token::Let, at), selected(), (Token::Equals, at)]);
+                    wrapped.extend(awaited);
+                    wrapped.extend([
+                        (Token::SemiColon, at),
+                        (Token::If, at),
+                        ident("matches"),
+                        (Token::Bang, at),
+                        (Token::LeftParen, at),
+                        (Token::Ampersand, at),
+                        selected(),
+                        (Token::Comma, at),
+                    ]);
+                    wrapped.extend(pattern.iter().cloned());
+                    wrapped.extend([
+                        (Token::RightParen, at),
+                        (Token::LeftBrace, at),
+                        ident("Some"),
+                        (Token::LeftParen, at),
+                        selected(),
+                        (Token::RightParen, at),
+                        (Token::RightBrace, at),
+                        (Token::Else, at),
+                        (Token::LeftBrace, at),
+                        ident("None"),
+                        (Token::RightBrace, at),
+                    ]);
+                } else {
+                    wrapped.extend([ident("Some"), (Token::LeftParen, at)]);
+                    wrapped.extend(awaited);
+                    wrapped.push((Token::RightParen, at));
+                }
+                wrapped.push((Token::RightBrace, at));
+                *future = wrapped;
+            }
         }
         let least = if name == "select" { 1 } else { 2 };
         if count < least || count > MOST {
@@ -11448,10 +11485,11 @@ impl<'a> Parser<'a> {
             spliced.extend(futures.pop().into_iter().flatten());
             spliced.push((Token::RightParen, at));
         } else {
+            let function = if filtered { "select_some" } else { name };
             spliced.extend([
                 ident("tokio"),
                 (Token::DoubleColon, at),
-                ident(&format!("__{name}{count}")),
+                ident(&format!("__{function}{count}")),
                 (Token::LeftParen, at),
             ]);
             // Each future is an argument as written, so a local moves in.
@@ -11473,6 +11511,9 @@ impl<'a> Parser<'a> {
                     if index + 1 < count {
                         wraps.push("Ok");
                     }
+                    if filtered {
+                        wraps.push("Some");
+                    }
                 }
                 for wrap in &wraps {
                     spliced.extend([ident(wrap), (Token::LeftParen, at)]);
@@ -11485,7 +11526,7 @@ impl<'a> Parser<'a> {
                 spliced.push((Token::RightBrace, at));
                 spliced.push((Token::Comma, at));
             }
-            // A branch whose pattern does not match ends the select at the
+            // Once no branch's pattern matched, the select ends at the
             // `else` branch, which panics as tokio's does when there is none.
             let otherwise = otherwise.unwrap_or_else(|| {
                 vec![
