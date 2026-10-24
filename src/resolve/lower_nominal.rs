@@ -7206,6 +7206,25 @@ impl PatternSyntax {
         }
     }
 
+    /// Whether a script enum variant appears in the pattern. A `let` of
+    /// one is irrefutable only when its enum has that one variant, which
+    /// the coverage check decides.
+    fn has_script_variant(&self) -> bool {
+        match self {
+            Self::Enum(pattern) => !pattern.host_struct || pattern.payload.iter().any(Self::has_script_variant),
+            Self::TupleStruct { members, .. } | Self::Tuple { members, .. } => {
+                members.iter().any(Self::has_script_variant)
+            }
+            Self::Slice { before, after, .. } => {
+                before.iter().chain(after.iter()).any(Self::has_script_variant)
+            }
+            Self::Reference { pattern, .. } | Self::At { pattern, .. } => {
+                pattern.has_script_variant()
+            }
+            _ => false,
+        }
+    }
+
     /// `_` or a plain binding, which matches anything.
     const fn is_irrefutable_leaf(&self) -> bool {
         matches!(
@@ -12790,7 +12809,20 @@ impl<'a> Parser<'a> {
         // slider's `i64`, takes it as its runtime kind, as the facade's
         // number inputs do (`deref_facade_strings`).
         let facade = items.iter().all(|item| item.imported_identity().is_none());
-        for argument in arguments.iter_mut() {
+        // A callable whose input is the item's type parameter, as
+        // `Task::map`'s, takes the function's own input type.
+        let generic_input = |index: usize| {
+            items.iter().any(|item| {
+                item.signature().parameters().get(index).is_some_and(|parameter| {
+                    matches!(
+                        parameter.shape(),
+                        crate::host::type_ref::Shape::Callable { input, .. }
+                            if matches!(input.shape(), crate::host::type_ref::Shape::Parameter(_))
+                    )
+                })
+            })
+        };
+        for (index, argument) in arguments.iter_mut().enumerate() {
             // A local `fn` pointer, as `message: fn(f32) -> _`, is passed
             // as the closure that calls it.
             if facade
@@ -12821,6 +12853,7 @@ impl<'a> Parser<'a> {
                 argument.ty = target;
             }
             if facade
+                && !generic_input(index)
                 && let Ty::Callable {
                     inputs,
                     output,
@@ -13074,6 +13107,15 @@ impl<'a> Parser<'a> {
                 })
             })
         };
+        // A number passed as an item's type parameter, as `Task::done`'s,
+        // keeps its type, as a function passed to it does.
+        let generic = |index: usize| {
+            items.iter().any(|item| {
+                item.signature().parameters().get(index).is_some_and(|parameter| {
+                    matches!(parameter.shape(), crate::host::type_ref::Shape::Parameter(_))
+                })
+            })
+        };
         // A facade takes `&str`, slices and borrowed facade values, such as
         // iced's `&Theme`, as their owned types. Its `f64` and `i64` inputs stand
         // for iced's `f32` and `u16`/`u32` (`impl Into<Pixels>`, `Padding`):
@@ -13119,8 +13161,8 @@ impl<'a> Parser<'a> {
                 {
                     argument.ty = Ty::Option(target.clone());
                 }
-                Ty::Float(Float::F32) => argument.ty = Ty::Float(Float::F64),
-                Ty::Int(kind) if !matches!(kind, Int::I64 | Int::Var(_)) => {
+                Ty::Float(Float::F32) if !generic(index) => argument.ty = Ty::Float(Float::F64),
+                Ty::Int(kind) if !matches!(kind, Int::I64 | Int::Var(_)) && !generic(index) => {
                     argument.ty = Ty::Int(Int::I64);
                 }
                 // A generic `T: IntoFragment` is its text, as iced's
@@ -15390,7 +15432,10 @@ impl<'a> Parser<'a> {
                 Ty::Reference { target, .. } => *target,
                 ty => ty,
             };
-            let source = receiver.rendered_source();
+            // In parentheses, so the copy is not a move of the receiver.
+            let mut source = origin::Fragment::plain("(");
+            source.push(receiver.rendered_source());
+            source.push_text(")");
             return Ok(self.operator_expr(source, owned, span(receiver.span.start(), end)));
         }
         if self.models.host_items(&path).is_none()
@@ -17056,6 +17101,13 @@ impl<'a> Parser<'a> {
         self.reject_signature_support(&value.ty, value.span, "retained in a local binding")?;
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
+        }
+        // `let Wrapper(x) = w;` of a one-variant enum: matched as `let ..
+        // else` is, after the coverage check finds it irrefutable.
+        if !syntax.has_ref_mut() && syntax.has_script_variant() {
+            let end = value.span.end();
+            self.consume_terminator(start)?;
+            return self.bind_let_pattern(start, &syntax, value, None, end, pending);
         }
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
         // `ref mut` bindings are the subject's places: it is not copied.
@@ -26569,6 +26621,10 @@ impl<'a> Parser<'a> {
             let same_head = match (&self.inference.resolve(&value.ty), &self_ty) {
                 (Ty::Script(value, _), Ty::Script(written, _)) => value == written,
                 (Ty::Keyed(value, _), Ty::Keyed(written, _)) => value == written,
+                // `Task::<Message>::none()`: a facade type's arguments.
+                (Ty::Host { proof: value, .. }, Ty::Host { proof: written, .. }) => {
+                    value.definition.path() == written.definition.path()
+                }
                 (Ty::Array { .. }, Ty::Array { .. })
                 | (Ty::Option(_), Ty::Option(_))
                 | (Ty::Result(..), Ty::Result(..))
