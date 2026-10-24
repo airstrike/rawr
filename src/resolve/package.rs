@@ -1409,6 +1409,29 @@ impl<'a> Resolver<'a> {
             active.remove(&address);
             return Ok(target);
         }
+        // A private `use` is visible to the module's descendants, as in
+        // Rust: `use crate::Preset;` inside `mod grid` reaches the root's
+        // `use preset::Preset;`.
+        if let Some(alias) = self.aliases.get(&address)
+            && within(context, &address, address.modules.len())
+        {
+            self.validate_module_hops(context, &address, reference)?;
+            if !active.insert(address.clone()) {
+                return Err(Failure {
+                    primary: context.source,
+                    secondary: Some(alias.source),
+                    error: Error::InvalidImport {
+                        path: path.join("::").into(),
+                        reason: "cyclic import".into(),
+                        reference,
+                        declaration: None,
+                    },
+                });
+            }
+            let target = self.resolve_any_path(&alias.context, &alias.path, alias.span, active)?;
+            active.remove(&address);
+            return Ok(target);
+        }
         Err(self.unknown_import(context, path, reference))
     }
 
