@@ -37,3 +37,30 @@ pub fn build_directory(
         environment.cargo_home().ok().flatten().as_deref(),
     )
 }
+
+/// The target triple `cargo build` builds `project` for when none is named,
+/// `None` for the host without one.
+#[must_use]
+pub fn build_target(
+    project: &Path,
+    environment: &crate::cargo::config::Environment,
+) -> Option<String> {
+    rawr_location::build_target(
+        project,
+        |key| environment.value_of(key),
+        environment.cargo_home().ok().flatten().as_deref(),
+    )
+}
+
+/// The Cargo config files for `project` that set a profile for the `rawr`
+/// crate by name, which Cargo cannot combine with the runner's own.
+#[must_use]
+pub fn rawr_profile_configs(
+    project: &Path,
+    environment: &crate::cargo::config::Environment,
+) -> Vec<PathBuf> {
+    rawr_location::rawr_profile_configs(
+        project,
+        environment.cargo_home().ok().flatten().as_deref(),
+    )
+}

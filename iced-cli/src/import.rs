@@ -58,6 +58,80 @@ pub(crate) fn declared(
     Ok(graph.declares_rust_import().then_some(target))
 }
 
+/// Rawr compiles a project's Rust in the project's own build directory with
+/// the pinned nightly, for the host named as a target. Those are the units
+/// `cargo build` compiles only when the project builds the same way, which
+/// is what `rawr new` sets up; otherwise every crate would be compiled twice.
+/// `Err` names what the project needs, as the files to add.
+pub(crate) fn same_build(root: &std::path::Path) -> Result<(), String> {
+    let environment = Environment::capture().map_err(|error| error.to_string())?;
+    // rustup decides the toolchain from the directory: `RUSTUP_TOOLCHAIN`,
+    // an override, a `rust-toolchain.toml` above it, or the default.
+    let active = std::process::Command::new("rustup")
+        .args(["show", "active-toolchain"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        });
+    let target = rawr_import::location::build_target(root, &environment);
+    let overrides = rawr_import::location::rawr_profile_configs(root, &environment);
+    same_build_as(root, active.as_deref(), target.as_deref(), &overrides)
+}
+
+/// [`same_build`] for a project whose toolchain is `active` (`None` when
+/// rustup cannot tell), whose `cargo build` target is `target`, and whose
+/// Cargo config files `overrides` set a profile for the `rawr` crate.
+fn same_build_as(
+    root: &std::path::Path,
+    active: Option<&str>,
+    target: Option<&str>,
+    overrides: &[PathBuf],
+) -> Result<(), String> {
+    let channel = rawr_import::cargo::toolchain::CHANNEL;
+    let host = rawr_import::cargo::toolchain::HOST.trim();
+    let mut needed = Vec::new();
+    if let Some(active) = active
+        && active != channel
+        && !active.starts_with(&format!("{channel}-"))
+    {
+        needed.push(format!(
+            "It builds with `{active}`, so add `rust-toolchain.toml`:\n\n{}",
+            crate::new::toolchain()
+        ));
+    }
+    if target != Some(host) {
+        needed.push(format!(
+            "It builds for {}, so add `.cargo/config.toml`:\n\n{}",
+            target.map_or_else(|| "no named target".to_owned(), |target| format!("`{target}`")),
+            crate::new::cargo_config()
+        ));
+    }
+    for config in overrides {
+        needed.push(format!(
+            "`{}` sets a profile for the `rawr` crate, and Cargo cannot combine it with \
+             the one Rawr's runner sets. A project inside a Rawr checkout inherits the \
+             checkout's config; move the project out of it, or remove that profile.",
+            config.display()
+        ));
+    }
+    if needed.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "`{}` must build as Rawr builds it, with `{channel}` for `{host}`, or each of its \
+         crates is compiled twice: once by `cargo build` and once by Rawr. {}",
+        root.display(),
+        needed.join("\n")
+    ))
+}
+
 /// The rawr-iced widget features a project's runner builds with.
 ///
 /// The aim is the ones the project's iced has, as its Cargo.toml names them
@@ -538,6 +612,26 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use rawr_import::cargo::config::Environment;
+
+    #[test]
+    fn a_project_builds_as_rawr_builds_it_or_is_told_what_to_add() {
+        let root = Path::new("/project");
+        let channel = rawr_import::cargo::toolchain::CHANNEL;
+        let host = rawr_import::cargo::toolchain::HOST.trim();
+        let pinned = format!("{channel}-{host}");
+        assert_eq!(super::same_build_as(root, Some(&pinned), Some(host), &[]), Ok(()));
+        assert_eq!(super::same_build_as(root, None, Some(host), &[]), Ok(()));
+        let error = super::same_build_as(root, Some(&pinned), None, &[]).unwrap_err();
+        assert!(error.contains(".cargo/config.toml"), "{error}");
+        assert!(!error.contains("rust-toolchain.toml"), "{error}");
+        let error = super::same_build_as(root, Some("stable-aarch64-apple-darwin"), Some(host), &[])
+            .unwrap_err();
+        assert!(error.contains("rust-toolchain.toml"), "{error}");
+        assert!(error.contains(channel), "{error}");
+        let config = PathBuf::from("/checkout/.cargo/config.toml");
+        let error = super::same_build_as(root, Some(&pinned), Some(host), &[config]).unwrap_err();
+        assert!(error.contains("/checkout/.cargo/config.toml"), "{error}");
+    }
 
     #[test]
     fn real_iced_import_seals_one_generated_profile_owner() {

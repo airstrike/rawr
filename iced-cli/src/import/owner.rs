@@ -31,6 +31,7 @@ pub(crate) fn check(
     graph: Option<rawr::package::Graph>,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<PathBuf, diagnostic::Report> {
+    same_build(target)?;
     let source = target.source().path().to_path_buf();
     let fallback = fallback(target)?;
     let revision = rawr_import::supervisor::Owner::new()
@@ -57,6 +58,7 @@ pub(crate) fn run(
     lifecycle: rawr_import::process::Lifecycle,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<bool, diagnostic::Report> {
+    same_build(target)?;
     let source = fallback(target)?;
     let target_path = project(target)
         .ok_or_else(|| framework("a native owner requires a Rawr crate", source.clone()))?
@@ -309,6 +311,7 @@ pub(crate) fn snapshot(
     mode: crate::command::Mode,
     #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<rawr_iced::snapshot::Outcome, diagnostic::Report> {
+    same_build(target)?;
     let lifecycle = match mode {
         crate::command::Mode::Check => rawr_import::process::Lifecycle::SnapshotCheck,
         crate::command::Mode::Update => rawr_import::process::Lifecycle::SnapshotUpdate,
@@ -640,6 +643,17 @@ fn wait_for_window(mut lane: Lane, source: diagnostic::Source) -> Result<(), dia
         }
         std::thread::sleep(IDLE_POLL);
     }
+}
+
+/// A project that builds as Rawr builds it, or the error naming the files
+/// it needs.
+fn same_build(target: &rawr::project::Target) -> Result<(), diagnostic::Report> {
+    let Some(root) = project(target) else {
+        return Ok(());
+    };
+    super::same_build(root).map_err(|message| {
+        diagnostic::Report::error(diagnostic::code::ENVIRONMENT_PROJECT_BUILD, message).finish()
+    })
 }
 
 fn project(target: &rawr::project::Target) -> Option<&Path> {

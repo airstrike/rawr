@@ -92,6 +92,60 @@ pub fn build_directory<'a>(
     target_directory(project, environment, cargo_home)
 }
 
+/// The target triple `cargo build` builds `project` for when none is named:
+/// `CARGO_BUILD_TARGET`, then `build.target` from the Cargo config files, else
+/// `None` (the host, in `target/<profile>`).
+pub fn build_target<'a>(
+    project: &Path,
+    environment: impl Fn(&str) -> Option<&'a str>,
+    cargo_home: Option<&Path>,
+) -> Option<String> {
+    if let Some(value) = environment("CARGO_BUILD_TARGET").filter(|value| !value.is_empty()) {
+        return Some(value.to_owned());
+    }
+    project
+        .ancestors()
+        .map(|directory| directory.join(".cargo"))
+        .chain(cargo_home.map(Path::to_path_buf))
+        .flat_map(|directory| ["config.toml", "config"].map(|name| directory.join(name)))
+        .find_map(|path| configured(&path, "target"))
+}
+
+/// The Cargo config files Cargo reads for `project` that set a profile for
+/// the `rawr` crate by name (`[profile.dev.package.rawr]`). A Rawr checkout's
+/// own config does, and a project under it would inherit that.
+pub fn rawr_profile_configs(project: &Path, cargo_home: Option<&Path>) -> Vec<PathBuf> {
+    project
+        .ancestors()
+        .map(|directory| directory.join(".cargo"))
+        .chain(cargo_home.map(Path::to_path_buf))
+        .flat_map(|directory| ["config.toml", "config"].map(|name| directory.join(name)))
+        .filter(|path| {
+            let Some(document) = fs::read_to_string(path)
+                .ok()
+                .and_then(|text| text.parse::<DocumentMut>().ok())
+            else {
+                return false;
+            };
+            document
+                .get("profile")
+                .and_then(|profiles| profiles.as_table_like())
+                .is_some_and(|profiles| {
+                    profiles.iter().any(|(_, profile)| {
+                        profile
+                            .get("package")
+                            .and_then(|packages| packages.as_table_like())
+                            .is_some_and(|packages| {
+                                packages.iter().any(|(spec, _)| {
+                                    spec == "rawr" || spec.starts_with("rawr@")
+                                })
+                            })
+                    })
+                })
+        })
+        .collect()
+}
+
 fn configured_target_dir(path: &Path) -> Option<String> {
     configured(path, "target-dir")
 }
