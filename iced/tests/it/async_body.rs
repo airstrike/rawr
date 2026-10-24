@@ -272,3 +272,28 @@ fn tick(ready: bool) -> Option<impl Future<Output = i64> + use<>> {
     );
     assert_eq!(loaded(&source), 26);
 }
+
+#[test]
+fn a_match_arm_awaits_with_its_bindings() {
+    let source = app(
+        r#"
+#[derive(Debug, Clone)] enum Job { Double(i64), Add(i64, i64), Skip }
+async fn run(jobs: Vec<Job>) -> i64 {
+    let mut total = 0;
+    for job in jobs {
+        total += match job {
+            Job::Double(n) => Task::done(n * 2).await,
+            Job::Add(a, b) => {
+                let first = Task::done(a).await;
+                first + Task::done(b).await
+            }
+            Job::Skip => 0,
+        };
+    }
+    total
+}
+"#,
+        "run(vec![Job::Double(4), Job::Skip, Job::Add(2, 3)])",
+    );
+    assert_eq!(loaded(&source), 13);
+}
