@@ -8116,3 +8116,24 @@ fn language_ref_cell_panics_on_a_conflicting_borrow() {
     "#);
     assert_eq!(value, 2);
 }
+
+#[test]
+fn language_one_variant_enum_let_is_irrefutable() {
+    let value = run(r#"
+        enum Wrapper { W(i64) }
+        enum Named { N { a: i64, b: i64 } }
+        pub fn run() -> i64 {
+            let w = Wrapper::W(5);
+            let Wrapper::W(x) = w;
+            let Named::N { a, b } = Named::N { a: 10, b: 100 };
+            let (Wrapper::W(y), z) = (Wrapper::W(1000), 10000);
+            x + a + b + y + z
+        }
+        run()
+    "#);
+    assert_eq!(value, 11115);
+    let error = rejected(
+        "enum Two { A(i64), B } pub fn run() -> i64 { let Two::A(x) = Two::B; x } run()",
+    );
+    assert!(error.contains("refutable pattern"), "{error}");
+}

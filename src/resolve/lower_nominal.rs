@@ -7166,6 +7166,25 @@ impl PatternSyntax {
         }
     }
 
+    /// Whether a script enum variant appears in the pattern. A `let` of
+    /// one is irrefutable only when its enum has that one variant, which
+    /// the coverage check decides.
+    fn has_script_variant(&self) -> bool {
+        match self {
+            Self::Enum(pattern) => !pattern.host_struct || pattern.payload.iter().any(Self::has_script_variant),
+            Self::TupleStruct { members, .. } | Self::Tuple { members, .. } => {
+                members.iter().any(Self::has_script_variant)
+            }
+            Self::Slice { before, after, .. } => {
+                before.iter().chain(after.iter()).any(Self::has_script_variant)
+            }
+            Self::Reference { pattern, .. } | Self::At { pattern, .. } => {
+                pattern.has_script_variant()
+            }
+            _ => false,
+        }
+    }
+
     /// `_` or a plain binding, which matches anything.
     const fn is_irrefutable_leaf(&self) -> bool {
         matches!(
@@ -16593,6 +16612,13 @@ impl<'a> Parser<'a> {
         self.reject_signature_support(&value.ty, value.span, "retained in a local binding")?;
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
+        }
+        // `let Wrapper(x) = w;` of a one-variant enum: matched as `let ..
+        // else` is, after the coverage check finds it irrefutable.
+        if !syntax.has_ref_mut() && syntax.has_script_variant() {
+            let end = value.span.end();
+            self.consume_terminator(start)?;
+            return self.bind_let_pattern(start, &syntax, value, None, end, pending);
         }
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
         // `ref mut` bindings are the subject's places: it is not copied.
