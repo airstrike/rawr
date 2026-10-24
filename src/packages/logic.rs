@@ -232,231 +232,51 @@ mod f32_functions {
 
     #[rawr_fn(name = "==")]
     pub fn eq_if(x: INT, y: f32) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f32) == y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            (x - y).abs() / max <= f32::EPSILON
-        }
+        (x as f32) == y
     }
     #[rawr_fn(name = "==")]
     pub fn eq_fi(x: f32, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x == (y as f32);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            (x - y).abs() / max <= f32::EPSILON
-        }
+        x == (y as f32)
     }
     #[rawr_fn(name = "!=")]
     pub fn neq_if(x: INT, y: f32) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f32) != y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            (x - y).abs() / max > f32::EPSILON
-        }
+        (x as f32) != y
     }
     #[rawr_fn(name = "!=")]
     pub fn neq_fi(x: f32, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x != (y as f32);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            (x - y).abs() / max > f32::EPSILON
-        }
+        x != (y as f32)
     }
     #[rawr_fn(name = ">")]
     pub fn gt_if(x: INT, y: f32) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f32) > y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            (x - y) / max > f32::EPSILON
-        }
+        (x as f32) > y
     }
     #[rawr_fn(name = ">")]
     pub fn gt_fi(x: f32, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x > (y as f32);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            (x - y) / max > f32::EPSILON
-        }
+        x > (y as f32)
     }
     #[rawr_fn(name = ">=")]
     pub fn gte_if(x: INT, y: f32) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f32) >= y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            (x - y) / max > -f32::EPSILON
-        }
+        (x as f32) >= y
     }
     #[rawr_fn(name = ">=")]
     pub fn gte_fi(x: f32, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x >= (y as f32);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            (x - y) / max > -f32::EPSILON
-        }
+        x >= (y as f32)
     }
     #[rawr_fn(name = "<")]
     pub fn lt_if(x: INT, y: f32) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f32) < y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            (y - x) / max > f32::EPSILON
-        }
+        (x as f32) < y
     }
     #[rawr_fn(name = "<")]
     pub fn lt_fi(x: f32, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x < (y as f32);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            (y - x) / max > f32::EPSILON
-        }
+        x < (y as f32)
     }
     #[rawr_fn(name = "<=")]
     pub fn lte_if(x: INT, y: f32) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f32) <= y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            (y - x) / max > -f32::EPSILON
-        }
+        (x as f32) <= y
     }
     #[rawr_fn(name = "<=")]
     pub fn lte_fi(x: f32, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x <= (y as f32);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f32;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            (y - x) / max > -f32::EPSILON
-        }
+        x <= (y as f32)
     }
 
     #[rawr_fn(name = "max")]
@@ -508,231 +328,51 @@ mod f64_functions {
 
     #[rawr_fn(name = "==")]
     pub fn eq_if(x: INT, y: f64) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f64) == y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            return (x - y).abs() / max <= f64::EPSILON;
-        }
+        (x as f64) == y
     }
     #[rawr_fn(name = "==")]
     pub fn eq_fi(x: f64, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x == (y as f64);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            return (x - y).abs() / max <= f64::EPSILON;
-        }
+        x == (y as f64)
     }
     #[rawr_fn(name = "!=")]
     pub fn neq_if(x: INT, y: f64) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f64) != y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            return (x - y).abs() / max > f64::EPSILON;
-        }
+        (x as f64) != y
     }
     #[rawr_fn(name = "!=")]
     pub fn neq_fi(x: f64, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x != (y as f64);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            return (x - y).abs() / max > f64::EPSILON;
-        }
+        x != (y as f64)
     }
     #[rawr_fn(name = ">")]
     pub fn gt_if(x: INT, y: f64) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f64) > y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            return (x - y) / max > f64::EPSILON;
-        }
+        (x as f64) > y
     }
     #[rawr_fn(name = ">")]
     pub fn gt_fi(x: f64, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x > (y as f64);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            return (x - y) / max > f64::EPSILON;
-        }
+        x > (y as f64)
     }
     #[rawr_fn(name = ">=")]
     pub fn gte_if(x: INT, y: f64) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f64) >= y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            return (x - y) / max > -f64::EPSILON;
-        }
+        (x as f64) >= y
     }
     #[rawr_fn(name = ">=")]
     pub fn gte_fi(x: f64, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x >= (y as f64);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            return (x - y) / max > -f64::EPSILON;
-        }
+        x >= (y as f64)
     }
     #[rawr_fn(name = "<")]
     pub fn lt_if(x: INT, y: f64) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f64) < y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            return (y - x) / max > f64::EPSILON;
-        }
+        (x as f64) < y
     }
     #[rawr_fn(name = "<")]
     pub fn lt_fi(x: f64, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x < (y as f64);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return false;
-            }
-            return (y - x) / max > f64::EPSILON;
-        }
+        x < (y as f64)
     }
     #[rawr_fn(name = "<=")]
     pub fn lte_if(x: INT, y: f64) -> bool {
-        #[cfg(feature = "unchecked")]
-        return (x as f64) <= y;
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let x = x as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            return (y - x) / max > -f64::EPSILON;
-        }
+        (x as f64) <= y
     }
     #[rawr_fn(name = "<=")]
     pub fn lte_fi(x: f64, y: INT) -> bool {
-        #[cfg(feature = "unchecked")]
-        return x <= (y as f64);
-
-        #[cfg(not(feature = "unchecked"))]
-        {
-            let y = y as f64;
-            let max = if x * y == 0.0 {
-                1.0
-            } else {
-                x.abs().max(y.abs())
-            };
-            if max == 0.0 {
-                return true;
-            }
-            return (y - x) / max > -f64::EPSILON;
-        }
+        x <= (y as f64)
     }
 
     #[rawr_fn(name = "max")]

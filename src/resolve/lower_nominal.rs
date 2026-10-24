@@ -14,6 +14,8 @@ pub(crate) mod cell;
 mod collected_tests;
 #[cfg(all(test, not(feature = "no_function")))]
 mod language_tests;
+#[cfg(all(test, not(feature = "no_function")))]
+mod rust_meaning_tests;
 
 use super::{intrinsic, item, type_ref, Error, LoweringFailure, Program};
 use crate::ast::{
@@ -3047,6 +3049,9 @@ enum PreludeOp {
     Narrow,
     /// `value as T` for the kind of `kind_code`: `cast(value, kind)`.
     Cast,
+    /// An arithmetic result of a `{float}` that inference made an `f32`,
+    /// rounded to it: `round(value)`.
+    RoundF32,
     /// `v[low..high]` of an array or a string (by bytes, on `char`
     /// boundaries): `slice(value, low, high, inclusive)`, `high` `-1` for
     /// an open end; a copy, with Rust's panics.
@@ -3152,6 +3157,7 @@ impl PreludeOp {
             Self::Join => "slice.join",
             Self::StrSplit => "str.split",
             Self::Narrow => "number.narrow",
+            Self::RoundF32 => "number.round-f32",
             Self::Cast => "number.cast",
             Self::Slice => "slice.range",
             Self::SliceGet => "slice.get",
@@ -3255,6 +3261,7 @@ impl PreludeOp {
                 TypeId::of::<ImmutableString>(),
             ],
             Self::Cast => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
+            Self::RoundF32 => vec![TypeId::of::<Dynamic>()],
             Self::Parse => vec![TypeId::of::<ImmutableString>()],
             Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
             Self::StrChange => vec![
@@ -3495,6 +3502,7 @@ impl PreludeOp {
                 return cast_value(args[0], code);
             }
             Self::Cast => return cast_value(args[0], args[1].as_int().unwrap_or(3)),
+            Self::RoundF32 => return cast_value(args[0], 10),
             Self::Slice | Self::SplitAt => return slice_value(self, args),
             Self::VecMethod => return vec_method(args),
             Self::Time => return time_method(args),
@@ -8417,6 +8425,12 @@ struct Parser<'a> {
     /// settled: each placeholder, written over with the kind's code once
     /// it has (`i32` when nothing binds it, as in Rust).
     pending_int_kinds: Vec<(String, Ty)>,
+    /// Float literals and arithmetic of a `{float}` whose kind inference
+    /// had not settled: each placeholder, written over once it has. A
+    /// literal becomes its text, rounded to `f32` when that is its kind;
+    /// arithmetic becomes the call that rounds to `f32`, or blanks before
+    /// the parenthesized value when it is an `f64`.
+    pending_float_kinds: Vec<PendingFloat>,
     /// `Default::default()` calls whose type inference fixes later:
     /// `(placeholder, type, span)`, written over with the type's default.
     pending_defaults: Vec<(String, Ty, Span)>,
@@ -8602,6 +8616,7 @@ impl<'a> Parser<'a> {
             template_params: std::cell::RefCell::new(Box::default()),
             witnessed_ops: BTreeMap::new(),
             pending_int_kinds: Vec::new(),
+            pending_float_kinds: Vec::new(),
             pending_defaults: Vec::new(),
             no_struct: false,
             split_angle: None,
@@ -9490,6 +9505,26 @@ impl<'a> Parser<'a> {
                 ty => kind_code(ty),
             };
             let replacement = format!("{code:<width$}", width = placeholder.len());
+            self.output.replace_same_length(&placeholder, &replacement);
+            for closure in &mut self.lifted {
+                closure.body.replace_same_length(&placeholder, &replacement);
+            }
+        }
+        for pending in std::mem::take(&mut self.pending_float_kinds) {
+            let single = self.inference.resolve(&pending.ty) == Ty::Float(Float::F32);
+            let (placeholder, replacement) = match pending.kind {
+                PendingFloatKind::Literal(value) => {
+                    let text = if single {
+                        format!("{:?}", value as f32 as f64)
+                    } else {
+                        format!("{value:?}")
+                    };
+                    (pending.placeholder, text)
+                }
+                PendingFloatKind::Round(helper) if single => (pending.placeholder, helper),
+                PendingFloatKind::Round(_) => (pending.placeholder, String::new()),
+            };
+            let replacement = format!("{replacement:<width$}", width = placeholder.len());
             self.output.replace_same_length(&placeholder, &replacement);
             for closure in &mut self.lifted {
                 closure.body.replace_same_length(&placeholder, &replacement);
@@ -23496,6 +23531,22 @@ impl<'a> Parser<'a> {
         let code = match self.inference.resolve(&value.ty) {
             Ty::Int(kind) if kind.checked() => kind_code(Ty::Int(kind)).to_string(),
             Ty::Float(Float::F32) => kind_code(Ty::Float(Float::F32)).to_string(),
+            // An `f32` once inference settles is rounded; an `f64` is not.
+            Ty::Float(Float::Var(_)) => {
+                let helper = self.push_op(Op::Prelude(PreludeOp::RoundF32));
+                let placeholder =
+                    format!("__rawr_float_rounding_{:016}", self.pending_float_kinds.len());
+                debug_assert!(helper.len() <= placeholder.len());
+                self.pending_float_kinds.push(PendingFloat {
+                    placeholder: placeholder.clone(),
+                    ty: value.ty.clone(),
+                    kind: PendingFloatKind::Round(helper),
+                });
+                let source = std::mem::take(&mut value.source);
+                value.source = source.surrounded(&format!("{placeholder}("), ")");
+                value.source.cover(value.span);
+                return value;
+            }
             // Its kind is known once inference settles (`finish_witnesses`).
             Ty::Int(Int::Var(_)) => {
                 let placeholder = format!("__rawr_int_kind_{:08}", self.pending_int_kinds.len());
@@ -27245,7 +27296,24 @@ impl<'a> Parser<'a> {
             #[cfg(not(feature = "no_float"))]
             Token::FloatConstant(value) => {
                 let ty = self.literal_kind(0, false, token_span)?.0;
-                Ok(self.literal(value.1.to_string(), ty, token_span))
+                let number = *value.0;
+                let text = match &ty {
+                    // An `f32` holds the nearest `f32`, as Rust's literal.
+                    Ty::Float(Float::F32) => format!("{:?}", number as f32 as f64),
+                    // Its kind is known once inference settles.
+                    Ty::Float(Float::Var(_)) => {
+                        let placeholder =
+                            format!("__rawr_float_literal_{:08}", self.pending_float_kinds.len());
+                        self.pending_float_kinds.push(PendingFloat {
+                            placeholder: placeholder.clone(),
+                            ty: ty.clone(),
+                            kind: PendingFloatKind::Literal(number),
+                        });
+                        placeholder
+                    }
+                    _ => value.1.to_string(),
+                };
+                Ok(self.literal(text, ty, token_span))
             }
             Token::LeftParen => {
                 let outer = std::mem::replace(&mut self.no_struct, false);
@@ -40656,6 +40724,21 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
             wrapped.into()
         }
     })
+}
+
+/// A float literal or arithmetic result whose kind inference settles
+/// later (`Lowering::pending_float_kinds`).
+struct PendingFloat {
+    placeholder: String,
+    ty: Ty,
+    kind: PendingFloatKind,
+}
+
+enum PendingFloatKind {
+    /// The literal's value.
+    Literal(f64),
+    /// The name of the `RoundF32` helper the placeholder calls.
+    Round(String),
 }
 
 fn compound_operator(assignment: &Token) -> Option<Token> {

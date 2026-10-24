@@ -159,71 +159,13 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                 Modulo              => impl_op!(FLOAT => $xx % $yy),
                 PowerOf             => impl_op!(FLOAT => $xx.powf($yy as FLOAT)),
 
-                #[cfg(feature = "unchecked")]
+                // IEEE comparison, as Rust's: a NaN is unequal and unordered.
                 EqualsTo            => impl_op!(FLOAT => $xx == $yy),
-                #[cfg(not(feature = "unchecked"))]
-                EqualsTo            => Some((|_, args| {
-                    let x = args[0].$xx().unwrap() as FLOAT;
-                    let y = args[1].$yy().unwrap() as FLOAT;
-                    let max = if x * y == 0.0 { 1.0 } else { x.abs().max(y.abs()) };
-                    if max == 0.0 { return Ok(Dynamic::TRUE); }
-                    Ok(((x - y).abs()/max <= FLOAT::EPSILON).into())
-                }, false)),
-
-                #[cfg(feature = "unchecked")]
                 NotEqualsTo         => impl_op!(FLOAT => $xx != $yy),
-                #[cfg(not(feature = "unchecked"))]
-                NotEqualsTo         => Some((|_, args| {
-                    let x = args[0].$xx().unwrap() as FLOAT;
-                    let y = args[1].$yy().unwrap() as FLOAT;
-                    let max = if x * y == 0.0 { 1.0 } else { x.abs().max(y.abs()) };
-                    if max == 0.0 { return Ok(Dynamic::FALSE); }
-                    Ok(((x - y).abs()/max > FLOAT::EPSILON).into())
-                }, false)),
-
-                #[cfg(feature = "unchecked")]
                 GreaterThan         => impl_op!(FLOAT => $xx > $yy),
-                #[cfg(not(feature = "unchecked"))]
-                GreaterThan         => Some((|_, args| {
-                    let x = args[0].$xx().unwrap() as FLOAT;
-                    let y = args[1].$yy().unwrap() as FLOAT;
-                    let max = if x * y == 0.0 { 1.0 } else { x.abs().max(y.abs()) };
-                    if max == 0.0 { return Ok(Dynamic::FALSE); }
-                    Ok(((x - y)/max > FLOAT::EPSILON).into())
-                }, false)),
-
-                #[cfg(feature = "unchecked")]
                 GreaterThanEqualsTo => impl_op!(FLOAT => $xx >= $yy),
-                #[cfg(not(feature = "unchecked"))]
-                GreaterThanEqualsTo => Some((|_, args| {
-                    let x = args[0].$xx().unwrap() as FLOAT;
-                    let y = args[1].$yy().unwrap() as FLOAT;
-                    let max = if x * y == 0.0 { 1.0 } else { x.abs().max(y.abs()) };
-                    if max == 0.0 { return Ok(Dynamic::TRUE); }
-                    Ok(((x - y)/max > -FLOAT::EPSILON).into())
-                }, false)),
-
-                #[cfg(feature = "unchecked")]
                 LessThan            => impl_op!(FLOAT => $xx < $yy),
-                #[cfg(not(feature = "unchecked"))]
-                LessThan            => Some((|_, args| {
-                    let x = args[0].$xx().unwrap() as FLOAT;
-                    let y = args[1].$yy().unwrap() as FLOAT;
-                    let max = if x * y == 0.0 { 1.0 } else { x.abs().max(y.abs()) };
-                    if max == 0.0 { return Ok(Dynamic::FALSE); }
-                    Ok(((y - x)/max > FLOAT::EPSILON).into())
-                }, false)),
-
-                #[cfg(feature = "unchecked")]
                 LessThanEqualsTo    => impl_op!(FLOAT => $xx <= $yy),
-                #[cfg(not(feature = "unchecked"))]
-                LessThanEqualsTo    => Some((|_, args| {
-                    let x = args[0].$xx().unwrap() as FLOAT;
-                    let y = args[1].$yy().unwrap() as FLOAT;
-                    let max = if x * y == 0.0 { 1.0 } else { x.abs().max(y.abs()) };
-                    if max == 0.0 { return Ok(Dynamic::TRUE); }
-                    Ok(((y - x)/max > -FLOAT::EPSILON).into())
-                }, false)),
 
                 // Rust's `RangeInclusive<f64>`, as a slider's bounds.
                 InclusiveRange      => Some((|_, args| {
