@@ -12605,6 +12605,31 @@ impl<'a> Parser<'a> {
         Ok(closure)
     }
 
+    /// Whether `argument`, as written, fits the callable parameter at
+    /// `index` of the one item, with the receiver's types. Nothing is bound.
+    fn callable_fits(
+        &mut self,
+        items: &[crate::host::item::Definition],
+        receiver: Option<&Ty>,
+        index: usize,
+        argument: &ParsedExpr,
+    ) -> bool {
+        let [item] = items else {
+            return false;
+        };
+        let checkpoint = self.inference.checkpoint();
+        let fits = self
+            .instantiate_host_signature(item, receiver, None)
+            .is_ok_and(|signature| {
+                signature
+                    .inputs
+                    .get(index)
+                    .is_some_and(|expected| self.unify_type(expected, &argument.ty))
+            });
+        self.inference.rollback(checkpoint);
+        fits
+    }
+
     fn select_host_signature_form(
         &mut self,
         items: &[crate::host::item::Definition],
@@ -12632,7 +12657,9 @@ impl<'a> Parser<'a> {
         // number inputs do (`deref_facade_strings`).
         let facade = items.iter().all(|item| item.imported_identity().is_none());
         // A callable whose input is the item's type parameter, as
-        // `Task::map`'s, takes the function's own input type.
+        // `Task::map`'s, keeps the function's own input type when the
+        // receiver's type takes it, as a `Task<u32>` does. A facade's own
+        // `Task<f64>` stands for iced's `f32`, so it takes the runtime kind.
         let generic_input = |index: usize| {
             items.iter().any(|item| {
                 item.signature().parameters().get(index).is_some_and(|parameter| {
@@ -12675,7 +12702,7 @@ impl<'a> Parser<'a> {
                 argument.ty = target;
             }
             if facade
-                && !generic_input(index)
+                && !(generic_input(index) && self.callable_fits(items, receiver, index, argument))
                 && let Ty::Callable {
                     inputs,
                     output,

@@ -1245,17 +1245,20 @@ fn task_map_takes_a_narrow_variant_and_none_takes_a_turbofish() {
         r#"text("tasks")"#,
         r#"
 use iced::Task;
-#[derive(Debug, Clone)] enum Counted { Number(u32), Ratio(f32), Nothing }
+#[derive(Debug, Clone)] enum Counted { Number(u32), Ratio(f32), Scaled(f32), Nothing }
 fn count() -> Task<u32> { Task::done(7) }
 pub fn numbers() -> Task<Counted> { count().map(Counted::Number) }
 pub fn ratios() -> Task<Counted> { Task::done(0.5f32).map(Counted::Ratio) }
 pub fn none() -> Task<Counted> { Task::<Counted>::none() }
 pub fn discarded() -> bool { let _ = Task::<Counted>::none(); true }
+pub fn scaled() -> Task<Counted> {
+    iced::window::latest().and_then(iced::window::scale_factor).map(Counted::Scaled)
+}
 pub fn pick(counted: Counted) -> Task<Counted> {
     match counted {
         Counted::Number(_) => Task::<Counted>::none(),
         Counted::Ratio(_) => count().map(Counted::Number),
-        Counted::Nothing => Task::batch([Task::<Counted>::none(), Task::done(Counted::Nothing)]),
+        Counted::Scaled(_) | Counted::Nothing => Task::batch([Task::<Counted>::none(), Task::done(Counted::Nothing)]),
     }
 }
 "#,
