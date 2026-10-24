@@ -3065,6 +3065,8 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         ("fill_text", vec![type_ref::Type::builtin(type_ref::Builtin::String)], unit()?),
         ("translate", vec![ty("Vector")?], unit()?),
         ("rotate", vec![f64_()], unit()?),
+        ("rotate", vec![ty("Degrees")?], unit()?),
+        ("rotate", vec![ty("Radians")?], unit()?),
         ("scale", vec![f64_()], unit()?),
         ("scale_nonuniform", vec![ty("Vector")?], unit()?),
         ("push_transform", Vec::new(), unit()?),

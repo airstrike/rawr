@@ -203,7 +203,7 @@ pub(super) fn rotation(value: &mut Dynamic) -> Result<Rotation, Box<EvalAltResul
 }
 
 /// A `Radians`, or a `Degrees` in radians.
-fn radians(value: &mut Dynamic) -> Result<Radians, Box<EvalAltResult>> {
+pub(super) fn radians(value: &Dynamic) -> Result<Radians, Box<EvalAltResult>> {
     if let Some(degrees) = value.read_lock::<Degrees>().map(|degrees| *degrees) {
         return Ok(degrees.into());
     }

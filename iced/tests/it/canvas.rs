@@ -18,7 +18,7 @@ const DOTS: &str = r#"
 use iced::mouse;
 use iced::widget::canvas::{Action, Cache, Event, Frame, Geometry, LineCap, Path, Stroke};
 use iced::widget::{canvas, column, text};
-use iced::{Color, Element, Fill, Point, Rectangle, Renderer, Theme, Vector};
+use iced::{Color, Degrees, Element, Fill, Point, Radians, Rectangle, Renderer, Theme, Vector};
 
 #[derive(Default)]
 struct Dots {
@@ -85,6 +85,11 @@ impl canvas::Program<Message> for Dots {
             frame.with_save(|frame| {
                 frame.translate(Vector::new(10.0, 10.0));
                 frame.rotate(0.5);
+                // iced's `rotate(impl Into<Radians>)`: a negative number,
+                // and either angle.
+                frame.rotate(-0.25);
+                frame.rotate(Degrees(-30.0));
+                frame.rotate(Radians::PI / 4.0);
                 frame.stroke(
                     &Path::new(|b| {
                         b.move_to(Point::ORIGIN);

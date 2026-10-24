@@ -371,7 +371,12 @@ fn bind_frames(builder: &mut host::runtime::Builder) {
                         })
                     }
                     "translate" => marker::Draw::Translate(read::<iced::Vector>(operand(0)?, &path)?),
-                    "rotate" => marker::Draw::Rotate(pixels(operand(0)?, &path)?),
+                    // iced's `rotate(impl Into<Radians>)`: radians as a
+                    // number, or an angle.
+                    "rotate" => marker::Draw::Rotate(match operand(0)?.as_float() {
+                        Ok(radians) => radians as f32,
+                        Err(_) => super::angle::radians(operand(0)?)?.0,
+                    }),
                     "scale" => marker::Draw::Scale(pixels(operand(0)?, &path)?),
                     "scale_nonuniform" => {
                         marker::Draw::ScaleNonuniform(read::<iced::Vector>(operand(0)?, &path)?)
