@@ -3788,6 +3788,8 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let f64 = || type_ref::Type::builtin(type_ref::Builtin::F64);
     let degrees = || type_ref::Type::registered("Degrees");
     let radians = || type_ref::Type::registered("Radians");
+    let vector = || type_ref::Type::registered("Vector");
+    let point = || type_ref::Type::registered("Point");
     for (path, output) in [("Degrees", degrees()?), ("Radians", radians()?)] {
         let mut from = signature::Builder::new();
         from.parameter(f64()).output(output.clone());
@@ -3861,6 +3863,14 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
         ("Radians", "div", radians()?, radians()?),
         ("Radians", "div", f64(), radians()?),
         ("Radians", "rem", radians()?, radians()?),
+        // iced's `Vector` arithmetic and a `Point` moved by a `Vector`.
+        ("Vector", "add", vector()?, vector()?),
+        ("Vector", "sub", vector()?, vector()?),
+        ("Vector", "mul", f64(), vector()?),
+        ("Vector", "div", f64(), vector()?),
+        ("Point", "add", vector()?, point()?),
+        ("Point", "sub", vector()?, point()?),
+        ("Point", "sub", point()?, vector()?),
     ] {
         let mut operator = signature::Builder::new();
         operator.parameter(input).output(output);

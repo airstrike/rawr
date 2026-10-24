@@ -139,6 +139,39 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Radians operator");
     }
+    for name in ["add", "sub", "mul", "div"] {
+        let path = format!("iced::Vector::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let [left, right] = args else {
+                    return Err(arity(&path, 2, args.len()));
+                };
+                let left = take::<iced::Vector>(left, "iced::Vector")?;
+                Ok(Dynamic::from(match name {
+                    "add" => left + take::<iced::Vector>(right, "iced::Vector")?,
+                    "sub" => left - take::<iced::Vector>(right, "iced::Vector")?,
+                    "mul" => left * pixels(right, &path)?,
+                    _ => left / pixels(right, &path)?,
+                }))
+            })
+            .expect("the iced facade must retain every Vector operator");
+    }
+    for name in ["add", "sub"] {
+        let path = format!("iced::Point::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let [left, right] = args else {
+                    return Err(arity(&path, 2, args.len()));
+                };
+                let left = take::<iced::Point>(left, "iced::Point")?;
+                if let Some(other) = right.read_lock::<iced::Point>().map(|point| *point) {
+                    return Ok(Dynamic::from(left - other));
+                }
+                let by = take::<iced::Vector>(right, "iced::Vector")?;
+                Ok(Dynamic::from(if name == "add" { left + by } else { left - by }))
+            })
+            .expect("the iced facade must retain every Point operator");
+    }
 }
 
 /// A `Rotation`, or an angle in radians or degrees.

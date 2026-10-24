@@ -2058,3 +2058,38 @@ impl State {
     );
     find(&adapter, "true true");
 }
+
+/// A generative piece scales a `Vector` by an `f32` and moves a `Point` by
+/// it, as iced's `Mul<f32>` and `Add<Vector>` allow.
+#[test]
+fn vectors_scale_by_f32_and_move_points() {
+    let adapter = boot(
+        r#"
+use iced::widget::text;
+use iced::{Point, Vector, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {}
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let fade: f32 = 0.25 + 0.25;
+        let moved = Vector::new(1.5, 2.0) * 2.0 * fade * 2.0;
+        let at = Point::new(1.0, 1.0) + moved - Vector::new(1.0, 0.0);
+        let back = at - Point::ORIGIN;
+        text(format!("{} {} {}", moved.x, moved.y, back.y))
+    }
+}
+"#,
+    );
+    find(&adapter, "3 4 5");
+}
