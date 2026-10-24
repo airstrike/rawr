@@ -80,13 +80,13 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>fn</code>. A function can be nested inside another function.</li>
   <li><code>struct</code> with named fields, tuple structs and unit structs.</li>
   <li><code>enum</code> with unit, tuple and struct variants.</li>
-  <li><code>impl</code> blocks with methods, associated functions and associated consts.</li>
+  <li><code>impl</code> blocks with methods, associated functions and associated consts. An <code>impl</code> may sit inside a function body. <code>Self</code> works in a method body&rsquo;s type annotations, as in <code>let next: Self = ..</code>.</li>
   <li><code>trait</code> with default methods, associated types and static functions. Traits can be implemented for your own types and for built-in types such as <code>i64</code>.</li>
   <li><code>const</code> and <code>static</code> items.</li>
   <li><code>type</code> aliases, generic ones included, such as <code>type Pair&lt;T&gt; = (T, T);</code>. A <code>pub type</code> can be imported from another module.</li>
   <li><code>pub</code> and restricted visibility. <code>pub(crate)</code>, <code>pub(super)</code> and <code>pub(in path)</code> all work.</li>
-  <li><code>mod</code>. A <code>mod util;</code> declaration loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. A module without that line is native Rust, and cargo builds it. An inline <code>mod m { .. }</code> works too.</li>
-  <li><code>use</code> with paths and groups, such as <code>use std::collections::{HashMap, HashSet};</code>. A glob of a standard library module such as <code>use std::collections::*;</code> works too.</li>
+  <li><code>mod</code>. A <code>mod util;</code> declaration loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. A module without that line is native Rust, and cargo builds it. An inline <code>mod m { .. }</code> works too. A path through <code>crate::</code> or <code>super::</code> reaches a name that module brings in with <code>use</code>, as in Rust.</li>
+  <li><code>use</code> with paths and groups, such as <code>use std::collections::{HashMap, HashSet};</code>. A glob of a standard library module such as <code>use std::collections::*;</code> works too. A path that starts with <code>::</code> names an outside crate, as in <code>use ::image::ColorType;</code>. It is an error when its first name is not a crate.</li>
   <li><code>#[derive]</code> of <code>Debug</code>, <code>Clone</code>, <code>Copy</code>, <code>PartialEq</code>, <code>Eq</code>, <code>PartialOrd</code>, <code>Ord</code>, <code>Hash</code> and <code>Default</code>. Rawr checks a derive the way rustc does. Deriving <code>Copy</code> on a struct with a <code>String</code> field is an error.</li>
 </ul>
 
@@ -263,7 +263,7 @@ fn main() {
   <li><code>From::from</code>, <code>Into::into</code>, <code>Clone::clone</code> and <code>ToString::to_string</code> as values. <code>.map(String::from)</code> is one example. A method of <code>Option</code> or <code>Result</code> works as a value too, as in <code>.map(Result::ok)</code>. So does an associated function of your own type, as in <code>.map(Db::from)</code> or <code>let make = Db::new;</code>.</li>
   <li><code>TryFrom</code> between integer types.</li>
 </ul>
-<p>In an iced app, <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>, which are std&rsquo;s own in iced.</p>
+<p>In an iced app, <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>, which are std&rsquo;s own in iced. <code>std::path</code> has <code>PathBuf</code> and <code>Path</code>, and <code>std::ffi</code> has <code>OsString</code> and <code>OsStr</code>. They are Rust&rsquo;s own types. <code>Path</code> is another name for <code>PathBuf</code>, and <code>OsStr</code> is another name for <code>OsString</code>. They have <code>new</code>, <code>from</code>, <code>push</code>, <code>join</code>, <code>parent</code>, <code>file_name</code>, <code>file_stem</code>, <code>extension</code>, <code>display</code>, <code>to_str</code> and <code>to_string_lossy</code>. An imported Rust function does not take one yet.</p>
 
 <h2 id="not-supported">Not supported yet</h2>
 <p>These are valid Rust that Rawr rejects today. Each one fails the check with an error that names the construct.</p>
@@ -273,6 +273,7 @@ fn main() {
   <li><code>const fn</code>.</li>
   <li>Byte literals (<code>b'a'</code>, <code>b"ab"</code>) and <code>char</code> ranges such as <code>'a'..='e'</code>.</li>
   <li><code>macro_rules!</code>.</li>
+  <li>serde&rsquo;s <code>#[derive(Serialize, Deserialize)]</code> on your own types.</li>
   <li><code>async</code> and <code>.await</code> in a program without iced. iced&rsquo;s <code>Task</code> is what runs a future, as <a href="/docs/iced#async">Async code</a> describes.</li>
   <li>A <code>const</code> captured in a format string (<code>"{LIMIT}"</code>). Pass it as an argument instead.</li>
 </ul>
@@ -289,6 +290,7 @@ fn main() {
 <h3 id="missing-std">Standard library</h3>
 <ul>
   <li><code>Rc</code> and <code>Cell</code>.</li>
+  <li><code>std::io</code>.</li>
   <li><code>VecDeque</code> and <code>BinaryHeap</code>.</li>
   <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
   <li><code>write!</code> into a <code>String</code> through <code>std::fmt::Write</code>.</li>
