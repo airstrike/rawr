@@ -1512,6 +1512,23 @@ impl Spin {
         (started.elapsed(), image.note)
     }
 
+    /// The docs' tokio channel example (/docs/play/reference) settles on its
+    /// last frame within the bot's still budget: its sleeps are on the paused
+    /// tokio clock, so they cost no wall time. A debug build is about seven
+    /// times slower, so it gets a larger budget.
+    #[test]
+    fn tokio_channel_example_settles_within_the_still_budget() {
+        let budget = if cfg!(debug_assertions) { 15_000 } else { 2_000 };
+        let source = include_str!("../tests/fixtures/channel.rs");
+        let (ran, note) = animate_for(source, budget, budget);
+        assert_eq!(note, None, "the example ran to its last frame");
+        assert!(ran < std::time::Duration::from_millis(budget), "{ran:?}");
+        // Longer sleeps cost no more.
+        let slower = source.replace("from_millis(100)", "from_millis(2_000)");
+        let (_, note) = animate_for(&slower, budget, budget);
+        assert_eq!(note, None, "eight seconds of tokio sleeps fit the budget");
+    }
+
     #[test]
     fn budget_switches_once_the_view_changes() {
         // The view changes, so the spin runs to the animation budget.
