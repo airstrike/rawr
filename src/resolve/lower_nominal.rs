@@ -28063,8 +28063,12 @@ impl<'a> Parser<'a> {
             return Ok(element);
         }
         self.end_borrows(&name);
-        // A local bound to a `RefCell` borrow: the cell's value.
-        if self.closures.is_empty()
+        // A local bound to a `RefCell` borrow: the cell's value. A closure
+        // or async body reads its own borrows, not one it captures.
+        if self
+            .closures
+            .last()
+            .is_none_or(|scope| !scope.captures.contains(name.as_str()))
             && let Some(value) = self.cell_guard_use(&name, name_span)
         {
             return Ok(value);
