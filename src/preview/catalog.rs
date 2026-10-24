@@ -58,6 +58,15 @@ impl Catalog {
         Self::from_package_executable_with_presence(executable, false, false)
     }
 
+    /// A generation of any program, a plain one (no application or
+    /// previews, a `main` run once) included.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn from_package_generation_executable_plain(
+        executable: program::Executable,
+    ) -> Result<Self, (program::source::Id, preview::Error)> {
+        Self::from_package_executable_with_presence(executable, false, true)
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn from_package_generation_executable_checked(
         executable: program::Executable,

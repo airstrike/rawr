@@ -134,11 +134,44 @@ pub(crate) fn snapshot_generation_checked(
     snapshot_generation_with_semantics(engine, snapshot, Some((cycle, expected)))
 }
 
+/// A generation of any program, a plain one included, for a runner with no
+/// host profile.
+#[cfg(feature = "rust-import")]
+pub(crate) fn snapshot_generation_plain(
+    engine: &Engine,
+    snapshot: &super::snapshot::Snapshot,
+) -> Result<crate::reload::Candidate, Error> {
+    snapshot_generation_with(engine, snapshot, Semantics::Plain)
+}
+
+#[cfg(feature = "rust-import")]
+enum Semantics<'a> {
+    /// No application or previews required.
+    Plain,
+    /// An application or previews, unchecked.
+    Generation,
+    /// Checked against a profile's application semantics.
+    Checked(&'a crate::host::facade::ProfileCycle, &'a [u8; 32]),
+}
+
 #[cfg(feature = "rust-import")]
 fn snapshot_generation_with_semantics(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
     semantic: Option<(&crate::host::facade::ProfileCycle, &[u8; 32])>,
+) -> Result<crate::reload::Candidate, Error> {
+    let semantics = match semantic {
+        Some((cycle, expected)) => Semantics::Checked(cycle, expected),
+        None => Semantics::Generation,
+    };
+    snapshot_generation_with(engine, snapshot, semantics)
+}
+
+#[cfg(feature = "rust-import")]
+fn snapshot_generation_with(
+    engine: &Engine,
+    snapshot: &super::snapshot::Snapshot,
+    semantics: Semantics<'_>,
 ) -> Result<crate::reload::Candidate, Error> {
     let graph = Graph::load_snapshot(engine, snapshot)?;
     let sources = graph.diagnostic_sources();
@@ -146,11 +179,12 @@ fn snapshot_generation_with_semantics(
     let program = resolve::package::resolve(graph, &engine.host_registry)
         .map_err(|failure| Error::resolution(sources.clone(), failure))?;
     let executable = snapshot_executable(engine, program, &sources)?;
-    let candidate = match semantic {
-        Some((cycle, expected)) => {
+    let candidate = match semantics {
+        Semantics::Checked(cycle, expected) => {
             crate::reload::Candidate::from_package_checked(executable, source, cycle, expected)
         }
-        None => crate::reload::Candidate::from_package(executable, source),
+        Semantics::Generation => crate::reload::Candidate::from_package(executable, source),
+        Semantics::Plain => crate::reload::Candidate::from_package_plain(executable, source),
     };
     candidate.map_err(|(source, error)| {
         Error::resolution(
