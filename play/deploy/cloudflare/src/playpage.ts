@@ -48,7 +48,7 @@ export function render(page: Page): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rawr Playground</title>
+<title>rawr playground</title>
 <link rel="icon" href="/play.svg" type="image/svg+xml">
 ${ogTags(page.og, escape)}
 <meta name="theme-color" content="#ff2e93">
@@ -61,6 +61,7 @@ body { background: var(--bg); color: var(--text); font: 15px/1.5 "Fira Sans", sy
 a { color: var(--pink); text-decoration: none; }
 .cap, .bar, label span, button, select, footer { font: 11px/1.4 "Fira Mono", ui-monospace, monospace; letter-spacing: 0.06em; text-transform: uppercase; }
 .cap { color: var(--dim); }
+.brand b { text-transform: none; }
 .pink { color: var(--pink); }
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px; border-bottom: 1px solid var(--line); color: var(--dim); }
 .brand { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
@@ -117,7 +118,7 @@ footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wr
 </style>
 </head>
 <body>
-<header class="bar"><a class="brand" href="/" aria-label="Rawr home, playground"><span class="mark" aria-hidden="true"></span><b>RAWR</b><span>Playground</span></a><span class="links"><a href="/docs/play">Docs</a><a class="status" href="/bot">Status</a><a href="/bot/invite">Add to Discord</a></span></header>
+<header class="bar"><a class="brand" href="/" aria-label="rawr home, playground"><span class="mark" aria-hidden="true"></span><b>rawr</b><span>Playground</span></a><span class="links"><a href="/docs">Docs</a><a href="/docs/play">Help</a><a class="status" href="/bot">Status</a><a href="/bot/invite">Add to Discord</a></span></header>
 <div class="tools">
 <select id="examples" aria-label="Examples"><option value="">Examples</option>${options}<option value="reset">Reset</option></select>
 <span class="seg">${theme("dark")}${theme("light")}</span>
