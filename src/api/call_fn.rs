@@ -187,7 +187,7 @@ impl Engine {
             &mut Caches::new(),
         )
         .and_then(|result| {
-            result.try_cast_result().map_err(|r| {
+            result.try_cast_host_result().map_err(|r| {
                 let result_type = self.map_type_name(r.type_name());
                 let cast_type = match type_name::<T>() {
                     typ if typ.contains("::") => self.map_type_name(typ),

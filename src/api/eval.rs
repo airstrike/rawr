@@ -187,7 +187,7 @@ impl Engine {
             return Ok(reify! { result => T });
         }
 
-        result.try_cast_result::<T>().map_err(|v| {
+        result.try_cast_host_result::<T>().map_err(|v| {
             let typename = match type_name::<T>() {
                 typ if typ.contains("::") => self.map_type_name(typ),
                 typ => typ,

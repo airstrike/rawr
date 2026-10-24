@@ -188,6 +188,42 @@ impl<T: Any + Clone> DerefMut for DynamicWriteLock<'_, T> {
 }
 
 impl Dynamic {
+    /// A script's result as the host's type `T`. A typed script holds
+    /// every integer kind in [`INT`], a `u64` or a `usize` as its bits, so
+    /// an integer read as another integer type is that kind's value: Rust's
+    /// `u64::MAX`, not `-1`.
+    pub(crate) fn try_cast_host_result<T: Any>(self) -> Result<T, Self> {
+        if let Union::Int(n, ..) = self.0 {
+            let id = TypeId::of::<T>();
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let converted: Option<Box<dyn Any>> = if id == TypeId::of::<u64>() {
+                Some(Box::new(n as u64))
+            } else if id == TypeId::of::<usize>() {
+                usize::try_from(n as u64).ok().map(|n| Box::new(n) as Box<dyn Any>)
+            } else if id == TypeId::of::<u32>() {
+                u32::try_from(n).ok().map(|n| Box::new(n) as Box<dyn Any>)
+            } else if id == TypeId::of::<u16>() {
+                u16::try_from(n).ok().map(|n| Box::new(n) as Box<dyn Any>)
+            } else if id == TypeId::of::<u8>() {
+                u8::try_from(n).ok().map(|n| Box::new(n) as Box<dyn Any>)
+            } else if id == TypeId::of::<i32>() {
+                i32::try_from(n).ok().map(|n| Box::new(n) as Box<dyn Any>)
+            } else if id == TypeId::of::<i16>() {
+                i16::try_from(n).ok().map(|n| Box::new(n) as Box<dyn Any>)
+            } else if id == TypeId::of::<i8>() {
+                i8::try_from(n).ok().map(|n| Box::new(n) as Box<dyn Any>)
+            } else {
+                None
+            };
+            if let Some(value) = converted.and_then(|value| value.downcast::<T>().ok()) {
+                return Ok(*value);
+            }
+        }
+        self.try_cast_result()
+    }
+}
+
+impl Dynamic {
     /// Get the arbitrary data attached to this [`Dynamic`].
     #[must_use]
     pub const fn tag(&self) -> Tag {

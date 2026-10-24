@@ -139,3 +139,28 @@ fn language_rust_meaning_step_by_steps() {
         assert!(error.to_string().contains("assertion failed: step != 0"), "{error}");
     }
 }
+
+#[test]
+fn language_rust_meaning_host_reads_integer_kinds() {
+    // A `u64` result is Rust's `u64`, not the `-1` its bits read as.
+    let engine = Engine::new();
+    assert_eq!(engine.eval::<u64>("-1_i64 as u64").unwrap(), u64::MAX);
+    assert_eq!(engine.eval::<u64>("(1_u64 << 63) + 5").unwrap(), (1 << 63) + 5);
+    assert_eq!(engine.eval::<usize>("vec![1, 2].len()").unwrap(), 2);
+    assert_eq!(engine.eval::<u8>("200_u8").unwrap(), 200);
+    assert_eq!(engine.eval::<i32>("-7_i32").unwrap(), -7);
+    let ast = engine
+        .compile("pub fn big(x: u64) -> u64 { x * 2 } pub fn count(v: Vec<i64>) -> usize { v.len() }")
+        .unwrap();
+    let mut scope = crate::Scope::new();
+    assert_eq!(
+        engine.call_fn::<u64>(&mut scope, &ast, "big", (1_i64 << 62,)).unwrap(),
+        1 << 63
+    );
+    assert_eq!(
+        engine
+            .call_fn::<usize>(&mut scope, &ast, "count", (vec![crate::Dynamic::from(1_i64)],))
+            .unwrap(),
+        1
+    );
+}
