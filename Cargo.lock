@@ -3221,8 +3221,6 @@ dependencies = [
  "anstream",
  "anstyle",
  "indexmap",
- "serde_core",
- "serde_spanned",
  "toml_datetime",
  "toml_parser",
  "toml_writer",
