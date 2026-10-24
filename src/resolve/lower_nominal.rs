@@ -14602,6 +14602,17 @@ impl<'a> Parser<'a> {
             let profile_mapper = self.coerce_profile_mapper(&item, expected, argument)?;
             #[cfg(not(feature = "rust-import"))]
             let profile_mapper = false;
+            // An array where the host takes a slice, as iced's
+            // `pick_list(.., options: impl Borrow<[T]>, ..)`: Rust's
+            // unsized coercion, or the array's own `Borrow<[T]>`.
+            if let (Ty::Array { length: None, .. }, Ty::Array { element, length: Some(_) }) =
+                (self.inference.resolve(expected), self.inference.resolve(&argument.ty))
+            {
+                argument.ty = Ty::Array {
+                    element,
+                    length: None,
+                };
+            }
             if !profile_mapper {
                 self.coerce_expr(expected, argument)?;
             }

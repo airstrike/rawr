@@ -599,6 +599,64 @@ fn master_closure_parameters_take_the_types_of_the_other_arguments() {
     find(&adapter, "version 1");
 }
 
+/// An array of the script's own enum where iced takes `impl Borrow<[T]>`,
+/// as ferris passes its rotation strategies.
+const ARRAY_OPTIONS: &str = r#"
+use iced::widget::{column, pick_list};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    choice: Choice,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Picked(Choice),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Choice {
+    #[default]
+    Floating,
+    Solid,
+}
+
+impl std::fmt::Display for Choice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Choice::Floating => "floating",
+            Choice::Solid => "solid",
+        })
+    }
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Picked(choice) => self.choice = choice,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            pick_list(Some(self.choice), [Choice::Floating, Choice::Solid], Choice::to_string)
+                .on_select(Message::Picked)
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_pick_list_takes_an_array_of_script_values() {
+    let adapter = boot(ARRAY_OPTIONS);
+    find(&adapter, "floating");
+}
+
 const RICH: &str = r#"
 use iced::widget::{column, rich_text, span, text};
 use iced::{Color, Font, Widget};
