@@ -37,7 +37,7 @@
   <ol>
     <li><a href="/docs">Overview</a></li>
     <li><a href="/docs/start">Getting started</a></li>
-    <li><a href="/docs/language" aria-current="page">The language</a><ol><li><a href="#overview">How a program runs</a></li><li><a href="#items">Items</a></li><li><a href="#types">Types</a></li><li><a href="#generics-traits">Generics and traits</a></li><li><a href="#patterns">Patterns and control flow</a></li><li><a href="#closures">Closures</a></li><li><a href="#macros">Macros</a></li><li><a href="#std">The standard library</a></li><li><a href="#not-supported">Not supported yet</a></li><li><a href="#differences">Differences from cargo run</a></li></ol></li>
+    <li><a href="/docs/language" aria-current="page">The language</a><ol><li><a href="#overview">How a program runs</a></li><li><a href="#items">Items</a></li><li><a href="#types">Types</a></li><li><a href="#generics-traits">Generics and traits</a></li><li><a href="#patterns">Patterns and control flow</a></li><li><a href="#moves">Moves</a></li><li><a href="#closures">Closures</a></li><li><a href="#macros">Macros</a></li><li><a href="#std">The standard library</a></li><li><a href="#not-supported">Not supported yet</a></li><li><a href="#differences">Differences from cargo run</a></li></ol></li>
     <li><a href="/docs/embedding">Embedding</a></li>
     <li><a href="/docs/iced">rawr-iced</a></li>
     <li><a href="/docs/play">?play and the playground</a></li>
@@ -81,6 +81,7 @@ Error: "\"forty\": invalid digit found in string"
   <li><code>struct</code> with named fields, tuple structs and unit structs.</li>
   <li><code>enum</code> with unit, tuple and struct variants.</li>
   <li><code>impl</code> blocks with methods, associated functions and associated consts. An <code>impl</code> may sit inside a function body. <code>Self</code> works in a method body&rsquo;s type annotations, as in <code>let next: Self = ..</code>.</li>
+  <li><code>unsafe impl Send for T {}</code> and <code>unsafe impl Sync for T {}</code>. Every Rawr value is already <code>Send</code> and <code>Sync</code>, so the impl changes nothing. Rawr checks it as rustc does. <code>impl Send</code> without <code>unsafe</code> is an error. So is <code>unsafe impl</code> of another trait.</li>
   <li><code>trait</code> with default methods, associated types and static functions. Traits can be implemented for your own types and for built-in types such as <code>i64</code>.</li>
   <li><code>const</code> and <code>static</code> items.</li>
   <li><code>type</code> aliases, generic ones included, such as <code>type Pair&lt;T&gt; = (T, T);</code>. A <code>pub type</code> can be imported from another module.</li>
@@ -182,9 +183,13 @@ fn main() {
   <li>Patterns on <code>&amp;mut</code> places write their bindings back. <code>for p in &amp;mut points { p.x += 1; }</code> changes the elements. So does <code>if let State::Running { progress, .. } = &amp;mut self.state { *progress = p; }</code>. This holds in <code>match</code>, <code>if let</code>, <code>while let</code>, <code>let</code> and <code>let .. else</code>. It holds for nested struct, tuple and slice patterns, for <code>ref mut</code>, for <code>match self</code> in a <code>&amp;mut self</code> method, and for a pattern inside another one.</li>
 </ul>
 
+<h2 id="moves">Moves</h2>
+<p>A value that is not <code>Copy</code> moves when it is passed, assigned or stored by value, as in Rust. It drops with its last owner. A use after the move fails the check as rustc&rsquo;s E0382 does. Moving one field out of a struct, as <code>let name = p.name;</code>, leaves the struct&rsquo;s other fields usable. Assigning the field again makes it usable. A <code>match</code> arm whose pattern binds a part by value moves the subject. <code>a + &amp;b</code> moves the <code>String</code> <code>a</code>.</p>
+
 <h2 id="closures">Closures</h2>
 <p>Closures capture their environment. <code>move</code> closures work. A closure that mutates what it captures is <code>FnMut</code>. Functions can take closures as <code>impl Fn(..)</code> or as a generic <code>F: Fn(..)</code>. They can return them as <code>impl Fn(..)</code> or <code>Box&lt;dyn Fn(..)&gt;</code>. A struct field can hold a <code>Box&lt;dyn Fn(..)&gt;</code>.</p>
 <p>A closure in a variable is a value. It can be passed to a function or to <code>map</code>, copied to another variable, or called from inside another closure. A parameter can be <code>_</code> or another pattern.</p>
+<p>A closure that moves a captured value out, as <code>|| drop(s)</code> does, takes that value in when it is made, as in Rust. Such a closure can be called once. A closure that holds a value that is not <code>Copy</code> is not <code>Copy</code> either, so <code>let g = f;</code> moves it.</p>
 <div class="block">
   <div class="file"><b>closures.rs</b></div>
   <pre><code data-lang="rust" data-run="closures.rs" id="src-closures">fn apply(f: impl Fn(i64) -&gt; i64, x: i64) -&gt; i64 {
@@ -254,7 +259,7 @@ fn main() {
   <li>Arrays: <code>[T; N]::map</code> gives a <code>[U; N]</code>.</li>
   <li>Numbers: <code>abs</code>, <code>pow</code>, <code>sqrt</code>, <code>powi</code>, <code>powf</code>, <code>floor</code>, <code>round</code> and kin. Floats also have <code>sin</code>, <code>cos</code>, <code>tan</code>, their inverses and hyperbolic forms, <code>atan2</code>, <code>hypot</code>, <code>exp</code>, <code>ln</code>, <code>log</code>, <code>log10</code>, <code>to_degrees</code> and <code>to_radians</code>. <code>rem_euclid</code> and <code>div_euclid</code> work on floats and integers. A number&rsquo;s method can be called by its path, as in <code>f32::rem_euclid(x, 1.0)</code>.</li>
   <li><code>std::time::Duration</code> and <code>Instant</code>: <code>Duration::from_millis</code> and its kin, <code>as_secs</code>, <code>as_millis</code>, <code>as_secs_f64</code>, <code>Instant::now</code>, <code>elapsed</code>, <code>duration_since</code>, and the operators <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> and <code>&lt;</code>. <code>{:?}</code> prints Rust&rsquo;s text, such as <code>1.5s</code>.</li>
-  <li><code>std::collections</code>: <code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. A local may hold an entry, as in <code>let n = map.entry(k).or_default(); *n += 1;</code>.</li>
+  <li><code>std::collections</code>: <code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code> and <code>BTreeSet</code>. A local may hold an entry, as in <code>let n = map.entry(k).or_default(); *n += 1;</code>. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are Rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. <code>cargo build</code> still uses the crate&rsquo;s faster hasher.</li>
   <li><code>std::cell::RefCell</code>: <code>new</code>, <code>default</code>, <code>borrow</code>, <code>borrow_mut</code>, <code>into_inner</code>, <code>replace</code>, <code>take</code> and <code>clone</code>. A change through a shared reference to a <code>RefCell</code> changes the cell. A borrow ends with its block, as in Rust. A borrow that conflicts with one still held panics with Rust&rsquo;s message.</li>
   <li><code>std::marker::PhantomData</code>.</li>
   <li><code>std::mem::swap</code>, <code>replace</code> and <code>take</code>.</li>
@@ -263,7 +268,7 @@ fn main() {
   <li><code>From::from</code>, <code>Into::into</code>, <code>Clone::clone</code> and <code>ToString::to_string</code> as values. <code>.map(String::from)</code> is one example. A method of <code>Option</code> or <code>Result</code> works as a value too, as in <code>.map(Result::ok)</code>. So does an associated function of your own type, as in <code>.map(Db::from)</code> or <code>let make = Db::new;</code>.</li>
   <li><code>TryFrom</code> between integer types.</li>
 </ul>
-<p>In an iced app, <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>, which are std&rsquo;s own in iced. <code>std::path</code> has <code>PathBuf</code> and <code>Path</code>, and <code>std::ffi</code> has <code>OsString</code> and <code>OsStr</code>. They are Rust&rsquo;s own types. <code>Path</code> is another name for <code>PathBuf</code>, and <code>OsStr</code> is another name for <code>OsString</code>. They have <code>new</code>, <code>from</code>, <code>push</code>, <code>join</code>, <code>parent</code>, <code>file_name</code>, <code>file_stem</code>, <code>extension</code>, <code>display</code>, <code>to_str</code> and <code>to_string_lossy</code>. An imported Rust function does not take one yet.</p>
+<p>In an iced app, <code>std::time</code> names <code>iced::time</code>&rsquo;s <code>Duration</code> and <code>Instant</code>, which are std&rsquo;s own in iced. <code>std::path</code> has <code>PathBuf</code> and <code>Path</code>, and <code>std::ffi</code> has <code>OsString</code> and <code>OsStr</code>. They are Rust&rsquo;s own types. <code>Path</code> is another name for <code>PathBuf</code>, and <code>OsStr</code> is another name for <code>OsString</code>. They have <code>new</code>, <code>from</code>, <code>push</code>, <code>join</code>, <code>parent</code>, <code>file_name</code>, <code>file_stem</code>, <code>extension</code>, <code>display</code>, <code>to_str</code> and <code>to_string_lossy</code>. An imported Rust function does not take one yet. <code>std::io</code> has <code>Error</code> and <code>ErrorKind</code>. <code>Error::new</code>, <code>Error::other</code>, <code>Error::from</code> and <code>kind</code> work, and <code>{}</code> prints Rust&rsquo;s text. Nothing in it reads or writes a file.</p>
 
 <h2 id="not-supported">Not supported yet</h2>
 <p>These are valid Rust that Rawr rejects today. Each one fails the check with an error that names the construct.</p>
@@ -289,8 +294,8 @@ fn main() {
 </ul>
 <h3 id="missing-std">Standard library</h3>
 <ul>
-  <li><code>Rc</code> and <code>Cell</code>.</li>
-  <li><code>std::io</code>.</li>
+  <li><code>Rc</code>, <code>Arc</code> and <code>Cell</code>.</li>
+  <li><code>std::io</code> beyond <code>Error</code> and <code>ErrorKind</code>, and <code>std::fs</code>.</li>
   <li><code>VecDeque</code> and <code>BinaryHeap</code>.</li>
   <li><code>std::process::exit</code> and <code>Box&lt;dyn std::error::Error&gt;</code>.</li>
   <li><code>write!</code> into a <code>String</code> through <code>std::fmt::Write</code>.</li>
@@ -314,7 +319,7 @@ fn main() {
 <h3 id="lenient">Code that Rawr accepts and rustc rejects</h3>
 <p>Rawr&rsquo;s check is not rustc. Some code passes <code>rawr check</code> and fails <code>cargo build</code>. <code>rawr check</code> also runs <code>cargo check</code>, which reports these cases. <a href="/docs/cli#rawr">Commands</a> describes its output.</p>
 <ul>
-  <li>There is no borrow checker beyond rejecting two live <code>&amp;mut</code> borrows of one value. Use after move, a shared borrow held across a mutation, and returning a reference to a local are all accepted.</li>
+  <li>There is no borrow checker beyond rejecting two live <code>&amp;mut</code> borrows of one value and a use after a move. A shared borrow held across a mutation and returning a reference to a local are accepted.</li>
   <li><code>String</code> and <code>&amp;str</code> are one type to the checker. Passing <code>"x"</code> where a <code>String</code> is expected is accepted.</li>
   <li>Lifetimes are not checked. A missing lifetime on <code>fn f(a: &amp;str, b: &amp;str) -&gt; &amp;str</code> is accepted.</li>
   <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
