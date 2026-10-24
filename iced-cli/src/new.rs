@@ -12,16 +12,35 @@ pub const COUNTER_SOURCE: &str = include_str!("../assets/counter/src/main.rs");
 
 /// The `Cargo.toml` [`create`] writes for the package `name`. Its iced
 /// names `advanced` and `sipper`, the two iced features Rawr's runner adds,
-/// so the runner leaves the project's iced features as they are.
+/// and every widget Rawr's facade offers, so a widget can be added while
+/// the program runs and the runner builds the same iced as `cargo build`.
 #[must_use]
 pub fn manifest(name: &str) -> String {
     format!(
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
          [dependencies]\niced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\", \
-         features = [\"advanced\", \"sipper\"] }}\n",
-        rawr_iced::native::ICED_REVISION
+         features = [{}] }}\n",
+        rawr_iced::native::ICED_REVISION,
+        ICED_FEATURES
+            .iter()
+            .map(|feature| format!("\"{feature}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
     )
 }
+
+/// The iced features [`manifest`] names. The image widget comes without
+/// codecs, as Rawr's runner builds it: iced's `image` would add every codec
+/// the `image` crate has, AVIF's encoder among them.
+pub const ICED_FEATURES: [&str; 7] = [
+    "advanced",
+    "canvas",
+    "image-without-codecs",
+    "qr_code",
+    "selector",
+    "sipper",
+    "svg",
+];
 
 /// The `rust-toolchain.toml` [`create`] writes: the importer's pinned
 /// nightly, the compiler Rawr builds the project's runner and reads its
@@ -30,8 +49,20 @@ pub fn manifest(name: &str) -> String {
 #[must_use]
 pub fn toolchain() -> String {
     format!(
-        "[toolchain]\nchannel = \"{}\"\n",
+        "[toolchain]\nchannel = \"{}\"\ncomponents = [\"rust-src\", \"rustfmt\", \"clippy\"]\n",
         rawr_import::cargo::toolchain::CHANNEL
+    )
+}
+
+/// The `.cargo/config.toml` [`create`] writes: `build.target` names the
+/// host, as Rawr's builds do, so `cargo build` and `rawr run` compile the
+/// same units into `target/<host>/debug` and each reuses the other's.
+#[cfg(feature = "native-runner")]
+#[must_use]
+pub fn cargo_config() -> String {
+    format!(
+        "[build]\ntarget = \"{}\"\n",
+        rawr_import::cargo::toolchain::HOST.trim()
     )
 }
 
@@ -112,6 +143,7 @@ enum Operation {
     CreateDirectory,
     WriteManifest,
     WriteToolchain,
+    WriteCargoConfig,
     WriteSource,
 }
 
@@ -215,6 +247,24 @@ fn create_at(
         path: source_directory.clone(),
         kind: CreatedKind::Directory,
     });
+    #[cfg(feature = "native-runner")]
+    {
+        let config_directory = plan.root.join(".cargo");
+        if let Err(source) = file_system.create_directory(&config_directory) {
+            return Err(initialization_failure(
+                file_system,
+                &plan.root,
+                &config_directory,
+                Operation::CreateDirectory,
+                source,
+                &ledger,
+            ));
+        }
+        ledger.push(LedgerEntry {
+            path: config_directory,
+            kind: CreatedKind::Directory,
+        });
+    }
 
     let files = [
         (
@@ -227,6 +277,12 @@ fn create_at(
             plan.root.join("rust-toolchain.toml"),
             toolchain(),
             Operation::WriteToolchain,
+        ),
+        #[cfg(feature = "native-runner")]
+        (
+            plan.root.join(".cargo/config.toml"),
+            cargo_config(),
+            Operation::WriteCargoConfig,
         ),
         (
             source_directory.join("main.rs"),
@@ -516,6 +572,7 @@ impl fmt::Display for Operation {
             Self::CreateDirectory => formatter.write_str("create directory"),
             Self::WriteManifest => formatter.write_str("write Cargo.toml"),
             Self::WriteToolchain => formatter.write_str("write rust-toolchain.toml"),
+            Self::WriteCargoConfig => formatter.write_str("write .cargo/config.toml"),
             Self::WriteSource => formatter.write_str("write starter source"),
         }
     }
@@ -751,7 +808,7 @@ mod tests {
         assert_eq!(manifest, super::manifest("my-counter"));
         assert!(manifest.starts_with("[package]\nname = \"my-counter\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"));
         assert!(manifest.contains(&format!(
-            "iced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\", features = [\"advanced\", \"sipper\"] }}",
+            "iced = {{ git = \"https://github.com/iced-rs/iced\", rev = \"{}\", features = [\"advanced\", \"canvas\", \"image-without-codecs\", \"qr_code\", \"selector\", \"sipper\", \"svg\"] }}",
             rawr_iced::native::ICED_REVISION
         )));
         #[cfg(feature = "native-runner")]
@@ -760,9 +817,14 @@ mod tests {
         assert_eq!(
             toolchain,
             format!(
-                "[toolchain]\nchannel = \"{}\"\n",
+                "[toolchain]\nchannel = \"{}\"\ncomponents = [\"rust-src\", \"rustfmt\", \"clippy\"]\n",
                 rawr_import::cargo::toolchain::CHANNEL
             )
+        );
+        #[cfg(feature = "native-runner")]
+        assert_eq!(
+            std::fs::read_to_string(target.join(".cargo/config.toml")).unwrap(),
+            super::cargo_config()
         );
         let source = std::fs::read_to_string(target.join("src/main.rs")).unwrap();
         assert_eq!(source, super::COUNTER_SOURCE);

@@ -121,5 +121,9 @@ features = [
     "Win32_System_IO",
 ]
 
+# `link` alone, as iced's core-foundation asks for it: `default` would make
+# the crate a second unit beside `cargo build`'s in a project's runner.
 [target.'cfg(target_os = "macos")'.dependencies.core-foundation-sys]
 version = "0.8.7"
+default-features = false
+features = ["link"]

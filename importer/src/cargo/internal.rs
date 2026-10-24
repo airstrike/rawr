@@ -284,7 +284,7 @@ impl Recipe {
         profile: &str,
         allocation: &mut super::RequestAllocation,
     ) -> Result<()> {
-        allocation.items(9)?;
+        allocation.items(7)?;
         for value in [
             "profile",
             profile,
@@ -292,8 +292,6 @@ impl Recipe {
             self.package_id.as_ref(),
             "debug",
             "opt-level",
-            "strip",
-            "build-override",
             "strip",
         ] {
             allocation.string(value)?;
@@ -332,17 +330,10 @@ impl Recipe {
         // runs it.
         override_table.insert("strip", value(false));
         packages.insert(self.package_id.as_ref(), Item::Table(override_table));
-        let selected = table(profiles_of(document)?, profile, "selected Cargo profile")?;
-        let build = table(selected, "build-override", "Cargo build script profile")?;
-        if !build.contains_key("strip") {
-            build.insert("strip", value(false));
-        }
+        // No `build-override`: build scripts and proc macros are units the
+        // project's own `cargo build` compiles, and they must stay the same.
         Ok(())
     }
-}
-
-fn profiles_of(document: &mut DocumentMut) -> Result<&mut Table> {
-    table(document.as_table_mut(), "profile", "Cargo profile authority")
 }
 
 fn table<'a>(parent: &'a mut Table, key: &str, document: &'static str) -> Result<&'a mut Table> {
@@ -532,7 +523,7 @@ mod tests {
         assert_eq!(internal["opt-level"].as_integer(), Some(3));
         // Nothing is stripped, so no build runs `rust-objcopy`.
         assert_eq!(internal["strip"].as_bool(), Some(false));
-        assert_eq!(profile["build-override"]["strip"].as_bool(), Some(false));
+        assert!(profile.get("build-override").is_none());
     }
 
     #[test]
