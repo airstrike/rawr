@@ -12823,12 +12823,42 @@ impl<'a> Parser<'a> {
     /// shared borrow is passed by value, and a typed number as its runtime kind.
     /// Imported Rust items keep exact types.
     fn deref_facade_strings(
-        &self,
+        &mut self,
         items: &[crate::host::item::Definition],
         arguments: &mut [ParsedExpr],
     ) -> Result<(), Error> {
         if items.iter().any(|item| item.imported_identity().is_some()) {
             return Ok(());
+        }
+        // An imported value where an iced helper takes text, as `text` takes
+        // `impl IntoFragment`: its `Display` text. `cargo check` holds the
+        // value's type to the trait iced asks for.
+        #[cfg(feature = "rust-import")]
+        for (index, argument) in arguments.iter_mut().enumerate() {
+            let target = match self.inference.resolve(&argument.ty) {
+                Ty::Reference { target, .. } => self.inference.resolve(&target),
+                ty => ty,
+            };
+            let imported = matches!(&target, Ty::Host { proof, .. }
+                if proof.definition.identity().imported().is_some());
+            let text = items.iter().all(|item| item.path().starts_with("iced::"))
+                && items.iter().any(|item| {
+                    item.signature().parameters().get(index).is_some_and(|parameter| {
+                            matches!(
+                                parameter.shape(),
+                                crate::host::type_ref::Shape::Builtin(
+                                    crate::host::type_ref::Builtin::String
+                                )
+                            )
+                        })
+                });
+            if imported && text {
+                argument.source =
+                    self.prelude_op(PreludeOp::DisplayText, [argument.rendered_source()]);
+                argument.prelude = origin::Fragment::default();
+                argument.lvalue = None;
+                argument.ty = Ty::String;
+            }
         }
         // iced never takes an `i64` or `f64`: its numbers are `f32`, `u8`,
         // `u16`, `u32`, or a slider's `T`. A facade `i64`/`f64` input stands
@@ -27043,6 +27073,47 @@ impl<'a> Parser<'a> {
             }
             let items = value_or_call(macro_or_value(items.into_vec(), false), false);
             let [item] = items.as_slice() else {
+                // `.map(text)`: an overloaded function as a value is the
+                // closure `|a| text(a)`, whose call picks the overload.
+                let arities = items
+                    .iter()
+                    .filter(|item| {
+                        matches!(
+                            item.kind(),
+                            crate::host::item::Kind::Function
+                                | crate::host::item::Kind::AssociatedFunction
+                        )
+                    })
+                    .map(|item| item.signature().parameters().len())
+                    .collect::<BTreeSet<_>>();
+                if !matches!(self.peek(), Token::LeftParen | Token::Unit)
+                    && arities.len() == 1
+                    && let Some(&arity) = arities.first()
+                    && arity > 0
+                {
+                    let at = name_span.start();
+                    let parameter =
+                        |index: usize| Token::Identifier(Box::new(format!("__a{index}").into()));
+                    let mut tokens = Vec::new();
+                    for index in 0..arity {
+                        if index > 0 {
+                            tokens.push((Token::Comma, at));
+                        }
+                        tokens.push((parameter(index), at));
+                    }
+                    tokens.push((Token::Pipe, at));
+                    tokens.push((Token::Identifier(Box::new(name.as_str().into())), at));
+                    tokens.push((Token::LeftParen, at));
+                    for index in 0..arity {
+                        if index > 0 {
+                            tokens.push((Token::Comma, at));
+                        }
+                        tokens.push((parameter(index), at));
+                    }
+                    tokens.push((Token::RightParen, at));
+                    self.splice_tokens(tokens);
+                    return self.parse_closure(Token::Pipe, name_span, false);
+                }
                 return Err(Error::InvalidHostOperation {
                     item: binding.qualified,
                     reason: "overloaded host items require call syntax".into(),

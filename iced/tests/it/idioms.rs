@@ -1226,3 +1226,15 @@ struct Picture {
     );
     find(&adapter, "true");
 }
+
+/// iced's websocket example lists its messages with `.map(text)`: `text`
+/// as a value is the closure that calls it.
+#[test]
+fn an_overloaded_helper_passes_as_a_function_value() {
+    let adapter = boot(
+        r#"let lines = vec![String::from("first"), String::from("second")];
+        column(lines.iter().map(text))"#,
+    );
+    find(&adapter, "first");
+    find(&adapter, "second");
+}
