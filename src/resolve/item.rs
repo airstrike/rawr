@@ -22,14 +22,6 @@ pub(crate) enum Kind {
     Impl(Impl),
     Trait(Trait),
     Function(Function),
-    LegacyFunction(LegacyFunction),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct LegacyFunction {
-    pub name: crate::item::Name,
-    pub parameter_count: usize,
-    pub body: Body,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

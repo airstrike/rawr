@@ -52,6 +52,7 @@ codes!(Parse;
     (PARSE_UNEXPECTED_EOF, "RAWR-PARSE-UNEXPECTED-EOF", "Unexpected end of source."),
     (PARSE_MISSING_TOKEN, "RAWR-PARSE-MISSING-TOKEN", "Required source token is missing."),
     (PARSE_MISSING_SYMBOL, "RAWR-PARSE-MISSING-SYMBOL", "Required source symbol is missing."),
+    (PARSE_UNEXPECTED, "RAWR-PARSE-UNEXPECTED", "Syntax Rust does not have, as rustc reports it."),
 );
 
 codes!(Resolve;
@@ -96,7 +97,6 @@ codes!(Resolve;
 
 codes!(Framework;
     (FRAMEWORK_MISSING_ENTRY, "RAWR-FRAMEWORK-MISSING-ENTRY", "Missing application entry."),
-    (FRAMEWORK_PRIVATE_MAIN, "RAWR-FRAMEWORK-PRIVATE-MAIN", "Private application main."),
     (FRAMEWORK_INVALID_MAIN, "RAWR-FRAMEWORK-INVALID-MAIN", "Invalid application main."),
     (FRAMEWORK_MULTIPLE_ENTRIES, "RAWR-FRAMEWORK-MULTIPLE-ENTRIES", "Multiple application entries."),
     (FRAMEWORK_CONDITIONAL_ENTRY, "RAWR-FRAMEWORK-CONDITIONAL-ENTRY", "Conditional application entry."),

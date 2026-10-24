@@ -860,7 +860,6 @@ impl Parser<'_> {
             let end = self.expect(Token::RightParen, "')' after `and_modify`'s function")?;
             let mut source = entry_place;
             source.push_text(format!(".{}();", function.generated));
-            self.used_nominal = true;
             return Ok((source, end));
         }
         self.expect(Token::Pipe, "a closure `|v| ..` in `and_modify`")?;

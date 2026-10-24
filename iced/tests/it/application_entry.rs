@@ -139,11 +139,6 @@ fn application_promotion_requires_an_entry_without_changing_general_compilation(
 fn application_entry_rejects_ambiguous_locations_and_shapes_with_positions() {
     let cases = [
         (
-            "fn main() { iced::run(Counter::update, Counter::view) }",
-            Category::PrivateMain,
-            1,
-        ),
-        (
             "pub fn main(value: i64) { iced::run(Counter::update, Counter::view) }",
             Category::InvalidMain,
             1,

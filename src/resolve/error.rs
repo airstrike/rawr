@@ -60,6 +60,8 @@ pub enum Category {
     InvalidMatch,
     /// Source combines nominal operations with syntax not lowered in this phase.
     UnsupportedNominalSyntax,
+    /// Syntax Rust does not have, as rustc reports it.
+    Syntax,
     /// The restricted application-root contract was violated.
     InvalidApplication,
     /// A local preview declaration cannot be normalized at compile time.
@@ -97,6 +99,7 @@ impl fmt::Display for Category {
             Self::MissingCapability => formatter.write_str("missing capability"),
             Self::InvalidMatch => formatter.write_str("invalid match"),
             Self::UnsupportedNominalSyntax => formatter.write_str("unsupported nominal syntax"),
+            Self::Syntax => formatter.write_str("syntax error"),
             Self::InvalidApplication => formatter.write_str("invalid application"),
             Self::InvalidPreview => formatter.write_str("invalid preview"),
             Self::InvalidWidget => formatter.write_str("invalid widget protocol"),
@@ -351,6 +354,18 @@ pub enum Error {
         /// Exact source position that selected it.
         source: Span,
     },
+    /// Syntax Rust does not have, as rustc reports it: its message, the
+    /// label under the token and rustc's help.
+    Syntax {
+        /// The error, as rustc words it.
+        message: ImmutableString,
+        /// The label under the token.
+        label: ImmutableString,
+        /// rustc's help, when it gives one.
+        help: Option<ImmutableString>,
+        /// The token's span.
+        at: Span,
+    },
     /// Restricted application-root discovery failed.
     Application(crate::application::Error),
     /// Local preview metadata or one of its exact callback proofs is invalid.
@@ -408,6 +423,7 @@ impl Error {
             Self::MissingCapability { .. } => Category::MissingCapability,
             Self::InvalidMatch { .. } => Category::InvalidMatch,
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
+            Self::Syntax { .. } => Category::Syntax,
             Self::Application(_) => Category::InvalidApplication,
             Self::InvalidPreview { .. } => Category::InvalidPreview,
             Self::InvalidWidget { .. } => Category::InvalidWidget,
@@ -445,6 +461,7 @@ impl Error {
             Self::UnusedValue { value, .. } => value.as_str(),
             Self::SelfOutsideImpl { .. } => "self",
             Self::UnsupportedNominalSyntax { construct, .. } => construct.as_str(),
+            Self::Syntax { message, .. } => message.as_str(),
             Self::Application(_) => "application",
             Self::InvalidPreview { preview, .. } => preview.as_str(),
             Self::InvalidWidget { widget, .. } => widget.as_str(),
@@ -483,6 +500,7 @@ impl Error {
             Self::MissingCapability { operation, .. } => *operation,
             Self::InvalidMatch { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
+            Self::Syntax { at, .. } => *at,
             Self::Application(error) => error.primary_span(),
             Self::InvalidPreview { reference, .. } => *reference,
             Self::InvalidWidget { reference, .. } => *reference,
@@ -522,7 +540,8 @@ impl Error {
             | Self::TypeMismatch { .. }
             | Self::MissingCapability { .. }
             | Self::InvalidMatch { .. }
-            | Self::UnsupportedNominalSyntax { .. } => None,
+            | Self::UnsupportedNominalSyntax { .. }
+            | Self::Syntax { .. } => None,
             Self::Application(error) => error.secondary_span(),
             Self::InvalidPreview { declaration, .. } => *declaration,
             Self::InvalidWidget { declaration, .. } => *declaration,
@@ -733,6 +752,7 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "nominal operation uses unsupported syntax `{construct}` at {source}"
             ),
+            Error::Syntax { message, .. } => formatter.write_str(message),
             Error::Application(error) => error.fmt(formatter),
             Error::InvalidPreview {
                 preview,

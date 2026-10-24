@@ -710,7 +710,6 @@ fn item_header(kind: &item::Kind) -> Option<&crate::item::Header> {
         item::Kind::Impl(item) => &item.header,
         item::Kind::Trait(item) => &item.header,
         item::Kind::Function(item) => &item.header,
-        item::Kind::LegacyFunction(_) => return None,
     })
 }
 

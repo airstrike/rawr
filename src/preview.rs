@@ -1482,7 +1482,6 @@ fn collect_subjects(
             resolve::item::Kind::Trait(item) => {
                 reject_header_previews(shell.source, &item.header, "trait declaration")?;
             }
-            resolve::item::Kind::LegacyFunction(_) => {}
         }
     }
     Ok(subjects)

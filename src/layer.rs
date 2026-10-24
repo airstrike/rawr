@@ -269,10 +269,6 @@ impl Names {
                 self.declared.insert(function.name.text.clone());
                 self.function(function);
             }
-            item::Parsed::LegacyFunction(function) => {
-                self.declared.insert(function.name.text.clone());
-                self.body(&function.body_syntax);
-            }
             item::Parsed::Struct(item) => {
                 self.declared.insert(item.name.text.clone());
                 for field in &item.fields {

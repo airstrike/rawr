@@ -348,8 +348,6 @@ pub enum Parsed {
     Function(Function),
     /// A type alias: `type Name<T> = Type;`.
     TypeAlias(TypeAlias),
-    /// A private legacy function retained only for application-root diagnostics.
-    LegacyFunction(LegacyFunction),
 }
 
 impl Parsed {
@@ -365,12 +363,7 @@ impl Parsed {
             Self::Trait(item) => item.span,
             Self::Function(item) => item.span,
             Self::TypeAlias(item) => item.span,
-            Self::LegacyFunction(item) => item.span,
         }
-    }
-
-    pub(crate) const fn masks_legacy_source(&self) -> bool {
-        !matches!(self, Self::LegacyFunction(_))
     }
 }
 
@@ -671,20 +664,6 @@ pub struct Function {
     /// as an `async move` block.
     pub(crate) asynchronous: bool,
     /// Complete item span.
-    pub span: Span,
-}
-
-/// A non-masking outline of a private legacy function relevant to application discovery.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LegacyFunction {
-    /// Declared function name.
-    pub name: Name,
-    /// Number of syntactic parameters in the legacy header.
-    pub parameter_count: usize,
-    /// Source span occupied by the body, including braces.
-    pub body_span: Span,
-    pub(crate) body_syntax: BodySyntax,
-    /// Complete function span.
     pub span: Span,
 }
 

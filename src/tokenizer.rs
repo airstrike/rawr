@@ -33,6 +33,9 @@ pub struct TokenizerControlBlock {
     ///
     /// Set to `Some` in order to collect a compressed script.
     pub compressed: Option<String>,
+    /// Read the input as Rust, which has no backtick strings: a backtick
+    /// is rustc's "unknown start of token".
+    pub rust: bool,
 }
 
 impl TokenizerControlBlock {
@@ -47,6 +50,7 @@ impl TokenizerControlBlock {
             #[cfg(feature = "metadata")]
             global_comments: String::new(),
             compressed: None,
+            rust: false,
         }
     }
 }
@@ -2045,6 +2049,14 @@ fn get_next_token_inner(
                     );
             }
             // ` - string literal
+            ('`', ..) if state.tokenizer_control.borrow().rust => {
+                return (
+                    Token::LexError(
+                        LERR::ImproperSymbol("`".into(), "unknown start of token: `".into()).into(),
+                    ),
+                    start_pos,
+                );
+            }
             ('`', ..) => {
                 // Start from the next line if at the end of line
                 match stream.peek_next() {
@@ -2077,6 +2089,16 @@ fn get_next_token_inner(
                 );
             }
 
+            // `#"…"#` is not Rust's raw string, which starts with `r`.
+            ('#', '"' | '#') if state.tokenizer_control.borrow().rust => {
+                return (
+                    Token::LexError(
+                        LERR::ImproperSymbol("#".into(), "expected expression, found `#`".into())
+                            .into(),
+                    ),
+                    start_pos,
+                );
+            }
             // r - raw string literal
             ('#', '"' | '#') => {
                 return parse_raw_string_literal(stream, state, pos, 0).map_or_else(

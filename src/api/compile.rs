@@ -1,6 +1,7 @@
 //! Module that defines the public compilation API of [`Engine`].
 
 use crate::parser::{ParseResult, ParseState};
+use crate::tokenizer::Token;
 use crate::{program, Engine, Scope, Shared, AST};
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
@@ -842,18 +843,49 @@ impl Engine {
         scope: &Scope,
         script: impl AsRef<str>,
     ) -> ParseResult<AST> {
-        let scripts = [script];
-        let (stream, t) = self.lex(&scripts);
-
-        let input = &mut stream.peekable();
-        let lib = &mut <_>::default();
-        let state = ParseState::new(Some(scope), input, t, lib);
-
-        self.parse_global_expr(
-            state,
-            |_| {},
+        self.expression_only(script.as_ref())?;
+        self.compile_scripts_with_scope_raw(
+            Some(scope),
+            [script],
             #[cfg(not(feature = "no_optimize"))]
             self.optimization_level,
         )
+    }
+
+    /// Refuse a script that is not one expression: a statement ends with
+    /// `;` or starts with `let`, as rustc reports where it wants an
+    /// expression.
+    fn expression_only(&self, script: &str) -> ParseResult<()> {
+        let scripts = [script];
+        let (stream, _) = self.lex(&scripts);
+        let mut depth = 0_usize;
+        let mut first = true;
+        for (token, position) in stream {
+            let statement = match token {
+                Token::EOF => break,
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                    None
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.saturating_sub(1);
+                    None
+                }
+                Token::SemiColon if depth == 0 => Some("found `;`"),
+                Token::Let if first => Some("found `let` statement"),
+                _ => None,
+            };
+            first = false;
+            if let Some(found) = statement {
+                return Err(crate::parser::item::unexpected(
+                    format!("expected expression, {found}"),
+                    "expected expression",
+                    None,
+                    &token,
+                    position,
+                ));
+            }
+        }
+        Ok(())
     }
 }

@@ -1,7 +1,6 @@
 //! Module that defines the public evaluation API of [`Engine`].
 
 use crate::eval::Caches;
-use crate::parser::ParseState;
 use crate::{Engine, RawrResultOf, Scope, AST};
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
@@ -55,20 +54,12 @@ impl Engine {
     /// ```
     #[inline]
     pub fn run_with_scope(&self, scope: &mut Scope, script: &str) -> RawrResultOf<()> {
-        let scripts = [script];
-        let ast = {
-            let (stream, tc) = self.lex(&scripts);
-
-            let input = &mut stream.peekable();
-            let lib = &mut <_>::default();
-            let state = ParseState::new(Some(scope), input, tc, lib);
-
-            self.parse(
-                state,
-                #[cfg(not(feature = "no_optimize"))]
-                self.optimization_level,
-            )?
-        };
+        let ast = self.compile_scripts_with_scope_raw(
+            Some(scope),
+            [script],
+            #[cfg(not(feature = "no_optimize"))]
+            self.optimization_level,
+        )?;
         self.run_ast_with_scope(scope, &ast)
     }
     /// Evaluate an [`AST`].

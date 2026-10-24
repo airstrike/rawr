@@ -95,8 +95,7 @@ impl Model {
                 item::Kind::Use(_)
                 | item::Kind::Impl(_)
                 | item::Kind::Trait(_)
-                | item::Kind::Function(_)
-                | item::Kind::LegacyFunction(_) => continue,
+                | item::Kind::Function(_) => continue,
             };
             runtime.insert(
                 type_def::Identity::Script(definition.key().clone()),

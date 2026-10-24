@@ -567,8 +567,7 @@ impl<'a> Builder<'a> {
                 | item::Parsed::Impl(_)
                 | item::Parsed::Trait(_)
                 | item::Parsed::Function(_)
-                | item::Parsed::TypeAlias(_)
-                | item::Parsed::LegacyFunction(_) => None,
+                | item::Parsed::TypeAlias(_) => None,
             })
             .collect::<Vec<_>>();
         let file_text = source.text().to_string();

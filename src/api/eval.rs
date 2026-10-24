@@ -2,7 +2,6 @@
 
 use crate::ast::{Expr, FnCallHashes};
 use crate::eval::{Caches, GlobalRuntimeState};
-use crate::parser::ParseState;
 use crate::tokenizer::Token;
 use crate::types::dynamic::Variant;
 use crate::{
@@ -120,23 +119,7 @@ impl Engine {
         scope: &mut Scope,
         script: &str,
     ) -> RawrResultOf<T> {
-        let scripts = [script];
-        let ast = {
-            let (stream, tc) = self.lex(&scripts);
-
-            let input = &mut stream.peekable();
-            let lib = &mut <_>::default();
-            let state = ParseState::new(Some(scope), input, tc, lib);
-
-            // No need to optimize a lone expression
-            self.parse_global_expr(
-                state,
-                |_| {},
-                #[cfg(not(feature = "no_optimize"))]
-                crate::OptimizationLevel::None,
-            )?
-        };
-
+        let ast = self.compile_expression_with_scope(scope, script)?;
         self.eval_ast_with_scope(scope, &ast)
     }
     /// Evaluate an [`AST`], returning the result value or an error.

@@ -44,7 +44,6 @@ enum Class {
     Declaration(Span),
     Body(Span),
     Expression(Span),
-    Source,
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -139,10 +138,6 @@ impl Generated {
         offset
     }
 
-    pub(super) fn source(&mut self, source: program::source::Id, text: &str) {
-        self.push(source, Class::Source, Priority::Owned, text);
-    }
-
     pub(super) fn translate(&self, span: Span) -> Result<At, Error> {
         if span.is_none() {
             return Err(Error::MissingPosition);
@@ -175,7 +170,7 @@ impl Generated {
         if start < end {
             self.eof = Some(At {
                 source,
-                span: class.at_end(text),
+                span: class.at_end(),
             });
             self.origins.push(Origin {
                 generated: start..end,
@@ -209,13 +204,6 @@ impl Generated {
             source: origin.source,
             span: match origin.class {
                 Class::Declaration(span) | Class::Body(span) | Class::Expression(span) => span,
-                Class::Source => {
-                    let start = position_at(
-                        &self.text[origin.generated.clone()],
-                        byte.checked_sub(origin.generated.start)?,
-                    );
-                    Span::new(start, start)
-                }
             },
         })
     }
@@ -225,17 +213,12 @@ impl Class {
     fn ordering_span(&self) -> Span {
         match self {
             Self::Declaration(span) | Self::Body(span) | Self::Expression(span) => *span,
-            Self::Source => Span::NONE,
         }
     }
 
-    fn at_end(&self, text: &str) -> Span {
+    fn at_end(&self) -> Span {
         match self {
             Self::Declaration(span) | Self::Body(span) | Self::Expression(span) => *span,
-            Self::Source => {
-                let end = position_at(text, text.len());
-                Span::new(end, end)
-            }
         }
     }
 }
@@ -257,20 +240,6 @@ pub(super) fn byte_at(source: &str, position: Position) -> Option<usize> {
         }
     }
     (current_line == line && current_column == column).then_some(source.len())
-}
-
-fn position_at(source: &str, byte: usize) -> Position {
-    let mut line = 1_u16;
-    let mut column = 0_u16;
-    for character in source[..byte].chars() {
-        if character == '\n' {
-            line = line.saturating_add(1);
-            column = 0;
-        } else {
-            column = column.saturating_add(1);
-        }
-    }
-    Position::new(line, column)
 }
 
 #[cfg(test)]
@@ -358,35 +327,6 @@ mod tests {
             assert_eq!(translated.source, source);
             assert_eq!(translated.span, inner);
         }
-    }
-
-    #[test]
-    fn generated_source_identity_mapping_ignores_preceding_functions() {
-        let source = program::source::Id::from_index(3);
-        let mut plain = Generated::new();
-        plain.source(source, "let broken = ;\n");
-        let plain = plain
-            .translate(Span::new(Position::new(1, 14), Position::new(1, 14)))
-            .expect("plain generated position has exact source ownership");
-
-        let mut prefixed = Generated::new();
-        prefixed.declaration(
-            program::source::Id::ROOT,
-            span(1, 1, 1, 3),
-            "fn prior() {}\n",
-        );
-        prefixed.source(source, "let broken = ;\n");
-        let prefixed = prefixed
-            .translate(Span::new(Position::new(2, 14), Position::new(2, 14)))
-            .expect("prefixed generated position has exact source ownership");
-
-        assert_eq!(plain.source, source);
-        assert_eq!(prefixed.source, source);
-        assert_eq!(plain.span, prefixed.span);
-        assert_eq!(
-            plain.span,
-            Span::new(Position::new(1, 14), Position::new(1, 14))
-        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Main module defining the lexer and parser.
 
-mod item;
+pub(crate) mod item;
 
 pub(crate) use item::CALLBACK_CLOSURE_PREFIX;
 
@@ -557,10 +557,12 @@ impl Engine {
         let script_source = source.without(
             items
                 .iter()
-                .filter(|item| item.masks_legacy_source())
                 .map(crate::item::Parsed::span)
                 .chain(inner_attributes),
         );
+        // The statements outside the items are typed Rust, which the
+        // checker reads when it lowers them. This parse only tells whether
+        // there are any.
         let script = self
             .compile_legacy_script_with_scope_raw(
                 scope,
@@ -568,14 +570,7 @@ impl Engine {
                 #[cfg(not(feature = "no_optimize"))]
                 optimization_level,
             )
-            .map(Some)
-            .or_else(|error| {
-                if items.is_empty() {
-                    Err(error)
-                } else {
-                    Ok(None)
-                }
-            })?;
+            .ok();
 
         Ok(crate::parse::Unit::new(
             source,

@@ -330,8 +330,7 @@ pub(crate) fn resolve(items: &[item::Shell]) -> Result<BTreeMap<type_def::Id, Se
             item::Kind::Use(_)
             | item::Kind::Impl(_)
             | item::Kind::Trait(_)
-            | item::Kind::Function(_)
-            | item::Kind::LegacyFunction(_) => continue,
+            | item::Kind::Function(_) => continue,
         };
 
         let definition = match &shell.kind {
@@ -340,8 +339,7 @@ pub(crate) fn resolve(items: &[item::Shell]) -> Result<BTreeMap<type_def::Id, Se
             item::Kind::Use(_)
             | item::Kind::Impl(_)
             | item::Kind::Trait(_)
-            | item::Kind::Function(_)
-            | item::Kind::LegacyFunction(_) => {
+            | item::Kind::Function(_) => {
                 unreachable!("only nominal items create capability requests")
             }
         };

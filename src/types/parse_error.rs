@@ -171,6 +171,18 @@ pub enum ParseErrorType {
     MalformedReceiver(String, Span),
     /// A structural tuple type has an unsupported number of members.
     MalformedTypeTuple(usize, Span),
+    /// Syntax Rust does not have, as rustc reports it: its message, the
+    /// label under the token, the help, and the token's span.
+    Unexpected {
+        /// The error, as rustc words it.
+        message: String,
+        /// The label under the token.
+        label: String,
+        /// rustc's help, when it gives one.
+        help: Option<String>,
+        /// The token's span.
+        span: Span,
+    },
     /// A parsed Rawr unit failed semantic resolution or lowering.
     Resolution(crate::resolve::Error),
     /// Missing a property name for custom types and maps.
@@ -302,6 +314,7 @@ impl fmt::Display for ParseErrorType {
                 f,
                 "Invalid tuple type with {actual} member(s); expected at least 2"
             ),
+            Self::Unexpected { message, .. } => f.write_str(message),
             Self::Resolution(error) => match error {
                 crate::resolve::Error::DuplicateItem {
                     name,
@@ -410,6 +423,7 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
                     write!(f, "Unsupported nominal syntax '{construct}'")
                 }
+                crate::resolve::Error::Syntax { message, .. } => f.write_str(message),
                 crate::resolve::Error::Application(error) => write!(f, "{error}"),
                 crate::resolve::Error::InvalidPreview {
                     preview, reason, ..
@@ -533,7 +547,8 @@ impl ParseError {
     pub const fn primary_span(&self) -> Span {
         match self.err_type() {
             ParseErrorType::MalformedReceiver(_, span)
-            | ParseErrorType::MalformedTypeTuple(_, span) => *span,
+            | ParseErrorType::MalformedTypeTuple(_, span)
+            | ParseErrorType::Unexpected { span, .. } => *span,
             ParseErrorType::Resolution(error) => error.primary_span(),
             _ => Span::new(self.1, self.1),
         }

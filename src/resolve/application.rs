@@ -152,9 +152,6 @@ enum AttemptKind {
 
 struct Attempt<'a> {
     name: &'a crate::item::Name,
-    /// A legacy `fn main() { .. }`: Rust's `fn main() -> iced::Result` and
-    /// `pub fn main` are items.
-    legacy: bool,
     parameter_count: usize,
     has_receiver: bool,
     syntax: &'a crate::item::BodySyntax,
@@ -280,12 +277,6 @@ fn resolve_entry(
             entry: attempt.span,
         });
     }
-    if attempt.legacy {
-        return Err(application::Error::PrivateMain {
-            declaration: attempt.name.span,
-            entry: attempt.span,
-        });
-    }
     if attempt.has_receiver || attempt.parameter_count > 0 {
         return Err(application::Error::InvalidMain {
             reason: "application `main` cannot declare a receiver or parameters".into(),
@@ -404,21 +395,8 @@ fn collect_attempts<'a>(
             item::Kind::Function(function) => {
                 collect_function_attempts(
                     &function.name,
-                    false,
                     function.parameters.len(),
                     function.receiver.is_some(),
-                    &function.body.syntax,
-                    true,
-                    contracts,
-                    &mut attempts,
-                );
-            }
-            item::Kind::LegacyFunction(function) => {
-                collect_function_attempts(
-                    &function.name,
-                    true,
-                    function.parameter_count,
-                    false,
                     &function.body.syntax,
                     true,
                     contracts,
@@ -429,7 +407,6 @@ fn collect_attempts<'a>(
                 for function in &item.functions {
                     collect_function_attempts(
                         &function.name,
-                        false,
                         function.parameters.len(),
                         function.receiver.is_some(),
                         &function.body.syntax,
@@ -451,7 +428,6 @@ fn collect_attempts<'a>(
 
 fn collect_function_attempts<'a>(
     name: &'a crate::item::Name,
-    legacy: bool,
     parameter_count: usize,
     has_receiver: bool,
     syntax: &'a crate::item::BodySyntax,
@@ -470,7 +446,6 @@ fn collect_function_attempts<'a>(
             .unwrap_or_else(|| tokens[index].span());
         attempts.push(Attempt {
             name,
-            legacy,
             parameter_count,
             has_receiver,
             syntax,
@@ -799,13 +774,11 @@ fn boot_function(
         item::Kind::Function(function) => Some(function.clone()),
         _ => None,
     };
-    // `fn main` is a private legacy function in a script.
     let main = items
         .iter()
         .find(|shell| match &shell.kind {
             item::Kind::Function(function) => function.name.span == attempt.name.span,
-            item::Kind::LegacyFunction(function) => function.name.span == attempt.name.span,
-            _ => false,
+                _ => false,
         })
         .ok_or_else(non_symbolic)?;
     let state = items
@@ -869,7 +842,6 @@ fn unit_update(
 ) -> Option<item::Shell> {
     let main = items.iter().find(|shell| match &shell.kind {
         item::Kind::Function(function) => function.name.span == attempt.name.span,
-        item::Kind::LegacyFunction(function) => function.name.span == attempt.name.span,
         _ => false,
     })?;
     let state = update_state(view, items, methods).or_else(|| {
@@ -969,7 +941,6 @@ fn default_boot(
 ) -> Option<item::Shell> {
     let main = items.iter().find(|shell| match &shell.kind {
         item::Kind::Function(function) => function.name.span == attempt.name.span,
-        item::Kind::LegacyFunction(function) => function.name.span == attempt.name.span,
         _ => false,
     })?;
     let state = update_state(update, items, methods)?;
@@ -1145,7 +1116,6 @@ fn theme_function(
 ) -> Option<item::Shell> {
     let main = items.iter().find(|shell| match &shell.kind {
         item::Kind::Function(function) => function.name.span == attempt.name.span,
-        item::Kind::LegacyFunction(function) => function.name.span == attempt.name.span,
         _ => false,
     })?;
     let state = update_state(update, items, methods)?;
@@ -1242,7 +1212,6 @@ fn resolve_callback(
                 | item::Kind::Enum(_)
                 | item::Kind::Impl(_)
                 | item::Kind::Trait(_)
-                | item::Kind::LegacyFunction(_)
                 | item::Kind::Function(_) => None,
             }),
         [owner, name] => {
@@ -1264,7 +1233,6 @@ fn resolve_callback(
                     item::Kind::Impl(_)
                     | item::Kind::Trait(_)
                     | item::Kind::Function(_)
-                    | item::Kind::LegacyFunction(_)
                     | item::Kind::Struct(_)
                     | item::Kind::Enum(_) => None,
                 });

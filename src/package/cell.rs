@@ -490,7 +490,6 @@ record! {
         header, name, generics, receiver, parameters, output, body_span,
         body_syntax, constant, asynchronous, span,
     }
-    item::LegacyFunction { name, parameter_count, body_span, body_syntax, span }
     item::TypeAlias { header, name, generics, target, span }
     item::Parameter { name, ty, span, pattern }
     type_ref::Path { segments, span, global }
@@ -513,7 +512,6 @@ impl Codec for item::Parsed {
             Self::Impl(item) => (writer.byte(4), item.put(writer)),
             Self::Trait(item) => (writer.byte(5), item.put(writer)),
             Self::Function(item) => (writer.byte(6), item.put(writer)),
-            Self::LegacyFunction(item) => (writer.byte(7), item.put(writer)),
             Self::TypeAlias(item) => (writer.byte(8), item.put(writer)),
         };
     }
@@ -526,7 +524,6 @@ impl Codec for item::Parsed {
             4 => Self::Impl(Codec::get(reader)?),
             5 => Self::Trait(Codec::get(reader)?),
             6 => Self::Function(Codec::get(reader)?),
-            7 => Self::LegacyFunction(Codec::get(reader)?),
             8 => Self::TypeAlias(Codec::get(reader)?),
             _ => return None,
         })

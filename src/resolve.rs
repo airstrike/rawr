@@ -302,8 +302,7 @@ fn resolve_with_evidence_and_namespace(
         | crate::item::Parsed::Impl(_)
         | crate::item::Parsed::Trait(_)
         | crate::item::Parsed::Function(_)
-        | crate::item::Parsed::TypeAlias(_)
-        | crate::item::Parsed::LegacyFunction(_) => None,
+        | crate::item::Parsed::TypeAlias(_) => None,
     }) {
         return Err(Error::UnsupportedNominalSyntax {
             construct: "file modules require project/package compilation".into(),
@@ -445,7 +444,7 @@ pub(crate) fn validate_invocation_storage(program: &Program) -> Result<(), Locat
                     }
                 }
             }
-            item::Kind::Use(_) | item::Kind::Trait(_) | item::Kind::LegacyFunction(_) => {}
+            item::Kind::Use(_) | item::Kind::Trait(_) => {}
         }
     }
     Ok(())
@@ -512,8 +511,7 @@ pub(crate) fn lower(program: Program) -> Result<AST, Error> {
         match &shell.kind {
             item::Kind::Use(_)
             | item::Kind::Struct(_)
-            | item::Kind::Enum(_)
-            | item::Kind::LegacyFunction(_) => {}
+            | item::Kind::Enum(_) => {}
             item::Kind::Impl(_) | item::Kind::Trait(_) => {}
             item::Kind::Function(function) => reject_unavailable(function)?,
         }
@@ -541,8 +539,7 @@ pub(crate) fn lower_with_engine(
         match &shell.kind {
             item::Kind::Use(_)
             | item::Kind::Struct(_)
-            | item::Kind::Enum(_)
-            | item::Kind::LegacyFunction(_) => {}
+            | item::Kind::Enum(_) => {}
             item::Kind::Impl(_) | item::Kind::Trait(_) => {}
             item::Kind::Function(function) => reject_unavailable(function)?,
         }
@@ -753,8 +750,7 @@ impl Symbols {
                 item::Kind::Use(_)
                 | item::Kind::Impl(_)
                 | item::Kind::Trait(_)
-                | item::Kind::Function(_)
-                | item::Kind::LegacyFunction(_) => {}
+                | item::Kind::Function(_) => {}
             }
         }
 
@@ -826,8 +822,7 @@ fn named_declaration(
         | crate::item::Parsed::Use(_)
         | crate::item::Parsed::Impl(_)
         | crate::item::Parsed::Trait(_)
-        | crate::item::Parsed::TypeAlias(_)
-        | crate::item::Parsed::LegacyFunction(_) => None,
+        | crate::item::Parsed::TypeAlias(_) => None,
         crate::item::Parsed::Struct(item) => Some((
             &item.name,
             Some(type_def::Kind::Struct),
@@ -1909,21 +1904,6 @@ fn resolve_item(
             #[cfg(feature = "rust-import")]
             native,
         )?),
-        crate::item::Parsed::LegacyFunction(parsed) => {
-            item::Kind::LegacyFunction(item::LegacyFunction {
-                name: parsed.name,
-                parameter_count: parsed.parameter_count,
-                body: item::Body {
-                    span: parsed.body_span,
-                    lowering: item::Lowering::Unavailable,
-                    syntax: parsed.body_syntax,
-                    constant: false,
-                    asynchronous: false,
-                    text: None,
-                    elide: None,
-                },
-            })
-        }
     };
 
     Ok(item::Shell {
@@ -2566,7 +2546,7 @@ fn fill_trait_defaults(
                     fill(&mut function.generics);
                 }
             }
-            item::Kind::Use(_) | item::Kind::LegacyFunction(_) => {}
+            item::Kind::Use(_) => {}
         }
     }
 }
@@ -2855,7 +2835,7 @@ fn elaborate_supertraits(items: &mut [item::Shell]) -> Result<(), LocatedError> 
                 }
             }
             item::Kind::Function(function) => generics(&mut function.generics),
-            item::Kind::Use(_) | item::Kind::LegacyFunction(_) => {}
+            item::Kind::Use(_) => {}
         }
     }
     Ok(())
@@ -3499,7 +3479,7 @@ fn check_trait_bounds(
                     Ok(())
                 }),
             item::Kind::Function(item) => check(&item.generics),
-            item::Kind::Use(_) | item::Kind::LegacyFunction(_) => Ok(()),
+            item::Kind::Use(_) => Ok(()),
         };
         checked.map_err(|error| LocatedError::primary(shell.source, error))?;
     }
@@ -3724,7 +3704,7 @@ fn resolve_projections(items: &mut [item::Shell]) -> Result<(), LocatedError> {
                         .flat_map(|variant| variant.payload.iter_mut()),
                 )
             }
-            item::Kind::Use(_) | item::Kind::LegacyFunction(_) => Ok(()),
+            item::Kind::Use(_) => Ok(()),
         };
         resolved.map_err(|error| LocatedError::primary(shell.source, error))?;
     }
@@ -4635,7 +4615,7 @@ fn check_generic_arity(
                 .and_then(|()| item.functions.iter().try_for_each(function)),
             item::Kind::Trait(item) => item.functions.iter().try_for_each(function),
             item::Kind::Function(item) => function(item),
-            item::Kind::Use(_) | item::Kind::LegacyFunction(_) => Ok(()),
+            item::Kind::Use(_) => Ok(()),
         };
         checked.map_err(|error| LocatedError::primary(shell.source, error))?;
     }
@@ -5431,8 +5411,7 @@ mod tests {
             Kind::Use(_)
             | Kind::Impl(_)
             | Kind::Trait(_)
-            | Kind::Function(_)
-            | Kind::LegacyFunction(_) => {
+            | Kind::Function(_) => {
                 panic!("expected nominal item")
             }
         }

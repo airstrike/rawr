@@ -137,8 +137,7 @@ impl Manifest {
                 item::Kind::Use(_)
                 | item::Kind::Impl(_)
                 | item::Kind::Trait(_)
-                | item::Kind::Function(_)
-                | item::Kind::LegacyFunction(_) => None,
+                | item::Kind::Function(_) => None,
             })
             .collect::<BTreeMap<_, _>>();
         let mut definitions: Vec<_> = program
