@@ -134,6 +134,29 @@ fn twice(n: i64) -> Task<i64> {
 }
 
 #[test]
+fn an_async_block_drops_the_sender_it_moved_when_it_ends() {
+    let source = app(
+        r#"
+async fn sum() -> i64 {
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let send = async move {
+        sender.send(4).unwrap();
+        sender.send(5).unwrap();
+    };
+    send.await;
+    let mut total = 0;
+    while let Some(n) = receiver.recv().await {
+        total += n;
+    }
+    total
+}
+"#,
+        "sum()",
+    );
+    assert_eq!(loaded(&source), 9);
+}
+
+#[test]
 fn await_outside_an_async_body_is_rejected() {
     let error = rejected(&app("fn f() -> i64 { Task::done(1).await }", "async { 1 }"));
     assert!(error.contains("`.await` outside an async block"), "{error}");

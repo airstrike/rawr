@@ -378,7 +378,7 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
 </ul>
 <p>It doesn&rsquo;t have <code>JoinSet</code>, <code>Notify</code>, <code>Semaphore</code>, <code>RwLock</code>, <code>broadcast</code> or <code>time::sleep_until</code>. A <code>Mutex</code> has no <code>try_lock</code> or <code>into_inner</code>. A plain program has no async code, so only an app can use tokio.</p>
 <p><code>rawr run</code> uses the same stand-in for a program that doesn&rsquo;t depend on tokio. There its timers run on the real clock. A project whose <code>Cargo.toml</code> depends on tokio gets the real crate.</p>
-<p>This app adds up what a producer sends over a channel. Its GIF shows &ldquo;adding up&rdquo; and then the sum at 400&nbsp;ms of simulated time.</p>
+<p>This app adds up what a producer sends over a channel. Its GIF shows &ldquo;adding up&rdquo; and then the sum at 400&nbsp;ms of simulated time. The sender moves into the producer, as in Rust. The channel closes when the producer ends, so the consumer&rsquo;s loop stops.</p>
 <div class="block">
   <div class="file"><b>channel.rs</b></div>
   <pre><code data-lang="rust" data-run="channel.rs" id="src-channel">use iced::widget::text;
@@ -407,7 +407,6 @@ async fn total() -&gt; u32 {
             sender.send(n).await.unwrap();
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        drop(sender);
     };
     let consumer = async move {
         let mut sum = 0;
@@ -447,9 +446,8 @@ impl Sum {
 <p>Use <code>tokio::join!</code> to run futures at once. Return a <code>Task</code> from <code>update</code> to start work that outlives the current message.</p>
 
 <h3 id="tokio-differences">Where ?play&rsquo;s tokio behaves differently</h3>
-<p>Three things work differently from the real tokio.</p>
+<p>Two things work differently from the real tokio.</p>
 <ul>
-  <li><strong>A channel closes only on an explicit <code>drop</code>.</strong> Rawr copies values, so a sender would otherwise live as long as any copy of it. A sender is a shared handle instead. <code>drop(sender)</code> ends it for every copy. <code>sender.clone()</code> makes another handle, and the channel closes once each handle is dropped. A sender that is only moved stays open until the function that made it returns. Write <code>drop(sender)</code> when the producer is done, as <code>channel.rs</code> does.</li>
   <li><strong>A <code>select!</code> branch whose pattern doesn&rsquo;t match ends the wait.</strong> It goes to the <code>else</code> branch, or panics when there is none. The real tokio would keep waiting for the other branches. A branch can&rsquo;t have an <code>if</code> condition either. Give each branch a pattern that always matches. <code>value = receiver.recv()</code> is one. Then match on <code>value</code> in the branch&rsquo;s body.</li>
   <li><strong>A read through a lock doesn&rsquo;t wait.</strong> <code>let mut held = mutex.lock().await;</code> waits until no other task holds the lock. A read inside a larger expression reads without waiting. <code>*mutex.lock().await + 1</code> is one such read. This keeps <code>+=</code> from locking twice. When a task must hold the lock across an <code>.await</code>, bind the guard with <code>let</code> first.</li>
 </ul>

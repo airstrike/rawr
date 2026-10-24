@@ -8300,3 +8300,223 @@ fn language_registered_function_is_known_to_the_checker() {
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(value, 7);
 }
+
+thread_local! {
+    /// How many `Guard`s are alive on this test's thread.
+    static GUARDS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
+
+/// A host value whose drop is seen: `alive()` counts the live ones.
+struct Guard;
+
+impl Guard {
+    fn new() -> Self {
+        GUARDS.with(|alive| alive.set(alive.get() + 1));
+        Self
+    }
+}
+
+impl Clone for Guard {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        GUARDS.with(|alive| alive.set(alive.get() - 1));
+    }
+}
+
+/// A facade with `guard() -> Guard` and `alive() -> i64`.
+fn guard_facade() -> crate::host::facade::Definition {
+    use crate::host::{facade, item, signature, type_ref};
+    let mut builder = facade::Builder::new("drops", facade::Abi::new(1).unwrap()).unwrap();
+    builder
+        .type_::<Guard>("Guard", &[], &[crate::capability::Kind::Clone])
+        .unwrap();
+    let mut guard = signature::Builder::new();
+    guard.output(type_ref::Type::registered("Guard").unwrap());
+    builder
+        .item(item::Definition::function("guard", guard.finish()).unwrap())
+        .unwrap();
+    let mut alive = signature::Builder::new();
+    alive.output(type_ref::Type::builtin(type_ref::Builtin::I64));
+    builder
+        .item(item::Definition::function("alive", alive.finish()).unwrap())
+        .unwrap();
+    builder.finish().unwrap()
+}
+
+/// `run()` of `source`, which uses `drops::{guard, alive, Guard}`.
+fn run_guarded(source: &str) -> i64 {
+    let mut engine = Engine::new();
+    engine.register_host_facade(guard_facade()).unwrap();
+    let engine = crate::Shared::new(engine);
+    let source = format!("use drops::{{alive, guard, Guard}};\n{source}");
+    let authority = engine
+        .compile_authority(&source)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut runtime = crate::host::runtime::Builder::new(guard_facade());
+    runtime
+        .bind("drops::guard", |_| Ok(crate::Dynamic::from(Guard::new())))
+        .unwrap();
+    runtime
+        .bind("drops::alive", |_| Ok(crate::Dynamic::from(GUARDS.with(std::cell::Cell::get))))
+        .unwrap();
+    let mut registry = crate::host::runtime::Registry::new();
+    registry.install(runtime.finish()).unwrap();
+    let run = authority
+        .items()
+        .find(|item| item.key().name() == "run")
+        .unwrap()
+        .clone();
+    let output = authority
+        .invoke_bound(&run, &mut [], crate::Shared::new(registry))
+        .unwrap_or_else(|error| panic!("{error}"));
+    output.as_int().unwrap()
+}
+
+#[test]
+fn language_a_value_moved_into_a_call_drops_there() {
+    let value = run_guarded(
+        r#"
+fn take(guard: Guard) -> i64 { alive() }
+struct Holder { guard: Guard }
+pub fn run() -> i64 {
+    let first = guard();
+    let inside = take(first);
+    let after = alive();
+    let second = guard();
+    let holder = Holder { guard: second };
+    let held = alive();
+    drop(holder);
+    inside * 1000 + after * 100 + held * 10 + alive()
+}
+"#,
+    );
+    assert_eq!(value, 1000 + 10);
+}
+
+#[test]
+fn language_a_value_moved_into_a_move_closure_drops_with_it() {
+    let value = run_guarded(
+        r#"
+fn look(guard: &Guard) -> i64 { 1 }
+pub fn run() -> i64 {
+    let kept = guard();
+    {
+        let closure = move || look(&kept);
+        closure();
+    }
+    alive()
+}
+"#,
+    );
+    assert_eq!(value, 0);
+}
+
+#[test]
+fn language_a_returned_value_lives_with_its_caller() {
+    let value = run_guarded(
+        r#"
+fn pass(guard: Guard) -> Guard { let moved = guard; moved }
+pub fn run() -> i64 {
+    let returned = pass(guard());
+    let held = alive();
+    drop(returned);
+    held * 10 + alive()
+}
+"#,
+    );
+    assert_eq!(value, 10);
+}
+
+#[test]
+fn language_a_value_drops_at_the_end_of_its_block_and_loop_body() {
+    let value = run_guarded(
+        r#"
+pub fn run() -> i64 {
+    {
+        let inner = guard();
+    }
+    let after_block = alive();
+    let mut seen = 0;
+    for _ in 0..3 {
+        let each = guard();
+        seen += alive();
+    }
+    let outer = guard();
+    {
+        let moved = outer;
+    }
+    after_block * 100 + seen * 10 + alive()
+}
+"#,
+    );
+    assert_eq!(value, 30);
+}
+
+#[test]
+fn language_a_clone_stays_alive_when_the_original_moves() {
+    let value = run_guarded(
+        r#"
+pub fn run() -> i64 {
+    let original = guard();
+    let copy = original.clone();
+    drop(original);
+    let kept = alive();
+    let both = (copy.clone(), copy);
+    kept * 10 + alive()
+}
+"#,
+    );
+    assert_eq!(value, 12);
+}
+
+#[test]
+fn language_use_of_a_moved_value_is_rejected() {
+    for source in [
+        "pub fn run() -> i64 { let v = vec![1]; let w = v; v.len() as i64 } run()",
+        "fn eat(v: Vec<i64>) -> i64 { 0 } \
+         pub fn run() -> i64 { let v = vec![1]; eat(v); v.len() as i64 } run()",
+        "pub fn run() -> i64 { let v = vec![1]; let f = move || v.len(); v.len() as i64 } run()",
+        "pub fn run() -> i64 { let v = vec![1]; for _ in 0..2 { drop(v); } 0 } run()",
+        "pub fn run() -> i64 { let s = String::new(); let t = (s, 1); s.len() as i64 } run()",
+        "pub fn run(c: bool) -> i64 { let v = vec![1]; if c { drop(v); } v.len() as i64 } run(true)",
+    ] {
+        let error = rejected(source);
+        assert!(error.contains("moved value 'v'") || error.contains("moved value 's'"), "{error}");
+    }
+}
+
+#[test]
+fn language_moves_keep_what_rust_accepts() {
+    let value = run(r#"
+        fn eat(v: Vec<i64>) -> i64 { v.len() as i64 }
+        pub fn run(c: bool) -> i64 {
+            let n = 2;
+            let m = n;
+            let v = vec![1, 2];
+            if c {
+                return eat(v);
+            }
+            let mut w = vec![3];
+            let first = eat(w);
+            w = vec![4, 5, 6];
+            let pair = (v, w.clone());
+            let mut total = 0;
+            loop {
+                let x = vec![7];
+                if total > 2 {
+                    total += eat(x);
+                    break;
+                }
+                total += 1;
+            }
+            n + m + first + eat(w) + pair.0.len() as i64 + total
+        }
+        run(false)
+    "#);
+    assert_eq!(value, 2 + 2 + 1 + 3 + 2 + 4);
+}
