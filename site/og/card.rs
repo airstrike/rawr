@@ -60,7 +60,7 @@ impl Card {
             column![
                 brand,
                 lede,
-                row![file("main.rs", "cargo run"), file("cart.rawr", "rawr run cart.rawr")].spacing(16),
+                row![file("main.rs", "cargo run"), file("cart.rs", "rawr run cart.rs")].spacing(16),
                 row![
                     caption("RAWR.AIRSTRIKE.FYI"),
                     space().width(Fill),

@@ -51,12 +51,12 @@
 <p class="lede">Short answers to common questions about how rawr works and where it is going.</p>
 
 <h2 id="interpreter">What kind of interpreter is rawr?</h2>
-<p>rawr is a tree-walking interpreter over a typed program. Its front end parses Rust-shaped code. It resolves names and checks types, traits and generics before anything runs. It reports errors the way rustc does. Then an evaluator walks the checked program and runs it.</p>
+<p>rawr is a tree-walking interpreter over a typed program. Its front end parses Rust. It resolves names and checks types, traits and generics before anything runs. It reports errors the way rustc does. Then an evaluator walks the checked program and runs it.</p>
 <p>Values at run time carry a tag for their type. They are reference-counted. Everything a program calls is native Rust. That includes iced, the standard library and the Rust crates you import.</p>
 <p>An experimental bytecode VM also exists. It is off by default.</p>
 
 <h2 id="evaluator">Where does the evaluator come from?</h2>
-<p>rawr began as a fork of <a href="https://rhai.rs">Rhai</a>. Rhai is an embedded scripting language for Rust. Its source is on <a href="https://github.com/rhaiscript/rhai">GitHub</a>. rawr keeps Rhai&rsquo;s evaluator as its foundation. It also keeps Rhai&rsquo;s dynamic values and its machinery for calling host functions. These parts are mature. rawr adds a statically typed language shaped like Rust on top of them.</p>
+<p>rawr began as a fork of <a href="https://rhai.rs">Rhai</a>. Rhai is an embedded scripting language for Rust. Its source is on <a href="https://github.com/rhaiscript/rhai">GitHub</a>. rawr keeps Rhai&rsquo;s evaluator as its foundation. It also keeps Rhai&rsquo;s dynamic values and its machinery for calling host functions. These parts are mature. rawr adds a typed Rust front end on top of them, and every program and script is typed Rust.</p>
 <p>Thank you to the Rhai authors for the work that rawr is built on.</p>
 <p>rawr is not compatible with Rhai scripts. Rhai is licensed under MIT or Apache-2.0. rawr uses the same two licenses. The LICENSE files in the repository carry the attribution.</p>
 

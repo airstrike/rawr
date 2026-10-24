@@ -54,7 +54,7 @@
 <h2 id="overview">How a program runs</h2>
 <p>rawr checks a whole program before any of it runs. The check resolves names and types, traits and method calls. It also checks that every <code>match</code> covers every case. A program that fails the check doesn&rsquo;t start.</p>
 <p>A program is a Cargo crate or a single <code>.rs</code> file. In a crate, the root file is <code>src/main.rs</code> or <code>src/lib.rs</code>. Its first line is <code>// rawr</code>. A single file is one <code>.rs</code> file you give to <code>rawr run</code>. Its first line may be <code>// rawr</code> but doesn&rsquo;t have to be.</p>
-<p>A single file can hold items, top-level statements, or both. rawr runs the top-level statements first and then calls <code>fn main</code> if there is one. Cargo would not build a file with top-level statements, so keep them to snippets and the playground.</p>
+<p>A single file can hold items, top-level statements, or both. Top-level statements behave like the body of <code>fn main() { .. }</code>, the way rustdoc runs a doctest, so a function can&rsquo;t read their variables. rawr runs the top-level statements first and then calls <code>fn main</code> if there is one. Cargo would not build a file with top-level statements, so keep them to snippets and the playground.</p>
 <p>This program uses <code>?</code>, a <code>Result</code> from <code>main</code> and a closure. It prints the same output as the Rust binary and exits with the same status.</p>
 <div class="block">
   <div class="file"><b>parse.rs</b></div>
@@ -291,7 +291,7 @@ fn main() {
   <li>Borrowing two fields of one struct mutably at once. <code>swap(&amp;mut p.x, &amp;mut p.y)</code> is one example.</li>
   <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
   <li>Dereferencing twice (<code>**x</code>) inside a closure such as the one passed to <code>min_by_key</code>.</li>
-  <li>Comparing an untyped <code>None</code> with <code>&lt;</code>. Comparing typed <code>Option</code> values works.</li>
+  <li>Comparing a <code>None</code> whose type isn&rsquo;t known yet with <code>&lt;</code>. Comparing <code>Option</code> values of a known type works.</li>
   <li><code>impl Drop</code>.</li>
 </ul>
 <h3 id="missing-std">Standard library</h3>

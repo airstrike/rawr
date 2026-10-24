@@ -67,16 +67,16 @@ total: 27
 The same file can be `src/main.rs` of a Cargo crate. Then `cargo run` prints the
 same line.
 
-A Rust program can also embed Rawr and load the same code as a script. A
-script that an app loads is a `.rawr` file. This one is
-`examples/scripts/cart.rawr`, the program above without its `// rawr` line.
+A Rust program can also embed rawr and load the same code as a script. A
+script is typed Rust too, in a `.rs` file. This one is
+`examples/scripts/cart.rs`, the program above without its `// rawr` line.
 
 ```rust
 use rawr::{Engine, Scope};
 
 fn main() -> Result<(), Box<rawr::EvalAltResult>> {
     let engine = Engine::new();
-    let ast = engine.compile(include_str!("scripts/cart.rawr"))?;
+    let ast = engine.compile(include_str!("scripts/cart.rs"))?;
     engine.call_fn::<()>(&mut Scope::new(), &ast, "main", ())
 }
 ```

@@ -59,7 +59,7 @@ impl Engine {
     ///
     /// // Compile a script file to an AST and store it for later evaluation.
     /// // Notice that a PathBuf is required which can easily be constructed from a string.
-    /// let ast = engine.compile_file("script.rawr".into())?;
+    /// let ast = engine.compile_file("script.rs".into())?;
     ///
     /// for _ in 0..42 {
     ///     engine.eval_ast::<i64>(&ast)?;
@@ -98,7 +98,7 @@ impl Engine {
     ///
     /// // Compile a script to an AST and store it for later evaluation.
     /// // Notice that a PathBuf is required which can easily be constructed from a string.
-    /// let ast = engine.compile_file_with_scope(&scope, "script.rawr".into())?;
+    /// let ast = engine.compile_file_with_scope(&scope, "script.rs".into())?;
     ///
     /// let result = engine.eval_ast::<i64>(&ast)?;
     /// # }
@@ -127,7 +127,7 @@ impl Engine {
     /// let engine = Engine::new();
     ///
     /// // Notice that a PathBuf is required which can easily be constructed from a string.
-    /// let result = engine.eval_file::<i64>("script.rawr".into())?;
+    /// let result = engine.eval_file::<i64>("script.rs".into())?;
     /// # Ok(())
     /// # }
     /// ```
@@ -159,7 +159,7 @@ impl Engine {
     /// scope.push("x", 42_i64);
     ///
     /// // Notice that a PathBuf is required which can easily be constructed from a string.
-    /// let result = engine.eval_file_with_scope::<i64>(&mut scope, "script.rawr".into())?;
+    /// let result = engine.eval_file_with_scope::<i64>(&mut scope, "script.rs".into())?;
     /// # Ok(())
     /// # }
     /// ```
@@ -184,7 +184,7 @@ impl Engine {
     /// let engine = Engine::new();
     ///
     /// // Notice that a PathBuf is required which can easily be constructed from a string.
-    /// engine.run_file("script.rawr".into())?;
+    /// engine.run_file("script.rs".into())?;
     /// # Ok(())
     /// # }
     /// ```
@@ -216,7 +216,7 @@ impl Engine {
     /// scope.push("x", 42_i64);
     ///
     /// // Notice that a PathBuf is required which can easily be constructed from a string.
-    /// engine.run_file_with_scope(&mut scope, "script.rawr".into())?;
+    /// engine.run_file_with_scope(&mut scope, "script.rs".into())?;
     /// # Ok(())
     /// # }
     /// ```
@@ -234,7 +234,7 @@ impl Engine {
 ///
 /// ```no_run
 /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-/// let result = rawr::eval_file::<i64>("script.rawr")?;
+/// let result = rawr::eval_file::<i64>("script.rs")?;
 /// # Ok(())
 /// # }
 /// ```
@@ -251,7 +251,7 @@ pub fn eval_file<T: Variant + Clone>(path: impl AsRef<Path>) -> RawrResultOf<T> 
 ///
 /// ```no_run
 /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-/// rawr::run_file("script.rawr")?;
+/// rawr::run_file("script.rs")?;
 /// # Ok(())
 /// # }
 /// ```

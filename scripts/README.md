@@ -22,20 +22,20 @@ How to Run
 Run scripts using the `rawr-run` tool:
 
 ```sh
-rawr-run ./scripts/test_script_to_run.rawr
+rawr-run ./scripts/test_script_to_run.rs
 ```
 
 or
 
 ```sh
-cargo run --bin rawr-run ./scripts/test_script_to_run.rawr
+cargo run --bin rawr-run ./scripts/test_script_to_run.rs
 ```
 
 The timing scripts (`fibonacci`, `for2`, `mat_mul`, `primes`, `speed_test` and
 `strings_map`) are meant for a release build:
 
 ```sh
-cargo run --release --bin rawr-run ./scripts/fibonacci.rawr
+cargo run --release --bin rawr-run ./scripts/fibonacci.rs
 ```
 
 A debug build allows only 8 nested function calls, so `fibonacci` stops with a

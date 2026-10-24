@@ -324,12 +324,12 @@ fn main() {
       </table>
       <div class="block">
         <div class="file"><b>examples/cart.rs</b><span>the host</span></div>
-        <pre><code data-lang="rust">//! Rawr embedded: Rust code running a Rust-shaped script.
+        <pre><code data-lang="rust">//! rawr embedded: a Rust program that loads a script written in Rust.
 use rawr::{Engine, Scope};
 
 fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
     let engine = Engine::new();
-    let ast = engine.compile(include_str!("scripts/cart.rawr"))?;
+    let ast = engine.compile(include_str!("scripts/cart.rs"))?;
     engine.call_fn::&lt;()&gt;(&amp;mut Scope::new(), &amp;ast, "main", ())
 }</code></pre>
         <div class="run"><button type="button" class="runbtn" data-source="src-cart" data-out="out-host" aria-label="Run the cart script this host loads" hidden></button><b>cargo run --example cart</b><span id="out-host" aria-live="polite">total: 27</span></div>

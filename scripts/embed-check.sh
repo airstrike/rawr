@@ -21,11 +21,11 @@ fi
 
 # A typo in a script: `fn main() -> Result` prints the error as rustc would.
 expected='Error: error[E0609]: no field `itmes` on type `Order`
- --> scripts/typo.rawr:4:45-4:50
+ --> scripts/typo.rs:4:45-4:50
  4 |     format!("{} x{}", order.customer, order.itmes)
    |                                             ^^^^^'
-if cargo run -q --manifest-path "$manifest" -- scripts/typo.rawr >/dev/null 2>"$CARGO_TARGET_DIR/typo.err"; then
-    echo "examples/app accepted scripts/typo.rawr" >&2
+if cargo run -q --manifest-path "$manifest" -- scripts/typo.rs >/dev/null 2>"$CARGO_TARGET_DIR/typo.err"; then
+    echo "examples/app accepted scripts/typo.rs" >&2
     exit 1
 fi
 actual="$(sed -n '/^Error: /,$p' "$CARGO_TARGET_DIR/typo.err")"

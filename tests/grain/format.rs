@@ -132,10 +132,10 @@ fn the_round_trip_covers_something_worth_covering() {
 
 /// Where the golden pair lives. The source is checked in beside the artifact so
 /// a regeneration is a visible two-file change.
-const GOLDEN_SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/grain/fixtures/golden.rawr");
+const GOLDEN_SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/grain/fixtures/golden.rs");
 const GOLDEN_ARTIFACT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/grain/fixtures/golden.rgrn");
 
-/// The caller state `golden.rawr` expects. Part of the fixture, so it lives
+/// The caller state `golden.rs` expects. Part of the fixture, so it lives
 /// with it rather than being invented at each use.
 fn golden_scope() -> Scope<'static> {
     let mut scope = Scope::new();
