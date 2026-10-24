@@ -65,9 +65,10 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
         &[],
         crate::OWNED_DEFAULT_VALUE_CAPABILITIES,
     )?;
-    builder.type_::<Shell>("advanced::Shell", &["Message"], cloned)?;
+    builder.type_::<Shell>("advanced::Shell", &[], cloned)?;
     builder.alias("advanced::shell::Shell", "advanced::Shell")?;
     builder.value_type::<iced::Transformation>("Transformation", &[], copied)?;
+    builder.value_type::<super::Never>("Never", &[], crate::OWNED_EQ_VALUE_CAPABILITIES)?;
 
     builder.implementable_trait::<WidgetTrait>(
         "advanced::widget::Widget",
@@ -180,7 +181,7 @@ fn declare_instance(builder: &mut facade::Builder) -> Result<(), host::Error> {
             layout()?,
             cursor()?,
             ty("widget::Renderer")?,
-            type_ref::Type::applied("advanced::Shell", [parameter("Message")?])?,
+            ty("advanced::Shell")?,
             rectangle()?,
         ])?,
         unit(),
@@ -279,30 +280,19 @@ fn declare_values(builder: &mut facade::Builder) -> Result<(), host::Error> {
         method(builder, &path, Owned, vec![ty("Length")?], lengths()?)?;
     }
 
-    // `shell.request_redraw()` and kin.
-    let shell = || type_ref::Type::applied("advanced::Shell", [type_ref::Type::parameter("Message")?]);
-    let generic = |inputs: Vec<type_ref::Type>, output: type_ref::Type| -> Result<_, host::Error> {
-        let mut signature = signature::Builder::new();
-        signature.type_parameter("Message", &[])?;
-        for input in inputs {
-            signature.parameter(input);
-        }
-        signature.output(output);
-        Ok(signature.finish())
-    };
-    let _ = shell;
-    for (name, inputs, output) in [
-        ("request_redraw", Vec::new(), unit()),
-        ("capture_event", Vec::new(), unit()),
-        ("is_event_captured", Vec::new(), type_ref::Type::builtin(type_ref::Builtin::Bool)),
-        ("publish", vec![type_ref::Type::parameter("Message")?], unit()),
+    // `shell.request_redraw()` and kin. The Shell takes any message.
+    for (name, output) in [
+        ("request_redraw", unit()),
+        ("capture_event", unit()),
+        ("is_event_captured", type_ref::Type::builtin(type_ref::Builtin::Bool)),
     ] {
-        builder.item(item::Definition::method(
-            format!("advanced::Shell::{name}"),
-            Shared,
-            generic(inputs, output)?,
-        )?)?;
+        method(builder, &format!("advanced::Shell::{name}"), Shared, Vec::new(), output)?;
     }
+    let mut publish = signature::Builder::new();
+    publish.type_parameter("Message", &[])?;
+    publish.parameter(type_ref::Type::parameter("Message")?);
+    publish.output(unit());
+    builder.item(item::Definition::method("advanced::Shell::publish", Shared, publish.finish())?)?;
 
     // `Transformation::translate(x, y) * Transformation::scale(s)`.
     let transformation = || ty("Transformation");
@@ -336,6 +326,8 @@ fn declare_renderer(builder: &mut facade::Builder) -> Result<(), host::Error> {
     method(builder, "widget::Renderer::end_layer", Shared, Vec::new(), unit())?;
     method(builder, "widget::Renderer::start_transformation", Shared, vec![ty("Transformation")?], unit())?;
     method(builder, "widget::Renderer::end_transformation", Shared, Vec::new(), unit())?;
+    // What `with_translation` starts: Rawr runs its closure itself.
+    method(builder, "widget::Renderer::__rawr_start_translation", Shared, vec![ty("Vector")?], unit())?;
     // `with_layer`, `with_transformation` and `with_translation` run their
     // closure where they are written, between a start and an end.
     for (name, input) in [
@@ -376,7 +368,7 @@ fn declare_forwarding(builder: &mut facade::Builder) -> Result<(), host::Error> 
     let cursor = || ty("mouse::Cursor");
     let rectangle = || ty("Rectangle");
     let r = || type_ref::Type::parameter("R");
-    let shell = || type_ref::Type::applied("advanced::Shell", [type_ref::Type::parameter("Message")?]);
+    let shell = || ty("advanced::Shell");
     for (name, inputs, output) in [
         ("size", Vec::new(), ty("advanced::layout::LengthSize")?),
         ("tag", Vec::new(), ty("advanced::widget::tree::Tag")?),
@@ -428,6 +420,86 @@ fn declare_forwarding(builder: &mut facade::Builder) -> Result<(), host::Error> 
 /// `graphics::mesh::{Mesh, Indexed, SolidVertex2D}`, `graphics::color::pack`
 /// and `renderer.draw_mesh(mesh)`.
 fn declare_mesh(builder: &mut facade::Builder) -> Result<(), host::Error> {
-    let _ = (builder, MeshRendererTrait);
+    use receiver::Mode::{Owned, Shared};
+
+    for module in ["advanced::graphics::color", "advanced::graphics::mesh"] {
+        builder.module(module)?;
+    }
+    let copied = crate::OWNED_VALUE_CAPABILITIES;
+    let debug = crate::DEBUG_VALUE_CAPABILITIES;
+    builder.value_type::<iced::advanced::graphics::color::Packed>(
+        "advanced::graphics::color::Packed",
+        &[],
+        copied,
+    )?;
+    builder.value_type::<iced::advanced::graphics::mesh::SolidVertex2D>(
+        "advanced::graphics::mesh::SolidVertex2D",
+        &[],
+        copied,
+    )?;
+    builder.value_type::<iced::advanced::graphics::mesh::Indexed<iced::advanced::graphics::mesh::SolidVertex2D>>(
+        "advanced::graphics::mesh::Indexed",
+        &[],
+        debug,
+    )?;
+    builder.value_type::<iced::advanced::graphics::Mesh>("advanced::graphics::mesh::Mesh", &[], debug)?;
+    builder.value_type::<super::SolidMesh>("advanced::graphics::mesh::Mesh::Solid", &[], debug)?;
+    builder.alias("advanced::graphics::Mesh", "advanced::graphics::mesh::Mesh")?;
+    builder.trait_::<MeshRendererTrait>("advanced::graphics::mesh::Renderer", &[])?;
+
+    let packed = || ty("advanced::graphics::color::Packed");
+    let narrow = |length| type_ref::Type::array(type_ref::Type::builtin(type_ref::Builtin::F32), length);
+    for input in [narrow(4), ty("Color")?] {
+        builder.item(item::Definition::function(
+            "advanced::graphics::color::pack",
+            signature(vec![input], packed()?),
+        )?)?;
+    }
+    // `SolidVertex2D { position, color }`.
+    let vertex = || ty("advanced::graphics::mesh::SolidVertex2D");
+    associated(builder, "advanced::graphics::mesh::SolidVertex2D::default", Vec::new(), vertex()?)?;
+    // iced's `[f32; 2]` position and `[f32; 4]` color.
+    for (name, field) in [("position", narrow(2)), ("color", packed()?)] {
+        let path = format!("advanced::graphics::mesh::SolidVertex2D::{name}");
+        method(builder, &path, Shared, Vec::new(), field.clone())?;
+        method(builder, &path, Owned, vec![field], vertex()?)?;
+    }
+    // `mesh::Indexed { vertices, indices }`.
+    let indexed = || ty("advanced::graphics::mesh::Indexed");
+    associated(builder, "advanced::graphics::mesh::Indexed::default", Vec::new(), indexed()?)?;
+    for (name, field) in [
+        ("vertices", type_ref::Type::slice(vertex()?)),
+        ("indices", type_ref::Type::slice(type_ref::Type::builtin(type_ref::Builtin::I64))),
+    ] {
+        let path = format!("advanced::graphics::mesh::Indexed::{name}");
+        method(builder, &path, Shared, Vec::new(), field.clone())?;
+        method(builder, &path, Owned, vec![field], indexed()?)?;
+    }
+    // `Mesh::Solid { buffers, transformation, clip_bounds }`.
+    let solid = || ty("advanced::graphics::mesh::Mesh::Solid");
+    associated(builder, "advanced::graphics::mesh::Mesh::Solid::default", Vec::new(), solid()?)?;
+    for (name, field) in [
+        ("buffers", indexed()?),
+        ("transformation", ty("Transformation")?),
+        ("clip_bounds", ty("Rectangle")?),
+    ] {
+        let path = format!("advanced::graphics::mesh::Mesh::Solid::{name}");
+        method(builder, &path, Shared, Vec::new(), field.clone())?;
+        method(builder, &path, Owned, vec![field], solid()?)?;
+    }
+    method(
+        builder,
+        "advanced::graphics::mesh::Mesh::Solid::into",
+        Owned,
+        Vec::new(),
+        ty("advanced::graphics::mesh::Mesh")?,
+    )?;
+    method(
+        builder,
+        "widget::Renderer::draw_mesh",
+        Shared,
+        vec![ty("advanced::graphics::mesh::Mesh")?],
+        unit(),
+    )?;
     Ok(())
 }

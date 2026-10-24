@@ -20,6 +20,201 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_values(builder);
     bind_renderer(builder);
     bind_forwarding(builder);
+    bind_mesh(builder);
+}
+
+fn floats<const N: usize>(value: &Dynamic, path: &str) -> Result<[f32; N], Box<EvalAltResult>> {
+    let array = value
+        .read_lock::<rawr::Array>()
+        .ok_or_else(|| runtime_error(format!("`{path}` expects an array of {N} numbers")))?;
+    let mut floats = [0.0; N];
+    if array.len() != N {
+        return Err(runtime_error(format!("`{path}` expects an array of {N} numbers")));
+    }
+    for (float, value) in floats.iter_mut().zip(array.iter()) {
+        *float = pixels(value, path)?;
+    }
+    Ok(floats)
+}
+
+fn bind_mesh(builder: &mut host::runtime::Builder) {
+    use iced::advanced::graphics::color;
+    use iced::advanced::graphics::mesh::{Indexed, Mesh, SolidVertex2D};
+
+    builder
+        .bind("iced::advanced::graphics::color::pack", |args| {
+            let [color] = args else {
+                return Err(arity("color::pack", 1, args.len()));
+            };
+            let color = match color.read_lock::<iced::Color>() {
+                Some(color) => *color,
+                None => {
+                    let [r, g, b, a] = floats::<4>(color, "color::pack")?;
+                    iced::Color::from_rgba(r, g, b, a)
+                }
+            };
+            Ok(Dynamic::from(color::pack(color)))
+        })
+        .expect("the iced facade must retain color::pack");
+    builder
+        .bind("iced::advanced::graphics::mesh::SolidVertex2D::default", |_| {
+            Ok(Dynamic::from(SolidVertex2D {
+                position: [0.0; 2],
+                color: color::pack(iced::Color::TRANSPARENT),
+            }))
+        })
+        .expect("the iced facade must retain SolidVertex2D::default");
+    for name in ["position", "color"] {
+        let path = format!("iced::advanced::graphics::mesh::SolidVertex2D::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let Some((receiver, operands)) = args.split_first_mut() else {
+                    return Err(arity(&path, 1, 0));
+                };
+                let mut vertex = read::<SolidVertex2D>(receiver, &path)?;
+                let [value] = operands else {
+                    return Ok(match name {
+                        "position" => Dynamic::from(
+                            vertex
+                                .position
+                                .iter()
+                                .map(|&coordinate| Dynamic::from(f64::from(coordinate)))
+                                .collect::<rawr::Array>(),
+                        ),
+                        _ => Dynamic::from(vertex.color),
+                    });
+                };
+                match name {
+                    "position" => vertex.position = floats::<2>(value, &path)?,
+                    _ => vertex.color = read(value, &path)?,
+                }
+                Ok(Dynamic::from(vertex))
+            })
+            .expect("the iced facade must retain every SolidVertex2D field");
+    }
+    builder
+        .bind("iced::advanced::graphics::mesh::Indexed::default", |_| {
+            Ok(Dynamic::from(Indexed::<SolidVertex2D> {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            }))
+        })
+        .expect("the iced facade must retain Indexed::default");
+    for name in ["vertices", "indices"] {
+        let path = format!("iced::advanced::graphics::mesh::Indexed::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let Some((receiver, operands)) = args.split_first_mut() else {
+                    return Err(arity(&path, 1, 0));
+                };
+                let mut indexed = read::<Indexed<SolidVertex2D>>(receiver, &path)?;
+                let [value] = operands else {
+                    return Ok(match name {
+                        "vertices" => Dynamic::from(
+                            indexed.vertices.iter().copied().map(Dynamic::from).collect::<rawr::Array>(),
+                        ),
+                        _ => Dynamic::from(
+                            indexed
+                                .indices
+                                .iter()
+                                .map(|&index| Dynamic::from(rawr::INT::from(index)))
+                                .collect::<rawr::Array>(),
+                        ),
+                    });
+                };
+                let array = value
+                    .read_lock::<rawr::Array>()
+                    .ok_or_else(|| runtime_error(format!("`{path}` expects a `Vec`")))?
+                    .clone();
+                match name {
+                    "vertices" => {
+                        indexed.vertices = array
+                            .iter()
+                            .map(|vertex| read::<SolidVertex2D>(vertex, &path))
+                            .collect::<Result<_, _>>()?;
+                    }
+                    _ => {
+                        indexed.indices = array
+                            .iter()
+                            .map(|index| {
+                                index
+                                    .as_int()
+                                    .ok()
+                                    .and_then(|index| u32::try_from(index).ok())
+                                    .ok_or_else(|| runtime_error(format!("`{path}` expects `u32` indices")))
+                            })
+                            .collect::<Result<_, _>>()?;
+                    }
+                }
+                Ok(Dynamic::from(indexed))
+            })
+            .expect("the iced facade must retain every Indexed field");
+    }
+    builder
+        .bind("iced::advanced::graphics::mesh::Mesh::Solid::default", |_| {
+            Ok(Dynamic::from(super::SolidMesh {
+                buffers: Indexed {
+                    vertices: Vec::new(),
+                    indices: Vec::new(),
+                },
+                transformation: iced::Transformation::IDENTITY,
+                clip_bounds: Rectangle::INFINITE,
+            }))
+        })
+        .expect("the iced facade must retain Mesh::Solid");
+    for name in ["buffers", "transformation", "clip_bounds"] {
+        let path = format!("iced::advanced::graphics::mesh::Mesh::Solid::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                let Some((receiver, operands)) = args.split_first_mut() else {
+                    return Err(arity(&path, 1, 0));
+                };
+                let mut solid = read::<super::SolidMesh>(receiver, &path)?;
+                let [value] = operands else {
+                    return Ok(match name {
+                        "buffers" => Dynamic::from(solid.buffers),
+                        "transformation" => Dynamic::from(solid.transformation),
+                        _ => Dynamic::from(solid.clip_bounds),
+                    });
+                };
+                match name {
+                    "buffers" => solid.buffers = read(value, &path)?,
+                    "transformation" => solid.transformation = read(value, &path)?,
+                    _ => solid.clip_bounds = read(value, &path)?,
+                }
+                Ok(Dynamic::from(solid))
+            })
+            .expect("the iced facade must retain every Mesh::Solid field");
+    }
+    builder
+        .bind("iced::advanced::graphics::mesh::Mesh::Solid::into", |args| {
+            let [solid] = args else {
+                return Err(arity("Mesh::Solid", 1, args.len()));
+            };
+            let super::SolidMesh {
+                buffers,
+                transformation,
+                clip_bounds,
+            } = read(solid, "Mesh::Solid")?;
+            Ok(Dynamic::from(Mesh::Solid {
+                buffers,
+                transformation,
+                clip_bounds,
+            }))
+        })
+        .expect("the iced facade must retain Mesh::Solid::into");
+    builder
+        .bind("iced::widget::Renderer::draw_mesh", |args| {
+            let [_, mesh] = args else {
+                return Err(arity("Renderer::draw_mesh", 2, args.len()));
+            };
+            let mesh = mesh.take().try_cast_result::<Mesh>().map_err(|_| {
+                runtime_error("`Renderer::draw_mesh` expects a `Mesh`".into())
+            })?;
+            record("Renderer::draw_mesh", |effects| effects.commands.push(Command::Mesh(mesh)))?;
+            Ok(Dynamic::UNIT)
+        })
+        .expect("the iced facade must retain Renderer::draw_mesh");
 }
 
 /// A value of `T` read in place.
@@ -311,6 +506,20 @@ fn bind_renderer(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::UNIT)
         })
         .expect("the iced facade must retain Renderer::fill_quad");
+    builder
+        .bind("iced::widget::Renderer::__rawr_start_translation", |args| {
+            let [_, translation] = args else {
+                return Err(arity("Renderer::with_translation", 2, args.len()));
+            };
+            let translation = read::<iced::Vector>(translation, "Renderer::with_translation")?;
+            record("Renderer::with_translation", |effects| {
+                effects.commands.push(Command::StartTransformation(
+                    iced::Transformation::translate(translation.x, translation.y),
+                ));
+            })?;
+            Ok(Dynamic::UNIT)
+        })
+        .expect("the iced facade must retain Renderer::with_translation's start");
     for name in ["start_layer", "end_layer", "start_transformation", "end_transformation"] {
         let path = format!("iced::widget::Renderer::{name}");
         builder

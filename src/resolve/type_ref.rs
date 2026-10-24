@@ -557,6 +557,11 @@ fn resolve_path(
             });
         }
         content_messages(definition, &mut arguments, host);
+        // iced's `Shell<'_, Message>`: the facade's Shell takes any message,
+        // so a generic widget's `shell.request_redraw()` needs no witness.
+        if definition.path().as_str() == "iced::advanced::Shell" {
+            arguments.retain(|argument| !matches!(argument, Argument::Type(_)));
+        }
         // iced's defaulted `Theme` and `Renderer` parameters after the
         // declared ones (`canvas::Geometry<Renderer>`) name the facade's own.
         while arguments

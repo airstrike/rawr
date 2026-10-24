@@ -70,10 +70,13 @@ const WIDGET_SPAN_PATH: &str = "iced::widget::span";
 const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
 /// The library calls that run their closure where they are written, which
 /// Rawr calls there itself (`immediate_callback`).
-const IMMEDIATE_CALLBACKS: [&str; 3] = [
+const IMMEDIATE_CALLBACKS: [&str; 6] = [
     "iced::widget::canvas::Path::new",
     "iced::widget::canvas::Frame::with_save",
     "iced::widget::canvas::Cache::draw",
+    "iced::widget::Renderer::with_layer",
+    "iced::widget::Renderer::with_transformation",
+    "iced::widget::Renderer::with_translation",
 ];
 /// iced's `advanced` traits that a facade type implements natively: the
 /// trait's name and its implementor. A bound by one of them takes that type,
@@ -13873,7 +13876,11 @@ impl<'a> Parser<'a> {
         let Some(index) = IMMEDIATE_CALLBACKS.iter().position(|immediate| *immediate == path) else {
             return Ok(None);
         };
-        let expected = if index == 2 { 3 } else { 1 };
+        let expected = match index {
+            2 => 3,
+            3..=5 => 2,
+            _ => 1,
+        };
         if arguments.len() != expected {
             return Err(Error::InvalidHostOperation {
                 item: path.into(),
@@ -13941,6 +13948,38 @@ impl<'a> Parser<'a> {
                 source.push_text("; ");
                 let popped = method(self, operand, "pop_transform", Vec::new())?;
                 source.push(popped.rendered_source());
+                source.push_text(format!("; {result}"));
+                output
+            }
+            // `renderer.with_layer(bounds, |renderer| ..)` and the
+            // transformations: a start, the closure, and its end.
+            3..=5 => {
+                let receiver = receiver.expect("a renderer call has its renderer").clone();
+                let operand = arguments.pop().expect("a renderer call has its operand");
+                let (start, end) = match index {
+                    3 => ("start_layer", "end_layer"),
+                    4 => ("start_transformation", "end_transformation"),
+                    _ => ("__rawr_start_translation", "end_transformation"),
+                };
+                let renderer = self.temporary("renderer");
+                let renderer_ty = match self.inference.resolve(&receiver.ty) {
+                    Ty::Reference { target, .. } => *target,
+                    ty => ty,
+                };
+                source.push_text(format!("let {renderer} = "));
+                source.push(receiver.rendered_source());
+                source.push_text("; ");
+                let local = local(self, &renderer, renderer_ty.clone());
+                let started = method(self, local.clone(), start, vec![operand])?;
+                source.push(started.rendered_source());
+                let output = self.inference.fresh();
+                let result = self.temporary("drawn");
+                let invoked = self.immediate_call(&mut closure, &renderer_ty, &output, &renderer)?;
+                source.push_text(format!("; let {result} = "));
+                source.push(invoked);
+                source.push_text("; ");
+                let ended = method(self, local, end, Vec::new())?;
+                source.push(ended.rendered_source());
                 source.push_text(format!("; {result}"));
                 output
             }

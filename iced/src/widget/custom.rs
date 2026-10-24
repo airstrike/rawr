@@ -60,6 +60,19 @@ pub(crate) struct Instance {
     written: u64,
 }
 
+/// iced's `Mesh::Solid { buffers, transformation, clip_bounds }`, built
+/// field by field and made a `Mesh` by `into`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SolidMesh {
+    buffers: iced::advanced::graphics::mesh::Indexed<iced::advanced::graphics::mesh::SolidVertex2D>,
+    transformation: iced::Transformation,
+    clip_bounds: Rectangle,
+}
+
+/// iced's `Never`, the Message of a view that sends none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Never {}
+
 /// iced's `Size<Length>`, which `Widget::size` returns.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct LengthSize(pub(crate) Size<Length>);
