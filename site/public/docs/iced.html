@@ -485,7 +485,30 @@ fn start() -&gt; (Download, Task&lt;Message&gt;) {
 <p><code>futures::future::join</code> and <code>try_join</code> run two futures at once, through iced&rsquo;s <code>iced::futures</code>. <code>try_join</code> ends at the first <code>Err</code>.</p>
 <p>A program that does not depend on tokio still has tokio&rsquo;s timers, channels, <code>Mutex</code> and <code>join!</code>, <code>try_join!</code> and <code>select!</code>. Rawr runs its own tokio for them. In <code>?play</code> its timers follow the recording&rsquo;s clock, so the GIF shows each step. <a href="/docs/play#tokio">?play&rsquo;s tokio</a> lists what it has. A program that depends on tokio uses the real crate instead.</p>
 <p>A reload that changes an async body cancels the task that runs it. A suspended body never goes on with the new code.</p>
-<p><code>tokio::task::spawn_blocking</code> with a Rawr closure does not work yet. A Rust async method that borrows its receiver does not cross either.</p>
+<p>A Rust async method that borrows its receiver does not cross.</p>
+<h3 id="blocking">Blocking work</h3>
+<p><code>tokio::task::spawn_blocking</code> runs a Rawr closure off the UI thread. Its handle is a future of <code>Result&lt;T, JoinError&gt;</code>, as in tokio. So <code>Task::perform</code> takes it, and <code>.await</code> takes its output in an async body.</p>
+<div class="block">
+  <pre><code data-lang="rust">use tokio::task::spawn_blocking;
+
+fn update(&amp;mut self, message: Message) -&gt; Task&lt;Message&gt; {
+    match message {
+        Message::Count =&gt; {
+            let limit = self.limit;
+            Task::perform(spawn_blocking(move || count_primes(limit)), |result| {
+                Message::Counted(result.unwrap())
+            })
+        }
+        Message::Counted(primes) =&gt; {
+            self.primes = Some(primes);
+            Task::none()
+        }
+    }
+}</code></pre>
+</div>
+<p>The closure runs on a worker thread of its own when its task starts. It has its own evaluation, so the window keeps drawing while it works. It sees only the values it moved in, and those are its own, so its work never changes the State. A shared handle such as a channel sender stays shared, as in Rust. Its output reaches <code>update</code> on the UI thread, after the same check as every other step of a task. A reload drops the output of a closure that is still running, but it cannot stop the thread. The thread ends when the closure returns.</p>
+<p>A closure that fails fails its task, as a failing <code>update</code> does. So the <code>Result</code> is always <code>Ok</code>, and <code>JoinError</code> exists only so the type can be named. tokio starts the closure when <code>spawn_blocking</code> is called. Rawr starts it when the task runs, which iced does right after <code>update</code> returns it.</p>
+<p><code>std::thread::spawn</code> does not compile, and the error points to <code>spawn_blocking</code>. Its <code>join</code> waits on the calling thread, which would stop the UI thread. Rawr runs a closure off the UI thread only as a task whose output reaches <code>update</code>. In a project that depends on tokio, <code>spawn_blocking</code> with a Rawr closure is not supported yet.</p>
 
 <h2 id="diagnostics">Diagnostics</h2>
 <p><code>rawr check</code> checks an app without opening a window. Errors look like rustc&rsquo;s. Delete the <code>Decrement</code> arm from the counter and it reports the missing arm:</p>
@@ -524,7 +547,7 @@ fn start() -&gt; (Download, Task&lt;Message&gt;) {
   <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code> and <code>grid</code>.</li>
   <li><code>iced::gradient</code>, <code>iced::clipboard</code> and <code>application::timed</code>.</li>
   <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
-  <li><code>tokio::task::spawn_blocking</code> with a Rawr closure. Other async code works, as <a href="#async">Async code</a> describes.</li>
+  <li><code>std::thread::spawn</code>. <code>tokio::task::spawn_blocking</code> runs blocking work instead, as <a href="#blocking">Blocking work</a> describes.</li>
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
 <p>iced master has 56 examples. 32 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>custom_quad</code>, <code>custom_widget</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>geometry</code>, <code>lazy</code>, <code>loupe</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code>, <code>vectorial_text</code> and <code>websocket</code>. Six of the others use <code>async</code> code and now stop at other gaps. Two need <code>iced::application::timed</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>

@@ -373,7 +373,7 @@ svg(svg::Handle::from_memory(circle.as_bytes())).width(160).height(160)</code></
   <li><code>tokio::sync::oneshot</code> has <code>channel</code>.</li>
   <li><code>tokio::sync::watch</code> has <code>channel</code> with <code>send</code>, <code>subscribe</code>, <code>changed</code>, <code>borrow</code> and <code>borrow_and_update</code>.</li>
   <li><code>tokio::sync::Mutex</code> has <code>new</code> and <code>lock().await</code>.</li>
-  <li><code>tokio::task</code> has <code>yield_now</code>.</li>
+  <li><code>tokio::task</code> has <code>yield_now</code> and <code>spawn_blocking</code>.</li>
   <li><code>tokio::join!</code>, <code>tokio::try_join!</code> and <code>tokio::select!</code> take up to 5 futures. <code>select!</code> accepts <code>biased;</code>. <code>use tokio::join;</code> makes <code>join!</code> tokio&rsquo;s.</li>
 </ul>
 <p>It doesn&rsquo;t have <code>JoinSet</code>, <code>Notify</code>, <code>Semaphore</code>, <code>RwLock</code>, <code>broadcast</code> or <code>time::sleep_until</code>. A <code>Mutex</code> has no <code>try_lock</code> or <code>into_inner</code>. A plain program has no async code, so only an app can use tokio.</p>
@@ -441,9 +441,12 @@ impl Sum {
 </div>
 
 <h3 id="spawn">No tokio::spawn</h3>
-<p>Async code runs on iced&rsquo;s UI thread, one step at a time. A spawned future would need to start a task outside the one it belongs to, and that model has no way to do it. So <code>tokio::spawn</code> doesn&rsquo;t compile. <code>task::spawn</code>, <code>spawn_blocking</code> and <code>spawn_local</code> don&rsquo;t either. The error says what to use instead.</p>
-<div class="block"><pre><code>unsupported syntax: `tokio::spawn` in a program without a tokio dependency, whose async code runs on iced's UI thread; run futures at once with `tokio::join!`, or return a `Task` from `update`</code></pre></div>
+<p>Async code runs on iced&rsquo;s UI thread, one step at a time. A spawned future would need to start a task outside the one it belongs to, and that model has no way to do it. So <code>tokio::spawn</code> doesn&rsquo;t compile. <code>task::spawn</code> and <code>spawn_local</code> don&rsquo;t either. The error says what to use instead.</p>
+<div class="block"><pre><code>unsupported syntax: `tokio::spawn` in a program without a tokio dependency, whose async code runs on iced's UI thread; run futures at once with `tokio::join!`, run blocking work with `tokio::task::spawn_blocking`, or return a `Task` from `update`</code></pre></div>
 <p>Use <code>tokio::join!</code> to run futures at once. Return a <code>Task</code> from <code>update</code> to start work that outlives the current message.</p>
+
+<h3 id="spawn-blocking">spawn_blocking</h3>
+<p><code>tokio::task::spawn_blocking(move || ..)</code> runs a closure on a worker thread, as <a href="/docs/iced#blocking">iced&rsquo;s blocking work</a> describes. <code>Task::perform</code> takes its handle, and <code>.await</code> takes its output. In a recording the worker reads the simulated clock, and the recording waits for the closure to end. So its output is ready at the instant its task started, and a GIF is the same on every run. A closure that takes long uses up the snippet&rsquo;s time limit, as the same work in <code>update</code> would. <code>std::thread::spawn</code> doesn&rsquo;t compile, and its error points to <code>spawn_blocking</code>.</p>
 
 <h3 id="tokio-differences">Where ?play&rsquo;s tokio behaves differently</h3>
 <p>Two things work differently from the real tokio.</p>
