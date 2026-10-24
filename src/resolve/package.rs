@@ -1782,7 +1782,11 @@ fn host_target(
             })
         }
         // `use std::fmt;`, for hand-written `Debug` and `Display` impls.
-        None if super::std_fmt_import(&qualified) => Ok(Target::Module),
+        None if super::std_fmt_import(&qualified)
+            || super::tokio_macro(&qualified, host).is_some() =>
+        {
+            Ok(Target::Module)
+        }
         None => {
             #[cfg(feature = "rust-import")]
             let missing = native.filter(|site| site.missing_binding(host, &qualified));

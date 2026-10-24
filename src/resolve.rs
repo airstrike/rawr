@@ -1142,8 +1142,11 @@ fn resolve_import_binding(
                 owner: owner.clone(),
             }
         }
-        // `use std::fmt;`, for hand-written `Debug` and `Display` impls.
-        None if std_fmt_import(&qualified) => item::Import::Module,
+        // `use std::fmt;`, for hand-written `Debug` and `Display` impls,
+        // and `use tokio::join;`, a macro Rawr expands.
+        None if std_fmt_import(&qualified) || tokio_macro(&qualified, host).is_some() => {
+            item::Import::Module
+        }
         None => {
             return Err(Error::UnknownImport {
                 path: qualified,
@@ -1189,6 +1192,18 @@ pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableS
         }
     }
     qualified.into()
+}
+
+/// The macro `path` names when it is tokio's `join`, `try_join` or
+/// `select` in a program without tokio, whose tokio is rawr-iced's
+/// (`std_reexport`). Rawr expands them itself.
+pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static str> {
+    let name = path.strip_prefix("tokio::")?;
+    let name = ["join", "try_join", "select"]
+        .into_iter()
+        .find(|macro_name| *macro_name == name)?;
+    (host.facade_fingerprint("tokio").is_none() && host.entry("rawr_iced::tokio").is_some())
+        .then_some(name)
 }
 
 /// `std::fmt` (or `core::fmt`) and its `Debug`, `Display` and `Formatter`,

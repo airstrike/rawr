@@ -11009,6 +11009,225 @@ impl<'a> Parser<'a> {
         self.parse_local_type().map(Some)
     }
 
+    /// tokio's `join!(a, b, ..)`, `try_join!(a, b, ..)` and
+    /// `select! { pattern = future => body, .. else => body }`, at the `!`,
+    /// written again as Rawr code: an `.await` on rawr-iced's
+    /// `tokio::__join2` (and the others for each count), and for `select!` a
+    /// `match` of its output. Plan `i` of a select gives `Err` `i` times
+    /// around its output, then `Ok` unless it is the last
+    /// (`rawr_iced::task::Kind::Select`).
+    fn parse_tokio_macro(&mut self, name: &str, start: Span) -> Result<ParsedExpr, Error> {
+        const MOST: usize = 5;
+        let at = start.start();
+        let ident = |text: &str| (Token::Identifier(Box::new(text.into())), at);
+        let reserved = |text: &str| (Token::Reserved(Box::new(text.into())), at);
+        let unsupported = |construct: String, end: Position| Error::UnsupportedNominalSyntax {
+            construct: construct.into(),
+            source: span(at, end),
+        };
+        self.next();
+        // The futures and, for `select!`, each branch's pattern and body.
+        let mut futures = Vec::<Vec<(Token, Position)>>::new();
+        let mut branches = Vec::<(Vec<(Token, Position)>, Vec<(Token, Position)>)>::new();
+        let mut otherwise = None;
+        let end;
+        if name == "select" {
+            let open = self.expect(Token::LeftBrace, "'{' after `select!`")?;
+            let _ = open;
+            if matches!(self.peek(), Token::Identifier(ref word) if word.as_str() == "biased")
+                && matches!(self.peek_second(), Token::SemiColon)
+            {
+                self.next();
+                self.next();
+            }
+            loop {
+                if matches!(self.peek(), Token::RightBrace) {
+                    end = self.next().1;
+                    break;
+                }
+                // `pattern = future =>` or `else =>`.
+                let mut pattern = Vec::new();
+                let is_else = matches!(self.peek(), Token::Else);
+                if is_else {
+                    self.next();
+                } else {
+                    let mut depth = 0usize;
+                    loop {
+                        let (token, position) = self.next();
+                        match token {
+                            Token::Equals if depth == 0 => break,
+                            Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                            Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                                depth = depth.saturating_sub(1);
+                            }
+                            Token::EOF => {
+                                return Err(unsupported("`=` after a `select!` pattern".into(), position));
+                            }
+                            _ => {}
+                        }
+                        pattern.push((token, position));
+                    }
+                }
+                let mut future = Vec::new();
+                let mut depth = 0usize;
+                loop {
+                    let (token, position) = self.next();
+                    match token {
+                        Token::DoubleArrow if depth == 0 => break,
+                        Token::Comma if depth == 0 => {
+                            return Err(unsupported(
+                                "a `select!` branch with an `if` precondition".into(),
+                                position,
+                            ));
+                        }
+                        Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                            depth += 1;
+                        }
+                        Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                            depth = depth.saturating_sub(1);
+                        }
+                        Token::EOF => {
+                            return Err(unsupported("`=>` in a `select!` branch".into(), position));
+                        }
+                        _ => {}
+                    }
+                    future.push((token, position));
+                }
+                // The body: a block, or an expression up to a comma.
+                let mut body = Vec::new();
+                let block = matches!(self.peek(), Token::LeftBrace);
+                let mut depth = 0usize;
+                loop {
+                    match self.peek() {
+                        Token::Comma if depth == 0 => {
+                            self.next();
+                            break;
+                        }
+                        Token::RightBrace if depth == 0 => break,
+                        Token::EOF => {
+                            let position = self.next().1;
+                            return Err(unsupported("'}' to close `select!`".into(), position));
+                        }
+                        _ => {}
+                    }
+                    let (token, position) = self.next();
+                    match token {
+                        Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                            depth += 1;
+                        }
+                        Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                            depth = depth.saturating_sub(1);
+                        }
+                        _ => {}
+                    }
+                    body.push((token, position));
+                    if block && depth == 0 {
+                        if matches!(self.peek(), Token::Comma) {
+                            self.next();
+                        }
+                        break;
+                    }
+                }
+                if is_else {
+                    otherwise = Some(body);
+                } else {
+                    futures.push(future);
+                    branches.push((pattern, body));
+                }
+            }
+        } else {
+            let (tokens, close) = self.take_argument_tokens()?;
+            end = close;
+            let mut depth = 0usize;
+            let mut current = Vec::new();
+            for (token, position) in tokens {
+                match token {
+                    Token::Comma if depth == 0 => {
+                        futures.push(std::mem::take(&mut current));
+                        continue;
+                    }
+                    Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                        depth += 1;
+                    }
+                    Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                        depth = depth.saturating_sub(1);
+                    }
+                    _ => {}
+                }
+                current.push((token, position));
+            }
+            if !current.is_empty() {
+                futures.push(current);
+            }
+        }
+        let count = futures.len();
+        let least = if name == "select" { 1 } else { 2 };
+        if count < least || count > MOST {
+            return Err(unsupported(
+                format!("`{name}!` of {count} futures; Rawr takes {least} to {MOST}"),
+                end,
+            ));
+        }
+        // `(tokio::__join2(a, b).await)`, or the select's `match`.
+        let mut spliced = vec![(Token::LeftParen, at)];
+        if name == "select" {
+            spliced.push(reserved("match"));
+        }
+        if count == 1 {
+            spliced.push((Token::LeftParen, at));
+            spliced.extend(futures.pop().into_iter().flatten());
+            spliced.push((Token::RightParen, at));
+        } else {
+            spliced.extend([
+                ident("tokio"),
+                (Token::DoubleColon, at),
+                ident(&format!("__{name}{count}")),
+                (Token::LeftParen, at),
+            ]);
+            for (index, future) in futures.into_iter().enumerate() {
+                if index > 0 {
+                    spliced.push((Token::Comma, at));
+                }
+                spliced.push((Token::LeftParen, at));
+                spliced.extend(future);
+                spliced.push((Token::RightParen, at));
+            }
+            spliced.push((Token::RightParen, at));
+        }
+        spliced.extend([(Token::Period, at), reserved("await")]);
+        if name == "select" {
+            spliced.push((Token::LeftBrace, at));
+            for (index, (pattern, body)) in branches.into_iter().enumerate() {
+                let mut wraps = Vec::new();
+                if count > 1 {
+                    wraps.extend(std::iter::repeat_n("Err", index));
+                    if index + 1 < count {
+                        wraps.push("Ok");
+                    }
+                }
+                for wrap in &wraps {
+                    spliced.extend([ident(wrap), (Token::LeftParen, at)]);
+                }
+                spliced.extend(pattern);
+                spliced.extend(wraps.iter().map(|_| (Token::RightParen, at)));
+                spliced.push((Token::DoubleArrow, at));
+                spliced.push((Token::LeftBrace, at));
+                spliced.extend(body);
+                spliced.push((Token::RightBrace, at));
+                spliced.push((Token::Comma, at));
+            }
+            if let Some(body) = otherwise {
+                spliced.extend([(Token::Underscore, at), (Token::DoubleArrow, at), (Token::LeftBrace, at)]);
+                spliced.extend(body);
+                spliced.extend([(Token::RightBrace, at), (Token::Comma, at)]);
+            }
+            spliced.push((Token::RightBrace, at));
+        }
+        spliced.push((Token::RightParen, end));
+        self.splice_tokens(spliced);
+        self.parse_primary()
+    }
+
     fn splice_tokens(&mut self, tokens: Vec<(Token, Position)>) {
         let rest = std::mem::replace(&mut self.input, Vec::new().into_iter().peekable());
         self.input = tokens
@@ -26855,6 +27074,13 @@ impl<'a> Parser<'a> {
                 span(name_span.start(), close),
             ));
         }
+        // `join!`, `try_join!` and `select!` after `use tokio::join;`.
+        if matches!(self.peek(), Token::Bang)
+            && let Some(binding) = self.models.import(&name)
+            && let Some(name) = crate::resolve::tokio_macro(&binding.qualified, &self.models.host)
+        {
+            return self.parse_tokio_macro(name, name_span);
+        }
         if matches!(self.peek(), Token::Bang)
             && name.as_str() == "matches"
             && self.models.import(&name).is_none()
@@ -33153,6 +33379,12 @@ impl<'a> Parser<'a> {
                 ),
                 _ => written,
             };
+            // `tokio::join!(..)`, `try_join!` and `select!` without tokio.
+            if matches!(self.peek(), Token::Bang)
+                && let Some(name) = crate::resolve::tokio_macro(&full, &self.models.host)
+            {
+                return self.parse_tokio_macro(name, first_span);
+            }
             // `tokio::spawn` has no place to run without tokio.
             if matches!(
                 full.as_str(),
