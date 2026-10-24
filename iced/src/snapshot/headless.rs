@@ -297,8 +297,72 @@ impl Renderer {
             (size.width * scale).round() as u32,
             (size.height * scale).round() as u32,
         );
-        let bytes = self.raw.screenshot(physical, scale, base.background_color);
+        let mut bytes = self.raw.screenshot(physical, scale, base.background_color);
+        if let Some(canvas) = self.canvas.filter(|canvas| canvas.margin > 0) {
+            let margin = (canvas.margin as f32 * scale).round() as u32;
+            fill_margin(&mut bytes, physical.width, physical.height, margin);
+        }
         image::Image::new(physical.width, physical.height, bytes)
+    }
+}
+
+/// Paint the canvas's margin, `margin` pixels on each side of an image
+/// `width` by `height`, with the content's own background: the color its
+/// edge is all in, as a canvas filling the view draws. A content edge of
+/// several colors keeps the theme's background there.
+fn fill_margin(rgba: &mut [u8], width: u32, height: u32, margin: u32) {
+    let (width, height, margin) = (width as usize, height as usize, margin as usize);
+    if width <= 2 * margin || height <= 2 * margin {
+        return;
+    }
+    let pixel = |rgba: &[u8], x: usize, y: usize| {
+        let at = (y * width + x) * 4;
+        [rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]]
+    };
+    let (left, right) = (margin, width - margin - 1);
+    let (top, bottom) = (margin, height - margin - 1);
+    let edge = pixel(rgba, left, top);
+    let uniform = (left..=right)
+        .all(|x| pixel(rgba, x, top) == edge && pixel(rgba, x, bottom) == edge)
+        && (top..=bottom).all(|y| pixel(rgba, left, y) == edge && pixel(rgba, right, y) == edge);
+    if !uniform {
+        return;
+    }
+    for y in 0..height {
+        for x in 0..width {
+            if (left..=right).contains(&x) && (top..=bottom).contains(&y) {
+                continue;
+            }
+            let at = (y * width + x) * 4;
+            rgba[at..at + 4].copy_from_slice(&edge);
+        }
+    }
+}
+
+#[cfg(test)]
+mod margin_tests {
+    #[test]
+    fn a_uniform_content_edge_colors_the_margin() {
+        let (side, margin) = (6_u32, 1_u32);
+        let mut rgba = [9_u8, 9, 9, 255].repeat((side * side) as usize);
+        for y in 1..5 {
+            for x in 1..5 {
+                let at = ((y * side + x) * 4) as usize;
+                rgba[at..at + 4].copy_from_slice(&[20, 18, 24, 255]);
+            }
+        }
+        let center = ((2 * side + 2) * 4) as usize;
+        rgba[center..center + 4].copy_from_slice(&[255, 0, 0, 255]);
+        super::fill_margin(&mut rgba, side, side, margin);
+        assert_eq!(&rgba[0..4], &[20, 18, 24, 255]);
+        assert_eq!(&rgba[center..center + 4], &[255, 0, 0, 255]);
+
+        // A content edge of two colors keeps the theme's margin.
+        let mut mixed = [9_u8, 9, 9, 255].repeat((side * side) as usize);
+        let edge = ((side + 1) * 4) as usize;
+        mixed[edge..edge + 4].copy_from_slice(&[1, 2, 3, 255]);
+        super::fill_margin(&mut mixed, side, side, margin);
+        assert_eq!(&mixed[0..4], &[9, 9, 9, 255]);
     }
 }
 
