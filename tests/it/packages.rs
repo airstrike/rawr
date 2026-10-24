@@ -1,17 +1,12 @@
-use rawr::packages::{Package, StandardPackage as SSS};
+use rawr::packages::Package;
 use rawr::{Engine, INT, Module, Scope, def_package};
 
-#[cfg(not(feature = "no_module"))]
-#[cfg(not(feature = "no_custom_syntax"))]
 #[test]
 fn test_packages() {
     def_package! {
         /// My custom package.
-        MyPackage(m) : SSS {
+        MyPackage(m) {
             m.set_native_fn("hello", |x: INT| Ok(x + 1));
-            m.set_native_fn("@", |x: INT, y: INT| Ok(x * x + y * y));
-        } |> |engine| {
-            engine.register_custom_operator("@", 160).unwrap();
         }
     }
 
@@ -23,7 +18,6 @@ fn test_packages() {
 
         // Register packages - cheap.
         pkg.register_into_engine(&mut engine);
-        pkg.register_into_engine_as(&mut engine, "foo");
 
         // Create custom scope - cheap.
         let mut scope = Scope::new();
@@ -33,10 +27,10 @@ fn test_packages() {
 
         // Evaluate script.
 
-        engine.eval_with_scope::<INT>(&mut scope, "hello(x) @ foo::hello(x)")
+        engine.eval_with_scope::<INT>(&mut scope, "hello(x) * hello(x)")
     };
 
-    assert_eq!(make_call(42).unwrap(), 3698);
+    assert_eq!(make_call(42).unwrap(), 1849);
 }
 
 #[cfg(not(feature = "no_function"))]
@@ -44,7 +38,7 @@ fn test_packages() {
 #[test]
 fn test_packages_with_script() {
     let mut engine = Engine::new();
-    let ast = engine.compile("fn foo(x) { x + 1 }  fn bar(x) { foo(x) + 1 }").unwrap();
+    let ast = engine.compile("pub fn foo(x: i64) -> i64 { x + 1 } pub fn bar(x: i64) -> i64 { foo(x) + 1 }").unwrap();
 
     let module = Module::eval_ast_as_new(Scope::new(), &ast, &engine).unwrap();
     engine.register_global_module(module.into());

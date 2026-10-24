@@ -1,4 +1,4 @@
-use rawr::{Engine, INT, ParseErrorType};
+use rawr::{Engine, INT, ParseErrorType, resolve::Error};
 
 #[test]
 fn test_loop() {
@@ -8,8 +8,8 @@ fn test_loop() {
         engine
             .eval::<INT>(
                 "
-                    let x = 0;
-                    let i = 0;
+                    let mut x = 0;
+                    let mut i = 0;
 
                     loop {
                         if i < 10 {
@@ -32,22 +32,32 @@ fn test_loop() {
         engine
             .eval::<INT>(
                 "
+                    let mut found = 0;
                     for n in 0..10 {
-                        let x = if n <= 5 { n };
-                        x ?? break 42;
+                        let Some(_x) = (if n <= 5 { Some(n) } else { None }) else {
+                            found = 42;
+                            break;
+                        };
                     }
+                    found
                 "
             )
             .unwrap(),
         42
     );
 
-    assert_eq!(*engine.compile("let x = 0; break;").unwrap_err().err_type(), ParseErrorType::LoopBreak);
+    let outside_loop = |script: &str| {
+        let err = engine.compile(script).expect_err(script);
+        matches!(err.err_type(), ParseErrorType::Resolution(Error::UnsupportedNominalSyntax { construct, .. }) if construct == "`break` or `continue` outside a loop")
+    };
 
+    assert!(outside_loop("let x = 0; break;"));
+
+    // A closure body is not inside the loop around it.
     #[cfg(not(feature = "no_function"))]
-    assert_eq!(*engine.compile("loop { let f = || { break;  } }").unwrap_err().err_type(), ParseErrorType::LoopBreak);
+    assert!(outside_loop("loop { let f = || { break; }; }"));
 
-    assert_eq!(*engine.compile("let x = 0; if x > 0 { continue; }").unwrap_err().err_type(), ParseErrorType::LoopBreak);
+    assert!(outside_loop("let x = 0; if x > 0 { continue; }"));
 }
 
 #[test]

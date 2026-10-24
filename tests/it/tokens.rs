@@ -1,74 +1,21 @@
-use rawr::{Engine, INT, ParseErrorType};
+use rawr::{Engine, INT};
 
 #[test]
 fn test_tokens_disabled() {
     let mut engine = Engine::new();
 
+    engine.compile("let x = if true { 42 } else { 0 };").unwrap();
+
     engine.disable_symbol("if"); // disable the 'if' keyword
 
-    assert!(matches!(
-        engine
-            .compile("let x = if true { 42 } else { 0 };")
-            .unwrap_err()
-            .err_type(),
-        ParseErrorType::Reserved(err) if err == "if"
-    ));
+    let error = engine.compile("let x = if true { 42 } else { 0 };").unwrap_err();
+    assert!(error.to_string().contains("`if`"), "{error}");
+
+    engine.compile("let mut x = 40 + 2; x += 1;").unwrap();
 
     engine.disable_symbol("+="); // disable the '+=' operator
 
-    assert_eq!(*engine.compile("let x = 40 + 2; x += 1;").unwrap_err().err_type(), ParseErrorType::UnknownOperator("+=".to_string()));
-
-    assert!(matches!(engine.compile("let x = += 0;").unwrap_err().err_type(), ParseErrorType::Reserved(err) if err == "+="));
-}
-
-#[cfg(not(feature = "no_custom_syntax"))]
-#[test]
-fn test_tokens_custom_operator_identifiers() {
-    let mut engine = Engine::new();
-
-    // Register a custom operator called `foo` and give it
-    // a precedence of 160 (i.e. between +|- and *|/).
-    engine.register_custom_operator("foo", 160).unwrap();
-
-    // Register a binary function named `foo`
-    engine.register_fn("foo", |x: INT, y: INT| (x * y) - (x + y));
-
-    assert_eq!(engine.eval_expression::<INT>("1 + 2 * 3 foo 4 - 5 / 6").unwrap(), 15);
-
-    #[cfg(not(feature = "no_function"))]
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                "
-                    fn foo(x, y) { y - x }
-                    1 + 2 * 3 foo 4 - 5 / 6
-                "
-            )
-            .unwrap(),
-        -1
-    );
-}
-
-#[cfg(not(feature = "no_custom_syntax"))]
-#[test]
-fn test_tokens_custom_operator_symbol() {
-    let mut engine = Engine::new();
-
-    // Register a custom operator `#` and give it
-    // a precedence of 160 (i.e. between +|- and *|/).
-    engine.register_custom_operator("#", 160).unwrap();
-
-    // Register a binary function named `#`
-    engine.register_fn("#", |x: INT, y: INT| (x * y) - (x + y));
-
-    assert_eq!(engine.eval_expression::<INT>("1 + 2 * 3 # 4 - 5 / 6").unwrap(), 15);
-
-    // Register a custom operator named `=>`
-    let _ = engine.register_custom_operator("=>", 160).unwrap_err();
-    engine.disable_symbol("=>");
-    engine.register_custom_operator("=>", 160).unwrap();
-    engine.register_fn("=>", |x: INT, y: INT| (x * y) - (x + y));
-    assert_eq!(engine.eval_expression::<INT>("1 + 2 * 3 => 4 - 5 / 6").unwrap(), 15);
+    let _ = engine.compile("let mut x = 40 + 2; x += 1;").unwrap_err();
 }
 
 #[test]
@@ -76,7 +23,7 @@ fn test_tokens_unicode_xid_ident() {
     let engine = Engine::new();
     let result = engine.eval::<INT>(
         "
-            fn すべての答え() { 42 }
+            fn すべての答え() -> i64 { 42 }
             すべての答え()
         ",
     );
@@ -85,44 +32,4 @@ fn test_tokens_unicode_xid_ident() {
 
     #[cfg(not(feature = "unicode-xid-ident"))]
     let _ = result.unwrap_err();
-
-    let result = engine.eval::<INT>(
-        "
-            fn _1() { 1 }
-            _1()
-        ",
-    );
-    let _ = result.unwrap_err();
-}
-
-/// Regression: `Engine::compact_script` must not fuse an operator with a
-/// following character into a different token. In particular `x < -1` must not
-/// compact to `x<-1` (Rawr lexes `<-` and `--` as Rust
-/// does, but compaction still keeps them apart). The compacted output must always
-/// compile back.
-///
-/// Uses only core integer expressions so it holds under every feature set
-/// (e.g. `no_function`, `no_float`, `only_i32`).
-#[test]
-fn test_compact_script_operator_adjacency() {
-    let engine = Engine::new();
-
-    for source in [
-        "let a = 1 < -1;",  // `< -` would fuse into the invalid `<-`
-        "let b = 5 - -2;",  // `- -` would fuse into the reserved `--`
-        "let c = 2 * -1;",  // must stay valid
-        "let d = 10 % -4;", // must stay valid
-        "let e = 3 <= -2;", // `<=` must not be broken by the fix
-    ] {
-        // Sanity: the source itself compiles.
-        engine.compile(source).unwrap();
-
-        let compacted = engine.compact_script(source).unwrap();
-
-        // No operator must have fused with the following `-`.
-        assert!(!compacted.contains("<-") && !compacted.contains("--"), "compacted form fused an operator with `-`: {:?}", compacted);
-
-        // The compacted form must compile back to the same program.
-        engine.compile(&compacted).unwrap_or_else(|e| panic!("compacted {:?} failed to recompile: {}", compacted, e));
-    }
 }

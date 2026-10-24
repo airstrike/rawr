@@ -1,4 +1,4 @@
-use rawr::{Dynamic, Engine, INT, Scope};
+use rawr::{Dynamic, Engine, Output};
 use std::sync::{Arc, RwLock};
 
 #[cfg(not(feature = "only_i32"))]
@@ -7,94 +7,85 @@ use std::sync::{Arc, RwLock};
 fn test_to_string() {
     let engine = Engine::new();
 
-    let mut scope = Scope::new();
-    scope.push("x", 42_u8);
-    scope.push("y", 42_i32);
-    scope.push("z", 42_i16);
-
-    assert_eq!(engine.eval_with_scope::<String>(&mut scope, "to_string(x)").unwrap(), "42");
-    assert_eq!(engine.eval_with_scope::<String>(&mut scope, "to_string(x)").unwrap(), "42");
-    assert_eq!(engine.eval_with_scope::<String>(&mut scope, "to_string(x)").unwrap(), "42");
+    assert_eq!(engine.eval::<String>("let x: u8 = 42; x.to_string()").unwrap(), "42");
+    assert_eq!(engine.eval::<String>("let y: i32 = 42; y.to_string()").unwrap(), "42");
+    assert_eq!(engine.eval::<String>("let z: i16 = 42; z.to_string()").unwrap(), "42");
 }
 
 #[test]
 fn test_print_debug() {
     let logbook = Arc::new(RwLock::new(Vec::<String>::new()));
 
-    // Redirect print/debug output to 'log'
-    let log1 = logbook.clone();
-    let log2 = logbook.clone();
+    // Redirect the output of `println!` and `eprintln!` to the logbook.
+    let log = logbook.clone();
 
     let mut engine = Engine::new();
 
-    engine.on_print(move |s| log1.write().unwrap().push(format!("entry: {s}"))).on_debug(move |s, src, pos| {
-        let src = src.unwrap_or("unknown");
-        log2.write().unwrap().push(format!("DEBUG of {src} at {pos:?}: {s}"))
+    engine.on_output(move |output, text| {
+        let stream = if output == Output::Stderr { "err" } else { "out" };
+        log.write().unwrap().push(format!("{stream}: {text}"))
     });
 
     // Evaluate script
-    engine.run("print(40 + 2)").unwrap();
-    let mut ast = engine.compile(r#"let x = "hello!"; debug(x)"#).unwrap();
-    ast.set_source("world");
+    engine.run(r#"println!("{}", 40 + 2)"#).unwrap();
+    let ast = engine.compile(r#"let x = "hello!"; eprintln!("{x:?}")"#).unwrap();
     let r = engine.eval_ast::<Dynamic>(&ast).unwrap();
 
-    // 'logbook' captures all the 'print' and 'debug' output
+    // The logbook captures each macro's text, its newline included.
     assert!(r.is_unit());
     assert_eq!(logbook.read().unwrap().len(), 2);
-    assert_eq!(logbook.read().unwrap()[0], "entry: 42");
-    assert_eq!(logbook.read().unwrap()[1], if cfg!(not(feature = "no_position")) { r#"DEBUG of world at 1:19: "hello!""# } else { r#"DEBUG of world at none: "hello!""# });
+    assert_eq!(logbook.read().unwrap()[0], "out: 42\n");
+    assert_eq!(logbook.read().unwrap()[1], "err: \"hello!\"\n");
 
     for entry in logbook.read().unwrap().iter() {
-        println!("{entry}");
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
-struct MyStruct {
-    field: INT,
-}
-
-impl std::fmt::Display for MyStruct {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "hello: {}", self.field)
+        print!("{entry}");
     }
 }
 
 #[cfg(not(feature = "no_object"))]
 #[test]
 fn test_print_custom_type() {
-    let mut engine = Engine::new();
+    let engine = Engine::new();
 
-    engine
-        .register_type_with_name::<MyStruct>("MyStruct")
-        .register_fn("to_debug", |x: &mut MyStruct| x.to_string())
-        .register_fn("debug", |x: &mut MyStruct| x.to_string())
-        .register_fn("new_ts", || MyStruct { field: 42 });
+    let types = "
+        use std::fmt;
 
-    engine.run("let x = new_ts(); debug(x);").unwrap();
+        struct MyStruct { field: i64 }
+
+        impl fmt::Display for MyStruct {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, \"hello: {}\", self.field) }
+        }
+
+        impl fmt::Debug for MyStruct {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, \"hello: {}\", self.field) }
+        }
+    ";
+
+    assert_eq!(engine.eval::<String>(&format!("{types} let x = MyStruct {{ field: 42 }}; x.to_string()")).unwrap(), "hello: 42");
 
     #[cfg(not(feature = "no_index"))]
     assert_eq!(
         engine
-            .eval::<String>(
-                r#"
-                    let x = [ 123, true, (), "world", new_ts() ];
-                    x.to_string()
+            .eval::<String>(&format!(
+                r#"{types}
+                    let x = (123, true, (), "world", MyStruct {{ field: 42 }});
+                    format!("{{x:?}}")
                 "#
-            )
+            ))
             .unwrap(),
-        r#"[123, true, (), "world", hello: 42]"#
+        r#"(123, true, (), "world", hello: 42)"#
     );
 
-    assert!(
+    #[cfg(not(feature = "no_index"))]
+    assert_eq!(
         engine
-            .eval::<String>(
-                r#"
-                let x = #{ a:123, b:true, c:(), d:"world", e:new_ts() };
-                x.to_string()
-            "#
-            )
-            .unwrap()
-            .contains(r#""e": hello: 42"#)
+            .eval::<String>(&format!(
+                r#"{types}
+                    let x = vec![MyStruct {{ field: 42 }}, MyStruct {{ field: 7 }}];
+                    format!("{{x:?}}")
+                "#
+            ))
+            .unwrap(),
+        "[hello: 42, hello: 7]"
     );
 }

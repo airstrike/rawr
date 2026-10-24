@@ -119,7 +119,7 @@ fn nominal_match_scrutinee_and_selected_arm_execute_once() {
                         Choice::Selected
                     }
                     fn selected(&mut self) -> i64 { self.calls += 1; 40 }
-                    fn unselected(&mut self) -> i64 { throw "unselected arm ran" }
+                    fn unselected(&mut self) -> i64 { panic!("unselected arm ran") }
                     fn choose(&mut self) -> i64 {
                         match self.choose_subject() {
                             Choice::Selected => self.selected(),
@@ -152,7 +152,7 @@ fn nested_if_and_match_values_compose_on_both_sides() {
                         self.calls += 1;
                         selected
                     }
-                    fn fail(&mut self) -> i64 { throw "unselected nested branch ran" }
+                    fn fail(&mut self) -> i64 { panic!("unselected nested branch ran") }
                     fn choose(&mut self, outer: bool, choice: Choice) -> i64 {
                         if outer {
                             match choice {

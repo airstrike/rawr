@@ -725,8 +725,7 @@ impl RuntimeGraph {
                     crate::resolve::item::Kind::Use(_)
                     | crate::resolve::item::Kind::Impl(_)
                     | crate::resolve::item::Kind::Trait(_)
-                    | crate::resolve::item::Kind::Function(_)
-                    | crate::resolve::item::Kind::LegacyFunction(_) => None,
+                    | crate::resolve::item::Kind::Function(_) => None,
                 })
                 .filter_map(|(definition, is_tuple_free)| {
                     (!is_tuple_free && tuple_free[&definition]).then_some(definition)
@@ -774,8 +773,7 @@ impl RuntimeGraph {
                     crate::resolve::item::Kind::Use(_)
                     | crate::resolve::item::Kind::Impl(_)
                     | crate::resolve::item::Kind::Trait(_)
-                    | crate::resolve::item::Kind::Function(_)
-                    | crate::resolve::item::Kind::LegacyFunction(_) => continue,
+                    | crate::resolve::item::Kind::Function(_) => continue,
                 };
                 if discovered != dependencies[&definition] {
                     dependencies.insert(definition, discovered);

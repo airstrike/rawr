@@ -6,7 +6,7 @@ fn main() -> Result<(), Box<EvalAltResult>> {
     let engine = Engine::new();
     let mut scope = Scope::new();
 
-    engine.run_with_scope(&mut scope, "let x = 4 + 5")?;
+    engine.run_with_scope(&mut scope, "let mut x = 4 + 5")?;
 
     println!("x = {}", scope.get_value::<i64>("x").unwrap());
 

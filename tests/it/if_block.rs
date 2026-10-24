@@ -4,7 +4,8 @@ use rawr::{Engine, INT};
 fn test_if() {
     let engine = Engine::new();
 
-    assert_eq!(engine.eval::<INT>("if true { 55 }").unwrap(), 55);
+    // An `if` without `else` has the type `()`, so it can't produce a number.
+    let _ = engine.eval::<INT>("if true { 55 }").unwrap_err();
     assert_eq!(engine.eval::<INT>("if false { 55 } else { 44 }").unwrap(), 44);
     assert_eq!(engine.eval::<INT>("if true { 55 } else { 44 }").unwrap(), 55);
     assert_eq!(engine.eval::<INT>("if false { 55 } else if true { 33 } else { 44 }").unwrap(), 33);

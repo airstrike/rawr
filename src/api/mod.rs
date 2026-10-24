@@ -28,9 +28,6 @@ pub mod custom_syntax;
 
 pub mod build_type;
 
-#[cfg(feature = "metadata")]
-pub mod definitions;
-
 pub mod deprecated;
 
 use crate::func::{locked_read, locked_write, Locked};
@@ -171,6 +168,8 @@ impl Engine {
     ///
     /// The precedence cannot be zero.
     ///
+    /// Typed scripts can't use custom operators yet.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -185,11 +184,6 @@ impl Engine {
     ///
     /// // Register a binary function named '#'
     /// engine.register_fn("#", |x: i64, y: i64| (x * y) - (x + y));
-    ///
-    /// assert_eq!(
-    ///     engine.eval_expression::<i64>("1 + 2 * 3 # 4 - 5 / 6")?,
-    ///     15
-    /// );
     /// # Ok(())
     /// # }
     /// ```

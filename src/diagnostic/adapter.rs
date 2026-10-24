@@ -19,6 +19,7 @@ impl Report {
                 application_report(source, error)
             }
             ParseErrorType::Resolution(error) => resolution_report(source, error),
+            ParseErrorType::Unexpected { .. } => unexpected_report(source, error.err_type(), None),
             error_type => {
                 let (stable_code, help) = parse_code(error_type);
                 let mut builder = Report::error(stable_code, error_type.to_string());
@@ -42,6 +43,9 @@ impl Report {
                 application_report_at(source, error, span)
             }
             ParseErrorType::Resolution(error) => resolution_report_at(source, error, span),
+            ParseErrorType::Unexpected { .. } => {
+                unexpected_report(source, error.err_type(), Some(span))
+            }
             error_type => {
                 let (stable_code, help) = parse_code(error_type);
                 let mut builder = Report::error(stable_code, error_type.to_string());
@@ -323,6 +327,34 @@ impl Report {
     }
 }
 
+/// Syntax Rust does not have, with rustc's label under the token and its
+/// help, at `span` when the token's position was mapped there.
+fn unexpected_report(
+    source: Source,
+    error: &ParseErrorType,
+    span: Option<Span>,
+) -> Result<Report, Error> {
+    let ParseErrorType::Unexpected {
+        message,
+        label,
+        help,
+        span: own,
+    } = error
+    else {
+        unreachable!("only syntax Rust does not have is reported here");
+    };
+    let mut builder = Report::error(code::PARSE_UNEXPECTED, message.clone());
+    if let Some(help) = help {
+        builder = builder.help(help.clone());
+    }
+    let span = span.unwrap_or(*own);
+    builder = builder.source(source.clone());
+    if !span.is_none() {
+        builder = builder.primary(source, span, Some(label.clone().into()))?;
+    }
+    Ok(builder.finish())
+}
+
 fn parse_code(error: &ParseErrorType) -> (code::Code, Option<&'static str>) {
     match error {
         ParseErrorType::BadInput(..) => (code::PARSE_BAD_INPUT, None),
@@ -337,6 +369,7 @@ fn parse_code(error: &ParseErrorType) -> (code::Code, Option<&'static str>) {
         | ParseErrorType::WrongEnumVariantArity(..) => (code::RESOLVE_ENUM_PATTERN, None),
         ParseErrorType::MalformedReceiver(..) => (code::RESOLVE_RECEIVER, None),
         ParseErrorType::MalformedTypeTuple(..) => (code::RESOLVE_TYPE_SHAPE, None),
+        ParseErrorType::Unexpected { .. } => (code::PARSE_UNEXPECTED, None),
         ParseErrorType::Resolution(..) => unreachable!(),
         _ => (code::PARSE_SYNTAX, None),
     }
@@ -353,7 +386,7 @@ fn resolution_report_at(
 ) -> Result<Report, Error> {
     Ok(sourced_builder(error, &source, primary)
         .source(source.clone())
-        .primary(source, primary, None)?
+        .primary(source, primary, primary_label(error))?
         .finish())
 }
 
@@ -471,7 +504,7 @@ fn resolution_report_with_sources(
     });
     let mut builder = builder.source(source.clone());
     if !error.primary_span().is_none() {
-        builder = builder.primary(source.clone(), member_span(error), None)?;
+        builder = builder.primary(source.clone(), member_span(error), primary_label(error))?;
     }
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
         builder = builder.secondary(
@@ -481,6 +514,14 @@ fn resolution_report_with_sources(
         )?;
     }
     Ok(builder.finish())
+}
+
+/// The label under the primary span, where rustc writes one.
+fn primary_label(error: &resolve::Error) -> Option<crate::ImmutableString> {
+    match error {
+        resolve::Error::Syntax { label, .. } => Some(label.clone()),
+        _ => None,
+    }
 }
 
 fn resolution_builder(error: &resolve::Error) -> Builder {
@@ -545,12 +586,16 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::MissingCapability => code::RESOLVE_CAPABILITY,
         resolve::Category::InvalidMatch => code::RESOLVE_MATCH,
         resolve::Category::UnsupportedNominalSyntax => code::RESOLVE_UNSUPPORTED_SYNTAX,
+        resolve::Category::Syntax => code::PARSE_UNEXPECTED,
         resolve::Category::InvalidPreview => code::RESOLVE_PREVIEW,
         resolve::Category::InvalidWidget => code::RESOLVE_WIDGET,
         resolve::Category::InvalidApplication => unreachable!(),
     };
     let builder = Report::error(stable_code, resolution_message(error));
     match error {
+        resolve::Error::Syntax {
+            help: Some(help), ..
+        } => builder.help(help.clone()),
         resolve::Error::DuplicateItem { .. }
         | resolve::Error::DuplicateMember { .. }
         | resolve::Error::DuplicateMethod { .. } => {
@@ -619,7 +664,6 @@ fn application_builder(error: &application::Error) -> Builder {
 
     let stable_code = match error.category() {
         ApplicationCategory::MissingEntry => code::FRAMEWORK_MISSING_ENTRY,
-        ApplicationCategory::PrivateMain => code::FRAMEWORK_PRIVATE_MAIN,
         ApplicationCategory::InvalidMain => code::FRAMEWORK_INVALID_MAIN,
         ApplicationCategory::MultipleEntries => code::FRAMEWORK_MULTIPLE_ENTRIES,
         ApplicationCategory::ConditionalEntry => code::FRAMEWORK_CONDITIONAL_ENTRY,
@@ -815,6 +859,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
             format!("unsupported syntax: {construct}")
         }
+        resolve::Error::Syntax { message, .. } => message.to_string(),
         resolve::Error::Application(error) => application_message(error),
         resolve::Error::InvalidPreview {
             preview, reason, ..
@@ -828,9 +873,6 @@ fn resolution_message(error: &resolve::Error) -> String {
 fn application_message(error: &application::Error) -> String {
     match error {
         application::Error::MissingEntry => "application compilation requires one public `main` tail entry using registered `iced` intrinsics".into(),
-        application::Error::PrivateMain { .. } => {
-            "application entry must be declared by `fn main() -> iced::Result` or `pub fn main`".into()
-        }
         application::Error::InvalidMain { reason, .. } => {
             format!("invalid application `main`: {reason}")
         }

@@ -22,6 +22,11 @@ fn main() {
         // Create Engine
         let mut engine = Engine::new();
 
+        // The script waits through a function the host provides.
+        engine.register_fn("sleep", |seconds: i64| {
+            std::thread::sleep(std::time::Duration::from_secs(seconds as u64))
+        });
+
         engine.on_progress(move |_ops| {
             #[cfg(feature = "sync")]
             if _ops % 5 != 0 {
@@ -69,21 +74,21 @@ fn main() {
         let _ = engine
             .run(
                 r#"
-                    let counter = 0;
+                    let mut counter = 0;
 
                     loop {
-                        print("[Script] One Potato...");
+                        println!("[Script] One Potato...");
                         sleep(1);
 
                         counter += 1;
 
-                        print("[Script] Two Potatoes...");
+                        println!("[Script] Two Potatoes...");
                         sleep(1);
 
-                        print(`[Script] Boring Counter: ${counter}...`);
+                        println!("[Script] Boring Counter: {counter}...");
                         sleep(1);
 
-                        print("[Script] Three Potatoes...");
+                        println!("[Script] Three Potatoes...");
                         sleep(1);
                     }
                 "#,

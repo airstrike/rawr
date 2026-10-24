@@ -1,12 +1,7 @@
-use rawr::{Dynamic, Engine, ParseErrorType, Scope};
+use rawr::{Engine, ParseErrorType, Scope};
 
 #[derive(Clone)]
 struct HostMessage;
-
-#[derive(Clone)]
-enum Message {
-    Tick,
-}
 
 #[test]
 fn ordinary_scripts_compile_and_evaluate_through_resolution() {
@@ -78,19 +73,14 @@ fn engine_type_registration_is_visible_to_header_resolution() {
 }
 
 #[test]
-fn enum_switch_and_new_function_behavior_remain_available() {
-    let mut engine = Engine::new();
-    engine.register_enum::<Message>("Message", &[("Tick", 0)], |message| match message {
-        Message::Tick => (0, Vec::<Dynamic>::new()),
-    });
-    let mut scope = Scope::new();
-    scope.push("message", Message::Tick);
+fn a_function_named_new_remains_callable() {
+    let engine = Engine::new();
 
-    assert_eq!(engine.eval_with_scope::<i64>(&mut scope, "fn new() { 42 } switch message { Message::Tick => new(), _ => 0 }",).unwrap(), 42);
+    assert_eq!(engine.eval::<i64>("fn new() -> i64 { 42 } new()").unwrap(), 42);
 }
 
-/// `use rawr::preview;` is for rustc: it is no item, and the legacy script
-/// does not see it.
+/// `use rawr::preview;` is for rustc: it is no item, and the script does not
+/// see it.
 #[test]
 fn an_import_of_rawr_attributes_is_neither_item_nor_script() {
     let engine = Engine::new();

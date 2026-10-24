@@ -11,7 +11,7 @@ pub(crate) mod native;
 pub(crate) mod package;
 pub(crate) mod type_ref;
 
-use crate::{host, method, parse, program, type_def, ImmutableString, Span, AST};
+use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub use error::{Category, Error};
 use std::collections::BTreeMap;
 #[cfg(feature = "no_std")]
@@ -92,7 +92,8 @@ pub struct Program {
 
 pub(crate) struct Script {
     source: program::source::Id,
-    ast: Option<AST>,
+    /// The statements outside the items, the body of `fn main` to the
+    /// checker.
     #[cfg(not(feature = "no_function"))]
     text: String,
 }
@@ -291,9 +292,9 @@ fn resolve_with_evidence_and_namespace(
     allocation_order: AllocationOrder,
     evidence: crate::diagnostic::Source,
 ) -> Result<Program, Error> {
-    let (source, parsed_items, legacy_script, legacy_source) = unit.into_parts();
+    let (source, parsed_items, _, statement_source) = unit.into_parts();
     #[cfg(feature = "no_function")]
-    drop(legacy_source);
+    drop(statement_source);
     if let Some(module) = parsed_items.iter().find_map(|item| match item {
         crate::item::Parsed::Module(module) => Some(module),
         crate::item::Parsed::Use(_)
@@ -302,8 +303,7 @@ fn resolve_with_evidence_and_namespace(
         | crate::item::Parsed::Impl(_)
         | crate::item::Parsed::Trait(_)
         | crate::item::Parsed::Function(_)
-        | crate::item::Parsed::TypeAlias(_)
-        | crate::item::Parsed::LegacyFunction(_) => None,
+        | crate::item::Parsed::TypeAlias(_) => None,
     }) {
         return Err(Error::UnsupportedNominalSyntax {
             construct: "file modules require project/package compilation".into(),
@@ -357,9 +357,8 @@ fn resolve_with_evidence_and_namespace(
         aliases,
         scripts: vec![Script {
             source: program::source::Id::ROOT,
-            ast: legacy_script,
             #[cfg(not(feature = "no_function"))]
-            text: legacy_source,
+            text: statement_source,
         }]
         .into_boxed_slice(),
     };
@@ -445,7 +444,7 @@ pub(crate) fn validate_invocation_storage(program: &Program) -> Result<(), Locat
                     }
                 }
             }
-            item::Kind::Use(_) | item::Kind::Trait(_) | item::Kind::LegacyFunction(_) => {}
+            item::Kind::Use(_) | item::Kind::Trait(_) => {}
         }
     }
     Ok(())
@@ -505,32 +504,6 @@ fn resolve_with(
     resolve_with_evidence_and_namespace(unit, host, namespace, allocation_order, evidence)
 }
 
-/// Lower the retained legacy syntax only after the complete unit has resolved.
-#[allow(dead_code)]
-pub(crate) fn lower(program: Program) -> Result<AST, Error> {
-    for shell in &program.items {
-        match &shell.kind {
-            item::Kind::Use(_)
-            | item::Kind::Struct(_)
-            | item::Kind::Enum(_)
-            | item::Kind::LegacyFunction(_) => {}
-            item::Kind::Impl(_) | item::Kind::Trait(_) => {}
-            item::Kind::Function(function) => reject_unavailable(function)?,
-        }
-    }
-
-    program
-        .scripts
-        .into_vec()
-        .into_iter()
-        .find(|script| script.source == program::source::Id::ROOT)
-        .and_then(|script| script.ast)
-        .ok_or_else(|| Error::LoweringUnavailable {
-            item: "<script>".into(),
-            body: Span::NONE,
-        })
-}
-
 pub(crate) fn lower_with_engine(
     engine: &crate::Engine,
     program: Program,
@@ -541,8 +514,7 @@ pub(crate) fn lower_with_engine(
         match &shell.kind {
             item::Kind::Use(_)
             | item::Kind::Struct(_)
-            | item::Kind::Enum(_)
-            | item::Kind::LegacyFunction(_) => {}
+            | item::Kind::Enum(_) => {}
             item::Kind::Impl(_) | item::Kind::Trait(_) => {}
             item::Kind::Function(function) => reject_unavailable(function)?,
         }
@@ -753,8 +725,7 @@ impl Symbols {
                 item::Kind::Use(_)
                 | item::Kind::Impl(_)
                 | item::Kind::Trait(_)
-                | item::Kind::Function(_)
-                | item::Kind::LegacyFunction(_) => {}
+                | item::Kind::Function(_) => {}
             }
         }
 
@@ -826,8 +797,7 @@ fn named_declaration(
         | crate::item::Parsed::Use(_)
         | crate::item::Parsed::Impl(_)
         | crate::item::Parsed::Trait(_)
-        | crate::item::Parsed::TypeAlias(_)
-        | crate::item::Parsed::LegacyFunction(_) => None,
+        | crate::item::Parsed::TypeAlias(_) => None,
         crate::item::Parsed::Struct(item) => Some((
             &item.name,
             Some(type_def::Kind::Struct),
@@ -1909,21 +1879,6 @@ fn resolve_item(
             #[cfg(feature = "rust-import")]
             native,
         )?),
-        crate::item::Parsed::LegacyFunction(parsed) => {
-            item::Kind::LegacyFunction(item::LegacyFunction {
-                name: parsed.name,
-                parameter_count: parsed.parameter_count,
-                body: item::Body {
-                    span: parsed.body_span,
-                    lowering: item::Lowering::Unavailable,
-                    syntax: parsed.body_syntax,
-                    constant: false,
-                    asynchronous: false,
-                    text: None,
-                    elide: None,
-                },
-            })
-        }
     };
 
     Ok(item::Shell {
@@ -2566,7 +2521,7 @@ fn fill_trait_defaults(
                     fill(&mut function.generics);
                 }
             }
-            item::Kind::Use(_) | item::Kind::LegacyFunction(_) => {}
+            item::Kind::Use(_) => {}
         }
     }
 }
@@ -2855,7 +2810,7 @@ fn elaborate_supertraits(items: &mut [item::Shell]) -> Result<(), LocatedError> 
                 }
             }
             item::Kind::Function(function) => generics(&mut function.generics),
-            item::Kind::Use(_) | item::Kind::LegacyFunction(_) => {}
+            item::Kind::Use(_) => {}
         }
     }
     Ok(())
@@ -3499,7 +3454,7 @@ fn check_trait_bounds(
                     Ok(())
                 }),
             item::Kind::Function(item) => check(&item.generics),
-            item::Kind::Use(_) | item::Kind::LegacyFunction(_) => Ok(()),
+            item::Kind::Use(_) => Ok(()),
         };
         checked.map_err(|error| LocatedError::primary(shell.source, error))?;
     }
@@ -3724,7 +3679,7 @@ fn resolve_projections(items: &mut [item::Shell]) -> Result<(), LocatedError> {
                         .flat_map(|variant| variant.payload.iter_mut()),
                 )
             }
-            item::Kind::Use(_) | item::Kind::LegacyFunction(_) => Ok(()),
+            item::Kind::Use(_) => Ok(()),
         };
         resolved.map_err(|error| LocatedError::primary(shell.source, error))?;
     }
@@ -4635,7 +4590,7 @@ fn check_generic_arity(
                 .and_then(|()| item.functions.iter().try_for_each(function)),
             item::Kind::Trait(item) => item.functions.iter().try_for_each(function),
             item::Kind::Function(item) => function(item),
-            item::Kind::Use(_) | item::Kind::LegacyFunction(_) => Ok(()),
+            item::Kind::Use(_) => Ok(()),
         };
         checked.map_err(|error| LocatedError::primary(shell.source, error))?;
     }
@@ -4841,7 +4796,7 @@ mod tests {
     use super::item::Kind;
     use super::type_ref::{Target, Type};
     use super::{
-        lower, resolve, resolve_with, AllocationOrder, Category, Error, Namespace, Program,
+        resolve, resolve_with, AllocationOrder, Category, Error, Namespace, Program,
     };
     use crate::{host, program, type_def, Engine};
     use std::any::TypeId;
@@ -5040,7 +4995,7 @@ mod tests {
     }
 
     #[test]
-    fn resolver_owns_ids_and_the_legacy_ast_seam() {
+    fn resolver_owns_ids_and_the_statements_outside_items() {
         let engine = Engine::new();
         let unit = engine
             .parse_unit("struct Counter; let answer = 40 + 2; answer")
@@ -5054,7 +5009,6 @@ mod tests {
             program.source().text(),
             "struct Counter; let answer = 40 + 2; answer"
         );
-        assert_eq!(lower(program).unwrap().statements().len(), 2);
     }
 
     #[test]
@@ -5431,8 +5385,7 @@ mod tests {
             Kind::Use(_)
             | Kind::Impl(_)
             | Kind::Trait(_)
-            | Kind::Function(_)
-            | Kind::LegacyFunction(_) => {
+            | Kind::Function(_) => {
                 panic!("expected nominal item")
             }
         }

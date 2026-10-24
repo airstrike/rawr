@@ -1,11 +1,11 @@
-use rawr::{Engine, EvalAltResult, INT};
+use rawr::{Engine, EvalAltResult, INT, ParseErrorType, resolve::Error};
 
 #[test]
 fn test_mismatched_op() {
     let engine = Engine::new();
 
     assert!(matches!(
-        *engine.eval::<INT>(r#""hello, " + "world!""#).expect_err("expects error"),
+        *engine.eval::<INT>(r#""hello, ".to_string() + "world!""#).expect_err("expects error"),
         EvalAltResult::ErrorMismatchOutputType(need, actual, ..) if need == std::any::type_name::<INT>() && actual == "string"
     ));
 }
@@ -44,21 +44,18 @@ fn test_mismatched_op_custom_type() {
 
     engine.register_type_with_name::<TestStruct>("TestStruct").register_fn("new_ts", TestStruct::new);
 
-    assert!(!engine.eval::<bool>("new_ts() == 42").unwrap());
+    // A registered function returns an untyped value, which the checker won't mix with a typed one.
+    let type_mismatch = |script: &str| {
+        let err = engine.eval::<bool>(script).expect_err(script);
+        matches!(*err, EvalAltResult::ErrorParsing(ParseErrorType::Resolution(Error::TypeMismatch { .. }), ..))
+    };
+    assert!(type_mismatch("new_ts() == 42"));
+    assert!(type_mismatch("60 + new_ts()"));
 
-    assert!(engine.eval::<bool>("new_ts() != ()").unwrap());
-
-    assert!(matches!(*engine.eval::<bool>(
-        "
-            let x = new_ts();
-            let y = new_ts();
-            x == y
-        ").unwrap_err(),
-        EvalAltResult::ErrorFunctionNotFound(f, ..) if f == "== (TestStruct, TestStruct)"));
-
+    // Two untyped values can't be compared either.
     assert!(matches!(
-        *engine.eval::<INT>("60 + new_ts()").unwrap_err(),
-        EvalAltResult::ErrorFunctionNotFound(f, ..) if f == format!("+ ({}, TestStruct)", std::any::type_name::<INT>())
+        *engine.eval::<bool>("let x = new_ts(); let y = new_ts(); x == y").unwrap_err(),
+        EvalAltResult::ErrorParsing(ParseErrorType::Resolution(Error::UnsupportedNominalSyntax { construct, .. }), ..) if construct == "equality of dynamic values"
     ));
 
     assert!(matches!(

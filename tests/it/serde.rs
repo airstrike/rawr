@@ -389,46 +389,6 @@ fn test_serde_de_struct() {
 }
 
 #[test]
-#[cfg(not(feature = "no_index"))]
-#[cfg(not(feature = "no_object"))]
-#[cfg(not(feature = "no_float"))]
-fn test_serde_de_script() {
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct Point {
-        x: FLOAT,
-        y: FLOAT,
-    }
-
-    #[allow(dead_code)]
-    #[derive(Debug, Deserialize)]
-    struct MyStruct {
-        a: i64,
-        b: Vec<String>,
-        c: bool,
-        d: Point,
-    }
-
-    let engine = Engine::new();
-
-    let result: Dynamic = engine
-        .eval(
-            r#"
-            #{
-                a: 42,
-                b: [ "hello", "world" ],
-                c: true,
-                d: #{ x: 123.456, y: 999.0 }
-            }
-        "#,
-        )
-        .unwrap();
-
-    // Convert the 'Dynamic' object map into 'MyStruct'
-    let _: MyStruct = from_dynamic(&result).unwrap();
-}
-
-#[test]
 fn test_serde_de_unit_enum() {
     #[derive(Debug, PartialEq, Deserialize)]
     enum MyEnum {
@@ -672,16 +632,17 @@ fn test_serde_optional() {
         foo: Option<char>,
     }
 
-    let mut engine = Engine::new();
-    engine.register_type_with_name::<TestStruct>("TestStruct");
-
-    let r = engine.eval::<Dynamic>("#{ foo: 'a' }").unwrap();
+    let mut map = Map::new();
+    map.insert("foo".into(), 'a'.into());
+    let r = Dynamic::from_map(map);
     assert_eq!(from_dynamic::<TestStruct>(&r).unwrap(), TestStruct { foo: Some('a') });
 
-    let r = engine.eval::<Dynamic>("#{ foo: () }").unwrap();
+    let mut map = Map::new();
+    map.insert("foo".into(), Dynamic::UNIT);
+    let r = Dynamic::from_map(map);
     assert_eq!(from_dynamic::<TestStruct>(&r).unwrap(), TestStruct { foo: None });
 
-    let r = engine.eval::<Dynamic>("#{ }").unwrap();
+    let r = Dynamic::from_map(Map::new());
     assert_eq!(from_dynamic::<TestStruct>(&r).unwrap(), TestStruct { foo: None });
 
     let ts = TestStruct { foo: Some('a') };
@@ -701,17 +662,10 @@ fn test_serde_optional() {
 #[cfg(not(feature = "no_index"))]
 #[cfg(not(feature = "no_object"))]
 fn test_serde_blob() {
-    let engine = Engine::new();
-
-    let r = engine
-        .eval::<Dynamic>(
-            "
-            let x = blob(10);
-            for i in 0..10 { x[i] = i; }
-            #{ x: x }
-        ",
-        )
-        .unwrap();
+    // A typed script's `Vec<u8>` is an array, so the blob is built in Rust.
+    let mut map = Map::new();
+    map.insert("x".into(), Dynamic::from_blob((0..10).collect()));
+    let r = Dynamic::from_map(map);
 
     let data = format!("{r:?}");
 

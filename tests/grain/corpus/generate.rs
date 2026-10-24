@@ -1,11 +1,18 @@
-// Random rawr scripts, for comparing the VM against the walker on programs
-// nobody wrote.
+// Random typed Rust scripts, for comparing the VM against the walker on
+// programs nobody wrote.
 //
 // The hand-written corpus proves the constructs someone thought to test. This
-// covers the combinations they did not: a `try` inside a `for` inside a
-// `switch` arm whose subject is an indexed chain, and the several thousand
-// other shapes of that kind. Every one is run both ways and the results
-// compared, so a divergence names a script that reproduces it.
+// covers the combinations they did not: a `match` inside a `for` inside a
+// function whose argument is an indexed vector, and the several thousand other
+// shapes of that kind. Every one is run both ways and the results compared, so
+// a divergence names a script that reproduces it.
+//
+// Every script is well typed. Each expression is built for the type its place
+// needs, and each variable carries its type, so the type checker accepts what
+// is written and run time is where the two sides can disagree. Errors still
+// happen there, and on purpose: dividing by zero, overflowing, indexing past
+// the end and calling `unwrap` on nothing are all generated, and both sides
+// have to report them the same way.
 //
 // Two constraints follow from `fuzz/fuzz_targets/generated.rs` pulling this
 // file in with `include!` rather than depending on it: nothing may be imported
@@ -17,11 +24,10 @@
 //   - Recursion. A function may only call one defined before it, so no script
 //     can recurse. Running out of call levels is a limit both sides enforce
 //     but not in lockstep, and it would drown real findings.
-//   - A closure handed to a native. `a.map(|x| ..)` has a known divergence in
-//     argument order for captures, pinned in `tests/callback.rs`. Closures are
-//     generated and called directly instead.
 //   - An unbounded loop. Every `while` counts a guard variable the body cannot
-//     name, so it always terminates.
+//     name, and counts it before the body runs, so a `continue` cannot skip it.
+//   - A moved value read again. A `String` or `Vec` variable is read by value
+//     only through `.clone()`, so no script uses a value after a move.
 
 /// A source of choices: xorshift64*, optionally front-loaded with bytes
 /// somebody else picked.
@@ -100,62 +106,60 @@ impl Rng {
 const MAX_DEPTH: usize = 3;
 
 /// How deep blocks and control flow may nest, for the same reason.
-///
-/// Rawr counts statements towards the same budget and allows a function body
-/// half of what it allows the top level, so this is what keeps a script inside
-/// both. Scripts are wide rather than deep as a result, which is the right
-/// trade: a `try` inside a `for` finds things, a `try` inside a `for` inside a
-/// `while` inside an `if` mostly finds the parser.
 const MAX_NESTING: usize = 2;
 
-/// Operators whose *result* is a boolean whatever their operands turn out to
-/// be, so the parser accepts one as a condition.
-///
-/// It type-checks that much statically: `if 5 { }` is a parse error, not a
-/// runtime one. Comparisons are safe to build out of anything because only the
-/// operands can be wrong, and that is a runtime disagreement worth generating.
+/// The types a generated value can have.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Ty {
+    Int,
+    Bool,
+    Text,
+    List,
+}
+
+const TYPES: &[Ty] = &[Ty::Int, Ty::Int, Ty::Bool, Ty::Text, Ty::List];
+
+impl Ty {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Int => "i64",
+            Self::Bool => "bool",
+            Self::Text => "String",
+            Self::List => "Vec<i64>",
+        }
+    }
+}
+
+/// A variable that can be named, with what it holds and whether it may be
+/// assigned to.
+#[derive(Clone)]
+struct Var {
+    name: String,
+    ty: Ty,
+    mutable: bool,
+}
+
+/// Integer operators. Each one can fail at run time on some operands —
+/// overflow, or a zero on the right of `/` and `%` — which is a disagreement
+/// worth generating rather than worth avoiding.
+const ARITHMETIC: &[&str] = &["+", "-", "*", "/", "%", "&", "|", "^"];
+
 const COMPARISONS: &[&str] = &["==", "!=", "<", "<=", ">", ">="];
-
-/// Operators that are defined for at least one pair of generated types. A pair
-/// they are not defined for is a runtime error both sides have to agree on,
-/// which is worth generating rather than worth avoiding.
-///
-/// `&&` and `||` are not here — they demand boolean operands at parse time, so
-/// they belong to [`Generator::condition`] and nowhere else.
-const BINARY: &[&str] = &["+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "&", "|"];
-
-const METHODS: &[&str] = &["len", "to_string", "abs", "is_empty", "floor", "to_upper"];
-
-/// Natives called in *function-call* style, with their arity.
-///
-/// Rawr rewrites `f(x, ..)` into `x.f(..)` when the first argument is a plain
-/// variable, so `push(a, 2)` mutates `a` and `push([1], 2)` mutates nothing —
-/// the same syntax, and only the receiver decides. Half of these mutate and
-/// half do not, because whether the write lands is the question.
-///
-/// Nothing here can grow a value without bound: an argument reaching one of
-/// these is an arbitrary generated integer, and `pad` would turn that into an
-/// allocation rather than into a divergence.
-const NATIVES: &[(&str, usize)] = &[("push", 2), ("insert", 3), ("remove", 2), ("truncate", 2), ("reverse", 1), ("clear", 1), ("pop", 1), ("shift", 1), ("len", 1), ("is_empty", 1), ("abs", 1), ("to_upper", 1)];
 
 pub struct Generator {
     rng: Rng,
     /// Variables that can be named, innermost last.
-    vars: Vec<String>,
-    /// Functions defined so far, with their arity. Only these can be called,
-    /// and only from after their definition, which is what rules out recursion.
-    functions: Vec<(String, usize)>,
-    /// Loop nesting, so `break` and `continue` appear only where they parse.
+    vars: Vec<Var>,
+    /// Functions defined so far, with their parameter types and their result.
+    /// Only these can be called, and only from after their definition, which
+    /// is what rules out recursion.
+    functions: Vec<(String, Vec<Ty>, Ty)>,
+    /// Loop nesting, so `break` and `continue` appear only inside a loop.
     loops: usize,
     depth: usize,
     /// Nesting of blocks and control flow, capped for the same reason `depth`
-    /// is: rawr counts statements towards the same complexity limit, so a
-    /// `while` inside an `if` inside a `for` runs out of budget on its own.
+    /// is.
     nesting: usize,
-    /// Set while generating the inside of an interpolated string, where
-    /// another one cannot go — the lexer ends the outer string on the inner
-    /// one's opening backtick.
-    interpolating: bool,
     /// Supplies names that cannot collide with each other.
     counter: usize,
 }
@@ -163,16 +167,7 @@ pub struct Generator {
 impl Generator {
     #[must_use]
     pub fn new(seed: u64) -> Self {
-        Self {
-            rng: Rng::new(seed),
-            vars: Vec::new(),
-            functions: Vec::new(),
-            loops: 0,
-            depth: 0,
-            nesting: 0,
-            interpolating: false,
-            counter: 0,
-        }
+        Self { rng: Rng::new(seed), vars: Vec::new(), functions: Vec::new(), loops: 0, depth: 0, nesting: 0, counter: 0 }
     }
 
     /// A generator whose choices are made by somebody else's bytes, for
@@ -185,6 +180,10 @@ impl Generator {
     fn name(&mut self, prefix: &str) -> String {
         self.counter += 1;
         format!("{prefix}{}", self.counter)
+    }
+
+    fn any_type(&mut self) -> Ty {
+        *self.rng.one_of(TYPES)
     }
 
     /// One whole script.
@@ -206,57 +205,65 @@ impl Generator {
         // Ending on an expression gives the script a value, so a divergence in
         // what it computed shows up and not only a divergence in what it left
         // behind.
-        out.push_str(&self.expression());
+        let ty = self.any_type();
+        out.push_str(&self.expression(ty));
         out
     }
 
     fn function(&mut self) -> String {
         let name = self.name("f");
-        let arity = self.rng.below(3);
-        let params: Vec<String> = (0..arity).map(|i| format!("p{i}")).collect();
+        let params: Vec<Ty> = (0..self.rng.below(3)).map(|_| self.any_type()).collect();
+        let result = self.any_type();
 
         // A body sees its parameters and nothing else, which is also what rawr
         // gives it.
-        let outer = std::mem::replace(&mut self.vars, params.clone());
+        let declared: Vec<Var> = params.iter().enumerate().map(|(i, ty)| Var { name: format!("p{i}"), ty: *ty, mutable: false }).collect();
+        let outer = std::mem::replace(&mut self.vars, declared);
         let outer_loops = std::mem::replace(&mut self.loops, 0);
-        // Rawr allows a function body half the expression depth it allows the
-        // top level (`MAX_FUNCTION_EXPR_DEPTH`), so a body starts one level in.
+        // A function body starts one level in, so its statements stay inside
+        // the expression depth rawr allows a body.
         let outer_nesting = std::mem::replace(&mut self.nesting, 1);
         let mut body = String::new();
         for _ in 0..1 + self.rng.below(3) {
             body.push_str(&self.statement());
             body.push(' ');
         }
-        body.push_str(&self.expression());
+        body.push_str(&self.expression(result));
         self.vars = outer;
         self.loops = outer_loops;
         self.nesting = outer_nesting;
 
+        let list: Vec<String> = params.iter().enumerate().map(|(i, ty)| format!("p{i}: {}", ty.name())).collect();
         // Registered after the body is generated, so the body cannot call it.
-        self.functions.push((name.clone(), arity));
-        format!("fn {name}({}) {{ {body} }}", params.join(", "))
+        self.functions.push((name.clone(), params, result));
+        format!("fn {name}({}) -> {} {{ {body} }}", list.join(", "), result.name())
     }
 
     fn statement(&mut self) -> String {
         // Weighted by hand: `let` more often than anything else, because a
-        // script with no variables cannot exercise slots, chains or capture.
+        // script with no variables cannot exercise slots, writes or capture.
         // Anything that nests is dropped from the choices once deep enough,
         // which is why the arms are ordered with those last.
         let nesting_kinds = if self.nesting < MAX_NESTING { 5 } else { 0 };
         let loop_kinds = if self.loops > 0 { 2 } else { 0 };
-        match self.rng.below(5 + nesting_kinds + loop_kinds) {
+        match self.rng.below(6 + nesting_kinds + loop_kinds) {
             0..=2 => {
-                let value = self.expression();
+                let ty = self.any_type();
+                let value = self.expression(ty);
                 let name = self.name("v");
-                self.vars.push(name.clone());
-                format!("let {name} = {value};")
+                let mutable = !self.rng.chance(4);
+                self.vars.push(Var { name: name.clone(), ty, mutable });
+                format!("let {}{name}: {} = {value};", if mutable { "mut " } else { "" }, ty.name())
             }
-            3 => self.assignment(),
-            4 => format!("{};", self.expression()),
+            3 | 4 => self.assignment(),
+            5 => {
+                let ty = self.any_type();
+                format!("{};", self.expression(ty))
+            }
 
             // Nesting, reachable only while there is budget for it.
-            5 => {
-                let cond = self.condition();
+            6 => {
+                let cond = self.expression(Ty::Bool);
                 self.nesting += 1;
                 let then = self.block();
                 let otherwise = self.rng.chance(2).then(|| self.block());
@@ -266,13 +273,13 @@ impl Generator {
                     None => format!("if {cond} {then}"),
                 }
             }
-            6 => self.nested(Self::bounded_while),
-            7 => self.nested(Self::for_loop),
-            8 => self.nested(Self::switch),
-            9 => self.nested(Self::try_catch),
+            7 => self.nested(Self::bounded_while),
+            8 => self.nested(Self::for_loop),
+            9 => self.nested(Self::match_statement),
+            10 => self.nested(Self::block),
 
             // Only reachable inside a loop, per `loop_kinds` above.
-            10 => "break;".to_string(),
+            11 => "break;".to_string(),
             _ => "continue;".to_string(),
         }
     }
@@ -287,9 +294,7 @@ impl Generator {
     /// A run of statements, with the scope they declared popped afterwards
     /// exactly as the VM pops it.
     ///
-    /// Returned without braces so a caller can append to it. Appending to a
-    /// finished block by trimming its `}` back off is how a body that happens
-    /// to end in one gets silently truncated.
+    /// Returned without braces so a caller can add to it.
     fn statements(&mut self) -> String {
         let mark = self.vars.len();
         let mut out = String::new();
@@ -306,31 +311,57 @@ impl Generator {
     }
 
     fn assignment(&mut self) -> String {
-        let Some(target) = self.variable() else {
-            return format!("{};", self.expression());
-        };
-        let op = self.rng.one_of(&["=", "+=", "-=", "*="]).to_string();
-        format!("{target} {op} {};", self.expression())
+        let targets: Vec<Var> = self.vars.iter().filter(|var| var.mutable).cloned().collect();
+        if targets.is_empty() {
+            let ty = self.any_type();
+            return format!("{};", self.expression(ty));
+        }
+        let target = targets[self.rng.below(targets.len())].clone();
+        let name = &target.name;
+        match target.ty {
+            Ty::Int => {
+                let op = self.rng.one_of(&["=", "+=", "-=", "*="]).to_string();
+                format!("{name} {op} {};", self.expression(Ty::Int))
+            }
+            Ty::Bool => format!("{name} = {};", self.expression(Ty::Bool)),
+            Ty::Text => match self.rng.below(3) {
+                0 => format!("{name} = {};", self.expression(Ty::Text)),
+                1 => format!("{name}.push_str(&{});", self.expression(Ty::Text)),
+                _ => format!("{name}.push('{}');", self.rng.one_of(&['a', 'z', '!'])),
+            },
+            Ty::List => match self.rng.below(8) {
+                0 => format!("{name} = {};", self.expression(Ty::List)),
+                1 | 2 => format!("{name}.push({});", self.expression(Ty::Int)),
+                // Past the end some of the time, which both sides must refuse
+                // the same way.
+                3 => format!("{name}[{}] = {};", self.rng.below(4), self.expression(Ty::Int)),
+                4 => format!("{name}.pop();"),
+                5 => format!("{name}.truncate({});", self.rng.below(4)),
+                6 => format!("{name}.sort();"),
+                _ => format!("{name}.reverse();"),
+            },
+        }
     }
 
     /// `while`, with a guard the body cannot reach.
     ///
     /// The guard is not pushed onto `vars`, so nothing generated inside can
-    /// assign to it and the loop always ends.
+    /// assign to it, and it is counted before the body, so a `continue`
+    /// cannot skip it. The loop always ends.
     fn bounded_while(&mut self) -> String {
         let guard = self.name("g");
         let limit = 1 + self.rng.below(4);
         self.loops += 1;
         let body = self.statements();
         self.loops -= 1;
-        format!("let {guard} = 0; while {guard} < {limit} {{ {body} {guard} += 1; }}")
+        format!("let mut {guard}: i64 = 0; while {guard} < {limit} {{ {guard} += 1; {body} }}")
     }
 
     fn for_loop(&mut self) -> String {
         let item = self.name("it");
-        let iterable = if self.rng.chance(2) { format!("0..{}", 1 + self.rng.below(4)) } else { self.array() };
+        let iterable = if self.rng.chance(2) { format!("0..{}", 1 + self.rng.below(4)) } else { self.expression(Ty::List) };
 
-        self.vars.push(item.clone());
+        self.vars.push(Var { name: item.clone(), ty: Ty::Int, mutable: false });
         self.loops += 1;
         let body = self.block();
         self.loops -= 1;
@@ -339,192 +370,199 @@ impl Generator {
         format!("for {item} in {iterable} {body}")
     }
 
-    fn switch(&mut self) -> String {
-        let subject = self.expression();
+    fn match_statement(&mut self) -> String {
+        let subject = self.expression(Ty::Int);
         let mut arms = Vec::new();
         for value in 0..1 + self.rng.below(3) {
-            arms.push(format!("{value} => {}", self.expression()));
+            arms.push(format!("{value} => {}", self.block()));
         }
         if self.rng.chance(3) {
-            arms.push(format!("0..={} => {}", 9, self.expression()));
+            arms.push(format!("5..=9 => {}", self.block()));
         }
-        arms.push(format!("_ => {}", self.expression()));
-        format!("switch {subject} {{ {} }};", arms.join(", "))
+        arms.push(format!("_ => {}", self.block()));
+        format!("match {subject} {{ {} }}", arms.join(" "))
     }
 
-    fn try_catch(&mut self) -> String {
-        let mut body = self.statements();
-        // A `throw` inside, most of the time: rawr's optimizer replaces a `try`
-        // whose body is pure with a plain block, so a pure body would test the
-        // optimizer rather than the handler.
-        if !self.rng.chance(3) {
-            let thrown = self.expression();
-            body.push_str(&format!("throw {thrown};"));
-        }
-        let catch = self.block();
-        if self.rng.chance(2) { format!("try {{ {body} }} catch (e) {catch}") } else { format!("try {{ {body} }} catch {catch}") }
-    }
-
-    fn variable(&mut self) -> Option<String> {
-        if self.vars.is_empty() {
+    fn variable(&mut self, ty: Ty) -> Option<String> {
+        let names: Vec<String> = self.vars.iter().filter(|var| var.ty == ty).map(|var| var.name.clone()).collect();
+        if names.is_empty() {
             return None;
         }
-        Some(self.vars[self.rng.below(self.vars.len())].clone())
+        Some(names[self.rng.below(names.len())].clone())
     }
 
-    /// An array literal, empty about a quarter of the time.
-    ///
-    /// Empty matters on its own: it contributes no size check, so nesting one
-    /// inside a literal that does is what catches a running total being popped
-    /// by the wrong literal.
-    fn array(&mut self) -> String {
-        let items: Vec<String> = (0..self.rng.below(4)).map(|_| self.element()).collect();
-        format!("[{}]", items.join(", "))
-    }
-
-    fn map(&mut self) -> String {
-        let entries: Vec<String> = (0..self.rng.below(4)).map(|n| format!("k{n}: {}", self.element())).collect();
-        format!("#{{ {} }}", entries.join(", "))
-    }
-
-    /// What goes inside a literal.
-    ///
-    /// Sometimes another literal, so nesting is reached — an all-constant one
-    /// is folded away by the optimizer before the compiler sees it, and only a
-    /// computed element keeps the literal alive to run time.
-    fn element(&mut self) -> String {
-        if self.depth < MAX_DEPTH && self.rng.chance(4) {
-            self.depth += 1;
-            let out = if self.rng.chance(2) { self.array() } else { self.map() };
-            self.depth -= 1;
-            return out;
+    /// A leaf of the type asked for: cheap, and always available however deep
+    /// the nesting has got.
+    fn atom(&mut self, ty: Ty) -> String {
+        if self.rng.chance(2)
+            && let Some(var) = self.variable(ty)
+        {
+            // A `String` or a `Vec` read by value is cloned, so the variable
+            // is never moved out of.
+            return match ty {
+                Ty::Int | Ty::Bool => var,
+                Ty::Text | Ty::List => format!("{var}.clone()"),
+            };
         }
-        self.atom()
-    }
-
-    /// A leaf: cheap, and always available however deep the nesting has got.
-    fn atom(&mut self) -> String {
-        match self.rng.below(8) {
-            0..=2 => format!("{}", self.rng.below(64)),
-            // A float literal is not syntax under `no_float` — rawr reads the
-            // `.` as a property access — so the whole script would fail to
-            // parse and test nothing.
-            #[cfg(not(feature = "no_float"))]
-            3 => format!("{}.{}", self.rng.below(8), self.rng.below(8)),
-            4 => format!("\"s{}\"", self.rng.below(8)),
-            5 => self.rng.one_of(&["true", "false"]).to_string(),
-            6 => "'c'".to_string(),
-            _ => self.variable().unwrap_or_else(|| "1".to_string()),
+        match ty {
+            Ty::Int => format!("{}", self.rng.below(64)),
+            Ty::Bool => self.rng.one_of(&["true", "false"]).to_string(),
+            Ty::Text => format!("\"s{}\".to_string()", self.rng.below(8)),
+            Ty::List => {
+                let items: Vec<String> = (0..self.rng.below(4)).map(|_| format!("{}", self.rng.below(16))).collect();
+                if items.is_empty() { "Vec::<i64>::new()".to_string() } else { format!("vec![{}]", items.join(", ")) }
+            }
         }
     }
 
-    /// Something the parser will accept where a boolean is required.
-    fn condition(&mut self) -> String {
+    /// An expression of the type asked for.
+    fn expression(&mut self, ty: Ty) -> String {
         if self.depth >= MAX_DEPTH {
-            return self.rng.one_of(&["true", "false"]).to_string();
+            return self.atom(ty);
         }
         self.depth += 1;
-        let out = match self.rng.below(8) {
-            0 => "true".to_string(),
-            1 => "false".to_string(),
-            2 => format!("(!{})", self.condition()),
-            3 => {
-                let lhs = self.condition();
-                let op = self.rng.one_of(&["&&", "||"]);
-                format!("({lhs} {op} {})", self.condition())
-            }
-            _ => {
-                let lhs = self.expression();
-                let op = self.rng.one_of(COMPARISONS);
-                format!("({lhs} {op} {})", self.expression())
-            }
+        let out = match ty {
+            Ty::Int => self.int(),
+            Ty::Bool => self.boolean(),
+            Ty::Text => self.text(),
+            Ty::List => self.list(),
         };
         self.depth -= 1;
         out
     }
 
-    pub fn expression(&mut self) -> String {
-        if self.depth >= MAX_DEPTH {
-            return self.atom();
-        }
-        self.depth += 1;
-        let out = self.compound();
-        self.depth -= 1;
-        out
-    }
-
-    fn compound(&mut self) -> String {
-        match self.rng.below(14) {
-            0..=3 => self.atom(),
-            4 | 5 => {
-                let lhs = self.expression();
-                let op = self.rng.one_of(BINARY);
-                format!("({lhs} {op} {})", self.expression())
+    fn int(&mut self) -> String {
+        match self.rng.below(16) {
+            0..=3 => self.atom(Ty::Int),
+            4..=6 => {
+                let lhs = self.expression(Ty::Int);
+                let op = self.rng.one_of(ARITHMETIC);
+                format!("({lhs} {op} {})", self.expression(Ty::Int))
             }
-            6 => format!("(-{})", self.expression()),
-            // `!` takes a condition rather than any expression: rawr rejects
-            // `!9` at parse time the same way it rejects `if 9`.
-            7 => format!("(!{})", self.condition()),
-            8 => self.array(),
-            9 => self.map(),
-            10 => {
-                // A chain over each of the three `Root` variants: a declared
-                // variable, a name that is declared nowhere — which is what a
-                // caller would have supplied, and here resolves to nothing —
-                // and a literal.
-                let root = match self.variable() {
-                    _ if self.rng.chance(6) => "absent".to_string(),
-                    Some(var) if self.rng.chance(2) => var,
-                    _ => self.array(),
-                };
-                match self.rng.below(3) {
-                    0 => format!("{root}[{}]", self.rng.below(4)),
-                    1 => format!("{root}.{}()", self.rng.one_of(METHODS)),
-                    _ => format!("{root}.a"),
+            7 => format!("(-{})", self.expression(Ty::Int)),
+            8 => {
+                let cond = self.expression(Ty::Bool);
+                let then = self.expression(Ty::Int);
+                format!("(if {cond} {{ {then} }} else {{ {} }})", self.expression(Ty::Int))
+            }
+            9 => {
+                let subject = self.expression(Ty::Int);
+                let zero = self.expression(Ty::Int);
+                let digit = self.expression(Ty::Int);
+                format!("(match {subject} {{ 0 => {zero}, 1..=9 => {digit}, _ => {} }})", self.expression(Ty::Int))
+            }
+            10 => format!("({}.len() as i64)", self.expression(Ty::List)),
+            11 => format!("({}.len() as i64)", self.expression(Ty::Text)),
+            // Past the end some of the time, which both sides must refuse the
+            // same way.
+            12 => format!("{}[{}]", self.expression(Ty::List), self.rng.below(4)),
+            13 => {
+                let method = self.rng.one_of(&["abs", "max", "min", "signum"]).to_string();
+                let receiver = self.expression(Ty::Int);
+                // Cast, so a literal receiver is an `i64` rather than an
+                // integer whose type is still to be decided.
+                match method.as_str() {
+                    "max" | "min" => format!("({receiver} as i64).{method}({})", self.expression(Ty::Int)),
+                    _ => format!("({receiver} as i64).{method}()"),
                 }
             }
-            11 if !self.interpolating => {
-                self.interpolating = true;
-                let segment = self.expression();
-                self.interpolating = false;
-                format!("`i{}{{{segment}}}`", self.rng.below(8))
+            14 => self.call(Ty::Int),
+            _ => self.closure(Ty::Int),
+        }
+    }
+
+    fn boolean(&mut self) -> String {
+        match self.rng.below(9) {
+            0..=1 => self.atom(Ty::Bool),
+            2..=4 => {
+                let lhs = self.expression(Ty::Int);
+                let op = self.rng.one_of(COMPARISONS);
+                format!("({lhs} {op} {})", self.expression(Ty::Int))
             }
-            11 => self.atom(),
-            12 => self.call(),
+            5 => {
+                let lhs = self.expression(Ty::Bool);
+                let op = self.rng.one_of(&["&&", "||"]);
+                format!("({lhs} {op} {})", self.expression(Ty::Bool))
+            }
+            6 => format!("(!{})", self.expression(Ty::Bool)),
+            7 => {
+                let list = self.expression(Ty::List);
+                format!("{list}.contains(&{})", self.expression(Ty::Int))
+            }
             _ => {
-                // A closure, called directly. Handing one to a native is the
-                // shape with the known divergence, so it is not generated.
-                let param = self.name("c");
-                self.vars.push(param.clone());
-                let body = self.expression();
-                self.vars.pop();
-                format!("(|{param}| {body}).call({})", self.atom())
+                if self.rng.chance(2) {
+                    format!("{}.is_empty()", self.expression(Ty::List))
+                } else {
+                    format!("{}.is_empty()", self.expression(Ty::Text))
+                }
             }
         }
     }
 
-    fn call(&mut self) -> String {
-        if self.rng.chance(4) {
-            return self.native_call();
+    fn text(&mut self) -> String {
+        match self.rng.below(7) {
+            0..=1 => self.atom(Ty::Text),
+            2 => {
+                let lhs = self.expression(Ty::Int);
+                format!("format!(\"{{}}-{{}}\", {lhs}, {})", self.expression(Ty::Text))
+            }
+            3 => format!("format!(\"{{:?}}\", {})", self.expression(Ty::List)),
+            // `format!` rather than `.to_string()`: the VM refuses
+            // `(s.len() as i64).to_string()`, which
+            // `to_string_on_a_string_length_is_refused_by_the_vm` pins, and
+            // this would reach it in a few scripts in every thousand.
+            4 => format!("format!(\"{{}}\", {})", self.expression(Ty::Int)),
+            5 => format!("{}.to_uppercase()", self.expression(Ty::Text)),
+            _ => self.call(Ty::Text),
         }
-        if self.functions.is_empty() {
-            return self.atom();
-        }
-        let (name, arity) = self.functions[self.rng.below(self.functions.len())].clone();
-        let args: Vec<String> = (0..arity).map(|_| self.atom()).collect();
-        format!("{name}({})", args.join(", "))
     }
 
-    /// A native in function-call style, with a variable in first position
-    /// wherever there is one to use — see [`NATIVES`].
-    fn native_call(&mut self) -> String {
-        let (name, arity) = NATIVES[self.rng.below(NATIVES.len())];
-        let receiver = self.variable().unwrap_or_else(|| self.array());
-        let rest: Vec<String> = (1..arity).map(|_| self.atom()).collect();
-
-        if rest.is_empty() {
-            return format!("{name}({receiver})");
+    fn list(&mut self) -> String {
+        match self.rng.below(7) {
+            0..=1 => self.atom(Ty::List),
+            2 => {
+                let items: Vec<String> = (0..1 + self.rng.below(3)).map(|_| self.expression(Ty::Int)).collect();
+                format!("vec![{}]", items.join(", "))
+            }
+            3 => format!("(0..{}).collect::<Vec<i64>>()", self.rng.below(5)),
+            // A closure handed to a native, which calls it back.
+            4 => {
+                let param = self.name("x");
+                let list = self.expression(Ty::List);
+                self.vars.push(Var { name: param.clone(), ty: Ty::Int, mutable: false });
+                let body = self.expression(Ty::Int);
+                self.vars.pop();
+                format!("{list}.into_iter().map(|{param}| {body}).collect::<Vec<i64>>()")
+            }
+            5 => {
+                let param = self.name("x");
+                let list = self.expression(Ty::List);
+                self.vars.push(Var { name: param.clone(), ty: Ty::Int, mutable: false });
+                let body = self.expression(Ty::Bool);
+                self.vars.pop();
+                format!("{list}.into_iter().filter(|{param}| {{ let {param} = *{param}; {body} }}).collect::<Vec<i64>>()")
+            }
+            _ => self.call(Ty::List),
         }
-        format!("{name}({receiver}, {})", rest.join(", "))
+    }
+
+    /// A closure called on the spot.
+    fn closure(&mut self, ty: Ty) -> String {
+        let param = self.name("c");
+        let argument = self.atom(Ty::Int);
+        self.vars.push(Var { name: param.clone(), ty: Ty::Int, mutable: false });
+        let body = self.expression(ty);
+        self.vars.pop();
+        format!("(|{param}: i64| -> {} {{ {body} }})({argument})", ty.name())
+    }
+
+    fn call(&mut self, ty: Ty) -> String {
+        let candidates: Vec<(String, Vec<Ty>)> = self.functions.iter().filter(|(.., result)| *result == ty).map(|(name, params, _)| (name.clone(), params.clone())).collect();
+        if candidates.is_empty() {
+            return self.atom(ty);
+        }
+        let (name, params) = candidates[self.rng.below(candidates.len())].clone();
+        let args: Vec<String> = params.iter().map(|param| self.atom(*param)).collect();
+        format!("{name}({})", args.join(", "))
     }
 }

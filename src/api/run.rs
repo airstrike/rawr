@@ -1,7 +1,6 @@
 //! Module that defines the public evaluation API of [`Engine`].
 
 use crate::eval::Caches;
-use crate::parser::ParseState;
 use crate::{Engine, RawrResultOf, Scope, AST};
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
@@ -17,7 +16,7 @@ impl Engine {
     ///
     /// let engine = Engine::new();
     ///
-    /// engine.run("print(40 + 2);")?;
+    /// engine.run(r#"println!("{}", 40 + 2);"#)?;
     /// # Ok(())
     /// # }
     /// ```
@@ -46,7 +45,7 @@ impl Engine {
     /// let mut scope = Scope::new();
     /// scope.push("x", 40_i64);
     ///
-    /// engine.run_with_scope(&mut scope, "x += 2; print(x);")?;
+    /// engine.run_with_scope(&mut scope, r#"x += 2; println!("{x}");"#)?;
     ///
     /// // The variable in the scope is modified
     /// assert_eq!(scope.get_value::<i64>("x").expect("variable x should exist"), 42);
@@ -55,20 +54,12 @@ impl Engine {
     /// ```
     #[inline]
     pub fn run_with_scope(&self, scope: &mut Scope, script: &str) -> RawrResultOf<()> {
-        let scripts = [script];
-        let ast = {
-            let (stream, tc) = self.lex(&scripts);
-
-            let input = &mut stream.peekable();
-            let lib = &mut <_>::default();
-            let state = ParseState::new(Some(scope), input, tc, lib);
-
-            self.parse(
-                state,
-                #[cfg(not(feature = "no_optimize"))]
-                self.optimization_level,
-            )?
-        };
+        let ast = self.compile_scripts_with_scope_raw(
+            Some(scope),
+            [script],
+            #[cfg(not(feature = "no_optimize"))]
+            self.optimization_level,
+        )?;
         self.run_ast_with_scope(scope, &ast)
     }
     /// Evaluate an [`AST`].
@@ -82,7 +73,7 @@ impl Engine {
     /// let engine = Engine::new();
     ///
     /// // Compile a script to an AST and store it for later evaluation
-    /// let ast = engine.compile("print(40 + 2);")?;
+    /// let ast = engine.compile(r#"println!("{}", 40 + 2);"#)?;
     ///
     /// // Evaluate it
     /// engine.run_ast(&ast)?;
@@ -108,7 +99,7 @@ impl Engine {
     /// scope.push("x", 40_i64);
     ///
     /// // Compile a script to an AST and store it for later evaluation
-    /// let ast = engine.compile("x += 2; x")?;
+    /// let ast = engine.compile_with_scope(&scope, "x += 2; x")?;
     ///
     /// // Evaluate it
     /// engine.run_ast_with_scope(&mut scope, &ast)?;
@@ -152,7 +143,7 @@ impl Engine {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-/// rawr::run("print(40 + 2);")?;
+/// rawr::run(r#"println!("{}", 40 + 2);"#)?;
 /// # Ok(())
 /// # }
 /// ```

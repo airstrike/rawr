@@ -1,15 +1,16 @@
-//! # Rawr
+//! # rawr
 //!
-//! Rawr is a Rust-shaped scripting language and application framework for
-//! iced applications.
+//! rawr runs typed Rust as a scripting language. A Rust program embeds it
+//! with an [`Engine`], which checks a script as Rust, runs it and calls its
+//! functions.
 //!
 //! # A Quick Example
 //!
-//! ## Contents of `my_script.rawr`
+//! ## Contents of `my_script.rs`
 //!
-//! ```rawr
+//! ```rust,ignore
 //! /// Brute force factorial function
-//! fn factorial(x) {
+//! fn factorial(x: i64) -> i64 {
 //!     if x == 1 { return 1; }
 //!     x * factorial(x - 1)
 //! }
@@ -40,7 +41,7 @@
 //! #   #[cfg(not(target_family = "wasm"))]
 //! #
 //!     // Evaluate the script, expecting a 'bool' result
-//!     let result: bool = engine.eval_file("my_script.rawr".into())?;
+//!     let result: bool = engine.eval_file("my_script.rs".into())?;
 //!
 //!     assert_eq!(result, true);
 //!
@@ -428,10 +429,6 @@ pub use eval::{Caches, FnResolutionCache, FnResolutionCacheEntry, GlobalRuntimeS
 #[cfg(feature = "internals")]
 #[allow(deprecated)]
 pub use func::{locked_read, locked_write, NativeCallContextStore, RawrFunc};
-
-#[cfg(feature = "internals")]
-#[cfg(feature = "metadata")]
-pub use api::definitions::Definitions;
 
 /// Number of items to keep inline for [`StaticVec`].
 const STATIC_VEC_INLINE_SIZE: usize = 3;

@@ -341,14 +341,14 @@ impl AST {
     /// let engine = Engine::new();
     ///
     /// let ast1 = engine.compile("
-    ///     fn foo(x) { 42 + x }
+    ///     fn foo(x: i64) -> i64 { 42 + x }
     ///     foo(1)
     /// ")?;
     ///
-    /// let ast2 = engine.compile(r#"
-    ///     fn foo(n) { `hello${n}` }
-    ///     foo("!")
-    /// "#)?;
+    /// let ast2 = engine.compile("
+    ///     fn foo(n: i64) -> i64 { n * 100 }
+    ///     foo(5)
+    /// ")?;
     ///
     /// let ast = ast1.merge(&ast2);    // Merge 'ast2' into 'ast1'
     ///
@@ -357,13 +357,13 @@ impl AST {
     ///
     /// // 'ast' is essentially:
     /// //
-    /// //    fn foo(n) { `hello${n}` } // <- definition of first 'foo' is overwritten
-    /// //    foo(1)                    // <- notice this will be "hello1" instead of 43,
-    /// //                              //    but it is no longer the return value
-    /// //    foo("!")                  // returns "hello!"
+    /// //    fn foo(n: i64) -> i64 { n * 100 }  // <- definition of first 'foo' is overwritten
+    /// //    foo(1)                             // <- notice this will be 100 instead of 43,
+    /// //                                       //    but it is no longer the return value
+    /// //    foo(5)                             // returns 500
     ///
     /// // Evaluate it
-    /// assert_eq!(engine.eval_ast::<String>(&ast)?, "hello!");
+    /// assert_eq!(engine.eval_ast::<i64>(&ast)?, 500);
     /// # }
     /// # Ok(())
     /// # }
@@ -394,14 +394,14 @@ impl AST {
     /// let engine = Engine::new();
     ///
     /// let mut ast1 = engine.compile("
-    ///     fn foo(x) { 42 + x }
+    ///     fn foo(x: i64) -> i64 { 42 + x }
     ///     foo(1)
     /// ")?;
     ///
-    /// let ast2 = engine.compile(r#"
-    ///     fn foo(n) { `hello${n}` }
-    ///     foo("!")
-    /// "#)?;
+    /// let ast2 = engine.compile("
+    ///     fn foo(n: i64) -> i64 { n * 100 }
+    ///     foo(5)
+    /// ")?;
     ///
     /// ast1.combine(ast2);    // Combine 'ast2' into 'ast1'
     ///
@@ -410,13 +410,13 @@ impl AST {
     ///
     /// // 'ast1' is essentially:
     /// //
-    /// //    fn foo(n) { `hello${n}` } // <- definition of first 'foo' is overwritten
-    /// //    foo(1)                    // <- notice this will be "hello1" instead of 43,
-    /// //                              //    but it is no longer the return value
-    /// //    foo("!")                  // returns "hello!"
+    /// //    fn foo(n: i64) -> i64 { n * 100 }  // <- definition of first 'foo' is overwritten
+    /// //    foo(1)                             // <- notice this will be 100 instead of 43,
+    /// //                                       //    but it is no longer the return value
+    /// //    foo(5)                             // returns 500
     ///
     /// // Evaluate it
-    /// assert_eq!(engine.eval_ast::<String>(&ast1)?, "hello!");
+    /// assert_eq!(engine.eval_ast::<i64>(&ast1)?, 500);
     /// # }
     /// # Ok(())
     /// # }
@@ -448,15 +448,15 @@ impl AST {
     /// let engine = Engine::new();
     ///
     /// let ast1 = engine.compile("
-    ///     fn foo(x) { 42 + x }
+    ///     fn foo(x: i64) -> i64 { 42 + x }
     ///     foo(1)
     /// ")?;
     ///
-    /// let ast2 = engine.compile(r#"
-    ///     fn foo(n) { `hello${n}` }
-    ///     fn error() { 0 }
-    ///     foo("!")
-    /// "#)?;
+    /// let ast2 = engine.compile("
+    ///     fn foo(n: i64) -> i64 { n * 100 }
+    ///     fn error() -> i64 { 0 }
+    ///     foo(5)
+    /// ")?;
     ///
     /// // Merge 'ast2', picking only 'error()' but not 'foo(..)', into 'ast1'
     /// let ast = ast1.merge_filtered(&ast2, |_, _, script, name, params|
@@ -464,15 +464,15 @@ impl AST {
     ///
     /// // 'ast' is essentially:
     /// //
-    /// //    fn foo(n) { 42 + n }      // <- definition of 'ast1::foo' is not overwritten
-    /// //                              //    because 'ast2::foo' is filtered away
-    /// //    foo(1)                    // <- notice this will be 43 instead of "hello1",
-    /// //                              //    but it is no longer the return value
-    /// //    fn error() { 0 }          // <- this function passes the filter and is merged
-    /// //    foo("!")                  // <- returns "42!"
+    /// //    fn foo(x: i64) -> i64 { 42 + x }  // <- definition of 'ast1::foo' is not overwritten
+    /// //                                       //    because 'ast2::foo' is filtered away
+    /// //    foo(1)                             // <- notice this will be 43 instead of 100,
+    /// //                                       //    but it is no longer the return value
+    /// //    fn error() -> i64 { 0 }            // <- this function passes the filter and is merged
+    /// //    foo(5)                             // <- returns 47
     ///
     /// // Evaluate it
-    /// assert_eq!(engine.eval_ast::<String>(&ast)?, "42!");
+    /// assert_eq!(engine.eval_ast::<i64>(&ast)?, 47);
     /// # Ok(())
     /// # }
     /// ```
@@ -591,15 +591,15 @@ impl AST {
     /// let engine = Engine::new();
     ///
     /// let mut ast1 = engine.compile("
-    ///     fn foo(x) { 42 + x }
+    ///     fn foo(x: i64) -> i64 { 42 + x }
     ///     foo(1)
     /// ")?;
     ///
-    /// let ast2 = engine.compile(r#"
-    ///     fn foo(n) { `hello${n}` }
-    ///     fn error() { 0 }
-    ///     foo("!")
-    /// "#)?;
+    /// let ast2 = engine.compile("
+    ///     fn foo(n: i64) -> i64 { n * 100 }
+    ///     fn error() -> i64 { 0 }
+    ///     foo(5)
+    /// ")?;
     ///
     /// // Combine 'ast2', picking only 'error()' but not 'foo(..)', into 'ast1'
     /// ast1.combine_filtered(ast2, |_, _, script, name, params|
@@ -607,15 +607,15 @@ impl AST {
     ///
     /// // 'ast1' is essentially:
     /// //
-    /// //    fn foo(n) { 42 + n }      // <- definition of 'ast1::foo' is not overwritten
-    /// //                              //    because 'ast2::foo' is filtered away
-    /// //    foo(1)                    // <- notice this will be 43 instead of "hello1",
-    /// //                              //    but it is no longer the return value
-    /// //    fn error() { 0 }          // <- this function passes the filter and is merged
-    /// //    foo("!")                  // <- returns "42!"
+    /// //    fn foo(x: i64) -> i64 { 42 + x }  // <- definition of 'ast1::foo' is not overwritten
+    /// //                                       //    because 'ast2::foo' is filtered away
+    /// //    foo(1)                             // <- notice this will be 43 instead of 100,
+    /// //                                       //    but it is no longer the return value
+    /// //    fn error() -> i64 { 0 }            // <- this function passes the filter and is merged
+    /// //    foo(5)                             // <- returns 47
     ///
     /// // Evaluate it
-    /// assert_eq!(engine.eval_ast::<String>(&ast1)?, "42!");
+    /// assert_eq!(engine.eval_ast::<i64>(&ast1)?, 47);
     /// # Ok(())
     /// # }
     /// ```
@@ -697,12 +697,14 @@ impl AST {
     /// let engine = Engine::new();
     ///
     /// let mut ast = engine.compile(r#"
-    ///     fn foo(n) { n + 1 }
-    ///     fn bar() { print("hello"); }
+    ///     fn foo(n: i64) -> i64 { n + 1 }
+    ///     fn bar() { println!("hello"); }
     /// "#)?;
     ///
     /// // Remove all functions except 'foo(..)'
     /// ast.retain_functions(|_, _, name, params| name == "foo" && params == 1);
+    ///
+    /// assert_eq!(ast.iter_functions().count(), 1);
     /// # }
     /// # Ok(())
     /// # }
@@ -778,9 +780,10 @@ impl AST {
     /// Extract all top-level literal constant and/or variable definitions.
     /// This is useful for extracting all global constants from a script without actually running it.
     ///
-    /// A literal constant/variable definition takes the form of:
-    /// `const VAR = `_value_`;` and `let VAR = `_value_`;`
-    /// where _value_ is a literal expression or will be optimized into a literal.
+    /// A literal definition takes the form of `let VAR = `_value_`;` or
+    /// `let mut VAR = `_value_`;` where _value_ is a literal expression.
+    /// An immutable `let` counts as a constant and a `let mut` counts as a variable.
+    /// A `const` item is not included.
     ///
     /// # Example
     ///
@@ -791,26 +794,24 @@ impl AST {
     /// let engine = Engine::new();
     ///
     /// let ast = engine.compile(
-    /// "
-    ///     const A = 40 + 2;   // constant that optimizes into a literal
-    ///     let b = 123;        // literal variable
-    ///     const B = b * A;    // non-literal constant
-    ///     const C = 999;      // literal constant
-    ///     b = A + C;          // expression
+    /// r#"
+    ///     let a = 42;              // literal constant
+    ///     let mut b = 123;         // literal variable
+    ///     let c = b * a;           // not a literal
+    ///     const D: i64 = 999;      // const item, not included
+    ///     b = a + c + D;           // expression
     ///
-    ///     {                   // <- new block scope
-    ///         const Z = 0;    // <- literal constant not at top-level
+    ///     {                        // <- new block scope
+    ///         let z = 0;           // <- literal constant not at top-level
     ///
-    ///         print(Z);       // make sure the block is not optimized away
+    ///         println!("{z}");
     ///     }
-    /// ")?;
+    /// "#)?;
     ///
     /// let mut iter = ast.iter_literal_variables(true, false)
     ///                   .map(|(name, is_const, value)| (name, is_const, value.as_int().unwrap()));
     ///
-    /// # #[cfg(not(feature = "no_optimize"))]
-    /// assert_eq!(iter.next(), Some(("A", true, 42)));
-    /// assert_eq!(iter.next(), Some(("C", true, 999)));
+    /// assert_eq!(iter.next(), Some(("a", true, 42)));
     /// assert_eq!(iter.next(), None);
     ///
     /// let mut iter = ast.iter_literal_variables(false, true)
@@ -822,16 +823,13 @@ impl AST {
     /// let mut iter = ast.iter_literal_variables(true, true)
     ///                   .map(|(name, is_const, value)| (name, is_const, value.as_int().unwrap()));
     ///
-    /// # #[cfg(not(feature = "no_optimize"))]
-    /// assert_eq!(iter.next(), Some(("A", true, 42)));
+    /// assert_eq!(iter.next(), Some(("a", true, 42)));
     /// assert_eq!(iter.next(), Some(("b", false, 123)));
-    /// assert_eq!(iter.next(), Some(("C", true, 999)));
     /// assert_eq!(iter.next(), None);
     ///
     /// let scope: Scope = ast.iter_literal_variables(true, false).collect();
     ///
-    /// # #[cfg(not(feature = "no_optimize"))]
-    /// assert_eq!(scope.len(), 2);
+    /// assert_eq!(scope.len(), 1);
     ///
     /// Ok(())
     /// # }

@@ -1,6 +1,6 @@
 //! Main module defining the lexer and parser.
 
-mod item;
+pub(crate) mod item;
 
 pub(crate) use item::CALLBACK_CLOSURE_PREFIX;
 
@@ -538,49 +538,31 @@ pub(crate) fn parse_trait(source: &str) -> Option<crate::item::Trait> {
 impl Engine {
     /// Parse Rawr item headers while retaining ordinary script statements outside item bodies.
     pub fn parse_unit(&self, source: impl AsRef<str>) -> ParseResult<crate::parse::Unit> {
-        self.parse_unit_with_scope_raw(
-            None,
-            source.as_ref(),
-            #[cfg(not(feature = "no_optimize"))]
-            self.optimization_level,
-        )
-    }
-
-    pub(crate) fn parse_unit_with_scope_raw(
-        &self,
-        scope: Option<&Scope>,
-        source: &str,
-        #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
-    ) -> ParseResult<crate::parse::Unit> {
-        let source = crate::source::Map::new(source);
+        let source = crate::source::Map::new(source.as_ref());
         let (items, inner_attributes) = item::parse(self, source.text())?;
         let script_source = source.without(
             items
                 .iter()
-                .filter(|item| item.masks_legacy_source())
                 .map(crate::item::Parsed::span)
                 .chain(inner_attributes),
         );
-        let script = self
-            .compile_legacy_script_with_scope_raw(
-                scope,
-                &script_source,
-                #[cfg(not(feature = "no_optimize"))]
-                optimization_level,
-            )
-            .map(Some)
-            .or_else(|error| {
-                if items.is_empty() {
-                    Err(error)
-                } else {
-                    Ok(None)
-                }
-            })?;
+        // The statements outside the items are typed Rust, which the
+        // checker reads when it lowers them. Here it is enough to know
+        // where the first one starts.
+        let statements = {
+            let inputs = [script_source.as_str()];
+            let (mut stream, control) = self.lex_raw(&inputs, None);
+            control.borrow_mut().rust = true;
+            match stream.next() {
+                Some((Token::EOF, _)) | None => None,
+                Some((_, position)) => Some(position),
+            }
+        };
 
         Ok(crate::parse::Unit::new(
             source,
             items,
-            script,
+            statements,
             script_source,
         ))
     }

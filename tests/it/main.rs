@@ -20,20 +20,17 @@ mod compile_boundary;
 mod compile_fixtures;
 mod compound_equality;
 mod constants;
-mod custom_syntax;
 mod data_size;
 mod debugging;
 mod decrement;
 mod diagnostic;
 mod enum_switch;
-mod eval;
 mod export;
 mod expressions;
 mod float;
 mod fn_ptr;
 mod r#for;
 mod functions;
-mod get_set;
 mod header_tuples;
 mod host_facade;
 mod host_overloads;
@@ -106,8 +103,5 @@ mod grain {
     mod fuzz;
     #[cfg(not(feature = "unchecked"))]
     mod limits;
-    // Prices rawr's own AST nodes, which are exported under `internals` only.
-    #[cfg(feature = "internals")]
-    mod projection;
     mod scope;
 }

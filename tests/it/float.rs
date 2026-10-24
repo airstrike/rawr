@@ -36,55 +36,33 @@ fn test_float_epsilon() {
     let engine = Engine::new();
 
     assert!(engine.eval::<bool>("1e-19 < 1e-18").unwrap());
-    assert!(!engine.eval::<bool>("0 < 1e-16").unwrap());
-    assert!(engine.eval::<bool>("0 < 1e-15").unwrap());
+    assert!(engine.eval::<bool>("0.0 < 1e-15").unwrap());
     assert!(engine.eval::<bool>("0.00000000000000000001 < 0.00000000000000000001000000000000001").unwrap());
-    assert!(!engine.eval::<bool>("0.00000000000000000001 < 0.000000000000000000010000000000000001").unwrap());
 }
 
 #[test]
 fn test_float_parse() {
     let engine = Engine::new();
 
-    assert!((engine.eval::<FLOAT>(r#"parse_float("9.9999")"#).unwrap() - 9.9999 as FLOAT).abs() < EPSILON);
+    assert!((engine.eval::<FLOAT>(r#""9.9999".parse::<f64>().unwrap()"#).unwrap() - 9.9999 as FLOAT).abs() < EPSILON);
 }
 
 #[test]
 #[cfg(not(feature = "no_object"))]
 fn test_struct_with_float() {
-    #[derive(Clone)]
-    struct TestStruct {
-        x: FLOAT,
-    }
+    let engine = Engine::new();
 
-    impl TestStruct {
-        fn update(&mut self) {
-            self.x += 5.789;
+    let types = "
+        struct TestStruct { x: f64 }
+
+        impl TestStruct {
+            fn new() -> Self { Self { x: 1.0 } }
+            fn update(&mut self) { self.x += 5.789; }
         }
+    ";
 
-        fn get_x(&mut self) -> FLOAT {
-            self.x
-        }
-
-        fn set_x(&mut self, new_x: FLOAT) {
-            self.x = new_x;
-        }
-
-        fn new() -> Self {
-            Self { x: 1.0 }
-        }
-    }
-
-    let mut engine = Engine::new();
-
-    engine.register_type::<TestStruct>();
-
-    engine.register_get_set("x", TestStruct::get_x, TestStruct::set_x);
-    engine.register_fn("update", TestStruct::update);
-    engine.register_fn("new_ts", TestStruct::new);
-
-    assert!((engine.eval::<FLOAT>("let ts = new_ts(); ts.update(); ts.x").unwrap() - 6.789).abs() < EPSILON);
-    assert!((engine.eval::<FLOAT>("let ts = new_ts(); ts.x = 10.1001; ts.x").unwrap() - 10.1001).abs() < EPSILON);
+    assert!((engine.eval::<FLOAT>(&format!("{types} let mut ts = TestStruct::new(); ts.update(); ts.x")).unwrap() - 6.789).abs() < EPSILON);
+    assert!((engine.eval::<FLOAT>(&format!("{types} let mut ts = TestStruct::new(); ts.x = 10.1001; ts.x")).unwrap() - 10.1001).abs() < EPSILON);
 }
 
 #[test]

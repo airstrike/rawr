@@ -43,10 +43,12 @@ fn main() -> Result<(), Box<EvalAltResult>> {
         println!();
     }
 
+    // A registered function's `&mut` first parameter takes the variable by
+    // reference, so `update(x)` changes `x`.
     let result = engine.eval::<TestStruct>(
         "
-            let x = new_ts();
-            x.update();
+            let mut x = new_ts();
+            update(x);
             x
         ",
     )?;
@@ -55,8 +57,12 @@ fn main() -> Result<(), Box<EvalAltResult>> {
 
     let result = engine.eval::<TestStruct>(
         "
-            let x = [ new_ts() ];
-            x[0].update();
+            let mut x = vec![new_ts()];
+            // The element is taken out, updated through its variable and put
+            // back, because only a variable is handed over by reference.
+            let mut first = x.remove(0);
+            update(first);
+            x.push(first);
             x[0]
         ",
     )?;

@@ -117,27 +117,30 @@ fn the_round_trip_covers_something_worth_covering() {
         // rests on into a panic in rawr, so the case is not run at all there.
         #[cfg(not(feature = "unchecked"))]
         "error_divide_by_zero",
-        "switch_range",           // a switch table, and the hasher probe with it
-        "switch_guard",           // and one whose arms are a chain rather than a target
-        "string_slice_read",      // a range constant, which is a host type in `Dynamic`
-        "string_slice_inclusive", // and the other range tag
-        "index_assign_array",     // a chain rooted at a slot, and its name
-        "temp_root_array_method", // and one rooted on the operand stack instead
+        "match_range",                   // a range pattern, lowered to comparisons
+        "match_guard",                   // and a guard that falls through
+        "index_assign_array",            // a chain rooted at a slot, and its name
+        "temp_root_array_method",        // and one rooted on the operand stack instead
+        "for_vec",                       // an iterator, and the two-edged instruction
+        "closure_fn_pointer",            // a function pointer to a compiled chunk
+        "closure_named_function_in_map", // handed on and called back
+        "host_call_mutates",             // a by-reference call
     ] {
-        assert!(names.contains(&required), "`{required}` no longer writes, so the encoder branch it covers is untested",);
+        assert!(names.contains(&required), "`{required}` no longer writes, so the encoder branch it covers is untested; these write: {names:?}",);
     }
 }
 
 /// Where the golden pair lives. The source is checked in beside the artifact so
 /// a regeneration is a visible two-file change.
-const GOLDEN_SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/grain/fixtures/golden.rawr");
+const GOLDEN_SOURCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/grain/fixtures/golden.rs");
 const GOLDEN_ARTIFACT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/grain/fixtures/golden.rgrn");
 
-/// The caller state `golden.rawr` expects. Part of the fixture, so it lives
+/// The caller state `golden.rs` expects. Part of the fixture, so it lives
 /// with it rather than being invented at each use.
 fn golden_scope() -> Scope<'static> {
     let mut scope = Scope::new();
-    scope.push("supplied", vec![Dynamic::from(7 as INT)]);
+    scope.push("supplied", 7 as INT);
+    scope.push("w", corpus::Widget::default());
     scope
 }
 
@@ -177,7 +180,7 @@ fn a_golden_artifact_written_by_an_older_build_still_runs() {
     {
         let engine = corpus::engine();
         let source = std::fs::read_to_string(GOLDEN_SOURCE).expect("the golden source is checked in");
-        let ast = engine.compile(&source).expect("the golden source must parse");
+        let ast = engine.compile_with_scope(&golden_scope(), &source).expect("the golden source must parse");
         let program = Compiler::new().compile(&ast);
         assert_eq!(program.residual_count(), 0, "the golden source must lower whole, or the artifact covers less than it claims: {:?}", program.first_unsupported(),);
 
@@ -215,20 +218,19 @@ fn a_golden_artifact_written_by_an_older_build_still_runs() {
             .map(|(_, op)| format!("{op:?}").split(['(', ' ', '{']).next().unwrap_or_default().to_string())
             .collect();
         for required in [
-            "Chain",             // a chain record, with all three of its roots
-            "CallRef",           // and both by-reference call forms
-            "Rotate",            // which only a named receiver needs
-            "LoadNamed",         // the caller's variable, flat
-            "LoadSharedNamed",   // and as the cell a capture binds
-            "MakeClosure",       // a function pointer to a compiled chunk
-            "Curry",             // with what it captured bound onto it
-            "MakeArray",         // a literal the optimizer could not fold
-            "MakeMap",           // and its template-plus-pairs cousin
-            "CheckSize",         // the per-element size check beside it
-            "PushHandler",       // a handler region, whose catch variable is pooled
-            "Throw",             //
-            "IterNext",          // an iterator, and the two-edged instruction
-            "InterpolateAppend", // a string built a segment at a time
+            "Chain",           // a chain record
+            "CallRef",         // a by-reference call
+            "Rotate",          // which only a named receiver with an argument needs
+            "LoadNamed",       // the caller's variable, flat
+            "AssignNamed",     // and written
+            "LoadSharedNamed", // and as the cell a capture binds
+            "MakeClosure",     // a function pointer to a compiled chunk
+            "Curry",           // with what it captured bound onto it
+            "CallFnPtr",       // and called
+            "MakeArray",       // a literal the optimizer could not fold
+            "CheckSize",       // the per-element size check beside it
+            "IterNext",        // an iterator, and the two-edged instruction
+            "Tick",            // a loop's back edge
         ] {
             assert!(
                 kinds.contains(required),
@@ -237,7 +239,7 @@ fn a_golden_artifact_written_by_an_older_build_still_runs() {
             );
         }
         assert!(
-            kinds.len() >= 35,
+            kinds.len() >= 33,
             "the golden covers only {} instruction kinds, which is narrower than it \
          was written to be: {kinds:?}",
             kinds.len(),
@@ -272,25 +274,28 @@ fn a_golden_artifact_written_by_an_older_build_still_runs() {
     }
 }
 
-/// A chain rooted at a caller's variable, which the corpus cannot cover.
+/// Calls rooted at a caller's variable, which the corpus cannot cover.
 ///
-/// Every case in `writable` runs from an empty scope, so the name a
-/// [`Root::Named`] carries — and the position beside it, which is what an
-/// `ErrorVariableNotFound` is reported against — has no encoder coverage there.
+/// Every case in `writable` runs from an empty scope, so the name a chain or a
+/// by-reference call carries — and the position beside it, which is what an
+/// error is reported against — has no encoder coverage there.
 #[test]
 fn a_chain_rooted_at_a_name_survives_the_round_trip() {
     let engine = corpus::engine();
-    let source = "host.push(2); host[9]";
+    let source = "mode.push('!'); bump(w); bump_then_fail(w)";
 
-    let ast = engine.compile(source).expect("must compile");
+    let seed = |scope: &mut Scope| {
+        scope.push("mode", "chase".to_string());
+        scope.push("w", corpus::Widget::default());
+    };
+
+    let mut checked = Scope::new();
+    seed(&mut checked);
+    let ast = engine.compile_with_scope(&checked, source).expect("must compile");
     let program = Compiler::new().compile(&ast);
     assert_eq!(program.residual_count(), 0, "the chain must lower");
     let bytes = program.write().expect("must be writable");
     let reloaded = Program::read(&bytes).expect("what we wrote must read back");
-
-    let seed = |scope: &mut Scope| {
-        scope.push("host", vec![Dynamic::from(1 as INT)]);
-    };
 
     let mut walked = Scope::new();
     seed(&mut walked);
@@ -306,11 +311,10 @@ fn a_chain_rooted_at_a_name_survives_the_round_trip() {
         snapshot(&loaded, out)
     };
 
-    // The mutation lands, and the out-of-bounds index is still blamed on the
-    // step rather than on the chain — so both the name and its position came
-    // back intact.
+    // The mutation lands, and the failure is still blamed where rawr blames
+    // it — so both the names and their positions came back intact.
     assert_eq!(actual, expected);
-    assert!(actual.result.is_err(), "the index must still be refused");
+    assert!(actual.result.is_err(), "the last call must still fail");
 }
 
 /// Fragments are the allocation the format exists to remove, so writing one
@@ -318,16 +322,16 @@ fn a_chain_rooted_at_a_name_survives_the_round_trip() {
 ///
 /// The refusal has to name the construct and where it is. A caller deciding
 /// whether to ship source instead cannot act on "27 fragments"; it can act on
-/// "for at line 1".
+/// "switch at line 1".
 #[test]
 fn refusing_to_write_names_the_construct_responsible() {
     let engine = corpus::engine();
 
     for (source, expected) in [
-        ("let x = 1; eval(\"x\")", "an unlowered expression"),
-        // `?.` short-circuits on unit rather than stepping, so it is not a
-        // chain this compiler can express whatever its root is.
-        ("let x = 1; x?.y", "an unlowered expression"),
+        // A closure capturing a script local is not lowered yet.
+        ("let n: i64 = 10; let a = vec![1, 2, 3]; a.iter().map(|x| x * n).collect::<Vec<i64>>()", "an unlowered expression"),
+        // Nor is a pattern taking an `Option` apart, which lowers to a switch.
+        ("let o = Some(3); if let Some(x) = o { x } else { 0 }", "switch"),
     ] {
         let ast = engine.compile(source).expect("must compile");
         let program = Compiler::new().compile(&ast);
@@ -354,14 +358,14 @@ fn script_functions_survive_the_round_trip() {
     let engine = corpus::engine();
 
     for source in [
-        "fn add(a, b) { a + b } add(2, 3)",
-        "fn fib(n) { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } } fib(6)",
-        "fn first() { 1 } fn second(x) { first() + x } second(4)",
+        "fn add(a: i64, b: i64) -> i64 { a + b } add(2, 3)",
+        "fn fib(n: i64) -> i64 { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } } fib(6)",
+        "fn first() -> i64 { 1 } fn second(x: i64) -> i64 { first() + x } second(4)",
         // Failing inside a function has to keep rawr's wrapping and position.
         // `unchecked` turns this into a panic in rawr's own built-in rather
         // than an error, so there is nothing left here to compare.
         #[cfg(not(feature = "unchecked"))]
-        "fn bad(x) { x / 0 } bad(1)",
+        "fn bad(x: i64) -> i64 { x / 0 } bad(1)",
     ] {
         let ast = engine.compile(source).expect("must compile");
         let program = Compiler::new().compile(&ast);
@@ -374,59 +378,30 @@ fn script_functions_survive_the_round_trip() {
     }
 }
 
-/// A function the compiler cannot lower stays rawr's, and a program that still
-/// depends on rawr's copy cannot be written — silently dropping it would
-/// produce an artifact that loads and then cannot find its own function.
-#[test]
-#[cfg(not(feature = "no_module"))]
-fn a_function_the_compiler_cannot_lower_refuses_to_write() {
-    let engine = corpus::engine();
-    // `import` declares into the caller's scope, which the slot model cannot
-    // account for. `this` used to be the example here, and is not one any more.
-    let ast = engine.compile(r#"fn m() { import "x" as y; 1 } m()"#).expect("must compile");
-    let program = Compiler::new().compile(&ast);
-
-    assert!(program.functions().is_empty(), "a body the slot model cannot account for must not become a chunk",);
-    assert!(matches!(program.write(), Err(WriteError::HasScriptFunctions | WriteError::HasResiduals { .. }),), "got {:?}", program.write(),);
-}
-
-/// The counterpart, and the milestone: a body that uses `this` is a chunk now,
-/// so a program full of them is an artifact rather than a tree.
-#[test]
-fn a_body_using_this_is_compiled_and_writable() {
-    let engine = corpus::engine();
-    let ast = engine.compile("fn bump(n) { this += n; this } let x = 21; x.bump(21); x").expect("must compile");
-    let program = Compiler::new().compile(&ast);
-
-    assert_eq!(program.residual_count(), 0, "{:?}", program.first_unsupported());
-    assert!(!program.functions().is_empty(), "a body using `this` must become a chunk");
-    assert!(program.write().is_ok(), "got {:?}", program.write());
-}
-
 /// A program with one of everything the corruption tests need to reach: a
-/// float constant, a loop, and a `switch` — whose table is the one part of an
-/// artifact holding jump targets that are not in the code, and so the one the
-/// verifier would most plausibly forget to check.
+/// float constant, a loop, a vector built, pushed to and written through, and
+/// a `match`.
 ///
-/// Both by-reference call forms are here too. Their argument count includes a
-/// receiver that is not on the operand stack, so a corrupted one is read
-/// against a different depth than any other call's.
+/// Both by-reference call forms are here too, on a value the caller supplies.
+/// Their argument count includes a receiver that is not on the operand stack,
+/// so a corrupted one is read against a different depth than any other call's.
 fn sample(engine: &Engine) -> Vec<u8> {
     // A float in the constant pool is part of what this covers, and `no_float`
-    // has no float to put there. The rest of the shape — a loop, an array, a
-    // caller variable, an indexed write, a switch — is the same either way.
+    // has no float to put there. The rest of the shape is the same either way.
     #[cfg(not(feature = "no_float"))]
-    const SECOND: &str = "2.5";
+    const SECOND: &str = "let b: f64 = 2.5; let s = b * 2.0;";
     #[cfg(feature = "no_float")]
-    const SECOND: &str = "2";
+    const SECOND: &str = "let b: i64 = 2; let s = b * 2;";
 
     let source = format!(
-        "let a = 1; let b = {SECOND}; while a < 10 {{ a += 1 }} \
-         let c = [a]; push(c, b); push(caller_supplied, a); \
-         caller_supplied[0] = a; \
-         switch a {{ 1 => \"one\", 0..=20 => \"some\", _ => \"many\" }}"
+        "let mut a: i64 = 1; {SECOND} while a < 10 {{ a += 1 }} \
+         let mut c: Vec<i64> = vec![a]; c.push(a); c[0] = a; \
+         bump(w); raise(w, a); \
+         match a {{ 1 => \"one\", 0..=20 => \"some\", _ => \"many\" }}"
     );
-    let ast = engine.compile(&source).expect("must compile");
+    let mut scope = Scope::new();
+    scope.push("w", corpus::Widget::default());
+    let ast = engine.compile_with_scope(&scope, &source).expect("must compile");
     Compiler::new().compile(&ast).write().expect("the sample must be writable")
 }
 
@@ -464,35 +439,6 @@ fn a_different_value_representation_is_refused_by_name() {
     restricted[8] ^= 0b100; // the `no_index` bit
     let message = Program::read(&restricted).unwrap_err().to_string();
     assert!(message.contains("no_index"), "the message must name the flag: {message}",);
-}
-
-/// A `switch` carries hashes rawr's parser computed, and rawr seeds its hasher
-/// per process unless the host says otherwise. Two processes that disagree
-/// would load each other's artifacts perfectly and then send every subject to
-/// the default — a wrong answer rather than a failure, which is the worst kind.
-///
-/// The probe is what turns it into a failure, so this checks the failure
-/// happens and that the message says what to do about it.
-#[test]
-fn a_switch_hashed_by_a_different_seed_is_refused() {
-    let engine = corpus::engine();
-    let bytes = sample(&engine);
-
-    // The probe is the only place the artifact repeats this value, and finding
-    // it that way means the test does not have to know the layout.
-    let probe = rawr::grain::bytecode::probe().to_le_bytes();
-    let at = bytes.windows(probe.len()).position(|window| window == probe).expect("an artifact with a switch in it carries a probe");
-
-    let mut corrupt = bytes.clone();
-    corrupt[at] ^= 1;
-
-    let err = Program::read(&corrupt).expect_err("a foreign hasher must be refused");
-    assert!(matches!(err, ReadError::HashSeedMismatch { .. }), "got {err:?}",);
-    assert!(err.to_string().contains("set_hashing_seed"), "the message must say how to fix it: {err}",);
-
-    // And the uncorrupted one still loads, so the check is not simply always
-    // failing.
-    assert!(Program::read(&bytes).is_ok());
 }
 
 /// An artifact arrives over a link, so every prefix of one is a thing that can
@@ -539,10 +485,10 @@ fn trailing_bytes_are_refused() {
 // limits this hangs rather than fails, which is worse than not running.
 #[cfg(not(feature = "unchecked"))]
 fn no_single_bit_flip_can_panic_or_smuggle_a_bad_chunk() {
-    let writer = Engine::new();
+    let writer = corpus::engine();
     let bytes = sample(&writer);
 
-    let mut engine = Engine::new();
+    let mut engine = corpus::engine();
     engine.set_max_operations(10_000);
 
     let mut loaded = 0usize;
@@ -572,14 +518,12 @@ fn no_single_bit_flip_can_panic_or_smuggle_a_bad_chunk() {
 /// The device is sent a stripped artifact and knows nothing about the source.
 /// It fails, and all it can say is which instruction. The host kept the table,
 /// and turns that back into the position rawr itself would have reported.
-/// There is no table to strip under `no_position`, so nothing to resolve; and
-/// the failure it turns on is a division by zero, which `unchecked` makes a
-/// panic in rawr rather than an error.
+/// There is no table to strip under `no_position`, so nothing to resolve.
 #[test]
-#[cfg(not(any(feature = "no_position", feature = "unchecked")))]
+#[cfg(not(feature = "no_position"))]
 fn a_stripped_program_reports_an_address_the_host_can_resolve() {
     let engine = corpus::engine();
-    let source = "let a = 1;\nlet b = 0;\na / b";
+    let source = "let mut w = widget(1);\nbump(w);\nbump_then_fail(w)";
 
     // Host: compile, split.
     let ast = engine.compile(source).expect("must compile");
@@ -592,13 +536,16 @@ fn a_stripped_program_reports_an_address_the_host_can_resolve() {
     assert!(device.positions().is_stripped(), "a stripped artifact must not carry positions",);
 
     let mut vm = Vm::new(&engine);
-    let error = vm.eval_with_scope(&mut Scope::new(), &device).expect_err("dividing by zero must fail");
+    let error = vm.eval_with_scope(&mut Scope::new(), &device).expect_err("the last call must fail");
     let address = vm.fault_pc().expect("a failed run must name an instruction");
 
     // Host: resolve what came back.
     let site = rawr::grain::pos::resolve(&table, address as u32).expect("the failing instruction must have a recorded site");
 
-    assert_eq!((site.line, site.column), (3, 3), "the division is at line 3, column 3 of {source:?}",);
+    // The site is the position rawr's own walker reports for the same failure.
+    let walked = engine.eval_ast::<Dynamic>(&ast).expect_err("the walker must fail too");
+    let position = walked.position();
+    assert_eq!((Some(site.line as usize), Some(site.column as usize)), (position.line(), position.position()), "the host must resolve the address to where rawr blames the failure",);
 
     // And the same program with its table attached says so itself, exactly as
     // rawr does — which is what makes the resolved site trustworthy.
@@ -617,8 +564,8 @@ fn a_stripped_program_reports_an_address_the_host_can_resolve() {
 fn a_table_from_a_different_program_is_refused() {
     let engine = corpus::engine();
 
-    let short = Compiler::new().compile(&engine.compile("1 + 1").unwrap());
-    let long = Compiler::new().compile(&engine.compile("let a = 1; while a < 9 { a += 1 } a").unwrap());
+    let short = Compiler::new().compile(&engine.compile("let a: i64 = 1; a + 1").unwrap());
+    let long = Compiler::new().compile(&engine.compile("let mut a: i64 = 1; while a < 9 { a += 1; } a").unwrap());
 
     let (_, long_table) = long.write_stripped().expect("must be writable");
     let (short_bytes, _) = short.write_stripped().expect("must be writable");

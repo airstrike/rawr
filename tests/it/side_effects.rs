@@ -1,5 +1,5 @@
 //! This test simulates an external command object that is driven by a script.
-use rawr::{Engine, INT, Scope};
+use rawr::{Engine, INT, Output, Scope};
 use std::sync::{Arc, Mutex, RwLock};
 
 /// Simulate a command object.
@@ -36,7 +36,7 @@ fn test_side_effects_command() {
     let api = command.clone(); // Notice this clones the `Arc` only
 
     // Make the API object a singleton in the script environment.
-    scope.push_constant("Command", api);
+    scope.push_constant("command", api);
 
     // Register type.
     engine.register_type_with_name::<API>("CommandType");
@@ -45,16 +45,16 @@ fn test_side_effects_command() {
         let val = command.get();
         command.action(val + x);
     });
-    engine.register_get("value", |command: &mut API| command.lock().unwrap().get());
+    engine.register_fn("value", |command: &mut API| command.lock().unwrap().get());
 
     assert_eq!(
         engine
             .eval_with_scope::<INT>(
                 &mut scope,
                 "
-                    // Drive the command object via the wrapper
-                    Command.action(30);
-                    Command.value
+                    // Drive the command object through the registered functions.
+                    action(&command, 30);
+                    value(&command)
                 "
             )
             .unwrap(),
@@ -71,11 +71,15 @@ fn test_side_effects_print() {
 
     let mut engine = Engine::new();
 
-    // Override action of 'print' function
+    // Catch what the script prints to standard output.
     let logger = result.clone();
-    engine.on_print(move |s| logger.write().unwrap().push_str(s));
+    engine.on_output(move |output, s| {
+        if output == Output::Stdout {
+            logger.write().unwrap().push_str(s);
+        }
+    });
 
-    engine.run("print(40 + 2);").unwrap();
+    engine.run(r#"print!("{}", 40 + 2);"#).unwrap();
 
     assert_eq!(*result.read().unwrap(), "42");
 }

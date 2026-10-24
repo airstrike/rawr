@@ -1,12 +1,12 @@
 //! Parsed Rawr compilation units.
 
-use crate::{item, source, AST};
+use crate::{item, source, Position};
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
 
-/// Parsed source items and the retained script representation they surround.
+/// Parsed source items and the statements they surround.
 ///
-/// The legacy script AST is intentionally private and moves only through
+/// A unit is not runnable on its own; it moves through
 /// [`crate::resolve::resolve`].
 ///
 /// ```compile_fail
@@ -20,8 +20,10 @@ pub struct Unit {
     source: source::Map,
     /// Source-level Rawr items.
     items: Box<[item::Parsed]>,
-    /// Existing script statements outside Rawr item boundaries.
-    script: Option<AST>,
+    /// Where the first statement outside the items starts, when there is one.
+    statements: Option<Position>,
+    /// The source with the items blanked: the statements, which the checker
+    /// reads as the body of `fn main`.
     script_source: String,
 }
 
@@ -29,13 +31,13 @@ impl Unit {
     pub(crate) fn new(
         source: source::Map,
         items: Box<[item::Parsed]>,
-        script: Option<AST>,
+        statements: Option<Position>,
         script_source: String,
     ) -> Self {
         Self {
             source,
             items,
-            script,
+            statements,
             script_source,
         }
     }
@@ -52,12 +54,12 @@ impl Unit {
         &self.items
     }
 
-    /// The items, the script and the script's masked source.
-    pub(crate) fn parts(&self) -> (&[item::Parsed], Option<&AST>, &str) {
-        (&self.items, self.script.as_ref(), &self.script_source)
+    /// The items, where the statements start and the statements' source.
+    pub(crate) fn parts(&self) -> (&[item::Parsed], Option<Position>, &str) {
+        (&self.items, self.statements, &self.script_source)
     }
 
-    pub(crate) fn into_parts(self) -> (source::Map, Box<[item::Parsed]>, Option<AST>, String) {
-        (self.source, self.items, self.script, self.script_source)
+    pub(crate) fn into_parts(self) -> (source::Map, Box<[item::Parsed]>, Option<Position>, String) {
+        (self.source, self.items, self.statements, self.script_source)
     }
 }

@@ -1,97 +1,72 @@
 use rawr::{Engine, EvalAltResult, INT};
 
 #[test]
-fn test_throw() {
+fn test_panic() {
     let engine = Engine::new();
 
     assert!(matches!(
-        *engine.run("if true { throw 42 }").expect_err("expects error"),
-        EvalAltResult::ErrorRuntime(s, ..) if s.as_int().unwrap() == 42
+        *engine.run(r#"if true { panic!("{}", 42) }"#).expect_err("expects error"),
+        EvalAltResult::ErrorRuntime(s, ..) if s.to_string() == "42"
     ));
 
     assert!(matches!(
-        *engine.run(r#"throw"#).expect_err("expects error"),
-        EvalAltResult::ErrorRuntime(s, ..) if s.is_unit()
+        *engine.run(r#"panic!("boom")"#).expect_err("expects error"),
+        EvalAltResult::ErrorRuntime(s, ..) if s.to_string() == "boom"
     ));
 }
 
 #[test]
-fn test_try_catch() {
+fn test_result() {
     let engine = Engine::new();
 
-    assert_eq!(engine.eval::<INT>("try { throw 42; } catch (x) { return x; }").unwrap(), 42);
+    let fail = "fn fail() -> Result<i64, i64> { Err(42) }";
 
-    assert_eq!(engine.eval::<INT>("try { throw 42; } catch { return 123; }").unwrap(), 123);
+    assert_eq!(engine.eval::<INT>(&format!("{fail} match fail() {{ Ok(v) => v, Err(x) => x }}")).unwrap(), 42);
 
-    #[cfg(not(feature = "unchecked"))]
-    assert_eq!(engine.eval::<INT>("let x = 42; try { let y = 123; print(x/0); } catch { x = 0 } x").unwrap(), 0);
+    assert_eq!(engine.eval::<INT>(&format!("{fail} match fail() {{ Ok(v) => v, Err(_) => 123 }}")).unwrap(), 123);
 
-    #[cfg(not(feature = "no_function"))]
+    // `?` returns the error from the calling function.
     assert_eq!(
         engine
-            .eval::<INT>(
+            .eval::<INT>(&format!(
                 "
-                    fn foo(x) { try { throw 42; } catch (x) { return x; } }
-                    foo(0)
+                    {fail}
+                    fn foo() -> Result<i64, i64> {{ let x = fail()?; Ok(x + 1) }}
+                    foo().unwrap_or_else(|x| x)
                 "
-            )
+            ))
+            .unwrap(),
+        42
+    );
+
+    // The error's binding shadows an outer one only inside its arm.
+    assert_eq!(
+        engine
+            .eval::<INT>(&format!(
+                "
+                    {fail}
+                    let err = 123;
+                    if let Err(err) = fail() {{ err }} else {{ 0 }}
+                "
+            ))
             .unwrap(),
         42
     );
 
     assert_eq!(
         engine
-            .eval::<INT>(
-                "
+            .eval::<INT>(&format!(
+                r#"
+                    {fail}
                     let err = 123;
-                    let x = 0;
-                    try { throw 42; } catch(err) { return err; }
-                "
-            )
-            .unwrap(),
-        42
-    );
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                "
-                    let err = 123;
-                    let x = 0;
-                    try { throw 42; } catch(err) { print(err); }
+                    if let Err(err) = fail() {{ println!("{{err}}"); }}
                     err
-                "
-            )
+                "#
+            ))
             .unwrap(),
         123
-    );
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                "
-                    let foo = 123;
-                    let x = 0;
-                    try { throw 42; } catch(err) { return foo; }
-                "
-            )
-            .unwrap(),
-        123
-    );
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                "
-                    let foo = 123;
-                    let x = 0;
-                    try { throw 42; } catch(err) { return err; }
-                "
-            )
-            .unwrap(),
-        42
     );
 
     #[cfg(not(feature = "unchecked"))]
-    assert!(matches!(*engine.run("try { 42/0; } catch { throw; }").expect_err("expects error"), EvalAltResult::ErrorArithmetic(..)));
+    assert!(matches!(*engine.run("let x = 42; let y = 0; let z = x / y;").expect_err("expects error"), EvalAltResult::ErrorArithmetic(..)));
 }

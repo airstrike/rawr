@@ -1311,9 +1311,10 @@ fn view() -> impl Widget<()> {
         let PlayError::Compile(text) = error else {
             panic!("expected a compile error, got {error:?}");
         };
-        assert!(text.contains(" --> play.rs:1:12\n"), "{text}");
+        // The method's name is underlined, as rustc underlines it.
+        assert!(text.contains(" --> play.rs:1:12-1:17\n"), "{text}");
         assert!(text.contains(" 1 | text(\"hi\").bogus(1)\n"), "{text}");
-        assert!(text.contains("   |            ^\n"), "{text}");
+        assert!(text.contains("   |            ^^^^^\n"), "{text}");
         assert!(!text.contains("use iced"), "{text}");
     }
 
@@ -1367,7 +1368,7 @@ fn view() -> impl Widget<()> {
 
     #[test]
     fn run_plain_program_prints_its_output() {
-        let cart = text(include_str!("../../examples/scripts/cart.rawr"));
+        let cart = text(include_str!("../../examples/scripts/cart.rs"));
         assert_eq!(cart.text(), "total: 27\n");
         assert_eq!((cart.status, cart.truncated, cart.limit), (0, false, false));
     }

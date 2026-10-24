@@ -332,13 +332,6 @@ fn compiler_support_survives_public_ast_statement_transforms() {
 }
 
 #[test]
-fn compiler_support_is_linked_for_dynamic_eval() {
-    let value = Engine::new().eval::<i64>(r#"eval("struct Counter { value: i64 } Counter { value: 42 }.value")"#).unwrap();
-
-    assert_eq!(value, 42);
-}
-
-#[test]
 fn compiler_support_survives_ast_merge_across_schema_generations() {
     let engine = Engine::new();
     let first = engine.compile("struct Value { inner: i64 } Value { inner: 42 };").unwrap();

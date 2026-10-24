@@ -4,9 +4,6 @@ use rawr::{Engine, EvalAltResult, INT, ParseErrorType};
 #[cfg(not(feature = "no_index"))]
 use rawr::Array;
 
-#[cfg(not(feature = "no_object"))]
-use rawr::Map;
-
 #[test]
 fn test_max_string_size() {
     let mut engine = Engine::new();
@@ -16,15 +13,15 @@ fn test_max_string_size() {
 
     assert_eq!(*engine.compile(r#"let x = "朝に紅顔、暮に白骨";"#).unwrap_err().err_type(), ParseErrorType::LiteralTooLarge("Length of string".to_string(), 10));
 
-    assert_eq!(*engine.compile("let x = `朝に紅顔、暮に白骨`;").unwrap_err().err_type(), ParseErrorType::LiteralTooLarge("Length of string".to_string(), 10));
+    assert_eq!(*engine.compile(r##"let x = r#"朝に紅顔、暮に白骨"#;"##).unwrap_err().err_type(), ParseErrorType::LiteralTooLarge("Length of string".to_string(), 10));
 
-    assert_eq!(*engine.compile(r#"let x = `Say ${"Hi!"} and so be it.`;"#).unwrap_err().err_type(), ParseErrorType::LiteralTooLarge("Length of string".to_string(), 10));
+    assert_eq!(*engine.compile(r#"let x = format!("Say {} and so be it.", "Hi!");"#).unwrap_err().err_type(), ParseErrorType::LiteralTooLarge("Length of string".to_string(), 10));
 
     assert!(matches!(
         *engine
             .run(
                 r#"
-                    let x = "hello, ";
+                    let x = String::from("hello, ");
                     let y = "world!";
                     x + y
                 "#
@@ -33,13 +30,14 @@ fn test_max_string_size() {
         EvalAltResult::ErrorDataTooLarge(..)
     ));
 
-    #[cfg(not(feature = "no_object"))]
     assert!(matches!(
         *engine
             .run(
                 r#"
-                    let x = "hello";
-                    x.pad(100, '!');
+                    let mut x = String::from("hello");
+                    for _ in 0..100 {
+                        x.push('!');
+                    }
                     x
                 "#
             )
@@ -53,7 +51,7 @@ fn test_max_string_size() {
         engine
             .eval::<String>(
                 r#"
-                    let x = "hello, ";
+                    let x = String::from("hello, ");
                     let y = "world!";
                     x + y
                 "#
@@ -69,18 +67,15 @@ fn test_max_array_size() {
     let mut engine = Engine::new();
     engine.set_max_array_size(10);
 
-    #[cfg(not(feature = "no_object"))]
-    engine.set_max_map_size(10);
-
     assert_eq!(*engine.compile("let x = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15];").unwrap_err().err_type(), ParseErrorType::LiteralTooLarge("Size of array literal".to_string(), 10));
 
     assert!(matches!(
         *engine
             .run(
                 "
-                    let x = [1,2,3,4,5,6];
-                    let y = [7,8,9,10,11,12];
-                    x + y
+                    let mut x = vec![1, 2, 3, 4, 5, 6];
+                    let y = vec![7, 8, 9, 10, 11, 12];
+                    x.extend(y);
                 "
             )
             .unwrap_err(),
@@ -93,12 +88,12 @@ fn test_max_array_size() {
             .eval::<INT>(
                 "
                     let x = 42;
-                    let y = [];
-                    let f = || x;
-                    for n in 0..10 {
-                        y += x;
+                    let mut y = Vec::new();
+                    let _f = || x;
+                    for _ in 0..10 {
+                        y.push(x);
                     }
-                    len(y)
+                    y.len() as i64
                 "
             )
             .unwrap(),
@@ -111,10 +106,10 @@ fn test_max_array_size() {
             .run(
                 "
                     let x = 42;
-                    let y = [];
-                    let f = || x;
-                    for n in 0..11 {
-                        y += x;
+                    let mut y = Vec::new();
+                    let _f = || x;
+                    for _ in 0..11 {
+                        y.push(x);
                     }
                 "
             )
@@ -122,40 +117,25 @@ fn test_max_array_size() {
         EvalAltResult::ErrorDataTooLarge(..)
     ));
 
-    assert!(matches!(
-        *engine
-            .run(
-                "
-                    let x = [ 42 ];
-                    loop { x[0] = x; }
-                "
-            )
-            .unwrap_err(),
-        EvalAltResult::ErrorDataTooLarge(..)
-    ));
-
-    #[cfg(not(feature = "no_object"))]
     assert_eq!(
         engine
             .eval::<INT>(
                 "
-                    let x = [1,2,3,4,5,6];
-                    x.pad(10, 42);
-                    len(x)
+                    let mut x = vec![1, 2, 3, 4, 5, 6];
+                    x.resize(10, 42);
+                    x.len() as i64
                 "
             )
             .unwrap(),
         10
     );
 
-    #[cfg(not(feature = "no_object"))]
     assert!(matches!(
         *engine
             .run(
                 "
-                    let x = [1,2,3,4,5,6];
-                    x.pad(11, 42);
-                    x
+                    let mut x = vec![1, 2, 3, 4, 5, 6];
+                    x.resize(11, 42);
                 "
             )
             .unwrap_err(),
@@ -166,9 +146,9 @@ fn test_max_array_size() {
         engine
             .eval::<INT>(
                 "
-                let x = [1,2];
-                len([x, x, x])
-            "
+                    let x = vec![1, 2];
+                    vec![x.clone(), x.clone(), x].len() as i64
+                "
             )
             .unwrap(),
         3
@@ -178,21 +158,8 @@ fn test_max_array_size() {
         *engine
             .run(
                 "
-                    let x = [1,2,3];
-                    [x, x, x, x]
-                "
-            )
-            .unwrap_err(),
-        EvalAltResult::ErrorDataTooLarge(..)
-    ));
-
-    #[cfg(not(feature = "no_object"))]
-    assert!(matches!(
-        *engine
-            .run(
-                "
-                    let x = #{a:1, b:2, c:3};
-                    [x, x, x, x]
+                    let x = vec![1, 2, 3];
+                    vec![x.clone(), x.clone(), x.clone(), x]
                 "
             )
             .unwrap_err(),
@@ -203,10 +170,10 @@ fn test_max_array_size() {
         *engine
             .run(
                 "
-                    let x = [1];
-                    let y = [x, x];
-                    let z = [y, y];
-                    [z, z, z]
+                    let x = vec![1];
+                    let y = vec![x.clone(), x];
+                    let z = vec![y.clone(), y];
+                    vec![z.clone(), z.clone(), z]
                 "
             )
             .unwrap_err(),
@@ -219,9 +186,10 @@ fn test_max_array_size() {
         engine
             .eval::<Array>(
                 "
-                    let x = [1,2,3,4,5,6];
-                    let y = [7,8,9,10,11,12];
-                    x + y
+                    let mut x = vec![1, 2, 3, 4, 5, 6];
+                    let y = vec![7, 8, 9, 10, 11, 12];
+                    x.extend(y);
+                    x
                 "
             )
             .unwrap()
@@ -233,102 +201,8 @@ fn test_max_array_size() {
         engine
             .eval::<Array>(
                 "
-                    let x = [1,2,3];
-                    [x, x, x, x]
-                "
-            )
-            .unwrap()
-            .len(),
-        4
-    );
-}
-
-#[test]
-#[cfg(not(feature = "no_object"))]
-fn test_max_map_size() {
-    let mut engine = Engine::new();
-    engine.set_max_map_size(10);
-
-    #[cfg(not(feature = "no_index"))]
-    engine.set_max_array_size(10);
-
-    assert_eq!(
-        *engine.compile("let x = #{a:1,b:2,c:3,d:4,e:5,f:6,g:7,h:8,i:9,j:10,k:11,l:12,m:13,n:14,o:15};").unwrap_err().err_type(),
-        ParseErrorType::LiteralTooLarge("Number of properties in object map literal".to_string(), 10)
-    );
-
-    assert!(matches!(
-        *engine
-            .run(
-                "
-                    let x = #{};
-                    loop { x.a = x; }
-                "
-            )
-            .unwrap_err(),
-        EvalAltResult::ErrorDataTooLarge(..)
-    ));
-
-    assert!(matches!(
-        *engine
-            .run(
-                "
-                    let x = #{a:1,b:2,c:3,d:4,e:5,f:6};
-                    let y = #{g:7,h:8,i:9,j:10,k:11,l:12};
-                    x + y
-                "
-            )
-            .unwrap_err(),
-        EvalAltResult::ErrorDataTooLarge(..)
-    ));
-
-    assert!(matches!(
-        *engine
-            .run(
-                "
-                    let x = #{a:1,b:2,c:3};
-                    #{u:x, v:x, w:x, z:x}
-                "
-            )
-            .unwrap_err(),
-        EvalAltResult::ErrorDataTooLarge(..)
-    ));
-
-    #[cfg(not(feature = "no_index"))]
-    assert!(matches!(
-        *engine
-            .run(
-                "
-                    let x = [1, 2, 3];
-                    #{u:x, v:x, w:x, z:x}
-                "
-            )
-            .unwrap_err(),
-        EvalAltResult::ErrorDataTooLarge(..)
-    ));
-
-    engine.set_max_map_size(0);
-
-    assert_eq!(
-        engine
-            .eval::<Map>(
-                "
-                    let x = #{a:1,b:2,c:3,d:4,e:5,f:6};
-                    let y = #{g:7,h:8,i:9,j:10,k:11,l:12};
-                    x + y
-                "
-            )
-            .unwrap()
-            .len(),
-        12
-    );
-
-    assert_eq!(
-        engine
-            .eval::<Map>(
-                "
-                    let x = #{a:1,b:2,c:3};
-                    #{u:x, v:x, w:x, z:x}
+                    let x = vec![1, 2, 3];
+                    vec![x.clone(), x.clone(), x.clone(), x]
                 "
             )
             .unwrap()

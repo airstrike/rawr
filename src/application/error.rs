@@ -10,8 +10,6 @@ use std::prelude::v1::*;
 pub enum Category {
     /// Application compilation found no restricted root.
     MissingEntry,
-    /// A restricted root was declared by a private `main`.
-    PrivateMain,
     /// `main` has an unsupported declaration shape.
     InvalidMain,
     /// More than one restricted root was attempted.
@@ -56,7 +54,6 @@ impl fmt::Display for Category {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingEntry => formatter.write_str("missing application entry"),
-            Self::PrivateMain => formatter.write_str("private application main"),
             Self::InvalidMain => formatter.write_str("invalid application main"),
             Self::MultipleEntries => formatter.write_str("multiple application entries"),
             Self::ConditionalEntry => formatter.write_str("conditional application entry"),
@@ -93,13 +90,6 @@ impl fmt::Display for Category {
 pub enum Error {
     /// Application compilation found no registered restricted root.
     MissingEntry,
-    /// A restricted root was declared by a private `main`.
-    PrivateMain {
-        /// Span of the private `main` name.
-        declaration: Span,
-        /// Span of the attempted intrinsic root.
-        entry: Span,
-    },
     /// `main` has parameters, a receiver, or another unsupported declaration shape.
     InvalidMain {
         /// Stable explanation of the rejected declaration.
@@ -267,7 +257,6 @@ impl Error {
     pub const fn category(&self) -> Category {
         match self {
             Self::MissingEntry => Category::MissingEntry,
-            Self::PrivateMain { .. } => Category::PrivateMain,
             Self::InvalidMain { .. } => Category::InvalidMain,
             Self::MultipleEntries { .. } => Category::MultipleEntries,
             Self::ConditionalEntry { .. } => Category::ConditionalEntry,
@@ -295,8 +284,7 @@ impl Error {
     pub const fn primary_span(&self) -> Span {
         match self {
             Self::MissingEntry | Self::FacadeDependencyConflict { .. } => Span::NONE,
-            Self::PrivateMain { entry, .. }
-            | Self::ConditionalEntry { entry }
+            Self::ConditionalEntry { entry }
             | Self::NestedEntry { entry }
             | Self::HiddenEntry { entry, .. }
             | Self::NonTailEntry { entry }
@@ -323,9 +311,7 @@ impl Error {
     #[must_use]
     pub const fn secondary_span(&self) -> Option<Span> {
         match self {
-            Self::PrivateMain { declaration, .. } | Self::HiddenEntry { declaration, .. } => {
-                Some(*declaration)
-            }
+            Self::HiddenEntry { declaration, .. } => Some(*declaration),
             Self::MultipleEntries { first, .. } => Some(*first),
             Self::MissingEntry
             | Self::InvalidMain { .. }
@@ -354,10 +340,6 @@ impl fmt::Display for Error {
         match self {
             Self::MissingEntry => formatter.write_str(
                 "application compilation requires one public `main` tail entry using registered `iced` intrinsics",
-            ),
-            Self::PrivateMain { entry, .. } => write!(
-                formatter,
-                "application entry at {entry} must be declared by `fn main() -> iced::Result` or `pub fn main`"
             ),
             Self::InvalidMain {
                 reason,

@@ -39,13 +39,13 @@ fn main() {
         engine
             .run(
                 r#"
-                    print("Starting script loop...");
+                    println!("Starting script loop...");
 
                     loop {
-                        let x = get();
-                        print(`Script Read: ${x}`);
+                        let mut x: i64 = get();
+                        println!("Script Read: {x}");
                         x += 1;
-                        print(`Script Write: ${x}`);
+                        println!("Script Write: {x}");
                         put(x);
                     }
                 "#,

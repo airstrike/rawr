@@ -598,25 +598,13 @@ impl<'a> Resolver<'a> {
             slots,
         } in units
         {
-            let (source_map, parsed_items, legacy_script, legacy_source) = parsed.into_parts();
+            let (source_map, parsed_items, statements, statement_source) = parsed.into_parts();
             #[cfg(feature = "no_function")]
-            drop(legacy_source);
+            drop(statement_source);
 
             if context.source != self.entry_source
-                && legacy_script
-                    .as_ref()
-                    .is_some_and(|script| !script.statements().is_empty())
+                && let Some(position) = statements
             {
-                let position = legacy_script
-                    .as_ref()
-                    .and_then(|script| {
-                        script
-                            .statements()
-                            .iter()
-                            .map(crate::ast::Stmt::position)
-                            .find(|position| !position.is_none())
-                    })
-                    .unwrap_or(crate::Position::START);
                 return Err(Failure {
                     primary: context.source,
                     secondary: None,
@@ -664,9 +652,8 @@ impl<'a> Resolver<'a> {
                 source_map,
                 Script {
                     source: program::source::Id::from_index(context.source.index()),
-                    ast: legacy_script,
                     #[cfg(not(feature = "no_function"))]
-                    text: legacy_source,
+                    text: statement_source,
                 },
             ));
         }
@@ -1556,8 +1543,7 @@ fn preview_syntaxes(parsed: &crate::item::Parsed) -> Vec<&crate::preview::Syntax
         | crate::item::Parsed::Use(_)
         | crate::item::Parsed::Struct(_)
         | crate::item::Parsed::Enum(_)
-        | crate::item::Parsed::TypeAlias(_)
-        | crate::item::Parsed::LegacyFunction(_) => {}
+        | crate::item::Parsed::TypeAlias(_) => {}
     }
     syntaxes
 }
@@ -1622,9 +1608,6 @@ fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {
             for function in functions {
                 collect(&function.body_syntax, &mut output);
             }
-        }
-        crate::item::Parsed::LegacyFunction(function) => {
-            collect(&function.body_syntax, &mut output);
         }
         crate::item::Parsed::Module(_)
         | crate::item::Parsed::Use(_)
@@ -1738,9 +1721,6 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
                 collect(&function.body_syntax, &mut output);
             }
         }
-        crate::item::Parsed::LegacyFunction(function) => {
-            collect(&function.body_syntax, &mut output);
-        }
         crate::item::Parsed::Module(_)
         | crate::item::Parsed::Use(_)
         | crate::item::Parsed::Struct(_)
@@ -1789,7 +1769,6 @@ fn header(parsed: &crate::item::Parsed) -> Option<&crate::item::Header> {
         crate::item::Parsed::Trait(item) => Some(&item.header),
         crate::item::Parsed::Function(item) => Some(&item.header),
         crate::item::Parsed::TypeAlias(item) => Some(&item.header),
-        crate::item::Parsed::LegacyFunction(_) => None,
     }
 }
 
@@ -1896,8 +1875,7 @@ pub(super) fn collect_item_type_paths<'a>(
         crate::item::Parsed::Function(item) => collect_function_type_paths(item, output),
         crate::item::Parsed::TypeAlias(item) => collect_type_paths(&item.target, output),
         crate::item::Parsed::Module(_)
-        | crate::item::Parsed::Use(_)
-        | crate::item::Parsed::LegacyFunction(_) => {}
+        | crate::item::Parsed::Use(_) => {}
     }
 }
 
@@ -1957,8 +1935,7 @@ fn finish_definitions(
             item::Kind::Use(_)
             | item::Kind::Impl(_)
             | item::Kind::Trait(_)
-            | item::Kind::Function(_)
-            | item::Kind::LegacyFunction(_) => {}
+            | item::Kind::Function(_) => {}
         }
     }
     Ok(declarations

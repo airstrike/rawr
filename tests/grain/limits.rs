@@ -117,10 +117,10 @@ fn the_walker_agrees_the_loop_is_stopped() {
     assert!(matches!(*err, EvalAltResult::ErrorTooManyOperations(..)), "expected ErrorTooManyOperations, got {err:?}",);
 }
 
-/// `max_string_size` is a host's defence, and interpolation is the easiest way
-/// to walk past it — rawr checks the running total after *every* segment
-/// rather than once at the end, so a script cannot build a huge string and
-/// hand it over.
+/// `max_string_size` is a host's defence, and `format!` is the easiest way to
+/// walk past it — rawr checks the running total after *every* segment rather
+/// than once at the end, so a script cannot build a huge string and hand it
+/// over.
 ///
 /// The position is checked too, because it is the one thing a single
 /// instruction might not be able to reproduce: rawr blames the segment that
@@ -131,7 +131,7 @@ fn interpolation_respects_the_string_limit() {
     let mut engine = Engine::new();
     engine.set_max_string_size(16);
 
-    let source = r#"let a = "0123456789"; `${a}${a}${a}`"#;
+    let source = r#"let a = "0123456789"; format!("{a}{a}{a}")"#;
     let ast = engine.compile(source).expect("must compile");
     let program = Compiler::new().compile(&ast);
     assert_eq!(program.residual_count(), 0, "must be lowered, not walked");
@@ -150,7 +150,7 @@ fn ticking_does_not_disturb_a_bounded_loop() {
     let mut engine = Engine::new();
     engine.set_max_operations(10_000);
 
-    let source = "let i = 0; loop { i += 1; if i > 100 { break i; } }";
+    let source = "let mut i: i64 = 0; loop { i += 1; if i > 100 { break i; } }";
     let ast = engine.compile(source).expect("must compile");
 
     let program = Compiler::new().compile(&ast);

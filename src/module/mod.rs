@@ -2291,17 +2291,20 @@ impl Module {
     /// The entire [`AST`][crate::AST] is encapsulated into each function, allowing functions to
     /// cross-call each other.
     ///
+    /// Typed scripts can't export variables yet, so the new module holds the script's functions.
+    ///
     /// # Example
     ///
     /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
     /// use rawr::{Engine, Module, Scope};
     ///
-    /// let engine = Engine::new();
-    /// let ast = engine.compile("let answer = 42; export answer;")?;
+    /// let mut engine = Engine::new();
+    /// let ast = engine.compile("pub fn answer() -> i64 { 42 }")?;
     /// let module = Module::eval_ast_as_new(Scope::new(), &ast, &engine)?;
-    /// assert!(module.contains_var("answer"));
-    /// assert_eq!(module.get_var_value::<i64>("answer").expect("answer should exist"), 42);
+    ///
+    /// engine.register_global_module(module.into());
+    /// assert_eq!(engine.eval::<i64>("answer()")?, 42);
     /// # Ok(())
     /// # }
     /// ```

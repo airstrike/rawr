@@ -25,12 +25,12 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 
 use crate::item::{self, type_ref};
-use crate::{parse, preview, source, ImmutableString, Position, Span, AST};
+use crate::{parse, preview, source, ImmutableString, Position, Span};
 
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 6;
+const FORMAT: u32 = 7;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`) and the
@@ -188,17 +188,14 @@ impl Cells {
     }
 
     fn encode(&self, text: &str, unit: &parse::Unit) -> Option<Vec<u8>> {
-        let (items, script, script_source) = unit.parts();
-        let script = match script {
-            None => 0_u8,
-            Some(ast) if is_empty(ast) => 1,
-            Some(_) => return None,
-        };
+        let (items, statements, script_source) = unit.parts();
+        if statements.is_some() {
+            return None;
+        }
         let mut writer = Writer(Vec::with_capacity(text.len() * 2));
         writer.0.extend_from_slice(MAGIC);
         writer.text(&self.stamp);
         writer.0.extend_from_slice(&digest(text));
-        writer.byte(script);
         writer.text(script_source);
         put_all(items, &mut writer);
         Some(writer.0)
@@ -209,23 +206,11 @@ fn digest(text: &str) -> [u8; 32] {
     Sha256::digest(text.as_bytes()).into()
 }
 
-fn is_empty(ast: &AST) -> bool {
-    ast.source().is_none()
-        && ast.statements().is_empty()
-        && !ast.has_functions()
-        && ast.shared_support().is_empty()
-}
-
 fn decode(reader: &mut Reader, text: &str) -> Option<parse::Unit> {
-    let script = match reader.byte()? {
-        0 => None,
-        1 => Some(AST::empty()),
-        _ => return None,
-    };
     let script_source = reader.text()?.to_owned();
     let items = Box::<[item::Parsed]>::get(reader)?;
     reader.bytes.is_empty().then(|| {
-        parse::Unit::new(source::Map::new(text), items, script, script_source)
+        parse::Unit::new(source::Map::new(text), items, None, script_source)
     })
 }
 
@@ -490,7 +475,6 @@ record! {
         header, name, generics, receiver, parameters, output, body_span,
         body_syntax, constant, asynchronous, span,
     }
-    item::LegacyFunction { name, parameter_count, body_span, body_syntax, span }
     item::TypeAlias { header, name, generics, target, span }
     item::Parameter { name, ty, span, pattern }
     type_ref::Path { segments, span, global }
@@ -513,7 +497,6 @@ impl Codec for item::Parsed {
             Self::Impl(item) => (writer.byte(4), item.put(writer)),
             Self::Trait(item) => (writer.byte(5), item.put(writer)),
             Self::Function(item) => (writer.byte(6), item.put(writer)),
-            Self::LegacyFunction(item) => (writer.byte(7), item.put(writer)),
             Self::TypeAlias(item) => (writer.byte(8), item.put(writer)),
         };
     }
@@ -526,7 +509,6 @@ impl Codec for item::Parsed {
             4 => Self::Impl(Codec::get(reader)?),
             5 => Self::Trait(Codec::get(reader)?),
             6 => Self::Function(Codec::get(reader)?),
-            7 => Self::LegacyFunction(Codec::get(reader)?),
             8 => Self::TypeAlias(Codec::get(reader)?),
             _ => return None,
         })
@@ -876,7 +858,7 @@ mod tests {
             );
         }
         // A program loaded from its cells compiles as the parsed one does.
-        std::fs::write(root.join("cart.rs"), include_str!("../../examples/scripts/cart.rawr")).unwrap();
+        std::fs::write(root.join("cart.rs"), include_str!("../../examples/scripts/cart.rs")).unwrap();
         let cart = crate::project::Target::discover(root.join("cart.rs")).unwrap();
         let cells = Cells::new(root.join("cart"));
         let parsed = crate::package::Graph::load_with_cells(&engine, &cart, &cells).unwrap();

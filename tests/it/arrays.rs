@@ -11,52 +11,47 @@ fn test_arrays() {
     let engine = Engine::new();
 
     assert_eq!(engine.eval::<INT>("let x = [1, 2, 3]; x[1]").unwrap(), 2);
-    assert_eq!(engine.eval::<INT>("let x = [1, 2, 3,]; x[1]").unwrap(), 2);
-    assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; y[1] = 5; y[1]").unwrap(), 5);
-    assert_eq!(engine.eval::<char>(r#"let y = [1, [ 42, 88, "93" ], 3]; y[1][2][1]"#).unwrap(), '3');
-    assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; y[0]").unwrap(), 1);
-    assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; y[-1]").unwrap(), 3);
-    assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; y[-3]").unwrap(), 1);
-    let _ = engine.eval::<INT>("let y = []; y[-3]").unwrap_err();
-    let _ = engine.eval::<INT>("let y = []; y[0]").unwrap_err();
-    let _ = engine.eval::<INT>("let y = []; y[1]").unwrap_err();
-    let _ = engine.eval::<INT>("let y = [1, 2, 3]; y[3]").unwrap_err();
-    let _ = engine.eval::<INT>("let y = [1, 2, 3]; y[-4]").unwrap_err();
-    assert!(engine.eval::<bool>("let y = [1, 2, 3]; 2 in y").unwrap());
-    assert!(engine.eval::<bool>("let y = [1, 2, 3]; 42 !in y").unwrap());
-    assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; y += 4; y[3]").unwrap(), 4);
-    assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; pad(y, 5, 42); len(y)").unwrap(), 5);
-    assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; pad(y, 5, [42]); len(y)").unwrap(), 5);
-    assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; pad(y, 5, [42, 999, 123]); y[4][0]").unwrap(), 42);
-    assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; y[1] += 4; y").unwrap().into_typed_array::<INT>().unwrap(), [1, 6, 3]);
-    assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; extract(y, 1, 10)").unwrap().into_typed_array::<INT>().unwrap(), vec![2, 3]);
-    assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; extract(y, -3, 1)").unwrap().into_typed_array::<INT>().unwrap(), vec![1]);
-    assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; extract(y, -99, 2)").unwrap().into_typed_array::<INT>().unwrap(), vec![1, 2]);
-    assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; extract(y, 99, 1)").unwrap().into_typed_array::<INT>().unwrap(), vec![] as Vec<INT>);
+    assert_eq!(engine.eval::<INT>("let x = vec![1, 2, 3,]; x[1]").unwrap(), 2);
+    assert_eq!(engine.eval::<INT>("let mut y = vec![1, 2, 3]; y[1] = 5; y[1]").unwrap(), 5);
+    assert_eq!(engine.eval::<INT>("let y = vec![vec![1, 2, 3], vec![42, 88, 93]]; y[1][2]").unwrap(), 93);
+    assert_eq!(engine.eval::<INT>("let y = vec![1, 2, 3]; y[0]").unwrap(), 1);
+    assert_eq!(engine.eval::<INT>("let y = vec![1, 2, 3]; y[y.len() - 1]").unwrap(), 3);
+    let _ = engine.eval::<INT>("let y: Vec<i64> = vec![]; y[0]").unwrap_err();
+    let _ = engine.eval::<INT>("let y: Vec<i64> = vec![]; y[1]").unwrap_err();
+    let _ = engine.eval::<INT>("let y = vec![1, 2, 3]; y[3]").unwrap_err();
+    assert!(engine.eval::<bool>("let y = vec![1, 2, 3]; y.get(3).is_none()").unwrap());
+    assert!(engine.eval::<bool>("let y = vec![1, 2, 3]; y.contains(&2)").unwrap());
+    assert!(!engine.eval::<bool>("let y = vec![1, 2, 3]; y.contains(&42)").unwrap());
+    assert_eq!(engine.eval::<INT>("let mut y = vec![1, 2, 3]; y.resize(5, 42); y.len()").unwrap(), 5);
+    assert_eq!(engine.eval::<INT>("let mut y = vec![1, 2, 3]; y.resize(5, 42); y[4]").unwrap(), 42);
+    assert_eq!(engine.eval::<Dynamic>("let mut y = vec![1, 2, 3]; y[1] += 4; y").unwrap().into_typed_array::<INT>().unwrap(), [1, 6, 3]);
+    assert_eq!(engine.eval::<Dynamic>("let y = vec![1, 2, 3]; y[1..].to_vec()").unwrap().into_typed_array::<INT>().unwrap(), vec![2, 3]);
+    assert_eq!(engine.eval::<Dynamic>("let y = vec![1, 2, 3]; y[..1].to_vec()").unwrap().into_typed_array::<INT>().unwrap(), vec![1]);
+    assert_eq!(engine.eval::<Dynamic>("let mut y = vec![1, 2, 3]; y.truncate(1); y").unwrap().into_typed_array::<INT>().unwrap(), vec![1]);
 
     #[cfg(not(feature = "no_object"))]
     {
-        assert_eq!(engine.eval::<Dynamic>("let y = [1, 2, 3]; y.push(4); y").unwrap().into_typed_array::<INT>().unwrap(), [1, 2, 3, 4]);
+        assert_eq!(engine.eval::<Dynamic>("let mut y = vec![1, 2, 3]; y.push(4); y").unwrap().into_typed_array::<INT>().unwrap(), [1, 2, 3, 4]);
         // `insert` is Vec's: it takes a `usize` index up to the length.
-        assert_eq!(engine.eval::<Dynamic>("let mut y = [1, 2, 3]; y.insert(0, 4); y").unwrap().into_typed_array::<INT>().unwrap(), [4, 1, 2, 3]);
-        assert_eq!(engine.eval::<Dynamic>("let mut y = [1, 2, 3]; y.insert(3, 4); y").unwrap().into_typed_array::<INT>().unwrap(), [1, 2, 3, 4]);
-        let _ = engine.eval::<Dynamic>("let mut y = [1, 2, 3]; y.insert(999, 4); y").unwrap_err();
-        assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; let z = [42]; y[z.len]").unwrap(), 2);
-        assert_eq!(engine.eval::<INT>("let y = [1, 2, [3, 4, 5, 6]]; let z = [42]; y[2][z.len]").unwrap(), 4);
-        assert_eq!(engine.eval::<INT>("let y = [1, 2, 3]; let z = [2]; y[z[0]]").unwrap(), 3);
+        assert_eq!(engine.eval::<Dynamic>("let mut y = vec![1, 2, 3]; y.insert(0, 4); y").unwrap().into_typed_array::<INT>().unwrap(), [4, 1, 2, 3]);
+        assert_eq!(engine.eval::<Dynamic>("let mut y = vec![1, 2, 3]; y.insert(3, 4); y").unwrap().into_typed_array::<INT>().unwrap(), [1, 2, 3, 4]);
+        let _ = engine.eval::<Dynamic>("let mut y = vec![1, 2, 3]; y.insert(999, 4); y").unwrap_err();
+        assert_eq!(engine.eval::<INT>("let y = vec![1, 2, 3]; let z = vec![42]; y[z.len()]").unwrap(), 2);
+        assert_eq!(engine.eval::<INT>("let y = vec![vec![1, 2], vec![3, 4, 5, 6]]; let z = vec![42]; y[1][z.len()]").unwrap(), 4);
+        assert_eq!(engine.eval::<INT>("let y = vec![1, 2, 3]; let z = vec![2]; y[z[0]]").unwrap(), 3);
 
         assert_eq!(
             engine
                 .eval::<Dynamic>(
                     "
-                        let mut x = [2, 9];
+                        let mut x = vec![2, 9];
                         x.insert(1, 1);
                         x.insert(3, 3);
                         x.insert(0, 99);
 
                         let r = x.remove(2);
 
-                        x.extend([4, 5]);
+                        x.extend(vec![4, 5]);
 
                         x
                     "
@@ -73,10 +68,12 @@ fn test_arrays() {
         engine
             .eval::<INT>(
                 "
-                    let x = #{ foo: 42 };
+                    struct Foo { foo: i64 }
+
+                    let x = Foo { foo: 42 };
                     let n = 0;
-                    let a = [[x]];
-                    let i = [n];
+                    let a = vec![vec![x]];
+                    let i = vec![n];
                     a[n][i[n]].foo
                 "
             )
@@ -88,8 +85,9 @@ fn test_arrays() {
         engine
             .eval::<Dynamic>(
                 "
-                    let x = [1, 2, 3];
-                    x += [4, 5];
+                    let mut x = vec![1, 2, 3];
+                    let y = vec![4, 5];
+                    x.extend_from_slice(&y);
                     x
                 "
             )
@@ -102,9 +100,9 @@ fn test_arrays() {
         engine
             .eval::<Dynamic>(
                 "
-                    let x = [1, 2, 3];
-                    let y = [4, 5];
-                    x + y
+                    let x = vec![1, 2, 3];
+                    let y = vec![4, 5];
+                    x.iter().chain(y.iter()).cloned().collect::<Vec<i64>>()
                 "
             )
             .unwrap()
@@ -112,21 +110,20 @@ fn test_arrays() {
             .unwrap(),
         [1, 2, 3, 4, 5]
     );
-    #[cfg(not(feature = "no_closure"))]
-    assert!(
-        !engine
-            .eval::<bool>(
+    assert_eq!(
+        engine
+            .eval::<INT>(
                 "
-                let x = 42;
-                let y = [];
-                let f = || x;
-                for n in 0..10 {
-                    y += x;
-                }
-                some(y, |x| is_shared(x))
-            "
+                    let x = 42;
+                    let mut y = vec![];
+                    for n in 0..10 {
+                        y.push(x);
+                    }
+                    y.len()
+                "
             )
-            .unwrap()
+            .unwrap(),
+        10
     );
 
     let value = vec![String::from("hello"), String::from("world"), String::from("foo"), String::from("bar")];
@@ -151,7 +148,7 @@ fn test_array_chaining() {
         engine
             .eval::<bool>(
                 "
-                let v = [ PI() ];
+                let v = vec![std::f64::consts::PI];
                 ( v[0].cos() ).sin() == v[0].cos().sin()
             "
             )
@@ -161,71 +158,43 @@ fn test_array_chaining() {
 
 #[test]
 fn test_array_index_types() {
+    use rawr::resolve::Error;
+
     let engine = Engine::new();
 
-    engine.compile("[1, 2, 3][0]['x']").unwrap();
+    engine.compile("[1, 2, 3][0]").unwrap();
 
-    assert!(matches!(engine.compile("[1, 2, 3]['x']").unwrap_err().err_type(), ParseErrorType::MalformedIndexExpr(..)));
+    // An index is a `usize`, so any other type is refused before the script runs.
+    assert!(matches!(
+        engine.compile("[1, 2, 3][0]['x']").unwrap_err().err_type(),
+        ParseErrorType::Resolution(Error::TypeMismatch { expected, .. }) if expected == "usize"
+    ));
+
+    assert!(matches!(
+        engine.compile("[1, 2, 3]['x']").unwrap_err().err_type(),
+        ParseErrorType::Resolution(Error::TypeMismatch { expected, .. }) if expected == "usize"
+    ));
 
     #[cfg(not(feature = "no_float"))]
-    assert!(matches!(engine.compile("[1, 2, 3][123.456]").unwrap_err().err_type(), ParseErrorType::MalformedIndexExpr(..)));
+    assert!(matches!(
+        engine.compile("[1, 2, 3][123.456]").unwrap_err().err_type(),
+        ParseErrorType::Resolution(Error::TypeMismatch { expected, .. }) if expected == "usize"
+    ));
 
-    assert!(matches!(engine.compile("[1, 2, 3][()]").unwrap_err().err_type(), ParseErrorType::MalformedIndexExpr(..)));
+    assert!(matches!(
+        engine.compile("[1, 2, 3][()]").unwrap_err().err_type(),
+        ParseErrorType::Resolution(Error::TypeMismatch { expected, .. }) if expected == "usize"
+    ));
 
-    assert!(matches!(engine.compile(r#"[1, 2, 3]["hello"]"#).unwrap_err().err_type(), ParseErrorType::MalformedIndexExpr(..)));
+    assert!(matches!(
+        engine.compile(r#"[1, 2, 3]["hello"]"#).unwrap_err().err_type(),
+        ParseErrorType::Resolution(Error::TypeMismatch { expected, .. }) if expected == "usize"
+    ));
 
-    assert!(matches!(engine.compile("[1, 2, 3][true && false]").unwrap_err().err_type(), ParseErrorType::MalformedIndexExpr(..)));
-}
-
-#[test]
-#[cfg(not(feature = "no_object"))]
-fn test_array_with_structs() {
-    #[derive(Clone)]
-    struct TestStruct {
-        x: INT,
-    }
-
-    impl TestStruct {
-        fn update(&mut self) {
-            self.x += 1000;
-        }
-
-        fn get_x(&mut self) -> INT {
-            self.x
-        }
-
-        fn set_x(&mut self, new_x: INT) {
-            self.x = new_x;
-        }
-
-        fn new() -> Self {
-            Self { x: 1 }
-        }
-    }
-
-    let mut engine = Engine::new();
-
-    engine.register_type::<TestStruct>();
-
-    engine.register_get_set("x", TestStruct::get_x, TestStruct::set_x);
-    engine.register_fn("update", TestStruct::update);
-    engine.register_fn("new_ts", TestStruct::new);
-
-    assert_eq!(engine.eval::<INT>("let a = [new_ts()]; a[0].x").unwrap(), 1);
-
-    assert_eq!(
-        engine
-            .eval::<INT>(
-                "
-                    let a = [new_ts()];
-                    a[0].x = 100;
-                    a[0].update();
-                    a[0].x
-                "
-            )
-            .unwrap(),
-        1100
-    );
+    assert!(matches!(
+        engine.compile("[1, 2, 3][true && false]").unwrap_err().err_type(),
+        ParseErrorType::Resolution(Error::TypeMismatch { expected, .. }) if expected == "usize"
+    ));
 }
 
 #[cfg(not(feature = "no_object"))]
@@ -235,32 +204,31 @@ fn test_array_with_structs() {
 fn test_arrays_map_reduce() {
     let engine = Engine::new();
 
-    assert_eq!(engine.eval::<INT>("[1].map(|x| x + 41)[0]").unwrap(), 42);
-    assert_eq!(engine.eval::<INT>("[1].map(|| this + 41)[0]").unwrap(), 42);
-    assert_eq!(engine.eval::<INT>("let x = [1, 2, 3]; x.for_each(|| this += 41); x[0]").unwrap(), 42);
+    assert_eq!(engine.eval::<INT>("vec![1].iter().map(|x| x + 41).collect::<Vec<_>>()[0]").unwrap(), 42);
+    assert_eq!(engine.eval::<INT>("let mut x = vec![1, 2, 3]; for v in x.iter_mut() { *v += 41; } x[0]").unwrap(), 42);
     assert_eq!(
         engine
             .eval::<INT>(
                 "
-                    let x = [1, 2, 3];
-                    let sum = 0;
+                    let x = vec![1, 2, 3];
+                    let mut sum = 0;
                     let factor = 2;
-                    x.for_each(|| sum += this * factor);
+                    x.iter().for_each(|v| sum += v * factor);
                     sum
                 "
             )
             .unwrap(),
         12
     );
-    assert_eq!(engine.eval::<INT>("([1].map(|x| x + 41))[0]").unwrap(), 42);
-    assert_eq!(engine.eval::<INT>("let x = [1, 2, 3]; x.for_each(|i| this += i); x[2]").unwrap(), 5);
+    assert_eq!(engine.eval::<INT>("(vec![1].iter().map(|x| x + 41).collect::<Vec<_>>())[0]").unwrap(), 42);
+    assert_eq!(engine.eval::<INT>("let mut x = vec![1, 2, 3]; for (i, v) in x.iter_mut().enumerate() { *v += i as i64; } x[2]").unwrap(), 5);
 
     assert_eq!(
         engine
             .eval::<Dynamic>(
                 "
-                    let x = [1, 2, 3];
-                    x.filter(|v| v > 2)
+                    let x = vec![1, 2, 3];
+                    x.iter().filter(|v| **v > 2).cloned().collect::<Vec<i64>>()
                 "
             )
             .unwrap()
@@ -273,22 +241,8 @@ fn test_arrays_map_reduce() {
         engine
             .eval::<Dynamic>(
                 "
-                    let x = [1, 2, 3];
-                    x.filter(|| this > 2)
-                "
-            )
-            .unwrap()
-            .into_typed_array::<INT>()
-            .unwrap(),
-        [3]
-    );
-
-    assert_eq!(
-        engine
-            .eval::<Dynamic>(
-                "
-                    let x = [1, 2, 3];
-                    x.filter(|v, i| v > i)
+                    let x = vec![1, 2, 3];
+                    x.iter().enumerate().filter(|&(i, v)| *v > i as i64).map(|(_, v)| *v).collect::<Vec<i64>>()
                 "
             )
             .unwrap()
@@ -301,22 +255,8 @@ fn test_arrays_map_reduce() {
         engine
             .eval::<Dynamic>(
                 "
-                    let x = [1, 2, 3];
-                    x.map(|v| v * 2)
-                "
-            )
-            .unwrap()
-            .into_typed_array::<INT>()
-            .unwrap(),
-        [2, 4, 6]
-    );
-
-    assert_eq!(
-        engine
-            .eval::<Dynamic>(
-                "
-                    let x = [1, 2, 3];
-                    x.map(|| this * 2)
+                    let x = vec![1, 2, 3];
+                    x.iter().map(|v| v * 2).collect::<Vec<_>>()
                 "
             )
             .unwrap()
@@ -328,10 +268,10 @@ fn test_arrays_map_reduce() {
     assert_eq!(
         engine
             .eval::<INT>(
-                r#"
-                    let x = [1, 2, 3];
-                    x.reduce(|sum, v| if sum.type_of() == "()" { v * v } else { sum + v * v })
-                "#
+                "
+                    let x = vec![1, 2, 3];
+                    x.iter().fold(0, |sum, v| sum + v * v)
+                "
             )
             .unwrap(),
         14
@@ -341,10 +281,10 @@ fn test_arrays_map_reduce() {
         engine
             .eval::<INT>(
                 "
-                    let x = [1, 2, 3];
-                    x.reduce(|sum, v, i| {
-                        if i == 0 { sum = 10 }
-                        sum + v * v
+                    let x = vec![1, 2, 3];
+                    x.iter().enumerate().fold(0, |sum, (i, v)| {
+                        let start = if i == 0 { 10 } else { sum };
+                        start + v * v
                     })
                 "
             )
@@ -352,26 +292,13 @@ fn test_arrays_map_reduce() {
         24
     );
 
-    // assert_eq!(
-    //     engine.eval::<INT>(
-    //         "
-    //             let x = [1, 2, 3];
-    //             x.reduce(|sum, i| {
-    //                 if i == 0 { sum = 10 }
-    //                 sum + this * this
-    //             })
-    //         "
-    //     )?,
-    //     24
-    // );
-
     assert_eq!(
         engine
             .eval::<INT>(
-                r#"
-                    let x = [1, 2, 3];
-                    x.reduce_rev(|sum, v| if sum.type_of() == "()" { v * v } else { sum + v * v })
-                "#
+                "
+                    let x = vec![1, 2, 3];
+                    x.iter().rev().fold(0, |sum, v| sum + v * v)
+                "
             )
             .unwrap(),
         14
@@ -381,8 +308,11 @@ fn test_arrays_map_reduce() {
         engine
             .eval::<INT>(
                 "
-                    let x = [1, 2, 3];
-                    x.reduce_rev(|sum, v, i| { if i == 2 { sum = 10 } sum + v * v })
+                    let x = vec![1, 2, 3];
+                    x.iter().rev().enumerate().fold(0, |sum, (i, v)| {
+                        let start = if i == 0 { 10 } else { sum };
+                        start + v * v
+                    })
                 "
             )
             .unwrap(),
@@ -393,8 +323,8 @@ fn test_arrays_map_reduce() {
         engine
             .eval::<bool>(
                 "
-                let x = [1, 2, 3];
-                x.some(|v| v > 1)
+                let x = vec![1, 2, 3];
+                x.iter().any(|v| *v > 1)
             "
             )
             .unwrap()
@@ -404,8 +334,8 @@ fn test_arrays_map_reduce() {
         engine
             .eval::<bool>(
                 "
-                let x = [1, 2, 3];
-                x.some(|v, i| v * i == 0)
+                let x = vec![1, 2, 3];
+                x.iter().enumerate().any(|(i, v)| v * i as i64 == 0)
             "
             )
             .unwrap()
@@ -415,8 +345,8 @@ fn test_arrays_map_reduce() {
         !engine
             .eval::<bool>(
                 "
-                let x = [1, 2, 3];
-                x.all(|v| v > 1)
+                let x = vec![1, 2, 3];
+                x.iter().all(|v| *v > 1)
             "
             )
             .unwrap()
@@ -426,8 +356,8 @@ fn test_arrays_map_reduce() {
         engine
             .eval::<bool>(
                 "
-                let x = [1, 2, 3];
-                x.all(|v, i| v > i)
+                let x = vec![1, 2, 3];
+                x.iter().enumerate().all(|(i, v)| *v > i as i64)
             "
             )
             .unwrap()
@@ -437,8 +367,8 @@ fn test_arrays_map_reduce() {
         engine
             .eval::<INT>(
                 "
-                    let x = [1, 2, 3];
-                    x.find(|v| v > 2)
+                    let x = vec![1, 2, 3];
+                    x.iter().find(|v| **v > 2).copied().unwrap()
                 "
             )
             .unwrap(),
@@ -449,66 +379,58 @@ fn test_arrays_map_reduce() {
         engine
             .eval::<INT>(
                 "
-                    let x = [1, 2, 3];
-                    x.find(|v, i| v * i == 6)
+                    let x = vec![1, 2, 3];
+                    x.iter().enumerate().find(|&(i, v)| *v * i as i64 == 6).map(|(_, v)| *v).unwrap()
                 "
             )
             .unwrap(),
         3
     );
 
-    engine
-        .eval::<()>(
-            "
-                let x = [1, 2, 3, 2, 1];
-                x.find(|v| v > 4)
+    assert!(
+        engine
+            .eval::<bool>(
+                "
+                let x = vec![1, 2, 3, 2, 1];
+                x.iter().find(|v| **v > 4).is_none()
             ",
-        )
-        .unwrap();
+            )
+            .unwrap()
+    );
 
     assert_eq!(
         engine
             .eval::<INT>(
                 "
-                    let x = [#{alice: 1}, #{bob: 2}, #{clara: 3}];
-                    x.find_map(|v| v.bob)
+                    let x = vec![None, Some(2), None];
+                    x.iter().find_map(|v| *v).unwrap()
                 "
             )
             .unwrap(),
         2
     );
 
-    engine
-        .eval::<()>(
-            "
-                let x = [#{alice: 1}, #{bob: 2}, #{clara: 3}];
-                x.find_map(|v| v.dave)
+    assert!(
+        engine
+            .eval::<bool>(
+                "
+                let x: Vec<Option<i64>> = vec![Some(1), None];
+                x.iter().find_map(|v| v.filter(|n| *n > 1)).is_none()
             ",
-        )
-        .unwrap();
-}
-
-#[test]
-fn test_arrays_elvis() {
-    let engine = Engine::new();
-
-    engine.eval::<()>("let x = (); x?[2]").unwrap();
-
-    engine.run("let x = (); x?[2] = 42").unwrap();
+            )
+            .unwrap()
+    );
 }
 
 #[test]
 fn test_arrays_index_of() {
     let engine = Engine::new();
-    // INT array
-    assert_eq!(engine.eval::<INT>("index_of([1, 2, 3], 2)").unwrap(), 1);
-    // String array
-    assert_eq!(engine.eval::<INT>(r#"index_of(["hi", "hello", "world"], "hello")"#).unwrap(), 1);
-    assert_eq!(engine.eval::<INT>(r#"index_of(["a","b","c","b"], "b", 2)"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"index_of(["a","b"], "missing")"#).unwrap(), -1);
-
-    // Cross-type behavior
-    assert_eq!(engine.eval::<INT>(r#"index_of([1,2,3], "foo")"#).unwrap(), -1);
+    // An array of integers.
+    assert_eq!(engine.eval::<INT>("vec![1, 2, 3].iter().position(|v| *v == 2).unwrap()").unwrap(), 1);
+    // An array of strings.
+    assert_eq!(engine.eval::<INT>(r#"vec!["hi", "hello", "world"].iter().position(|s| *s == "hello").unwrap()"#).unwrap(), 1);
+    assert_eq!(engine.eval::<INT>(r#"vec!["a", "b", "c", "b"].iter().skip(2).position(|s| *s == "b").map(|p| p + 2).unwrap()"#).unwrap(), 3);
+    assert!(engine.eval::<bool>(r#"vec!["a", "b"].iter().position(|s| *s == "missing").is_none()"#).unwrap());
 }
 
 #[test]
@@ -520,8 +442,8 @@ fn test_arrays_index_of_with_named_fn() {
         engine
             .eval::<INT>(
                 r#"
-             fn is_two(x) { x == 2 }
-             [1,2,3,2].index_of("is_two")
+             fn is_two(x: i64) -> bool { x == 2 }
+             vec![1, 2, 3, 2].into_iter().position(is_two).unwrap()
          "#
             )
             .unwrap(),
@@ -531,8 +453,8 @@ fn test_arrays_index_of_with_named_fn() {
         engine
             .eval::<INT>(
                 r#"
-             fn is_two(x) { x == 2 }
-             [1,2,3,2].index_of("is_two", 2)
+             fn is_two(x: i64) -> bool { x == 2 }
+             vec![1, 2, 3, 2].into_iter().skip(2).position(is_two).unwrap() + 2
          "#
             )
             .unwrap(),
@@ -547,7 +469,7 @@ fn test_array_invalid_index_callback() {
     let mut engine = Engine::new();
 
     engine.on_invalid_array_index(|arr, index, _| match index {
-        -100 => {
+        3 => {
             arr.push((42 as INT).into());
             arr.last_mut().unwrap().try_into()
         }
@@ -559,8 +481,8 @@ fn test_array_invalid_index_callback() {
         engine
             .eval::<INT>(
                 "
-                    let a = [1, 2, 3];
-                    a[-100] += 1;
+                    let mut a = vec![1, 2, 3];
+                    a[3] += 1;
                     a[3] + a[100]
                 "
             )

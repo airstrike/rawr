@@ -2651,8 +2651,8 @@ fn language_binary_star_star_is_multiply_deref() {
     rejected("pub fn run(a: i64, b: i64) -> i64 { a ** b } run(2, 3)");
     rejected("pub fn run(a: i64) -> i64 { a.pow(2.0) } run(2)");
     rejected("pub fn run(a: f64) -> f64 { a.pow(2) } run(2.0)");
-    // Untyped scripts keep their power operator.
-    assert_eq!(run("let x = 2 ** 3; x"), 8);
+    // Scripts are Rust too: `**` is never a power operator.
+    rejected("let x = 2 ** 3; x");
 }
 
 #[test]
@@ -8293,10 +8293,29 @@ fn language_unknown_variable_is_an_error_at_its_name() {
 }
 
 #[test]
-fn language_untyped_legacy_function_is_known_to_the_checker() {
-    Engine::new()
-        .compile("fn sink(value) {} pub fn run() { sink(1); }")
-        .unwrap_or_else(|error| panic!("{error}"));
+fn language_untyped_parameter_is_rustcs_parse_error() {
+    let error = Engine::new()
+        .compile("fn sink(value) {}")
+        .expect_err("a parameter needs a type");
+    let text = error.to_string();
+    assert!(
+        text.contains("expected one of `:`, `@`, or `|`, found `)`"),
+        "{text}"
+    );
+    assert!(
+        text.contains("help: if this is a parameter name, give it a type"),
+        "{text}"
+    );
+}
+
+#[test]
+fn language_parameterless_helper_is_rust() {
+    // A tail value needs `->`, as in Rust; overloading by arity and reading
+    // the script's variables are Rust's errors.
+    assert_eq!(run("fn helper() -> i64 { 42 } helper()"), 42);
+    rejected("fn helper() { 42 } helper()");
+    rejected("fn f() -> i64 { 1 } fn f(x: i64) -> i64 { x } f()");
+    rejected("let x = 1; fn f() -> i64 { x } f()");
 }
 
 #[test]

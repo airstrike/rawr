@@ -12,13 +12,13 @@ fn main() -> Result<(), Box<EvalAltResult>> {
     // This script creates a closure which captures a variable and returns it.
     let ast = engine.compile(
         "
-            let x = 18;
+            let mut x: i64 = 18;
 
-            // The following closure captures 'x'
-            return |a, b| {
+            // The following closure moves 'x' into itself
+            move |a: i64, b: i64| -> i64 {
                 x += 1;         // x is incremented each time
                 (x + a) * b
-            };
+            }
         ",
     )?;
 

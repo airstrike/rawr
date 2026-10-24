@@ -138,23 +138,7 @@ pub(super) fn lower(
     _scope: Option<&Scope>,
     #[cfg(not(feature = "no_optimize"))] _optimization_level: crate::OptimizationLevel,
 ) -> Result<Output, LoweringFailure> {
-    if let Some(ast) = program
-        .scripts
-        .iter()
-        .find_map(|script| script.ast.as_ref())
-    {
-        return Ok(Output {
-            ast: ast.clone(),
-            locations: Box::default(),
-            dependencies: Box::default(),
-            runtime_requirements: Box::default(),
-            projection_requirements: Box::default(),
-            widget_requirements: Box::default(),
-            widget_promotions: Box::default(),
-            closures: Box::default(),
-        });
-    }
-
+    // Every script is checked as Rust, which needs functions.
     Err(LoweringFailure::original(
         program.source.entry(),
         Error::LoweringUnavailable {
@@ -294,10 +278,9 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     parser.symbolic_only = true;
     let lowered = parser.parse();
     drop(parser);
-    if let Some(lowered) = imported_result(lowered, &mut allocation_failure, script.source)? {
-        for operation in &lowered.ops {
-            dependencies.extend(operation.dependencies());
-        }
+    let lowered = imported_result(lowered, &mut allocation_failure, script.source)?;
+    for operation in &lowered.ops {
+        dependencies.extend(operation.dependencies());
     }
     uses.sort_unstable();
     uses.dedup();
@@ -786,46 +769,20 @@ fn lower_with_context(
             .as_mut()
             .map(|context| context.for_source(script.source)),
     );
-    let lowered_script = parser
+    if let Some(scope) = scope {
+        parser.bind_scope(scope);
+    }
+    let lowered = parser
         .parse()
         .map_err(|error| LoweringFailure::original(script.source, error.into()))?;
-
-    if program.methods.is_empty() && models.functions.is_empty() && lowered_script.is_none() {
-        let ast = match &script.ast {
-            Some(ast) => ast.clone(),
-            None => engine
-                .compile_legacy_script_with_scope_raw(
-                    scope,
-                    &script.text,
-                    #[cfg(not(feature = "no_optimize"))]
-                    optimization_level,
-                )
-                .map_err(|error| LoweringFailure::original(script.source, error))?,
-        };
-        return Ok(Output {
-            ast,
-            locations: Box::default(),
-            dependencies: Box::default(),
-            runtime_requirements: Box::default(),
-            projection_requirements: Box::default(),
-            widget_requirements: Box::default(),
-            widget_promotions: Box::default(),
-            closures: Box::default(),
-        });
-    }
-
-    if let Some(lowered) = lowered_script {
-        generated.body(
-            script.source,
-            source_full_span(program.source.text_at(script.source)),
-            &lowered.source,
-            &lowered.locations,
-        );
-        ops.extend(lowered.ops);
-        patterns.extend(lowered.patterns);
-    } else {
-        generated.source(script.source, &script.text);
-    }
+    generated.body(
+        script.source,
+        source_full_span(program.source.text_at(script.source)),
+        &lowered.source,
+        &lowered.locations,
+    );
+    ops.extend(lowered.ops);
+    patterns.extend(lowered.patterns);
 
     let mut ast = match engine.compile_legacy_script_with_scope_raw(
         scope,
@@ -2113,9 +2070,6 @@ struct Tables {
     functions: BTreeMap<(crate::program::source::Id, ImmutableString), ScriptFunction>,
     functions_by_key: BTreeMap<crate::item::Key, ScriptFunction>,
     widgets: BTreeMap<type_def::Identity, crate::widget::Definition>,
-    /// The names of the program's legacy functions, which calls reach
-    /// untyped.
-    legacy_functions: BTreeSet<ImmutableString>,
     sources: crate::program::source::Table,
     application_runtime: crate::application::RuntimeGraph,
     /// The application boot item, whose tuple output is a startup envelope.
@@ -2308,8 +2262,7 @@ impl Models {
                 item::Kind::Use(_)
                 | item::Kind::Impl(_)
                 | item::Kind::Trait(_)
-                | item::Kind::Function(_)
-                | item::Kind::LegacyFunction(_) => continue,
+                | item::Kind::Function(_) => continue,
             };
             by_name.insert((shell.source, nominal.name().into()), nominal.clone());
             by_definition.insert(nominal.definition().id(), nominal.clone());
@@ -2509,26 +2462,6 @@ impl Models {
                     .or_insert_with(|| Nominal::clone(nominal));
             }
         }
-        #[cfg_attr(feature = "no_function", allow(unused_mut))]
-        let mut legacy_functions = program
-            .items
-            .iter()
-            .filter_map(|shell| match &shell.kind {
-                item::Kind::LegacyFunction(function) => Some(function.name.text.clone()),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-        // `fn sink(value) {}` stays in the legacy script, outside the items:
-        // its functions are legacy functions too.
-        #[cfg(not(feature = "no_function"))]
-        legacy_functions.extend(
-            program
-                .scripts
-                .iter()
-                .filter_map(|script| script.ast.as_ref())
-                .flat_map(crate::AST::iter_functions)
-                .map(|function| ImmutableString::from(function.name)),
-        );
         let tables = Tables {
             runtime,
             host,
@@ -2574,7 +2507,6 @@ impl Models {
             functions,
             functions_by_key,
             widgets,
-            legacy_functions,
             sources: program.source.table().clone(),
             application_runtime,
             boot: program
@@ -8088,7 +8020,7 @@ fn item_generics(kind: &item::Kind) -> Vec<&item::Generic> {
             .iter()
             .flat_map(|function| function.generics.iter())
             .collect(),
-        item::Kind::Use(_) | item::Kind::LegacyFunction(_) => Vec::new(),
+        item::Kind::Use(_) => Vec::new(),
     }
 }
 
@@ -8290,8 +8222,6 @@ struct Parser<'a> {
     performs: Vec<Perform>,
     changes: Vec<ChangeOperation>,
     patterns: Vec<NominalPattern>,
-    looks_nominal: bool,
-    used_nominal: bool,
     op_offset: usize,
     pattern_offset: usize,
     last_type: Ty,
@@ -8515,9 +8445,6 @@ impl<'a> Parser<'a> {
     fn native_miss(&mut self, proven: bool, error: Error) -> Error {
         if proven && let Some(site) = self.native_site() {
             site.record(&error);
-            // A terminal imported miss must not fall through to the
-            // legacy parser, whose diagnostic has different provenance.
-            self.looks_nominal = true;
         }
         error
     }
@@ -8531,7 +8458,8 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")] imported: Option<ImportedContext<'a>>,
     ) -> Self {
         let inputs = [source];
-        let (mut stream, _) = engine.lex_raw(&inputs, None);
+        let (mut stream, control) = engine.lex_raw(&inputs, None);
+        control.borrow_mut().rust = true;
         let mut tokens = Vec::new();
         loop {
             let token = stream
@@ -8578,17 +8506,6 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        let looks_nominal = tokens.iter().any(
-            |(token, _)| matches!(token, Token::Identifier(name) if name.starts_with(SENTINEL) || name.starts_with(METHOD_SENTINEL) || name.starts_with(NOMINAL_MATCH_SENTINEL)),
-        ) || tokens.windows(2).any(|pair| {
-            matches!(
-                (&pair[0].0, &pair[1].0),
-                (Token::Identifier(name), Token::DoubleColon | Token::LeftBrace)
-                    if models.get(name).is_some()
-            )
-        }) || tokens
-            .iter()
-            .any(|(token, _)| matches!(token, Token::SelfValue));
         let associated = Shared::clone(&models.associated);
 
         Self {
@@ -8601,8 +8518,6 @@ impl<'a> Parser<'a> {
             performs: Vec::new(),
             changes: Vec::new(),
             patterns: Vec::new(),
-            looks_nominal,
-            used_nominal: false,
             op_offset,
             pattern_offset,
             last_type: Ty::Unit,
@@ -8717,7 +8632,6 @@ impl<'a> Parser<'a> {
             #[cfg(feature = "rust-import")]
             imported,
         );
-        parser.looks_nominal = true;
         parser.startup = startup;
         parser.callable = Some(definition.key().clone());
         parser.default_trait = definition
@@ -8849,7 +8763,6 @@ impl<'a> Parser<'a> {
             #[cfg(feature = "rust-import")]
             imported,
         );
-        parser.looks_nominal = true;
         parser.startup = startup;
         parser.callable = Some(key);
         parser.return_ty = Some(
@@ -8918,7 +8831,43 @@ impl<'a> Parser<'a> {
         parser
     }
 
-    fn parse(&mut self) -> Result<Option<Lowered>, Error> {
+    /// The variables of an embedder's `Scope`, which the script reads as
+    /// locals the host declared: each has its value's type, as a value a
+    /// registered function returns does, and a constant is immutable.
+    fn bind_scope(&mut self, scope: &Scope) {
+        use std::any::TypeId;
+        for (name, constant, value) in scope.iter_raw() {
+            let id = value.type_id();
+            let ty = if id == TypeId::of::<crate::INT>() {
+                Ty::Int(Int::I64)
+            } else if id == TypeId::of::<crate::FLOAT>() {
+                Ty::Float(Float::F64)
+            } else if id == TypeId::of::<bool>() {
+                Ty::Bool
+            } else if id == TypeId::of::<char>() {
+                Ty::Char
+            } else if id == TypeId::of::<ImmutableString>() {
+                Ty::String
+            } else if id == TypeId::of::<()>() {
+                Ty::Unit
+            } else {
+                Ty::Unknown
+            };
+            self.bindings.insert(
+                name.into(),
+                Binding {
+                    ty,
+                    mutable: !constant,
+                    available: true,
+                    moved_fields: BTreeMap::new(),
+                    declaration: Span::NONE,
+                    kind: BindingKind::Local,
+                },
+            );
+        }
+    }
+
+    fn parse(&mut self) -> Result<Lowered, Error> {
         if self.peek_identifier().is_some_and(|name| {
             name.starts_with(SENTINEL)
                 || name.starts_with(METHOD_SENTINEL)
@@ -8934,47 +8883,45 @@ impl<'a> Parser<'a> {
                 _ => self.parse_statement(),
             };
 
-            if let Err(error) = result {
-                return if self.looks_nominal || self.used_nominal {
-                    Err(error)
-                } else {
-                    Ok(None)
-                };
-            }
-        }
-
-        if !self.used_nominal {
-            return Ok(None);
+            result?;
         }
 
         self.finish_conversions()?;
         self.finish_bounds()?;
         self.finish_witnesses()?;
         let ops = self.finish_ops()?;
-        let (source, locations) = std::mem::take(&mut self.output).finish();
+        let (mut source, locations) = std::mem::take(&mut self.output).finish();
+        // As in a block, a script whose last statement ends with `;` has
+        // the value `()`.
+        if source.trim_end().ends_with(';') {
+            source.push_str("\n()");
+        }
 
-        Ok(Some(Lowered {
+        Ok(Lowered {
             source,
             locations,
             ops,
             patterns: std::mem::take(&mut self.patterns),
             closures: self.take_lifted(),
-        }))
+        })
     }
 
     /// The error for a call of `name` when no function of the crate's has
     /// that name. It is `None` when the engine has a native function of that
-    /// name, as `Engine::register_fn` makes, or the program has a legacy
-    /// function of it. Those take their arguments untyped at runtime. The
-    /// error offers the library function of that name to import when there
-    /// is one.
+    /// name, as `Engine::register_fn` makes, which takes its arguments
+    /// untyped at runtime. The error offers the library function of that
+    /// name to import when there is one.
     fn unknown_function(&self, name: &ImmutableString, at: Span) -> Option<Error> {
+        // The untyped standard library (`len`, `pad`, `type_of`) is the
+        // evaluator's: Rust has no such free functions. A package built on
+        // it keeps the functions it adds.
         let native = self.native_modules.iter().any(|module| {
-            module
-                .iter_fn()
-                .any(|(_, metadata)| metadata.name.as_str() == name.as_str())
+            module.iter_fn().any(|(_, metadata)| {
+                metadata.name.as_str() == name.as_str()
+                    && !(module.is_standard_lib() && standard_function(name))
+            })
         });
-        if native || self.models.legacy_functions.contains(name) {
+        if native {
             return None;
         }
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
@@ -8989,7 +8936,13 @@ impl<'a> Parser<'a> {
 
     /// A path that names no local, constant or function in scope. A library
     /// function of that name is offered to import.
-    fn unknown_variable(&self, name: &ImmutableString, at: Span) -> Error {
+    fn unknown_variable(&mut self, name: &ImmutableString, at: Span) -> Error {
+        // `switch x { .. }` and `import "m" as m;`: a name followed by a
+        // token no expression continues with is rustc's syntax error there,
+        // which it reports before it resolves the name.
+        if let Some(error) = self.expected_operator(true) {
+            return error;
+        }
         let written = crate::tokenizer::demangle_names(name);
         let reference = Span::new(at.start(), text_end(at.start(), &written));
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
@@ -9090,13 +9043,9 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 Token::Let => self.parse_binding(true)?,
                 Token::Const => self.parse_binding(false)?,
-                Token::Throw => self.parse_terminal_throw()?,
                 Token::LeftParen if self.startup && is_tuple(definition.output()) => {
                     self.parse_startup_tail(definition.output())?;
                     startup_tail = true;
-                }
-                Token::Do => {
-                    return Err(self.unsupported("legacy do in checked nominal methods"));
                 }
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
@@ -9190,7 +9139,6 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 Token::Let => self.parse_binding(true)?,
                 Token::Const => self.parse_binding(false)?,
-                Token::Throw => self.parse_terminal_throw()?,
                 Token::LeftParen
                     if self.startup && definition.output.as_ref().is_some_and(is_tuple) =>
                 {
@@ -9201,9 +9149,6 @@ impl<'a> Parser<'a> {
                             .expect("guard proves an explicit tuple output"),
                     )?;
                     *startup_tail = true;
-                }
-                Token::Do => {
-                    return Err(self.unsupported("legacy do in checked nominal functions"));
                 }
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
@@ -11413,7 +11358,6 @@ impl<'a> Parser<'a> {
                 self.pending_defaults.len()
             );
             self.capture_witnesses();
-            self.used_nominal = true;
             self.pending_defaults
                 .push((placeholder.clone(), ty.clone(), call));
             return Ok(self.operator_expr(origin::Fragment::plain(placeholder), ty, call));
@@ -14264,7 +14208,6 @@ impl<'a> Parser<'a> {
         definition: &method::Definition,
         expression: Span,
     ) -> Result<ParsedExpr, Error> {
-        self.used_nominal = true;
         let substitution = self.method_substitution(definition, None, expression)?;
         let inputs: Box<[Ty]> = definition
             .parameters()
@@ -14342,10 +14285,6 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        #[cfg(feature = "rust-import")]
-        if self.imported.is_some() {
-            self.looks_nominal = true;
-        }
 
         let Some(item) = items.first() else {
             return Err(Error::InvalidHostOperation {
@@ -15541,10 +15480,6 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        #[cfg(feature = "rust-import")]
-        if self.imported.is_some() {
-            self.looks_nominal = true;
-        }
 
         if matches!(
             item.kind(),
@@ -15613,10 +15548,6 @@ impl<'a> Parser<'a> {
         owner: crate::host::facade::Dependency,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        #[cfg(feature = "rust-import")]
-        if self.imported.is_some() {
-            self.looks_nominal = true;
-        }
 
         let (mut arguments, end) = self.parse_call_arguments("operation endpoint arguments")?;
         let call = span(name_span.start(), end);
@@ -15668,10 +15599,6 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        #[cfg(feature = "rust-import")]
-        if self.imported.is_some() {
-            self.looks_nominal = true;
-        }
 
         let Some(item) = items.first() else {
             return Err(Error::InvalidHostOperation {
@@ -15839,10 +15766,6 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        #[cfg(feature = "rust-import")]
-        if self.imported.is_some() {
-            self.looks_nominal = true;
-        }
         // A facade member is named as in Rust, `go` among them, which the
         // script spells `__rawr_go` (`tokenizer::RUST_NAMES`).
         let member: ImmutableString = match crate::tokenizer::demangle_names(&member) {
@@ -17063,6 +16986,15 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        // `const X = 3;`: a constant needs its type, as rustc says.
+        if !let_keyword && annotation.is_none() {
+            return Err(Error::Syntax {
+                message: "missing type for `const` item".into(),
+                label: "provide a type for the constant".into(),
+                help: None,
+                at: name_span,
+            });
+        }
         self.expect(Token::Equals, "'=' after binding name")?;
         // `let grains = map.entry(k).or_default();`: each use of `grains`
         // is the entry again, so `*grains += n` changes the map. Rust's
@@ -18688,27 +18620,6 @@ impl<'a> Parser<'a> {
             Lvalue::Nested(nested) => self.store_nested(&nested, replacement.rendered_source())
         };
         Ok((rendered, replacement.span))
-    }
-
-    fn parse_terminal_throw(&mut self) -> Result<(), Error> {
-        let start = self.expect(Token::Throw, "'throw' to start a diverging statement")?;
-        let value = self.parse_expr()?;
-        self.reject_invocation(&value.ty, value.span, "thrown from its invocation")?;
-        self.reject_signature_support(&value.ty, value.span, "thrown")?;
-        let terminated = self.consume_terminator(start)?;
-        if !matches!(self.peek(), Token::RightBrace) {
-            return Err(self.unsupported("non-terminal `throw` in a checked nominal body"));
-        }
-
-        let mut rendered = origin::Fragment::plain("throw ");
-        rendered.push(value.rendered_source());
-        if terminated {
-            rendered.push_text(";");
-        }
-        self.write_output(rendered, span(start, value.span.end()));
-        self.last_type = Ty::Never;
-        self.last_expression = None;
-        Ok(())
     }
 
     /// `source`, a call of the boot, opened into its `(State, Task)` tuple
@@ -22917,9 +22828,69 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Token::EOF | Token::RightBrace) {
             return Ok(false);
         }
+        if let Some(error) = self.expected_operator(false) {
+            return Err(error);
+        }
         Err(Error::UnsupportedNominalSyntax {
             construct: "statement without ';'".into(),
             source: span(start, self.position()),
+        })
+    }
+
+    /// rustc's syntax error at the next token when no expression continues
+    /// with it: a name, a literal or a keyword after an expression (`2 in
+    /// y`). After a path, rustc also expects `!`, `::` or `{`.
+    fn expected_operator(&mut self, after_path: bool) -> Option<Error> {
+        let (token, position) = self.input.peek().map(|(token, at)| (token.clone(), *at))?;
+        let stops = matches!(
+            token,
+            Token::Identifier(_)
+                | Token::IntegerConstant(_)
+                | Token::StringConstant(_)
+                | Token::CharConstant(_)
+                | Token::InterpolatedString(_)
+                | Token::True
+                | Token::False
+                | Token::Fn
+                | Token::Let
+                | Token::Const
+                | Token::In
+                | Token::If
+                | Token::While
+                | Token::Loop
+                | Token::For
+                | Token::Return
+        ) || {
+            #[cfg(not(feature = "no_float"))]
+            {
+                matches!(token, Token::FloatConstant(_))
+            }
+            #[cfg(feature = "no_float")]
+            {
+                false
+            }
+        };
+        if !stops || self.split_angle.is_some() {
+            return None;
+        }
+        let (expected, label) = if after_path {
+            (
+                "expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator",
+                "expected one of 8 possible tokens",
+            )
+        } else {
+            (
+                "expected one of `.`, `;`, `?`, `}`, or an operator",
+                "expected one of `.`, `;`, `?`, `}`, or an operator",
+            )
+        };
+        let found = crate::parser::item::found(&token);
+        let written = found.trim_start_matches("keyword ").trim_matches('`');
+        Some(Error::Syntax {
+            message: format!("{expected}, found {found}").into(),
+            label: label.into(),
+            help: None,
+            at: Span::new(position, text_end(position, written)),
         })
     }
 
@@ -26635,7 +26606,16 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let Some(definition_id) = self.inference.resolve(&value.ty).script() else {
-                return Err(self.unsupported("field access on a non-nominal value"));
+                // `f.curry(1)` on a closure: rustc's E0599, or E0609 for a field.
+                let written = crate::tokenizer::demangle_names(&member).into_owned();
+                return Err(Error::UnknownMember {
+                    owner: self.inference.resolve(&value.ty).name(&self.models),
+                    reference: Span::new(
+                        member_span.start(),
+                        text_end(member_span.start(), &written),
+                    ),
+                    member: written.into(),
+                });
             };
             // A scripted widget's `map` and `boxed` (`erasure_with`).
             let resolved = self.inference.resolve(&value.ty);
@@ -27392,10 +27372,25 @@ impl<'a> Parser<'a> {
                 }
                 .retain_origin())
             }
-            token => Err(Error::UnsupportedNominalSyntax {
-                construct: token.to_string().into(),
-                source: token_span,
+            // `Fn("name")`: `Fn` is a trait in Rust, not a value.
+            Token::Reserved(word) if word.as_str() == "Fn" => Err(Error::Syntax {
+                message: "expected function, tuple struct or tuple variant, found trait `Fn`"
+                    .into(),
+                label: "not a function, tuple struct or tuple variant".into(),
+                help: None,
+                at: Span::new(token_span.start(), text_end(token_span.start(), "Fn")),
             }),
+            // `throw`, `do`, `#{ .. }` and the like: rustc's syntax error.
+            token => {
+                let found = crate::parser::item::found(&token);
+                let written = found.trim_start_matches("keyword ").trim_matches('`');
+                Err(Error::Syntax {
+                    message: format!("expected expression, found {found}").into(),
+                    label: "expected expression".into(),
+                    help: None,
+                    at: Span::new(token_span.start(), text_end(token_span.start(), written)),
+                })
+            }
         }
     }
 
@@ -27506,10 +27501,6 @@ impl<'a> Parser<'a> {
             return Ok(value);
         }
 
-        #[cfg(feature = "rust-import")]
-        if self.imported.is_some() && self.models.import(&name).is_some() {
-            self.looks_nominal = true;
-        }
 
         if matches!(self.peek(), Token::Bang)
             && name.as_str() == "format"
@@ -29216,7 +29207,6 @@ impl<'a> Parser<'a> {
     /// A named function used as a value: a function item that coerces to
     /// a `fn` pointer or a host callable.
     fn function_value(&mut self, function: &ScriptFunction, span: Span) -> ParsedExpr {
-        self.used_nominal = true;
         let substitution = self.fresh_generics(&function.definition.generics, span);
         let inputs: Box<[Ty]> = function
             .definition
@@ -29270,7 +29260,6 @@ impl<'a> Parser<'a> {
         variant: usize,
         expression: Span,
     ) -> ParsedExpr {
-        self.used_nominal = true;
         let (enum_ty, substitution) = self.fresh_nominal(
             &Nominal::Enum {
                 definition: definition.clone(),
@@ -29324,7 +29313,6 @@ impl<'a> Parser<'a> {
             crate::item::StructForm::Tuple => {}
             _ => return Ok(None),
         }
-        self.used_nominal = true;
         let model = Nominal::Struct {
             definition: definition.clone(),
             item: item.clone(),
@@ -30868,7 +30856,6 @@ impl<'a> Parser<'a> {
                         .iter()
                         .map(|field| self.default_source(&Ty::from_resolved(&field.ty), span))
                         .collect::<Result<Vec<_>, _>>()?;
-                    self.used_nominal = true;
                     let helper = self.push_op(Op::Struct {
                         definition: definition.clone(),
                         item: item.clone(),
@@ -32448,7 +32435,6 @@ impl<'a> Parser<'a> {
 
     /// A use of `const NAME` evaluates its initializer, as Rust inlines it.
     fn constant_use(&mut self, function: &ScriptFunction, span: Span) -> ParsedExpr {
-        self.used_nominal = true;
         let ty = function
             .definition
             .output
@@ -32500,7 +32486,7 @@ impl<'a> Parser<'a> {
             return Ok(self.operator_expr(source, Ty::Unit, call));
         }
         // A name that no function of the crate's has is an error at the
-        // name, unless the engine or a legacy function serves it.
+        // name, unless a function the engine registered serves it.
         if function.is_none()
             && let Some(error) = self.unknown_function(&name, name_span)
         {
@@ -32546,7 +32532,6 @@ impl<'a> Parser<'a> {
         let mut witnesses = Vec::new();
         let mut opens_startup = false;
         let output = if let Some(function) = function {
-            self.used_nominal = true;
             if arguments.len() != function.definition.parameters.len() {
                 return Err(Error::InvalidMethodCall {
                     owner: "<module>".into(),
@@ -38214,7 +38199,6 @@ impl<'a> Parser<'a> {
     }
 
     fn push_op(&mut self, op: Op) -> String {
-        self.used_nominal = true;
         let name = format!("{SENTINEL}{}", self.op_offset + self.ops.len());
         self.ops.push(op);
         name
@@ -40844,6 +40828,27 @@ fn point_span(position: Position) -> Span {
     span(position, position)
 }
 
+/// Whether the evaluator's standard library has a function `name`.
+#[cfg(not(feature = "no_std"))]
+fn standard_function(name: &str) -> bool {
+    use crate::packages::Package as _;
+    static NAMES: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    NAMES
+        .get_or_init(|| {
+            crate::packages::StandardPackage::new()
+                .as_shared_module()
+                .iter_fn()
+                .map(|(_, metadata)| metadata.name.to_string())
+                .collect()
+        })
+        .contains(name)
+}
+
+#[cfg(feature = "no_std")]
+fn standard_function(_: &str) -> bool {
+    true
+}
+
 fn text_end(mut position: Position, text: &str) -> Position {
     for _ in text.chars() {
         position.advance();
@@ -41705,9 +41710,8 @@ pub fn run() { consume(produce()); }
         for source in [
             "use proof::produce; pub fn run() { let leaked = produce(); }",
             "use proof::produce; pub fn run() { produce() }",
-            "use proof::produce; pub fn run() { throw produce(); }",
             "use proof::produce; pub fn run() { produce() == produce() }",
-            "use proof::produce; fn sink(value) {} pub fn run() { sink(produce()); }",
+            "use proof::produce; fn sink<T>(value: T) {} pub fn run() { sink(produce()); }",
             "use proof::produce; use extension::consume; pub fn run() { consume(if true { produce() } else { produce() }); }",
             "use proof::produce; pub fn run() { produce().clone(); }",
         ] {

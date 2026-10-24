@@ -30,7 +30,7 @@ fn tax_rate(state: &str) -> f64 {
 fn main() -> Result<(), Box<rawr::EvalAltResult>> {
     // Scripts are named relative to the app, as rustc names source files.
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("the app's directory");
-    let script = std::env::args().nth(1).unwrap_or("scripts/pricing.rawr".into());
+    let script = std::env::args().nth(1).unwrap_or("scripts/pricing.rs".into());
 
     let mut shop = Exports::new("shop");
     shop.add::<Order>().add::<tax_rate>();

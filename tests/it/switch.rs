@@ -3,23 +3,23 @@ use rawr::{ASTNode, Expr};
 use rawr::{Engine, INT, ParseErrorType, Scope};
 
 #[test]
-fn test_switch() {
+fn test_match_literals() {
     let engine = Engine::new();
     let mut scope = Scope::new();
     scope.push("x", 42 as INT);
 
-    assert_eq!(engine.eval::<char>("switch 2 { 1 => (), 2 => 'a', 42 => true }").unwrap(), 'a');
-    engine.run("switch 3 { 1 => (), 2 => 'a', 42 => true }").unwrap();
-    assert_eq!(engine.eval::<INT>("switch 3 { 1 => (), 2 => 'a', 42 => true, _ => 123 }").unwrap(), 123);
-    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "switch 2 { 1 => (), 2 if x < 40 => 'a', 42 => true, _ => 123 }").unwrap(), 123);
-    assert_eq!(engine.eval_with_scope::<char>(&mut scope, "switch 2 { 1 => (), 2 if x > 40 => 'a', 42 => true, _ => 123 }").unwrap(), 'a');
-    assert!(engine.eval_with_scope::<bool>(&mut scope, "switch x { 1 => (), 2 => 'a', 42 => true }").unwrap());
-    assert!(engine.eval_with_scope::<bool>(&mut scope, "switch x { 1 => (), 2 => 'a', _ => true }").unwrap());
-    let _: () = engine.eval_with_scope::<()>(&mut scope, "switch x { 1 => 123, 2 => 'a' }").unwrap();
+    assert_eq!(engine.eval::<char>("match 2 { 1 => 'z', 2 => 'a', _ => 'q' }").unwrap(), 'a');
+    engine.run("match 3 { 1 => (), 2 => (), _ => () }").unwrap();
+    assert_eq!(engine.eval::<INT>("match 3 { 1 => 1, 2 => 2, 42 => 3, _ => 123 }").unwrap(), 123);
+    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match 2 { 1 => 1, 2 if x < 40 => 2, 42 => 3, _ => 123 }").unwrap(), 123);
+    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match 2 { 1 => 1, 2 if x > 40 => 2, 42 => 3, _ => 123 }").unwrap(), 2);
+    assert!(engine.eval_with_scope::<bool>(&mut scope, "match x { 1 => false, 2 => false, 42 => true, _ => false }").unwrap());
+    assert!(engine.eval_with_scope::<bool>(&mut scope, "match x { 1 => false, 2 => false, _ => true }").unwrap());
 
-    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "switch x { 1 | 2 | 3 | 5..50 | 'x' | true => 123, 'z' => 'a' }").unwrap(), 123);
-    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "switch x { 424242 => 123, _ => 42 }").unwrap(), 42);
-    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "switch x { 1 => 123, 42 => { x / 2 }, _ => 999 }").unwrap(), 21);
+    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match x { 1 | 2 | 3 | 5..50 => 123, _ => 0 }").unwrap(), 123);
+    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match x { 424242 => 123, _ => 42 }").unwrap(), 42);
+    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match x { 1 => 123, 42 => { x / 2 }, _ => 999 }").unwrap(), 21);
+    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match x { 1 => 123, other => other + 100 }").unwrap(), 142);
     #[cfg(not(feature = "no_index"))]
     assert_eq!(
         engine
@@ -28,9 +28,8 @@ fn test_switch() {
                 "
                     let y = [1, 2, 3];
 
-                    switch y {
-                        42 => 1,
-                        true => 2,
+                    match y {
+                        [4, 5, 6] => 1,
                         [1, 2, 3] => 3,
                         _ => 9
                     }
@@ -39,41 +38,32 @@ fn test_switch() {
             .unwrap(),
         3
     );
-    #[cfg(not(feature = "no_object"))]
-    assert_eq!(
-        engine
-            .eval_with_scope::<INT>(
-                &mut scope,
-                "
-                    let y = #{a:1, b:true, c:'x'};
+    assert_eq!(engine.eval::<INT>("match 'x' { 'a'..='m' => 1, 'x' | 'y' => 2, _ => 3 }").unwrap(), 2);
+    assert_eq!(engine.eval::<INT>(r#"match "hello" { "world" => 1, "hello" => 2, _ => 3 }"#).unwrap(), 2);
+    assert_eq!(engine.eval::<INT>("match true { true => 1, false => 2 }").unwrap(), 1);
 
-                    switch y {
-                        42 => 1,
-                        true => 2,
-                        #{b:true, c:'x', a:1} => 3,
-                        _ => 9
-                    }
-                "
-            )
-            .unwrap(),
-        3
-    );
-    assert!(engine.eval::<bool>("let x = 1..42; switch x { 1 => (), 2 => 'a', 1..42 => true }").unwrap());
+    // The first matching arm wins.
+    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match 42 { 42 => 123, 42 => 999, _ => 0 }").unwrap(), 123);
 
-    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "switch 42 { 42 => 123, 42 => 999 }").unwrap(), 123);
-
-    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "switch x { 42 => 123, 42 => 999 }").unwrap(), 123);
+    assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match x { 42 => 123, 42 => 999, _ => 0 }").unwrap(), 123);
 }
 
 #[test]
-fn test_switch_errors() {
+fn test_match_errors() {
     let engine = Engine::new();
 
-    assert!(matches!(engine.compile("switch x { _ => 123, 1 => 42 }").unwrap_err().err_type(), ParseErrorType::WrongSwitchDefaultCase));
+    // As in Rust, a match on a number must cover every value, and a guarded
+    // catch-all arm doesn't count.
+    for script in ["let x = 1; match x { 1 => 123 }", "let x = 1; match x { 1 => 123, _ if true => 42 }"] {
+        assert!(matches!(
+            engine.compile(script).unwrap_err().err_type(),
+            ParseErrorType::Resolution(rawr::resolve::Error::InvalidMatch { reason, .. }) if reason.contains("non-exhaustive")
+        ));
+    }
 }
 
 #[test]
-fn test_switch_condition() {
+fn test_match_condition() {
     let engine = Engine::new();
     let mut scope = Scope::new();
     scope.push("x", 42 as INT);
@@ -83,7 +73,7 @@ fn test_switch_condition() {
             .eval_with_scope::<INT>(
                 &mut scope,
                 "
-                    switch x / 2 {
+                    match x / 2 {
                         21 if x > 40 => 1,
                         0 if x < 100 => 2,
                         1 => 3,
@@ -100,7 +90,7 @@ fn test_switch_condition() {
             .eval_with_scope::<INT>(
                 &mut scope,
                 "
-                    switch x / 2 {
+                    match x / 2 {
                         21 if x < 40 => 1,
                         0 if x < 100 => 2,
                         1 => 3,
@@ -117,7 +107,7 @@ fn test_switch_condition() {
             .eval_with_scope::<INT>(
                 &mut scope,
                 "
-                    switch x {
+                    match x {
                         42 if x < 40 => 1,
                         42 if x > 40 => 7,
                         0 if x < 100 => 2,
@@ -130,110 +120,51 @@ fn test_switch_condition() {
             .unwrap(),
         7
     );
-
-    assert!(matches!(engine.compile("switch x { 1 => 123, _ if true => 42 }").unwrap_err().err_type(), ParseErrorType::WrongSwitchCaseCondition));
-}
-
-#[cfg(not(feature = "no_index"))]
-#[cfg(not(feature = "no_object"))]
-mod test_switch_enum {
-    use super::*;
-    use rawr::Array;
-    #[derive(Debug, Clone)]
-    #[allow(dead_code)]
-    enum MyEnum {
-        Foo,
-        Bar(INT),
-        Baz(String, bool),
-    }
-
-    impl MyEnum {
-        fn get_enum_data(&mut self) -> Array {
-            match self {
-                Self::Foo => vec!["Foo".into()] as Array,
-                Self::Bar(num) => vec!["Bar".into(), (*num).into()] as Array,
-                Self::Baz(name, option) => vec!["Baz".into(), name.clone().into(), (*option).into()] as Array,
-            }
-        }
-    }
-
-    #[test]
-    fn test_switch_enum() {
-        let mut engine = Engine::new();
-
-        engine.register_type_with_name::<MyEnum>("MyEnum").register_get("get_data", MyEnum::get_enum_data);
-
-        let mut scope = Scope::new();
-        scope.push("x", MyEnum::Baz("hello".to_string(), true));
-
-        assert_eq!(
-            engine
-                .eval_with_scope::<INT>(
-                    &mut scope,
-                    r#"
-                        switch x.get_data {
-                            ["Foo"] => 1,
-                            ["Bar", 42] => 2,
-                            ["Bar", 123] => 3,
-                            ["Baz", "hello", false] => 4,
-                            ["Baz", "hello", true] => 5,
-                            _ => 9
-                        }
-                    "#
-                )
-                .unwrap(),
-            5
-        );
-    }
 }
 
 #[test]
-fn test_switch_ranges() {
+fn test_match_ranges() {
     let engine = Engine::new();
     let mut scope = Scope::new();
     scope.push("x", 42 as INT);
 
     assert_eq!(
         engine
-            .eval_with_scope::<char>(&mut scope, "switch x { 10..20 => (), 20..=42 => 'a', 25..45 => 'z', 30..100 => true }")
+            .eval_with_scope::<char>(&mut scope, "match x { 10..20 => 'q', 20..=42 => 'a', 25..45 => 'z', 30..100 => 'w', _ => '-' }")
             .unwrap(),
         'a'
     );
     assert_eq!(
         engine
-            .eval_with_scope::<char>(&mut scope, "switch x { 10..20 => (), 20..=42 if x < 40 => 'a', 25..45 => 'z', 30..100 => true }")
+            .eval_with_scope::<char>(&mut scope, "match x { 10..20 => 'q', 20..=42 if x < 40 => 'a', 25..45 => 'z', 30..100 => 'w', _ => '-' }")
             .unwrap(),
         'z'
     );
     assert_eq!(
         engine
-            .eval_with_scope::<char>(&mut scope, "switch x { 42 => 'x', 10..20 => (), 20..=42 => 'a', 25..45 => 'z', 30..100 => true, 'w' => true }")
+            .eval_with_scope::<char>(&mut scope, "match x { 42 => 'x', 10..20 => 'q', 20..=42 => 'a', 25..45 => 'z', 30..100 => 'w', _ => '-' }")
             .unwrap(),
         'x'
     );
-    assert!(matches!(
+    // A literal after a range that covers it is never reached.
+    assert_eq!(
         engine
-            .compile("switch x { 10..20 => (), 20..=42 => 'a', 25..45 => 'z', 42 => 'x', 30..100 => true }")
-            .unwrap_err()
-            .err_type(),
-        ParseErrorType::WrongSwitchIntegerCase
-    ));
+            .eval_with_scope::<char>(&mut scope, "match x { 10..20 => 'q', 20..=42 => 'a', 25..45 => 'z', 42 => 'x', 30..100 => 'w', _ => '-' }")
+            .unwrap(),
+        'a'
+    );
     #[cfg(not(feature = "no_float"))]
     assert!(matches!(
-        engine
-            .compile("switch x { 10..20 => (), 20..=42 => 'a', 25..45 => 'z', 42.0 => 'x', 30..100 => true }")
-            .unwrap_err()
-            .err_type(),
-        ParseErrorType::WrongSwitchIntegerCase
+        engine.compile_with_scope(&scope, "match x { 10..20 => 'q', 42.0 => 'x', _ => '-' }").unwrap_err().err_type(),
+        ParseErrorType::Resolution(rawr::resolve::Error::TypeMismatch { .. })
     ));
     assert_eq!(
         engine
             .eval_with_scope::<char>(
                 &mut scope,
                 "
-                    switch 5 {
-                        'a' => true,
-                        0..10 if x+2==1+2 => print(40+2),
+                    match 5 {
+                        0..10 if x + 2 == 1 + 2 => 'a',
                         _ => 'x'
                     }
                 "
@@ -246,11 +177,10 @@ fn test_switch_ranges() {
             .eval_with_scope::<INT>(
                 &mut scope,
                 "
-                    switch 5 {
-                        'a' => true,
+                    match 5 {
                         0..10 => 123,
-                        2..12 => 'z',
-                        _ => 'x'
+                        2..12 => 7,
+                        _ => 0
                     }
                 "
             )
@@ -262,12 +192,11 @@ fn test_switch_ranges() {
             .eval_with_scope::<INT>(
                 &mut scope,
                 "
-                    switch 5 {
-                        'a' => true,
+                    match 5 {
                         4 | 5 | 6 => 42,
                         0..10 => 123,
-                        2..12 => 'z',
-                        _ => 'x'
+                        2..12 => 7,
+                        _ => 0
                     }
                 "
             )
@@ -279,10 +208,9 @@ fn test_switch_ranges() {
             .eval_with_scope::<char>(
                 &mut scope,
                 "
-                    switch 5 {
-                        'a' => true,
+                    match 5 {
                         2..12 => 'z',
-                        0..10 if x+2==1+2 => print(40+2),
+                        0..10 if x + 2 == 1 + 2 => 'a',
                         _ => 'x'
                     }
                 "
@@ -295,9 +223,8 @@ fn test_switch_ranges() {
             .eval_with_scope::<char>(
                 &mut scope,
                 "
-                    switch 5 {
-                        'a' => true,
-                        0..10 if x+2==1+2 => print(40+2),
+                    match 5 {
+                        0..10 if x + 2 == 1 + 2 => 'a',
                         2..12 => 'z',
                         _ => 'x'
                     }
@@ -308,17 +235,23 @@ fn test_switch_ranges() {
     );
 }
 
-/// AST walk tests — verify that `walk` visits the body of the `switch` default case.
+/// AST walk tests check that `walk` visits the body of every `match` arm.
 
 #[test]
 #[cfg(feature = "internals")]
-fn test_switch_walk_visits_default_case_body() {
-    let engine = Engine::new();
-    // `extra` is inside the default branch body and must be visited.
+fn test_match_walk_visits_default_case_body() {
+    let mut engine = Engine::new();
+    // Without optimization the variables stay in the tree.
+    engine.set_optimization_level(rawr::OptimizationLevel::None);
+    // `extra` is inside the catch-all arm's body and must be visited.
     let ast = engine
         .compile(
             r#"
-                switch action {
+                fn foo() -> i64 { 1 }
+                fn bar(value: i64) -> i64 { value }
+                let action = 1;
+                let extra = 2;
+                match action {
                     1 => foo(),
                     _ => bar(extra)
                 }
@@ -334,20 +267,24 @@ fn test_switch_walk_visits_default_case_body() {
         true
     });
 
-    assert!(vars.contains(&"extra".to_string()), "walk should visit `extra` in the default branch body");
+    assert!(vars.contains(&"extra".to_string()), "walk should visit `extra` in the catch-all arm's body");
 }
 
 #[test]
 #[cfg(feature = "internals")]
-fn test_switch_walk_visits_all_case_bodies_and_default() {
-    let engine = Engine::new();
+fn test_match_walk_visits_all_case_bodies_and_default() {
+    let mut engine = Engine::new();
+    // Without optimization the variables stay in the tree.
+    engine.set_optimization_level(rawr::OptimizationLevel::None);
     let ast = engine
         .compile(
             r#"
-                switch x {
-                    1 => arm_one(a),
-                    2 => arm_two(b),
-                    _ => arm_default(c)
+                fn arm(value: i64) -> i64 { value }
+                let (x, a, b, c) = (1, 2, 3, 4);
+                match x {
+                    1 => arm(a),
+                    2 => arm(b),
+                    _ => arm(c)
                 }
             "#,
         )
@@ -368,10 +305,12 @@ fn test_switch_walk_visits_all_case_bodies_and_default() {
 
 #[test]
 #[cfg(feature = "internals")]
-fn test_switch_walk_default_only() {
-    let engine = Engine::new();
-    // A switch with only a default arm — the body must still be visited.
-    let ast = engine.compile("switch x { _ => fallback(y) }").unwrap();
+fn test_match_walk_default_only() {
+    let mut engine = Engine::new();
+    // Without optimization the variables stay in the tree.
+    engine.set_optimization_level(rawr::OptimizationLevel::None);
+    // A match with only a catch-all arm: the body must still be visited.
+    let ast = engine.compile("fn fallback(value: i64) -> i64 { value } let x = 1; let y = 2; match x { _ => fallback(y) }").unwrap();
 
     let mut vars: Vec<String> = Vec::new();
     ast.walk(&mut |nodes: &[ASTNode]| {
@@ -381,5 +320,5 @@ fn test_switch_walk_default_only() {
         true
     });
 
-    assert!(vars.contains(&"y".to_string()), "walk should visit `y` inside the default-only branch body");
+    assert!(vars.contains(&"y".to_string()), "walk should visit `y` inside the catch-all arm's body");
 }

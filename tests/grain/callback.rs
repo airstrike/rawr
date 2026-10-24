@@ -1,10 +1,14 @@
 //! Natives that call a compiled function back.
 //!
-//! `[1, 2, 3].map(|x| x * 2)` is the shape: `map` is rawr's, and the pointer it
+//! `a.retain(|x| *x > 1)` is the shape: `retain` is rawr's, and the pointer it
 //! is handed is resolved by rawr's dispatch rather than by ours. This is where
 //! the wrappers that make that resolve are held to the walker's behaviour, and
 //! where the places it still diverges are pinned rather than left to be
 //! discovered.
+//!
+//! Not every adapter is a native: the typed lowering turns `iter().map(..)`
+//! and its relatives into a loop inside the program, which calls the closure
+//! itself. Those are here too, as closures reached from compiled code.
 
 // Only the engine is wanted here; the corpus scripts belong to the harnesses
 // that run all of them.
@@ -34,10 +38,10 @@ fn agree(source: &str) {
     assert_eq!(walk(&engine, source), run(&engine, source), "{source}");
 }
 
-/// The array is bound to a variable in every case here, and that is not
-/// incidental: a chain rooted at a literal is still a fragment, and a fragment
-/// hands the whole expression back to the walker — which would make every one
-/// of these pass without the wrappers existing at all.
+/// The vector is bound to a variable in every case here, and that is not
+/// incidental: a chain rooted at a literal can still be a fragment, and a
+/// fragment hands the whole expression back to the walker — which would make
+/// every one of these pass without the wrappers existing at all.
 fn lowered(source: &str) {
     let engine = corpus::engine();
     let ast = engine.compile(source).unwrap();
@@ -48,87 +52,50 @@ fn lowered(source: &str) {
 
 #[test]
 fn a_native_can_call_a_closure_back() {
-    lowered("let a = [1, 2, 3]; a.map(|x| x * 2)");
-    agree("let a = [1, 2, 3]; a.map(|x| x * 2)");
-    agree("let a = [1, 2, 3, 4]; a.filter(|x| x % 2 == 0)");
+    lowered("let mut a = vec![3, 1, 2]; a.retain(|x| *x > 1); a");
+    agree("let mut a = vec![3, 1, 2]; a.retain(|x| *x > 1); a");
+    agree("let mut a = vec![3, 1, 2]; a.sort_by(|x, y| y.cmp(x)); a");
 }
 
 #[test]
 fn a_native_can_call_a_named_function_back() {
-    agree("fn double(x) { x * 2 } let a = [1, 2, 3]; a.map(Fn(\"double\"))");
+    lowered("fn keep(x: &i64) -> bool { *x > 1 } let mut a = vec![3, 1, 2]; a.retain(keep); a");
+    agree("fn keep(x: &i64) -> bool { *x > 1 } let mut a = vec![3, 1, 2]; a.retain(keep); a");
+}
+
+/// The adapters the lowering keeps inside the program.
+#[test]
+fn compiled_code_can_call_a_closure() {
+    lowered("let a = vec![1, 2, 3]; a.iter().map(|x| x * 2).collect::<Vec<i64>>()");
+    agree("let a = vec![1, 2, 3]; a.iter().map(|x| x * 2).collect::<Vec<i64>>()");
+    agree("let a = vec![1, 2, 3, 4]; a.into_iter().filter(|x| x % 2 == 0).collect::<Vec<i64>>()");
+    agree("fn double(x: i64) -> i64 { x * 2 } let a = vec![1, 2, 3]; a.into_iter().map(double).collect::<Vec<i64>>()");
 }
 
 /// A bare function name is a function pointer, not a variable read.
-///
-/// The compiler leaves it to rawr — it is a fragment — and rawr used to refuse
-/// it, because a program holding any fragment sets `always_search_scope` and
-/// the check for a function of that name sat behind the flag. Every spelling
-/// below reported `double` as an unknown variable.
 #[test]
 fn a_bare_function_name_is_a_pointer() {
-    agree("fn double(x) { x * 2 } let a = [1, 2, 3]; a.map(double)");
-    agree("fn double(x) { x * 2 } let r = 0; { let f = double; r = f.call(4); } r");
-    agree("fn double(x) { x * 2 } fn apply(f, v) { f.call(v) } apply(double, 4)");
+    agree("fn double(x: i64) -> i64 { x * 2 } let mut r: i64 = 0; { let f = double; r = f(4); } r");
+    agree("fn double(x: i64) -> i64 { x * 2 } fn apply(f: fn(i64) -> i64, v: i64) -> i64 { f(v) } apply(double, 4)");
     // A variable of the same name still wins over the function.
-    agree("fn double(x) { x * 2 } let double = 7; double");
+    agree("fn double(x: i64) -> i64 { x * 2 } let double: i64 = 7; double");
 }
 
-/// A capture arrives, and has the right value.
+/// A capture arrives, has the right value, and arrives in the right place.
 ///
-/// Multiplication commutes, so this says nothing about which *position* it
-/// arrives in — see `a_capturing_closure_reaches_a_native_with_its_arguments_rotated`
-/// for that, which is where the answer is unwelcome.
+/// Subtraction rather than multiplication, because `n - x` and `x - n` are the
+/// same two values in the other order and only arithmetic that cares can tell
+/// them apart. A closure that captures a script local is still a fragment, so
+/// the walker evaluates the capture and the order is its own.
 #[test]
 #[cfg(not(feature = "no_closure"))]
 fn a_capturing_closure_resolves_and_sees_its_capture() {
-    lowered("let n = 10; let a = [1, 2, 3]; a.map(|x| x * n)");
-    agree("let n = 10; let a = [1, 2, 3]; a.map(|x| x * n)");
-}
-
-/// A capturing closure handed to a native that binds `this` gets its captured
-/// values *after* the element instead of before.
-///
-/// Not our arithmetic: it is which shape rawr tries first. A capture is a
-/// curried value, and `_call_with_extra_args` (`types/fn_ptr.rs:573`) opens
-/// with `[this] ++ curry ++ args` — the one order that is never right. Rawr's
-/// own closures escape it because they are `Fn*` pointers with the body
-/// attached, which is caught two branches earlier at `:538` and rearranged
-/// into `curry ++ [this] ++ args`.
-///
-/// Ours are `Fn` pointers resolved by name, so rawr reaches them as *natives*
-/// and takes the first shape. The proof that this is rawr's behaviour rather
-/// than ours is `stock_rawr_does_the_same_to_its_own_native_pointers` below,
-/// which reproduces it with no rawrgrain in the picture at all.
-///
-/// So: safe for a closure that captures nothing, and for one whose parameters
-/// commute. Wrong, silently, otherwise. Non-commutative on purpose here —
-/// `n - x` and `x - n` are the same two values in the other order, and only
-/// arithmetic that cares can tell them apart.
-#[test]
-#[cfg(not(feature = "no_closure"))]
-fn a_capturing_closure_reaches_a_native_with_its_arguments_rotated() {
     let engine = corpus::engine();
-    let source = "let n = 10; let a = [1, 2, 3]; a.map(|x| n - x)";
+    agree("let n: i64 = 10; let a = vec![1, 2, 3]; a.iter().map(|x| x * n).collect::<Vec<i64>>()");
 
+    let source = "let n: i64 = 10; let a = vec![1, 2, 3]; a.iter().map(|x| n - x).collect::<Vec<i64>>()";
     assert_eq!(walk(&engine, source), Ok("[9, 8, 7]".to_string()));
-    assert_eq!(run(&engine, source), Ok("[-9, -8, -7]".to_string()));
-}
-
-/// The same rotation, with nothing of ours involved.
-///
-/// `Fn(s)` on a computed name is the one spelling that gets a name-only
-/// pointer out of stock rawr, which is what every pointer we make is. Curry it,
-/// point it at a native, and hand it to `map`: rawr passes the element first
-/// and the curried value second, while `f.call(1)` on the very same pointer
-/// passes them the other way round.
-#[test]
-fn stock_rawr_does_the_same_to_its_own_native_pointers() {
-    let mut engine = corpus::engine();
-    engine.register_fn("nsub", |a: rawr::INT, b: rawr::INT| a - b);
-
-    let curried = "let s = \"ns\" + \"ub\"; let f = Fn(s).curry(10);";
-    assert_eq!(walk(&engine, &format!("{curried} [1, 2, 3].map(f)")), Ok("[-9, -8, -7]".to_string()), "rawr puts the element before the curried value",);
-    assert_eq!(walk(&engine, &format!("{curried} f.call(1)")), Ok("9".to_string()), "and the curried value first when there is no element",);
+    assert_eq!(run(&engine, source), walk(&engine, source));
 }
 
 #[test]
@@ -140,20 +107,25 @@ fn a_callback_reaching_a_second_one_still_resolves() {
     // measures the difference; this is about resolution, not depth.
     let mut engine = corpus::engine();
     engine.set_max_call_levels(64);
-    let source = "let a = [[1, 2], [3, 4]]; a.map(|row| row.map(|x| x + 1))";
+    let source = "let a = vec![vec![1, 2], vec![3, 4]]; a.iter().map(|row| row.iter().map(|x| x + 1).collect::<Vec<i64>>()).collect::<Vec<Vec<i64>>>()";
     assert_eq!(walk(&engine, source), run(&engine, source));
 }
 
+/// `move` copies what the closure captures, so a write after the closure is
+/// made does not reach it, however late the native calls it.
 #[test]
 #[cfg(not(feature = "no_closure"))]
-fn a_closure_called_back_sees_a_write_made_after_it_was_made() {
-    agree("let n = 1; let f = |x| x * n; n = 10; let a = [1, 2, 3]; a.map(f)");
+fn a_moved_closure_called_back_keeps_what_it_copied() {
+    let engine = corpus::engine();
+    let source = "let mut n: i64 = 1; let f = move |x: i64| x * n; n = 10; vec![1, 2, 3].into_iter().map(f).collect::<Vec<i64>>()";
+    assert_eq!(walk(&engine, source), Ok("[1, 2, 3]".to_string()));
+    assert_eq!(run(&engine, source), walk(&engine, source));
 }
 
 #[test]
 fn an_error_inside_a_callback_still_arrives() {
     let engine = corpus::engine();
-    let err = run(&engine, "let a = [1, 2, 3]; a.map(|x| throw x)").unwrap_err();
+    let err = run(&engine, r#"let a = vec![1, 2, 3]; a.iter().map(|x| -> i64 { panic!("{}", x) }).collect::<Vec<i64>>()"#).unwrap_err();
     assert!(err.contains("ErrorInFunctionCall"), "{err}");
 }
 
@@ -168,15 +140,20 @@ fn an_error_inside_a_callback_still_arrives() {
 #[test]
 #[cfg(not(feature = "unchecked"))]
 fn a_callback_costs_more_call_levels() {
+    // `Vec<Vec<..i64..>>`, `levels` deep.
+    fn vec_type(levels: usize) -> String {
+        format!("{}i64{}", "Vec<".repeat(levels), ">".repeat(levels))
+    }
+    // `levels` closures nested through `map`, each one a boundary, over a
+    // vector nested to match.
+    fn mapped(receiver: &str, levels: usize) -> String {
+        let param = format!("v{levels}");
+        let body = if levels == 1 { format!("{param} + 1") } else { mapped(&param, levels - 1) };
+        format!("{receiver}.into_iter().map(|{param}| {body}).collect::<{}>()", vec_type(levels))
+    }
+
     let deepest = |depth: usize, run: &dyn Fn(&Engine, &str) -> Result<String, String>| {
-        // `depth` closures nested through `map`, each one a boundary, over an
-        // array nested to match.
-        let mut source = format!("let a = {}1{}; a", "[".repeat(depth), "]".repeat(depth));
-        for level in 0..depth {
-            source.push_str(&format!(".map(|v{level}| v{level}"));
-        }
-        source.push_str(" + 1");
-        source.push_str(&")".repeat(depth));
+        let source = format!("let a = {}1{}; {}", "vec![".repeat(depth), "]".repeat(depth), mapped("a", depth));
         (1..=64)
             .find(|levels| {
                 let mut engine = corpus::engine();
@@ -190,6 +167,7 @@ fn a_callback_costs_more_call_levels() {
         let walker = deepest(depth, &walk);
         let vm = deepest(depth, &run);
         println!("{depth} nested callback(s): walker needs {walker}, we need {vm}");
+        assert!(walker < usize::MAX, "depth {depth}: the walker never ran it, so there is nothing to compare");
         assert!(
             vm >= walker,
             "depth {depth}: we ran at {vm} levels where the walker needed {walker}, \
@@ -203,10 +181,16 @@ fn without_the_wrappers_the_pointer_does_not_resolve() {
     // The whole reason `eval_with_callbacks` exists. A plain eval leaves rawr
     // nowhere to look, and the failure is a lookup failure rather than
     // anything worse.
+    //
+    //
+    // A program holding compiler-owned support can answer differently, and
+    // worse: `sort_by` without the wrappers leaves the vector unsorted and
+    // reports nothing. This one is chosen to need no support at all.
     let engine = corpus::engine();
-    let source = "let a = [1, 2, 3]; a.map(|x| x * 2)";
+    let source = "let mut a = vec![3, 1, 2]; a.retain(|x| *x > 1); a";
     let ast = engine.compile(source).unwrap();
     let program = Compiler::new().compile(&ast);
+    assert!(program.write().is_ok(), "the premise is a program with no support: {:?}", program.write());
 
     let err = Vm::new(&engine).eval_with_scope(&mut Scope::new(), &program).unwrap_err();
     assert!(format!("{err:?}").contains("ErrorFunctionNotFound"), "{err}");

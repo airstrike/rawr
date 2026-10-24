@@ -7,7 +7,7 @@ fn test_not() {
     assert!(!engine.eval::<bool>("let not_true = !true; not_true").unwrap());
 
     #[cfg(not(feature = "no_function"))]
-    assert!(engine.eval::<bool>("fn not(x) { !x } not(false)").unwrap());
+    assert!(engine.eval::<bool>("fn not(x: bool) -> bool { !x } not(false)").unwrap());
 
     assert!(engine.eval::<bool>("!!!!true").unwrap());
 }

@@ -28,13 +28,13 @@ pub trait Func<A, R> {
     ///
     /// let engine = Engine::new();             // create a new 'Engine' just for this
     ///
-    /// let ast = engine.compile("fn calc(x, y) { x + len(y) < 42 }")?;
+    /// let ast = engine.compile("fn calc(x: i64, y: &str) -> bool { x + (y.len() as i64) < 42 }")?;
     ///
     /// // Func takes two type parameters:
     /// //   1) a tuple made up of the types of the script function's parameters
     /// //   2) the return type of the script function
     ///
-    /// // 'func' will have type Box<dyn Fn(i64, String) -> Result<bool, Box<EvalAltResult>>> and is callable!
+    /// // 'func' will have type Box<dyn Fn(i64, &str) -> Result<bool, Box<EvalAltResult>>> and is callable!
     /// let func = Func::<(i64, &str), bool>::create_from_ast(
     /// //                ^^^^^^^^^^^ function parameter types in tuple
     ///
@@ -43,7 +43,7 @@ pub trait Func<A, R> {
     ///                                             "calc"  // the entry-point function name
     ///                                         );
     ///
-    /// func(123, "hello")? == false;           // call the anonymous function
+    /// assert_eq!(func(123, "hello")?, false); // call the anonymous function
     /// # Ok(())
     /// # }
     #[must_use]
@@ -61,13 +61,13 @@ pub trait Func<A, R> {
     ///
     /// let engine = Engine::new();             // create a new 'Engine' just for this
     ///
-    /// let script = "fn calc(x, y) { x + len(y) < 42 }";
+    /// let script = "fn calc(x: i64, y: &str) -> bool { x + (y.len() as i64) < 42 }";
     ///
     /// // Func takes two type parameters:
     /// //   1) a tuple made up of the types of the script function's parameters
     /// //   2) the return type of the script function
     ///
-    /// // 'func' will have type Box<dyn Fn(i64, String) -> Result<bool, Box<EvalAltResult>>> and is callable!
+    /// // 'func' will have type Box<dyn Fn(i64, &str) -> Result<bool, Box<EvalAltResult>>> and is callable!
     /// let func = Func::<(i64, &str), bool>::create_from_script(
     /// //                ^^^^^^^^^^^ function parameter types in tuple
     ///
@@ -76,7 +76,7 @@ pub trait Func<A, R> {
     ///                                             "calc"  // the entry-point function name
     ///                                         )?;
     ///
-    /// func(123, "hello")? == false;           // call the anonymous function
+    /// assert_eq!(func(123, "hello")?, false); // call the anonymous function
     /// # Ok(())
     /// # }
     /// ```

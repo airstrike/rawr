@@ -220,7 +220,7 @@ impl FnPtr {
     ///
     /// let engine = Engine::new();
     ///
-    /// let ast = engine.compile("fn foo(x, y) { len(x) + y }")?;
+    /// let ast = engine.compile("fn foo(x: &str, y: i64) -> i64 { x.len() as i64 + y }")?;
     ///
     /// let mut fn_ptr = FnPtr::new("foo")?;
     ///

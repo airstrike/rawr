@@ -1,9 +1,7 @@
 //! Module that provide formatting services to the [`Engine`].
 use crate::packages::iter_basic::{BitRange, CharsStream, StepRange};
-use crate::parser::{ParseResult, ParseState};
 use crate::{
-    Engine, ExclusiveRange, FnPtr, ImmutableString, InclusiveRange, Position, RawrError,
-    SmartString, ERR,
+    Engine, ExclusiveRange, FnPtr, ImmutableString, InclusiveRange, Position, RawrError, ERR,
 };
 use std::any::type_name;
 #[cfg(feature = "no_std")]
@@ -246,35 +244,5 @@ impl Engine {
     pub(crate) fn make_type_mismatch_err<T>(&self, typ: &str, pos: Position) -> RawrError {
         ERR::ErrorMismatchDataType(self.map_type_name(type_name::<T>()).into(), typ.into(), pos)
             .into()
-    }
-
-    /// Compact a script to eliminate insignificant whitespaces and comments.
-    ///
-    /// This is useful to prepare a script for further compressing.
-    ///
-    /// The output script is semantically identical to the input script, except smaller in size.
-    ///
-    /// Unlike other uglifiers and minifiers, this method does not rename variables nor perform any
-    /// optimization on the input script.
-    #[inline]
-    pub fn compact_script(&self, script: impl AsRef<str>) -> ParseResult<String> {
-        let scripts = [script];
-        let (mut stream, tc) = self.lex(&scripts);
-
-        tc.borrow_mut().compressed = Some(String::new());
-        stream.state.last_token = Some(SmartString::new_const());
-
-        let input = &mut stream.peekable();
-        let lib = &mut <_>::default();
-        let state = ParseState::new(None, input, tc.clone(), lib);
-
-        let mut _ast = self.parse(
-            state,
-            #[cfg(not(feature = "no_optimize"))]
-            crate::OptimizationLevel::None,
-        )?;
-
-        let guard = tc.borrow();
-        Ok(guard.compressed.as_ref().unwrap().into())
     }
 }

@@ -856,6 +856,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::SelfOutsideImpl { .. }
         | R::ImmutableReceiver { .. }
         | R::UnsupportedNominalSyntax { .. }
+        | R::Syntax { .. }
         | R::Application(_)
         | R::InvalidPreview { .. }
         | R::InvalidWidget { .. }

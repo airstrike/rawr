@@ -78,17 +78,18 @@ fn retained_function_rebinds_and_invokes_equivalent_new_executable() {
 }
 
 #[test]
-fn terminal_throw_satisfies_declared_output_and_preserves_runtime_failure() {
+fn terminal_panic_satisfies_declared_output_and_preserves_runtime_failure() {
     let engine = Shared::new(Engine::new());
-    let authority = engine.compile_authority(r#"pub fn impossible() -> i64 { throw "boom"; }"#).unwrap();
+    let authority = engine.compile_authority(r#"pub fn impossible() -> i64 { panic!("boom"); }"#).unwrap();
     let impossible = symbolic(&authority, "impossible", item::Kind::Function);
 
     let error = authority.invoke(&impossible, &mut []).unwrap_err();
     assert!(matches!(error, Error::Evaluation { .. }));
     assert!(error.to_string().contains("boom"));
 
-    let error = engine.compile_authority(r#"pub fn impossible() -> i64 { throw "boom"; 42 }"#).unwrap_err();
-    assert!(error.to_string().contains("non-terminal `throw`"));
+    // `throw` is not Rust.
+    let error = engine.compile_authority(r#"pub fn impossible() -> i64 { throw "boom"; }"#).unwrap_err();
+    assert!(error.to_string().contains("expected expression, found `throw`"), "{error}");
 }
 
 #[test]

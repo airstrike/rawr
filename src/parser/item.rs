@@ -219,11 +219,13 @@ fn is_attribute_import(item: &crate::item::Parsed) -> bool {
 fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     let inputs = [source];
     let (stream, tokenizer_control) = engine.lex(&inputs);
+    tokenizer_control.borrow_mut().rust = true;
     let input = &mut stream.peekable();
     let mut items = Vec::new();
     let mut inner = Vec::new();
     let mut scan = ScanState::default();
     let mut at_top = true;
+    let mut after_name = false;
 
     loop {
         let next = input.peek().expect("token streams always end with EOF");
@@ -264,6 +266,19 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                         bind_previews(item, &mut items)?;
                     }
                 }
+            }
+            // `private fn f()`: a name before `fn` is rustc's syntax error.
+            #[cfg(not(feature = "no_function"))]
+            (Token::Fn, position) if scan.delimiter_depth == 0 && after_name => {
+                return Err(unexpected(
+                    "expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator, \
+                     found keyword `fn`"
+                        .into(),
+                    "expected one of 8 possible tokens",
+                    None,
+                    &Token::Fn,
+                    *position,
+                ));
             }
             #[cfg(not(feature = "no_function"))]
             (Token::Fn, _) if scan.delimiter_depth == 0 => {
@@ -324,9 +339,17 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                 items.extend(parse_item(input, &tokenizer_control)?);
             }
             _ => {
-                scan.next(input, &tokenizer_control);
+                let depth = scan.delimiter_depth;
+                let token = scan.next(input, &tokenizer_control);
+                after_name = depth == 0
+                    && token.is_some_and(|(token, _)| {
+                        matches!(token, Token::Identifier(_) | Token::Reserved(_))
+                            || crate::tokenizer::rust_name(&token).is_some()
+                    });
+                continue;
             }
         }
+        after_name = false;
     }
 
     resolve_const_lengths(&mut items)?;
@@ -460,7 +483,7 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
             }
             Parsed::Function(item) => function(item)?,
             Parsed::TypeAlias(item) => visit(&mut item.target, &lengths)?,
-            Parsed::Module(_) | Parsed::Use(_) | Parsed::LegacyFunction(_) => {}
+            Parsed::Module(_) | Parsed::Use(_) => {}
         }
     }
     Ok(())
@@ -2347,7 +2370,7 @@ fn parse_function_rest(
                         )?;
                         continue;
                     }
-                    expect(input, Token::Colon, "after a function parameter name")?;
+                    expect_parameter_type(input)?;
                     let ty = parse_type(input)?;
                     let span = Span::new(parameter_name.span.start(), ty.span().end());
                     parameters.push(crate::item::Parameter {
@@ -2441,7 +2464,7 @@ fn parse_function_rest(
                         )?;
                         continue;
                     }
-                    expect(input, Token::Colon, "after a function parameter name")?;
+                    expect_parameter_type(input)?;
                     let ty = parse_type(input)?;
                     let span = Span::new(parameter_name.span.start(), ty.span().end());
                     parameters.push(crate::item::Parameter {
@@ -4379,9 +4402,7 @@ fn parse_callback_closure(
 pub(crate) const CALLBACK_CLOSURE_PREFIX: &str = "__rawr_closure_";
 
 #[cfg(not(feature = "no_function"))]
-/// A private top-level `fn` is a typed item when its signature is typed
-/// (`fn f(x: T)` or `fn f() -> T`), as in Rust; otherwise it stays a legacy
-/// untyped function.
+/// A private top-level `fn`: a typed item, as in Rust.
 fn parse_private_function(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
@@ -4396,206 +4417,28 @@ fn parse_private_function(
         visibility: None,
         span: Span::NONE,
     };
-    let typed = |function| Ok(Some(crate::item::Parsed::Function(function)));
-    // `fn name<T>(..)` is Rust, never legacy.
-    if matches!(input.peek(), Some((Token::LessThan, _))) {
-        let generics = parse_generic_params(input)?;
-        let open = if matches!(input.peek(), Some((Token::Unit, _))) {
-            input.next();
-            None
-        } else {
-            expect(input, Token::LeftParen, "after generic parameters")?;
-            Some(None)
-        };
-        return typed(parse_function_rest(
-            input,
-            tokenizer_control,
-            header,
-            start,
-            name,
-            generics,
-            open,
-            false,
-        )?);
-    }
-    let first = if matches!(input.peek(), Some((Token::Unit, _))) {
+    let generics = if matches!(input.peek(), Some((Token::LessThan, _))) {
+        parse_generic_params(input)?
+    } else {
+        Vec::new()
+    };
+    let open = if matches!(input.peek(), Some((Token::Unit, _))) {
         input.next();
-        if matches!(input.peek(), Some((Token::ThinArrow, _))) {
-            return typed(parse_function_rest(
-                input,
-                tokenizer_control,
-                header,
-                start,
-                name,
-                Vec::new(),
-                None,
-                false,
-            )?);
-        }
         None
     } else {
-        expect(input, Token::LeftParen, "after a private function name")?;
-        // A first parameter written as a pattern is Rust, never legacy.
-        if name.text != "main"
-            && matches!(
-                input.peek(),
-                Some((
-                    Token::LeftParen
-                        | Token::Ampersand
-                        | Token::And
-                        | Token::Mut
-                        | Token::Underscore,
-                    _
-                ))
-            )
-        {
-            return typed(parse_function_rest(
-                input,
-                tokenizer_control,
-                header,
-                start,
-                name,
-                Vec::new(),
-                Some(None),
-                false,
-            )?);
-        }
-        if input.peek().is_some_and(|(token, _)| is_name(token)) {
-            let first = parse_name(input, "as a function parameter")?;
-            // `fn f(x: T)` or `fn f(W(x): W)`.
-            if name.text != "main"
-                && matches!(
-                    input.peek(),
-                    Some((Token::Colon | Token::LeftParen | Token::DoubleColon, _))
-                )
-            {
-                return typed(parse_function_rest(
-                    input,
-                    tokenizer_control,
-                    header,
-                    start,
-                    name,
-                    Vec::new(),
-                    Some(Some(first)),
-                    false,
-                )?);
-            }
-            Some(true)
-        } else {
-            Some(false)
-        }
+        expect(input, Token::LeftParen, "after a function name")?;
+        Some(None)
     };
-    parse_legacy_function_outline(input, tokenizer_control, start, name, first)
-}
-
-#[cfg(not(feature = "no_function"))]
-fn parse_legacy_function_outline(
-    input: &mut TokenStream,
-    tokenizer_control: &TokenizerControl,
-    start: Position,
-    name: crate::item::Name,
-    open: Option<bool>,
-) -> ParseResult<Option<crate::item::Parsed>> {
-    let parameter_count = if let Some(has_parameter) = open {
-        let mut depth = 1_usize;
-        let mut count = 0_usize;
-        let mut has_parameter = has_parameter;
-
-        while depth > 0 {
-            match input.next().expect("token streams always end with EOF") {
-                (Token::LeftParen, _) => {
-                    depth += 1;
-                    has_parameter = true;
-                }
-                (Token::RightParen, _) => depth -= 1,
-                (Token::Comma, _) if depth == 1 => {
-                    count += usize::from(has_parameter);
-                    has_parameter = false;
-                }
-                (Token::EOF, position) => {
-                    return Err(PERR::MissingToken(
-                        Token::RightParen.into(),
-                        "to close private function parameters".into(),
-                    )
-                    .into_err(position));
-                }
-                (Token::LexError(error), position) => return Err(error.into_err(position)),
-                _ if depth == 1 => has_parameter = true,
-                _ => {}
-            }
-        }
-        count + usize::from(has_parameter)
-    } else {
-        0
-    };
-
-    let open = loop {
-        match input.next().expect("token streams always end with EOF") {
-            (Token::LeftBrace, position) => break position,
-            (Token::EOF, position) => {
-                return Err(PERR::MissingToken(
-                    Token::LeftBrace.into(),
-                    "to start a private function body".into(),
-                )
-                .into_err(position));
-            }
-            (Token::LexError(error), position) => return Err(error.into_err(position)),
-            _ => {}
-        }
-    };
-    let (body_span, body_syntax) = parse_body_syntax(input, tokenizer_control, open)?;
-
-    let attempts_application = attempts_iced_application(&body_syntax);
-    if name.text != "main" && !attempts_application {
-        return Ok(None);
-    }
-    // Rust's `fn main() { .. }`: a function returning `()`. One that starts
-    // an iced application stays an outline for the entry diagnostic.
-    if parameter_count == 0 && !attempts_application {
-        let span = Span::new(start, body_span.end());
-        return Ok(Some(crate::item::Parsed::Function(crate::item::Function {
-            header: crate::item::Header {
-                attributes: Box::default(),
-                visibility: None,
-                span: Span::new(start, after(open, 1)),
-            },
-            name,
-            generics: Box::default(),
-            receiver: None,
-            parameters: Box::default(),
-            output: None,
-            body_span,
-            body_syntax,
-            constant: false,
-            asynchronous: false,
-            span,
-        })));
-    }
-
-    Ok(Some(crate::item::Parsed::LegacyFunction(
-        crate::item::LegacyFunction {
-            name,
-            parameter_count,
-            body_span,
-            body_syntax,
-            span: Span::new(start, body_span.end()),
-        },
-    )))
-}
-
-#[cfg(not(feature = "no_function"))]
-fn attempts_iced_application(syntax: &crate::item::BodySyntax) -> bool {
-    syntax.tokens().windows(3).any(|tokens| {
-        matches!(
-            tokens[0].kind(),
-            crate::item::BodyTokenKind::Identifier(name) if name == "iced"
-        ) && matches!(tokens[1].kind(), crate::item::BodyTokenKind::DoubleColon)
-            && matches!(
-                tokens[2].kind(),
-                crate::item::BodyTokenKind::Identifier(name)
-                    if name == "run" || name == "application"
-            )
-    })
+    Ok(Some(crate::item::Parsed::Function(parse_function_rest(
+        input,
+        tokenizer_control,
+        header,
+        start,
+        name,
+        generics,
+        open,
+        false,
+    )?)))
 }
 
 #[cfg(not(feature = "no_function"))]
@@ -4856,6 +4699,69 @@ fn expect(input: &mut TokenStream, expected: Token, context: &str) -> ParseResul
     }
 }
 
+/// The `:` after a parameter's name. A parameter with no type is rustc's
+/// parse error: `fn sink(value)`.
+fn expect_parameter_type(input: &mut TokenStream) -> ParseResult<Position> {
+    match input.next().expect("token streams always end with EOF") {
+        (Token::Colon, position) => Ok(position),
+        (Token::LexError(error), position) => Err(error.into_err(position)),
+        (token, position) => Err(unexpected(
+            format!("expected one of `:`, `@`, or `|`, found {}", found(&token)),
+            "expected one of `:`, `@`, or `|`",
+            Some("if this is a parameter name, give it a type"),
+            &token,
+            position,
+        )),
+    }
+}
+
+/// rustc's name for a token it did not expect: `` `)` ``, `` keyword `fn` ``
+/// or `` `<eof>` ``.
+pub(crate) fn found(token: &Token) -> String {
+    /// Rust's keywords, which rustc names as keywords.
+    const KEYWORDS: [&str; 38] = [
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+        "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
+        "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
+        "trait", "true", "type", "unsafe", "use", "where", "while",
+    ];
+    match token {
+        Token::EOF => "`<eof>`".into(),
+        Token::Unit => "`(`".into(),
+        token => {
+            let text = token.to_string();
+            let text = crate::tokenizer::demangle_names(&text);
+            if KEYWORDS.contains(&text.as_ref()) {
+                format!("keyword `{text}`")
+            } else {
+                format!("`{text}`")
+            }
+        }
+    }
+}
+
+/// Syntax Rust does not have at `token`, as rustc reports it.
+pub(crate) fn unexpected(
+    message: String,
+    label: &str,
+    help: Option<&str>,
+    token: &Token,
+    position: Position,
+) -> crate::ParseError {
+    let width = match token {
+        Token::EOF => 0,
+        Token::Unit => 1,
+        token => token.to_string().chars().count(),
+    };
+    PERR::Unexpected {
+        message,
+        label: label.into(),
+        help: help.map(Into::into),
+        span: Span::new(position, after(position, width)),
+    }
+    .into_err(position)
+}
+
 fn token_span(start: Position, text: &str) -> Span {
     Span::new(start, after(start, text.chars().count()))
 }
@@ -5098,49 +5004,20 @@ fn view(state: &Counter) -> iced::widget::Column<'_, Message> { () }
     #[test]
     fn ordinary_scripts_and_new_function_remain_unchanged() {
         let engine = Engine::new();
-        let ast = engine.compile("fn new() { 40 + 2 } new()").unwrap();
+        let ast = engine.compile("fn new() -> i64 { 40 + 2 } new()").unwrap();
 
         assert_eq!(engine.eval_ast::<i64>(&ast).unwrap(), 42);
         assert_eq!(engine.eval::<char>("'a'").unwrap(), 'a');
     }
 
     #[test]
-    fn interpolated_strings_resume_before_adjacent_items() {
-        let engine = Engine::new();
-        let source = r#"
-let y = "world";
-let greeting = `hello ${y}`;
-struct Marker {}
-greeting
-"#;
-
-        let unit = engine.parse_unit(source).unwrap();
-        assert_eq!(unit.items().len(), 1);
-        assert!(matches!(unit.items()[0], Parsed::Struct(_)));
-
-        let ast = engine.compile(source).unwrap();
-        assert_eq!(
-            engine.eval_ast::<ImmutableString>(&ast).unwrap(),
-            "hello world"
+    fn backtick_strings_are_rusts_unknown_token() {
+        let source = "let y = 1;\nlet greeting = `hello ${y}`;\nstruct Marker {}\n";
+        let error = Engine::new().compile(source).unwrap_err();
+        assert!(
+            error.to_string().contains("unknown start of token: `"),
+            "{error}"
         );
-    }
-
-    #[test]
-    fn interpolated_strings_inside_item_bodies_do_not_escape_the_body() {
-        let engine = Engine::new();
-        let source = r#"
-pub fn render() {
-    let value = 1;
-    let label = `outer ${if value > 0 { `inner ${value}` } else { "none" }}`;
-}
-
-struct Marker {}
-"#;
-
-        let unit = engine.parse_unit(source).unwrap();
-        assert_eq!(unit.items().len(), 2);
-        assert!(matches!(unit.items()[0], Parsed::Function(_)));
-        assert!(matches!(unit.items()[1], Parsed::Struct(_)));
     }
 
     #[test]
@@ -5149,7 +5026,7 @@ struct Marker {}
         let source = r##"
 let quoted = "struct Fake {}";
 let character = '}';
-let raw = #"enum Fake {}"#;
+let raw = r#"enum Fake {}"#;
 // pub fn fake() {}
 /* impl Fake { fn fake(&self) {} } */
 struct Real {}
@@ -5168,38 +5045,5 @@ quoted
             engine.eval_ast::<ImmutableString>(&ast).unwrap(),
             "struct Fake {}"
         );
-    }
-
-    #[cfg(not(feature = "no_custom_syntax"))]
-    #[test]
-    fn registered_hash_syntax_coexists_with_attributes() {
-        use crate::INT;
-
-        let mut engine = Engine::new();
-        engine.register_custom_syntax_with_state_raw(
-            "#",
-            |symbols, _, _| match symbols.len() {
-                1 => Ok(Some("$int$".into())),
-                2 => Ok(None),
-                _ => unreachable!(),
-            },
-            false,
-            |_, inputs, _| Ok(inputs[0].get_literal_value::<INT>().unwrap().into()),
-        );
-        let source = r#"
-let answer = #41 + 1;
-#[derive(Default)]
-struct Marker {}
-answer
-"#;
-
-        let unit = engine.parse_unit(source).unwrap();
-        assert_eq!(unit.items().len(), 1);
-        let Parsed::Struct(item) = &unit.items()[0] else {
-            panic!("expected attributed struct item");
-        };
-        assert_eq!(item.header.attributes.len(), 1);
-
-        assert_eq!(engine.eval::<INT>(source).unwrap(), 42);
     }
 }

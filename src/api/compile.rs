@@ -1,6 +1,7 @@
 //! Module that defines the public compilation API of [`Engine`].
 
 use crate::parser::{ParseResult, ParseState};
+use crate::tokenizer::Token;
 use crate::{program, Engine, Scope, Shared, AST};
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
@@ -659,20 +660,10 @@ impl Engine {
         #[cfg(not(feature = "no_std"))]
         let unit =
             crate::timing::observe_optional(session, crate::timing::Phase::ParseItems, || {
-                self.parse_unit_with_scope_raw(
-                    scope,
-                    &source,
-                    #[cfg(not(feature = "no_optimize"))]
-                    optimization_level,
-                )
+                self.parse_unit(&source)
             })?;
         #[cfg(feature = "no_std")]
-        let unit = self.parse_unit_with_scope_raw(
-            scope,
-            &source,
-            #[cfg(not(feature = "no_optimize"))]
-            optimization_level,
-        )?;
+        let unit = self.parse_unit(&source)?;
 
         #[cfg(not(feature = "no_std"))]
         let program =
@@ -757,7 +748,8 @@ impl Engine {
         crate::package::compile::descriptor(self, target, session)
     }
 
-    /// Parse the masked legacy portion of a Rawr unit into its temporary AST.
+    /// Parse the lowered program text the evaluator runs. Only text the
+    /// compiler generated reaches this parser; user input is checked as Rust.
     pub(crate) fn compile_legacy_script_with_scope_raw(
         &self,
         scope: Option<&Scope>,
@@ -842,18 +834,67 @@ impl Engine {
         scope: &Scope,
         script: impl AsRef<str>,
     ) -> ParseResult<AST> {
-        let scripts = [script];
-        let (stream, t) = self.lex(&scripts);
-
-        let input = &mut stream.peekable();
-        let lib = &mut <_>::default();
-        let state = ParseState::new(Some(scope), input, t, lib);
-
-        self.parse_global_expr(
-            state,
-            |_| {},
+        self.expression_only(script.as_ref())?;
+        self.compile_scripts_with_scope_raw(
+            Some(scope),
+            [script],
             #[cfg(not(feature = "no_optimize"))]
             self.optimization_level,
         )
+    }
+
+    /// Refuse a script that is not one expression: a statement ends with
+    /// `;` or starts with `let`, as rustc reports where it wants an
+    /// expression.
+    fn expression_only(&self, script: &str) -> ParseResult<()> {
+        let scripts = [script];
+        let (stream, _) = self.lex(&scripts);
+        let mut depth = 0_usize;
+        let mut first = true;
+        for (token, position) in stream {
+            let statement = match token {
+                Token::EOF => break,
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                    None
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.saturating_sub(1);
+                    None
+                }
+                Token::SemiColon if depth == 0 => Some("found `;`".to_owned()),
+                Token::Let if first => Some("found `let` statement".to_owned()),
+                // An item is not an expression: `fn f() {}`, `const X: i64 = 1;`.
+                Token::Fn | Token::Const | Token::Reserved(_) | Token::Identifier(_)
+                    if first && starts_item(&token) =>
+                {
+                    Some(format!("found {}", crate::parser::item::found(&token)))
+                }
+                _ => None,
+            };
+            first = false;
+            if let Some(found) = statement {
+                return Err(crate::parser::item::unexpected(
+                    format!("expected expression, {found}"),
+                    "expected expression",
+                    None,
+                    &token,
+                    position,
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether `token` starts an item, which is not an expression.
+fn starts_item(token: &Token) -> bool {
+    match token {
+        Token::Fn | Token::Const => true,
+        Token::Reserved(word) | Token::Identifier(word) => matches!(
+            word.as_str(),
+            "struct" | "enum" | "impl" | "trait" | "use" | "mod" | "static" | "type" | "pub"
+        ),
+        _ => false,
     }
 }

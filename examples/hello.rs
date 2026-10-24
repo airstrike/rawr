@@ -5,7 +5,7 @@ use rawr::{Engine, EvalAltResult};
 fn main() -> Result<(), Box<EvalAltResult>> {
     let engine = Engine::new();
 
-    engine.run(r#"print("hello, world!")"#)?;
+    engine.run(r#"println!("hello, world!")"#)?;
 
     let result = engine.eval::<i64>("40 + 2")?;
 

@@ -703,8 +703,7 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
             resolve::item::Kind::Use(_)
             | resolve::item::Kind::Struct(_)
             | resolve::item::Kind::Impl(_)
-            | resolve::item::Kind::Trait(_)
-            | resolve::item::Kind::LegacyFunction(_) => {}
+            | resolve::item::Kind::Trait(_) => {}
         }
     }
 

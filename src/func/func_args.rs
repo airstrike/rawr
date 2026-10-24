@@ -45,11 +45,11 @@ pub trait FuncArgs {
     /// let mut scope = Scope::new();
     ///
     /// let ast = engine.compile(
-    /// "
-    ///     fn hello(x, y, z) {
-    ///         if x { `hello ${y}` } else { y + z }
+    /// r#"
+    ///     fn hello(x: bool, y: String, z: i64) -> String {
+    ///         if x { format!("hello {y}") } else { format!("{y}{z}") }
     ///     }
-    /// ")?;
+    /// "#)?;
     ///
     /// let result: String = engine.call_fn(&mut scope, &ast, "hello", options)?;
     ///
