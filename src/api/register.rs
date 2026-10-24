@@ -147,6 +147,9 @@ impl Engine {
     /// Register a custom type for use with the [`Engine`].
     /// The type must implement [`Clone`].
     ///
+    /// Typed scripts can't call methods of registered types with method-call syntax yet,
+    /// so they call the registered functions by name.
+    ///
     /// # Example
     ///
     /// ```
@@ -159,8 +162,8 @@ impl Engine {
     ///     fn new() -> Self {
     ///         Self { field: 1 }
     ///     }
-    ///     fn update(&mut self, offset: i64) {
-    ///         self.field += offset;
+    ///     fn with_offset(self, offset: i64) -> Self {
+    ///         Self { field: self.field + offset }
     ///     }
     /// }
     ///
@@ -174,11 +177,10 @@ impl Engine {
     ///     .register_type::<TestStruct>()
     ///     .register_fn("new_ts", TestStruct::new)
     ///     // Use `register_fn` to register methods on the type.
-    ///     .register_fn("update", TestStruct::update);
+    ///     .register_fn("with_offset", TestStruct::with_offset);
     ///
-    /// # #[cfg(not(feature = "no_object"))]
     /// assert_eq!(
-    ///     engine.eval::<TestStruct>("let x = new_ts(); x.update(41); x")?,
+    ///     engine.eval::<TestStruct>("let x = new_ts(); with_offset(x, 41)")?,
     ///     TestStruct { field: 42 }
     /// );
     /// # Ok(())
@@ -189,7 +191,10 @@ impl Engine {
         self.register_type_with_name::<T>(type_name::<T>())
     }
     /// Register a custom type for use with the [`Engine`], with a pretty-print name
-    /// for the `type_of` function. The type must implement [`Clone`].
+    /// for error messages and [`map_type_name`][Engine::map_type_name].
+    /// The type must implement [`Clone`].
+    ///
+    /// Typed scripts can't call `type_of` yet.
     ///
     /// # Example
     ///
@@ -215,16 +220,19 @@ impl Engine {
     ///     .register_type::<TestStruct>()
     ///     .register_fn("new_ts", TestStruct::new);
     ///
-    /// let default_name = engine.eval::<String>("let x = new_ts(); type_of(x)")?;
+    /// let type_path = std::any::type_name::<TestStruct>();
+    ///
+    /// let default_name = engine.map_type_name(type_path);
     /// assert_eq!(default_name.rsplit("::").next(), Some("TestStruct"));
     ///
     /// // Re-register the custom type with a name.
     /// engine.register_type_with_name::<TestStruct>("Hello");
     ///
-    /// assert_eq!(
-    ///     engine.eval::<String>("let x = new_ts(); type_of(x)")?,
-    ///     "Hello"
-    /// );
+    /// assert_eq!(engine.map_type_name(type_path), "Hello");
+    ///
+    /// // The name shows in errors about the type.
+    /// let error = engine.eval::<i64>("new_ts()").unwrap_err();
+    /// assert!(error.to_string().contains("Hello"));
     /// # Ok(())
     /// # }
     /// ```
@@ -236,7 +244,9 @@ impl Engine {
         let _ = self.host_registry.register_type::<T>(name);
         self
     }
-    /// Register a Rust enum for use in qualified `switch` patterns.
+    /// Register a Rust enum and its variants with the [`Engine`].
+    ///
+    /// Typed scripts can't match on a registered enum yet.
     ///
     /// The enum is also registered as a custom type under `name`. `variants`
     /// defines the script-visible variant names and their positional payload
@@ -261,17 +271,6 @@ impl Engine {
     ///         Message::Move(x, y) => (1, vec![(*x).into(), (*y).into()]),
     ///     },
     /// );
-    ///
-    /// let mut scope = rawr::Scope::new();
-    /// scope.push("message", Message::Move(20, 22));
-    /// assert_eq!(
-    ///     engine.eval_with_scope::<i64>(
-    ///         &mut scope,
-    ///         "switch message { Message::Move(x, y) => x + y, _ => 0 }",
-    ///     )?,
-    ///     42,
-    /// );
-    /// # Ok::<_, Box<rawr::EvalAltResult>>(())
     /// ```
     ///
     /// The extractor must return an index declared in `variants` and exactly
@@ -311,7 +310,8 @@ impl Engine {
         self
     }
     /// Register a custom type for use with the [`Engine`], with a pretty-print name
-    /// for the `type_of` function. The type must implement [`Clone`].
+    /// for error messages and [`map_type_name`][Engine::map_type_name].
+    /// The type must implement [`Clone`].
     ///
     /// # WARNING - Low Level API
     ///
@@ -353,6 +353,8 @@ impl Engine {
     ///
     /// The function signature must start with `&mut self` and not `&self`.
     ///
+    /// Typed scripts can't read properties of registered types yet.
+    ///
     /// Not available under `no_object`.
     ///
     /// # Example
@@ -384,8 +386,6 @@ impl Engine {
     ///     .register_fn("new_ts", TestStruct::new)
     ///     // Register a getter on a property (notice it doesn't have to be the same name).
     ///     .register_get("xyz", TestStruct::get_field);
-    ///
-    /// assert_eq!(engine.eval::<i64>("let a = new_ts(); a.xyz")?, 1);
     /// # Ok(())
     /// # }
     /// ```
@@ -400,6 +400,8 @@ impl Engine {
     }
 
     /// Register a setter function for a member of a registered type with the [`Engine`].
+    ///
+    /// Typed scripts can't write properties of registered types yet.
     ///
     /// Not available under `no_object`.
     ///
@@ -431,12 +433,6 @@ impl Engine {
     ///     .register_fn("new_ts", TestStruct::new)
     ///     // Register a setter on a property (notice it doesn't have to be the same name)
     ///     .register_set("xyz", TestStruct::set_field);
-    ///
-    /// // Notice that, with a getter, there is no way to get the property value
-    /// assert_eq!(
-    ///     engine.eval::<TestStruct>("let a = new_ts(); a.xyz = 42; a")?,
-    ///     TestStruct { field: 42 }
-    /// );
     /// # Ok(())
     /// # }
     /// ```
@@ -453,6 +449,8 @@ impl Engine {
     /// of a registered type with the [`Engine`].
     ///
     /// All function signatures must start with `&mut self` and not `&self`.
+    ///
+    /// Typed scripts can't read or write properties of registered types yet.
     ///
     /// Not available under `no_object`.
     ///
@@ -489,8 +487,6 @@ impl Engine {
     ///     // Register both a getter and a setter on a property
     ///     // (notice it doesn't have to be the same name)
     ///     .register_get_set("xyz", TestStruct::get_field, TestStruct::set_field);
-    ///
-    /// assert_eq!(engine.eval::<i64>("let a = new_ts(); a.xyz = 42; a.xyz")?, 42);
     /// # Ok(())
     /// # }
     /// ```
@@ -514,6 +510,8 @@ impl Engine {
     /// Register an index getter for a custom type with the [`Engine`].
     ///
     /// The function signature must start with `&mut self` and not `&self`.
+    ///
+    /// Typed scripts can't index registered types yet.
     ///
     /// Not available under both `no_index` and `no_object`.
     ///
@@ -554,9 +552,6 @@ impl Engine {
     ///     .register_fn("new_ts", TestStruct::new)
     ///     // Register an indexer.
     ///     .register_indexer_get(TestStruct::get_field);
-    ///
-    /// # #[cfg(not(feature = "no_index"))]
-    /// assert_eq!(engine.eval::<i64>("let a = new_ts(); a[2]")?, 3);
     /// # Ok(())
     /// # }
     /// ```
@@ -575,6 +570,8 @@ impl Engine {
         self.register_fn(crate::engine::FN_IDX_GET, get_fn)
     }
     /// Register an index setter for a custom type with the [`Engine`].
+    ///
+    /// Typed scripts can't index registered types yet.
     ///
     /// Not available under both `no_index` and `no_object`.
     ///
@@ -614,12 +611,6 @@ impl Engine {
     ///     .register_fn("new_ts", TestStruct::new)
     ///     // Register an indexer.
     ///     .register_indexer_set(TestStruct::set_field);
-    ///
-    /// # #[cfg(not(feature = "no_index"))]
-    /// let result = engine.eval::<TestStruct>("let a = new_ts(); a[2] = 42; a")?;
-    ///
-    /// # #[cfg(not(feature = "no_index"))]
-    /// assert_eq!(result.fields[2], 42);
     /// # Ok(())
     /// # }
     /// ```
@@ -638,6 +629,8 @@ impl Engine {
         self.register_fn(crate::engine::FN_IDX_SET, set_fn)
     }
     /// Short-hand for registering both index getter and setter functions for a custom type with the [`Engine`].
+    ///
+    /// Typed scripts can't index registered types yet.
     ///
     /// Not available under both `no_index` and `no_object`.
     ///
@@ -681,9 +674,6 @@ impl Engine {
     ///     .register_fn("new_ts", TestStruct::new)
     ///     // Register an indexer.
     ///     .register_indexer_get_set(TestStruct::get_field, TestStruct::set_field);
-    ///
-    /// # #[cfg(not(feature = "no_index"))]
-    /// assert_eq!(engine.eval::<i64>("let a = new_ts(); a[2] = 42; a[2]")?, 42);
     /// # Ok(())
     /// # }
     /// ```
@@ -726,6 +716,8 @@ impl Engine {
     }
     /// Register a shared [`Module`] as a static module namespace with the [`Engine`].
     ///
+    /// Typed scripts can't call functions through a static module path yet.
+    ///
     /// Functions marked [`FnNamespace::Global`][`crate::FnNamespace::Global`] and type iterators are exposed to scripts without
     /// namespace qualifications.
     ///
@@ -751,10 +743,6 @@ impl Engine {
     ///     // Multiple registrations to the same partial path is also OK!
     ///     .register_static_module("foo::bar::hello", module.clone())
     ///     .register_static_module("CalcService", module);
-    ///
-    /// assert_eq!(engine.eval::<i64>("foo::bar::baz::calc(41)")?, 42);
-    /// assert_eq!(engine.eval::<i64>("foo::bar::hello::calc(41)")?, 42);
-    /// assert_eq!(engine.eval::<i64>("CalcService::calc(41)")?, 42);
     /// # Ok(())
     /// # }
     /// ```

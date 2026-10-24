@@ -228,23 +228,6 @@ impl<'a> From<&'a crate::Module> for ModuleMetadata<'a> {
     }
 }
 
-#[cfg(feature = "internals")]
-impl crate::api::definitions::Definitions<'_> {
-    /// Generate a list of all functions in JSON format.
-    ///
-    /// Functions from the following sources are included:
-    /// 1) Functions defined in an [`AST`][crate::AST]
-    /// 2) Functions registered into the global namespace
-    /// 3) Functions in static modules
-    /// 4) Functions in registered global packages
-    /// 5) Functions in standard packages (optional)
-    #[inline(always)]
-    pub fn json(&self) -> serde_json::Result<String> {
-        self.engine()
-            .gen_metadata_to_json_raw(None, self.config().include_standard_packages)
-    }
-}
-
 impl Engine {
     /// Generate a list of all functions in JSON format.
     fn gen_metadata_to_json_raw(

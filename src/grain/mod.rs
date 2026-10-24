@@ -35,7 +35,7 @@
 //! use rawr::{Engine, Scope};
 //!
 //! let engine = Engine::new();
-//! let ast = engine.compile("let total = 0; for i in 0..10 { total += i; } total")?;
+//! let ast = engine.compile("let mut total = 0; for i in 0..10 { total += i; } total")?;
 //!
 //! let program = Compiler::new().compile(&ast);
 //!

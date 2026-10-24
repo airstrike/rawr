@@ -1,5 +1,5 @@
-category=unsupported nominal syntax
-name=legacy do in checked nominal functions
-primary=1:20-20
+category=syntax error
+name=expected expression, found `do`
+primary=1:20-22
 secondary=none
-message=Unsupported nominal syntax 'legacy do in checked nominal functions' (line 1, position 20)
+message=expected expression, found `do` (line 1, position 20)

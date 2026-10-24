@@ -598,27 +598,13 @@ impl<'a> Resolver<'a> {
             slots,
         } in units
         {
-            let (source_map, parsed_items, legacy_script, legacy_source) = parsed.into_parts();
+            let (source_map, parsed_items, statements, statement_source) = parsed.into_parts();
             #[cfg(feature = "no_function")]
-            drop(legacy_source);
+            drop(statement_source);
 
-            // Statements outside the items: the parse that tells whether
-            // there are any found some, or found text it could not read.
             if context.source != self.entry_source
-                && legacy_script
-                    .as_ref()
-                    .is_none_or(|script| !script.statements().is_empty())
+                && let Some(position) = statements
             {
-                let position = legacy_script
-                    .as_ref()
-                    .and_then(|script| {
-                        script
-                            .statements()
-                            .iter()
-                            .map(crate::ast::Stmt::position)
-                            .find(|position| !position.is_none())
-                    })
-                    .unwrap_or(crate::Position::START);
                 return Err(Failure {
                     primary: context.source,
                     secondary: None,
@@ -666,9 +652,8 @@ impl<'a> Resolver<'a> {
                 source_map,
                 Script {
                     source: program::source::Id::from_index(context.source.index()),
-                    ast: legacy_script,
                     #[cfg(not(feature = "no_function"))]
-                    text: legacy_source,
+                    text: statement_source,
                 },
             ));
         }

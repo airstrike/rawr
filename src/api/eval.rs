@@ -159,7 +159,7 @@ impl Engine {
     /// scope.push("x", 40_i64);
     ///
     /// // Compile a script to an AST and store it for later evaluation
-    /// let ast = engine.compile("x += 2; x")?;
+    /// let ast = engine.compile_with_scope(&scope, "x += 2; x")?;
     ///
     /// // Evaluate it
     /// assert_eq!(engine.eval_ast_with_scope::<i64>(&mut scope, &ast)?, 42);

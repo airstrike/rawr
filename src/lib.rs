@@ -430,10 +430,6 @@ pub use eval::{Caches, FnResolutionCache, FnResolutionCacheEntry, GlobalRuntimeS
 #[allow(deprecated)]
 pub use func::{locked_read, locked_write, NativeCallContextStore, RawrFunc};
 
-#[cfg(feature = "internals")]
-#[cfg(feature = "metadata")]
-pub use api::definitions::Definitions;
-
 /// Number of items to keep inline for [`StaticVec`].
 const STATIC_VEC_INLINE_SIZE: usize = 3;
 

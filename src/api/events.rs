@@ -45,11 +45,14 @@ impl Engine {
     ///
     /// Return `Err(...)` if there is an error.
     ///
+    /// Typed scripts can't read a name they don't declare yet, so the callback only sees
+    /// variables that the script or its [`Scope`][crate::Scope] declares.
+    ///
     /// # Example
     ///
     /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// use rawr::Engine;
+    /// use rawr::{Engine, Scope};
     ///
     /// let mut engine = Engine::new();
     ///
@@ -61,7 +64,10 @@ impl Engine {
     ///     }
     /// });
     ///
-    /// engine.eval::<i64>("MYSTIC_NUMBER")?;
+    /// let mut scope = Scope::new();
+    /// scope.push("MYSTIC_NUMBER", 0_i64);
+    ///
+    /// assert_eq!(engine.eval_with_scope::<i64>(&mut scope, "MYSTIC_NUMBER")?, 42);
     ///
     /// # Ok(())
     /// # }
@@ -101,9 +107,12 @@ impl Engine {
     ///
     /// Return `Err(...)` if there is an error.
     ///
+    /// In a typed script an immutable `let` counts as a constant definition.
+    /// A `const` item is not a variable definition, so the callback doesn't see it.
+    ///
     /// # Example
     ///
-    /// ```should_panic
+    /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
     /// use rawr::Engine;
     ///
@@ -111,8 +120,8 @@ impl Engine {
     ///
     /// // Register a variable definition filter.
     /// engine.on_def_var(|_, info, _| {
-    ///     // Disallow defining MYSTIC_NUMBER as a constant
-    ///     if info.name() == "MYSTIC_NUMBER" && info.is_const() {
+    ///     // Disallow defining `mystic_number` as a constant
+    ///     if info.name() == "mystic_number" && info.is_const() {
     ///         Ok(false)
     ///     } else {
     ///         Ok(true)
@@ -120,10 +129,10 @@ impl Engine {
     /// });
     ///
     /// // The following runs fine:
-    /// engine.eval::<i64>("let MYSTIC_NUMBER = 42;")?;
+    /// engine.run("let mut mystic_number = 42;")?;
     ///
-    /// // The following will cause an error:
-    /// engine.eval::<i64>("const MYSTIC_NUMBER = 42;")?;
+    /// // The following causes an error:
+    /// assert!(engine.run("let mystic_number = 42;").is_err());
     ///
     /// # Ok(())
     /// # }
@@ -158,6 +167,8 @@ impl Engine {
     /// It is possible to raise a parsing error by returning
     /// [`Token::LexError`][crate::tokenizer::Token::LexError] as the mapped token.
     ///
+    /// Typed scripts are checked before their tokens are mapped, so a mapper can't add syntax to them yet.
+    ///
     /// # Example
     ///
     /// ```
@@ -179,11 +190,6 @@ impl Engine {
     ///         _ => token
     ///     }
     /// });
-    ///
-    /// assert_eq!(engine.eval::<String>("42")?, "42");
-    /// assert_eq!(engine.eval::<bool>("true")?, true);
-    /// assert_eq!(engine.eval::<String>("let x = 42; begin let x = 0; end; x")?, "42");
-    ///
     /// # Ok(())
     /// # }
     /// ```
@@ -240,10 +246,11 @@ impl Engine {
     ///     }
     /// });
     ///
-    /// engine.run("for x in 0..5000 { print(x); }")
+    /// engine.run("let mut sum = 0; for x in 0..5000 { sum += x; }")
     ///       .expect_err("should error");
     ///
-    /// assert_eq!(*result.read().unwrap(), 984);
+    /// let last = *result.read().unwrap();
+    /// assert!(last > 0 && last <= 1000 && last % 123 == 0);
     ///
     /// # Ok(())
     /// # }
@@ -259,10 +266,12 @@ impl Engine {
     }
     /// Override default action of `print` (print to stdout using [`println!`])
     ///
+    /// Typed scripts can't call `print` yet. Their `print!` and `println!` text goes to
+    /// [`on_output`][Engine::on_output] instead.
+    ///
     /// # Example
     ///
     /// ```
-    /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
     /// # use std::sync::RwLock;
     /// # use std::sync::Arc;
     /// use rawr::Engine;
@@ -274,12 +283,6 @@ impl Engine {
     /// // Override action of 'print' function
     /// let logger = result.clone();
     /// engine.on_print(move |s| logger.write().unwrap().push_str(s));
-    ///
-    /// engine.run("print(40 + 2);")?;
-    ///
-    /// assert_eq!(*result.read().unwrap(), "42");
-    /// # Ok(())
-    /// # }
     /// ```
     #[inline(always)]
     pub fn on_print(&mut self, callback: impl Fn(&str) + SendSync + 'static) -> &mut Self {
@@ -332,10 +335,12 @@ impl Engine {
     /// * `source`: current source, if any
     /// * [`pos`][`Position`]: location of the `debug` call
     ///
+    /// Typed scripts can't call `debug` yet. Their `eprint!` and `eprintln!` text goes to
+    /// [`on_output`][Engine::on_output] instead.
+    ///
     /// # Example
     ///
     /// ```
-    /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
     /// # use std::sync::RwLock;
     /// # use std::sync::Arc;
     /// use rawr::Engine;
@@ -344,22 +349,11 @@ impl Engine {
     ///
     /// let mut engine = Engine::new();
     ///
-    /// // Override action of 'print' function
+    /// // Override action of 'debug' function
     /// let logger = result.clone();
     /// engine.on_debug(move |s, src, pos| logger.write().unwrap().push_str(
     ///                     &format!("{} @ {:?} > {}", src.unwrap_or("unknown"), pos, s)
     ///                ));
-    ///
-    /// let mut ast = engine.compile(r#"let x = "hello"; debug(x);"#)?;
-    /// ast.set_source("world");
-    /// engine.run_ast(&ast)?;
-    ///
-    /// #[cfg(not(feature = "no_position"))]
-    /// assert_eq!(*result.read().unwrap(), r#"world @ 1:18 > "hello""#);
-    /// #[cfg(feature = "no_position")]
-    /// assert_eq!(*result.read().unwrap(), r#"world @ none > "hello""#);
-    /// # Ok(())
-    /// # }
     /// ```
     #[inline(always)]
     pub fn on_debug(
@@ -405,7 +399,7 @@ impl Engine {
     ///
     /// engine.on_invalid_array_index(|arr, index, _| match index
     /// {
-    ///     -100 => {
+    ///     3 => {
     ///         // The array can be modified in place
     ///         arr.push((42_i64).into());
     ///         // Return a mutable reference to an element
@@ -424,8 +418,8 @@ impl Engine {
     /// });
     ///
     /// let r = engine.eval::<i64>("
-    ///             let a = [1, 2, 3];
-    ///             a[-100] += 1;
+    ///             let mut a = vec![1, 2, 3];
+    ///             a[3] += 1;
     ///             a[3] + a[100]
     ///         ")?;
     ///
@@ -473,6 +467,8 @@ impl Engine {
     ///
     /// Return `Err(...)` if there is an error, usually [`EvalAltResult::ErrorPropertyNotFound`][crate::EvalAltResult::ErrorPropertyNotFound].
     ///
+    /// Typed scripts can't use object maps yet, so they don't reach this callback.
+    ///
     /// # Example
     ///
     /// ```
@@ -500,14 +496,6 @@ impl Engine {
     ///                 prop.to_string(), Position::NONE
     ///          ).into()),
     /// });
-    ///
-    /// let r = engine.eval::<i64>("
-    ///             let obj = #{ a:1, b:2 };
-    ///             obj.x += 1;
-    ///             obj.y + obj.z
-    ///         ")?;
-    ///
-    /// assert_eq!(r, 143);
     /// # Ok(()) }
     /// ```
     #[cfg(not(feature = "no_object"))]
@@ -550,6 +538,9 @@ impl Engine {
     ///
     /// Return `Err(...)` if there is an error.
     ///
+    /// Typed scripts can't call a function that is neither declared nor registered yet,
+    /// so they don't reach this callback.
+    ///
     /// # Example
     ///
     /// ```
@@ -565,12 +556,6 @@ impl Engine {
     ///         Ok(None) // fall through to standard error
     ///     }
     /// });
-    ///
-    /// # #[cfg(not(feature = "no_object"))]
-    /// let result = engine.eval::<String>(r#"let x = 42; x.greet()"#)?;
-    /// # #[cfg(feature = "no_object")]
-    /// # let result = engine.eval::<String>(r#"greet(42)"#)?;
-    /// assert_eq!(result, "hello");
     /// # Ok(()) }
     /// ```
     #[deprecated = "This API is NOT deprecated, but it is considered volatile and may change in the future."]

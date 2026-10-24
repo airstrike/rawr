@@ -11,7 +11,7 @@ pub(crate) mod native;
 pub(crate) mod package;
 pub(crate) mod type_ref;
 
-use crate::{host, method, parse, program, type_def, ImmutableString, Span, AST};
+use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub use error::{Category, Error};
 use std::collections::BTreeMap;
 #[cfg(feature = "no_std")]
@@ -92,7 +92,8 @@ pub struct Program {
 
 pub(crate) struct Script {
     source: program::source::Id,
-    ast: Option<AST>,
+    /// The statements outside the items, the body of `fn main` to the
+    /// checker.
     #[cfg(not(feature = "no_function"))]
     text: String,
 }
@@ -291,9 +292,9 @@ fn resolve_with_evidence_and_namespace(
     allocation_order: AllocationOrder,
     evidence: crate::diagnostic::Source,
 ) -> Result<Program, Error> {
-    let (source, parsed_items, legacy_script, legacy_source) = unit.into_parts();
+    let (source, parsed_items, _, statement_source) = unit.into_parts();
     #[cfg(feature = "no_function")]
-    drop(legacy_source);
+    drop(statement_source);
     if let Some(module) = parsed_items.iter().find_map(|item| match item {
         crate::item::Parsed::Module(module) => Some(module),
         crate::item::Parsed::Use(_)
@@ -356,9 +357,8 @@ fn resolve_with_evidence_and_namespace(
         aliases,
         scripts: vec![Script {
             source: program::source::Id::ROOT,
-            ast: legacy_script,
             #[cfg(not(feature = "no_function"))]
-            text: legacy_source,
+            text: statement_source,
         }]
         .into_boxed_slice(),
     };
@@ -502,31 +502,6 @@ fn resolve_with(
     let evidence = crate::diagnostic::Source::new("<memory>", unit.source().text())
         .expect("the compiler-owned in-memory source identity is valid");
     resolve_with_evidence_and_namespace(unit, host, namespace, allocation_order, evidence)
-}
-
-/// Lower the retained legacy syntax only after the complete unit has resolved.
-#[allow(dead_code)]
-pub(crate) fn lower(program: Program) -> Result<AST, Error> {
-    for shell in &program.items {
-        match &shell.kind {
-            item::Kind::Use(_)
-            | item::Kind::Struct(_)
-            | item::Kind::Enum(_) => {}
-            item::Kind::Impl(_) | item::Kind::Trait(_) => {}
-            item::Kind::Function(function) => reject_unavailable(function)?,
-        }
-    }
-
-    program
-        .scripts
-        .into_vec()
-        .into_iter()
-        .find(|script| script.source == program::source::Id::ROOT)
-        .and_then(|script| script.ast)
-        .ok_or_else(|| Error::LoweringUnavailable {
-            item: "<script>".into(),
-            body: Span::NONE,
-        })
 }
 
 pub(crate) fn lower_with_engine(
@@ -4821,7 +4796,7 @@ mod tests {
     use super::item::Kind;
     use super::type_ref::{Target, Type};
     use super::{
-        lower, resolve, resolve_with, AllocationOrder, Category, Error, Namespace, Program,
+        resolve, resolve_with, AllocationOrder, Category, Error, Namespace, Program,
     };
     use crate::{host, program, type_def, Engine};
     use std::any::TypeId;
@@ -5020,7 +4995,7 @@ mod tests {
     }
 
     #[test]
-    fn resolver_owns_ids_and_the_legacy_ast_seam() {
+    fn resolver_owns_ids_and_the_statements_outside_items() {
         let engine = Engine::new();
         let unit = engine
             .parse_unit("struct Counter; let answer = 40 + 2; answer")
@@ -5034,7 +5009,6 @@ mod tests {
             program.source().text(),
             "struct Counter; let answer = 40 + 2; answer"
         );
-        assert_eq!(lower(program).unwrap().statements().len(), 2);
     }
 
     #[test]

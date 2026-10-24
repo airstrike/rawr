@@ -660,20 +660,10 @@ impl Engine {
         #[cfg(not(feature = "no_std"))]
         let unit =
             crate::timing::observe_optional(session, crate::timing::Phase::ParseItems, || {
-                self.parse_unit_with_scope_raw(
-                    scope,
-                    &source,
-                    #[cfg(not(feature = "no_optimize"))]
-                    optimization_level,
-                )
+                self.parse_unit(&source)
             })?;
         #[cfg(feature = "no_std")]
-        let unit = self.parse_unit_with_scope_raw(
-            scope,
-            &source,
-            #[cfg(not(feature = "no_optimize"))]
-            optimization_level,
-        )?;
+        let unit = self.parse_unit(&source)?;
 
         #[cfg(not(feature = "no_std"))]
         let program =
@@ -758,7 +748,8 @@ impl Engine {
         crate::package::compile::descriptor(self, target, session)
     }
 
-    /// Parse the masked legacy portion of a Rawr unit into its temporary AST.
+    /// Parse the lowered program text the evaluator runs. Only text the
+    /// compiler generated reaches this parser; user input is checked as Rust.
     pub(crate) fn compile_legacy_script_with_scope_raw(
         &self,
         scope: Option<&Scope>,

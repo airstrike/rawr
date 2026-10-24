@@ -138,23 +138,7 @@ pub(super) fn lower(
     _scope: Option<&Scope>,
     #[cfg(not(feature = "no_optimize"))] _optimization_level: crate::OptimizationLevel,
 ) -> Result<Output, LoweringFailure> {
-    if let Some(ast) = program
-        .scripts
-        .iter()
-        .find_map(|script| script.ast.as_ref())
-    {
-        return Ok(Output {
-            ast: ast.clone(),
-            locations: Box::default(),
-            dependencies: Box::default(),
-            runtime_requirements: Box::default(),
-            projection_requirements: Box::default(),
-            widget_requirements: Box::default(),
-            widget_promotions: Box::default(),
-            closures: Box::default(),
-        });
-    }
-
+    // Every script is checked as Rust, which needs functions.
     Err(LoweringFailure::original(
         program.source.entry(),
         Error::LoweringUnavailable {
@@ -9059,13 +9043,9 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 Token::Let => self.parse_binding(true)?,
                 Token::Const => self.parse_binding(false)?,
-                Token::Throw => self.parse_terminal_throw()?,
                 Token::LeftParen if self.startup && is_tuple(definition.output()) => {
                     self.parse_startup_tail(definition.output())?;
                     startup_tail = true;
-                }
-                Token::Do => {
-                    return Err(self.unsupported("legacy do in checked nominal methods"));
                 }
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
@@ -9159,7 +9139,6 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 Token::Let => self.parse_binding(true)?,
                 Token::Const => self.parse_binding(false)?,
-                Token::Throw => self.parse_terminal_throw()?,
                 Token::LeftParen
                     if self.startup && definition.output.as_ref().is_some_and(is_tuple) =>
                 {
@@ -9170,9 +9149,6 @@ impl<'a> Parser<'a> {
                             .expect("guard proves an explicit tuple output"),
                     )?;
                     *startup_tail = true;
-                }
-                Token::Do => {
-                    return Err(self.unsupported("legacy do in checked nominal functions"));
                 }
                 Token::Fn => self.skip_nested_fn()?,
                 Token::Use => self.skip_nested_use()?,
@@ -17010,6 +16986,15 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        // `const X = 3;`: a constant needs its type, as rustc says.
+        if !let_keyword && annotation.is_none() {
+            return Err(Error::Syntax {
+                message: "missing type for `const` item".into(),
+                label: "provide a type for the constant".into(),
+                help: None,
+                at: name_span,
+            });
+        }
         self.expect(Token::Equals, "'=' after binding name")?;
         // `let grains = map.entry(k).or_default();`: each use of `grains`
         // is the entry again, so `*grains += n` changes the map. Rust's
@@ -18635,27 +18620,6 @@ impl<'a> Parser<'a> {
             Lvalue::Nested(nested) => self.store_nested(&nested, replacement.rendered_source())
         };
         Ok((rendered, replacement.span))
-    }
-
-    fn parse_terminal_throw(&mut self) -> Result<(), Error> {
-        let start = self.expect(Token::Throw, "'throw' to start a diverging statement")?;
-        let value = self.parse_expr()?;
-        self.reject_invocation(&value.ty, value.span, "thrown from its invocation")?;
-        self.reject_signature_support(&value.ty, value.span, "thrown")?;
-        let terminated = self.consume_terminator(start)?;
-        if !matches!(self.peek(), Token::RightBrace) {
-            return Err(self.unsupported("non-terminal `throw` in a checked nominal body"));
-        }
-
-        let mut rendered = origin::Fragment::plain("throw ");
-        rendered.push(value.rendered_source());
-        if terminated {
-            rendered.push_text(";");
-        }
-        self.write_output(rendered, span(start, value.span.end()));
-        self.last_type = Ty::Never;
-        self.last_expression = None;
-        Ok(())
     }
 
     /// `source`, a call of the boot, opened into its `(State, Task)` tuple
@@ -41746,9 +41710,8 @@ pub fn run() { consume(produce()); }
         for source in [
             "use proof::produce; pub fn run() { let leaked = produce(); }",
             "use proof::produce; pub fn run() { produce() }",
-            "use proof::produce; pub fn run() { throw produce(); }",
             "use proof::produce; pub fn run() { produce() == produce() }",
-            "use proof::produce; fn sink(value) {} pub fn run() { sink(produce()); }",
+            "use proof::produce; fn sink<T>(value: T) {} pub fn run() { sink(produce()); }",
             "use proof::produce; use extension::consume; pub fn run() { consume(if true { produce() } else { produce() }); }",
             "use proof::produce; pub fn run() { produce().clone(); }",
         ] {

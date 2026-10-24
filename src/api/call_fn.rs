@@ -47,6 +47,8 @@ impl<'a> CallFnOptions<'a> {
         }
     }
     /// Bind to the `this` pointer.
+    ///
+    /// Typed scripts can't read the `this` pointer yet.
     #[inline(always)]
     #[must_use]
     pub fn bind_this_ptr(mut self, value: &'a mut Dynamic) -> Self {
@@ -101,21 +103,20 @@ impl Engine {
     /// let engine = Engine::new();
     ///
     /// let ast = engine.compile("
-    ///     fn add(x, y) { len(x) + y + foo }
-    ///     fn add1(x)   { len(x) + 1 + foo }
-    ///     fn bar()     { foo/2 }
+    ///     fn add(x: &str, y: i64) -> i64 { x.len() as i64 + y }
+    ///     fn add1(x: &str) -> i64 { x.len() as i64 + 1 }
+    ///     fn bar() -> i64 { 21 }
     /// ")?;
     ///
     /// let mut scope = Scope::new();
-    /// scope.push("foo", 42_i64);
     ///
     /// // Call the script-defined function
     /// let result = engine.call_fn::<i64>(&mut scope, &ast, "add", ( "abc", 123_i64 ) )?;
-    /// assert_eq!(result, 168);
+    /// assert_eq!(result, 126);
     ///
     /// let result = engine.call_fn::<i64>(&mut scope, &ast, "add1", ( "abc", ) )?;
     /// //                                                           ^^^^^^^^^^ tuple of one
-    /// assert_eq!(result, 46);
+    /// assert_eq!(result, 4);
     ///
     /// let result = engine.call_fn::<i64>(&mut scope, &ast, "bar", () )?;
     /// assert_eq!(result, 21);
@@ -146,24 +147,15 @@ impl Engine {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// use rawr::{Engine, Scope, Dynamic, CallFnOptions};
+    /// use rawr::{Engine, Scope, CallFnOptions};
     ///
     /// let engine = Engine::new();
     ///
     /// let ast = engine.compile("
-    ///     fn action(x) { this += x; }         // function using 'this' pointer
-    ///     fn decl(x)   { let hello = x; }     // declaring variables
+    ///     fn decl(x: i64) { let hello = x; }     // declaring variables
     /// ")?;
     ///
     /// let mut scope = Scope::new();
-    /// scope.push("foo", 42_i64);
-    ///
-    /// // Binding the 'this' pointer
-    /// let mut value = 1_i64.into();
-    /// let options = CallFnOptions::new().bind_this_ptr(&mut value);
-    ///
-    /// engine.call_fn_with_options::<()>(options, &mut scope, &ast, "action", ( 41_i64, ))?;
-    /// assert_eq!(value.as_int().unwrap(), 42);
     ///
     /// // Do not rewind scope
     /// let options = CallFnOptions::default().rewind_scope(false);

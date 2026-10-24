@@ -25,12 +25,12 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 
 use crate::item::{self, type_ref};
-use crate::{parse, preview, source, ImmutableString, Position, Span, AST};
+use crate::{parse, preview, source, ImmutableString, Position, Span};
 
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 6;
+const FORMAT: u32 = 7;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`) and the
@@ -188,17 +188,14 @@ impl Cells {
     }
 
     fn encode(&self, text: &str, unit: &parse::Unit) -> Option<Vec<u8>> {
-        let (items, script, script_source) = unit.parts();
-        let script = match script {
-            None => 0_u8,
-            Some(ast) if is_empty(ast) => 1,
-            Some(_) => return None,
-        };
+        let (items, statements, script_source) = unit.parts();
+        if statements.is_some() {
+            return None;
+        }
         let mut writer = Writer(Vec::with_capacity(text.len() * 2));
         writer.0.extend_from_slice(MAGIC);
         writer.text(&self.stamp);
         writer.0.extend_from_slice(&digest(text));
-        writer.byte(script);
         writer.text(script_source);
         put_all(items, &mut writer);
         Some(writer.0)
@@ -209,23 +206,11 @@ fn digest(text: &str) -> [u8; 32] {
     Sha256::digest(text.as_bytes()).into()
 }
 
-fn is_empty(ast: &AST) -> bool {
-    ast.source().is_none()
-        && ast.statements().is_empty()
-        && !ast.has_functions()
-        && ast.shared_support().is_empty()
-}
-
 fn decode(reader: &mut Reader, text: &str) -> Option<parse::Unit> {
-    let script = match reader.byte()? {
-        0 => None,
-        1 => Some(AST::empty()),
-        _ => return None,
-    };
     let script_source = reader.text()?.to_owned();
     let items = Box::<[item::Parsed]>::get(reader)?;
     reader.bytes.is_empty().then(|| {
-        parse::Unit::new(source::Map::new(text), items, script, script_source)
+        parse::Unit::new(source::Map::new(text), items, None, script_source)
     })
 }
 
