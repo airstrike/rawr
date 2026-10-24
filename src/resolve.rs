@@ -1164,7 +1164,10 @@ fn resolve_import_binding(
         }
         // `use std::fmt;`, for hand-written `Debug` and `Display` impls,
         // and `use tokio::join;`, a macro Rawr expands.
-        None if std_fmt_import(&qualified) || tokio_macro(&qualified, host).is_some() => {
+        None if std_fmt_import(&qualified)
+            || tokio_macro(&qualified, host).is_some()
+            || qualified.contains("::") && hasher_alias(&qualified).is_some() =>
+        {
             item::Import::Module
         }
         None => {
@@ -1393,6 +1396,9 @@ pub(crate) fn std_reverse(path: &str) -> bool {
 /// name), `collections::HashMap`, `std::collections::HashMap`; the
 /// collection's name.
 pub(crate) fn std_collection(path: &str) -> Option<&'static str> {
+    if let Some(collection) = hasher_alias(path) {
+        return Some(collection);
+    }
     let name = path
         .strip_prefix("std::collections::")
         .or_else(|| path.strip_prefix("collections::"))
@@ -1400,6 +1406,22 @@ pub(crate) fn std_collection(path: &str) -> Option<&'static str> {
     ["HashMap", "HashSet", "BTreeMap", "BTreeSet"]
         .into_iter()
         .find(|collection| *collection == name)
+}
+
+/// A crate's alias of std's `HashMap` or `HashSet` with its own hasher:
+/// `rustc_hash::FxHashMap<K, V>` is `HashMap<K, V, FxBuildHasher>`. Rawr
+/// reads it as its own map, whose hasher it does not expose; `cargo
+/// build` compiles the crate's. The bare name, as `use` binds it, or the
+/// full path; the std collection's name.
+pub(crate) fn hasher_alias(path: &str) -> Option<&'static str> {
+    const ALIASES: [(&str, &str); 2] = [("FxHashMap", "HashMap"), ("FxHashSet", "HashSet")];
+    let name = ["rustc_hash::", "fxhash::"]
+        .into_iter()
+        .find_map(|krate| path.strip_prefix(krate))
+        .unwrap_or(path);
+    ALIASES
+        .into_iter()
+        .find_map(|(alias, collection)| (alias == name).then_some(collection))
 }
 
 /// `std::cmp::Ordering` as a type path is written: `Ordering` (imported,

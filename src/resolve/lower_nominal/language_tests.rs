@@ -8647,3 +8647,24 @@ pub fn run() -> i64 {
     );
     assert_eq!(value, 0);
 }
+
+#[test]
+fn language_fx_hash_collections_are_rawr_maps() {
+    let value = run(r#"
+        use rustc_hash::FxHashMap;
+        use rustc_hash::FxHashSet;
+        struct Life { cells: FxHashSet<(i64, i64)> }
+        pub fn run() -> i64 {
+            let mut counts = FxHashMap::default();
+            counts.insert((0, 1), 2);
+            *counts.entry((0, 1)).or_insert(0) += 1;
+            let mut life = Life { cells: FxHashSet::default() };
+            life.cells.insert((1, 1));
+            life.cells.insert((1, 1));
+            let typed: FxHashMap<i64, i64> = FxHashMap::default();
+            counts[&(0, 1)] * 10 + life.cells.len() as i64 + typed.len() as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 31);
+}

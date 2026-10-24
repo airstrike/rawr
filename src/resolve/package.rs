@@ -1839,7 +1839,8 @@ fn host_target(
         }
         // `use std::fmt;`, for hand-written `Debug` and `Display` impls.
         None if super::std_fmt_import(&qualified)
-            || super::tokio_macro(&qualified, host).is_some() =>
+            || super::tokio_macro(&qualified, host).is_some()
+            || qualified.contains("::") && super::hasher_alias(&qualified).is_some() =>
         {
             Ok(Target::Module)
         }

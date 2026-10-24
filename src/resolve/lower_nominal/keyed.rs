@@ -86,7 +86,7 @@ impl Parser<'_> {
             _ if self.models.get(name).is_some() => return None,
             name => (name.to_string(), 0),
         };
-        let kind = Keyed::from_name(&collection)?;
+        let kind = Keyed::from_name(crate::resolve::std_collection(&collection)?)?;
         if tokens[consumed] != Token::DoubleColon {
             return None;
         }
@@ -175,7 +175,9 @@ impl Parser<'_> {
 
     /// `HashMap<K, V>` and its kin in a body, after the name.
     pub(super) fn parse_keyed_type(&mut self, name: &str, name_span: Span) -> Result<Ty, Error> {
-        let kind = Keyed::from_name(name).expect("a std collection's name");
+        let kind = crate::resolve::std_collection(name)
+            .and_then(Keyed::from_name)
+            .expect("a std collection's name");
         let arity = if kind.is_map() { 2 } else { 1 };
         let mut arguments = Vec::new();
         if matches!(self.peek(), Token::LessThan) {
