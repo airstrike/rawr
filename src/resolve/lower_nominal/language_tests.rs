@@ -7547,8 +7547,9 @@ fn language_precise_capture_bounds_and_async_functions() {
         "async fn go() -> i64 { 1 } pub fn run() -> i64 { 0 } run()",
         "struct S; impl S { async fn go(&self) -> i64 { 1 } } pub fn run() -> i64 { 0 } run()",
     ] {
+        // A future runs as iced's `Task`, so a program without iced has none.
         let error = rejected(source);
-        assert!(error.contains("not supported in Rawr yet"), "{error}");
+        assert!(error.contains("without iced"), "{error}");
     }
 }
 

@@ -687,6 +687,32 @@ fn resolve_impl(
     #[cfg(feature = "rust-import")] native: Option<super::native::Site<'_>>,
 ) -> Result<Path, Error> {
     let span = parsed.span;
+    if let Some(output) = future_output(&parsed) {
+        // A future is iced's `Task` of its output, which runs it.
+        let definition = host.type_(TASK).ok_or_else(|| Error::UnsupportedNominalSyntax {
+            construct: "a future in a program without iced, whose `Task` runs it".into(),
+            source: span,
+        })?;
+        let output = match output {
+            Some(output) => resolve(
+                output.clone(),
+                types,
+                host,
+                #[cfg(feature = "rust-import")]
+                native,
+            )?,
+            None => Type::Unit(span),
+        };
+        return Ok(Path {
+            target: Target::Host {
+                definition: definition.clone(),
+                owner: host.type_owner(TASK).cloned(),
+            },
+            name: TASK.into(),
+            arguments: Box::new([Argument::Type(output)]),
+            span,
+        });
+    }
     let found = parsed.segments[0]
         .arguments
         .iter()
@@ -759,6 +785,37 @@ fn resolve_impl(
         arguments,
         span,
     })
+}
+
+/// The type that runs a future: iced's `Task`.
+const TASK: &str = "iced::Task";
+
+/// `impl Future<Output = T>` (or `std::future::Future`): `Some(Some(T))`,
+/// or `Some(None)` without its `Output`.
+fn future_output(parsed: &item::type_ref::Path) -> Option<Option<&item::type_ref::Type>> {
+    let arguments = &parsed.segments[0].arguments;
+    let bound = arguments.iter().any(|argument| {
+        matches!(argument, item::type_ref::Argument::Type(item::type_ref::Type::Path(bound))
+            if bound.segments.last().is_some_and(|last| last.name.text == "Future")
+                && matches!(
+                    bound.segments.iter().map(|segment| segment.name.text.as_str()).collect::<Vec<_>>()[..],
+                    ["Future"] | ["std" | "core", "future", "Future"]
+                ))
+    });
+    if !bound {
+        return None;
+    }
+    let binding = format!("{}Future=Output", item::type_ref::BINDING_PREFIX);
+    Some(arguments.iter().find_map(|argument| match argument {
+        item::type_ref::Argument::Type(item::type_ref::Type::Path(path)) => match &path.segments[..] {
+            [segment] if segment.name.text == binding.as_str() => match &segment.arguments[..] {
+                [item::type_ref::Argument::Type(ty)] => Some(ty),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }))
 }
 
 /// `fmt::Formatter` and `fmt::Result` (also under `std::` or

@@ -132,12 +132,12 @@ pub mod diagnostic;
 mod engine;
 mod eval;
 mod func;
-#[cfg(feature = "grain")]
 /// Async bodies: what their functions return, and how they resume.
 #[cfg(not(feature = "no_function"))]
 pub mod future {
     pub use crate::eval::machine::{Frame, Poll};
 }
+#[cfg(feature = "grain")]
 pub mod grain;
 /// Host type metadata visible during Rawr resolution.
 pub mod host;
