@@ -15355,7 +15355,16 @@ impl<'a> Parser<'a> {
     fn parse_task_perform_future(&mut self, name_span: Span) -> Result<ParsedExpr, Error> {
         let future = self.parse_expr()?;
         self.expect(Token::Comma, "',' after the future")?;
-        let mapper = self.parse_expr()?;
+        // The mapper's closure takes the future's output, as in
+        // `Task::perform(spawn_blocking(..), |result| result.unwrap())`.
+        self.closure_hint = self
+            .task_output(&future.ty)
+            .map(|output| self.inference.resolve(&output))
+            .filter(|output| !contains_inference(output))
+            .map(|output| Box::new([output]) as Box<[Ty]>);
+        let mapper = self.parse_expr();
+        self.closure_hint = None;
+        let mapper = mapper?;
         if matches!(self.peek(), Token::Comma) {
             self.next();
         }
@@ -33907,20 +33916,30 @@ impl<'a> Parser<'a> {
             // `tokio::spawn` has no place to run without tokio.
             if matches!(
                 full.as_str(),
-                "tokio::spawn"
-                    | "tokio::task::spawn"
-                    | "tokio::task::spawn_blocking"
-                    | "tokio::task::spawn_local"
+                "tokio::spawn" | "tokio::task::spawn" | "tokio::task::spawn_local"
             ) && crate::resolve::std_reexport("tokio::task::yield_now", &self.models.host)
                 != "tokio::task::yield_now"
             {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: format!(
                         "`{full}` in a program without a tokio dependency, whose async code runs \
-                         on iced's UI thread; run futures at once with `tokio::join!`, or return \
-                         a `Task` from `update`"
+                         on iced's UI thread; run futures at once with `tokio::join!`, run \
+                         blocking work with `tokio::task::spawn_blocking`, or return a `Task` \
+                         from `update`"
                     )
                     .into(),
+                    source: span(first_span.start(), path_end),
+                });
+            }
+            // `std::thread::spawn(f).join()` waits for `f` where it is
+            // called, and Rawr runs a closure off the UI thread only as a
+            // task, whose output reaches `update`.
+            if full == "std::thread::spawn" {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "`std::thread::spawn`, whose `join` waits on the calling thread; \
+                                in an iced program, run blocking work with \
+                                `Task::perform(tokio::task::spawn_blocking(move || ..), ..)`"
+                        .into(),
                     source: span(first_span.start(), path_end),
                 });
             }

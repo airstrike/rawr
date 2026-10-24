@@ -64,6 +64,7 @@ enum PreparedKind {
     Send { sender: Sender, value: Dynamic },
     Join { plans: Box<[Prepared]>, fallible: bool },
     Select(Box<[Prepared]>),
+    Blocking(item::Value),
 }
 
 /// One value a Rust task yields, turned into a Rawr value on the UI thread.
@@ -428,6 +429,69 @@ pub(crate) fn tokio_timeout(
     }))
 }
 
+/// tokio's `task::spawn_blocking(f)`: the task that runs the closure `f`
+/// on a worker thread of its own.
+pub(crate) fn tokio_blocking(
+    witness: host::runtime::Witness,
+    work: &mut Dynamic,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    let work = take_value::<item::Value>(work, "a closure")?;
+    Ok(Dynamic::from(Plan {
+        kind: Kind::Blocking(work),
+        witness: Some(witness),
+    }))
+}
+
+/// The future of a `spawn_blocking` task. Its first poll starts a worker
+/// thread that calls the closure, with an evaluation of its own: the
+/// closure holds its own captured values, and the UI thread's State is not
+/// one of them. While a recording's clock is frozen on the polling thread,
+/// the worker reads the same frozen time and the poll waits for it, so its
+/// output is ready at the instant the task started, on every run.
+enum Blocking {
+    Unstarted(Option<(Authority, item::Value)>),
+    Running(iced::futures::channel::oneshot::Receiver<Result<Dynamic, Error>>),
+}
+
+impl std::future::Future for Blocking {
+    type Output = Result<Dynamic, Error>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if let Self::Unstarted(work) = &mut *self {
+            let Some((authority, work)) = work.take() else {
+                return std::task::Poll::Ready(Err(Error::Spent));
+            };
+            let frozen = crate::snapshot::clock::now();
+            let (sender, receiver) = iced::futures::channel::oneshot::channel();
+            let worker = std::thread::Builder::new()
+                .name("rawr spawn_blocking".into())
+                .spawn(move || {
+                    let _clock = frozen.map(crate::snapshot::clock::freeze_at);
+                    let _ = sender.send(authority.call(&work).map(rawr::result::ok));
+                });
+            match worker {
+                Err(error) => return std::task::Poll::Ready(Err(Error::Blocking(error.to_string()))),
+                Ok(worker) if frozen.is_some() => {
+                    let _ = worker.join();
+                }
+                Ok(_) => {}
+            }
+            *self = Self::Running(receiver);
+        }
+        let Self::Running(receiver) = &mut *self else {
+            return std::task::Poll::Ready(Err(Error::Spent));
+        };
+        std::pin::Pin::new(receiver).poll(context).map(|output| {
+            output.unwrap_or_else(|_| {
+                Err(Error::Blocking("the worker thread ended without an output".into()))
+            })
+        })
+    }
+}
+
 /// iced's own tasks: `exit`, `window::latest`/`close` and the focus
 /// operations. They run in iced's runtime and touch no Rawr authority.
 #[derive(Clone, Debug)]
@@ -554,6 +618,10 @@ enum Kind {
     /// first output ends the others. Plan `i` of `n` gives `Err` `i` times
     /// around its output, and then `Ok` unless it is the last.
     Select(Box<[Plan]>),
+    /// tokio's `task::spawn_blocking(f)`: the closure `f` runs on a worker
+    /// thread of its own when the task first runs, and the task gives
+    /// `Ok` of its output.
+    Blocking(item::Value),
 }
 
 /// Current executable authority used only while a symbolic plan is lowered.
@@ -590,6 +658,9 @@ pub enum Error {
     Imported(String),
     /// A task from Rust was already run. Rust's `Task` is not `Clone`.
     Spent,
+    /// A `spawn_blocking` worker thread did not start, or ended without
+    /// an output.
+    Blocking(String),
 }
 
 impl Plan {
@@ -676,7 +747,8 @@ impl Plan {
             | Kind::Script(_)
             | Kind::Send { .. }
             | Kind::Join { .. }
-            | Kind::Select(_) => None,
+            | Kind::Select(_)
+            | Kind::Blocking(_) => None,
             Kind::Done(payload) => Some(payload),
         }
     }
@@ -770,6 +842,7 @@ impl Plan {
                     .collect::<Result<Vec<_>, _>>()?
                     .into_boxed_slice(),
             ),
+            Kind::Blocking(work) => PreparedKind::Blocking(work),
         };
         Ok(Prepared { kind, witness })
     }
@@ -838,6 +911,7 @@ impl Plan {
                 }
                 iced::Task::batch(tasks)
             }
+            Kind::Blocking(work) => lowering.blocking(work, next),
         })
     }
 }
@@ -1156,6 +1230,14 @@ impl Lowering {
         }
     }
 
+    /// tokio's `spawn_blocking`: run the closure `work` on a worker thread,
+    /// under this task's authority, and hand `Ok` of its output to `next`
+    /// on the UI thread, after the freshness check (`resume`).
+    fn blocking(&self, work: item::Value, next: Next) -> iced::Task<runtime::Message> {
+        let blocking = Blocking::Unstarted(Some((self.authority.clone(), work)));
+        self.resume(iced::Task::future(blocking), next)
+    }
+
     /// Await an issued operation natively, then validate its output and run
     /// its mapper on the UI thread.
     fn operation(&self, pending: host::operation::Pending, next: Next) -> iced::Task<runtime::Message> {
@@ -1258,11 +1340,22 @@ impl Prepared {
                     .collect::<Vec<_>>();
                 iced::Task::batch(tasks)
             }
+            PreparedKind::Blocking(work) => lowering.blocking(work, next),
         }
     }
 }
 
 impl Authority {
+    /// Call `function` with no arguments: a closure of no parameters.
+    fn call(&self, function: &item::Value) -> Result<Dynamic, Error> {
+        match self {
+            Self::Application(launch) => launch.invoke(function, &mut []).map_err(Error::Mapper),
+            Self::Preview { catalog, key } => catalog
+                .invoke_function(key, function, &mut [])
+                .map_err(Error::PreviewMapper),
+        }
+    }
+
     fn map(&self, payload: Dynamic, mapper: &item::Value) -> Result<Dynamic, Error> {
         match self {
             Self::Application(launch) => {
@@ -1367,6 +1460,7 @@ impl fmt::Display for Error {
                 write!(formatter, "a Rust task's output could not cross into Rawr: {error}")
             }
             Self::Spent => formatter.write_str("this task from Rust already ran, and a Task runs once"),
+            Self::Blocking(error) => write!(formatter, "a `spawn_blocking` worker failed: {error}"),
         }
     }
 }
@@ -1381,7 +1475,7 @@ impl std::error::Error for Error {
             Self::Output(error) => Some(error),
             Self::Message(error) => Some(error),
             Self::PreviewMessage(error) => Some(error),
-            Self::Imported(_) | Self::Spent => None,
+            Self::Imported(_) | Self::Spent | Self::Blocking(_) => None,
         }
     }
 }

@@ -41,6 +41,13 @@ impl Drop for Frozen {
     }
 }
 
+/// Freeze this thread's clock at `at`: a `spawn_blocking` worker reads
+/// the recording's time while the recording waits for it.
+pub(crate) fn freeze_at(at: Instant) -> Frozen {
+    NOW.with(|now| now.set(Some(at)));
+    Frozen(())
+}
+
 /// The simulated time, when this thread's clock is frozen.
 pub(crate) fn now() -> Option<Instant> {
     NOW.with(Cell::get)
