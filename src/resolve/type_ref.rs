@@ -262,6 +262,41 @@ fn resolve_path(
         // Traits are crate-wide by name.
         let last = &rest[rest.len() - 1];
         let name = &last.name.text;
+        // iced's `&mut dyn widget::Operation`, which a script widget's
+        // `operate` lends on: the facade's operation handle.
+        if name.as_str() == "Operation" && rest.len() > 1 {
+            let mut handle = parsed.clone();
+            handle.segments = rest.to_vec().into();
+            let resolved = resolve_path(
+                handle,
+                types,
+                host,
+                #[cfg(feature = "rust-import")]
+                native,
+            );
+            if let Ok(path) = &resolved
+                && matches!(&path.target, Target::Host { definition, .. }
+                    if definition.path().as_str() == OPERATION)
+            {
+                return resolved;
+            }
+            // `widget::Operation` through a module `use`, which a type path
+            // does not follow: iced's, when every segment is iced's.
+            if rest[..rest.len() - 1].iter().all(|module| {
+                matches!(module.name.text.as_str(), "iced" | "advanced" | "widget" | "core")
+            }) && let Some(definition) = host.type_(OPERATION)
+            {
+                return Ok(Path {
+                    name: OPERATION.into(),
+                    target: Target::Host {
+                        definition: definition.clone(),
+                        owner: host.type_owner(OPERATION).cloned(),
+                    },
+                    arguments: Box::default(),
+                    span,
+                });
+            }
+        }
         // `Output = i64` bindings, kept as the arguments `=Output<i64>`.
         let mut arguments = Vec::new();
         for argument in &last.arguments {
@@ -529,6 +564,26 @@ fn resolve_path(
         });
     }
 
+    // iced's `Size<Length>`, which `advanced::Widget::size` returns, is a
+    // type of its own: the facade's `Size` is iced's `Size<f32>`.
+    let target = match &target {
+        Target::Host { definition, owner }
+            if definition.path().as_str() == "iced::Size"
+                && matches!(
+                    &arguments[..],
+                    [Argument::Type(Type::Path(Path { target: Target::Host { definition: length, .. }, .. }))]
+                        if length.path().as_str() == "iced::Length"
+                )
+                && let Some(lengths) = host.type_(LENGTH_SIZE) =>
+        {
+            arguments.clear();
+            Target::Host {
+                definition: lengths.clone(),
+                owner: owner.clone(),
+            }
+        }
+        _ => target,
+    };
     if let Target::Host { definition, .. } = &target {
         if definition.role() == host::type_def::Role::Trait {
             return Err(Error::UnsupportedNominalSyntax {
@@ -537,6 +592,14 @@ fn resolve_path(
             });
         }
         content_messages(definition, &mut arguments, host);
+        // iced's `Shell<'_, Message>`: the facade's Shell takes any message,
+        // so a generic widget's `shell.request_redraw()` needs no witness.
+        if matches!(
+            definition.path().as_str(),
+            "iced::advanced::Shell" | "iced::advanced::overlay::Element"
+        ) {
+            arguments.retain(|argument| !matches!(argument, Argument::Type(_)));
+        }
         // iced's defaulted `Theme` and `Renderer` parameters after the
         // declared ones (`canvas::Geometry<Renderer>`) name the facade's own.
         while arguments
@@ -574,6 +637,12 @@ fn resolve_path(
         span,
     })
 }
+
+/// iced's `widget::Operation`, which `operate` lends.
+const OPERATION: &str = "iced::advanced::widget::Operation";
+
+/// The facade's type for iced's `Size<Length>`.
+pub(crate) const LENGTH_SIZE: &str = "iced::advanced::layout::LengthSize";
 
 /// iced's widgets are generic over their content: `Column<Element<'_,
 /// Message>>`, `Container<'a, W>`, `Button<'a, Message, &str>`. A facade

@@ -171,6 +171,9 @@ struct Callback {
     /// `|| value`: the span of `value`, a closure of no parameters that
     /// only a boot may be.
     closure: Option<Span>,
+    /// `()` as `iced::run`'s update: iced's update of a view whose Message
+    /// is `Never`, which never runs.
+    unit: bool,
 }
 
 struct Tail {
@@ -522,8 +525,19 @@ fn resolve_main(
     let result = match attempt.kind {
         AttemptKind::Run => {
             let callbacks = cursor.callbacks(&["update", "view"])?;
-            let update = resolve_callback(&callbacks[0], "update", items, methods, source)?;
             let view = resolve_callback(&callbacks[1], "view", items, methods, source)?;
+            let update = if callbacks[0].unit {
+                let shell = unit_update(attempt, callbacks[0].span, &view, items, methods, contracts)
+                    .ok_or(application::Error::NonSymbolicCallback {
+                        role: "update".into(),
+                        callback: callbacks[0].span,
+                    })?;
+                let key = shell.key.clone().expect("an update has its key");
+                boot_closure.push(shell);
+                key
+            } else {
+                resolve_callback(&callbacks[0], "update", items, methods, source)?
+            };
             // `iced::run` boots from `State::default()`: a hand-written
             // `impl Default` runs; a derived one has no method item.
             let boot = match callbacks[0].segments.as_ref() {
@@ -532,6 +546,7 @@ fn resolve_main(
                         segments: Box::new([owner.clone(), "default".into()]),
                         span: callbacks[0].span,
                         closure: None,
+                        unit: false,
                     },
                     "boot",
                     items,
@@ -835,6 +850,105 @@ fn boot_function(
                 constant: true,
                 asynchronous: false,
                 text: None,
+                elide: None,
+            },
+        }),
+    })
+}
+
+/// `()` as `iced::run`'s update, for a view whose Message is iced's
+/// `Never`: `fn(&mut State, Never)` of the view's State, which never runs,
+/// beside `main`.
+fn unit_update(
+    attempt: &Attempt<'_>,
+    span: Span,
+    view: &crate::item::Key,
+    items: &[item::Shell],
+    methods: &[method::Definition],
+    contracts: &Contracts<'_>,
+) -> Option<item::Shell> {
+    let main = items.iter().find(|shell| match &shell.kind {
+        item::Kind::Function(function) => function.name.span == attempt.name.span,
+        item::Kind::LegacyFunction(function) => function.name.span == attempt.name.span,
+        _ => false,
+    })?;
+    let state = update_state(view, items, methods).or_else(|| {
+        items
+            .iter()
+            .filter(|shell| shell.key.as_ref() == Some(view))
+            .find_map(|shell| match &shell.kind {
+                item::Kind::Function(function) if function.parameters.is_empty() => {
+                    Some(super::type_ref::Type::Unit(span))
+                }
+                _ => None,
+            })
+    })?;
+    let never = contracts.registry.type_("iced::Never")?.clone();
+    let owner = contracts.registry.type_owner("iced::Never").cloned();
+    let message = super::type_ref::Type::Path(super::type_ref::Path {
+        name: "iced::Never".into(),
+        target: super::type_ref::Target::Host {
+            definition: never,
+            owner,
+        },
+        arguments: Box::default(),
+        span,
+    });
+    let parameter = |name: &str, ty| item::Parameter {
+        name: crate::item::Name {
+            text: name.into(),
+            span,
+        },
+        ty,
+        span,
+        pattern: None,
+    };
+    let name = crate::item::Name {
+        text: "__rawr_update".into(),
+        span,
+    };
+    let start = span.start();
+    let (line, column) = (start.line()?, start.position()?);
+    let text = format!("{}{}()", "\n".repeat(line - 1), " ".repeat(column - 1));
+    Some(item::Shell {
+        id: crate::item::Id::from_index(items.len()),
+        source: main.source,
+        key: Some(crate::item::Key::new(
+            view.package().into(),
+            view.modules().into(),
+            name.text.clone(),
+            crate::item::Kind::Function,
+        )),
+        span,
+        kind: item::Kind::Function(item::Function {
+            header: crate::item::Header {
+                attributes: Box::default(),
+                visibility: None,
+                span,
+            },
+            name,
+            generics: Box::default(),
+            receiver: None,
+            parameters: Box::new([
+                parameter(
+                    "state",
+                    super::type_ref::Type::Reference {
+                        mutable: true,
+                        lifetime: None,
+                        target: Box::new(state),
+                        span,
+                    },
+                ),
+                parameter("_message", message),
+            ]),
+            output: None,
+            body: item::Body {
+                span,
+                lowering: item::Lowering::NominalFunction,
+                syntax: crate::item::BodySyntax::new(Vec::new()),
+                constant: true,
+                asynchronous: false,
+                text: Some(text.into()),
                 elide: None,
             },
         }),
@@ -1287,6 +1401,16 @@ impl<'a> Cursor<'a> {
         if role == "boot" && first.kind() == &crate::item::BodyTokenKind::OrOr {
             return self.closure(role);
         }
+        if role == "update" && first.kind() == &crate::item::BodyTokenKind::Unit {
+            let span = first.span();
+            self.consume();
+            return Ok(Callback {
+                segments: Box::default(),
+                span,
+                closure: None,
+                unit: true,
+            });
+        }
         let crate::item::BodyTokenKind::Identifier(first_name) = first.kind() else {
             return Err(application::Error::NonSymbolicCallback {
                 role: role.into(),
@@ -1332,6 +1456,7 @@ impl<'a> Cursor<'a> {
             segments: segments.into_boxed_slice(),
             span: Span::new(start, end),
             closure: None,
+            unit: false,
         })
     }
 
@@ -1365,6 +1490,7 @@ impl<'a> Cursor<'a> {
             segments: Box::default(),
             span: Span::new(start.start(), end),
             closure: Some(Span::new(body, end)),
+            unit: false,
         })
     }
 

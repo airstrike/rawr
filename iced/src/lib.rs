@@ -1067,6 +1067,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_media(&mut builder)?;
     declare_rich_text(&mut builder)?;
     declare_canvas(&mut builder)?;
+    widget::custom::declare::declare(&mut builder)?;
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
@@ -2382,6 +2383,26 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
                 receiver::Mode::Shared,
                 reader.finish(),
             )?)?;
+        }
+    }
+    // `offset.x = 2.0` and `Size { width: 1.0, height: 2.0 }`: a field
+    // set through its owned builder.
+    for (owner, fields) in [
+        ("Size", &["width", "height"][..]),
+        ("Point", &["x", "y"][..]),
+        ("Vector", &["x", "y"][..]),
+    ] {
+        for field in fields {
+            for input in PIXELS {
+                let mut setter = signature::Builder::new();
+                setter.parameter(type_ref::Type::builtin(input));
+                setter.output(type_ref::Type::registered(owner)?);
+                builder.item(item::Definition::method(
+                    format!("{owner}::{field}"),
+                    receiver::Mode::Owned,
+                    setter.finish(),
+                )?)?;
+            }
         }
     }
     builder.item(item::Definition::intrinsic_macro(
@@ -4708,6 +4729,24 @@ fn declare_styles(builder: &mut facade::Builder) -> Result<(), host::Error> {
         receiver::Mode::Shared,
         reader.finish(),
     )?)?;
+    // `border.width` and `border.color`, read as fields, and
+    // `border::radius(r)`.
+    for (name, output) in [("width", type_ref::Type::builtin(type_ref::Builtin::F64)), ("color", color()?)] {
+        let mut reader = signature::Builder::new();
+        reader.output(output);
+        builder.item(item::Definition::method(
+            format!("Border::{name}"),
+            receiver::Mode::Shared,
+            reader.finish(),
+        )?)?;
+    }
+    for input in &pixels {
+        let mut function = signature::Builder::new();
+        function
+            .parameter(input.clone())
+            .output(type_ref::Type::registered("border::Radius")?);
+        builder.item(item::Definition::function("border::radius", function.finish())?)?;
+    }
     let border_inputs = [
         ("rounded", &pixels[..]),
         ("width", &pixels[..]),

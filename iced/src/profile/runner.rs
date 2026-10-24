@@ -34,10 +34,10 @@ const COMPATIBILITY_SEMANTIC_POLICY: &[u8] = b"rawr.iced.compatibility-applicati
 const COMPATIBILITY_RUNTIME_BINDING: &[u8] = b"rawr.iced.compatibility-runtime-binding/v2";
 const TEXT_ENDPOINT_DISPOSITION: &[u8] =
     b"rawr.iced.compatibility-text-endpoint/suppressed-by-D271/v1";
-const COMPATIBILITY_PROJECTIONS: usize = 33;
+const COMPATIBILITY_PROJECTIONS: usize = 35;
 const COMPATIBILITY_ABI: u32 = 16;
 const COMPATIBILITY_DIGEST: [u8; 16] = [
-    63, 41, 208, 56, 32, 36, 89, 12, 56, 111, 64, 178, 230, 63, 15, 230,
+    64, 109, 181, 110, 88, 78, 242, 233, 35, 133, 102, 105, 121, 205, 25, 215,
 ];
 
 /// One exact target-argument substitution sealed into a generated projection table.
@@ -3914,6 +3914,14 @@ mod digest_tests {
             semantic.fingerprint().compatibility_digest(),
             super::COMPATIBILITY_DIGEST,
             "update COMPATIBILITY_DIGEST to the left value"
+        );
+        assert_eq!(
+            semantic
+                .types()
+                .map(|definition| definition.projections().len())
+                .sum::<usize>(),
+            super::COMPATIBILITY_PROJECTIONS,
+            "update COMPATIBILITY_PROJECTIONS to the left value"
         );
     }
 }

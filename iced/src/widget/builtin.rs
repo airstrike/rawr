@@ -544,6 +544,10 @@ fn bind_attestations(builder: &mut host::runtime::Builder) {
     builder
         .bind_type_attestation("iced::Element", |value, expected| {
             let value = value.read_lock::<widget::Value>()?;
+            // A wrapping widget's forwarded call, whose Message is erased.
+            if expected.argument_name(0).as_deref() == Some(super::custom::ERASED) {
+                return expected.attest(value.witness().is_some());
+            }
             (expected.argument_count() == 1)
                 .then(|| expected.attest_witness(value.witness()))
                 .flatten()
@@ -2017,6 +2021,16 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain every border function");
         builder
             .bind(format!("iced::Border::{name}"), move |args| {
+                // `border.width` and `border.color`, read as fields.
+                if let [border] = args {
+                    let border = border
+                        .read_lock::<iced::Border>()
+                        .ok_or_else(|| runtime_error("expected `iced::Border`".to_string()))?;
+                    return Ok(match name {
+                        "width" => Dynamic::from(f64::from(border.width)),
+                        _ => Dynamic::from(border.color),
+                    });
+                }
                 if args.len() != 2 {
                     return Err(arity(name, 2, args.len()));
                 }
@@ -2025,6 +2039,14 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Border builder");
     }
+    builder
+        .bind("iced::border::radius", |args| {
+            let [radius] = args else {
+                return Err(arity("border::radius", 1, args.len()));
+            };
+            Ok(Dynamic::from(iced::border::radius(pixels(radius, "border::radius")?)))
+        })
+        .expect("the iced facade must retain border::radius");
 }
 
 fn bind_space_builders(builder: &mut host::runtime::Builder) {

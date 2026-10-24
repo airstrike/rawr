@@ -228,6 +228,110 @@ fn main() -&gt; iced::Result {
 }</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-sun" data-out="out-sun" data-alt="A yellow sun with twelve pink rays, drawn by rawr-iced on the server" aria-label="Run sun.rs" hidden></button><b>rawr run sun.rs</b><span class="quiet" id="out-sun" aria-live="polite">(opens a window)</span></div>
 </div>
+<h3 id="custom-widgets">Widgets of your own</h3>
+<p>A type can implement iced&rsquo;s <code>advanced::Widget</code> trait, as iced&rsquo;s <code>custom_widget</code>, <code>custom_quad</code>, <code>geometry</code> and <code>loupe</code> examples do. A value of that type goes in a view like any other widget. The trait is iced master&rsquo;s, so <code>layout</code> sets <code>tree.size</code> and returns nothing.</p>
+<ul>
+  <li><code>size</code>, <code>layout</code> and <code>draw</code> are required. <code>update</code>, <code>mouse_interaction</code>, <code>tag</code>, <code>state</code>, <code>diff</code>, <code>operate</code> and <code>overlay</code> are optional. A method the impl leaves out runs iced&rsquo;s own default, without calling your code.</li>
+  <li><code>draw</code> fills quads with <code>renderer.fill_quad</code>. It draws meshes with <code>draw_mesh</code>. <code>renderer::Quad</code> takes its <code>bounds</code>, <code>border</code>, <code>shadow</code> and <code>snap</code>. <code>with_translation</code> and <code>with_transformation</code> run their closure where they are written, as in iced.</li>
+  <li><code>update</code> receives iced&rsquo;s events. Its <code>Shell</code> publishes a message, requests a redraw or captures the event.</li>
+  <li>A widget can wrap an <code>Element</code>, as loupe does. It forwards <code>size</code>, <code>layout</code>, <code>draw</code>, <code>update</code>, <code>operate</code>, <code>overlay</code> and the rest to it. iced shows the first overlay its <code>overlay</code> returns. The wrapped widget draws in its place among the widget&rsquo;s own drawing, inside the transformation and clipping around it.</li>
+  <li>A widget keeps a State of its own with <code>tree::Tag::of::&lt;State&gt;()</code> and <code>tree::State::new(value)</code>. <code>tree.state.downcast_ref::&lt;State&gt;()</code> reads it. <code>let state = tree.state.downcast_mut::&lt;State&gt;();</code> changes it. A reload keeps the State while its type and its fields stay the same. A change to them starts it again from <code>state</code>.</li>
+  <li><code>Size&lt;Length&gt;</code>, <code>layout::Limits</code>, <code>Layout</code>, <code>Transformation</code>, <code>Rectangle::expand</code>, <code>graphics::color::pack</code> and <code>iced::Never</code> work as in iced. <code>iced::run((), view)</code> runs a view whose Message is <code>Never</code>.</li>
+</ul>
+<p>A widget&rsquo;s drawing is kept while its <code>draw</code> runs and shown when <code>draw</code> returns. A call that fails shows its error in the widget&rsquo;s bounds. Its drawing and its Shell requests are dropped.</p>
+<p>A panic in a wrapped <code>Element</code>&rsquo;s own code is an error of the call that reached it. ?play and snapshots draw with tiny-skia, which does not draw meshes. A mesh shows in a window.</p>
+<div class="block">
+  <div class="file"><b>circle.rs</b></div>
+  <pre><code data-lang="rust" data-run="circle.rs" id="src-circle">use iced::advanced::layout::{self, Layout};
+use iced::advanced::renderer;
+use iced::advanced::widget::{self, Widget};
+use iced::widget::{center, column, slider, text};
+use iced::{border, mouse, Center, Color, Length, Rectangle, Size};
+
+struct Circle {
+    radius: f32,
+}
+
+impl widget::Meta for Circle {}
+
+impl&lt;Message, Theme, Renderer&gt; Widget&lt;Message, Theme, Renderer&gt; for Circle
+where
+    Renderer: renderer::Renderer,
+{
+    fn size(&amp;self) -&gt; Size&lt;Length&gt; {
+        Size {
+            width: Length::Shrink,
+            height: Length::Shrink,
+        }
+    }
+
+    fn layout(&amp;mut self, tree: &amp;mut widget::Tree, _renderer: &amp;Renderer, _limits: &amp;layout::Limits) {
+        tree.size = Size::new(self.radius * 2.0, self.radius * 2.0);
+    }
+
+    fn draw(
+        &amp;self,
+        _tree: &amp;widget::Tree,
+        renderer: &amp;mut Renderer,
+        _theme: &amp;Theme,
+        _style: &amp;renderer::Style,
+        layout: Layout,
+        _cursor: mouse::Cursor,
+        _viewport: &amp;Rectangle,
+    ) {
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds: layout.bounds(),
+                border: border::rounded(self.radius),
+                ..renderer::Quad::default()
+            },
+            Color::from_rgb8(0xff, 0x2e, 0x93),
+        );
+    }
+}
+
+struct App {
+    radius: f32,
+}
+
+impl Default for App {
+    fn default() -&gt; Self {
+        App { radius: 50.0 }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Radius(f32),
+}
+
+impl App {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::Radius(radius) =&gt; self.radius = radius,
+        }
+    }
+
+    fn view(&amp;self) -&gt; impl iced::Widget&lt;Message&gt; {
+        let radius = self.radius;
+        center(
+            column![
+                Circle { radius },
+                text!("Radius: {radius:.0}"),
+                slider(10.0..=100.0, radius, Message::Radius),
+            ]
+            .spacing(20)
+            .width(300)
+            .align_x(Center),
+        )
+    }
+}
+
+fn main() -&gt; iced::Result {
+    iced::run(App::update, App::view)
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-circle" data-out="out-circle" data-alt="A pink circle of radius 50 above its radius and a slider, drawn by a widget written in Rawr" aria-label="Run circle.rs" hidden></button><b>rawr run circle.rs</b><span class="quiet" id="out-circle" aria-live="polite">(opens a window)</span></div>
+</div>
 <h3 id="subscriptions">Subscriptions</h3>
 <p>A <code>.subscription(..)</code> method returns a <code>Subscription&lt;Message&gt;</code>. <code>iced::time::every</code>, <code>iced::keyboard::listen</code>, <code>iced::event::listen</code> and <code>iced::window::frames</code> work. Subscriptions combine with <code>map</code> and <code>filter_map</code>. <code>Subscription::run(builder)</code> takes a Rust function that returns a sipper, as <a href="#async">Async code</a> describes.</p>
 <div class="block">
@@ -404,7 +508,7 @@ fn start() -&gt; (Download, Task&lt;Message&gt;) {
   <li>Controls: <code>button</code>, <code>checkbox</code>, <code>toggler</code>, <code>radio</code>, <code>slider</code>, <code>vertical_slider</code>, <code>pick_list</code>, <code>combo_box</code>, <code>text_input</code> and <code>progress_bar</code>.</li>
   <li>Display: <code>text</code>, <code>image</code>, <code>svg</code>, <code>qr_code</code>, <code>rule</code> and <code>tooltip</code>. <code>Svg::style</code> takes a style function. <code>image::Handle</code> has <code>from_path</code>, <code>from_bytes</code> and <code>from_rgba</code>. <code>svg::Handle</code> has <code>from_path</code> and <code>from_memory</code>.</li>
   <li>Rich text: <code>rich_text</code>, <code>rich_text!</code> and <code>span</code>. A string works as a span. <code>on_link_click</code> maps a span&rsquo;s link to a message. A span without a link needs no link type.</li>
-  <li>Drawing: <code>canvas</code>, as <a href="#canvas">above</a>.</li>
+  <li>Drawing: <code>canvas</code>, as <a href="#canvas">above</a>, and widgets of your own, as <a href="#custom-widgets">above</a>.</li>
   <li>Interaction: <code>mouse_area</code>, <code>opaque</code>, <code>hover</code>, <code>sensor</code>, <code>component</code> and <code>widget::operation</code>.</li>
   <li><code>float</code> draws its content scaled and moved above the rest. It takes <code>scale</code>, <code>translate</code> with a function of the content&rsquo;s bounds and the viewport, and <code>style</code> with a function of the theme that returns a <code>float::Style</code>.</li>
   <li><code>selector::find</code> with a widget <code>Id</code>. Its <code>Target</code> has <code>bounds</code> and <code>visible_bounds</code>.</li>
@@ -415,14 +519,14 @@ fn start() -&gt; (Download, Task&lt;Message&gt;) {
 <p><code>main</code> may run statements before <code>iced::application</code> or <code>iced::run</code>, such as <code>tracing_subscriber::fmt::init();</code>. They run once, when <code>rawr run</code> starts, as Rust runs <code>main</code> once. A reset or a reload boots the app again without them. An edit to them takes effect when <code>rawr run</code> restarts, and the window says so. <code>#[cfg(..)]</code> on a statement and <code>cfg!</code> follow the machine Rawr runs on.</p>
 <h3 id="not-available">Not available yet</h3>
 <ul>
-  <li><code>iced::advanced</code>&rsquo;s widget traits. A custom widget other than a canvas program is written in Rust and imported. Its type cannot borrow yet, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>
+  <li>A widget type of your own that borrows, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>
   <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code>, <code>grid</code> and <code>keyed_column</code>.</li>
   <li><code>iced::gradient</code>, <code>iced::clipboard</code> and <code>application::timed</code>.</li>
   <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
   <li><code>tokio::task::spawn_blocking</code> with a Rawr closure. Other async code works, as <a href="#async">Async code</a> describes.</li>
 </ul>
 <h3 id="examples">iced&rsquo;s own examples</h3>
-<p>iced master has 56 examples. 28 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>lazy</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code>, <code>vectorial_text</code> and <code>websocket</code>. Six of the others write <code>async</code> code in the app itself. Four implement their own widget through <code>iced::advanced</code>. Two need <code>iced::application::timed</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
+<p>iced master has 56 examples. 32 of them pass <code>rawr check</code> with <code>// rawr</code> added as the first line of their files: <code>arc</code>, <code>bezier_tool</code>, <code>checkbox</code>, <code>combo_box</code>, <code>component</code>, <code>counter</code>, <code>custom_quad</code>, <code>custom_widget</code>, <code>delineate</code>, <code>download_progress</code>, <code>events</code>, <code>exit</code>, <code>geometry</code>, <code>lazy</code>, <code>loupe</code>, <code>modal</code>, <code>pick_list</code>, <code>progress_bar</code>, <code>qr_code</code>, <code>scrollable</code>, <code>slider</code>, <code>stopwatch</code>, <code>styling</code>, <code>svg</code>, <code>system_information</code>, <code>table</code>, <code>text</code>, <code>toast</code>, <code>tooltip</code>, <code>url_handler</code>, <code>vectorial_text</code> and <code>websocket</code>. Six of the others use <code>async</code> code and now stop at other gaps. Two need <code>iced::application::timed</code>. The rest need iced items or Rust features listed above. The playground&rsquo;s Examples menu has several of the passing examples ready to run.</p>
 <nav class="pager" aria-label="Next and previous pages"><a class="prev" href="/docs/embedding">Previous<b>Embedding</b></a><a class="next" href="/docs/play">Next<b>?play and the playground</b></a></nav>
 </article>
 </main>
