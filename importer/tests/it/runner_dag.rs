@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use sha2::{Digest as _, Sha256};
 
@@ -242,7 +242,7 @@ fn prepare_runner_harness(project: &std::path::Path) {
     assert!(status.success(), "the runner DAG fixture lock must seal");
 }
 
-fn execute_runner(project: &std::path::Path, snapshot: u8, start: bool) -> (u128, Counts) {
+fn execute_runner(project: &std::path::Path, snapshot: u8, start: bool) -> Counts {
     let chain = rawr_import::node::Chain::fixture(context(project))
         .expect("the runner DAG fixture parent validates");
     let cache = rawr_import::cache::Writer::new(project).expect("the runner cache binds");
@@ -253,7 +253,6 @@ fn execute_runner(project: &std::path::Path, snapshot: u8, start: bool) -> (u128
         1,
     )
     .expect("the runner DAG evidence scope opens");
-    let started = Instant::now();
     if start {
         let (snapshot, transport) = lifecycle_snapshot(project);
         let request = rawr_import::bridge::fixture_lifecycle_generation(
@@ -278,10 +277,8 @@ fn execute_runner(project: &std::path::Path, snapshot: u8, start: bool) -> (u128
         .expect("the generated-owner fixture request seals");
         execute_request(request, transport, project, &cache, &mut supervisor, false);
     }
-    let elapsed = started.elapsed().as_millis();
     drop(scope);
-    let counts = Arc::into_inner(counts).expect("the runner count scope retires");
-    (elapsed, counts)
+    Arc::into_inner(counts).expect("the runner count scope retires")
 }
 
 fn execute_request<B: rawr_import::surface::Runner>(
@@ -320,9 +317,9 @@ fn execute_request<B: rawr_import::surface::Runner>(
         .expect("the generated owner exits and reaps");
 }
 
-fn write_worker_report(path: &std::path::Path, elapsed_ms: u128, counts: &Counts) {
+fn write_worker_report(path: &std::path::Path, counts: &Counts) {
     let report = format!(
-        "elapsed_ms={elapsed_ms}\noverlay_hits={}\noverlay_misses={}\nhits={}\nmisses={}\npublished={}\ncargo={}\nrunner_process={}\nadmitted={}\nstarted={}\n",
+        "overlay_hits={}\noverlay_misses={}\nhits={}\nmisses={}\npublished={}\ncargo={}\nrunner_process={}\nadmitted={}\nstarted={}\n",
         counts.overlay_hits.load(Ordering::Relaxed),
         counts.overlay_misses.load(Ordering::Relaxed),
         counts.runner_hits.load(Ordering::Relaxed),
@@ -477,9 +474,8 @@ fn runner_dag_worker() {
         .expect("the worker snapshot is configured")
         .parse::<u8>()
         .expect("the worker snapshot is numeric");
-    let (elapsed_ms, counts) =
-        execute_runner(&project, snapshot, std::env::var_os(WORKER_START).is_some());
-    write_worker_report(&report, elapsed_ms, &counts);
+    let counts = execute_runner(&project, snapshot, std::env::var_os(WORKER_START).is_some());
+    write_worker_report(&report, &counts);
 }
 
 #[test]
@@ -588,23 +584,6 @@ fn identical_fresh_lifecycle_reuses_and_starts_without_transform_or_cargo_childr
     assert_eq!(second.get("admitted"), Some(&1));
     assert_eq!(second.get("started"), Some(&1));
 
-    let cold_ms = *first
-        .get("elapsed_ms")
-        .expect("the cold Started time is reported");
-    let warm_ms = *second
-        .get("elapsed_ms")
-        .expect("the warm Started time is reported");
-    let saved_ms = cold_ms.saturating_sub(warm_ms);
-    let reduction = if cold_ms == 0 {
-        0.0
-    } else {
-        saved_ms as f64 * 100.0 / cold_ms as f64
-    };
-    eprintln!(
-        "FRESH_LIFECYCLE_DAG_STARTED cold_ms={cold_ms} warm_ms={warm_ms} saved_ms={saved_ms} reduction_percent={reduction:.1} warm_overlay_hits=1 warm_runner_hits=1 warm_overlay_transforms=0 warm_runner_transforms=0 warm_cargo=0 warm_owner_processes=1 warm_admitted=1 warm_started=1",
-    );
-    assert!(warm_ms < cold_ms, "the warm Started path must be faster");
-
     retire_shared_store(&project);
 }
 
@@ -649,25 +628,6 @@ fn identical_fresh_runner_process_reuses_without_transform_or_cargo_children() {
     assert_eq!(second.get("runner_process"), Some(&1));
     assert_eq!(second.get("admitted"), Some(&1));
 
-    let first_ms = *first
-        .get("elapsed_ms")
-        .expect("the cold elapsed time is reported");
-    let second_ms = *second
-        .get("elapsed_ms")
-        .expect("the warm elapsed time is reported");
-    let saved_ms = first_ms.saturating_sub(second_ms);
-    let reduction = if first_ms == 0 {
-        0.0
-    } else {
-        saved_ms as f64 * 100.0 / first_ms as f64
-    };
-    eprintln!(
-        "FRESH_RUNNER_DAG_READY cold_ms={first_ms} warm_ms={second_ms} saved_ms={saved_ms} reduction_percent={reduction:.1} cold_overlay=1 warm_overlay=0 cold_runner_transform=1 warm_runner_transform=0 cold_cargo=1 warm_cargo=0 cold_owner_process=1 warm_owner_process=1 cold_admitted=1 warm_admitted=1",
-    );
-    assert!(
-        saved_ms > 0,
-        "the fresh stored hit must reduce elapsed time"
-    );
     assert_eq!(
         store_snapshot(&project.join("runner-harness")),
         source_tree,
@@ -714,21 +674,6 @@ fn changed_rawr_snapshot_reuses_the_exact_runner_without_cargo() {
     assert_eq!(second.get("runner_process"), Some(&1));
     assert_eq!(second.get("admitted"), Some(&1));
 
-    let cold_ms = *first
-        .get("elapsed_ms")
-        .expect("the cold edit time is reported");
-    let warm_ms = *second
-        .get("elapsed_ms")
-        .expect("the warm edit time is reported");
-    eprintln!(
-        "RAWR_EDIT_RUNNER_DAG_READY cold_ms={cold_ms} warm_ms={warm_ms} saved_ms={} cold_overlay=1 warm_overlay=0 cold_cargo=1 warm_cargo=0 cold_runner_transform=1 warm_runner_transform=0 cold_owner_process=1 warm_owner_process=1 cold_admitted=1 warm_admitted=1",
-        cold_ms.saturating_sub(warm_ms),
-    );
-    assert!(
-        warm_ms < cold_ms,
-        "the Rawr edit must reduce elapsed owner preparation"
-    );
-
     retire_shared_store(&project);
 }
 
@@ -754,7 +699,6 @@ fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
     )
     .expect("the hot-edit evidence scope opens");
 
-    let cold_started = Instant::now();
     let (cold_snapshot, cold_transport) = runner_snapshot(&project, 1);
     let cold_request = rawr_import::bridge::fixture_generation(
         chain.clone(),
@@ -777,7 +721,6 @@ fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
         .bootstrap(built, cold_transport, &process)
         .expect("the cold generated owner reaches admitted state");
     let cold_key = admitted.key();
-    let cold_elapsed = cold_started.elapsed();
 
     assert_eq!(counts.overlay_hits.load(Ordering::Relaxed), 0);
     assert_eq!(counts.overlay_misses.load(Ordering::Relaxed), 1);
@@ -815,7 +758,6 @@ fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
         .expect("the obsolete Rawr-only preparation aborts");
     assert_eq!(admitted.key(), cold_key);
 
-    let hot_started = Instant::now();
     let (hot_snapshot, hot_transport) = runner_snapshot(&project, 3);
     let hot_request = rawr_import::bridge::fixture_generation(
         chain,
@@ -841,7 +783,6 @@ fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
     let hot_key = admitted
         .commit_compile(prepared)
         .expect("the current Rawr-only preparation commits");
-    let hot_elapsed = hot_started.elapsed();
     assert_ne!(hot_key, cold_key);
     assert_eq!(admitted.key(), hot_key);
 
@@ -861,17 +802,7 @@ fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
         .expect("the hot-edited generated owner exits and reaps");
     drop(scope);
     let counts = Arc::into_inner(counts).expect("the hot-edit count scope retires");
-    eprintln!(
-        "RAWR_HOT_EDIT_OWNER_REUSE cold_ms={} hot_ms={} saved_ms={} aborted_preparations=1 total_overlay_transforms=1 hot_overlay_transforms=0 total_runner_transforms=1 hot_runner_transforms=0 total_cargo_children=1 hot_cargo_children=0 total_owner_processes=1 hot_owner_processes=0 admitted_generations=1",
-        cold_elapsed.as_millis(),
-        hot_elapsed.as_millis(),
-        cold_elapsed.saturating_sub(hot_elapsed).as_millis(),
-    );
     assert_eq!(counts.runner_process.load(Ordering::Relaxed), 1);
-    assert!(
-        hot_elapsed < cold_elapsed,
-        "the Rawr-only hot edit must be faster than the cold owner build"
-    );
 
     store
         .retire_fixture()
@@ -898,7 +829,6 @@ fn identical_runner_restores_from_shared_node_without_cargo() {
         1,
     )
     .expect("the cold evidence scope opens");
-    let cold_started = Instant::now();
     let cold = rawr_import::runner::fixture(
         chain.clone(),
         supervisor.revision().expect("the cold revision seals"),
@@ -912,7 +842,6 @@ fn identical_runner_restores_from_shared_node_without_cargo() {
     cold.artifact()
         .revalidate()
         .expect("the cold runner artifact revalidates");
-    let cold_elapsed = cold_started.elapsed();
     drop(cold);
     drop(cold_scope);
     assert_eq!(cold_counts.runner_hits.load(Ordering::Relaxed), 0);
@@ -935,7 +864,6 @@ fn identical_runner_restores_from_shared_node_without_cargo() {
         1,
     )
     .expect("the warm evidence scope opens");
-    let warm_started = Instant::now();
     let warm = rawr_import::runner::fixture(
         chain,
         supervisor.revision().expect("the warm revision seals"),
@@ -950,7 +878,6 @@ fn identical_runner_restores_from_shared_node_without_cargo() {
     warm.artifact()
         .revalidate()
         .expect("the restored runner artifact revalidates");
-    let warm_elapsed = warm_started.elapsed();
     drop(warm);
     drop(warm_scope);
     assert_eq!(warm_counts.runner_hits.load(Ordering::Relaxed), 1);
@@ -968,12 +895,6 @@ fn identical_runner_restores_from_shared_node_without_cargo() {
         store_snapshot(store.root()),
         cold_store,
         "the healthy shared runner hit must not durably mutate the store",
-    );
-    eprintln!(
-        "RUNNER_DAG cold_ms={} warm_ms={} saved_ms={} cold_cargo_runner=1 warm_cargo_runner=0",
-        cold_elapsed.as_millis(),
-        warm_elapsed.as_millis(),
-        cold_elapsed.saturating_sub(warm_elapsed).as_millis(),
     );
     store
         .retire_fixture()

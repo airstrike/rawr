@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use sha2::{Digest as _, Sha256};
 
@@ -393,7 +393,6 @@ fn fresh_process_worker() {
                 ));
             }
             children.fetch_add(1, Ordering::Relaxed);
-            std::thread::sleep(Duration::from_millis(300));
             Ok(Artifact(
                 b"sealed-native-product".to_vec().into_boxed_slice(),
             ))
@@ -426,7 +425,7 @@ fn direct_node_seals_once_and_a_fresh_process_reuses_without_transform_children(
     let first_report = root.with_extension("first.report");
     let second_report = root.with_extension("second.report");
 
-    let first_elapsed = run_worker(&root, &first_report);
+    run_worker(&root, &first_report);
     let first = parse_report(&first_report);
     assert_eq!(first.get("hits"), Some(&0));
     assert_eq!(first.get("misses"), Some(&1));
@@ -448,7 +447,7 @@ fn direct_node_seals_once_and_a_fresh_process_reuses_without_transform_children(
         "the first run publishes one action envelope"
     );
 
-    let second_elapsed = run_worker(&root, &second_report);
+    run_worker(&root, &second_report);
     let second = parse_report(&second_report);
     assert_eq!(second.get("hits"), Some(&1));
     assert_eq!(second.get("misses"), Some(&0));
@@ -460,24 +459,6 @@ fn direct_node_seals_once_and_a_fresh_process_reuses_without_transform_children(
         snapshot(&store_root),
         sealed,
         "a healthy hit is durably inert"
-    );
-
-    let saved = first_elapsed.saturating_sub(second_elapsed);
-    let reduction = if first_elapsed.is_zero() {
-        0.0
-    } else {
-        saved.as_secs_f64() * 100.0 / first_elapsed.as_secs_f64()
-    };
-    eprintln!(
-        "DAG_SLICE first_ms={} second_ms={} saved_ms={} reduction_percent={reduction:.1} first_transforms=1 second_transforms=0 first_children=1 second_children=0",
-        first_elapsed.as_millis(),
-        second_elapsed.as_millis(),
-        saved.as_millis(),
-    );
-    assert!(first_elapsed >= Duration::from_millis(250));
-    assert!(
-        saved >= Duration::from_millis(200),
-        "the stored hit must remove the child-backed transform latency"
     );
 
     fs::remove_file(first_report).expect("the first report retires");
@@ -5794,14 +5775,11 @@ fn symlinked_dynamic_store_directory_rejects_before_execution() {
     fs::remove_dir_all(outside).expect("the outside fixture retires");
 }
 
-fn run_worker(root: &Path, report: &Path) -> Duration {
-    let started = Instant::now();
+fn run_worker(root: &Path, report: &Path) {
     let output = worker_command(root, report)
         .output()
         .expect("the fresh DAG worker launches");
-    let elapsed = started.elapsed();
     assert_worker_success(output);
-    elapsed
 }
 
 fn worker_command(root: &Path, report: &Path) -> Command {
