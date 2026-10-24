@@ -269,6 +269,10 @@ pub(crate) fn declare(
         &[],
         &[Debug, Clone],
     )?;
+    // A mutex is a Rawr `RefCell` at runtime, which `mutex.lock().await`
+    // borrows once no other borrow holds it
+    // (`resolve::lower_nominal::cell::parse_mutex_lock`).
+    builder.type_::<rawr::resolve::Cell>("tokio::sync::Mutex", &["T"], &[])?;
     builder.type_::<WatchSender>("tokio::sync::watch::Sender", &["T"], &[Debug])?;
     builder.type_::<WatchReceiver>("tokio::sync::watch::Receiver", &["T"], &[Debug, Clone])?;
     builder.type_::<WatchSendError>("tokio::sync::watch::error::SendError", &["T"], &[Debug])?;
@@ -433,6 +437,20 @@ pub(crate) fn declare(
         Type::result(unit(), parameter("T")?),
     )?;
 
+    // Mutex
+    let mut new = signature::Builder::new();
+    new.type_parameter("T", &[])?;
+    new.parameter(parameter("T")?);
+    new.output(generic("tokio::sync::Mutex")?);
+    builder.item(item::Definition::associated_function("tokio::sync::Mutex::new", new.finish())?)?;
+    function(
+        builder,
+        "tokio::__lock",
+        &["T"],
+        vec![generic("tokio::sync::Mutex")?],
+        task_of(unit())?,
+    )?;
+
     // watch
     function(
         builder,
@@ -584,6 +602,10 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
             .expect(concat!("the rawr_iced facade must declare ", $path, " exactly once"));)*
         };
     }
+    rawr.bind_type_attestation("rawr_iced::tokio::sync::Mutex", |value, expected| {
+        expected.attest(rawr::resolve::cell_held(value).is_some())
+    })
+    .expect("the rawr_iced facade must declare tokio::sync::Mutex exactly once");
     attest! {
         "tokio::sync::mpsc::Sender" => Sender,
         "tokio::sync::mpsc::Receiver" => Receiver,
@@ -777,6 +799,34 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
         })
     });
 
+    bind("tokio::sync::Mutex::new", |_call, args| Ok(rawr::resolve::cell_new(args[0].take())));
+    bind("tokio::__lock", |_call, args| {
+        // A borrow's end wakes nothing, so a waiting task looks again. On a
+        // recording's clock it asks to be polled again at once, and the
+        // recording polls it after each step of Rawr code. Elsewhere it looks
+        // after each millisecond. The borrow is made as the task ends, so no
+        // other task takes it between this one's end and its next step.
+        let mutex = args[0].clone();
+        Ok(task::tokio_task(None, move || {
+            let mutex = mutex.clone();
+            let recording = clock::now().is_some();
+            let mut timer: Option<BoxFuture<'static, ()>> = None;
+            Box::pin(std::future::poll_fn(move |context| loop {
+                if let Some(guard) = rawr::resolve::cell_lock(&mutex) {
+                    return Poll::Ready(guard);
+                }
+                if recording {
+                    context.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+                let waiting = timer.get_or_insert_with(|| sleep(std::time::Duration::from_millis(1)));
+                if waiting.as_mut().poll(context).is_pending() {
+                    return Poll::Pending;
+                }
+                timer = None;
+            }))
+        }))
+    });
     bind("tokio::sync::watch::channel", |_call, args| {
         let (sender, receiver) = watch::channel(args[0].take());
         Ok(Dynamic::from_array(vec![

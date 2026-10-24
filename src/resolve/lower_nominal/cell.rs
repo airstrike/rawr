@@ -17,9 +17,9 @@ type BorrowToken = std::sync::Weak<()>;
 
 /// A `RefCell`: its value and the borrows it holds.
 #[derive(Clone)]
-pub(super) struct Cell(crate::Shared<Inner>);
+pub struct Cell(crate::Shared<Inner>);
 
-pub(super) struct Inner {
+pub struct Inner {
     value: crate::Locked<Dynamic>,
     /// Each held borrow's token and whether it is mutable. A borrow whose
     /// guard is gone is released.
@@ -70,6 +70,33 @@ fn cell(value: &Dynamic) -> Option<crate::Shared<Inner>> {
 /// The value of a cell or a borrow, for `Debug`.
 pub(super) fn value(value: &Dynamic) -> Option<Dynamic> {
     cell(value).map(|cell| cell.value())
+}
+
+/// A new cell of `value`.
+pub(super) fn new(value: Dynamic) -> Dynamic {
+    Dynamic::from(Cell(crate::Shared::new(Inner {
+        value: crate::Locked::new(value),
+        borrows: crate::Locked::new(Vec::new()),
+    })))
+}
+
+/// Whether the cell `value` is borrowed; `None` when it is no cell.
+pub(super) fn held(value: &Dynamic) -> Option<bool> {
+    let cell = value.read_lock::<Cell>()?.0.clone();
+    Some(cell.held().0)
+}
+
+/// A mutable borrow of the cell `value` when nothing borrows it.
+pub(super) fn try_borrow_mut(value: &Dynamic) -> Option<Dynamic> {
+    let inner = value.read_lock::<Cell>()?.0.clone();
+    if inner.held().0 {
+        return None;
+    }
+    let token = crate::Shared::new(());
+    if let Some(mut borrows) = crate::func::locked_write(&inner.borrows) {
+        borrows.push((crate::Shared::downgrade(&token), true));
+    }
+    Some(Dynamic::from(Guard { cell: inner, token }))
 }
 
 pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
@@ -280,6 +307,79 @@ impl Parser<'_> {
                 reference: member_span,
             }),
         }
+    }
+
+    /// rawr-iced's tokio `mutex.lock().await`, after `lock`: the mutex is a
+    /// `RefCell` at runtime. The task of `tokio::__lock` waits until no
+    /// borrow holds it and gives the mutable borrow it then makes, which the
+    /// expression is, as `borrow_mut()` is.
+    pub(super) fn parse_mutex_lock(
+        &mut self,
+        mutex: ParsedExpr,
+        inner: Ty,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let (arguments, _) = self.parse_call_arguments("`lock` arguments")?;
+        let awaited = arguments.is_empty()
+            && matches!(self.peek(), Token::Period)
+            && matches!(self.peek_second(), Token::Reserved(ref keyword) if keyword.as_str() == "await");
+        if !awaited || !self.closures.last().is_some_and(|scope| scope.asynchronous) {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "a tokio `Mutex` locked other than by `mutex.lock().await` in async code"
+                    .into(),
+                source: span(mutex.span.start(), member_span.end()),
+            });
+        }
+        self.next();
+        let end = self.next().1;
+        let call = span(mutex.span.start(), end);
+        let items = self
+            .models
+            .host_items("rawr_iced::tokio::__lock")
+            .map(<[_]>::to_vec)
+            .ok_or_else(|| self.unsupported("tokio's `Mutex` without rawr-iced"))?;
+        let owner = self.models.item_owner("rawr_iced::tokio::__lock").cloned();
+        let cell = mutex.rendered_source();
+        let lock = self.call_host_function(&items, owner, vec![mutex], call)?;
+        let mut borrow = origin::Fragment::plain(format!("{}(", crate::eval::machine::AWAIT));
+        borrow.push(lock.rendered_source());
+        borrow.push_text(")");
+        // As for `borrow_mut()`, a change locks where the place is read, and
+        // a read in an expression (`*mutex.lock().await + 1`) reads the value
+        // without waiting, so `+=` does not lock twice.
+        let source = self.prelude_op(PreludeOp::CellGet, [cell]);
+        let mut expression = self.operator_expr(
+            source,
+            Ty::Reference {
+                mutable: true,
+                target: Box::new(inner.clone()),
+            },
+            call,
+        );
+        let place = self.temporary("cell");
+        self.bindings.insert(
+            place.as_str().into(),
+            Binding {
+                ty: Ty::Unknown,
+                mutable: true,
+                available: true,
+                declaration: call,
+                kind: BindingKind::Local,
+            },
+        );
+        expression.lvalue = Some(Lvalue::Nested(Box::new(NestedLvalue {
+            binding: place.as_str().into(),
+            base: borrow.clone(),
+            steps: vec![PlaceStep::Cell { release: true }],
+            ty: inner.clone(),
+        })));
+        self.last_cell_borrow = Some(CellBorrow {
+            span: call,
+            borrow,
+            mutable: true,
+            inner,
+        });
+        Ok(expression)
     }
 
     /// `let v = cell.borrow_mut();`: the borrow kept in a hidden local for

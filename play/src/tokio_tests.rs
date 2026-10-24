@@ -356,3 +356,26 @@ fn tokio_files_sockets_and_processes_are_unknown() {
         assert!(error.contains("error[RAWR-RESOLVE-UNKNOWN-"), "{path}: {error}");
     }
 }
+
+#[test]
+fn tokio_mutex_lock_waits_for_the_holder() {
+    shows_at(
+        "use tokio::sync::Mutex;
+use tokio::time::sleep;
+async fn add(total: &Mutex<i64>, n: i64) {
+    let mut held = total.lock().await;
+    let before = *held;
+    sleep(Duration::from_millis(100)).await;
+    *held = before + n;
+}
+async fn run() -> String {
+    let total = Mutex::new(0);
+    tokio::join!(add(&total, 1), add(&total, 2));
+    *total.lock().await += 10;
+    let value = *total.lock().await;
+    format!(\"total {value}\")
+}",
+        "total 13",
+        Duration::from_millis(200),
+    );
+}

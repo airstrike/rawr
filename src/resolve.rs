@@ -1194,6 +1194,33 @@ pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableS
     qualified.into()
 }
 
+/// A `RefCell` at runtime, as a host type whose values are cells names it.
+#[doc(hidden)]
+pub use lower_nominal::cell::Cell;
+
+/// A `RefCell` of `value`, for a host type whose values are cells, as
+/// rawr-iced's tokio `Mutex` is.
+#[doc(hidden)]
+#[must_use]
+pub fn cell_new(value: crate::Dynamic) -> crate::Dynamic {
+    lower_nominal::cell_new(value)
+}
+
+/// Whether the `RefCell` `value` is borrowed; `None` when it is no cell.
+#[doc(hidden)]
+#[must_use]
+pub fn cell_held(value: &crate::Dynamic) -> Option<bool> {
+    lower_nominal::cell_held(value)
+}
+
+/// A mutable borrow of the `RefCell` `value`, as `borrow_mut` makes one,
+/// when nothing borrows it; `None` while something does.
+#[doc(hidden)]
+#[must_use]
+pub fn cell_lock(value: &crate::Dynamic) -> Option<crate::Dynamic> {
+    lower_nominal::cell_lock(value)
+}
+
 /// The macro `path` names when it is tokio's `join`, `try_join` or
 /// `select` in a program without tokio, whose tokio is rawr-iced's
 /// (`std_reexport`). Rawr expands them itself.

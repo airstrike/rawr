@@ -8,7 +8,7 @@ mod location;
 mod origin;
 mod places;
 mod reverse;
-mod cell;
+pub(crate) mod cell;
 
 #[cfg(all(test, not(feature = "no_function"), feature = "rust-import"))]
 mod collected_tests;
@@ -1991,6 +1991,22 @@ fn host_number_accepts(parameter: &crate::host::type_ref::Type, source: &Ty) -> 
         Shape::Builtin(Builtin::F64 | Builtin::F32) => matches!(source, Ty::Float(_)),
         _ => false,
     }
+}
+
+/// A `RefCell` of `value` (`resolve::cell_new`).
+pub(crate) fn cell_new(value: Dynamic) -> Dynamic {
+    cell::new(value)
+}
+
+/// Whether the `RefCell` `value` is borrowed (`resolve::cell_held`).
+pub(crate) fn cell_held(value: &Dynamic) -> Option<bool> {
+    cell::held(value)
+}
+
+/// A mutable borrow of the `RefCell` `value` when nothing borrows it
+/// (`resolve::cell_lock`).
+pub(crate) fn cell_lock(value: &Dynamic) -> Option<Dynamic> {
+    cell::try_borrow_mut(value)
 }
 
 /// Whether `value` is a `RefCell` at runtime.
@@ -25970,6 +25986,21 @@ impl<'a> Parser<'a> {
             };
             if let Some(inner) = cell {
                 value = self.parse_cell_member(value, inner, member, member_span)?;
+                continue;
+            }
+            // tokio's `mutex.lock().await` without tokio: a `RefCell`
+            // borrow once no other borrow holds it.
+            let mutex = match &builtin {
+                Ty::Reference { target, .. } => (**target).clone(),
+                ty => ty.clone(),
+            };
+            if member.as_str() == "lock"
+                && let Ty::Host { proof, arguments } = &mutex
+                && proof.definition.path() == "rawr_iced::tokio::sync::Mutex"
+                && let [inner] = &arguments[..]
+            {
+                let inner = inner.clone();
+                value = self.parse_mutex_lock(value, inner, member_span)?;
                 continue;
             }
             let tuple = match &builtin {
