@@ -29,7 +29,7 @@ prelude = [
     "iced::widget::center_y", "iced::widget::checkbox", "iced::widget::column",
     "iced::widget::combo_box", "iced::widget::component", "iced::widget::container",
     "iced::widget::float",
-    "iced::widget::hover", "iced::widget::image", "iced::widget::lazy",
+    "iced::widget::hover", "iced::widget::image", "iced::widget::keyed_column", "iced::widget::lazy",
     "iced::widget::left", "iced::widget::mouse_area", "iced::widget::opaque",
     "iced::widget::pick_list", "iced::widget::pin", "iced::widget::progress_bar",
     "iced::widget::qr_code", "iced::widget::radio", "iced::widget::responsive", "iced::widget::rich_text",
