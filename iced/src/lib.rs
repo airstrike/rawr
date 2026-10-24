@@ -1102,6 +1102,12 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     declare_font(&mut builder)?;
     declare_checkbox_icon(&mut builder)?;
     declare_angles(&mut builder)?;
+    for path in DEFAULTED {
+        builder.item(item::Definition::associated_function(
+            format!("{path}::default"),
+            output_signature(path)?,
+        )?)?;
+    }
     declare_scrollable(&mut builder)?;
     declare_table(&mut builder)?;
     // `font::Family::to_string` and `ContentFit::to_string`: their
@@ -3985,6 +3991,11 @@ pub(crate) const SCROLLABLE_SOURCES: [&str; 8] = [
     "Content",
     "Resize",
 ];
+
+/// The facade's `Default` types whose `T::default()` is iced's own,
+/// bound in `widget::helpers`.
+pub(crate) const DEFAULTED: [&str; 7] =
+    ["Color", "ContentFit", "Font", "Padding", "Point", "Rectangle", "Vector"];
 
 /// iced's `Degrees` and `Radians`: `Degrees(90.0)`, `Radians::PI`,
 /// `Radians::from(degrees)` and their operators, the methods named for `std::ops`' traits.

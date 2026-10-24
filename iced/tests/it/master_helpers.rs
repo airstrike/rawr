@@ -708,6 +708,49 @@ fn master_slider_moves_over_an_angle_range() {
     find(&adapter, "quarter 90");
 }
 
+/// `Checkbox::text_size`, and `T::default()` of iced's `Default` types,
+/// as ferris writes them.
+const CHECKBOX_AND_DEFAULTS: &str = r#"
+use iced::widget::{checkbox, column, text};
+use iced::{Color, ContentFit, Point, Vector, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Toggled(bool),
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let point = Point::default() + Vector::default();
+        column![
+            checkbox(true).label("Spin!").text_size(12).on_toggle(Message::Toggled),
+            text(format!(
+                "{} {:?} {}",
+                ContentFit::default(),
+                Color::default() == Color::TRANSPARENT,
+                point.x,
+            )),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_checkbox_text_size_and_facade_defaults() {
+    let adapter = boot(CHECKBOX_AND_DEFAULTS);
+    find(&adapter, "Spin!");
+    find(&adapter, "Contain true 0");
+}
+
 /// std's `io::Error` and `io::ErrorKind`, as editor and markdown use them.
 const IO_ERRORS: &str = r#"
 use iced::widget::{column, text};

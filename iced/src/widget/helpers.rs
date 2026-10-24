@@ -30,6 +30,30 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_operations(builder);
     bind_keyboard(builder);
     bind_events(builder);
+    bind_defaults(builder);
+}
+
+/// `T::default()` of each type in `crate::DEFAULTED`.
+fn bind_defaults(builder: &mut host::runtime::Builder) {
+    fn bind<T: Default + Clone + Send + Sync + 'static>(
+        builder: &mut host::runtime::Builder,
+        path: &str,
+    ) {
+        builder
+            .bind(format!("iced::{path}::default"), |_| Ok(Dynamic::from(T::default())))
+            .expect("the iced facade must retain every DEFAULTED type's default");
+    }
+    for path in crate::DEFAULTED {
+        match path {
+            "Color" => bind::<iced::Color>(builder, path),
+            "ContentFit" => bind::<iced::ContentFit>(builder, path),
+            "Font" => bind::<iced::Font>(builder, path),
+            "Padding" => bind::<iced::Padding>(builder, path),
+            "Point" => bind::<iced::Point>(builder, path),
+            "Rectangle" => bind::<iced::Rectangle>(builder, path),
+            _ => bind::<iced::Vector>(builder, path),
+        }
+    }
 }
 
 /// The readers that match `iced::Event`, `window::Event`, `mouse::Event`,
