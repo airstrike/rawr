@@ -38,8 +38,6 @@ impl Decoded {
 
 /// The complete replay result, not a current node receipt or published owner.
 pub(in crate::cargo) struct Replay {
-    #[cfg(feature = "import-baseline")]
-    pub(in crate::cargo) observation: [u8; 32],
     pub(in crate::cargo) decoded: Arc<Decoded>,
     pub(in crate::cargo) capture: Capture,
     pub(in crate::cargo) completion: universe::Completion,
@@ -252,22 +250,6 @@ impl Request {
             limits,
         )?;
         Ok(Replay {
-            #[cfg(feature = "import-baseline")]
-            observation: cargo::resolution_observation(
-                [
-                    manifest,
-                    source,
-                    decoded.pending.lock_digest(),
-                    self.authority.digest,
-                    self.config.digest(),
-                    decoded.metadata.digest(),
-                    decoded.graph.digest(),
-                ],
-                Some(completion.proof()),
-                &decoded.selected,
-                &self.target,
-                &self.profile,
-            ),
             decoded,
             capture,
             completion,

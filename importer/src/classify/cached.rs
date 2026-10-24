@@ -312,10 +312,6 @@ mod tests {
         fn process(&self, _kind: crate::metrics::ProcessKind) {}
         fn milestone(&self, _milestone: crate::metrics::Milestone, _observed_ns: Option<u64>) {}
         fn runner_owned(&self, _owned: &crate::metrics::runner::Owned) {}
-        #[cfg(feature = "import-baseline")]
-        fn profile(&self, _evidence: &crate::metrics::profile::Evidence) {}
-        #[cfg(feature = "import-baseline")]
-        fn pipeline(&self, _evidence: &crate::metrics::pipeline::Evidence) {}
         fn scope_opened(&self) {}
         fn scope_joined(&self) {}
     }

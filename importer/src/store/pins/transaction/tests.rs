@@ -114,16 +114,8 @@ fn prepared_failures_restore_absent_empty_and_existing_ledgers_exactly() {
             let retained = match previous {
                 0 => None,
                 1 => {
-                    lease::with_publication(store.root(), store.graph_budget(), |publication| {
-                        super::super::save(
-                            publication,
-                            store.root(),
-                            &Ledger::empty(store.project),
-                            #[cfg(feature = "import-baseline")]
-                            crate::metrics::publication::Replacement::ProjectRecovery,
-                            #[cfg(feature = "import-baseline")]
-                            crate::metrics::principal::ledger::Cause::Recovery(None),
-                        )
+                    lease::with_publication(store.root(), |publication| {
+                        super::super::save(publication, store.root(), &Ledger::empty(store.project))
                     })
                     .unwrap();
                     None
@@ -197,10 +189,6 @@ fn admission_error_rolls_back_and_success_only_transfers_the_locked_roots() {
     let next = proof(&store, 8);
     let retained = store.pin_live_last_good(&old).unwrap();
     let before = snapshot(&store);
-    #[cfg(feature = "import-baseline")]
-    let recorder = crate::metrics::recorder::Recorder::transform(10_000).unwrap();
-    #[cfg(feature = "import-baseline")]
-    let scope = recorder.scope().unwrap();
     let rejected = store
         .with_live_last_good(&next, || {
             publication_is_locked(&store);
@@ -213,32 +201,6 @@ fn admission_error_rolls_back_and_success_only_transfers_the_locked_roots() {
         Err(Rejected::Operation("profile rejected"))
     ));
     assert_eq!(snapshot(&store), before);
-    #[cfg(feature = "import-baseline")]
-    {
-        use crate::metrics::principal::{self, ledger};
-        drop(scope);
-        let evidence = recorder.snapshot().unwrap().principal.unwrap();
-        assert!(evidence.fault.is_none());
-        let prior = principal::Commitment::produced(before.ledger.as_deref().unwrap());
-        assert!(evidence
-            .events
-            .as_slice()
-            .iter()
-            .any(|event| matches!(event,
-                principal::Event::Ledger { change: ledger::Event::Started {
-                    cause: ledger::Cause::PinBind, before: ledger::Prior::Bytes(value), ..
-                } } if *value == prior
-            )));
-        assert!(evidence
-            .events
-            .as_slice()
-            .iter()
-            .any(|event| matches!(event,
-                principal::Event::Ledger { change: ledger::Event::Started {
-                    cause: ledger::Cause::PinRestore, after, ..
-                } } if *after == prior
-            )));
-    }
 
     let committed = store
         .with_live_last_good(&next, || {
@@ -310,10 +272,6 @@ fn rollback_error_retains_the_original_admission_failure() {
     let next = proof(&store, 12);
     let retained = store.pin_live_last_good(&old).unwrap();
     let before = snapshot(&store);
-    #[cfg(feature = "import-baseline")]
-    let recorder = crate::metrics::recorder::Recorder::transform(10_000).unwrap();
-    #[cfg(feature = "import-baseline")]
-    let scope = recorder.scope().unwrap();
     let result = store
         .with_live_last_good(&next, || {
             FAILURE.with(|failure| failure.set(Some(Stage::Rollback)));
@@ -332,155 +290,6 @@ fn rollback_error_retains_the_original_admission_failure() {
         before,
         "the armed owner retries cleanup while publication remains held"
     );
-    #[cfg(feature = "import-baseline")]
-    {
-        use crate::metrics::principal::{self, pin};
-        drop(scope);
-        let evidence = recorder.snapshot().unwrap().principal.unwrap();
-        assert!(evidence.fault.is_none());
-        let attempts: Vec<_> = evidence
-            .events
-            .as_slice()
-            .iter()
-            .filter_map(|event| match event {
-                principal::Event::Pin {
-                    change:
-                        pin::Event::TransactionStep {
-                            step: pin::TransactionStep::Restore { attempt },
-                            ..
-                        },
-                } => Some(*attempt),
-                _ => None,
-            })
-            .collect();
-        let results: Vec<_> = evidence
-            .events
-            .as_slice()
-            .iter()
-            .filter_map(|event| match event {
-                principal::Event::Pin {
-                    change:
-                        pin::Event::TransactionStep {
-                            step: pin::TransactionStep::Restored { attempt, succeeded },
-                            ..
-                        },
-                } => Some((*attempt, *succeeded)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            attempts.len(),
-            2,
-            "explicit failure and Drop retry are separate occurrences"
-        );
-        assert_ne!(attempts[0], attempts[1]);
-        assert_eq!(results, [(attempts[0], false), (attempts[1], true)]);
-        let acquired: Vec<_> = evidence
-            .events
-            .as_slice()
-            .iter()
-            .filter_map(|event| match event {
-                principal::Event::Pin {
-                    change:
-                        pin::Event::TransactionStep {
-                            step: pin::TransactionStep::Acquired { owner, .. },
-                            ..
-                        },
-                } => Some(*owner),
-                _ => None,
-            })
-            .collect();
-        let previous: Vec<_> = evidence
-            .events
-            .as_slice()
-            .iter()
-            .filter_map(|event| match event {
-                principal::Event::Pin {
-                    change:
-                        pin::Event::TransactionStep {
-                            step: pin::TransactionStep::Previous { owner },
-                            ..
-                        },
-                } => Some(*owner),
-                _ => None,
-            })
-            .collect();
-        assert!(!acquired.is_empty() && !previous.is_empty());
-        let mut owners = std::collections::BTreeSet::new();
-        for event in evidence.events.as_slice() {
-            match event {
-                principal::Event::Pin {
-                    change: pin::Event::Owner { owner, .. },
-                } => assert!(owners.insert(*owner)),
-                principal::Event::Pin {
-                    change: pin::Event::Retired { owner },
-                } => assert!(owners.remove(owner)),
-                principal::Event::Pin {
-                    change:
-                        pin::Event::TransactionStep {
-                            step: pin::TransactionStep::RestoreApplied { .. },
-                            ..
-                        },
-                } => {
-                    assert!(acquired.iter().all(|owner| !owners.contains(owner)));
-                    assert!(
-                        previous.iter().all(|owner| owners.contains(owner)),
-                        "old guards still cover completed restoration mutations"
-                    );
-                }
-                principal::Event::Pin {
-                    change:
-                        pin::Event::TransactionStep {
-                            step:
-                                pin::TransactionStep::Restored {
-                                    succeeded: true, ..
-                                },
-                            ..
-                        },
-                } => {
-                    assert!(
-                        previous.iter().all(|owner| !owners.contains(owner)),
-                        "old guards retire before the success marker"
-                    );
-                }
-                _ => {}
-            }
-        }
-        assert!(
-            owners.is_empty(),
-            "every reached validated guard retired inside this scope"
-        );
-        let relocated = evidence
-            .events
-            .as_slice()
-            .iter()
-            .position(|event| {
-                matches!(
-                    event,
-                    principal::Event::Pin {
-                        change: pin::Event::Relocated { .. }
-                    }
-                )
-            })
-            .unwrap();
-        let removed = evidence
-            .events
-            .as_slice()
-            .iter()
-            .position(|event| {
-                matches!(
-                    event,
-                    principal::Event::Pin {
-                        change: pin::Event::Step {
-                            step: pin::Step::Removed,
-                            ..
-                        }
-                    }
-                )
-            })
-            .unwrap();
-        assert!(relocated < removed);
-    }
     drop(retained);
     store.retire_fixture().unwrap();
 }
@@ -492,7 +301,7 @@ fn discarded_and_unwinding_transactions_release_new_guards_before_restoration() 
     let next = proof(&store, 14);
     let retained = store.pin_live_last_good(&old).unwrap();
     let before = snapshot(&store);
-    lease::with_publication(store.root(), store.graph_budget(), |publication| {
+    lease::with_publication(store.root(), |publication| {
         drop(Transaction::bind(
             publication,
             store.root(),
@@ -511,66 +320,6 @@ fn discarded_and_unwinding_transactions_release_new_guards_before_restoration() 
     }));
     assert!(panicked.is_err());
     assert_eq!(snapshot(&store), before);
-    drop(retained);
-    store.retire_fixture().unwrap();
-}
-
-#[cfg(feature = "import-baseline")]
-#[test]
-fn recovery_observes_the_removed_reservation_instead_of_the_current_key() {
-    use crate::metrics::{principal, recorder};
-    use crate::store::accounting::LeaseKey;
-
-    let store = store("recovery-key-observation");
-    let proof = proof(&store, 27);
-    let retained = store.pin_live_last_good(&proof).unwrap();
-    let removed = LeaseKey::Action(crate::node::ActionKey::from_bytes([0x71; 32]));
-    let current = LeaseKey::Action(crate::node::ActionKey::from_bytes([0x72; 32]));
-    lease::with_publication(store.root(), store.graph_budget(), |publication| {
-        super::super::reserve(
-            publication,
-            store.root(),
-            store.project,
-            removed,
-            Charge::zero(),
-        )
-    })
-    .unwrap();
-    let recorder = recorder::Recorder::transform(10_000).unwrap();
-    let scope = recorder.scope().unwrap();
-    lease::with_publication(store.root(), store.graph_budget(), |publication| {
-        super::super::recover(
-            publication,
-            store.root(),
-            store.project,
-            current,
-            &mut crate::store::recovery::Budget::new(),
-        )
-    })
-    .unwrap();
-    drop(scope);
-    let evidence = recorder.snapshot().unwrap().principal.unwrap();
-    assert!(evidence.fault.is_none());
-    let recovered: Vec<_> = evidence
-        .events
-        .as_slice()
-        .iter()
-        .filter_map(|event| match event {
-            principal::Event::Ledger {
-                change:
-                    principal::ledger::Event::Started {
-                        cause: principal::ledger::Cause::Recovery(key),
-                        ..
-                    },
-            } => Some(*key),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(recovered, [Some(removed.observed())]);
-    assert!(Ledger::read(store.root(), store.project)
-        .unwrap()
-        .reservations
-        .is_empty());
     drop(retained);
     store.retire_fixture().unwrap();
 }

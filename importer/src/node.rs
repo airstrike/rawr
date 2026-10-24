@@ -8,8 +8,6 @@ use sha2::{Digest as _, Sha256};
 use crate::metrics;
 
 pub(crate) mod account;
-#[cfg(feature = "import-baseline")]
-pub(crate) mod census;
 pub(crate) mod codec;
 mod content;
 mod key;
@@ -535,8 +533,6 @@ struct GraphUsage {
     paths: usize,
     hashed: u64,
     exceeded: crate::exceedance::Record,
-    #[cfg(feature = "import-baseline")]
-    census_paths: census::Paths,
 }
 
 impl GraphBudget {
@@ -558,21 +554,13 @@ impl GraphBudget {
         ])
     }
 
-    #[cfg(any(test, feature = "import-baseline"))]
+    #[cfg(test)]
     pub(crate) fn census_usage(&self) -> Result<(u64, usize, u64), Error> {
         let usage = self
             .usage
             .lock()
             .map_err(|_| Error::State("graph census lock poisoned"))?;
         Ok((usage.decoded, usage.paths, usage.hashed))
-    }
-
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn census_paths(&self) -> Result<census::Paths, Error> {
-        self.usage
-            .lock()
-            .map(|usage| usage.census_paths)
-            .map_err(|_| Error::State("graph census lock poisoned"))
     }
 
     pub(crate) fn shares_with(&self, other: &Self) -> bool {
@@ -620,7 +608,6 @@ impl GraphBudget {
             self.targets.lookups,
             LOOKUPS_RESOURCE,
             None,
-            metrics::accounting::Axis::Lookups,
         )
     }
 
@@ -631,7 +618,6 @@ impl GraphBudget {
             self.targets.comparisons,
             COMPARISONS_RESOURCE,
             None,
-            metrics::accounting::Axis::Comparisons,
         )
     }
 
@@ -642,7 +628,6 @@ impl GraphBudget {
             self.targets.deep,
             DEEP_RESOURCE,
             None,
-            metrics::accounting::Axis::Deep,
         )
     }
 
@@ -664,7 +649,6 @@ impl GraphBudget {
             self.targets.decoded,
             DECODED_RESOURCE,
             Some(caller),
-            metrics::accounting::Axis::Decoded,
         )
     }
 
@@ -680,44 +664,12 @@ impl GraphBudget {
             entry.0 += 1;
             entry.1 += paths as u64;
         });
-        #[cfg(feature = "import-baseline")]
-        if option_env!("RAWR_SCOPE_CENSUS") == Some("1") {
-            let mut usage = self
-                .usage
-                .lock()
-                .map_err(|_| Error::State("typed store graph budget lock was poisoned"))?;
-            let requested = usage.paths.checked_add(paths);
-            let (result, exceeded) = match requested {
-                None => (Err(Error::Allocation), false),
-                Some(actual) => {
-                    usage.paths = actual;
-                    let exceeded = actual > self.targets.paths
-                        && usage.exceeded.exceeded(
-                            PATHS_RESOURCE,
-                            self.targets.paths as u64,
-                            actual as u64,
-                            Some(caller),
-                        );
-                    (Ok(()), exceeded)
-                }
-            };
-            usage.census_paths.record(caller, paths, result.is_ok());
-            return self.observe_charge(
-                usage,
-                metrics::accounting::Axis::Paths,
-                requested.map(|value| value as u64),
-                self.targets.paths as u64,
-                result,
-                exceeded,
-            );
-        }
         self.charge_usize(
             |usage| &mut usage.paths,
             paths,
             self.targets.paths,
             PATHS_RESOURCE,
             Some(caller),
-            metrics::accounting::Axis::Paths,
         )
     }
 
@@ -728,7 +680,6 @@ impl GraphBudget {
             self.targets.hashed,
             HASHED_RESOURCE,
             None,
-            metrics::accounting::Axis::Hashed,
         )
     }
 
@@ -743,7 +694,6 @@ impl GraphBudget {
         target: usize,
         resource: &'static str,
         site: Option<&'static std::panic::Location<'static>>,
-        axis: metrics::accounting::Axis,
     ) -> Result<(), Error> {
         let mut usage = self
             .usage
@@ -762,14 +712,7 @@ impl GraphBudget {
                 (Ok(()), exceeded)
             }
         };
-        self.observe_charge(
-            usage,
-            axis,
-            requested.map(|value| value as u64),
-            target as u64,
-            result,
-            exceeded,
-        )
+        self.observe_charge(usage, result, exceeded)
     }
 
     fn charge_u64(
@@ -779,7 +722,6 @@ impl GraphBudget {
         target: u64,
         resource: &'static str,
         site: Option<&'static std::panic::Location<'static>>,
-        axis: metrics::accounting::Axis,
     ) -> Result<(), Error> {
         let mut usage = self
             .usage
@@ -796,51 +738,23 @@ impl GraphBudget {
                 (Ok(()), exceeded)
             }
         };
-        self.observe_charge(usage, axis, requested, target, result, exceeded)
+        self.observe_charge(usage, result, exceeded)
     }
 
-    /// Release the account lock, then publish the exceedance record and any
-    /// baseline observation. A write-only sink is still arbitrary caller code:
+    /// Release the account lock, then publish the exceedance record. A write-only sink is still arbitrary caller code:
     /// never invoke it while the original account lock is held, and never
     /// change the original result.
     fn observe_charge(
         &self,
         usage: std::sync::MutexGuard<'_, GraphUsage>,
-        axis: metrics::accounting::Axis,
-        requested: Option<u64>,
-        target: u64,
         result: Result<(), Error>,
         exceeded: bool,
     ) -> Result<(), Error> {
-        #[cfg(not(feature = "import-baseline"))]
-        let _ = (axis, requested, target);
         let record = usage.exceeded;
-        #[cfg(feature = "import-baseline")]
-        let observation = metrics::accounting::Graph {
-            account: self.id,
-            stage: metrics::accounting::Stage::Charge(axis),
-            admitted: [
-                usage.lookups as u64,
-                usage.comparisons as u64,
-                usage.deep as u64,
-                usage.decoded,
-                usage.paths as u64,
-                usage.hashed,
-            ],
-            exceedance: requested.is_none_or(|amount| amount > target).then_some(
-                metrics::accounting::Exceedance {
-                    axis,
-                    requested,
-                    limit: target,
-                },
-            ),
-        };
         drop(usage);
         if exceeded {
             crate::exceedance::publish(crate::exceedance::Account::Graph, self.id, &record);
         }
-        #[cfg(feature = "import-baseline")]
-        metrics::record_graph(observation);
         result
     }
 
@@ -983,11 +897,6 @@ impl<'store> Evaluator<'store> {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
                     let bytes = execute()?.into_encoded(recipe.output_limit)?;
-                    #[cfg(feature = "import-baseline")]
-                    self.metrics.scalar(
-                        metrics::accounting::Scalar::NodePayloadBytes(K::KIND.metric()),
-                        bytes.len() as u64,
-                    );
                     if bytes.len() > recipe.output_limit {
                         return Err(Error::Limit {
                             resource: "node content bytes",
@@ -1104,11 +1013,6 @@ impl<'store> Evaluator<'store> {
                         "direct node executor was consumed before the final miss",
                     ))?;
                     let bytes = transform()?.into_encoded(recipe.output_limit)?;
-                    #[cfg(feature = "import-baseline")]
-                    self.metrics.scalar(
-                        metrics::accounting::Scalar::NodePayloadBytes(K::KIND.metric()),
-                        bytes.len() as u64,
-                    );
                     if bytes.len() > recipe.output_limit {
                         return Err(Error::Limit {
                             resource: "node content bytes",
@@ -1219,11 +1123,6 @@ impl<'store> Evaluator<'store> {
                                 validate(&value, budget, read_set::Scope::Consumer)?;
                             let complete = recipe.complete(&discovered_inputs)?;
                             let bytes = value.encode(recipe.output_limit)?;
-                            #[cfg(feature = "import-baseline")]
-                            self.metrics.scalar(
-                                metrics::accounting::Scalar::NodePayloadBytes(K::KIND.metric()),
-                                bytes.len() as u64,
-                            );
                             if bytes.len() > recipe.output_limit {
                                 return Err(Error::Limit {
                                     resource: "node content bytes",
@@ -1390,11 +1289,6 @@ impl<'store> Evaluator<'store> {
                         let (value, bundle, discovered_inputs) = transform(attempt)?.into_parts();
                         let complete = recipe.complete(&discovered_inputs)?;
                         let bytes = value.encode(recipe.output_limit)?;
-                        #[cfg(feature = "import-baseline")]
-                        self.metrics.scalar(
-                            metrics::accounting::Scalar::NodePayloadBytes(K::KIND.metric()),
-                            bytes.len() as u64,
-                        );
                         if bytes.len() > recipe.output_limit {
                             return Err(Error::Limit {
                                 resource: "node content bytes",

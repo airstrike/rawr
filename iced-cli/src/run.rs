@@ -34,33 +34,20 @@ pub fn prepare(path: Option<PathBuf>) -> Result<rawr_iced::application::Prepared
 pub fn execute(path: Option<PathBuf>) -> Result<bool, Error> {
     let loaded = crate::base::load(path.as_ref())
         .map_err(|report| Error::Compile(compile::Error::from_report(report)))?;
-    execute_loaded(
-        loaded,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
+    execute_loaded(loaded)
 }
 
 /// Run an application from the command's one load. `Ok(false)` is a
 /// program that ended with a failing exit.
-pub(crate) fn execute_loaded(
-    loaded: crate::base::Loaded,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<bool, Error> {
+pub(crate) fn execute_loaded(loaded: crate::base::Loaded) -> Result<bool, Error> {
     #[cfg(feature = "native-runner")]
     if loaded.graph.declares_rust_import() {
         return crate::import::owner::run(
             &loaded.target,
             Some(loaded.graph),
             rawr_import::process::Lifecycle::Run,
-            #[cfg(feature = "import-baseline")]
-            profile,
         )
         .map_err(Error::Live);
-    }
-    #[cfg(feature = "import-baseline")]
-    if profile.is_some() {
-        return Err(Error::Live(profile_report()));
     }
     let launch = crate::watch::Launch::open(loaded).map_err(Error::Live)?;
     let (bootstrap, source, service, timing, session) = launch.into_parts();
@@ -87,15 +74,6 @@ pub(crate) fn execute_loaded(
         .finish()
         .map_err(|error| Error::Live(crate::watch::native_report(error, source)));
     native.and(shutdown).map(|()| true)
-}
-
-#[cfg(feature = "import-baseline")]
-fn profile_report() -> diagnostic::Report {
-    diagnostic::Report::error(
-        diagnostic::code::FRAMEWORK_NATIVE,
-        "private profile selection requires a declared Rust import",
-    )
-    .finish()
 }
 
 impl fmt::Display for Error {

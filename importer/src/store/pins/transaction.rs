@@ -1,7 +1,5 @@
 //! Publication-scoped pin replacement with exact failure restoration.
 
-#[cfg(feature = "import-baseline")]
-use crate::metrics::principal::pin;
 use std::fs;
 use std::path::Path;
 
@@ -35,8 +33,6 @@ struct Pending<'publication, 'store> {
     root: &'publication Path,
     project: Digest,
     change: Option<Change>,
-    #[cfg(feature = "import-baseline")]
-    observation: pin::Transaction,
 }
 
 struct Change {
@@ -96,17 +92,10 @@ impl<'publication, 'store, const N: usize> Transaction<'publication, 'store, N> 
         entries: &[crate::node::read_set::Entry],
         digest: Digest,
     ) -> Result<Self, Error> {
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::record_scalar(
-            crate::metrics::accounting::Scalar::PinRolesRequested,
-            N as u64,
-        );
         let path = super::ledger_path(root, project);
         let before = match fs::symlink_metadata(&path) {
             Ok(_) => {
                 let bytes = crate::store::entry::read_file(&path, super::MAX_LEDGER_BYTES)?;
-                #[cfg(feature = "import-baseline")]
-                super::observe_read(bytes.len());
                 Some(bytes)
             }
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => None,
@@ -145,8 +134,6 @@ impl<'publication, 'store, const N: usize> Transaction<'publication, 'store, N> 
             records.push(lock::Acquisition::inspect(root, project, pinned)?);
         }
         let after = ledger.encode()?;
-        #[cfg(feature = "import-baseline")]
-        lock::admit_guard_observations(publication, previous.roots.len());
         let mut retained = Vec::new();
         retained
             .try_reserve_exact(previous.roots.len())
@@ -156,8 +143,6 @@ impl<'publication, 'store, const N: usize> Transaction<'publication, 'store, N> 
                 lock::Acquisition::inspect(root, project, pinned)?.retain(publication, root)?,
             );
         }
-        #[cfg(feature = "import-baseline")]
-        lock::admit_guard_observations(publication, N);
         let mut acquired = Vec::new();
         acquired
             .try_reserve_exact(N)
@@ -166,16 +151,6 @@ impl<'publication, 'store, const N: usize> Transaction<'publication, 'store, N> 
             publication,
             root,
             project,
-            #[cfg(feature = "import-baseline")]
-            observation: pin::Transaction::start(
-                publication,
-                project.as_bytes(),
-                digest.as_bytes(),
-                N,
-                retained.len(),
-                before.as_deref(),
-                &after,
-            ),
             change: Some(Change {
                 before,
                 records,
@@ -184,19 +159,6 @@ impl<'publication, 'store, const N: usize> Transaction<'publication, 'store, N> 
                 ledger_attempted: false,
             }),
         };
-        #[cfg(feature = "import-baseline")]
-        {
-            for (index, role) in roles.into_iter().enumerate() {
-                pending.observation.role(index, role.observed());
-            }
-            if let Some(change) = &pending.change {
-                for guard in &change._previous {
-                    pending.observation.step(pin::TransactionStep::Previous {
-                        owner: guard.observed(),
-                    });
-                }
-            }
-        }
         let stage = (|| {
             let change = pending
                 .change
@@ -204,41 +166,12 @@ impl<'publication, 'store, const N: usize> Transaction<'publication, 'store, N> 
                 .ok_or(Error::State("pin transaction lost its captured state"))?;
             for record in &change.records {
                 change.acquired.push(record.acquire(publication, root)?);
-                #[cfg(feature = "import-baseline")]
-                if let Some(guard) = change.acquired.last() {
-                    pending.observation.step(pin::TransactionStep::Acquired {
-                        index: (change.acquired.len() - 1) as u64,
-                        owner: guard.observed(),
-                    });
-                }
                 checkpoint(Stage::Acquired(change.acquired.len()))?;
             }
             if change.before.as_deref() != Some(after.as_ref()) {
                 change.ledger_attempted = true;
-                #[cfg(feature = "import-baseline")]
-                pending
-                    .observation
-                    .step(pin::TransactionStep::LedgerAttempted);
-                super::save_bytes(
-                    publication,
-                    root,
-                    project,
-                    &after,
-                    #[cfg(feature = "import-baseline")]
-                    crate::metrics::publication::Replacement::PinBind,
-                    #[cfg(feature = "import-baseline")]
-                    crate::metrics::principal::ledger::Cause::PinBind,
-                    #[cfg(feature = "import-baseline")]
-                    change.before.as_deref().map_or(
-                        crate::metrics::principal::ledger::Before::Absent,
-                        crate::metrics::principal::ledger::Before::Bytes,
-                    ),
-                )?;
+                super::save_bytes(publication, root, project, &after)?;
             }
-            #[cfg(feature = "import-baseline")]
-            pending.observation.step(pin::TransactionStep::Ledger {
-                replaced: change.ledger_attempted,
-            });
             checkpoint(Stage::Ledger)?;
             Ok(())
         })();
@@ -277,33 +210,12 @@ impl<'publication, 'store, const N: usize> Transaction<'publication, 'store, N> 
             drop(guards);
             return Err(pending.reject(failure));
         }
-        #[cfg(feature = "import-baseline")]
-        self.pending
-            .observation
-            .step(pin::TransactionStep::Validated);
         match operation() {
             Ok(value) => {
-                #[cfg(feature = "import-baseline")]
-                self.pending
-                    .observation
-                    .step(pin::TransactionStep::Callback { succeeded: true });
-                #[cfg(feature = "import-baseline")]
-                crate::metrics::record_scalar(
-                    crate::metrics::accounting::Scalar::PinRolesCommitted,
-                    N as u64,
-                );
                 self.pending.change = None;
-                #[cfg(feature = "import-baseline")]
-                self.pending
-                    .observation
-                    .step(pin::TransactionStep::Committed);
                 Ok(Ok((value, self.guards)))
             }
             Err(failure) => {
-                #[cfg(feature = "import-baseline")]
-                self.pending
-                    .observation
-                    .step(pin::TransactionStep::Callback { succeeded: false });
                 let Self {
                     guards,
                     mut pending,
@@ -333,41 +245,18 @@ impl Pending<'_, '_> {
         let Some(change) = self.change.as_mut() else {
             return Ok(());
         };
-        #[cfg(feature = "import-baseline")]
-        let attempt = crate::metrics::principal::next();
-        #[cfg(feature = "import-baseline")]
-        self.observation
-            .step(pin::TransactionStep::Restore { attempt });
         let result = (|| {
-            #[cfg(feature = "import-baseline")]
-            crate::metrics::record_scalar(
-                crate::metrics::accounting::Scalar::PinRolesRollbackRequested,
-                change.records.len() as u64,
-            );
             change.acquired.clear();
             checkpoint(Stage::Rollback)?;
             if change.ledger_attempted {
                 match &change.before {
-                    Some(bytes) => super::save_bytes(
-                        self.publication,
-                        self.root,
-                        self.project,
-                        bytes,
-                        #[cfg(feature = "import-baseline")]
-                        crate::metrics::publication::Replacement::PinRestore,
-                        #[cfg(feature = "import-baseline")]
-                        crate::metrics::principal::ledger::Cause::PinRestore,
-                        #[cfg(feature = "import-baseline")]
-                        crate::metrics::principal::ledger::Before::Unknown,
-                    )?,
+                    Some(bytes) => {
+                        super::save_bytes(self.publication, self.root, self.project, bytes)?
+                    }
                     None => super::save_or_retire(
                         self.publication,
                         self.root,
                         &Ledger::empty(self.project),
-                        #[cfg(feature = "import-baseline")]
-                        crate::metrics::publication::Replacement::PinRestore,
-                        #[cfg(feature = "import-baseline")]
-                        crate::metrics::principal::ledger::Cause::PinRestore,
                     )?,
                 }
             }
@@ -389,16 +278,8 @@ impl Pending<'_, '_> {
             Ok(())
         })();
         if result.is_ok() {
-            #[cfg(feature = "import-baseline")]
-            self.observation
-                .step(pin::TransactionStep::RestoreApplied { attempt });
             self.change = None;
         }
-        #[cfg(feature = "import-baseline")]
-        self.observation.step(pin::TransactionStep::Restored {
-            attempt,
-            succeeded: result.is_ok(),
-        });
         result
     }
 }
@@ -408,8 +289,6 @@ impl Drop for Pending<'_, '_> {
         // Normal failures explicitly preserve cleanup errors; unwinding still
         // attempts restoration while the publication lease remains held.
         drop(self.restore());
-        #[cfg(feature = "import-baseline")]
-        self.observation.finish(self.change.is_some());
     }
 }
 

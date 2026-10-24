@@ -282,22 +282,6 @@ impl Prepared {
     pub fn retain_api(self, limits: &Limits) -> Result<crate::api::Continuation> {
         self.owner.retain_api(limits)
     }
-
-    /// Return the same toolchain observation as the complete resolution path.
-    #[cfg(feature = "import-baseline")]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn observed_toolchain(&self) -> [u8; 32] {
-        self.owner.observed_toolchain()
-    }
-
-    /// Return the same authority observation as the complete resolution path.
-    #[cfg(feature = "import-baseline")]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn observed_identity(&self) -> [u8; 32] {
-        self.owner.observed_identity()
-    }
 }
 
 /// The immutable final-form manifest, lock, config, metadata, and unit proof.
@@ -935,14 +919,6 @@ impl RequestAllocation {
     /// Publish this account's exceedance record.
     fn publish(&self) {
         crate::exceedance::publish(crate::exceedance::Account::Request, self.id, &self.exceeded);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn observe(&self) {
-        use crate::metrics::accounting::Scalar;
-
-        crate::metrics::record_scalar(Scalar::CargoRequestItems, self.items as u64);
-        crate::metrics::record_scalar(Scalar::CargoRequestBytes, self.bytes as u64);
     }
 
     fn new(limits: &Limits) -> Self {
@@ -2851,36 +2827,6 @@ impl Builder {
     }
 }
 
-#[cfg(feature = "import-baseline")]
-fn resolution_observation(
-    identities: [Digest; 7],
-    universe: Option<universe::Proof>,
-    selected: &[Selection],
-    target: &str,
-    profile: &str,
-) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"rawr.phase9.resolution-observation/v1");
-    for identity in identities {
-        digest.update(identity.as_bytes());
-    }
-    if let Some(universe) = universe {
-        digest.update(universe.base().as_bytes());
-        digest.update(universe.complete().as_bytes());
-    }
-    for selected in selected {
-        digest.update((selected.alias.len() as u64).to_le_bytes());
-        digest.update(selected.alias.as_bytes());
-        digest.update((selected.package_id.len() as u64).to_le_bytes());
-        digest.update(selected.package_id.as_bytes());
-    }
-    digest.update((target.len() as u64).to_le_bytes());
-    digest.update(target.as_bytes());
-    digest.update((profile.len() as u64).to_le_bytes());
-    digest.update(profile.as_bytes());
-    digest.finalize().into()
-}
-
 impl Resolution {
     /// Reconstruct launch paths solely from this resolution's validated
     /// toolchain proof; no discovery or version process is executed.
@@ -2888,36 +2834,6 @@ impl Resolution {
     #[must_use]
     pub fn replay_native(&self) -> Native {
         Native::from_toolchain(&self.toolchain)
-    }
-
-    /// Return a stable observation of the installed toolchain proof.
-    #[cfg(feature = "import-baseline")]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn observed_toolchain(&self) -> [u8; 32] {
-        self.toolchain.observational_digest()
-    }
-
-    /// Return a stable observation of the complete resolved Cargo authority.
-    #[cfg(feature = "import-baseline")]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn observed_identity(&self) -> [u8; 32] {
-        resolution_observation(
-            [
-                self.manifest,
-                self.source,
-                self.lock,
-                self.authority,
-                self.config,
-                self.metadata.digest(),
-                self.build_unit.digest(),
-            ],
-            self.universe,
-            &self.selected,
-            &self.target,
-            &self.profile,
-        )
     }
 
     /// The one fixed Rawr-owned resolution harness directory.

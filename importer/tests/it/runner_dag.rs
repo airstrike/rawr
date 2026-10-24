@@ -150,12 +150,6 @@ impl rawr_import::metrics::Sink for Counts {
 
     fn runner_owned(&self, _owned: &rawr_import::metrics::runner::Owned) {}
 
-    #[cfg(feature = "import-baseline")]
-    fn profile(&self, _evidence: &rawr_import::metrics::profile::Evidence) {}
-
-    #[cfg(feature = "import-baseline")]
-    fn pipeline(&self, _evidence: &rawr_import::metrics::pipeline::Evidence) {}
-
     fn scope_opened(&self) {}
 
     fn scope_joined(&self) {}

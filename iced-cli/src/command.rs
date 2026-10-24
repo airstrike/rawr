@@ -388,20 +388,6 @@ mod tests {
     }
 
     #[test]
-    fn default_command_grammar_rejects_the_private_evidence_prefix() {
-        for arguments in [
-            &["--baseline-evidence-v1", "/tmp/evidence.sock", "00", "run"][..],
-            &["--baseline-profile-v1", "variant", "check"][..],
-        ] {
-            assert!(matches!(
-                parse(arguments),
-                Err(Error::UnknownArgument(argument)) if argument == arguments[0]
-            ));
-        }
-        assert!(!super::HELP.contains("--baseline-"));
-    }
-
-    #[test]
     fn unambiguous_path_tokens_are_implicit_run_targets() {
         for path in [".", "..", "./counter", "src/main.rs", "Cargo.toml", "rawr.toml"] {
             assert_eq!(

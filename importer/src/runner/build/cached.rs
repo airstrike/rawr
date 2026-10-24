@@ -741,11 +741,6 @@ impl Product {
                 seal_digest: self.seal_digest,
             },
         )?;
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::record_target(
-            crate::metrics::pipeline::target::Kind::Runner,
-            crate::metrics::pipeline::target::Target::observe(self.reference),
-        );
         Ok(super::super::Native::Shared {
             artifact,
             retained,

@@ -62,9 +62,6 @@ use crate::cargo::{self, Limits, Request};
 use crate::input::{self, stored};
 use crate::{metrics, store};
 
-#[cfg(feature = "import-baseline")]
-pub(in crate::cargo) mod census;
-
 /// The exact admitted node and the successful replay that admitted its bytes.
 pub(crate) struct Ready {
     node: node::Validated<Product>,
@@ -73,21 +70,6 @@ pub(crate) struct Ready {
 }
 
 impl Ready {
-    #[cfg(feature = "import-baseline")]
-    pub(in crate::cargo) fn observed_toolchain(&self) -> [u8; 32] {
-        self.evaluation
-            .cached
-            .attestation
-            .value()
-            .proof()
-            .observational_digest()
-    }
-
-    #[cfg(feature = "import-baseline")]
-    pub(in crate::cargo) fn observed_identity(&self) -> [u8; 32] {
-        self.replay.observation
-    }
-
     #[cfg(test)]
     pub(crate) fn node(&self) -> &node::Validated<Product> {
         &self.node
@@ -113,11 +95,6 @@ impl Ready {
                 operation: "resolution owner retention closure",
                 source: Box::new(source),
             })?;
-        #[cfg(feature = "import-baseline")]
-        metrics::record_target(
-            metrics::pipeline::target::Kind::Resolution,
-            metrics::pipeline::target::Target::observe(commitment.reference()),
-        );
         crate::extract::from_owner_parts(
             &evaluation.cached.context,
             evaluation.identity.as_bytes(),
@@ -155,11 +132,6 @@ impl Ready {
                 operation: "resolution owner retention closure",
                 source: Box::new(source),
             })?;
-        #[cfg(feature = "import-baseline")]
-        metrics::record_target(
-            metrics::pipeline::target::Kind::Resolution,
-            metrics::pipeline::target::Target::observe(commitment.reference()),
-        );
         // The graph rebuild owns its observations so a resolved warm launch
         // can skip it entirely (see `api::retained::Lazy`).
         let decoded = Arc::clone(&replay.decoded);
@@ -329,42 +301,6 @@ struct Accounts {
     refused: bool,
 }
 
-#[cfg(feature = "import-baseline")]
-impl Accounts {
-    fn observe<T>(&self, stage: metrics::accounting::OwnerStage, result: &Result<T, node::Error>) {
-        use metrics::accounting::Scalar;
-
-        self.request.observe();
-        let (items, bytes) = self.input.usage.observation();
-        metrics::record_scalar(Scalar::OwnerInputItems, items as u64);
-        metrics::record_scalar(Scalar::OwnerInputBytes, bytes as u64);
-        self.cargo.observe();
-        if let Err(error) = result {
-            observe_refusal(stage, error);
-        }
-    }
-}
-
-#[cfg(feature = "import-baseline")]
-fn observe_refusal(stage: metrics::accounting::OwnerStage, mut error: &node::Error) {
-    use metrics::accounting::Scalar;
-
-    metrics::record_scalar(Scalar::OwnerRefusals(stage), 1);
-    let (actual, limit) = loop {
-        match error {
-            node::Error::Limit { actual, limit, .. } => break (*actual, *limit),
-            node::Error::Importer(importer) => match importer.as_ref() {
-                crate::Error::Limit { actual, limit, .. } => break (*actual, *limit),
-                crate::Error::Node { source, .. } => error = source,
-                _ => return,
-            },
-            _ => return,
-        }
-    };
-    metrics::record_scalar(Scalar::OwnerRefusedRequired(stage), actual as u64);
-    metrics::record_scalar(Scalar::OwnerRefusedLimit(stage), limit as u64);
-}
-
 struct Captured {
     enabled: bool,
     replay: Option<([u8; BYTES], replay::Replay)>,
@@ -503,13 +439,6 @@ fn preflight(
         )
         .map_err(node::Error::from)
     })();
-    #[cfg(feature = "import-baseline")]
-    {
-        allocation.observe();
-        if let Err(error) = &result {
-            observe_refusal(metrics::accounting::OwnerStage::Preflight, error);
-        }
-    }
     let placement = result?;
     Ok(Preflight {
         request,
@@ -669,8 +598,6 @@ impl Evaluation {
                 if result.as_ref().is_err_and(refusal) {
                     accounts.refused = true;
                 }
-                #[cfg(feature = "import-baseline")]
-                accounts.observe(metrics::accounting::OwnerStage::Commitment, &result);
                 result
             },
         )
@@ -743,8 +670,6 @@ impl Evaluation {
                 if result.as_ref().is_err_and(refusal) {
                     accounts.refused = true;
                 }
-                #[cfg(feature = "import-baseline")]
-                accounts.observe(metrics::accounting::OwnerStage::Replay, &result);
                 result
             },
         );
@@ -996,8 +921,6 @@ impl Evaluation {
                     }
                     run()
                 })();
-                #[cfg(feature = "import-baseline")]
-                accounts.observe(metrics::accounting::OwnerStage::Execute, &result);
                 result
             },
         )
@@ -1010,8 +933,6 @@ impl Evaluation {
         accounts: &mut Accounts,
         graph: &node::GraphBudget,
     ) -> Result<node::Bundled<Product>, node::Error> {
-        #[cfg(feature = "import-baseline")]
-        census::checkpoint("before-prepare-harness", graph)?;
         let harness = self.request.prepare_harness_in(
             &layout,
             &self.cached,
@@ -1020,8 +941,6 @@ impl Evaluation {
             &mut accounts.request,
             cargo_account,
         )?;
-        #[cfg(feature = "import-baseline")]
-        census::checkpoint("after-prepare-harness", graph)?;
         let built = self.request.build_harness_in(
             &self.cached,
             &layout,
@@ -1030,8 +949,6 @@ impl Evaluation {
             &self.limits,
             &self.limits,
         )?;
-        #[cfg(feature = "import-baseline")]
-        census::checkpoint("after-build-harness", graph)?;
         let completed = self.request.complete_parts_in(
             &self.cached,
             &layout,
@@ -1086,19 +1003,6 @@ impl Evaluation {
             &self.request.target,
             graph,
         )?;
-        #[cfg(feature = "import-baseline")]
-        if option_env!("RAWR_SCOPE_CENSUS") == Some("1") {
-            let query = super::content::Scope::from_query_observations(
-                layout.root(),
-                &stored,
-                &retained.build,
-                &completed.capture,
-                &completed.toolchain,
-                &self.request.target,
-                graph,
-            )?;
-            census::report(layout.root(), &scope, &query, &completed.capture, graph)?;
-        }
         let mut budget = stored::Budget::borrow(&self.limits, &mut accounts.input, graph);
         let bytes = match completed.capture.namespace() {
             Some(namespace) => stored::Record::encode_with_namespace(
@@ -1324,65 +1228,6 @@ mod tests {
             assert!(matches!(mapped, node::Error::Transform(_)));
             assert!(!refusal(&mapped));
         }
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn allocation_observation_preserves_original_usage_and_refusal_amounts() {
-        use metrics::accounting::{OwnerStage, Scalar};
-
-        let limits = Limits::standard();
-        let mut accounts = Accounts {
-            input: input::Allocation::for_replay(&limits),
-            request: cargo::RequestAllocation::new(&limits),
-            cargo: cargo::unit::Allocation::begin(&limits),
-            refused: false,
-        };
-        accounts.request.retained(2, 7).unwrap();
-        accounts.input.items(3).unwrap();
-        accounts.input.bytes(11).unwrap();
-        let result: Result<(), node::Error> = Err(crate::Error::Limit {
-            resource: "request retained bytes",
-            limit: 8,
-            actual: 9,
-        }
-        .into());
-        let recorder = metrics::recorder::Recorder::transform_at(10, 1).unwrap();
-        {
-            let _scope = recorder.scope().unwrap();
-            accounts.observe(OwnerStage::Execute, &result);
-            accounts.observe::<()>(
-                OwnerStage::Replay,
-                &Err(node::Error::Codec("ordinary stale input")),
-            );
-        }
-        assert!(!accounts.refused);
-        assert!(matches!(&result, Err(node::Error::Importer(inner))
-        if matches!(inner.as_ref(), crate::Error::Limit {
-            resource: "request retained bytes", limit: 8, actual: 9,
-        })));
-        let evidence = recorder.snapshot().unwrap().accounting;
-        for (scalar, value) in [
-            (Scalar::CargoRequestItems, 2),
-            (Scalar::CargoRequestBytes, 7),
-            (Scalar::OwnerInputItems, 3),
-            (Scalar::OwnerInputBytes, 11),
-            (Scalar::OwnerRefusedRequired(OwnerStage::Execute), 9),
-            (Scalar::OwnerRefusedLimit(OwnerStage::Execute), 8),
-        ] {
-            assert_eq!(evidence.scalar(scalar).unwrap().max, value);
-        }
-        assert_eq!(
-            evidence
-                .scalar(Scalar::OwnerRefusals(OwnerStage::Replay))
-                .unwrap()
-                .total,
-            1
-        );
-        assert_eq!(
-            evidence.scalar(Scalar::OwnerRefusedRequired(OwnerStage::Replay)),
-            None
-        );
     }
 
     #[test]

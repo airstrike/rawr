@@ -1000,11 +1000,6 @@ struct ProductionObservation;
 
 impl Observation for ProductionObservation {
     fn record(&self, _command: &Command, _elapsed: Duration) -> Result<()> {
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::record_scalar_wide(
-            crate::metrics::accounting::Scalar::ProcessElapsedNanoseconds,
-            _elapsed.as_nanos(),
-        );
         Ok(())
     }
 }
@@ -1154,8 +1149,6 @@ fn execute<O: Observation>(
     let status = recorded_result(status, recorded)?;
     let stdout = join_reader(stdout_reader, "child stdout");
     let stderr = join_reader(stderr_reader, "child stderr");
-    #[cfg(feature = "import-baseline")]
-    record_transport(&stdout, &stderr);
     let stdout = bounded_bytes("child stdout", stdout_limit, stdout?)?;
     let stderr = bounded_bytes("child stderr", stderr_limit, stderr?)?;
     match command.kind {
@@ -1171,21 +1164,6 @@ fn execute<O: Observation>(
         stdout,
         stderr,
     })
-}
-
-#[cfg(feature = "import-baseline")]
-fn record_transport(stdout: &Result<(Vec<u8>, usize)>, stderr: &Result<(Vec<u8>, usize)>) {
-    use crate::metrics::accounting::Scalar;
-    // Reuse the completed reader's observed length, including a refused excess.
-    // A failed reader has unknown length; never wait longer just for evidence.
-    for (result, scalar) in [
-        (stdout, Scalar::ProcessStdoutBytes),
-        (stderr, Scalar::ProcessStderrBytes),
-    ] {
-        if let Ok((_, bytes)) = result {
-            crate::metrics::record_scalar(scalar, *bytes as u64);
-        }
-    }
 }
 
 fn recorded_result<T>(result: Result<T>, recorded: Result<()>) -> Result<T> {
@@ -1517,78 +1495,6 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use super::*;
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn transport_observation_keeps_refused_length_and_unknown_reader_distinct() {
-        use crate::metrics::{accounting::Scalar, recorder::Recorder};
-        let recorder = Recorder::transform(100).unwrap();
-        let scope = recorder.scope().unwrap();
-        let stdout = Ok((vec![1; 4], 17));
-        let stderr = Ok((Vec::new(), 0));
-        record_transport(&stdout, &stderr);
-        let failure = bounded_bytes("child stdout", 16, stdout.unwrap()).unwrap_err();
-        assert!(matches!(
-            failure,
-            Error::Limit {
-                actual: 17,
-                limit: 16,
-                ..
-            }
-        ));
-        let unavailable = Err(group_error("reader failed", "fixture"));
-        record_transport(&unavailable, &unavailable);
-        drop(scope);
-        let accounting = recorder.snapshot().unwrap().accounting;
-        assert_eq!(
-            accounting.scalar(Scalar::ProcessStdoutBytes).unwrap().max,
-            17
-        );
-        let stderr = accounting.scalar(Scalar::ProcessStderrBytes).unwrap();
-        assert_eq!((stderr.count, stderr.max), (1, 0));
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn production_recording_fault_preserves_the_original_completion_error() {
-        use crate::metrics::accounting::{Fault, Scalar};
-
-        let recorder = crate::metrics::recorder::Recorder::transform_at(1, 1).unwrap();
-        let scope = recorder.scope().unwrap();
-        let command = Command::preflight(
-            Preflight::component_list(),
-            PathBuf::from("fixture"),
-            Box::default(),
-        );
-        let record = || ProductionObservation.record(&command, Duration::from_nanos(7));
-        assert_eq!(recorded_result(Ok(5), record()).unwrap(), 5);
-        let failure: Result<()> = Err(Error::Limit {
-            resource: "original native failure",
-            limit: 123,
-            actual: 124,
-        });
-        assert!(matches!(
-            recorded_result(failure, record()),
-            Err(Error::Limit {
-                resource: "original native failure",
-                limit: 123,
-                actual: 124,
-            })
-        ));
-        drop(scope);
-        let evidence = recorder.snapshot().unwrap().accounting;
-        assert_eq!(
-            evidence.fault,
-            Some(Fault::ScalarOverflow(Scalar::ProcessElapsedNanoseconds))
-        );
-        assert_eq!(
-            evidence
-                .scalar(Scalar::ProcessElapsedNanoseconds)
-                .unwrap()
-                .count,
-            1
-        );
-    }
 
     #[test]
     fn sealed_tool_selection_charges_only_attempted_paths_and_canonical_storage() {

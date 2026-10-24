@@ -545,22 +545,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         Ok(context)
     }
 
-    fn observe_result<T>(&self, _result: &Result<T, Error>) {
-        #[cfg(feature = "import-baseline")]
-        {
-            use crate::metrics::accounting::Scalar;
-            for (key, value) in [
-                (Scalar::ClassifiedItems, self.retained_items.get()),
-                (Scalar::ClassifiedBytes, self.retained_bytes.get()),
-                (Scalar::ClassifiedScratchBytes, self.scratch_bytes.get()),
-            ] {
-                crate::metrics::record_scalar(key, value as u64);
-            }
-            if let Err(error) = _result {
-                observe_failure(error);
-            }
-        }
-    }
+    fn observe_result<T>(&self, _result: &Result<T, Error>) {}
 
     /// The classified retained targets are accounting targets recorded
     /// on the classification account; the charge continues. Only checked
@@ -1914,10 +1899,6 @@ impl ClassifiedParts {
                 allocation,
             })
         })();
-        #[cfg(feature = "import-baseline")]
-        if let Err(error) = &result {
-            observe_failure(error);
-        }
         result
     }
 }
@@ -4063,16 +4044,6 @@ pub enum Error {
     Node(#[source] Box<crate::node::Error>),
 }
 
-#[cfg(feature = "import-baseline")]
-fn observe_failure(error: &Error) {
-    use crate::metrics::accounting::{self, SemanticStage};
-    let required = match error {
-        Error::Limit { actual, limit, .. } => Some((*actual, *limit)),
-        _ => None,
-    };
-    accounting::semantic_refusal(SemanticStage::Classification, required);
-}
-
 impl Write for Measured {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         let Some(actual) = self.bytes.checked_add(buffer.len()) else {
@@ -5210,117 +5181,6 @@ mod tests {
         assert_eq!(axis.target, (settled - 1) as u64);
         assert_eq!(axis.first_requested, settled as u64);
         assert_eq!(axis.high_water, (settled + 1) as u64);
-    }
-
-    /// A pre-seal retained-byte target one short of the true usage is
-    /// recorded and the pass completes; the baseline scalars still report the
-    /// true retained and scratch usage and no semantic refusal is recorded.
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn preseal_classification_exceedance_keeps_original_retained_and_scratch_axes() {
-        use crate::metrics::accounting::{Scalar, SemanticStage};
-
-        let graph = crate::test_fixture::graph();
-        let authority = super::Authority {
-            items: usize::MAX,
-            bytes: usize::MAX,
-            scratch_bytes: usize::MAX,
-        };
-        let (measured, scratch) = graph
-            .classify_parts(&Policy::standard(), authority)
-            .unwrap();
-        let retained = measured.allocation;
-        assert!(scratch > 0);
-        let recorder = crate::metrics::recorder::Recorder::transform_at(10, 1).unwrap();
-        {
-            let _scope = recorder.scope().unwrap();
-            let (recorded, recorded_scratch) = graph
-                .classify_parts(
-                    &Policy::standard(),
-                    super::Authority {
-                        bytes: retained.bytes - 1,
-                        ..authority
-                    },
-                )
-                .expect("one retained byte short of the true usage records and continues");
-            assert_eq!(recorded.canonical, measured.canonical);
-            assert_eq!(recorded.fingerprint, measured.fingerprint);
-            assert_eq!(recorded_scratch, scratch);
-        }
-        let evidence = recorder.snapshot().unwrap().accounting;
-        for (scalar, expected) in [
-            (Scalar::ClassifiedItems, retained.items),
-            (Scalar::ClassifiedBytes, retained.bytes),
-            (Scalar::ClassifiedScratchBytes, scratch),
-        ] {
-            assert_eq!(evidence.scalar(scalar).unwrap().max, expected as u64);
-        }
-        for scalar in [
-            Scalar::SemanticRefusals(SemanticStage::Classification),
-            Scalar::SemanticRefusedRequired(SemanticStage::Classification),
-            Scalar::SemanticRefusedLimit(SemanticStage::Classification),
-        ] {
-            assert_eq!(evidence.scalar(scalar).map_or(0, |range| range.total), 0);
-        }
-    }
-
-    /// A retained-byte target already crossed by the inherited graph
-    /// usage at initialization is recorded and the pass completes; the
-    /// baseline scalars report the true usage and no refusal is recorded.
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn classification_initialization_exceedance_keeps_inherited_original_usage() {
-        use crate::metrics::accounting::{Scalar, SemanticStage};
-
-        let graph = crate::test_fixture::graph();
-        let inherited = graph.allocation();
-        assert!(inherited.bytes > 1);
-        let authority = super::Authority {
-            items: usize::MAX,
-            bytes: usize::MAX,
-            scratch_bytes: usize::MAX,
-        };
-        let (measured, scratch) = graph
-            .classify_parts(&Policy::standard(), authority)
-            .unwrap();
-        let retained = measured.allocation;
-        let recorder = crate::metrics::recorder::Recorder::transform_at(10, 1).unwrap();
-        {
-            let _scope = recorder.scope().unwrap();
-            let (recorded, recorded_scratch) = graph
-                .classify_parts(
-                    &Policy::standard(),
-                    super::Authority {
-                        bytes: 1,
-                        ..authority
-                    },
-                )
-                .expect("a one-byte retained target records at initialization and continues");
-            assert_eq!(recorded.canonical, measured.canonical);
-            assert_eq!(recorded.fingerprint, measured.fingerprint);
-            assert_eq!(recorded_scratch, scratch);
-        }
-        let evidence = recorder.snapshot().unwrap().accounting;
-        assert_eq!(
-            evidence.scalar(Scalar::ClassifiedItems).unwrap().max,
-            retained.items as u64
-        );
-        assert!(retained.items >= inherited.items);
-        assert_eq!(
-            evidence.scalar(Scalar::ClassifiedBytes).unwrap().max,
-            retained.bytes as u64
-        );
-        assert!(retained.bytes > inherited.bytes);
-        assert_eq!(
-            evidence.scalar(Scalar::ClassifiedScratchBytes).unwrap().max,
-            scratch as u64
-        );
-        assert_eq!(
-            evidence
-                .scalar(Scalar::SemanticRefusals(SemanticStage::Classification))
-                .map_or(0, |range| range.total),
-            0
-        );
     }
 
     #[test]

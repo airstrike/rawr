@@ -101,15 +101,6 @@ pub enum SemanticStage {
     Classification,
 }
 
-#[cfg(feature = "import-baseline")]
-pub(crate) fn semantic_refusal(stage: SemanticStage, required: Option<(usize, usize)>) {
-    super::record_scalar(Scalar::SemanticRefusals(stage), 1);
-    if let Some((actual, limit)) = required {
-        super::record_scalar(Scalar::SemanticRefusedRequired(stage), actual as u64);
-        super::record_scalar(Scalar::SemanticRefusedLimit(stage), limit as u64);
-    }
-}
-
 const SCALARS: [Scalar; 83] = [
     Scalar::ResolutionMetadataBytes,
     Scalar::ResolutionUnitBytes,
@@ -351,13 +342,6 @@ pub struct Evidence {
     pub native: [Option<NativeRow>; NATIVE_ACCOUNTS],
     /// A fault freezes this evidence at the last representable observation.
     pub fault: Option<Fault>,
-    /// Additive fixed bundle history. Historical absence is unknown, never zero.
-    #[cfg(feature = "import-baseline")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bundles: Option<super::bundle::Evidence>,
-    #[cfg(feature = "import-baseline")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub publications: Option<super::publication::Evidence>,
 }
 
 impl Default for Evidence {
@@ -370,10 +354,6 @@ impl Default for Evidence {
             graphs: [None; GRAPH_ACCOUNTS],
             native: [None; NATIVE_ACCOUNTS],
             fault: None,
-            #[cfg(feature = "import-baseline")]
-            bundles: None,
-            #[cfg(feature = "import-baseline")]
-            publications: None,
         }
     }
 }
@@ -437,18 +417,6 @@ impl Evidence {
             }
         }
         true
-    }
-
-    /// Check required observations supplied by the qualification's known workload.
-    ///
-    /// A handled refusal is evidence, not a claim that the product terminated.
-    /// The caller must separately check the actual product outcome and full account
-    /// coverage. This check grants no production capability.
-    pub fn qualifies(&self, required: &[Scalar]) -> bool {
-        self.valid()
-            && self.fault.is_none()
-            && self.graphs[0].is_some()
-            && required.iter().all(|scalar| self.scalar(*scalar).is_some())
     }
 
     /// Check that this runner lifetime reported each required command, including

@@ -1,9 +1,3 @@
-#[cfg(feature = "import-baseline")]
-use crate::metrics::principal::retirement;
-
-#[cfg(feature = "import-baseline")]
-use crate::metrics::principal::ledger::{Before, Cause, Write};
-
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -218,14 +212,6 @@ impl Charge {
 }
 
 impl LeaseKey {
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn observed(self) -> crate::metrics::principal::Lease {
-        match self {
-            Self::Action(key) => crate::metrics::principal::Lease::Action(key.as_bytes()),
-            Self::Execution(key) => crate::metrics::principal::Lease::Execution(key.as_bytes()),
-        }
-    }
-
     pub(crate) fn code(self) -> u8 {
         match self {
             Self::Action(_) => 1,
@@ -290,10 +276,6 @@ impl Capacity<'_> {
             &self.root,
             &target,
             &bytes,
-            #[cfg(feature = "import-baseline")]
-            crate::metrics::publication::Replacement::InstallationReservation,
-            #[cfg(feature = "import-baseline")]
-            Some(Write::installation(Cause::Reservation(key.observed()))),
         )?;
         Ok(Reservation {
             key,
@@ -304,24 +286,6 @@ impl Capacity<'_> {
 }
 
 impl Reference {
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn observed(self) -> crate::metrics::principal::pin::Reference {
-        crate::metrics::principal::pin::Reference {
-            class: match self.0.class {
-                Class::Action => 1,
-                Class::Content => 2,
-                Class::Bundle => 3,
-            },
-            kind: self.0.kind as u8,
-            schema: self.0.schema,
-            key: self.0.key.as_bytes(),
-            bytes: self.0.charge.bytes,
-            allocations: self.0.charge.allocations,
-            members: self.0.charge.members,
-            record: self.0.record,
-        }
-    }
-
     pub(crate) const fn charge(self) -> Charge {
         self.0.charge
     }
@@ -378,13 +342,6 @@ impl Reference {
     }
 }
 
-#[cfg(feature = "import-baseline")]
-impl Allocation {
-    pub(crate) fn observed(self) -> crate::metrics::principal::pin::Reference {
-        Reference(self).observed()
-    }
-}
-
 impl Registered {
     pub(crate) const fn allocation(self) -> Allocation {
         self.allocation
@@ -408,14 +365,6 @@ impl Registered {
 }
 
 impl Record {
-    #[cfg(feature = "import-baseline")]
-    pub(crate) const fn commitment(&self) -> crate::metrics::principal::Commitment {
-        crate::metrics::principal::Commitment {
-            bytes: self.length,
-            sha256: self.digest,
-        }
-    }
-
     pub(crate) fn seal(
         identity: Identity,
         payload: &[u8],
@@ -656,20 +605,6 @@ impl Record {
         self.charge
     }
 
-    /// Observer uses a commitment admitted from the already-produced record bytes.
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn observed(&self, record: [u8; 32]) -> crate::metrics::principal::pin::Reference {
-        Reference(Allocation {
-            class: self.identity.class,
-            kind: self.identity.kind,
-            schema: self.identity.schema,
-            key: self.identity.key,
-            charge: self.charge,
-            record,
-        })
-        .observed()
-    }
-
     pub(crate) fn allocation(&self) -> Allocation {
         Allocation {
             class: self.identity.class,
@@ -802,11 +737,6 @@ impl Ledger {
     fn read_budgeted(root: &Path, budget: &crate::node::GraphBudget) -> Result<Self, Error> {
         let path = ledger_path(root);
         let bytes = super::entry::read_file_budgeted(&path, MAX_LEDGER_BYTES, budget)?;
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::record_scalar(
-            crate::metrics::accounting::Scalar::LedgerReadBytes,
-            bytes.len() as u64,
-        );
         Self::decode(&bytes).map_err(|_| Error::Corrupt {
             path,
             reason: "installation ledger decoding failed",
@@ -835,11 +765,6 @@ impl Ledger {
     fn read_with_recovery(root: &Path) -> Result<Self, Error> {
         let path = ledger_path(root);
         let bytes = super::entry::read_file(&path, MAX_LEDGER_BYTES)?;
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::record_scalar(
-            crate::metrics::accounting::Scalar::LedgerReadBytes,
-            bytes.len() as u64,
-        );
         Self::decode(&bytes).map_err(|_| Error::Corrupt {
             path,
             reason: "installation ledger decoding failed",
@@ -1269,11 +1194,6 @@ impl Ledger {
             encode_registered(*registered, &publishers, &sequences, &mut bytes)?;
         }
         debug_assert_eq!(bytes.len(), length);
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::record_scalar(
-            crate::metrics::accounting::Scalar::LedgerEncodedBytes,
-            bytes.len() as u64,
-        );
         Ok(bytes.into_boxed_slice())
     }
 
@@ -1513,17 +1433,7 @@ pub(crate) fn initialize(
             }
             let plan = super::control::Plan::replacement(&path, bytes.len());
             let admitted = super::control::Admitted::seal(publication, root, plan)?;
-            super::entry::replace_admitted_file(
-                admitted,
-                publication,
-                root,
-                &path,
-                &bytes,
-                #[cfg(feature = "import-baseline")]
-                crate::metrics::publication::Replacement::InstallationBootstrap,
-                #[cfg(feature = "import-baseline")]
-                Some(Write::installation(Cause::Bootstrap).with_before(Before::Absent)),
-            )?;
+            super::entry::replace_admitted_file(admitted, publication, root, &path, &bytes)?;
             let ledger = Ledger::read(root)?;
             physical(root, &ledger).map(|_| ())
         }
@@ -1543,13 +1453,7 @@ pub(crate) fn reserve(
 ) -> Result<Reservation, Error> {
     let mut ledger = Ledger::read(root)?;
     ledger.insert_reservation(key, charge)?;
-    save(
-        publication,
-        root,
-        &ledger,
-        #[cfg(feature = "import-baseline")]
-        Cause::Reservation(key.observed()),
-    )?;
+    save(publication, root, &ledger)?;
     Ok(Reservation {
         key,
         charge,
@@ -1627,14 +1531,7 @@ pub(crate) fn begin_eviction(
 ) -> Result<(), Error> {
     let mut ledger = (*Ledger::read_recovery(root, budget)?).clone();
     ledger.begin_eviction(selected)?;
-    save_recovery(
-        publication,
-        root,
-        ledger,
-        budget,
-        #[cfg(feature = "import-baseline")]
-        Cause::Eviction,
-    )
+    save_recovery(publication, root, ledger, budget)
 }
 
 pub(super) fn begin_repair_eviction(
@@ -1650,17 +1547,7 @@ pub(super) fn begin_repair_eviction(
     let target = ledger_path(root);
     let plan = super::control::Plan::replacement(&target, bytes.len());
     let admitted = admit_repair_control_with(publication, root, &ledger, plan, repair)?;
-    super::entry::replace_admitted_file(
-        admitted,
-        publication,
-        root,
-        &target,
-        &bytes,
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::publication::Replacement::InstallationRepair,
-        #[cfg(feature = "import-baseline")]
-        Some(Write::installation(Cause::Repair)),
-    )?;
+    super::entry::replace_admitted_file(admitted, publication, root, &target, &bytes)?;
     budget.retain_installation(root, std::sync::Arc::new(ledger), recovery_metadata(root)?);
     Ok(())
 }
@@ -1714,14 +1601,7 @@ pub(crate) fn finish_eviction(
 ) -> Result<(), Error> {
     let mut ledger = (*Ledger::read_recovery(root, budget)?).clone();
     ledger.finish_eviction()?;
-    save_recovery(
-        publication,
-        root,
-        ledger,
-        budget,
-        #[cfg(feature = "import-baseline")]
-        Cause::Eviction,
-    )
+    save_recovery(publication, root, ledger, budget)
 }
 
 pub(crate) fn cancel(
@@ -1731,13 +1611,7 @@ pub(crate) fn cancel(
 ) -> Result<(), Error> {
     let mut ledger = Ledger::read(root)?;
     ledger.cancel(reservation)?;
-    save(
-        publication,
-        root,
-        &ledger,
-        #[cfg(feature = "import-baseline")]
-        Cause::Cancel(reservation.key.observed()),
-    )
+    save(publication, root, &ledger)
 }
 
 pub(crate) fn plan(
@@ -1796,13 +1670,7 @@ pub(crate) fn commit(
 ) -> Result<(), Error> {
     let mut ledger = Ledger::read(root)?;
     ledger.commit(reservation, records)?;
-    save(
-        publication,
-        root,
-        &ledger,
-        #[cfg(feature = "import-baseline")]
-        Cause::Commit(reservation.key.observed()),
-    )
+    save(publication, root, &ledger)
 }
 
 pub(crate) fn registered_with_budget(
@@ -2109,8 +1977,7 @@ pub(crate) fn recover_key(
                 charge: Charge::zero(),
                 record: [0; 32],
             });
-            super::bundle::recover_planned_observed(
-                publication,
+            super::bundle::recover_planned(
                 root,
                 reservation.key,
                 plan.kind,
@@ -2122,14 +1989,7 @@ pub(crate) fn recover_key(
         }
     }
     ledger.reservations.remove(index);
-    save_recovery(
-        publication,
-        root,
-        ledger,
-        budget,
-        #[cfg(feature = "import-baseline")]
-        Cause::Recovery(Some(key.observed())),
-    )
+    save_recovery(publication, root, ledger, budget)
 }
 
 #[cfg(test)]
@@ -2258,7 +2118,6 @@ fn save(
     publication: &super::lease::Publication<'_>,
     root: &Path,
     ledger: &Ledger,
-    #[cfg(feature = "import-baseline")] cause: Cause,
 ) -> Result<(), Error> {
     let bytes = ledger.encode()?;
     if publication.root() != root {
@@ -2271,17 +2130,7 @@ fn save(
     // A ledger write is admitted by what it changes; the whole-store
     // shape walk stays with bootstrap, garbage recovery and repair.
     let admitted = super::control::Admitted::seal(publication, root, plan)?;
-    super::entry::replace_admitted_file(
-        admitted,
-        publication,
-        root,
-        &target,
-        &bytes,
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::publication::Replacement::InstallationSave,
-        #[cfg(feature = "import-baseline")]
-        Some(Write::installation(cause)),
-    )
+    super::entry::replace_admitted_file(admitted, publication, root, &target, &bytes)
 }
 
 fn recovery_metadata(root: &Path) -> Result<fs::Metadata, Error> {
@@ -2302,15 +2151,8 @@ fn save_recovery(
     root: &Path,
     ledger: Ledger,
     budget: &mut super::recovery::Budget,
-    #[cfg(feature = "import-baseline")] cause: Cause,
 ) -> Result<(), Error> {
-    save(
-        publication,
-        root,
-        &ledger,
-        #[cfg(feature = "import-baseline")]
-        cause,
-    )?;
+    save(publication, root, &ledger)?;
     budget.retain_installation(root, std::sync::Arc::new(ledger), recovery_metadata(root)?);
     Ok(())
 }
@@ -2341,19 +2183,7 @@ fn save_reserved(
     // A ledger write is admitted by what it changes; the whole-store
     // shape walk stays with bootstrap, garbage recovery and repair.
     let admitted = super::control::Admitted::seal(publication, root, plan)?;
-    super::entry::replace_admitted_file(
-        admitted,
-        publication,
-        root,
-        &target,
-        &bytes,
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::publication::Replacement::InstallationPlanned,
-        #[cfg(feature = "import-baseline")]
-        Some(Write::installation(Cause::Planned(
-            reservation.key.observed(),
-        ))),
-    )
+    super::entry::replace_admitted_file(admitted, publication, root, &target, &bytes)
 }
 
 pub(super) fn admit_control<'lease>(
@@ -2496,59 +2326,15 @@ fn recover_planned(
     }
     let allocation = record.allocation();
     budget.deletion(allocation.charge)?;
-    #[cfg(feature = "import-baseline")]
-    let mut observation = crate::metrics::publication::Attempt::start(
-        crate::metrics::publication::Class::Retirement(
-            crate::metrics::publication::Retirement::Planned,
-        ),
-    );
-    #[cfg(feature = "import-baseline")]
-    let retirement = retirement::Attempt::start(
-        publication,
-        &directory,
-        retirement::Cause::Planned {
-            lease: reservation.observed(),
-        },
-        retirement::Facts {
-            allocation: Some(allocation.observed()),
-            owner: Some(retirement::Owner {
-                lease: record.reservation().observed(),
-                publisher: record.publisher().as_bytes(),
-            }),
-            member: Some(record.commitment()),
-        },
-    );
-    let temporary = super::entry::stage_retirement(
-        publication,
-        root,
-        &directory,
-        #[cfg(feature = "import-baseline")]
-        &mut observation,
-        #[cfg(feature = "import-baseline")]
-        Some(super::entry::Retirement::Allocation(&retirement)),
-    )?;
-    #[cfg(feature = "import-baseline")]
-    observation.cleanup_started();
-    #[cfg(feature = "import-baseline")]
-    retirement.removal_started();
-    let cleanup = fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
+    let temporary = super::entry::stage_retirement(publication, root, &directory)?;
+    fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
         operation: "remove planned typed store allocation during recovery",
         path: temporary.clone(),
         source,
-    });
-    #[cfg(feature = "import-baseline")]
-    observation.cleanup(cleanup.is_ok());
-    #[cfg(feature = "import-baseline")]
-    retirement.removal_finished(cleanup.is_ok());
-    cleanup?;
-    let result = super::entry::sync_directory(temporary.parent().ok_or(Error::State(
+    })?;
+    super::entry::sync_directory(temporary.parent().ok_or(Error::State(
         "typed store recovery allocation has no temporary parent",
-    ))?);
-    #[cfg(feature = "import-baseline")]
-    retirement.completed(result.is_ok());
-    #[cfg(feature = "import-baseline")]
-    let result = observation.finish(result);
-    result
+    ))?)
 }
 
 fn validate_recovery_members(directory: &Path, payload_name: &'static str) -> Result<(), Error> {
@@ -2911,79 +2697,9 @@ fn array_at(bytes: &[u8], offset: usize) -> Result<[u8; 32], Error> {
         .ok_or(Error::Codec("typed store accounting digest is truncated"))
 }
 
-/// Parent-only canonical binding; no filesystem read or producer allocation.
-#[cfg(feature = "import-baseline")]
-pub(crate) fn matches_observed_bundle(
-    allocation: crate::metrics::principal::pin::Reference,
-    lease: crate::metrics::principal::Lease,
-    publisher: [u8; 32],
-    seal: crate::metrics::principal::Commitment,
-    control: crate::metrics::principal::Commitment,
-    geometry: Option<[u8; 32]>,
-) -> bool {
-    let Some(kind) = Kind::from_code(allocation.kind) else {
-        return false;
-    };
-    let reservation = match lease {
-        crate::metrics::principal::Lease::Action(key) => {
-            LeaseKey::Action(ActionKey::from_bytes(key))
-        }
-        crate::metrics::principal::Lease::Execution(key) => {
-            LeaseKey::Execution(ExecutionKey::from_bytes(key))
-        }
-    };
-    if allocation.class != 3
-        || control.bytes
-            != match geometry {
-                Some(_) => BUNDLE_RECORD_BYTES,
-                None => RECORD_BYTES,
-            } as u64
-        || control.sha256 != allocation.record
-    {
-        return false;
-    }
-    let record = Record {
-        identity: Identity {
-            class: Class::Bundle,
-            kind,
-            schema: allocation.schema,
-            key: Digest::from_bytes(allocation.key),
-            reservation,
-            publisher: Digest::from_bytes(publisher),
-        },
-        length: seal.bytes,
-        digest: seal.sha256,
-        charge: Charge {
-            bytes: allocation.bytes,
-            allocations: allocation.allocations,
-            members: allocation.members,
-        },
-        geometry,
-    };
-    <[u8; 32]>::from(Sha256::digest(record.encode())) == control.sha256
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn storage_observation_reports_encoded_bytes() {
-        use crate::metrics::{accounting::Scalar, recorder::Recorder};
-        let recorder = Recorder::transform(100).unwrap();
-        let length;
-        {
-            let _scope = recorder.scope().unwrap();
-            length = Ledger::empty().encode().unwrap().len();
-        }
-        let evidence = recorder.snapshot().unwrap().accounting;
-        assert_eq!(
-            evidence.scalar(Scalar::LedgerEncodedBytes).unwrap().total,
-            length as u64
-        );
-        assert!(evidence.scalar(Scalar::LedgerReadBytes).is_none());
-    }
 
     #[test]
     fn bootstrap_recovers_atomic_replacement_temporary_and_rebuilds_a_partial_final_ledger() {
@@ -3049,7 +2765,7 @@ mod tests {
         root: &Path,
         evaluate: impl FnOnce(&super::super::lease::Publication<'_>) -> Result<T, Error>,
     ) -> T {
-        super::super::lease::with_publication(root, &crate::node::GraphBudget::new(), evaluate)
+        super::super::lease::with_publication(root, evaluate)
             .expect("the accounting fixture publication succeeds")
     }
 
@@ -3065,16 +2781,6 @@ mod tests {
             target,
             payload_name,
             payload,
-            #[cfg(feature = "import-baseline")]
-            match identity.class {
-                Class::Action => crate::metrics::publication::Class::Action(identity.kind.metric()),
-                Class::Content => {
-                    crate::metrics::publication::Class::Content(identity.kind.metric())
-                }
-                Class::Bundle => unreachable!("directory fixture is not a Cargo bundle"),
-            },
-            #[cfg(feature = "import-baseline")]
-            None,
             |metadata| Record::seal(identity, payload, metadata),
         )
         .expect("the accounting fixture publishes");
@@ -3789,18 +3495,14 @@ mod tests {
         symlink(&outside, &action_path).expect("the foreign fixture link exists");
 
         assert!(matches!(
-            super::super::lease::with_publication(
-                &root,
-                &crate::node::GraphBudget::new(),
-                |publication| {
-                    recover_key(
-                        publication,
-                        &root,
-                        key,
-                        &mut crate::store::recovery::Budget::new(),
-                    )
-                }
-            ),
+            super::super::lease::with_publication(&root, |publication| {
+                recover_key(
+                    publication,
+                    &root,
+                    key,
+                    &mut crate::store::recovery::Budget::new(),
+                )
+            }),
             Err(Error::CleanupRequired(_))
         ));
         assert!(action_path

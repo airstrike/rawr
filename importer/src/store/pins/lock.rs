@@ -1,5 +1,3 @@
-#[cfg(feature = "import-baseline")]
-use crate::metrics::principal::pin;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Read as _;
@@ -25,55 +23,8 @@ const MAX_TOTAL_BYTES: usize = MAX_ROOTS * HEADER_BYTES + MAX_EDGES * 96;
 /// from miss-side stale-pin recovery and eviction.
 pub(crate) struct Guard {
     _file: File,
-    #[cfg(feature = "import-baseline")]
-    observation: pin::Owner,
 }
-impl Guard {
-    #[cfg(feature = "import-baseline")]
-    pub(super) fn observed(&self) -> u64 {
-        self.observation.token()
-    }
-}
-
-/// This guard vector was not charged on the graph axis before observation.
-/// Admit its actual full requested layout; Arc clones allocate no new payload.
-#[cfg(feature = "import-baseline")]
-pub(super) fn admit_guard_observations(
-    publication: &crate::store::lease::Publication<'_>,
-    count: usize,
-) {
-    pin::storage(
-        publication,
-        count.saturating_mul(std::mem::size_of::<Guard>()),
-    );
-}
-
-#[cfg(feature = "import-baseline")]
-fn observe(
-    publication: &crate::store::lease::Publication<'_>,
-    target: &Path,
-    project: Digest,
-    root: &Root,
-    bytes: &[u8],
-) -> pin::Source {
-    if !crate::metrics::principal_enabled() {
-        return pin::Source::default();
-    }
-    let source = pin::Source::observe(
-        publication,
-        target,
-        project.as_bytes(),
-        root.role.observed(),
-        root.owner.0.as_bytes(),
-        root.proof.as_bytes(),
-        bytes,
-        root.references.len(),
-    );
-    for (index, reference) in root.references.iter().enumerate() {
-        source.reference(index, reference.observed());
-    }
-    source
-}
+impl Guard {}
 
 /// Exact pre-mutation record state retained until a pin replacement commits.
 pub(super) struct Acquisition {
@@ -113,11 +64,9 @@ impl Acquisition {
 
     pub(super) fn retain(
         &self,
-        publication: &crate::store::lease::Publication<'_>,
+        _publication: &crate::store::lease::Publication<'_>,
         store: &Path,
     ) -> Result<Guard, Error> {
-        #[cfg(not(feature = "import-baseline"))]
-        let _ = publication;
         if !self.existing {
             return Err(Error::CleanupRequired(
                 "a retained project pin record is missing",
@@ -133,30 +82,7 @@ impl Acquisition {
             .join(self.pinned.role.directory())
             .join(self.pinned.owner.directory())
             .join("root");
-        #[cfg(feature = "import-baseline")]
-        let source = observe(
-            publication,
-            path.parent().unwrap_or(store),
-            self.project,
-            &self.pinned,
-            &bytes,
-        );
-        #[cfg(feature = "import-baseline")]
-        let attempt = pin::Attempt::start(
-            publication,
-            path.parent().unwrap_or(store),
-            Some(&source),
-            pin::Operation::Retain,
-        );
-        let result = open_shared(
-            &path,
-            &bytes,
-            #[cfg(feature = "import-baseline")]
-            Some(&source),
-        );
-        #[cfg(feature = "import-baseline")]
-        attempt.completed(result.is_ok());
-        result
+        open_shared(&path, &bytes)
     }
 
     pub(super) fn rollback(
@@ -202,8 +128,6 @@ pub(crate) struct Stale {
     references: Box<[Reference]>,
     charge: Charge,
     _file: Guard,
-    #[cfg(feature = "import-baseline")]
-    observation: pin::Source,
 }
 
 struct Record {
@@ -238,15 +162,9 @@ pub(super) fn acquire(
         .join(pinned.role.directory())
         .join(pinned.owner.directory());
     let target = store.join(&relative);
-    #[cfg(feature = "import-baseline")]
-    let source = observe(publication, &target, project, pinned, &bytes);
-    #[cfg(feature = "import-baseline")]
-    let attempt = pin::Attempt::start(publication, &target, Some(&source), pin::Operation::Acquire);
     match super::super::entry::existing_directory(store, &relative)? {
         Some(_) => {
             validate_record_file(&target, &bytes)?;
-            #[cfg(feature = "import-baseline")]
-            attempt.step(pin::Step::Existing);
         }
         None => {
             Inventory::read(store)?.admit(pinned.references.len(), bytes.len())?;
@@ -256,32 +174,16 @@ pub(super) fn acquire(
                 &target,
                 "root",
                 &bytes,
-                #[cfg(feature = "import-baseline")]
-                crate::metrics::publication::Class::Pin(pinned.role.observed()),
-                #[cfg(feature = "import-baseline")]
-                None,
-                #[cfg(feature = "import-baseline")]
-                Some(&attempt),
             )? {
                 super::super::entry::Publication::Published => {}
                 super::super::entry::Publication::Existing => {
                     validate_record_file(&target, &bytes)?;
-                    #[cfg(feature = "import-baseline")]
-                    attempt.step(pin::Step::Existing);
                 }
             }
         }
     }
     super::transaction::checkpoint(super::transaction::Stage::Published(pinned.role))?;
-    let result = open_shared(
-        &target.join("root"),
-        &bytes,
-        #[cfg(feature = "import-baseline")]
-        Some(&source),
-    );
-    #[cfg(feature = "import-baseline")]
-    attempt.completed(result.is_ok());
-    result
+    open_shared(&target.join("root"), &bytes)
 }
 
 pub(super) fn retire_released(
@@ -301,22 +203,8 @@ pub(super) fn retire_released(
     let directory = super::super::entry::existing_directory(store, &relative)?.ok_or(
         Error::CleanupRequired("a released pin root disappeared before retirement"),
     )?;
-    #[cfg(feature = "import-baseline")]
-    let source = observe(publication, &directory, project, released, &bytes);
-    #[cfg(feature = "import-baseline")]
-    let attempt = pin::Attempt::start(
-        publication,
-        &directory,
-        Some(&source),
-        pin::Operation::Release,
-    );
     validate_record_file(&directory, &bytes)?;
-    let lock = match open_snapshot(
-        &directory.join("root"),
-        &bytes,
-        #[cfg(feature = "import-baseline")]
-        Some(&source),
-    )? {
+    let lock = match open_snapshot(&directory.join("root"), &bytes)? {
         SnapshotLock::Stale(lock) => lock,
         SnapshotLock::Active(_) => {
             return Err(Error::CleanupRequired(
@@ -324,48 +212,18 @@ pub(super) fn retire_released(
             ));
         }
     };
-    #[cfg(feature = "import-baseline")]
-    let mut observation = crate::metrics::publication::Attempt::start(
-        crate::metrics::publication::Class::ReleasedPin(released.role.observed()),
-    );
-    let temporary = super::super::entry::stage_retirement(
-        publication,
-        store,
-        &directory,
-        #[cfg(feature = "import-baseline")]
-        &mut observation,
-        #[cfg(feature = "import-baseline")]
-        Some(crate::store::entry::Retirement::Pin(&attempt)),
-    )?;
-    #[cfg(feature = "import-baseline")]
-    observation.cleanup_started();
-    #[cfg(feature = "import-baseline")]
-    attempt.step(pin::Step::RemovalStarted);
-    let cleanup = fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
+    let temporary = super::super::entry::stage_retirement(publication, store, &directory)?;
+    fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
         operation: "retire released pin root",
         path: temporary.clone(),
         source,
-    });
-    #[cfg(feature = "import-baseline")]
-    observation.cleanup(cleanup.is_ok());
-    #[cfg(feature = "import-baseline")]
-    attempt.step(if cleanup.is_ok() {
-        pin::Step::Removed
-    } else {
-        pin::Step::RemovalFailed
-    });
-    cleanup?;
+    })?;
     drop(lock);
-    let result = super::super::entry::sync_directory(
+    super::super::entry::sync_directory(
         temporary
             .parent()
             .ok_or(Error::State("released pin root has no temporary directory"))?,
-    );
-    #[cfg(feature = "import-baseline")]
-    let result = observation.finish(result);
-    #[cfg(feature = "import-baseline")]
-    attempt.completed(result.is_ok());
-    result
+    )
 }
 
 impl Record {
@@ -589,11 +447,9 @@ impl Inventory {
 impl Snapshot {
 
     fn read_with_recovery(
-        publication: &crate::store::lease::Publication<'_>,
+        _publication: &crate::store::lease::Publication<'_>,
         store: &Path,
     ) -> Result<Self, Error> {
-        #[cfg(not(feature = "import-baseline"))]
-        let _ = publication;
         let (_, located) = Inventory::catalog(store)?;
         let mut protected = Vec::new();
         let mut stale = Vec::new();
@@ -601,32 +457,15 @@ impl Snapshot {
         protected
             .try_reserve_exact(MAX_EDGES)
             .map_err(|_| Error::Allocation)?;
-        #[cfg(feature = "import-baseline")]
-        pin::storage(publication, located.len() * std::mem::size_of::<Stale>());
         stale
             .try_reserve_exact(located.len())
             .map_err(|_| Error::Allocation)?;
-        #[cfg(feature = "import-baseline")]
-        pin::storage(publication, located.len() * std::mem::size_of::<Active>());
         active
             .try_reserve_exact(located.len())
             .map_err(|_| Error::Allocation)?;
         for located in located {
             let path = located.directory.join("root");
-            #[cfg(feature = "import-baseline")]
-            let source = observe(
-                publication,
-                &located.directory,
-                located.record.project,
-                &located.record.root,
-                &located.bytes,
-            );
-            match open_snapshot(
-                &path,
-                &located.bytes,
-                #[cfg(feature = "import-baseline")]
-                Some(&source),
-            )? {
+            match open_snapshot(&path, &located.bytes)? {
                 SnapshotLock::Active(file) => {
                     protected.extend_from_slice(&located.record.root.references);
                     active.push(Active {
@@ -643,23 +482,13 @@ impl Snapshot {
                     references: located.record.root.references,
                     charge: pin_charge(located.bytes.len())?,
                     _file: file,
-                    #[cfg(feature = "import-baseline")]
-                    observation: source,
                 }),
             }
         }
         protected.sort_unstable();
         protected.dedup();
         let protected = protected.into_boxed_slice();
-        #[cfg(feature = "import-baseline")]
-        if stale.len() != stale.capacity() {
-            pin::storage(publication, stale.len() * std::mem::size_of::<Stale>());
-        }
         let stale = stale.into_boxed_slice();
-        #[cfg(feature = "import-baseline")]
-        if active.len() != active.capacity() {
-            pin::storage(publication, active.len() * std::mem::size_of::<Active>());
-        }
         let active = active.into_boxed_slice();
         Ok(Self {
             protected,
@@ -708,53 +537,16 @@ impl Stale {
         store: &Path,
         budget: &mut super::super::recovery::Budget,
     ) -> Result<(), Error> {
-        #[cfg(feature = "import-baseline")]
-        let attempt = pin::Attempt::start(
-            publication,
-            &self.directory,
-            Some(&self.observation),
-            pin::Operation::Stale,
-        );
         budget.deletion(self.charge)?;
-        #[cfg(feature = "import-baseline")]
-        let mut observation = crate::metrics::publication::Attempt::start(
-            crate::metrics::publication::Class::StalePin(self.role.observed()),
-        );
-        let temporary = super::super::entry::stage_retirement(
-            publication,
-            store,
-            &self.directory,
-            #[cfg(feature = "import-baseline")]
-            &mut observation,
-            #[cfg(feature = "import-baseline")]
-            Some(crate::store::entry::Retirement::Pin(&attempt)),
-        )?;
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup_started();
-        #[cfg(feature = "import-baseline")]
-        attempt.step(pin::Step::RemovalStarted);
-        let cleanup = fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
+        let temporary = super::super::entry::stage_retirement(publication, store, &self.directory)?;
+        fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
             operation: "retire replaced typed store pin root",
             path: temporary.clone(),
             source,
-        });
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup(cleanup.is_ok());
-        #[cfg(feature = "import-baseline")]
-        attempt.step(if cleanup.is_ok() {
-            pin::Step::Removed
-        } else {
-            pin::Step::RemovalFailed
-        });
-        cleanup?;
-        let result = super::super::entry::sync_directory(temporary.parent().ok_or(
-            Error::State("typed store pin root has no temporary directory"),
-        )?);
-        #[cfg(feature = "import-baseline")]
-        let result = observation.finish(result);
-        #[cfg(feature = "import-baseline")]
-        attempt.completed(result.is_ok());
-        result
+        })?;
+        super::super::entry::sync_directory(temporary.parent().ok_or(Error::State(
+            "typed store pin root has no temporary directory",
+        ))?)
     }
 }
 
@@ -788,36 +580,8 @@ pub(super) fn recover_replaced(
     let mut projects = BTreeMap::<Digest, Vec<Stale>>::new();
     for stale in stale {
         let values = projects.entry(stale.project).or_default();
-        #[cfg(feature = "import-baseline")]
-        if values.len() == values.capacity() {
-            // This reached Vec<Stale>::push requests RawVec's amortized growth:
-            // alloc/raw_vec/mod.rs:158,503 (nightly-2026-07-11). This is the
-            // requested layout; no claim is made about an in-place realloc.
-            let size = std::mem::size_of::<Stale>();
-            let minimum = if size == 1 {
-                8
-            } else if size <= 1024 {
-                4
-            } else {
-                1
-            };
-            let requested = values
-                .capacity()
-                .saturating_mul(2)
-                .max(values.len().saturating_add(1))
-                .max(minimum);
-            pin::storage(
-                publication,
-                requested.saturating_mul(std::mem::size_of::<Stale>()),
-            );
-        }
         values.push(stale);
     }
-    #[cfg(feature = "import-baseline")]
-    pin::storage(
-        publication,
-        projects.values().map(Vec::len).sum::<usize>() * std::mem::size_of::<Stale>(),
-    );
     let mut retained = Vec::new();
     retained
         .try_reserve_exact(projects.values().map(Vec::len).sum())
@@ -831,10 +595,6 @@ pub(super) fn recover_replaced(
                 retained.push(stale);
             }
         }
-    }
-    #[cfg(feature = "import-baseline")]
-    if retained.len() != retained.capacity() {
-        pin::storage(publication, retained.len() * std::mem::size_of::<Stale>());
     }
     Ok(Snapshot {
         protected,
@@ -898,11 +658,7 @@ fn validate_one_member(root: &Path) -> Result<Box<[u8]>, Error> {
     super::super::entry::read_file(&entry.path(), MAX_RECORD_BYTES)
 }
 
-fn open_shared(
-    path: &Path,
-    expected: &[u8],
-    #[cfg(feature = "import-baseline")] source: Option<&pin::Source>,
-) -> Result<Guard, Error> {
+fn open_shared(path: &Path, expected: &[u8]) -> Result<Guard, Error> {
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect typed store pin-root lock",
         path: path.to_path_buf(),
@@ -976,35 +732,18 @@ fn open_shared(
             reason: "typed store pin-root bytes changed while locking",
         });
     }
-    Ok(Guard {
-        _file: file,
-        #[cfg(feature = "import-baseline")]
-        observation: source
-            .map(|source| source.owner(pin::Mode::Shared))
-            .unwrap_or_default(),
-    })
+    Ok(Guard { _file: file })
 }
 
-fn open_snapshot(
-    path: &Path,
-    expected: &[u8],
-    #[cfg(feature = "import-baseline")] source: Option<&pin::Source>,
-) -> Result<SnapshotLock, Error> {
-    open_snapshot_with(
-        path,
-        expected,
-        true,
-        #[cfg(feature = "import-baseline")]
-        source,
-    )?
-    .ok_or(Error::State("ordinary pin snapshot lost its active guard"))
+fn open_snapshot(path: &Path, expected: &[u8]) -> Result<SnapshotLock, Error> {
+    open_snapshot_with(path, expected, true)?
+        .ok_or(Error::State("ordinary pin snapshot lost its active guard"))
 }
 
 fn open_snapshot_with(
     path: &Path,
     expected: &[u8],
     retain_active: bool,
-    #[cfg(feature = "import-baseline")] source: Option<&pin::Source>,
 ) -> Result<Option<SnapshotLock>, Error> {
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect typed store pin-root snapshot",
@@ -1082,21 +821,9 @@ fn open_snapshot_with(
         });
     }
     if state {
-        Ok(Some(SnapshotLock::Active(Guard {
-            _file: file,
-            #[cfg(feature = "import-baseline")]
-            observation: source
-                .map(|source| source.owner(pin::Mode::Shared))
-                .unwrap_or_default(),
-        })))
+        Ok(Some(SnapshotLock::Active(Guard { _file: file })))
     } else {
-        Ok(Some(SnapshotLock::Stale(Guard {
-            _file: file,
-            #[cfg(feature = "import-baseline")]
-            observation: source
-                .map(|source| source.owner(pin::Mode::Exclusive))
-                .unwrap_or_default(),
-        })))
+        Ok(Some(SnapshotLock::Stale(Guard { _file: file })))
     }
 }
 

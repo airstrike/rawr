@@ -1252,10 +1252,6 @@ pub(crate) struct Allocation {
     /// Accounting exceedance never sets it; a latched account does no
     /// further work.
     refused: bool,
-    #[cfg(feature = "import-baseline")]
-    refusal_observed: std::cell::Cell<bool>,
-    #[cfg(feature = "import-baseline")]
-    reported_usage: std::cell::Cell<Option<(usize, usize)>>,
 }
 
 const EVIDENCE_CATEGORY_COUNT: usize = 6;
@@ -1335,10 +1331,6 @@ impl Allocation {
             id: crate::exceedance::next_id(),
             exceeded: std::cell::Cell::new(crate::exceedance::Record::new()),
             refused: false,
-            #[cfg(feature = "import-baseline")]
-            refusal_observed: std::cell::Cell::new(false),
-            #[cfg(feature = "import-baseline")]
-            reported_usage: std::cell::Cell::new(None),
         }
     }
 
@@ -1360,10 +1352,6 @@ impl Allocation {
             id: crate::exceedance::next_id(),
             exceeded: std::cell::Cell::new(crate::exceedance::Record::new()),
             refused: false,
-            #[cfg(feature = "import-baseline")]
-            refusal_observed: std::cell::Cell::new(false),
-            #[cfg(feature = "import-baseline")]
-            reported_usage: std::cell::Cell::new(None),
         }
     }
 
@@ -1486,12 +1474,6 @@ impl Allocation {
     /// The retained-graph targets are accounting targets recorded on
     /// this account; the measured graph is retained either way.
     pub(crate) fn validate_retained(&self, items: usize, bytes: usize) -> Result<()> {
-        #[cfg(feature = "import-baseline")]
-        {
-            use crate::metrics::accounting::Scalar;
-            crate::metrics::record_scalar(Scalar::ApiRetainedItems, items as u64);
-            crate::metrics::record_scalar(Scalar::ApiRetainedBytes, bytes as u64);
-        }
         self.check()?;
         self.exceeded("retained graph items", self.retained_item_limit, items);
         self.exceeded("retained graph bytes", self.retained_byte_limit, bytes);
@@ -1515,28 +1497,7 @@ impl Allocation {
     }
 
     fn failure_at(&self, _stage: crate::metrics::accounting::SemanticStage, error: Error) -> Error {
-        #[cfg(feature = "import-baseline")]
-        {
-            self.report_usage();
-            if !self.refusal_observed.replace(true) {
-                let required = match &error {
-                    Error::Limit { limit, actual, .. } => Some((*actual, *limit)),
-                    _ => None,
-                };
-                crate::metrics::accounting::semantic_refusal(_stage, required);
-            }
-        }
         error
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn report_usage(&self) {
-        let usage = self.usage();
-        if self.reported_usage.replace(Some(usage)) != Some(usage) {
-            use crate::metrics::accounting::Scalar;
-            crate::metrics::record_scalar(Scalar::ApiTransactionItems, self.items as u64);
-            crate::metrics::record_scalar(Scalar::ApiTransactionBytes, self.bytes as u64);
-        }
     }
 
     #[cfg(all(feature = "rustc-driver", feature = "test-fixtures"))]
@@ -2058,15 +2019,6 @@ impl Allocation {
     #[cfg(test)]
     fn evidence_counters(&self) -> Option<EvidenceCounters> {
         self.evidence
-    }
-}
-
-#[cfg(feature = "import-baseline")]
-impl Drop for Allocation {
-    fn drop(&mut self) {
-        // These are cumulative transaction charges, including on early refusal.
-        // Report any change since refusal without observing successful charges.
-        self.report_usage();
     }
 }
 
@@ -6759,95 +6711,6 @@ fn extraction(code: &'static str, reason: &str) -> Error {
 
 #[cfg(test)]
 mod api_protocol;
-
-#[cfg(all(test, feature = "import-baseline"))]
-mod refused_accounting {
-    use super::{Allocation, PolicyUsage};
-    use crate::metrics::accounting::{Scalar, SemanticStage};
-
-    /// Checked-arithmetic overflow is a genuine failure (not an
-    /// accounting `Limit`), so it is observed as a refusal without a required
-    /// amount and keeps both original reached axes.
-    #[test]
-    fn checked_transaction_refusal_keeps_both_original_reached_axes() {
-        let recorder = crate::metrics::recorder::Recorder::transform_at(10, 1).unwrap();
-        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
-        allocation.items(3).unwrap();
-        allocation.bytes(5).unwrap();
-        {
-            let _scope = recorder.scope().unwrap();
-            assert!(matches!(
-                allocation.retain(PolicyUsage {
-                    items: usize::MAX,
-                    bytes: 0
-                }),
-                Err(crate::Error::Node {
-                    operation: "canonical allocation items",
-                    ..
-                })
-            ));
-            assert_eq!(allocation.usage(), (3, 5));
-            assert!(allocation.is_refused());
-        }
-        let evidence = recorder.snapshot().unwrap().accounting;
-        assert_eq!(evidence.scalar(Scalar::ApiTransactionItems).unwrap().max, 3);
-        assert_eq!(evidence.scalar(Scalar::ApiTransactionBytes).unwrap().max, 5);
-        assert_eq!(
-            evidence
-                .scalar(Scalar::SemanticRefusals(SemanticStage::ApiTransaction))
-                .unwrap()
-                .total,
-            1
-        );
-        assert_eq!(
-            evidence.scalar(Scalar::SemanticRefusedRequired(
-                SemanticStage::ApiTransaction
-            )),
-            None
-        );
-        assert_eq!(evidence.scalar(Scalar::ApiRetainedBytes), None);
-    }
-
-    #[test]
-    fn real_reserve_failure_keeps_precharged_transaction_and_typed_source() {
-        let recorder = crate::metrics::recorder::Recorder::transform_at(10, 1).unwrap();
-        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
-        allocation.bytes(7).unwrap();
-        {
-            let _scope = recorder.scope().unwrap();
-            // Vec rejects this capacity arithmetically, without an enormous allocation.
-            assert!(matches!(
-                allocation.reserve(&mut Vec::<u8>::new(), usize::MAX),
-                Err(crate::Error::Allocation {
-                    operation: "owned container allocation",
-                    ..
-                })
-            ));
-            assert_eq!(allocation.usage(), (usize::MAX, 7));
-        }
-        let evidence = recorder.snapshot().unwrap().accounting;
-        assert_eq!(evidence.fault, None);
-        assert_eq!(
-            evidence.scalar(Scalar::ApiTransactionItems).unwrap().max,
-            usize::MAX as u64
-        );
-        assert_eq!(evidence.scalar(Scalar::ApiTransactionBytes).unwrap().max, 7);
-        assert_eq!(
-            evidence
-                .scalar(Scalar::SemanticRefusals(SemanticStage::ApiTransaction))
-                .unwrap()
-                .total,
-            1
-        );
-        assert_eq!(
-            evidence.scalar(Scalar::SemanticRefusedRequired(
-                SemanticStage::ApiTransaction
-            )),
-            None
-        );
-        assert_eq!(evidence.scalar(Scalar::ApiRetainedBytes), None);
-    }
-}
 
 #[cfg(all(test, feature = "rustc-driver", feature = "test-fixtures"))]
 mod classification_evidence_authority {

@@ -54,8 +54,6 @@ svg = ["iced/svg"]
 grain = ["rawr/grain"]
 no_optimize = ["rawr/no_optimize"]
 profile-selection-diagnostic = ["rawr_import/canonical-selector-diagnostic"]
-# One private profile-fixture pair in the existing baseline artifact.
-import-baseline = []
 
 [lib]
 name = "rawr_iced"

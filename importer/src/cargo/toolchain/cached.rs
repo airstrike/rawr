@@ -814,10 +814,6 @@ mod tests {
 
         fn milestone(&self, _milestone: metrics::Milestone, _observed_ns: Option<u64>) {}
         fn runner_owned(&self, _owned: &metrics::runner::Owned) {}
-        #[cfg(feature = "import-baseline")]
-        fn profile(&self, _evidence: &metrics::profile::Evidence) {}
-        #[cfg(feature = "import-baseline")]
-        fn pipeline(&self, _evidence: &metrics::pipeline::Evidence) {}
         fn scope_opened(&self) {}
         fn scope_joined(&self) {}
     }

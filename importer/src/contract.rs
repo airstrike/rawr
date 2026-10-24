@@ -73,12 +73,6 @@ impl Contract<Classified> {
         allocation: Usage,
         chain: Option<crate::node::Chain>,
     ) -> Self {
-        #[cfg(feature = "import-baseline")]
-        {
-            use crate::metrics::accounting::Scalar;
-            crate::metrics::record_scalar(Scalar::ClassifiedItems, allocation.items as u64);
-            crate::metrics::record_scalar(Scalar::ClassifiedBytes, allocation.bytes as u64);
-        }
         Self {
             graph,
             support,
@@ -334,14 +328,6 @@ impl Usage {
         item_limit: usize,
         byte_limit: usize,
     ) -> Result<Self, crate::classify::Error> {
-        #[cfg(feature = "import-baseline")]
-        {
-            use crate::metrics::accounting::Scalar;
-            // The producer already admitted this ownership. Observe it before
-            // the existing cardinality check can refuse the prospective contract.
-            crate::metrics::record_scalar(Scalar::ClassifiedItems, precharged.0 as u64);
-            crate::metrics::record_scalar(Scalar::ClassifiedBytes, precharged.1 as u64);
-        }
         let graph_usage = graph.allocation();
         let mut items = graph_usage
             .items

@@ -49,23 +49,6 @@ pub(super) struct Budget {
     )>,
 }
 
-#[cfg(feature = "import-baseline")]
-impl Drop for Budget {
-    fn drop(&mut self) {
-        use crate::metrics::accounting::Scalar;
-        // Observe this pass once, including the cumulative request that refused.
-        // Cleanup errors keep their original precedence and no work is repeated.
-        for (key, value) in [
-            (Scalar::RecoveryDeletionBytes, self.deleted.bytes),
-            (Scalar::RecoveryDeletionMembers, self.deleted.members),
-            (Scalar::RecoveryBundles, self.bundles as u64),
-            (Scalar::RecoveryTemporaries, self.temporaries as u64),
-        ] {
-            crate::metrics::record_scalar(key, value);
-        }
-    }
-}
-
 impl Budget {
     pub(super) const fn new() -> Self {
         Self {
@@ -145,14 +128,10 @@ impl Budget {
 /// Remove every pre-existing publication temporary while the caller owns the
 /// global publication lease. No live publisher can coexist with that lease.
 pub(super) fn recover_temporaries(
-    publication: &super::lease::Publication<'_>,
+    _publication: &super::lease::Publication<'_>,
     root: &Path,
     budget: &mut Budget,
 ) -> Result<bool, Error> {
-    #[cfg(feature = "import-baseline")]
-    let batch = crate::metrics::principal::recovery::Batch::start(publication, root);
-    #[cfg(not(feature = "import-baseline"))]
-    let _ = publication;
     let temporary_root = root.join("temporaries");
     let directory = fs::read_dir(&temporary_root).map_err(|source| Error::Io {
         operation: "read typed store publication temporaries",
@@ -196,81 +175,25 @@ pub(super) fn recover_temporaries(
         };
         budget.temporary()?;
         budget.deletion(charge)?;
-        #[cfg(feature = "import-baseline")]
-        batch.measured(
-            measured.len(),
-            &temporary,
-            directory,
-            charge.bytes,
-            charge.members,
-        );
         measured.push((temporary, directory, charge.members));
     }
     let recovered = !measured.is_empty();
-    #[cfg(feature = "import-baseline")]
-    batch.ready(measured.len());
-    for (index, (temporary, directory, members)) in measured.into_iter().enumerate() {
-        #[cfg(not(feature = "import-baseline"))]
-        let _ = index;
-        #[cfg(feature = "import-baseline")]
-        let principal = batch.temporary(index);
-        #[cfg(feature = "import-baseline")]
-        let mut observation = crate::metrics::publication::Attempt::start(if directory {
-            crate::metrics::publication::Class::RecoveredDirectory
-        } else {
-            crate::metrics::publication::Class::RecoveredFile
-        });
-        #[cfg(feature = "import-baseline")]
-        observation.adopted();
+    for (temporary, directory, members) in measured {
         let removed = if directory {
-            #[cfg(feature = "import-baseline")]
-            principal.thaw();
-            let thawed = thaw_tree(
-                &temporary,
-                members,
-                #[cfg(feature = "import-baseline")]
-                &principal,
-            );
-            #[cfg(feature = "import-baseline")]
-            principal.thawed(thawed.is_ok());
-            thawed?;
-            #[cfg(feature = "import-baseline")]
-            observation.cleanup_started();
-            #[cfg(feature = "import-baseline")]
-            principal.removal_started();
+            thaw_tree(&temporary, members)?;
             fs::remove_dir_all(&temporary)
         } else {
-            #[cfg(feature = "import-baseline")]
-            observation.cleanup_started();
-            #[cfg(feature = "import-baseline")]
-            principal.removal_started();
             fs::remove_file(&temporary)
         };
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup(removed.is_ok());
-        #[cfg(feature = "import-baseline")]
-        principal.removed(removed.is_ok());
         removed.map_err(|source| Error::Io {
             operation: "remove dead typed store publication temporary",
             path: temporary,
             source,
         })?;
-        // This lifetime ends at terminal removal. The one batch parent sync
-        // below remains outside each temporary's conservation evidence; its
-        // failure still fails the owner, without rewriting successful removals.
-        #[cfg(feature = "import-baseline")]
-        observation.finish(Ok::<(), Error>(()))?;
-        #[cfg(feature = "import-baseline")]
-        principal.completed();
     }
     if recovered {
-        let result = super::entry::sync_directory(&temporary_root);
-        #[cfg(feature = "import-baseline")]
-        batch.synced(result.is_ok());
-        result?;
+        super::entry::sync_directory(&temporary_root)?;
     }
-    #[cfg(feature = "import-baseline")]
-    batch.completed(recovered);
     Ok(recovered)
 }
 
@@ -352,13 +275,7 @@ fn tree_measure(root: &Path, member_limit: u64) -> Result<Charge, Error> {
     Ok(charge)
 }
 
-fn thaw_tree(
-    root: &Path,
-    expected_members: u64,
-    #[cfg(feature = "import-baseline")] observation: &crate::metrics::principal::recovery::Attempt<
-        '_,
-    >,
-) -> Result<(), Error> {
+fn thaw_tree(root: &Path, expected_members: u64) -> Result<(), Error> {
     if expected_members == 0 {
         return Err(Error::State(
             "typed store recovery cannot thaw an empty filesystem tree",
@@ -378,12 +295,7 @@ fn thaw_tree(
             return Err(Error::Shape(path));
         }
         if metadata.is_dir() {
-            set_writable(
-                &path,
-                &metadata,
-                #[cfg(feature = "import-baseline")]
-                observation,
-            )?;
+            set_writable(&path, &metadata)?;
             for child in fs::read_dir(&path).map_err(|source| Error::Io {
                 operation: "read frozen typed store publication temporary",
                 path: path.clone(),
@@ -407,12 +319,7 @@ fn thaw_tree(
         } else if metadata.is_file() {
             // Unlinking needs only the parent; never chmod a shared inode.
             if !hard_linked(&metadata) {
-                set_writable(
-                    &path,
-                    &metadata,
-                    #[cfg(feature = "import-baseline")]
-                    observation,
-                )?;
+                set_writable(&path, &metadata)?;
             }
         } else {
             return Err(Error::Shape(path));
@@ -462,13 +369,7 @@ fn hard_linked(_metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(unix)]
-fn set_writable(
-    path: &Path,
-    metadata: &fs::Metadata,
-    #[cfg(feature = "import-baseline")] observation: &crate::metrics::principal::recovery::Attempt<
-        '_,
-    >,
-) -> Result<(), Error> {
+fn set_writable(path: &Path, metadata: &fs::Metadata) -> Result<(), Error> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     let mode = if metadata.is_dir() {
@@ -476,11 +377,7 @@ fn set_writable(
     } else {
         metadata.mode() | 0o600
     };
-    #[cfg(feature = "import-baseline")]
-    let change = observation.mode(path, metadata.is_dir(), metadata.mode(), mode);
     let result = fs::set_permissions(path, fs::Permissions::from_mode(mode));
-    #[cfg(feature = "import-baseline")]
-    observation.mode_result(change, result.is_ok());
     result.map_err(|source| Error::Io {
         operation: "thaw typed store publication temporary",
         path: path.to_path_buf(),
@@ -489,15 +386,7 @@ fn set_writable(
 }
 
 #[cfg(not(unix))]
-fn set_writable(
-    path: &Path,
-    metadata: &fs::Metadata,
-    #[cfg(feature = "import-baseline")] observation: &crate::metrics::principal::recovery::Attempt<
-        '_,
-    >,
-) -> Result<(), Error> {
-    #[cfg(feature = "import-baseline")]
-    let _ = observation;
+fn set_writable(path: &Path, metadata: &fs::Metadata) -> Result<(), Error> {
     let mut permissions = metadata.permissions();
     permissions.set_readonly(false);
     fs::set_permissions(path, permissions).map_err(|source| Error::Io {
@@ -639,8 +528,7 @@ mod tests {
     }
 
     fn recover_temporaries(root: &Path, budget: &mut Budget) -> Result<bool, Error> {
-        let graph = crate::node::GraphBudget::new();
-        super::super::lease::with_publication(root, &graph, |publication| {
+        super::super::lease::with_publication(root, |publication| {
             super::recover_temporaries(publication, root, budget)
         })
     }

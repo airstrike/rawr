@@ -146,13 +146,7 @@ fn path_rows(mut cursor: &[u8]) -> impl Iterator<Item = &str> {
 
 /// Validate the complete borrowed population before writing any bytes. Caller
 /// must publish atomically only after this returns successfully.
-#[cfg_attr(
-    not(feature = "import-baseline"),
-    allow(
-        dead_code,
-        reason = "the driver binary encodes; the library only for baseline evidence"
-    )
-)]
+#[allow(dead_code, reason = "only the driver binary encodes")]
 pub(crate) fn encode<'a>(
     writer: &mut impl Write,
     arguments_digest: &str,

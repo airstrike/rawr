@@ -13,39 +13,7 @@ fn main() -> ExitCode {
     if let Err(error) = retire_on_termination() {
         eprintln!("warning: child processes may outlive an interrupted rawr: {error}");
     }
-    #[cfg(feature = "import-baseline")]
-    let (arguments, evidence, profile) =
-        match rawr_iced_cli::evidence::bootstrap(std::env::args_os().skip(1)) {
-            Ok(rawr_iced_cli::evidence::Bootstrap::Command(arguments)) => arguments.into_parts(),
-            Ok(rawr_iced_cli::evidence::Bootstrap::Cell(pending)) => {
-                return match rawr_iced_cli::evidence::execute_cell(pending) {
-                    Ok(()) => ExitCode::SUCCESS,
-                    Err(error) => {
-                        eprintln!("error: {error}");
-                        ExitCode::FAILURE
-                    }
-                };
-            }
-            Err(error) => {
-                eprintln!("error: {error}");
-                return ExitCode::from(2);
-            }
-        };
-    #[cfg(feature = "import-baseline")]
-    let request = rawr_iced_cli::command::parse(arguments);
-    #[cfg(not(feature = "import-baseline"))]
     let request = rawr_iced_cli::command::parse(std::env::args_os().skip(1));
-    #[cfg(feature = "import-baseline")]
-    let profile = match request.as_ref() {
-        Ok(request) => match rawr_iced_cli::evidence::authorize_request(profile, request) {
-            Ok(profile) => profile,
-            Err(error) => {
-                eprintln!("error: {error}");
-                return ExitCode::from(2);
-            }
-        },
-        Err(_) => profile,
-    };
 
     match request {
         Ok(rawr_iced_cli::command::Request::Help) => {
@@ -57,33 +25,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(rawr_iced_cli::command::Request::Execute(command)) => {
-            #[cfg(feature = "import-baseline")]
-            let evidence = match evidence {
-                Some(pending) => match pending.authenticate(&command) {
-                    Ok(active) => Some(active),
-                    Err(error) => {
-                        eprintln!("error: {error}");
-                        return ExitCode::from(2);
-                    }
-                },
-                None => None,
-            };
-            #[cfg(feature = "import-baseline")]
-            let result = rawr_iced_cli::execute_with_profile(command, profile);
-            #[cfg(not(feature = "import-baseline"))]
             let result = rawr_iced_cli::execute(command);
-            #[cfg(feature = "import-baseline")]
-            if let Some(active) = evidence {
-                match &result {
-                    Err(error) => {
-                        active.finish_failure(&rawr_iced_cli::diagnostic::render(&error.report()))
-                    }
-                    Ok(Some(report)) if !report.is_successful() => {
-                        active.finish_failure(&report.message())
-                    }
-                    _ => active.finish(rawr_import::metrics::evidence::capsule::Product::Success),
-                }
-            }
             match result {
                 Ok(Some(report)) => {
                     if !report.message().is_empty() {

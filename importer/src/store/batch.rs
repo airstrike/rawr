@@ -104,11 +104,6 @@ impl<'a> Batch<'a> {
                     || {
                         sink.node(K::KIND.metric(), crate::metrics::NodeEvent::ExecutedMiss);
                         let bytes = execute()?.into_encoded(recipe.output_limit())?;
-                        #[cfg(feature = "import-baseline")]
-                        sink.scalar(
-                            crate::metrics::accounting::Scalar::NodePayloadBytes(K::KIND.metric()),
-                            bytes.len() as u64,
-                        );
                         if bytes.len() > recipe.output_limit() {
                             return Err(Error::Limit {
                                 resource: "node content bytes",

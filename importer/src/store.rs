@@ -13,8 +13,6 @@ use crate::node::{
 };
 
 mod accounting;
-#[cfg(feature = "import-baseline")]
-pub(crate) use accounting::matches_observed_bundle;
 mod batch;
 pub(crate) use batch::Batch;
 pub(crate) mod bundle;
@@ -24,10 +22,6 @@ mod eviction;
 mod index;
 mod lease;
 pub(crate) use lease::Ownership;
-#[cfg(feature = "import-baseline")]
-pub(crate) use lease::Publication;
-#[cfg(feature = "import-baseline")]
-pub(crate) use recovery::valid_temporary_name;
 pub(crate) mod path;
 mod pins;
 mod recovery;
@@ -277,46 +271,25 @@ impl Store {
             None => true,
         };
         let mut budget = recovery::Budget::new();
-        lease::with_bootstrap(
-            &root,
-            fresh,
-            #[cfg(feature = "import-baseline")]
-            &graph_budget,
-            || {
-                for directory in FIXED_DIRECTORIES {
-                    if fresh {
-                        entry::ensure_directory(
-                            &root,
-                            Path::new(directory),
-                            #[cfg(feature = "import-baseline")]
-                            &graph_budget,
-                        )?;
-                    } else if entry::existing_directory(&root, Path::new(directory))?.is_none() {
-                        return Err(Error::CleanupRequired(
-                            "typed store fixed directory disappeared after bootstrap",
-                        ));
-                    }
-                }
-                lease::initialize(
-                    &root,
-                    fresh,
-                    #[cfg(feature = "import-baseline")]
-                    &graph_budget,
-                )?;
+        lease::with_bootstrap(&root, fresh, || {
+            for directory in FIXED_DIRECTORIES {
                 if fresh {
-                    lease::with_publication(&root, &graph_budget, |publication| {
-                        accounting::initialize(publication, &root, &mut budget)
-                    })?;
+                    entry::ensure_directory(&root, Path::new(directory))?;
+                } else if entry::existing_directory(&root, Path::new(directory))?.is_none() {
+                    return Err(Error::CleanupRequired(
+                        "typed store fixed directory disappeared after bootstrap",
+                    ));
                 }
-                Ok(())
-            },
-        )?;
-        lease::enroll_project(
-            &root,
-            &graph_budget,
-            Digest::from_bytes(project),
-            &mut budget,
-        )?;
+            }
+            lease::initialize(&root, fresh)?;
+            if fresh {
+                lease::with_publication(&root, |publication| {
+                    accounting::initialize(publication, &root, &mut budget)
+                })?;
+            }
+            Ok(())
+        })?;
+        lease::enroll_project(&root, Digest::from_bytes(project), &mut budget)?;
         Ok(Self {
             root,
             project: Digest::from_bytes(project),
@@ -330,11 +303,7 @@ impl Store {
         project: [u8; 32],
         graph_budget: crate::node::GraphBudget,
     ) -> Result<Self, Error> {
-        let root = entry::ensure_project_root(
-            rawr,
-            #[cfg(feature = "import-baseline")]
-            &graph_budget,
-        )?;
+        let root = entry::ensure_project_root(rawr)?;
         Self::open_with_budget(&root, project, graph_budget)
     }
 
@@ -343,7 +312,6 @@ impl Store {
         let before = accounting::usage(&self.root)?.0.bytes;
         while eviction::recover_one(
             &self.root,
-            &self.graph_budget,
             self.project,
             false,
             false,
@@ -413,7 +381,6 @@ impl Store {
     pub(crate) fn fixture_evict_one(&self, local_only: bool) -> Result<bool, Error> {
         eviction::recover_one(
             &self.root,
-            &self.graph_budget,
             self.project,
             local_only,
             false,
@@ -426,7 +393,6 @@ impl Store {
         let mut retired = 0;
         while eviction::recover_resolution_excess(
             &self.root,
-            &self.graph_budget,
             self.project,
             kind,
             keep,
@@ -449,7 +415,7 @@ impl Store {
 
     #[cfg(test)]
     pub(crate) fn fixture_interrupt_oldest_eviction(&self) -> Result<(), Error> {
-        eviction::interrupt_oldest(&self.root, &self.graph_budget, self.project)
+        eviction::interrupt_oldest(&self.root, self.project)
     }
 
     #[cfg(test)]
@@ -460,12 +426,12 @@ impl Store {
 
     #[cfg(test)]
     pub(crate) fn fixture_interrupt_after_staging_action(&self) -> Result<PathBuf, Error> {
-        eviction::interrupt_after_staging_action(&self.root, &self.graph_budget, self.project)
+        eviction::interrupt_after_staging_action(&self.root, self.project)
     }
 
     #[cfg(test)]
     pub(crate) fn fixture_interrupt_after_thawing_bundle_root(&self) -> Result<PathBuf, Error> {
-        eviction::interrupt_after_thawing_bundle_root(&self.root, &self.graph_budget, self.project)
+        eviction::interrupt_after_thawing_bundle_root(&self.root, self.project)
     }
 
     #[cfg(test)]
@@ -473,21 +439,11 @@ impl Store {
         &self,
         recipe: &Direct<K>,
     ) -> Result<PathBuf, Error> {
-        lease::with_publication(&self.root, &self.graph_budget, |publication| {
-            #[cfg(feature = "import-baseline")]
-            let mut observation = crate::metrics::publication::Attempt::start(
-                crate::metrics::publication::Class::Retirement(
-                    crate::metrics::publication::Retirement::Planned,
-                ),
-            );
+        lease::with_publication(&self.root, |publication| {
             entry::stage_retirement(
                 publication,
                 &self.root,
                 &self.action_path::<K>(recipe.action()),
-                #[cfg(feature = "import-baseline")]
-                &mut observation,
-                #[cfg(feature = "import-baseline")]
-                None,
             )
         })
     }
@@ -516,7 +472,7 @@ impl Store {
                 let mut recovery = recovery::Budget::new();
                 let (_project, reservation) =
                     self.reserve_node(key, estimate, K::KIND, K::SCHEMA, &mut recovery)?;
-                lease::with_publication(&self.root, &self.graph_budget, |_publication| {
+                lease::with_publication(&self.root, |_publication| {
                     self.publish_reserved(_publication, recipe, bytes, &reservation, None)
                         .map(|_| ())
                 })
@@ -651,8 +607,6 @@ impl Store {
                 digest,
                 reservation.key(),
                 self.project,
-                #[cfg(feature = "import-baseline")]
-                Some(publication),
             )?);
         }
         let content_parent = self.content_parent::<K>();
@@ -666,37 +620,14 @@ impl Store {
             reservation: reservation.key(),
             publisher: self.project,
         };
-        #[cfg(feature = "import-baseline")]
-        let content_observation = crate::metrics::principal::Attempt::start(
-            crate::metrics::principal::Identity::observe(
-                &self.root,
-                &content_target,
-                K::KIND,
-                K::SCHEMA,
-                recipe.action(),
-                self.project,
-                crate::metrics::principal::Target::Payload {
-                    content: digest.as_bytes(),
-                    lease: reservation.key().observed(),
-                },
-                self.graph_budget(),
-            ),
-            self.graph_budget(),
-        );
         let (content_publication, published_content) = entry::publish_sealed_directory(
             &self.root,
             &content_target,
             "payload",
             bytes,
-            #[cfg(feature = "import-baseline")]
-            crate::metrics::publication::Class::Content(K::KIND.metric()),
-            #[cfg(feature = "import-baseline")]
-            Some(&content_observation),
             |metadata| {
                 let (encoded, record) =
                     accounting::Record::seal(content_identity, bytes, metadata)?;
-                #[cfg(feature = "import-baseline")]
-                content_observation.sealed(record.commitment(), Some(&encoded));
                 Ok((encoded, record))
             },
         )?;
@@ -727,8 +658,6 @@ impl Store {
             }
         }
 
-        #[cfg(feature = "import-baseline")]
-        drop(content_observation);
         let action_parent = PathBuf::from("actions")
             .join(K::KIND.directory())
             .join(crate::node::STORAGE_DIRECTORY);
@@ -742,37 +671,14 @@ impl Store {
             reservation: reservation.key(),
             publisher: self.project,
         };
-        #[cfg(feature = "import-baseline")]
-        let action_observation = crate::metrics::principal::Attempt::start(
-            crate::metrics::principal::Identity::observe(
-                &self.root,
-                &action_target,
-                K::KIND,
-                K::SCHEMA,
-                recipe.action(),
-                self.project,
-                crate::metrics::principal::Target::Envelope {
-                    content: digest.as_bytes(),
-                    lease: reservation.key().observed(),
-                },
-                self.graph_budget(),
-            ),
-            self.graph_budget(),
-        );
         let (publication, published_action) = entry::publish_sealed_directory(
             &self.root,
             &action_target,
             "envelope",
             &envelope,
-            #[cfg(feature = "import-baseline")]
-            crate::metrics::publication::Class::Action(K::KIND.metric()),
-            #[cfg(feature = "import-baseline")]
-            Some(&action_observation),
             |metadata| {
                 let (encoded, record) =
                     accounting::Record::seal(action_identity, &envelope, metadata)?;
-                #[cfg(feature = "import-baseline")]
-                action_observation.sealed(record.commitment(), Some(&encoded));
                 Ok((encoded, record))
             },
         )?;
@@ -852,7 +758,7 @@ impl Store {
     ) -> Result<PinGuard, Error> {
         ownership.require(&self.root, self.project)?;
         retention.validate_storage(self)?;
-        let admission = lease::with_publication(&self.root, &self.graph_budget, |publication| {
+        let admission = lease::with_publication(&self.root, |publication| {
             transaction::Transaction::bind_retained(publication, self, retention)?.finish(
                 || retention.validate_storage(self),
                 || Ok::<(), std::convert::Infallible>(()),
@@ -877,13 +783,12 @@ impl Store {
         ownership.require(&self.root, self.project)?;
         lease::with_project(&self.root, self.project, || {
             retention.validate_storage(self)?;
-            let admission =
-                lease::with_publication(&self.root, &self.graph_budget, |publication| {
-                    transaction::Transaction::bind_retained(publication, self, retention)?.finish(
-                        || retention.validate_storage(self),
-                        || Ok::<(), std::convert::Infallible>(()),
-                    )
-                })?;
+            let admission = lease::with_publication(&self.root, |publication| {
+                transaction::Transaction::bind_retained(publication, self, retention)?.finish(
+                    || retention.validate_storage(self),
+                    || Ok::<(), std::convert::Infallible>(()),
+                )
+            })?;
             let guard = match admission {
                 Ok(((), [guard])) => guard,
                 Err(
@@ -981,10 +886,9 @@ impl Store {
         let key = accounting::LeaseKey::Execution(recipe.execution());
         lease::with_project(&self.root, self.project, || {
             let mut recovery = recovery::Budget::new();
-            eviction::recover_pending(&self.root, &self.graph_budget, &mut recovery)?;
+            eviction::recover_pending(&self.root, &mut recovery)?;
             eviction::recover_rejected(
                 &self.root,
-                &self.graph_budget,
                 K::KIND,
                 K::SCHEMA,
                 rejected_actions,
@@ -997,31 +901,24 @@ impl Store {
                 let node = accounting::Charge::node(recipe.output_limit(), envelope)?;
                 let (project, reservation, budget) =
                     self.reserve_bundle_node(key, node, K::KIND, K::SCHEMA, &mut recovery)?;
-                let attempt = match bundle::Attempt::allocate_observed(
-                    &self.root,
-                    recipe.execution(),
-                    budget,
-                    K::KIND,
-                    &self.graph_budget,
-                ) {
-                    Ok(attempt) => attempt,
-                    Err(failure) => {
-                        return match lease::with_publication(
-                            &self.root,
-                            &self.graph_budget,
-                            |publication| self.cancel_node(publication, &project, &reservation),
-                        ) {
-                            Ok(()) => Err(failure),
-                            Err(cleanup) => Err(Error::Cleanup {
-                                failure: Box::new(failure),
-                                cleanup: Box::new(cleanup),
-                            }),
-                        };
-                    }
-                };
+                let attempt =
+                    match bundle::Attempt::allocate(&self.root, recipe.execution(), budget) {
+                        Ok(attempt) => attempt,
+                        Err(failure) => {
+                            return match lease::with_publication(&self.root, |publication| {
+                                self.cancel_node(publication, &project, &reservation)
+                            }) {
+                                Ok(()) => Err(failure),
+                                Err(cleanup) => Err(Error::Cleanup {
+                                    failure: Box::new(failure),
+                                    cleanup: Box::new(cleanup),
+                                }),
+                            };
+                        }
+                    };
                 match evaluate(attempt) {
                     Ok(Reserved::Reuse(result)) => {
-                        lease::with_publication(&self.root, &self.graph_budget, |publication| {
+                        lease::with_publication(&self.root, |publication| {
                             self.cancel_node(publication, &project, &reservation)
                         })?;
                         Ok(result)
@@ -1037,7 +934,7 @@ impl Store {
                                 "bundled node publication omitted its execution bundle",
                             ));
                         };
-                        lease::with_publication(&self.root, &self.graph_budget, |publication| {
+                        lease::with_publication(&self.root, |publication| {
                             let records = self.publish_reserved(
                                 publication,
                                 &recipe,
@@ -1052,11 +949,9 @@ impl Store {
                         })?;
                         Ok(result)
                     }
-                    Err(failure) => match lease::with_publication(
-                        &self.root,
-                        &self.graph_budget,
-                        |publication| self.cancel_node(publication, &project, &reservation),
-                    ) {
+                    Err(failure) => match lease::with_publication(&self.root, |publication| {
+                        self.cancel_node(publication, &project, &reservation)
+                    }) {
                         Ok(()) => Err(failure),
                         Err(cleanup) => Err(Error::Cleanup {
                             failure: Box::new(failure),
@@ -1111,7 +1006,7 @@ impl Store {
                 self.reserve_node(key, estimate, K::KIND, K::SCHEMA, &mut recovery)?;
             match evaluate() {
                 Ok(Reserved::Reuse(result)) => {
-                    lease::with_publication(&self.root, &self.graph_budget, |publication| {
+                    lease::with_publication(&self.root, |publication| {
                         self.cancel_node(publication, &project, &reservation)
                     })?;
                     Ok(result)
@@ -1122,7 +1017,7 @@ impl Store {
                     bytes,
                     mut bundle,
                 }) => {
-                    lease::with_publication(&self.root, &self.graph_budget, |publication| {
+                    lease::with_publication(&self.root, |publication| {
                         let records = self.publish_reserved(
                             publication,
                             &recipe,
@@ -1140,7 +1035,7 @@ impl Store {
                     Ok(result)
                 }
                 Err(failure) => {
-                    match lease::with_publication(&self.root, &self.graph_budget, |publication| {
+                    match lease::with_publication(&self.root, |publication| {
                         self.cancel_node(publication, &project, &reservation)
                     }) {
                         Ok(()) => Err(failure),
@@ -1164,11 +1059,11 @@ impl Store {
         schema: u32,
         recovery: &mut recovery::Budget,
     ) -> Result<(pins::Reservation, accounting::Reservation), Error> {
-        eviction::recover_pending(&self.root, &self.graph_budget, recovery)?;
+        eviction::recover_pending(&self.root, recovery)?;
         self.recover_abandoned_reservation(key, recovery)?;
-        bundle::recover_dead(&self.root, &self.graph_budget, recovery)?;
+        bundle::recover_dead(&self.root, recovery)?;
         self.make_room(estimate)?;
-        lease::with_publication(&self.root, &self.graph_budget, |publication| {
+        lease::with_publication(&self.root, |publication| {
             self.reserve_node_once(publication, key, estimate, kind, schema, recovery)
         })
     }
@@ -1181,7 +1076,6 @@ impl Store {
         // A project keeps a few unrooted resolutions, whatever the caps.
         while eviction::recover_resolution_excess(
             &self.root,
-            &self.graph_budget,
             self.project,
             Kind::Resolution,
             eviction::RESOLUTIONS_KEPT,
@@ -1194,7 +1088,6 @@ impl Store {
             }
             if !eviction::recover_one(
                 &self.root,
-                &self.graph_budget,
                 self.project,
                 !installation,
                 true,
@@ -1249,11 +1142,11 @@ impl Store {
         schema: u32,
         recovery: &mut recovery::Budget,
     ) -> Result<(pins::Reservation, accounting::Reservation, bundle::Budget), Error> {
-        eviction::recover_pending(&self.root, &self.graph_budget, recovery)?;
+        eviction::recover_pending(&self.root, recovery)?;
         self.recover_abandoned_reservation(key, recovery)?;
-        bundle::recover_dead(&self.root, &self.graph_budget, recovery)?;
+        bundle::recover_dead(&self.root, recovery)?;
         self.make_room(node)?;
-        lease::with_publication(&self.root, &self.graph_budget, |publication| {
+        lease::with_publication(&self.root, |publication| {
             self.reserve_bundle_node_once(publication, key, node, kind, schema, recovery)
         })
     }
@@ -1276,7 +1169,7 @@ impl Store {
                 "runner bundle reservation requires one execution lease",
             ));
         };
-        bundle::recover_orphans_observed(publication, &self.root, execution, recovery)?;
+        bundle::recover_orphans(&self.root, execution, recovery)?;
         bundle::prepare_execution(publication, &self.root, execution)?;
         self.prepare_node_parents(publication, kind, schema)?;
         self.reserve_bundle_recovered(publication, key, node)
@@ -1315,7 +1208,7 @@ impl Store {
             let Some(_guard) = lease::try_key(&self.root, key)? else {
                 continue;
             };
-            lease::with_publication(&self.root, &self.graph_budget, |publication| {
+            lease::with_publication(&self.root, |publication| {
                 recovery::recover_temporaries(publication, &self.root, budget)?;
                 pins::recover_reservation_only(publication, &self.root, key)?;
                 accounting::recover_key(publication, &self.root, key, budget)?;
@@ -1370,7 +1263,7 @@ impl Store {
         drop(guard);
         let cleanup = proof
             .map(|proof| {
-                lease::with_publication(&self.root, &self.graph_budget, |publication| {
+                lease::with_publication(&self.root, |publication| {
                     pins::release_in_flight(publication, &self.root, self.project, proof.digest())
                 })
             })
@@ -1452,7 +1345,7 @@ impl Store {
         retention.require_proof(proof)?;
         let result = lease::with_project(&self.root, self.project, || {
             retention.validate_storage(self)?;
-            lease::with_publication(&self.root, &self.graph_budget, |publication| {
+            lease::with_publication(&self.root, |publication| {
                 let mut recovery = recovery::Budget::new();
                 pins::recover_empty_before_new_project(
                     publication,
@@ -1508,7 +1401,7 @@ impl Store {
         retention.require_proof(proof)?;
         lease::with_project(&self.root, self.project, || {
             retention.validate_storage(self)?;
-            lease::with_publication(&self.root, &self.graph_budget, |publication| {
+            lease::with_publication(&self.root, |publication| {
                 let mut recovery = recovery::Budget::new();
                 // The unchanged transaction keeps predecessors through its
                 // post-bind CURRENT proof check and the admission callback.
@@ -1575,7 +1468,7 @@ impl Store {
         operation: impl FnOnce() -> Result<T, E>,
     ) -> Result<Result<(T, [PinGuard; N]), transaction::Rejected<E>>, Error> {
         proof.revalidate(self)?;
-        lease::with_publication(&self.root, &self.graph_budget, |publication| {
+        lease::with_publication(&self.root, |publication| {
             let mut recovery = recovery::Budget::new();
             self.with_pin_roles_at(publication, roles, proof, &mut recovery, scope, operation)
         })
@@ -1598,7 +1491,7 @@ impl Store {
             InFlight::Current(proof) => proof.revalidate(self)?,
             InFlight::Retained(retention) => retention.validate_storage(self)?,
         }
-        let result = lease::with_publication(&self.root, &self.graph_budget, |publication| {
+        let result = lease::with_publication(&self.root, |publication| {
             recovery::recover_temporaries(publication, &self.root, recovery)?;
             match proof {
                 InFlight::Current(proof) => self.with_pin_roles_at(
@@ -1645,15 +1538,6 @@ impl Store {
         let result =
             transaction::Transaction::bind(publication, &self.root, self.project, roles, proof)?
                 .finish(|| proof.revalidate_scoped(self, scope), operation);
-        #[cfg(feature = "import-baseline")]
-        if roles.as_slice() == [PinRole::Live, PinRole::LastGood] && matches!(&result, Ok(Ok(_))) {
-            crate::metrics::principal::admitted(
-                &self.root,
-                self.project,
-                proof,
-                self.graph_budget(),
-            );
-        }
         result
     }
 
@@ -1754,7 +1638,7 @@ impl Store {
         action: ActionKey,
         repair: bool,
     ) {
-        let _ = lease::with_publication(&self.root, &self.graph_budget, |publication| {
+        let _ = lease::with_publication(&self.root, |publication| {
             if repair
                 && index::repair_existing(
                     publication,
@@ -1764,8 +1648,6 @@ impl Store {
                     lookup,
                     action,
                     self.project,
-                    #[cfg(feature = "import-baseline")]
-                    self.graph_budget(),
                 )?
             {
                 return Ok(());
@@ -1778,8 +1660,6 @@ impl Store {
                 lookup,
                 action,
                 self.project,
-                #[cfg(feature = "import-baseline")]
-                self.graph_budget(),
             )
         });
     }
@@ -2026,7 +1906,7 @@ impl Store {
         action: ActionKey,
         evaluate: impl FnOnce() -> Result<T, Error>,
     ) -> Result<T, Error> {
-        lease::with_action(&self.root, &self.graph_budget, action, evaluate)
+        lease::with_action(&self.root, action, evaluate)
     }
 
     pub(crate) fn with_heavy_lease<T>(
@@ -2041,7 +1921,7 @@ impl Store {
         execution: crate::node::ExecutionKey,
         evaluate: impl FnOnce() -> Result<T, Error>,
     ) -> Result<T, Error> {
-        lease::with_execution(&self.root, &self.graph_budget, execution, evaluate)
+        lease::with_execution(&self.root, execution, evaluate)
     }
 
     fn action_path<K: Value>(&self, action: ActionKey) -> PathBuf {
@@ -2079,14 +1959,6 @@ pub(crate) fn content_relative(kind: Kind, schema: u32, digest: Digest) -> PathB
         .join(kind.directory())
         .join(format!("{schema:08x}"))
         .join(digest.directory())
-}
-#[cfg(feature = "import-baseline")]
-pub(crate) fn index_relative(
-    kind: Kind,
-    lookup: crate::node::LookupKey,
-    action: ActionKey,
-) -> PathBuf {
-    index::bucket_relative(kind, lookup).join(action.directory())
 }
 
 /// Both digests of one content payload just read. Each is a pure function of

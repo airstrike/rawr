@@ -3555,7 +3555,7 @@ pub(super) struct JsonAllocation {
     /// Process-unique account identity for exceedance reporting.
     id: u64,
     exceeded: crate::exceedance::Record,
-    #[cfg(any(test, feature = "import-baseline"))]
+    #[cfg(test)]
     peak: JsonPeak,
 }
 
@@ -3616,7 +3616,7 @@ pub(super) struct Budgeted<T> {
     ownership: JsonOwnership,
 }
 
-#[cfg(any(test, feature = "import-baseline"))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct JsonPeak {
     items: usize,
@@ -3626,11 +3626,6 @@ struct JsonPeak {
 }
 
 impl Allocation {
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn observe(&self) {
-        self.retained.observe();
-    }
-
     /// Admit transferred transport ownership separately from the parsed JSON tree.
     pub(super) fn retain_transport(&mut self, bytes: Box<[u8]>) -> Result<Transport> {
         self.retained
@@ -3724,14 +3719,6 @@ impl Allocation {
     }
 }
 
-#[cfg(feature = "import-baseline")]
-impl Drop for Allocation {
-    fn drop(&mut self) {
-        // Cold failure can retire the actual epoch before it returns to its owner.
-        self.observe();
-    }
-}
-
 struct JsonSeed<'limits> {
     allocation: &'limits mut JsonAllocation,
     limits: &'limits Limits,
@@ -3777,10 +3764,8 @@ fn preflight_from(
             reason: error.to_string().into_boxed_str(),
         })
     })();
-    #[cfg(any(test, feature = "import-baseline"))]
+    #[cfg(test)]
     allocation.record_peak();
-    #[cfg(feature = "import-baseline")]
-    allocation.observe();
     result.map(|()| allocation)
 }
 
@@ -4104,7 +4089,7 @@ impl JsonAllocation {
             bytes: 0,
             id: crate::exceedance::next_id(),
             exceeded: crate::exceedance::Record::new(),
-            #[cfg(any(test, feature = "import-baseline"))]
+            #[cfg(test)]
             peak: JsonPeak::default(),
         }
     }
@@ -4150,32 +4135,12 @@ impl JsonAllocation {
         }
     }
 
-    #[cfg(any(test, feature = "import-baseline"))]
+    #[cfg(test)]
     fn record_peak(&mut self) {
         self.peak.items = self.peak.items.max(self.items);
         self.peak.total_bytes = self.peak.total_bytes.max(self.total_bytes);
         self.peak.strings = self.peak.strings.max(self.strings);
         self.peak.containers = self.peak.containers.max(self.containers);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn observe(&self) {
-        use crate::metrics::accounting::Scalar;
-
-        let current = self.full_usage();
-        let peak = self.peak_usage();
-        for (scalar, value) in [
-            (Scalar::CargoCurrentItems, current.0),
-            (Scalar::CargoCurrentBytes, current.1),
-            (Scalar::CargoCurrentStrings, current.2),
-            (Scalar::CargoCurrentContainers, current.3),
-            (Scalar::CargoPeakItems, peak.0),
-            (Scalar::CargoPeakBytes, peak.1),
-            (Scalar::CargoPeakStrings, peak.2),
-            (Scalar::CargoPeakContainers, peak.3),
-        ] {
-            crate::metrics::record_scalar(scalar, value as u64);
-        }
     }
 
     /// Retain one already-measured ownership delta before constructing it.
@@ -4212,7 +4177,7 @@ impl JsonAllocation {
             bytes: owned_add(self.bytes, ownership.bytes, RETAINED_BUFFER)?,
             id: self.id,
             exceeded: self.exceeded,
-            #[cfg(any(test, feature = "import-baseline"))]
+            #[cfg(test)]
             peak: JsonPeak {
                 items: self
                     .peak
@@ -4233,7 +4198,7 @@ impl JsonAllocation {
             },
         };
         *self = next;
-        #[cfg(any(test, feature = "import-baseline"))]
+        #[cfg(test)]
         self.record_peak();
         self.exceeded(AGGREGATE_ITEMS, limits.items, self.items);
         self.exceeded(AGGREGATE_BYTES, limits.json_bytes, self.total_bytes);
@@ -4279,7 +4244,7 @@ impl JsonAllocation {
             bytes: external.bytes,
             id: self.id,
             exceeded: self.exceeded,
-            #[cfg(any(test, feature = "import-baseline"))]
+            #[cfg(test)]
             peak: self.peak,
         };
         next.acquire(replacement, limits)?;
@@ -4577,7 +4542,7 @@ impl JsonAllocation {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "import-baseline"))]
+    #[cfg(test)]
     pub(super) const fn peak_usage(self) -> (usize, usize, usize, usize) {
         (
             self.peak.items,
@@ -4587,7 +4552,7 @@ impl JsonAllocation {
         )
     }
 
-    #[cfg(any(test, feature = "import-baseline"))]
+    #[cfg(test)]
     pub(super) const fn full_usage(self) -> (usize, usize, usize, usize) {
         (self.items, self.total_bytes, self.strings, self.containers)
     }
@@ -4599,7 +4564,7 @@ impl JsonAllocation {
         self.items = items;
         self.exceeded(resource, limits.items, elements);
         self.exceeded(AGGREGATE_ITEMS, limits.items, items);
-        #[cfg(any(test, feature = "import-baseline"))]
+        #[cfg(test)]
         self.record_peak();
         Ok(())
     }
@@ -4616,7 +4581,7 @@ impl JsonAllocation {
         self.items = items;
         self.exceeded(resource, limits.items, members);
         self.exceeded(AGGREGATE_ITEMS, limits.items, items);
-        #[cfg(any(test, feature = "import-baseline"))]
+        #[cfg(test)]
         self.record_peak();
         Ok(())
     }
@@ -4636,7 +4601,7 @@ impl JsonAllocation {
         self.exceeded(resource, limits.string_bytes, strings);
         self.exceeded(AGGREGATE_ITEMS, limits.items, items);
         self.exceeded(AGGREGATE_BYTES, limits.json_bytes, total_bytes);
-        #[cfg(any(test, feature = "import-baseline"))]
+        #[cfg(test)]
         self.record_peak();
         Ok(())
     }
@@ -4658,7 +4623,7 @@ impl JsonAllocation {
         self.exceeded(RETAINED_BUFFER, limits.json_bytes, retained_bytes);
         self.exceeded(AGGREGATE_ITEMS, limits.items, items);
         self.exceeded(AGGREGATE_BYTES, limits.json_bytes, total_bytes);
-        #[cfg(any(test, feature = "import-baseline"))]
+        #[cfg(test)]
         self.record_peak();
         Ok(())
     }
@@ -6356,66 +6321,6 @@ mod allocation_tests {
         let zero = exercise(0);
         exceeded(&zero, "normal Build script units", 0, 1);
         exceeded(&zero, "Build compiler artifact units", 0, 2);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn allocation_observation_keeps_transient_peak_after_release_and_exceedance() {
-        use crate::metrics::{accounting::Scalar, recorder};
-
-        let recorder = recorder::Recorder::transform_at(10, 1).unwrap();
-        {
-            let _scope = recorder.scope().unwrap();
-            let mut limits = Limits::standard();
-            limits.json_bytes = 16;
-            let mut epoch = Allocation::begin(&limits);
-            let _prior = epoch
-                .retain_transport(vec![0; 5].into_boxed_slice())
-                .unwrap();
-            let result: crate::Result<()> =
-                epoch
-                    .retained
-                    .with_scratch(super::JsonOwnership::buffer(11), &limits, || {
-                        Err(crate::Error::InputAccountRefused)
-                    });
-            assert!(matches!(result, Err(crate::Error::InputAccountRefused)));
-            assert!(!epoch.usage().exceedances().is_exceeded());
-            // Crossing the aggregate byte target is admitted and recorded.
-            let _over = epoch
-                .retain_transport(vec![0; 13].into_boxed_slice())
-                .expect("the aggregate byte target admits and records");
-            exceeded(&epoch.usage(), AGGREGATE_BYTES, 16, 18);
-            exceeded(&epoch.usage(), RETAINED_BUFFER, 16, 18);
-            epoch.observe();
-            assert_eq!(epoch.usage().full_usage(), (2, 18, 0, 0));
-            assert_eq!(epoch.usage().peak_usage(), (2, 18, 0, 0));
-        }
-        let evidence = recorder.snapshot().unwrap().accounting;
-        let current = evidence.scalar(Scalar::CargoCurrentBytes).unwrap();
-        assert_eq!((current.count, current.min, current.max), (2, 18, 18));
-        assert_eq!(evidence.scalar(Scalar::CargoPeakBytes).unwrap().max, 18);
-        assert_eq!(evidence.scalar(Scalar::CargoPeakItems).unwrap().max, 2);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn allocation_observation_retains_exceeding_json_preflight_usage() {
-        use crate::metrics::{accounting::Scalar, recorder};
-
-        let recorder = recorder::Recorder::transform_at(10, 1).unwrap();
-        {
-            let _scope = recorder.scope().unwrap();
-            let mut limits = Limits::standard();
-            limits.items = 2;
-            // The item target is accounting. The preflight admits the
-            // whole document and records the crossing with its true usage.
-            let allocation = preflight("Cargo observation fixture", b"[1,2]", &limits)
-                .expect("the item target records and admits");
-            assert!(allocation.exceedances().is_exceeded());
-        }
-        let evidence = recorder.snapshot().unwrap().accounting;
-        assert_eq!(evidence.scalar(Scalar::CargoCurrentItems).unwrap().max, 6);
-        assert_eq!(evidence.scalar(Scalar::CargoPeakItems).unwrap().max, 6);
     }
 
     #[test]

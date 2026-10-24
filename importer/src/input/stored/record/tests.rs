@@ -54,37 +54,6 @@ fn encoded(build: &build::Retained, input: &Stored) -> Vec<u8> {
     .expect("complete record encodes")
 }
 
-#[cfg(feature = "import-baseline")]
-#[test]
-fn scalar_observation_matches_the_actual_single_record_encoding() {
-    use crate::metrics::{accounting::Scalar, recorder::Recorder};
-    let (build, input) = fixture();
-    let recorder = Recorder::transform(1000).unwrap();
-    let bytes = {
-        let _scope = recorder.scope().unwrap();
-        encoded(&build, &input)
-    };
-    let evidence = recorder.snapshot().unwrap().accounting;
-    let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
-    let mut account = Allocation::for_proof(PRIOR, &limits);
-    let record =
-        Record::decode(&bytes, &mut Budget::borrow(&limits, &mut account, &graph)).unwrap();
-    for (key, expected) in [
-        (Scalar::ResolutionMetadataBytes, record.metadata().len()),
-        (Scalar::ResolutionUnitBytes, record.units().len()),
-        (Scalar::ResolutionBuildBytes, record.build().len()),
-        (Scalar::ResolutionInputBytes, record.input().len()),
-        (Scalar::ResolutionNamespaceBytes, record.namespace.len()),
-        (Scalar::ResolutionRecordBytes, bytes.len()),
-    ] {
-        let observed = evidence.scalar(key).unwrap();
-        assert_eq!(observed.count, 1); // measurement and output passes count once
-        assert_eq!(observed.total, expected as u64);
-    }
-    assert!(evidence.scalar(Scalar::ApiCanonicalBytes).is_none());
-}
-
 #[test]
 fn one_output_allocation_preserves_nested_codecs_and_decode_only_borrows() {
     let (build, input) = fixture();

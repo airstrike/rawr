@@ -1,6 +1,3 @@
-#[cfg(feature = "import-baseline")]
-use crate::metrics::principal::retirement;
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -117,34 +114,12 @@ pub(crate) fn publish(
     lookup: LookupKey,
     action: ActionKey,
     project: crate::node::Digest,
-    #[cfg(feature = "import-baseline")] budget: &crate::node::GraphBudget,
 ) -> Result<(), Error> {
     let bucket_relative = bucket_relative(kind, lookup);
     let target_relative = bucket_relative.join(action.directory());
     if let Some(target) = super::entry::existing_directory(root, &target_relative)? {
         let row_path = target.join("row");
         let existing = super::entry::read_file(&row_path, ROW_BYTES)?;
-        #[cfg(feature = "import-baseline")]
-        let observation = crate::metrics::principal::Attempt::start(
-            crate::metrics::principal::Identity::observe(
-                root,
-                &target,
-                kind,
-                output_schema,
-                action,
-                project,
-                crate::metrics::principal::Target::Index {
-                    lookup: lookup.as_bytes(),
-                },
-                budget,
-            ),
-            budget,
-        );
-        #[cfg(feature = "import-baseline")]
-        {
-            observation.row(&existing);
-            observation.completed(true);
-        }
         return if matches!(
             decode(&existing, kind, output_schema, lookup),
             Ok(existing) if existing == action
@@ -166,8 +141,6 @@ pub(crate) fn publish(
         lookup,
         action,
         project,
-        #[cfg(feature = "import-baseline")]
-        budget,
     )
 }
 
@@ -182,7 +155,6 @@ pub(crate) fn repair_existing(
     lookup: LookupKey,
     action: ActionKey,
     project: crate::node::Digest,
-    #[cfg(feature = "import-baseline")] budget: &crate::node::GraphBudget,
 ) -> Result<bool, Error> {
     let relative = bucket_relative(kind, lookup);
     let Some(bucket) = super::entry::existing_directory(root, &relative)? else {
@@ -226,23 +198,11 @@ pub(crate) fn repair_existing(
         return Ok(false);
     }
     Inventory::read_replacing(root, kind, lookup, project)?.admit(root, kind, lookup)?;
-    #[cfg(feature = "import-baseline")]
-    let retirement = retirement::Attempt::start(
-        publication,
-        &bucket,
-        retirement::Cause::IndexRepair,
-        retirement::Facts::default(),
-    );
-    #[cfg(feature = "import-baseline")]
-    retirement.removal_started();
-    let removal = fs::remove_dir_all(&bucket).map_err(|source| Error::Io {
+    fs::remove_dir_all(&bucket).map_err(|source| Error::Io {
         operation: "remove rejected discoverable candidate bucket",
         path: bucket.clone(),
         source,
-    });
-    #[cfg(feature = "import-baseline")]
-    retirement.removal_finished(removal.is_ok());
-    removal?;
+    })?;
     super::entry::sync_directory(
         bucket
             .parent()
@@ -256,11 +216,7 @@ pub(crate) fn repair_existing(
         lookup,
         action,
         project,
-        #[cfg(feature = "import-baseline")]
-        budget,
     )?;
-    #[cfg(feature = "import-baseline")]
-    retirement.completed(true);
     Ok(true)
 }
 
@@ -272,43 +228,12 @@ fn publish_row(
     lookup: LookupKey,
     action: ActionKey,
     project: crate::node::Digest,
-    #[cfg(feature = "import-baseline")] budget: &crate::node::GraphBudget,
 ) -> Result<(), Error> {
     let bucket =
         super::entry::ensure_admitted_directory(publication, root, &bucket_relative(kind, lookup))?;
     let target = bucket.join(action.directory());
     let bytes = encode(kind, output_schema, lookup, action, project);
-    #[cfg(feature = "import-baseline")]
-    let observation = crate::metrics::principal::Attempt::start(
-        crate::metrics::principal::Identity::observe(
-            root,
-            &target,
-            kind,
-            output_schema,
-            action,
-            project,
-            crate::metrics::principal::Target::Index {
-                lookup: lookup.as_bytes(),
-            },
-            budget,
-        ),
-        budget,
-    );
-    #[cfg(feature = "import-baseline")]
-    observation.row(&bytes);
-    match super::entry::publish_directory(
-        publication,
-        root,
-        &target,
-        "row",
-        &bytes,
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::publication::Class::Index(kind.metric()),
-        #[cfg(feature = "import-baseline")]
-        Some(&observation),
-        #[cfg(feature = "import-baseline")]
-        None,
-    )? {
+    match super::entry::publish_directory(publication, root, &target, "row", &bytes)? {
         super::entry::Publication::Published => Ok(()),
         super::entry::Publication::Existing => {
             let row_path = target.join("row");
@@ -656,13 +581,11 @@ pub(super) fn project_charge(
 }
 
 pub(crate) fn retire_action(
-    publication: &super::lease::Publication<'_>,
+    _publication: &super::lease::Publication<'_>,
     root: &Path,
     kind: Kind,
     action: ActionKey,
 ) -> Result<(), Error> {
-    #[cfg(not(feature = "import-baseline"))]
-    let _ = publication;
     let relative = PathBuf::from("indexes").join(kind.directory());
     let Some(kind_root) = super::entry::existing_directory(root, &relative)? else {
         return Ok(());
@@ -706,26 +629,12 @@ pub(crate) fn retire_action(
                 return Err(Error::Shape(target));
             }
             Ok(_) => {
-                #[cfg(feature = "import-baseline")]
-                let retirement = retirement::Attempt::start(
-                    publication,
-                    &target,
-                    retirement::Cause::IndexActionRetirement,
-                    retirement::Facts::default(),
-                );
-                #[cfg(feature = "import-baseline")]
-                retirement.removal_started();
-                let removal = fs::remove_dir_all(&target).map_err(|source| Error::Io {
+                fs::remove_dir_all(&target).map_err(|source| Error::Io {
                     operation: "remove retired candidate index row",
                     path: target.clone(),
                     source,
-                });
-                #[cfg(feature = "import-baseline")]
-                retirement.removal_finished(removal.is_ok());
-                removal?;
+                })?;
                 super::entry::sync_directory(&bucket.path())?;
-                #[cfg(feature = "import-baseline")]
-                retirement.completed(true);
             }
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => {
@@ -902,23 +811,17 @@ mod tests {
         lookup: LookupKey,
         action: ActionKey,
     ) -> Result<(), Error> {
-        super::super::lease::with_publication(
-            root,
-            &crate::node::GraphBudget::new(),
-            |publication| {
-                publish(
-                    publication,
-                    root,
-                    kind,
-                    schema,
-                    lookup,
-                    action,
-                    crate::node::Digest::from_bytes([0x92; 32]),
-                    #[cfg(feature = "import-baseline")]
-                    &crate::node::GraphBudget::new(),
-                )
-            },
-        )
+        super::super::lease::with_publication(root, |publication| {
+            publish(
+                publication,
+                root,
+                kind,
+                schema,
+                lookup,
+                action,
+                crate::node::Digest::from_bytes([0x92; 32]),
+            )
+        })
     }
 
     #[test]
@@ -961,11 +864,9 @@ mod tests {
             .join(ninth.directory())
             .exists());
 
-        super::super::lease::with_publication(
-            &root,
-            &crate::node::GraphBudget::new(),
-            |publication| retire_action(publication, &root, Kind::Runner, actions[0]),
-        )
+        super::super::lease::with_publication(&root, |publication| {
+            retire_action(publication, &root, Kind::Runner, actions[0])
+        })
         .expect("one retired action releases its exact index row");
         publish_fixture(&root, Kind::Runner, 2, key, ninth)
             .expect("one candidate can grow after exact retirement");

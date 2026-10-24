@@ -77,48 +77,17 @@ impl<'bytes> Record<'bytes> {
             budget.limits.json_bytes,
             units.len(),
         )?;
-        #[cfg(feature = "import-baseline")]
-        let sections = std::cell::Cell::new([0_usize; 3]);
         let encoded = codec::encode(budget, |writer| {
             writer.raw(MAGIC)?;
             writer.text(toolchain::supported_cargo_commit())?;
             writer.u32(SECTIONS)?;
             writer.bytes(metadata)?;
             writer.bytes(units)?;
-            #[cfg(feature = "import-baseline")]
-            let before_build = writer.position();
             writer.section(|writer| build.write(writer))?;
-            #[cfg(feature = "import-baseline")]
-            let before_input = writer.position();
             writer.section(|writer| input.write(writer))?;
-            #[cfg(feature = "import-baseline")]
-            let before_namespace = writer.position();
             writer.section(|writer| write_namespace(writer))?;
-            #[cfg(feature = "import-baseline")]
-            sections.set([
-                before_input - before_build - 8,
-                before_namespace - before_input - 8,
-                writer.position() - before_namespace - 8,
-            ]);
             Ok(())
         })?;
-        #[cfg(feature = "import-baseline")]
-        {
-            use crate::metrics::accounting::Scalar;
-            let [build, input, namespace] = sections.get();
-            // The successful output pass supplied these positions. No second
-            // encoder, parser, or read of persisted data is needed for evidence.
-            for (key, bytes) in [
-                (Scalar::ResolutionMetadataBytes, metadata.len()),
-                (Scalar::ResolutionUnitBytes, units.len()),
-                (Scalar::ResolutionBuildBytes, build),
-                (Scalar::ResolutionInputBytes, input),
-                (Scalar::ResolutionNamespaceBytes, namespace),
-                (Scalar::ResolutionRecordBytes, encoded.len()),
-            ] {
-                crate::metrics::record_scalar(key, bytes as u64);
-            }
-        }
         Ok(encoded)
     }
 

@@ -65,13 +65,6 @@ pub(crate) struct Usage {
     pub(super) bytes: usize,
 }
 
-#[cfg(feature = "import-baseline")]
-impl Usage {
-    pub(crate) const fn observation(self) -> (usize, usize) {
-        (self.items, self.bytes)
-    }
-}
-
 struct HexDigest<'digest>(&'digest [u8; 32]);
 
 impl std::fmt::Display for HexDigest<'_> {
@@ -101,32 +94,6 @@ pub(crate) const INPUT_BYTES_RESOURCE: &str = "input aggregate owned bytes";
 pub(crate) const INPUT_STRING_RESOURCE: &str = "input owned string bytes";
 
 impl Allocation {
-    #[cfg(feature = "import-baseline")]
-    fn observe_capture<T>(&self, result: &Result<T>) {
-        use crate::metrics::{self, accounting::OwnerStage, accounting::Scalar};
-
-        metrics::record_scalar(Scalar::OwnerInputItems, self.usage.items as u64);
-        metrics::record_scalar(Scalar::OwnerInputBytes, self.usage.bytes as u64);
-        let Err(mut error) = result.as_ref() else {
-            return;
-        };
-        let stage = OwnerStage::InputCapture;
-        metrics::record_scalar(Scalar::OwnerRefusals(stage), 1);
-        let (actual, limit) = loop {
-            match error {
-                Error::Limit { actual, limit, .. } => break (*actual, *limit),
-                Error::Node { source, .. } => match source.as_ref() {
-                    crate::node::Error::Limit { actual, limit, .. } => break (*actual, *limit),
-                    crate::node::Error::Importer(inner) => error = inner,
-                    _ => return,
-                },
-                _ => return,
-            }
-        };
-        metrics::record_scalar(Scalar::OwnerRefusedRequired(stage), actual as u64);
-        metrics::record_scalar(Scalar::OwnerRefusedLimit(stage), limit as u64);
-    }
-
     /// Start one current stored-input validation account before any bytes decode.
     /// Callers retain it across all work in the supplied graph validation epoch.
     pub(crate) fn for_replay(limits: &cargo::Limits) -> Self {
@@ -1676,8 +1643,6 @@ impl Baseline {
                 package_replay,
             ))
         });
-        #[cfg(feature = "import-baseline")]
-        allocation.observe_capture(&result);
         let (proof, recipes, recipe_allocation, universe_build, package_replay) = result?;
         Ok((
             Self {
@@ -2430,81 +2395,6 @@ mod build_message_tests {
         ));
         assert_eq!(allocation.usage(), Usage { items: 0, bytes: 5 });
         assert_eq!(allocation.exceedances().axes().count(), 1);
-    }
-
-    /// Crossing the proof byte target is charged, recorded and returns
-    /// `Ok`, so the baseline observer sees the usage and no refusal; only a
-    /// genuine physical cause (here a real file read against a zero bound)
-    /// reports a refusal, with its own figures.
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn allocation_observation_keeps_capture_usage_and_reports_only_physical_refusal() {
-        use crate::metrics::{accounting::OwnerStage, accounting::Scalar, recorder};
-
-        let mut limits = Limits::standard();
-        limits.input_proof_bytes = 3;
-        let mut allocation = Allocation::for_proof(Usage { items: 1, bytes: 2 }, &limits);
-        allocation.bytes(1).unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "rawr-input-observe-{}-{}",
-            std::process::id(),
-            READ_ID.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::write(&path, b"x").expect("the one-byte observation fixture is written");
-        let physical = read_file("observation fixture", &path, 0);
-        fs::remove_file(&path).expect("the observation fixture is retired");
-        assert!(matches!(
-            physical,
-            Err(crate::Error::Limit {
-                resource: "observation fixture",
-                limit: 0,
-                actual: 1,
-            })
-        ));
-        let recorder = recorder::Recorder::transform_at(10, 1).unwrap();
-        {
-            let _scope = recorder.scope().unwrap();
-            allocation.observe_capture(&Ok::<_, crate::Error>(()));
-            let result = allocation.bytes(1);
-            allocation.observe_capture(&result);
-            result.expect("one byte over the proof target is charged, not refused");
-            allocation.observe_capture(&physical);
-        }
-        assert_eq!(allocation.usage(), Usage { items: 1, bytes: 4 });
-        let axis = *allocation
-            .exceedances()
-            .axis(INPUT_BYTES_RESOURCE)
-            .expect("the proof account records its byte axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (3, 4, 4)
-        );
-        assert!(allocation.bytes(0).is_ok(), "an exceedance never latches");
-        let evidence = recorder.snapshot().unwrap().accounting;
-        let current = evidence.scalar(Scalar::OwnerInputBytes).unwrap();
-        assert_eq!((current.count, current.min, current.max), (3, 3, 4));
-        assert_eq!(evidence.scalar(Scalar::OwnerInputItems).unwrap().max, 1);
-        assert_eq!(
-            evidence
-                .scalar(Scalar::OwnerRefusals(OwnerStage::InputCapture))
-                .unwrap()
-                .count,
-            1
-        );
-        assert_eq!(
-            evidence
-                .scalar(Scalar::OwnerRefusedRequired(OwnerStage::InputCapture))
-                .unwrap()
-                .max,
-            1
-        );
-        assert_eq!(
-            evidence
-                .scalar(Scalar::OwnerRefusedLimit(OwnerStage::InputCapture))
-                .unwrap()
-                .max,
-            0
-        );
     }
 
     #[test]

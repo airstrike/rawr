@@ -7,29 +7,13 @@ use std::path::{Path, PathBuf};
 
 use rawr_import::cargo::config::Environment;
 
-#[cfg(all(test, feature = "import-baseline"))]
-mod baseline;
 pub(crate) mod owner;
 
 pub(crate) use rawr_import_cli::Prepared;
 
 /// rawr-iced's profile: the runner links rawr-iced as its profile host and
 /// the project's iced, and the profile reads its evidence from that iced.
-pub(crate) struct Iced {
-    #[cfg(feature = "import-baseline")]
-    fixture: Option<rawr_iced::profile::Fixture>,
-}
-
-impl Iced {
-    pub(crate) const fn new(
-        #[cfg(feature = "import-baseline")] fixture: Option<rawr_iced::profile::Fixture>,
-    ) -> Self {
-        Self {
-            #[cfg(feature = "import-baseline")]
-            fixture,
-        }
-    }
-}
+pub(crate) struct Iced;
 
 impl rawr_import_cli::Profile for Iced {
     fn prepare(
@@ -39,15 +23,7 @@ impl rawr_import_cli::Profile for Iced {
         revision: rawr_import::supervisor::Revision,
         scope: &rawr_import::supervisor::snapshot::attempt::Scope,
     ) -> Result<Prepared, rawr_import_cli::Error> {
-        prepare_in(
-            target,
-            graph,
-            revision,
-            #[cfg(feature = "import-baseline")]
-            self.fixture,
-            scope,
-        )
-        .map_err(Into::into)
+        prepare_in(target, graph, revision, scope).map_err(Into::into)
     }
 
     /// The window listens on an agent socket under `target/rawr`.
@@ -131,14 +107,11 @@ fn widgets(graph: &rawr::package::Graph) -> Vec<rawr_iced::features::Feature> {
 pub(crate) fn prepare(
     target: &rawr::project::Target,
     revision: rawr_import::supervisor::Revision,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
 ) -> Result<Prepared, Error> {
     prepare_in(
         target,
         None,
         revision,
-        #[cfg(feature = "import-baseline")]
-        profile,
         &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
     )
 }
@@ -147,38 +120,8 @@ fn prepare_in(
     target: &rawr::project::Target,
     graph: Option<rawr::package::Graph>,
     revision: rawr_import::supervisor::Revision,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
     scope: &rawr_import::supervisor::snapshot::attempt::Scope,
 ) -> Result<Prepared, Error> {
-    prepare_transform(
-        target,
-        graph,
-        revision,
-        #[cfg(feature = "import-baseline")]
-        profile,
-        |_, _| Ok(()),
-        scope,
-    )
-}
-
-fn prepare_transform(
-    target: &rawr::project::Target,
-    graph: Option<rawr::package::Graph>,
-    revision: rawr_import::supervisor::Revision,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-    verify_surface: impl FnOnce(&[u8], &rawr_import::cargo::Limits) -> Result<(), Error>,
-    scope: &rawr_import::supervisor::snapshot::attempt::Scope,
-) -> Result<Prepared, Error> {
-    #[cfg(feature = "import-baseline")]
-    let profile_selection = match profile {
-        None => rawr_import::metrics::profile::Selection::Inactive,
-        Some(rawr_iced::profile::Fixture::Baseline) => {
-            rawr_import::metrics::profile::Selection::Baseline
-        }
-        Some(rawr_iced::profile::Fixture::Variant) => {
-            rawr_import::metrics::profile::Selection::Variant
-        }
-    };
     let graph = match graph {
         Some(graph) => graph,
         None => rawr::package::Graph::load(&rawr::Engine::new(), target).map_err(Error::Rawr)?,
@@ -194,18 +137,10 @@ fn prepare_transform(
         .map_err(Error::Snapshot)?;
     let project = graph.entry_package().root().to_path_buf();
 
-    #[cfg(feature = "import-baseline")]
-    let definition = match profile {
-        Some(profile) => rawr_iced::profile::Definition::fixture(profile, &limits),
-        None => rawr_iced::profile::Definition::new(&limits),
-    }
-    .map_err(Error::ProfileDefinition)?;
-    #[cfg(not(feature = "import-baseline"))]
     let definition =
         rawr_iced::profile::Definition::new(&limits).map_err(Error::ProfileDefinition)?;
     let adapter = definition.trusted_adapter();
     let policy = rawr_import::classify::Policy::standard();
-    let mut verify_surface = Some(verify_surface);
     let mut snapshot = Some(snapshot);
     // A Rust path Rawr names below a wholesale crate re-export that
     // extraction only named (`iced::futures::…`) is demanded, and the import
@@ -223,11 +158,7 @@ fn prepare_transform(
     let widgets = widgets(&graph);
     rawr_iced::features::select(widgets.iter().copied());
     let seed = graph.rust_demand_seed(rawr_iced::profile::Definition::DEMAND, Some(framework));
-    #[cfg(feature = "import-baseline")]
-    let (mut observed_toolchain, mut observed_resolution);
-    #[cfg(feature = "import-baseline")]
-    let (mut observed_api, mut observed_generic): ([u8; 32], [u8; 32]);
-    let (demand, profile_contract, facade, cached, native) = loop {
+    let (demand, profile_contract, cached, native) = loop {
         let mut request_demand = crate_demand.clone();
         request_demand.extend(seed.iter().cloned());
         request_demand.sort_unstable();
@@ -266,11 +197,6 @@ fn prepare_transform(
         let prepared = request
             .prepare_cached_in(&limits, scope)
             .map_err(Error::Import)?;
-        #[cfg(feature = "import-baseline")]
-        {
-            observed_toolchain = prepared.observed_toolchain();
-            observed_resolution = prepared.observed_identity();
-        }
         let api = prepared.retain_api(&limits).map_err(Error::Import)?;
         let snapshot = snapshot
             .take()
@@ -293,20 +219,7 @@ fn prepare_transform(
             }
         };
         break match warm {
-            Ok(warm) => {
-                #[cfg(feature = "import-baseline")]
-                {
-                    observed_api = *warm.api.as_bytes();
-                    observed_generic = *warm.demand.contract_fingerprint().as_bytes();
-                }
-                (
-                    warm.demand,
-                    warm.profile,
-                    warm.facade,
-                    warm.checked,
-                    warm.native,
-                )
-            }
+            Ok(warm) => (warm.demand, warm.profile, warm.checked, warm.native),
             Err(api) => {
                 let completed = rawr_import::composition::evaluate_api_semantic(
                     api,
@@ -315,23 +228,8 @@ fn prepare_transform(
                     expected,
                     &limits,
                     |contract, profile_contract, facade| {
-                        if let Some(verify) = verify_surface.take() {
-                            verify(facade.bytes(), &limits)?;
-                        }
                         let mut engine = rawr::Engine::new();
                         let provisional = *profile_contract.rules_digest();
-                        #[cfg(feature = "import-baseline")]
-                        let compiler =
-                            rawr_iced::profile::runner::install_compiler_contract_fixture(
-                                &mut engine,
-                                definition.selected_fixture(),
-                                definition.selected_fixture().version(),
-                                facade.bytes(),
-                                provisional,
-                                &profile_contract,
-                            )
-                            .map_err(Error::Compiler)?;
-                        #[cfg(not(feature = "import-baseline"))]
                         let compiler = rawr_iced::profile::runner::install_compiler_contract(
                             &mut engine,
                             facade.bytes(),
@@ -389,11 +287,6 @@ fn prepare_transform(
                     facade,
                     checked: cached,
                 } = completed;
-                #[cfg(feature = "import-baseline")]
-                {
-                    observed_api = *contract.raw_fingerprint().as_bytes();
-                    observed_generic = *contract.fingerprint().as_bytes();
-                }
                 let brand = rawr::package::import::Brand::replay(&facade).map_err(Error::Brand)?;
                 let demand = cached
                     .replay_demand(brand, &contract, expected, &limits)
@@ -408,23 +301,12 @@ fn prepare_transform(
                 (
                     demand,
                     profile_contract,
-                    facade,
                     cached,
                     contract.into_native_proof(),
                 )
             }
         };
     };
-    #[cfg(feature = "import-baseline")]
-    let observed_facade = rawr_import::metrics::pipeline::digest(b"facade", facade.bytes());
-    if let Some(verify) = verify_surface.take() {
-        verify(facade.bytes(), &limits)?;
-    }
-    #[cfg(feature = "import-baseline")]
-    let observed_checked: [u8; 32] = cached
-        .checked_payload()
-        .try_into()
-        .map_err(|_| Error::CheckedPayload)?;
     rawr_iced::profile::Checked::from_retained(&cached).ok_or(Error::CheckedPayload)?;
     let profile = rawr_import::composition::profile::prepare_retained(
         &adapter,
@@ -433,44 +315,9 @@ fn prepare_transform(
         &limits,
     )
     .map_err(Error::ProfileGenerate)?;
-    #[cfg(feature = "import-baseline")]
-    let observed_profile = *profile.demand_digest();
-    #[cfg(feature = "import-baseline")]
-    let observed_profile_proof = *profile.fingerprint();
-    #[cfg(feature = "import-baseline")]
-    rawr_import::metrics::record_profile(&rawr_import::metrics::profile::Evidence::observe(
-        profile_selection,
-        *profile_contract.identity().digest(),
-        profile_contract.version().value(),
-        *profile.rules_digest(),
-    ));
-    #[cfg(feature = "import-baseline")]
-    let observed_native_inputs = *native.observed_fingerprint().map_err(Error::Import)?;
-    #[cfg(feature = "import-baseline")]
-    let observed_native_product = rawr_import::metrics::pipeline::digest_pair(
-        b"native-product",
-        &observed_native_inputs,
-        &observed_profile_proof,
-    );
     let request = demand
         .request_retained(native, profile, revision)
         .map_err(Error::Bridge)?;
-    #[cfg(feature = "import-baseline")]
-    rawr_import::metrics::record_pipeline(&rawr_import::metrics::pipeline::Evidence {
-        toolchain: observed_toolchain,
-        resolution: observed_resolution,
-        api: observed_api,
-        generic: observed_generic,
-        profile: observed_profile,
-        facade: observed_facade,
-        checked: observed_checked,
-        profile_proof: observed_profile_proof,
-        native_inputs: observed_native_inputs,
-        native_product: observed_native_product,
-        overlay: *request.build_request_key().as_bytes(),
-        resolution_target: None,
-        runner_target: None,
-    });
     let inputs = rawr::reload::source::Inputs::from_graph(&source).with_imported(request.watch());
     Ok(Prepared::new(
         request, transport, project, inputs, &graph, limits,
@@ -522,7 +369,7 @@ impl std::error::Error for Error {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use rawr_import::cargo::config::Environment;
 
@@ -537,8 +384,6 @@ mod tests {
         let prepared = super::prepare(
             &target,
             revision,
-            #[cfg(feature = "import-baseline")]
-            None,
         )
         .unwrap_or_else(|error| {
             panic!(
@@ -650,138 +495,6 @@ mod tests {
         rawr_import::extract::measure_classification(request, &native, &limits)
             .expect("real iced classification completes under production authority");
         fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    #[ignore = "RawrGallery full-surface invocation-template qualification without production CLI cutover"]
-    fn proves_rawrgallery_full_surface_before_production() {
-        let Some(root) = std::env::var_os("RAWR_GALLERY").map(PathBuf::from) else {
-            return;
-        };
-        let target = rawr::project::Target::discover(&root).expect("RawrGallery target");
-        let mut owner = rawr_import::supervisor::Owner::new();
-        let revision = owner.revision().expect("RawrGallery evidence revision");
-        let prepared = super::prepare_transform(
-            &target,
-            None,
-            revision,
-            #[cfg(feature = "import-baseline")]
-            None,
-            |facade, limits| {
-                rawr_import::surface::facade::Plan::verify_exact_surface(
-                    facade,
-                    limits,
-                    "gallery_ui",
-                    &["Dial", "domain::Screen", "domain::State"],
-                    &[
-                        "Dial::new",
-                        "Dial::range",
-                        "domain::DEFAULT_DIAL",
-                        "domain::State::new",
-                        "domain::State::select",
-                        "domain::State::toggle",
-                        "domain::apply",
-                        "domain::clamp",
-                        "domain::normalize",
-                    ],
-                    &["domain::UnsupportedScalar"],
-                )
-                .map_err(super::Error::Surface)?;
-                let plan = rawr_import::surface::facade::Plan::decode(facade, limits)
-                    .map_err(super::Error::Surface)?;
-                let iced = plan
-                    .facades()
-                    .find(|facade| facade.root() == "iced")
-                    .expect("qualified surface retains the exact iced facade");
-                let assert_cohort = |anchor: &str, expected: &[&str]| {
-                    let identity = iced
-                        .types()
-                        .find(|ty| ty.path() == anchor)
-                        .expect("cohort anchor survives the sealed facade")
-                        .identity();
-                    let actual = iced
-                        .types()
-                        .filter(|ty| ty.identity() == identity)
-                        .map(rawr_import::surface::facade::TypeDefinition::path)
-                        .collect::<Vec<_>>();
-                    assert_eq!(actual, expected, "{anchor} canonical alias cohort drifted");
-                };
-                assert_cohort(
-                    "Backend",
-                    &[
-                        "Backend",
-                        "advanced::graphics::core::Backend",
-                        "advanced::graphics::core::backend::Backend",
-                        "advanced::graphics::futures::core::Backend",
-                        "advanced::graphics::futures::core::backend::Backend",
-                        "backend::Backend",
-                    ],
-                );
-                assert_cohort(
-                    "Alignment",
-                    &[
-                        "Alignment",
-                        "advanced::graphics::core::Alignment",
-                        "advanced::graphics::core::alignment::Alignment",
-                        "advanced::graphics::futures::core::Alignment",
-                        "advanced::graphics::futures::core::alignment::Alignment",
-                        "alignment::Alignment",
-                    ],
-                );
-                Ok(())
-            },
-            &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
-        )
-        .expect("RawrGallery full intended facade installs and compiles");
-        let (request, snapshot, _, _) = prepared.into_parts();
-        let manifest = request
-            .generate(&rawr_import::cargo::Limits::standard())
-            .expect("RawrGallery sealed demand generates");
-        let source = manifest
-            .files()
-            .find(|file| file.path() == "src/main.rs")
-            .expect("RawrGallery generated source");
-        let source = std::str::from_utf8(source.bytes()).expect("generated source UTF-8");
-        for path in [
-            "gallery_ui::Dial::<i64>::new",
-            "gallery_ui::domain::apply",
-            "gallery_ui::domain::clamp",
-            "gallery_ui::domain::normalize",
-        ] {
-            assert!(source.contains(path), "generated source omits {path}");
-        }
-        assert!(
-            source.contains(".range"),
-            "generated source omits Dial::range"
-        );
-        assert!(
-            !source.contains("gallery_ui::Dial::new::<i64>"),
-            "generated source misplaced an implementation-owned argument on the item"
-        );
-        assert!(source.contains("__rawr_profile::payload"));
-        assert!(source.contains("profile_event_mapper"));
-        assert!(source.contains("insert_projectable"));
-        assert!(source.contains("static STRUCTURAL_ROWS"));
-        assert!(source.contains("StructuralKind::Field { copy: true }"));
-        assert!(source.contains("StructuralKind::Variant"));
-        assert!(
-            !source.contains("EXPECTED_APPLICATION_SEMANTIC"),
-            "current application evidence must travel with the launch snapshot, not compiled owner source",
-        );
-        assert!(source.contains("compile_package_snapshot_generation_checked"));
-        assert!(
-            source.contains("arguments.arena.shared::<gallery_ui::domain::State"),
-            "Copy scalar fields use one non-consuming exact-owner read",
-        );
-
-        let mut lane = crate::watch::native::Lane::new(&root)
-            .expect("RawrGallery non-production qualification lane");
-        let key = lane
-            .replace(manifest, snapshot)
-            .expect("RawrGallery generated owner admits complete intended surface");
-        assert_eq!(lane.current_key(), Some(key));
-        lane.shutdown()
-            .expect("RawrGallery non-production qualification owner retires");
     }
 
     pub(super) fn real_iced_fixture() -> rawr_import::store::TestProject {

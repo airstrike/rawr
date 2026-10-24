@@ -973,11 +973,6 @@ impl Pending {
         &self.metadata
     }
 
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn lock_digest(&self) -> Digest {
-        self.lock.digest()
-    }
-
     #[allow(
         clippy::too_many_arguments,
         reason = "completion joins the exact post-build observations retained by the receipt"

@@ -280,15 +280,6 @@ impl Inventory {
     }
 
     fn retain(bytes: Box<[u8]>, rows: usize) -> Self {
-        #[cfg(feature = "import-baseline")]
-        {
-            use crate::metrics::accounting::Scalar;
-            crate::metrics::record_scalar(Scalar::NativeInventoryItems, (rows + 1) as u64);
-            crate::metrics::record_scalar(
-                Scalar::NativeInventoryBytes,
-                (std::mem::size_of::<Self>() + bytes.len()) as u64,
-            );
-        }
         let mut digest = Sha256::new();
         digest.update(b"rawr.import.native-inventory/v1");
         digest.update(&bytes);

@@ -73,10 +73,6 @@ mod tests {
         fn runner_owned(&self, _: &metrics::runner::Owned) {}
         fn scope_opened(&self) {}
         fn scope_joined(&self) {}
-        #[cfg(feature = "import-baseline")]
-        fn profile(&self, _: &metrics::profile::Evidence) {}
-        #[cfg(feature = "import-baseline")]
-        fn pipeline(&self, _: &metrics::pipeline::Evidence) {}
         fn native(&self, pid: u32, epoch: u64, observation: account::Observation) {
             self.reports.lock().unwrap().push((pid, epoch, observation));
         }

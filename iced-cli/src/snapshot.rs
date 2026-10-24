@@ -18,37 +18,9 @@ pub fn execute(
     mode: command::Mode,
     path: Option<PathBuf>,
 ) -> Result<rawr_iced::snapshot::Outcome, Error> {
-    execute_transform(
-        mode,
-        path,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-
-#[cfg(feature = "import-baseline")]
-pub(crate) fn execute_with_profile(
-    mode: command::Mode,
-    path: Option<PathBuf>,
-    profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<rawr_iced::snapshot::Outcome, Error> {
-    execute_transform(mode, path, profile)
-}
-
-fn execute_transform(
-    mode: command::Mode,
-    path: Option<PathBuf>,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<rawr_iced::snapshot::Outcome, Error> {
     #[cfg(feature = "native-runner")]
     if let Some(target) = crate::import::declared(path.as_ref()).map_err(Error::from_report)? {
-        return crate::import::owner::snapshot(
-            &target,
-            mode,
-            #[cfg(feature = "import-baseline")]
-            profile,
-        )
-        .map_err(Error::from_report);
+        return crate::import::owner::snapshot(&target, mode).map_err(Error::from_report);
     }
     // A program with no Cargo project has no iced to run against.
     if cfg!(feature = "native-runner") {
@@ -57,16 +29,6 @@ fn execute_transform(
             None => std::env::current_dir().unwrap_or_default(),
         };
         return Err(Error::from_report(crate::base::without_cargo(&source)));
-    }
-    #[cfg(feature = "import-baseline")]
-    if profile.is_some() {
-        return Err(Error::from_report(
-            diagnostic::Report::error(
-                diagnostic::code::FRAMEWORK_NATIVE,
-                "private profile selection requires a declared Rust import",
-            )
-            .finish(),
-        ));
     }
     let target = match path {
         Some(path) => project::Target::discover(path),

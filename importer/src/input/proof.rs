@@ -860,14 +860,6 @@ impl Proof {
         }
     }
 
-    /// Borrow the placement-independent native-input identity for observation.
-    #[cfg(feature = "import-baseline")]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn observed_fingerprint(&self) -> Result<&[u8; 32]> {
-        self.native().map(super::native::Inputs::as_bytes)
-    }
-
     /// Clone only bounded filesystem identities required by the production
     /// watcher; environment and scalar proof entries remain non-filesystem
     /// freshness evidence.

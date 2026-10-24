@@ -1,8 +1,5 @@
 //! Immutable Cargo execution bundles owned by discoverable node attempts.
 
-#[cfg(feature = "import-baseline")]
-use crate::metrics::principal::{self, retirement};
-
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -11,8 +8,6 @@ use std::path::{Path, PathBuf};
 use sha2::Digest as _;
 
 use super::accounting::{self, Allocation, Charge, Class, Identity, LeaseKey, Record};
-#[cfg(feature = "import-baseline")]
-use crate::metrics::bundle::Event;
 use crate::node::{Digest, Error, ExecutionKey, Kind};
 
 pub(crate) mod buffer;
@@ -62,11 +57,6 @@ impl BundleCommitment {
             seal_digest,
         }
     }
-
-    #[cfg(feature = "import-baseline")]
-    pub(crate) const fn reference(&self) -> BundleRef {
-        self.reference
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -79,10 +69,6 @@ pub(crate) struct Attempt {
     reference: BundleRef,
     budget: Budget,
     armed: bool,
-    #[cfg(feature = "import-baseline")]
-    kind: Kind,
-    #[cfg(feature = "import-baseline")]
-    evidence: principal::bundle::Owner,
 }
 
 pub(crate) struct Pending {
@@ -94,10 +80,6 @@ pub(crate) struct Pending {
     geometry: [u8; 32],
     armed: bool,
     graph_budget: Option<crate::node::GraphBudget>,
-    #[cfg(feature = "import-baseline")]
-    kind: Kind,
-    #[cfg(feature = "import-baseline")]
-    evidence: principal::bundle::Owner,
 }
 
 /// Process-local shared lease preventing whole-bundle eviction while a runner
@@ -191,59 +173,10 @@ impl Repair {
             &self,
             budget,
         )?;
-        #[cfg(feature = "import-baseline")]
-        let evidence = principal::bundle::Owner::begin(
-            publication.graph(),
-            store,
-            self.root(),
-            principal::bundle::Origin::Repair,
-            Some(publication),
-        );
-        thaw_root_observed(
-            self.root(),
-            #[cfg(feature = "import-baseline")]
-            Some(evidence.context(store, self.root(), Some(publication))),
-        )?;
-        #[cfg(feature = "import-baseline")]
-        let mut observation = crate::metrics::publication::Attempt::start(
-            crate::metrics::publication::Class::Retirement(
-                crate::metrics::publication::Retirement::BundleRepair,
-            ),
-        );
-        #[cfg(feature = "import-baseline")]
-        let retirement = retirement::Attempt::start(
-            publication,
-            self.root(),
-            retirement::Cause::BundleRepair,
-            retirement::Facts {
-                allocation: Some(self.allocation.observed()),
-                ..retirement::Facts::default()
-            },
-        );
-        let temporary = super::entry::stage_admitted_retirement(
-            admitted,
-            publication,
-            store,
-            self.root(),
-            #[cfg(feature = "import-baseline")]
-            &mut observation,
-            #[cfg(feature = "import-baseline")]
-            Some(super::entry::Retirement::Allocation(&retirement)),
-        )?;
-        let result = remove_bundle_with(
-            &temporary,
-            #[cfg(feature = "import-baseline")]
-            Some(&mut observation),
-            #[cfg(feature = "import-baseline")]
-            Some(&retirement),
-            #[cfg(feature = "import-baseline")]
-            Some(evidence.context(store, &temporary, Some(publication))),
-        );
-        #[cfg(feature = "import-baseline")]
-        retirement.completed(result.is_ok());
-        #[cfg(feature = "import-baseline")]
-        let result = observation.finish(result);
-        result
+        thaw_root(self.root())?;
+        let temporary =
+            super::entry::stage_admitted_retirement(admitted, publication, store, self.root())?;
+        remove_bundle(&temporary)
     }
 }
 
@@ -287,11 +220,6 @@ impl BundleRef {
             .join(self.id.directory())
     }
 
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn lease_relative(self) -> PathBuf {
-        self.relative().join("lease")
-    }
-
     pub(crate) fn relative_budgeted(
         self,
         budget: &crate::node::GraphBudget,
@@ -326,89 +254,11 @@ impl Budget {
 }
 
 impl Attempt {
-    #[cfg(test)]
     pub(crate) fn allocate(
         store: &Path,
         execution: ExecutionKey,
         budget: Budget,
     ) -> Result<Self, Error> {
-        Self::allocate_for(store, execution, budget, Kind::Runner)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn allocate_for(
-        store: &Path,
-        execution: ExecutionKey,
-        budget: Budget,
-        kind: Kind,
-    ) -> Result<Self, Error> {
-        Self::allocate_initialized(store, execution, budget, kind, initialize)
-    }
-
-    pub(crate) fn allocate_observed(
-        store: &Path,
-        execution: ExecutionKey,
-        budget: Budget,
-        kind: Kind,
-        graph: &crate::node::GraphBudget,
-    ) -> Result<Self, Error> {
-        #[cfg(not(feature = "import-baseline"))]
-        let _ = graph;
-        Self::allocate_inner(
-            store,
-            execution,
-            budget,
-            kind,
-            #[cfg(feature = "import-baseline")]
-            Some(graph),
-            |root, parent, #[cfg(feature = "import-baseline")] context| {
-                initialize_observed(
-                    root,
-                    parent,
-                    #[cfg(feature = "import-baseline")]
-                    context,
-                )
-            },
-        )
-    }
-
-    #[cfg(test)]
-    fn allocate_initialized(
-        store: &Path,
-        execution: ExecutionKey,
-        budget: Budget,
-        kind: Kind,
-        initialize: impl FnOnce(&Path, &Path) -> Result<(), Error>,
-    ) -> Result<Self, Error> {
-        Self::allocate_inner(
-            store,
-            execution,
-            budget,
-            kind,
-            #[cfg(feature = "import-baseline")]
-            None,
-            |root, parent, #[cfg(feature = "import-baseline")] _context| initialize(root, parent),
-        )
-    }
-
-    fn allocate_inner(
-        store: &Path,
-        execution: ExecutionKey,
-        budget: Budget,
-        kind: Kind,
-        #[cfg(feature = "import-baseline")] graph: Option<&crate::node::GraphBudget>,
-        #[cfg(feature = "import-baseline")] initialize: impl FnOnce(
-            &Path,
-            &Path,
-            Option<principal::bundle::Context<'_>>,
-        ) -> Result<(), Error>,
-        #[cfg(not(feature = "import-baseline"))] initialize: impl FnOnce(
-            &Path,
-            &Path,
-        ) -> Result<(), Error>,
-    ) -> Result<Self, Error> {
-        #[cfg(not(feature = "import-baseline"))]
-        let _ = kind;
         if accounting::bundle_count(store)? >= MAX_BUNDLES || count_bundles(store)? >= MAX_BUNDLES {
             return Err(Error::Limit {
                 resource: "typed store immutable bundles",
@@ -421,8 +271,7 @@ impl Attempt {
             "runner bundle execution directory was not admitted before allocation",
         ))?;
         let mut collision = 0usize;
-        #[cfg_attr(not(feature = "import-baseline"), allow(unused_variables))]
-        let (id, root, evidence) = loop {
+        let (id, root) = loop {
             if collision == MAX_ORPHANS {
                 return Err(Error::CleanupRequired(
                     "runner bundle identifier collisions exceeded the bounded retry",
@@ -430,38 +279,8 @@ impl Attempt {
             }
             let id = random_id()?;
             let root = parent.join(id.directory());
-            #[cfg(feature = "import-baseline")]
-            let evidence = graph
-                .map(|graph| {
-                    principal::bundle::Owner::begin(
-                        graph,
-                        store,
-                        &root,
-                        principal::bundle::Origin::Allocation { kind: kind as u8 },
-                        None,
-                    )
-                })
-                .unwrap_or_default();
-            #[cfg(not(feature = "import-baseline"))]
-            let evidence = ();
-            #[cfg(feature = "import-baseline")]
-            let context = evidence.context(store, &root, None);
-            #[cfg(feature = "import-baseline")]
-            let mut operation = context.start(&root, principal::bundle::Action::Directory);
-            let created = fs::create_dir(&root);
-            #[cfg(feature = "import-baseline")]
-            {
-                operation.result(created.is_ok());
-                if created
-                    .as_ref()
-                    .is_err_and(|source| source.kind() == std::io::ErrorKind::AlreadyExists)
-                {
-                    operation.collision();
-                }
-                drop(operation);
-            }
-            match created {
-                Ok(()) => break (id, root, evidence),
+            match fs::create_dir(&root) {
+                Ok(()) => break (id, root),
                 Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
                     collision = collision.saturating_add(1);
                 }
@@ -475,63 +294,15 @@ impl Attempt {
             }
         };
         let reference = BundleRef::new(execution, id);
-        // Root allocation is real even if partition initialization subsequently fails.
-        #[cfg(feature = "import-baseline")]
-        observe(kind, reference, Event::Allocated);
-        let result = initialize(
-            &root,
-            &parent,
-            #[cfg(feature = "import-baseline")]
-            Some(evidence.context(store, &root, None)),
-        );
-        if let Err(error) = result {
-            #[cfg(feature = "import-baseline")]
-            {
-                observe(kind, reference, Event::InitializationFailed);
-                observe(kind, reference, Event::CleanupStarted);
-            }
-            #[cfg(feature = "import-baseline")]
-            let context = evidence.context(store, &root, None);
-            #[cfg(feature = "import-baseline")]
-            let mut cleanup = context.start(
-                &root,
-                principal::bundle::Action::Remove {
-                    cleanup: principal::bundle::Cleanup::Initialization,
-                },
-            );
-            let removed = fs::remove_dir_all(&root).is_ok();
-            #[cfg(feature = "import-baseline")]
-            {
-                cleanup.result(removed);
-                drop(cleanup);
-            }
-            #[cfg(feature = "import-baseline")]
-            observe(
-                kind,
-                reference,
-                if removed {
-                    Event::Removed
-                } else {
-                    Event::RemovalFailed
-                },
-            );
-            #[cfg(not(feature = "import-baseline"))]
-            let _ = removed;
+        if let Err(error) = initialize(&root, &parent) {
+            let _ = fs::remove_dir_all(&root);
             return Err(error);
         }
-        #[cfg(feature = "import-baseline")]
-        observe(kind, reference, Event::Initialized);
-        #[cfg(feature = "import-baseline")]
-        evidence.stage(principal::bundle::Stage::Initialized);
         Ok(Self {
             store: store.to_path_buf(),
             reference,
             budget,
             armed: true,
-            #[cfg(feature = "import-baseline")]
-            kind,
-            #[cfg(feature = "import-baseline")]
-            evidence,
         })
     }
 
@@ -583,8 +354,6 @@ impl Attempt {
         bytes: Box<[u8]>,
         budget: Option<&crate::node::GraphBudget>,
     ) -> Result<Pending, Error> {
-        #[cfg(feature = "import-baseline")]
-        observe(self.kind, self.reference, Event::SealStarted);
         let root = match budget {
             Some(budget) => self.root_budgeted(budget)?,
             None => self.root(),
@@ -598,16 +367,7 @@ impl Attempt {
             budget.paths(1)?;
             super::path::input(&path, budget)?;
         }
-        write_new_observed(
-            &path,
-            &bytes,
-            #[cfg(feature = "import-baseline")]
-            Some(self.evidence.context(&self.store, &root, None)),
-            #[cfg(feature = "import-baseline")]
-            principal::bundle::Control::Seal,
-            #[cfg(feature = "import-baseline")]
-            None,
-        )?;
+        write_new(&path, &bytes)?;
         let Measured { charge, geometry } = survey_observed_members(
             &root,
             View::Pending,
@@ -632,10 +392,6 @@ impl Attempt {
             budget.decode(self.store.as_os_str().as_encoded_bytes().len())?;
         }
         self.armed = false;
-        #[cfg(feature = "import-baseline")]
-        observe(self.kind, self.reference, Event::Sealed);
-        #[cfg(feature = "import-baseline")]
-        self.evidence.stage(principal::bundle::Stage::Sealed);
         Ok(Pending {
             store: self.store.clone(),
             reference: self.reference,
@@ -644,65 +400,23 @@ impl Attempt {
             geometry,
             armed: true,
             graph_budget: budget.cloned(),
-            #[cfg(feature = "import-baseline")]
-            kind: self.kind,
-            #[cfg(feature = "import-baseline")]
-            evidence: std::mem::take(&mut self.evidence),
         })
     }
 }
 
-#[cfg(test)]
 fn initialize(root: &Path, parent: &Path) -> Result<(), Error> {
-    initialize_observed(
-        root,
-        parent,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-fn initialize_observed(
-    root: &Path,
-    parent: &Path,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
     for directory in ["generated", "build", "target", "declared"] {
         let path = root.join(directory);
-        #[cfg(feature = "import-baseline")]
-        let mut operation = context
-            .as_ref()
-            .map(|context| context.start(&path, principal::bundle::Action::Directory));
         let created = fs::create_dir(&path);
-        #[cfg(feature = "import-baseline")]
-        if let Some(operation) = operation.as_mut() {
-            operation.result(created.is_ok());
-        }
         created.map_err(|source| Error::Io {
             operation: "create runner Cargo bundle partition",
             path,
             source,
         })?;
     }
-    write_new_observed(
-        &root.join("lease"),
-        LEASE_BYTES,
-        #[cfg(feature = "import-baseline")]
-        context,
-        #[cfg(feature = "import-baseline")]
-        principal::bundle::Control::Lease,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )?;
-    sync_observed(
-        root,
-        #[cfg(feature = "import-baseline")]
-        context,
-    )?;
-    sync_observed(
-        parent,
-        #[cfg(feature = "import-baseline")]
-        context,
-    )
+    write_new(&root.join("lease"), LEASE_BYTES)?;
+    super::entry::sync_directory(root)?;
+    super::entry::sync_directory(parent)
 }
 
 pub(crate) fn prepare_execution(
@@ -721,18 +435,8 @@ pub(crate) fn prepare_execution(
 impl Drop for Attempt {
     fn drop(&mut self) {
         if self.armed {
-            #[cfg(feature = "import-baseline")]
-            observe(self.kind, self.reference, Event::CleanupStarted);
             let root = self.root();
-            let outcome = remove_bundle_observed(
-                &root,
-                #[cfg(feature = "import-baseline")]
-                Some(self.evidence.context(&self.store, &root, None)),
-            );
-            #[cfg(feature = "import-baseline")]
-            observe_cleanup(self.kind, self.reference, outcome);
-            #[cfg(not(feature = "import-baseline"))]
-            let _ = outcome;
+            discard(&root);
         }
     }
 }
@@ -873,15 +577,7 @@ impl Pending {
         reservation: LeaseKey,
         publisher: Digest,
     ) -> Result<Record, Error> {
-        self.publish_observed(
-            kind,
-            schema,
-            key,
-            reservation,
-            publisher,
-            #[cfg(feature = "import-baseline")]
-            None,
-        )
+        self.publish_observed(kind, schema, key, reservation, publisher)
     }
 
     pub(crate) fn publish_observed(
@@ -891,10 +587,7 @@ impl Pending {
         key: Digest,
         reservation: LeaseKey,
         publisher: Digest,
-        #[cfg(feature = "import-baseline")] publication: Option<&super::lease::Publication<'_>>,
     ) -> Result<Record, Error> {
-        #[cfg(feature = "import-baseline")]
-        observe(kind, self.reference, Event::PublicationStarted);
         let budget = self.graph_budget.as_ref();
         let root = match budget {
             Some(budget) => path(
@@ -936,34 +629,8 @@ impl Pending {
         if let Some(budget) = budget {
             budget.paths(4)?;
         }
-        #[cfg(feature = "import-baseline")]
-        let context = Some(self.evidence.context(&self.store, &root, publication));
-        #[cfg(feature = "import-baseline")]
-        let commitment = context.and_then(|context| {
-            context.record_encoded(
-                record.observed([0; 32]),
-                record.reservation().observed(),
-                record.publisher().as_bytes(),
-                record.sealed_geometry(),
-                &bytes,
-            )
-        });
-        write_atomic_control_with_budget(
-            &root,
-            "allocation",
-            &bytes,
-            budget,
-            #[cfg(feature = "import-baseline")]
-            context,
-            #[cfg(feature = "import-baseline")]
-            commitment,
-        )?;
-        freeze_observed(
-            &root,
-            budget,
-            #[cfg(feature = "import-baseline")]
-            context,
-        )?;
+        write_atomic_control_with_budget(&root, "allocation", &bytes, budget)?;
+        freeze_with_budget(&root, budget)?;
         validate_top_level_with_budget(&root, State::Published, budget)?;
         let actual = survey(&root, View::Published, budget, true, Error::Shape)?;
         if let Some(budget) = budget {
@@ -977,37 +644,19 @@ impl Pending {
             source,
         })?;
         record.validate_bundle(kind, schema, key, &self.seal, &seal_metadata, actual)?;
-        #[cfg(feature = "import-baseline")]
-        observe(kind, self.reference, Event::Published);
-        #[cfg(feature = "import-baseline")]
-        self.evidence.stage(principal::bundle::Stage::Published);
         Ok(record)
     }
 
     pub(crate) fn retain(mut self) {
         self.armed = false;
-        #[cfg(feature = "import-baseline")]
-        observe(self.kind, self.reference, Event::Retained);
-        #[cfg(feature = "import-baseline")]
-        self.evidence.stage(principal::bundle::Stage::Retained);
     }
 }
 
 impl Drop for Pending {
     fn drop(&mut self) {
         if self.armed {
-            #[cfg(feature = "import-baseline")]
-            observe(self.kind, self.reference, Event::CleanupStarted);
             let root = self.store.join(self.reference.relative());
-            let outcome = remove_bundle_observed(
-                &root,
-                #[cfg(feature = "import-baseline")]
-                Some(self.evidence.context(&self.store, &root, None)),
-            );
-            #[cfg(feature = "import-baseline")]
-            observe_cleanup(self.kind, self.reference, outcome);
-            #[cfg(not(feature = "import-baseline"))]
-            let _ = outcome;
+            discard(&root);
         }
     }
 }
@@ -1680,66 +1329,16 @@ impl Eviction {
         self,
         publication: &super::lease::Publication<'_>,
         store: &Path,
-        #[cfg(feature = "import-baseline")] allocation: Allocation,
     ) -> Result<(), Error> {
         let admitted = accounting::admit_control(
             publication,
             store,
             super::control::Plan::retirement(&self.root),
         )?;
-        #[cfg(feature = "import-baseline")]
-        let evidence = principal::bundle::Owner::begin(
-            publication.graph(),
-            store,
-            &self.root,
-            principal::bundle::Origin::Eviction,
-            Some(publication),
-        );
-        thaw_root_observed(
-            &self.root,
-            #[cfg(feature = "import-baseline")]
-            Some(evidence.context(store, &self.root, Some(publication))),
-        )?;
-        #[cfg(feature = "import-baseline")]
-        let mut observation = crate::metrics::publication::Attempt::start(
-            crate::metrics::publication::Class::Retirement(
-                crate::metrics::publication::Retirement::BundleEviction,
-            ),
-        );
-        #[cfg(feature = "import-baseline")]
-        let retirement = retirement::Attempt::start(
-            publication,
-            &self.root,
-            retirement::Cause::BundleEviction,
-            retirement::Facts {
-                allocation: Some(allocation.observed()),
-                ..retirement::Facts::default()
-            },
-        );
-        let temporary = super::entry::stage_admitted_retirement(
-            admitted,
-            publication,
-            store,
-            &self.root,
-            #[cfg(feature = "import-baseline")]
-            &mut observation,
-            #[cfg(feature = "import-baseline")]
-            Some(super::entry::Retirement::Allocation(&retirement)),
-        )?;
-        let result = remove_bundle_with(
-            &temporary,
-            #[cfg(feature = "import-baseline")]
-            Some(&mut observation),
-            #[cfg(feature = "import-baseline")]
-            Some(&retirement),
-            #[cfg(feature = "import-baseline")]
-            Some(evidence.context(store, &temporary, Some(publication))),
-        );
-        #[cfg(feature = "import-baseline")]
-        retirement.completed(result.is_ok());
-        #[cfg(feature = "import-baseline")]
-        let result = observation.finish(result);
-        result
+        thaw_root(&self.root)?;
+        let temporary =
+            super::entry::stage_admitted_retirement(admitted, publication, store, &self.root)?;
+        remove_bundle(&temporary)
     }
 
     #[cfg(test)]
@@ -1780,7 +1379,6 @@ fn locate_allocation(store: &Path, allocation: Allocation) -> Result<Option<Path
     Ok(matched)
 }
 
-#[cfg(test)]
 pub(super) fn recover_planned(
     root: &Path,
     reservation: LeaseKey,
@@ -1789,52 +1387,6 @@ pub(super) fn recover_planned(
     key: Digest,
     registered: Option<Allocation>,
     budget: &mut super::recovery::Budget,
-) -> Result<(), Error> {
-    recover_planned_inner(
-        root,
-        reservation,
-        kind,
-        schema,
-        key,
-        registered,
-        budget,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-pub(super) fn recover_planned_observed(
-    publication: &super::lease::Publication<'_>,
-    root: &Path,
-    reservation: LeaseKey,
-    kind: Kind,
-    schema: u32,
-    key: Digest,
-    registered: Option<Allocation>,
-    budget: &mut super::recovery::Budget,
-) -> Result<(), Error> {
-    #[cfg(not(feature = "import-baseline"))]
-    let _ = publication;
-    recover_planned_inner(
-        root,
-        reservation,
-        kind,
-        schema,
-        key,
-        registered,
-        budget,
-        #[cfg(feature = "import-baseline")]
-        Some(publication),
-    )
-}
-fn recover_planned_inner(
-    root: &Path,
-    reservation: LeaseKey,
-    kind: Kind,
-    schema: u32,
-    key: Digest,
-    registered: Option<Allocation>,
-    budget: &mut super::recovery::Budget,
-    #[cfg(feature = "import-baseline")] publication: Option<&super::lease::Publication<'_>>,
 ) -> Result<(), Error> {
     let LeaseKey::Execution(execution) = reservation else {
         return Err(Error::State(
@@ -1895,16 +1447,7 @@ fn recover_planned_inner(
         let charge = measure(&incomplete, false)?;
         budget.bundle()?;
         budget.deletion(charge)?;
-        remove_recovered(
-            root,
-            &incomplete,
-            #[cfg(feature = "import-baseline")]
-            publication,
-            #[cfg(feature = "import-baseline")]
-            principal::bundle::Origin::Planned,
-            #[cfg(feature = "import-baseline")]
-            None,
-        )?;
+        remove_bundle(&incomplete)?;
     }
     match (matched, registered) {
         (Some((bundle, record)), Some(expected)) => {
@@ -1920,16 +1463,7 @@ fn recover_planned_inner(
             budget.bundle()?;
             let allocation = record.allocation();
             budget.deletion(allocation.charge)?;
-            remove_recovered(
-                root,
-                &bundle,
-                #[cfg(feature = "import-baseline")]
-                publication,
-                #[cfg(feature = "import-baseline")]
-                principal::bundle::Origin::Planned,
-                #[cfg(feature = "import-baseline")]
-                Some((&record, allocation)),
-            )
+            remove_bundle(&bundle)
         }
         (None, None) => Ok(()),
         _ => Err(Error::CleanupRequired(
@@ -1938,41 +1472,10 @@ fn recover_planned_inner(
     }
 }
 
-#[cfg(test)]
 pub(super) fn recover_orphans(
     store: &Path,
     execution: ExecutionKey,
     budget: &mut super::recovery::Budget,
-) -> Result<(), Error> {
-    recover_orphans_inner(
-        store,
-        execution,
-        budget,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-pub(super) fn recover_orphans_observed(
-    publication: &super::lease::Publication<'_>,
-    store: &Path,
-    execution: ExecutionKey,
-    budget: &mut super::recovery::Budget,
-) -> Result<(), Error> {
-    #[cfg(not(feature = "import-baseline"))]
-    let _ = publication;
-    recover_orphans_inner(
-        store,
-        execution,
-        budget,
-        #[cfg(feature = "import-baseline")]
-        Some(publication),
-    )
-}
-fn recover_orphans_inner(
-    store: &Path,
-    execution: ExecutionKey,
-    budget: &mut super::recovery::Budget,
-    #[cfg(feature = "import-baseline")] publication: Option<&super::lease::Publication<'_>>,
 ) -> Result<(), Error> {
     let relative = PathBuf::from("executions").join(execution.directory());
     let Some(directory) = super::entry::existing_directory(store, &relative)? else {
@@ -2005,16 +1508,7 @@ fn recover_orphans_inner(
         removed.push(path);
     }
     for path in removed {
-        remove_recovered(
-            store,
-            &path,
-            #[cfg(feature = "import-baseline")]
-            publication,
-            #[cfg(feature = "import-baseline")]
-            principal::bundle::Origin::Orphan,
-            #[cfg(feature = "import-baseline")]
-            None,
-        )?;
+        remove_bundle(&path)?;
     }
     Ok(())
 }
@@ -2023,7 +1517,6 @@ fn recover_orphans_inner(
 /// execution guard is the liveness proof and is acquired before publication.
 pub(super) fn recover_dead(
     store: &Path,
-    graph: &crate::node::GraphBudget,
     budget: &mut super::recovery::Budget,
 ) -> Result<bool, Error> {
     let mut executions =
@@ -2053,7 +1546,7 @@ pub(super) fn recover_dead(
     }
     let recovered = !executions.is_empty();
     for (execution, (_guard, paths)) in executions {
-        super::lease::with_publication(store, graph, |publication| {
+        super::lease::with_publication(store, |publication| {
             accounting::recover_key(publication, store, LeaseKey::Execution(execution), budget)?;
             let referenced = referenced_bundles(store, budget)?;
             for path in &paths {
@@ -2088,16 +1581,7 @@ pub(super) fn recover_dead(
                     };
                     budget.bundle()?;
                     budget.deletion(allocation.charge)?;
-                    remove_recovered(
-                        store,
-                        path,
-                        #[cfg(feature = "import-baseline")]
-                        Some(publication),
-                        #[cfg(feature = "import-baseline")]
-                        principal::bundle::Origin::Dead,
-                        #[cfg(feature = "import-baseline")]
-                        Some((&record, allocation)),
-                    )?;
+                    remove_bundle(path)?;
                     continue;
                 }
                 let Some(charge) = budget.dead_tree(path)?.filter(|_| budget.bundle_fits()) else {
@@ -2105,16 +1589,7 @@ pub(super) fn recover_dead(
                 };
                 budget.bundle()?;
                 budget.deletion(charge)?;
-                remove_recovered(
-                    store,
-                    path,
-                    #[cfg(feature = "import-baseline")]
-                    Some(publication),
-                    #[cfg(feature = "import-baseline")]
-                    principal::bundle::Origin::Dead,
-                    #[cfg(feature = "import-baseline")]
-                    None,
-                )?;
+                remove_bundle(path)?;
             }
             Ok(())
         })?;
@@ -2503,20 +1978,12 @@ fn survey_observed_members(
             members,
         })
     })();
-    let result = result.and_then(|charge| {
+    result.and_then(|charge| {
         Ok(Measured {
             charge,
             geometry: geometry.finish()?,
         })
-    });
-    #[cfg(feature = "import-baseline")]
-    {
-        use crate::metrics::accounting::Scalar;
-        // Include the reached request on refusal; this does not assert completion.
-        crate::metrics::record_scalar(Scalar::BundleMeasuredBytes, bytes);
-        crate::metrics::record_scalar(Scalar::BundleMeasuredMembers, members);
-    }
-    result
+    })
 }
 
 pub(crate) fn path(
@@ -2550,20 +2017,7 @@ fn freeze(root: &Path) -> Result<(), Error> {
     freeze_with_budget(root, None)
 }
 
-#[cfg(test)]
 fn freeze_with_budget(root: &Path, budget: Option<&crate::node::GraphBudget>) -> Result<(), Error> {
-    freeze_observed(
-        root,
-        budget,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-fn freeze_observed(
-    root: &Path,
-    budget: Option<&crate::node::GraphBudget>,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
     let mut directories = buffer::Buffer::new();
     let mut pending = traversal(root, budget)?;
     while let Some(path) = pending.pop() {
@@ -2589,13 +2043,7 @@ fn freeze_observed(
                 budget.paths(1)?;
                 super::path::input(&path, budget)?;
             }
-            set_frozen(
-                &path,
-                &metadata,
-                false,
-                #[cfg(feature = "import-baseline")]
-                context,
-            )?;
+            set_frozen(&path, &metadata, false)?;
         } else {
             return Err(Error::Shape(path));
         }
@@ -2617,22 +2065,12 @@ fn freeze_observed(
             super::path::input(&directory, budget)?;
             super::path::input(&directory, budget)?;
         }
-        set_frozen(
-            &directory,
-            &metadata,
-            true,
-            #[cfg(feature = "import-baseline")]
-            context,
-        )?;
+        set_frozen(&directory, &metadata, true)?;
         // One full sync of the root orders publication after the frozen tree.
         // An interior directory's lost entry or mode after a crash fails the
         // bundle's validation and is rebuilt, so it is not synced.
         if directory == root {
-            sync_observed(
-                &directory,
-                #[cfg(feature = "import-baseline")]
-                context,
-            )?;
+            super::entry::sync_directory(&directory)?;
         }
     }
     Ok(())
@@ -2697,18 +2135,7 @@ fn validate_frozen(root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-#[cfg(test)]
 fn thaw_root(root: &Path) -> Result<(), Error> {
-    thaw_root_observed(
-        root,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-fn thaw_root_observed(
-    root: &Path,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
     let metadata = fs::symlink_metadata(root).map_err(|source| Error::Io {
         operation: "inspect runner bundle root for atomic retirement",
         path: root.to_path_buf(),
@@ -2717,137 +2144,26 @@ fn thaw_root_observed(
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(Error::Shape(root.to_path_buf()));
     }
-    set_writable(
-        root,
-        &metadata,
-        #[cfg(feature = "import-baseline")]
-        context,
-    )
+    set_writable(root, &metadata)
 }
 
-#[cfg(test)]
-fn remove_bundle_checked(path: &Path) -> Result<(), Error> {
-    remove_bundle_with(
-        path,
-        #[cfg(feature = "import-baseline")]
-        None,
-        #[cfg(feature = "import-baseline")]
-        None,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-
-fn remove_bundle_with(
-    path: &Path,
-    #[cfg(feature = "import-baseline")] mut observation: Option<
-        &mut crate::metrics::publication::Attempt,
-    >,
-    #[cfg(feature = "import-baseline")] retirement: Option<&retirement::Attempt>,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
-    thaw_observed(
-        path,
-        #[cfg(feature = "import-baseline")]
-        context,
-    )?;
-    #[cfg(feature = "import-baseline")]
-    if let Some(observation) = observation.as_mut() {
-        observation.cleanup_started();
-    }
-    #[cfg(feature = "import-baseline")]
-    if let Some(retirement) = retirement {
-        retirement.removal_started();
-    }
-    #[cfg(feature = "import-baseline")]
-    let mut operation = context.as_ref().map(|context| {
-        context.start(
-            path,
-            principal::bundle::Action::Remove {
-                cleanup: principal::bundle::Cleanup::Checked,
-            },
-        )
-    });
-    let cleanup = fs::remove_dir_all(path).map_err(|source| Error::Io {
+fn remove_bundle(path: &Path) -> Result<(), Error> {
+    thaw(path)?;
+    fs::remove_dir_all(path).map_err(|source| Error::Io {
         operation: "remove incomplete runner bundle",
         path: path.to_path_buf(),
         source,
-    });
-    #[cfg(feature = "import-baseline")]
-    if let Some(observation) = observation.as_mut() {
-        observation.cleanup(cleanup.is_ok());
-    }
-    #[cfg(feature = "import-baseline")]
-    if let Some(retirement) = retirement {
-        retirement.removal_finished(cleanup.is_ok());
-    }
-    #[cfg(feature = "import-baseline")]
-    if let Some(operation) = operation.as_mut() {
-        operation.result(cleanup.is_ok());
-    }
-    #[cfg(feature = "import-baseline")]
-    drop(operation);
-    cleanup?;
+    })?;
     if let Some(parent) = path.parent() {
-        sync_observed(
-            parent,
-            #[cfg(feature = "import-baseline")]
-            context,
-        )?;
+        super::entry::sync_directory(parent)?;
     }
     Ok(())
 }
 
-fn remove_bundle_observed(
-    path: &Path,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-) -> (bool, bool) {
-    let thawed = thaw_observed(
-        path,
-        #[cfg(feature = "import-baseline")]
-        context,
-    )
-    .is_ok();
-    #[cfg(feature = "import-baseline")]
-    let mut operation = context.as_ref().map(|context| {
-        context.start(
-            path,
-            principal::bundle::Action::Remove {
-                cleanup: principal::bundle::Cleanup::Drop,
-            },
-        )
-    });
-    let removed = fs::remove_dir_all(path).is_ok();
-    #[cfg(feature = "import-baseline")]
-    if let Some(operation) = operation.as_mut() {
-        operation.result(removed);
-    }
-    (thawed, removed)
-}
-
-#[cfg(feature = "import-baseline")]
-fn observe(kind: Kind, reference: BundleRef, event: Event) {
-    crate::metrics::record_bundle(
-        kind.metric(),
-        crate::metrics::pipeline::target::Target::observe(reference),
-        event,
-    );
-}
-
-#[cfg(feature = "import-baseline")]
-fn observe_cleanup(kind: Kind, reference: BundleRef, (thawed, removed): (bool, bool)) {
-    if !thawed {
-        observe(kind, reference, Event::ThawFailed);
-    }
-    observe(
-        kind,
-        reference,
-        if removed {
-            Event::Removed
-        } else {
-            Event::RemovalFailed
-        },
-    );
+/// Best-effort removal of an abandoned bundle.
+fn discard(path: &Path) {
+    let _ = thaw(path);
+    let _ = fs::remove_dir_all(path);
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -2864,37 +2180,7 @@ pub(super) fn retire_fixture_store(root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
 fn thaw(root: &Path) -> Result<(), Error> {
-    thaw_observed(
-        root,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-fn thaw_observed(
-    root: &Path,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
-    #[cfg(feature = "import-baseline")]
-    let mut operation = context
-        .as_ref()
-        .map(|context| context.start(root, principal::bundle::Action::ThawTree));
-    let result = thaw_members(
-        root,
-        #[cfg(feature = "import-baseline")]
-        context,
-    );
-    #[cfg(feature = "import-baseline")]
-    if let Some(operation) = operation.as_mut() {
-        operation.result(result.is_ok());
-    }
-    result
-}
-fn thaw_members(
-    root: &Path,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
     let metadata = match fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -2906,49 +2192,16 @@ fn thaw_members(
             });
         }
     };
-    set_writable(
-        root,
-        &metadata,
-        #[cfg(feature = "import-baseline")]
-        context,
-    )?;
+    set_writable(root, &metadata)?;
     if metadata.is_dir() {
         for child in read_sorted(root)? {
-            thaw_members(
-                &child.path(),
-                #[cfg(feature = "import-baseline")]
-                context,
-            )?;
+            thaw(&child.path())?;
         }
     }
     Ok(())
 }
 
-#[cfg(test)]
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), Error> {
-    write_new_observed(
-        path,
-        bytes,
-        #[cfg(feature = "import-baseline")]
-        None,
-        #[cfg(feature = "import-baseline")]
-        principal::bundle::Control::Lease,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-fn write_new_observed(
-    path: &Path,
-    bytes: &[u8],
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-    #[cfg(feature = "import-baseline")] control: principal::bundle::Control,
-    #[cfg(feature = "import-baseline")] commitment: Option<principal::Commitment>,
-) -> Result<(), Error> {
-    #[cfg(feature = "import-baseline")]
-    let mut operation = context.as_ref().map(|context| match commitment {
-        Some(commitment) => context.committed_control(path, control, commitment),
-        None => context.control(path, control, bytes),
-    });
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -2958,29 +2211,16 @@ fn write_new_observed(
             path: path.to_path_buf(),
             source,
         })?;
-    #[cfg(feature = "import-baseline")]
-    if let Some(operation) = &operation {
-        operation.progress(principal::bundle::Progress::Opened);
-    }
     output.write_all(bytes).map_err(|source| Error::Io {
         operation: "write runner bundle control file",
         path: path.to_path_buf(),
         source,
     })?;
-    #[cfg(feature = "import-baseline")]
-    if let Some(operation) = &operation {
-        operation.progress(principal::bundle::Progress::Written);
-    }
-    let result = output.sync_all().map_err(|source| Error::Io {
+    output.sync_all().map_err(|source| Error::Io {
         operation: "sync runner bundle control file",
         path: path.to_path_buf(),
         source,
-    });
-    #[cfg(feature = "import-baseline")]
-    if let Some(operation) = operation.as_mut() {
-        operation.result(result.is_ok());
-    }
-    result
+    })
 }
 
 fn write_atomic_control_with_budget(
@@ -2988,8 +2228,6 @@ fn write_atomic_control_with_budget(
     name: &'static str,
     bytes: &[u8],
     budget: Option<&crate::node::GraphBudget>,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-    #[cfg(feature = "import-baseline")] commitment: Option<principal::Commitment>,
 ) -> Result<(), Error> {
     let target = match budget {
         Some(budget) => path(root, Path::new(name), budget)?,
@@ -3006,52 +2244,24 @@ fn write_atomic_control_with_budget(
     if let Some(budget) = budget {
         super::path::input(&pending, budget)?;
     }
-    write_new_observed(
-        &pending,
-        bytes,
-        #[cfg(feature = "import-baseline")]
-        context,
-        #[cfg(feature = "import-baseline")]
-        principal::bundle::Control::Allocation,
-        #[cfg(feature = "import-baseline")]
-        commitment,
-    )?;
+    write_new(&pending, bytes)?;
     if let Some(budget) = budget {
         super::path::input(root, budget)?;
     }
-    sync_observed(
-        root,
-        #[cfg(feature = "import-baseline")]
-        context,
-    )?;
+    super::entry::sync_directory(root)?;
     if let Some(budget) = budget {
         super::path::input(&pending, budget)?;
         super::path::input(&target, budget)?;
     }
-    #[cfg(feature = "import-baseline")]
-    let mut operation = context
-        .as_ref()
-        .map(|context| context.start(&target, principal::bundle::Action::RenameAllocation));
-    let renamed = fs::rename(&pending, &target).map_err(|source| Error::Io {
+    fs::rename(&pending, &target).map_err(|source| Error::Io {
         operation: "publish runner bundle control file",
         path: target,
         source,
-    });
-    #[cfg(feature = "import-baseline")]
-    if let Some(operation) = operation.as_mut() {
-        operation.result(renamed.is_ok());
-    }
-    #[cfg(feature = "import-baseline")]
-    drop(operation);
-    renamed?;
+    })?;
     if let Some(budget) = budget {
         super::path::input(root, budget)?;
     }
-    sync_observed(
-        root,
-        #[cfg(feature = "import-baseline")]
-        context,
-    )
+    super::entry::sync_directory(root)
 }
 
 fn random_id() -> Result<BundleId, Error> {
@@ -3260,12 +2470,7 @@ pub(crate) fn hard_linked(_metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(unix)]
-fn set_frozen(
-    path: &Path,
-    metadata: &fs::Metadata,
-    directory: bool,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
+fn set_frozen(path: &Path, metadata: &fs::Metadata, directory: bool) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt as _;
 
     let mode = frozen_mode(metadata, directory);
@@ -3274,30 +2479,12 @@ fn set_frozen(
     if metadata.permissions().mode() & 0o7777 == mode {
         return Ok(());
     }
-    #[cfg(feature = "import-baseline")]
-    let mut operation = {
-        use std::os::unix::fs::MetadataExt as _;
-        context.as_ref().map(|context| {
-            context.start(
-                path,
-                principal::bundle::Action::Freeze {
-                    directory,
-                    before: metadata.mode(),
-                    requested: mode,
-                },
-            )
-        })
-    };
     let result =
         fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|source| Error::Io {
             operation: "freeze runner bundle member",
             path: path.to_path_buf(),
             source,
         });
-    #[cfg(feature = "import-baseline")]
-    if let Some(operation) = operation.as_mut() {
-        operation.result(result.is_ok());
-    }
     result
 }
 
@@ -3322,12 +2509,7 @@ pub(crate) fn frozen_mode(_metadata: &fs::Metadata, _directory: bool) -> u32 {
 }
 
 #[cfg(not(unix))]
-fn set_frozen(
-    path: &Path,
-    metadata: &fs::Metadata,
-    _directory: bool,
-    #[cfg(feature = "import-baseline")] _context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
+fn set_frozen(path: &Path, metadata: &fs::Metadata, _directory: bool) -> Result<(), Error> {
     let mut permissions = metadata.permissions();
     permissions.set_readonly(true);
     fs::set_permissions(path, permissions).map_err(|source| Error::Io {
@@ -3338,11 +2520,7 @@ fn set_frozen(
 }
 
 #[cfg(unix)]
-fn set_writable(
-    path: &Path,
-    metadata: &fs::Metadata,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
+fn set_writable(path: &Path, metadata: &fs::Metadata) -> Result<(), Error> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     let mode = if metadata.is_dir() {
@@ -3350,36 +2528,17 @@ fn set_writable(
     } else {
         metadata.mode() | 0o200
     };
-    #[cfg(feature = "import-baseline")]
-    let mut operation = context.as_ref().map(|context| {
-        context.start(
-            path,
-            principal::bundle::Action::Thaw {
-                directory: metadata.is_dir(),
-                before: metadata.mode(),
-                requested: mode,
-            },
-        )
-    });
     let result =
         fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|source| Error::Io {
             operation: "thaw runner bundle member for cleanup",
             path: path.to_path_buf(),
             source,
         });
-    #[cfg(feature = "import-baseline")]
-    if let Some(operation) = operation.as_mut() {
-        operation.result(result.is_ok());
-    }
     result
 }
 
 #[cfg(not(unix))]
-fn set_writable(
-    path: &Path,
-    metadata: &fs::Metadata,
-    #[cfg(feature = "import-baseline")] _context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
+fn set_writable(path: &Path, metadata: &fs::Metadata) -> Result<(), Error> {
     let mut permissions = metadata.permissions();
     permissions.set_readonly(false);
     fs::set_permissions(path, permissions).map_err(|source| Error::Io {
@@ -3407,63 +2566,6 @@ fn writable(metadata: &fs::Metadata) -> bool {
     !metadata.permissions().readonly()
 }
 
-fn sync_observed(
-    path: &Path,
-    #[cfg(feature = "import-baseline")] context: Option<principal::bundle::Context<'_>>,
-) -> Result<(), Error> {
-    #[cfg(feature = "import-baseline")]
-    let mut operation = context
-        .as_ref()
-        .map(|context| context.start(path, principal::bundle::Action::Sync));
-    let result = super::entry::sync_directory(path);
-    #[cfg(feature = "import-baseline")]
-    if let Some(operation) = operation.as_mut() {
-        operation.result(result.is_ok());
-    }
-    result
-}
-
-fn remove_recovered(
-    store: &Path,
-    path: &Path,
-    #[cfg(feature = "import-baseline")] publication: Option<&super::lease::Publication<'_>>,
-    #[cfg(feature = "import-baseline")] origin: principal::bundle::Origin,
-    #[cfg(feature = "import-baseline")] record: Option<(&Record, Allocation)>,
-) -> Result<(), Error> {
-    #[cfg(not(feature = "import-baseline"))]
-    let _ = store;
-    #[cfg(feature = "import-baseline")]
-    let evidence = publication
-        .map(|publication| {
-            principal::bundle::Owner::begin(
-                publication.graph(),
-                store,
-                path,
-                origin,
-                Some(publication),
-            )
-        })
-        .unwrap_or_default();
-    #[cfg(feature = "import-baseline")]
-    if let Some((record, allocation)) = record {
-        evidence.context(store, path, publication).record(
-            allocation.observed(),
-            record.reservation().observed(),
-            record.publisher().as_bytes(),
-            record.sealed_geometry(),
-        );
-    }
-    remove_bundle_with(
-        path,
-        #[cfg(feature = "import-baseline")]
-        None,
-        #[cfg(feature = "import-baseline")]
-        None,
-        #[cfg(feature = "import-baseline")]
-        Some(evidence.context(store, path, publication)),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -3486,7 +2588,7 @@ mod tests {
         let executions = [
             1, 2, 3, 4, 5, 6, 7, 8, 21, 22, 31, 32, 33, 40, 41, 42, 43, 44, 45, 46, 47, 48,
         ];
-        super::super::lease::with_publication(store.root(), store.graph_budget(), |publication| {
+        super::super::lease::with_publication(store.root(), |publication| {
             for value in executions {
                 prepare_execution(publication, store.root(), execution(value))?;
             }
@@ -3494,13 +2596,8 @@ mod tests {
         })
         .expect("the bundle fixture execution parents are admitted");
         for value in executions {
-            super::super::lease::with_execution(
-                store.root(),
-                store.graph_budget(),
-                execution(value),
-                || Ok(()),
-            )
-            .expect("the bundle fixture execution lock is admitted");
+            super::super::lease::with_execution(store.root(), execution(value), || Ok(()))
+                .expect("the bundle fixture execution lock is admitted");
         }
         (root, store)
     }
@@ -3515,551 +2612,8 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "import-baseline")]
-    fn transported_bundle_history(
-        snapshot: &mut crate::metrics::recorder::Snapshot,
-    ) -> principal::Evidence {
-        let evidence = snapshot.principal.as_mut().unwrap();
-        evidence
-            .prepare_cell_transport(&mut snapshot.accounting, 1_000)
-            .unwrap();
-        serde_json::from_slice(&serde_json::to_vec(evidence).unwrap()).unwrap()
-    }
-    #[cfg(feature = "import-baseline")]
-    fn joined_bundle_history(
-        evidence: &principal::Evidence,
-        root: &Path,
-        before: &crate::metrics::cell::project::Manifest,
-        after: &crate::metrics::cell::project::Manifest,
-    ) -> Result<principal::bundle::join::Joined, &'static str> {
-        let empty = principal::Evidence {
-            cell_transport: true,
-            ..Default::default()
-        };
-        let processes = [(1, evidence), (2, &empty)];
-        let retirements = principal::retirement::join::pair(processes, root, before, after)?;
-        principal::bundle::join::pair(processes, root, before, after, &retirements)
-    }
-
     fn execution(value: u8) -> ExecutionKey {
         ExecutionKey::from_bytes([value; 32])
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn bundle_history_records_allocation_before_failed_initialization_and_keeps_original_error() {
-        let (fixture, store) = store("history-initialization");
-        let before = crate::metrics::cell::project::Manifest::read(store.root()).unwrap();
-        let recorder = crate::metrics::recorder::Recorder::transform(100).unwrap();
-        let scope = recorder.scope().unwrap();
-        let mut allocated = None;
-        let failure = Attempt::allocate_inner(
-            store.root(),
-            execution(1),
-            budget(1024 * 1024, 64),
-            Kind::Resolution,
-            Some(store.graph_budget()),
-            |root, parent, context| {
-                allocated = Some(root.to_path_buf());
-                fs::create_dir(root.join("generated")).unwrap();
-                initialize_observed(root, parent, context)
-            },
-        );
-        assert!(
-            matches!(failure, Err(Error::Io { operation: "create runner Cargo bundle partition", source, .. }) if source.kind() == std::io::ErrorKind::AlreadyExists)
-        );
-        drop(scope);
-        let after = crate::metrics::cell::project::Manifest::read(store.root()).unwrap();
-        let mut snapshot = recorder.snapshot().unwrap();
-        let principal = transported_bundle_history(&mut snapshot);
-        let joined = joined_bundle_history(&principal, store.root(), &before, &after).unwrap();
-        assert!(joined.operations.iter().any(|operation| matches!(
-            operation.action,
-            principal::bundle::Action::Remove {
-                cleanup: principal::bundle::Cleanup::Initialization
-            }
-        ) && operation.outcome
-            == Some(principal::bundle::Outcome::Succeeded)));
-        let history = snapshot.accounting.bundles.unwrap();
-        let row = history.resolution;
-        assert_eq!(history.fault, None);
-        assert_eq!(
-            (row.allocated, row.initialized, row.initialization_failed),
-            (1, 0, 1)
-        );
-        assert_eq!(
-            (row.cleanup_started, row.removed, row.removal_failed),
-            (1, 1, 0)
-        );
-        assert_eq!(
-            store.root().join(row.target.unwrap().bundle_relative()),
-            allocated.unwrap()
-        );
-        assert!(!store
-            .root()
-            .join(row.target.unwrap().bundle_relative())
-            .exists());
-        fs::remove_dir_all(fixture).unwrap();
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn bundle_history_records_real_retention_under_its_actual_role_and_target() {
-        use std::os::unix::ffi::OsStrExt as _;
-        let (fixture, store) = store("history-retained");
-        let before = crate::metrics::cell::project::Manifest::read(store.root()).unwrap();
-        let recorder = crate::metrics::recorder::Recorder::transform(100).unwrap();
-        let scope = recorder.scope().unwrap();
-        let attempt = Attempt::allocate_observed(
-            store.root(),
-            execution(1),
-            budget(1024 * 1024, 64),
-            Kind::Resolution,
-            store.graph_budget(),
-        )
-        .unwrap();
-        let target = crate::metrics::pipeline::target::Target::observe(attempt.reference());
-        let mut pending = attempt.seal(Box::from(&b"seal"[..])).unwrap();
-        super::super::lease::with_publication(store.root(), store.graph_budget(), |publication| {
-            pending.publish_observed(
-                Kind::Resolution,
-                2,
-                Digest::from_bytes([0x42; 32]),
-                LeaseKey::Execution(execution(1)),
-                Digest::from_bytes([0x51; 32]),
-                Some(publication),
-            )
-        })
-        .unwrap();
-        pending.retain();
-        drop(scope);
-        let after = crate::metrics::cell::project::Manifest::read(store.root()).unwrap();
-        let mut snapshot = recorder.snapshot().unwrap();
-        let principal = transported_bundle_history(&mut snapshot);
-        let joined = joined_bundle_history(&principal, store.root(), &before, &after).unwrap();
-        assert_eq!(joined.owners.len(), 1);
-        assert_eq!(
-            joined.owners[0].stages.last(),
-            Some(&principal::bundle::Stage::Retained)
-        );
-        assert!(joined
-            .endpoints
-            .iter()
-            .any(|endpoint| endpoint.path.ends_with(b"allocation") && endpoint.writes.len() == 1));
-        assert!(joined.operations.iter().any(|operation| matches!(
-            operation.action,
-            principal::bundle::Action::Freeze { .. }
-        ) && operation.matched_endpoint));
-        // Derived from the actual successful write: omitting write completion
-        // must not grant the supplied byte commitment to the final endpoint.
-        let mut rows = principal.events.as_slice().to_vec();
-        let write = rows
-            .iter()
-            .find_map(|event| match event {
-                principal::Event::Bundle {
-                    change:
-                        principal::bundle::Event::Started {
-                            operation,
-                            action:
-                                principal::bundle::Action::Control {
-                                    control: principal::bundle::Control::Seal,
-                                    ..
-                                },
-                            ..
-                        },
-                } => Some(*operation),
-                _ => None,
-            })
-            .unwrap();
-        rows.retain(|event| !matches!(event, principal::Event::Bundle { change: principal::bundle::Event::Progress { operation, progress: principal::bundle::Progress::Written } } if *operation == write));
-        let mut malformed = serde_json::to_value(&principal).unwrap();
-        malformed["events"] = serde_json::to_value(rows).unwrap();
-        let malformed = serde_json::from_value(malformed).unwrap();
-        assert!(joined_bundle_history(&malformed, store.root(), &before, &after).is_err());
-        for charge in [false, true] {
-            let mut rows = principal.events.as_slice().to_vec();
-            for row in &mut rows {
-                if let principal::Event::Bundle {
-                    change: principal::bundle::Event::Record { allocation, .. },
-                } = row
-                {
-                    if charge {
-                        allocation.bytes += 4096;
-                    } else {
-                        allocation.record[0] ^= 1;
-                    }
-                }
-            }
-            let mut malformed = serde_json::to_value(&principal).unwrap();
-            malformed["events"] = serde_json::to_value(rows).unwrap();
-            let malformed = serde_json::from_value(malformed).unwrap();
-            assert!(joined_bundle_history(&malformed, store.root(), &before, &after).is_err());
-        }
-        // Derived failures cannot be followed by the successful publication
-        // stage when the corresponding native operation aborts publication.
-        let freeze = joined
-            .operations
-            .iter()
-            .find(|operation| {
-                matches!(
-                    operation.action,
-                    principal::bundle::Action::Freeze {
-                        directory: false,
-                        ..
-                    }
-                )
-            })
-            .unwrap();
-        let sync = joined
-            .operations
-            .iter()
-            .find(|operation| {
-                operation.started > freeze.started
-                    && operation.action == principal::bundle::Action::Sync
-            })
-            .unwrap();
-        for failed in [freeze.token, sync.token] {
-            let mut rows = principal.events.as_slice().to_vec();
-            for row in &mut rows {
-                if let principal::Event::Bundle {
-                    change: principal::bundle::Event::Finished { operation, outcome },
-                } = row
-                {
-                    if *operation == failed {
-                        *outcome = principal::bundle::Outcome::Failed;
-                    }
-                }
-            }
-            let mut value = serde_json::to_value(&principal).unwrap();
-            value["events"] = serde_json::to_value(rows).unwrap();
-            assert!(joined_bundle_history(
-                &serde_json::from_value(value).unwrap(),
-                store.root(),
-                &before,
-                &after
-            )
-            .is_err());
-        }
-        // Extend the real creation/write history with a derived, validated
-        // retirement. Partial removal retains the completed seal commitment.
-        let original = target.bundle_relative();
-        let temporary = principal::retirement::Temporary {
-            process: 1,
-            sequence: 9001,
-        };
-        let record = joined.owners[0].record.as_ref().unwrap();
-        let principal::bundle::Target::Bundle { execution, bundle } = joined.owners[0].target
-        else {
-            panic!("actual bundle target");
-        };
-        let mut rows = principal.events.as_slice().to_vec();
-        rows.extend(
-            [
-                principal::retirement::Event::Started {
-                    attempt: u64::MAX - 1,
-                    publication: record.publication,
-                    root: principal::path_digest(store.root()),
-                    relative: principal::path_digest(&original),
-                    target: principal::retirement::Target::Bundle { execution, bundle },
-                    cause: principal::retirement::Cause::BundleEviction,
-                    facts: principal::retirement::Facts {
-                        allocation: Some(record.allocation),
-                        ..Default::default()
-                    },
-                },
-                principal::retirement::Event::Relocated {
-                    attempt: u64::MAX - 1,
-                    temporary,
-                    relative: principal::path_digest(&temporary.relative()),
-                },
-                principal::retirement::Event::RemovalStarted {
-                    attempt: u64::MAX - 1,
-                },
-                principal::retirement::Event::RemovalFinished {
-                    attempt: u64::MAX - 1,
-                    succeeded: false,
-                },
-                principal::retirement::Event::Finished {
-                    attempt: u64::MAX - 1,
-                    succeeded: false,
-                },
-            ]
-            .map(|change| principal::Event::Retirement { change }),
-        );
-        let mut value = serde_json::to_value(&principal).unwrap();
-        value["events"] = serde_json::to_value(&rows).unwrap();
-        let moved_history = serde_json::from_value(value).unwrap();
-        let mut moved = after.clone();
-        for row in moved.members.iter_mut() {
-            let native = Path::new(std::ffi::OsStr::from_bytes(&row.path));
-            if let Ok(suffix) = native.strip_prefix(&original) {
-                row.path = temporary
-                    .relative()
-                    .join(suffix)
-                    .as_os_str()
-                    .as_encoded_bytes()
-                    .into();
-            }
-        }
-        for row in moved.directories.iter_mut() {
-            let native = Path::new(std::ffi::OsStr::from_bytes(&row.path));
-            if let Ok(suffix) = native.strip_prefix(&original) {
-                row.path = if suffix.as_os_str().is_empty() {
-                    temporary.relative()
-                } else {
-                    temporary.relative().join(suffix)
-                }
-                .as_os_str()
-                .as_encoded_bytes()
-                .into();
-            }
-        }
-        moved
-            .members
-            .sort_by(|left, right| left.path.cmp(&right.path));
-        moved
-            .directories
-            .sort_by(|left, right| left.path.cmp(&right.path));
-        assert!(joined_bundle_history(&moved_history, store.root(), &before, &moved).is_ok());
-        moved
-            .members
-            .iter_mut()
-            .find(|row| row.path.ends_with(b"/seal"))
-            .unwrap()
-            .digest[0] ^= 1;
-        assert!(joined_bundle_history(&moved_history, store.root(), &before, &moved).is_err());
-        // The original new root cannot use a creation discharged by retirement.
-        let mut stranded = before.clone();
-        let mut directories = stranded.directories.into_vec();
-        directories.push(
-            after
-                .directories
-                .iter()
-                .find(|row| row.path.as_ref() == original.as_os_str().as_encoded_bytes())
-                .unwrap()
-                .clone(),
-        );
-        directories.sort_by(|left, right| left.path.cmp(&right.path));
-        stranded.directories = directories.into_boxed_slice();
-        assert!(joined_bundle_history(&moved_history, store.root(), &before, &stranded).is_err());
-        let history = snapshot.accounting.bundles.unwrap();
-        assert_eq!(history.fault, None);
-        assert!(history.resolution.retained_once(target));
-        assert!(history.runner.untouched());
-        assert!(store.root().join(target.bundle_relative()).exists());
-        retire_fixture_store(&fixture).unwrap();
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn bundle_history_pending_drop_keeps_actual_cleanup_without_a_publication() {
-        let (fixture, store) = store("history-owned-drop");
-        let before = crate::metrics::cell::project::Manifest::read(store.root()).unwrap();
-        let recorder = crate::metrics::recorder::Recorder::transform(1_000).unwrap();
-        let scope = recorder.scope().unwrap();
-        let attempt = Attempt::allocate_observed(
-            store.root(),
-            execution(1),
-            budget(1024 * 1024, 64),
-            Kind::Runner,
-            store.graph_budget(),
-        )
-        .unwrap();
-        let pending = attempt
-            .seal_budgeted(Box::from(&b"seal"[..]), store.graph_budget())
-            .unwrap();
-        drop(pending);
-        drop(scope);
-        let after = crate::metrics::cell::project::Manifest::read(store.root()).unwrap();
-        let mut snapshot = recorder.snapshot().unwrap();
-        let evidence = transported_bundle_history(&mut snapshot);
-        let joined = joined_bundle_history(&evidence, store.root(), &before, &after).unwrap();
-        assert_eq!(joined.owners.len(), 1);
-        let cleanup = joined
-            .operations
-            .iter()
-            .find(|operation| {
-                matches!(
-                    operation.action,
-                    principal::bundle::Action::Remove {
-                        cleanup: principal::bundle::Cleanup::Drop
-                    }
-                )
-            })
-            .unwrap();
-        assert_eq!(cleanup.publication, None);
-        assert_eq!(cleanup.outcome, Some(principal::bundle::Outcome::Succeeded));
-        assert!(joined.operations.iter().any(|operation| operation.action
-            == principal::bundle::Action::ThawTree
-            && operation.outcome == Some(principal::bundle::Outcome::Succeeded)));
-        assert_eq!(before, after);
-        retire_fixture_store(&fixture).unwrap();
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn bundle_history_keeps_failed_seal_and_publication_lifetimes() {
-        for publish in [false, true] {
-            let (fixture, store) = store("history-refusal");
-            let recorder = crate::metrics::recorder::Recorder::transform(100).unwrap();
-            let scope = recorder.scope().unwrap();
-            let graph = crate::node::GraphBudget::new();
-            let attempt =
-                Attempt::allocate(store.root(), execution(1), budget(1024 * 1024, 64)).unwrap();
-            let root = attempt.root();
-            if publish {
-                let mut pending = attempt
-                    .seal_budgeted(Box::from(&b"seal"[..]), &graph)
-                    .unwrap();
-                // The per-graph path target only records, so drive the
-                // path counter to its physical width; the next path check is
-                // a genuine checked-overflow failure.
-                graph
-                    .paths(usize::MAX - graph.census_usage().unwrap().1)
-                    .unwrap();
-                assert!(matches!(
-                    pending.publish(
-                        Kind::Runner,
-                        2,
-                        Digest::from_bytes([0x42; 32]),
-                        LeaseKey::Execution(execution(1)),
-                        Digest::from_bytes([0x51; 32])
-                    ),
-                    Err(Error::Allocation)
-                ));
-                drop(pending);
-            } else {
-                graph.paths(usize::MAX).unwrap();
-                assert!(matches!(
-                    attempt.seal_budgeted(Box::from(&b"seal"[..]), &graph),
-                    Err(Error::Allocation)
-                ));
-            }
-            assert!(graph
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .is_some());
-            drop(scope);
-            let history = recorder.snapshot().unwrap().accounting.bundles.unwrap();
-            let row = history.runner;
-            assert_eq!(history.fault, None);
-            assert_eq!(
-                (row.allocated, row.initialized, row.seal_started),
-                (1, 1, 1)
-            );
-            assert_eq!(row.sealed, u64::from(publish));
-            assert_eq!(row.publication_started, u64::from(publish));
-            assert_eq!((row.published, row.retained), (0, 0));
-            assert_eq!(
-                (row.cleanup_started, row.removed, row.removal_failed),
-                (1, 1, 0)
-            );
-            assert!(!root.exists());
-            fs::remove_dir_all(fixture).unwrap();
-        }
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn bundle_history_distinguishes_failed_best_effort_removal_without_retry() {
-        let (fixture, store) = store("history-removal");
-        let recorder = crate::metrics::recorder::Recorder::transform(100).unwrap();
-        let scope = recorder.scope().unwrap();
-        let attempt =
-            Attempt::allocate(store.root(), execution(1), budget(1024 * 1024, 64)).unwrap();
-        fs::remove_dir_all(attempt.root()).unwrap();
-        drop(attempt);
-        drop(scope);
-        let row = recorder
-            .snapshot()
-            .unwrap()
-            .accounting
-            .bundles
-            .unwrap()
-            .runner;
-        assert_eq!(
-            (
-                row.cleanup_started,
-                row.thaw_failed,
-                row.removed,
-                row.removal_failed
-            ),
-            (1, 0, 0, 1)
-        );
-        fs::remove_dir_all(fixture).unwrap();
-    }
-
-    #[cfg(all(feature = "import-baseline", unix))]
-    #[test]
-    fn bundle_history_keeps_thaw_failure_even_when_removal_succeeds() {
-        let (fixture, store) = store("history-thaw");
-        let recorder = crate::metrics::recorder::Recorder::transform(100).unwrap();
-        let scope = recorder.scope().unwrap();
-        let attempt =
-            Attempt::allocate(store.root(), execution(1), budget(1024 * 1024, 64)).unwrap();
-        let root = attempt.root();
-        std::os::unix::fs::symlink(root.join("missing"), root.join("target/broken")).unwrap();
-        drop(attempt);
-        drop(scope);
-        let row = recorder
-            .snapshot()
-            .unwrap()
-            .accounting
-            .bundles
-            .unwrap()
-            .runner;
-        assert_eq!(
-            (
-                row.cleanup_started,
-                row.thaw_failed,
-                row.removed,
-                row.removal_failed
-            ),
-            (1, 1, 1, 0)
-        );
-        assert!(!root.exists());
-        fs::remove_dir_all(fixture).unwrap();
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn bundle_history_failed_initialization_cleanup_does_not_replace_primary_error() {
-        let (fixture, store) = store("history-initialization-cleanup");
-        let recorder = crate::metrics::recorder::Recorder::transform(100).unwrap();
-        let scope = recorder.scope().unwrap();
-        let failure = Attempt::allocate_initialized(
-            store.root(),
-            execution(1),
-            budget(1024 * 1024, 64),
-            Kind::Runner,
-            |root, parent| {
-                fs::create_dir(root.join("generated")).unwrap();
-                let failure = initialize(root, parent);
-                fs::remove_dir_all(root).unwrap();
-                fs::write(
-                    root,
-                    b"inert replacement forcing existing best-effort cleanup failure",
-                )
-                .unwrap();
-                failure
-            },
-        );
-        assert!(
-            matches!(failure, Err(Error::Io { operation: "create runner Cargo bundle partition", source, .. }) if source.kind() == std::io::ErrorKind::AlreadyExists)
-        );
-        drop(scope);
-        let history = recorder.snapshot().unwrap().accounting.bundles.unwrap();
-        let row = history.runner;
-        assert_eq!(history.fault, None);
-        assert_eq!(
-            (row.allocated, row.initialized, row.initialization_failed),
-            (1, 0, 1)
-        );
-        assert_eq!(
-            (row.cleanup_started, row.removed, row.removal_failed),
-            (1, 0, 1)
-        );
-        fs::remove_dir_all(fixture).unwrap();
     }
 
     #[test]
@@ -4284,13 +2838,7 @@ mod tests {
         // validation must still reject its changed physical charge.
         let member = root.join("target/member");
         let metadata = fs::metadata(&member).unwrap();
-        set_writable(
-            &member,
-            &metadata,
-            #[cfg(feature = "import-baseline")]
-            None,
-        )
-        .unwrap();
+        set_writable(&member, &metadata).unwrap();
         fs::write(&member, vec![7; 8192]).unwrap();
         fs::set_permissions(&member, metadata.permissions()).unwrap();
         let (_, seal_path, bytes) = read_commitment(store.root(), &commitment, &graph).unwrap();
@@ -4495,7 +3043,7 @@ mod tests {
         fs::rename(&root, &moved).expect("the published bundle path is replaced while pin waits");
         drop(exclusive);
         assert!(worker.join().expect("the blocked pin joins").is_err());
-        remove_bundle_checked(&moved).expect("the moved pin-race bundle retires");
+        remove_bundle(&moved).expect("the moved pin-race bundle retires");
         fs::remove_dir_all(fixture).expect("the pin-race fixture retires");
     }
 
@@ -4551,25 +3099,18 @@ mod tests {
     fn globally_dead_attempt_requires_and_consumes_its_execution_lease() {
         let (fixture, store) = store("global-orphan");
         let execution = execution(32);
-        let abandoned = super::super::lease::with_execution(
-            store.root(),
-            store.graph_budget(),
-            execution,
-            || {
-                let attempt = Attempt::allocate(store.root(), execution, budget(1024 * 1024, 64))?;
-                let abandoned = attempt.root();
-                std::mem::forget(attempt);
-                Ok(abandoned)
-            },
-        )
+        let abandoned = super::super::lease::with_execution(store.root(), execution, || {
+            let attempt = Attempt::allocate(store.root(), execution, budget(1024 * 1024, 64))?;
+            let abandoned = attempt.root();
+            std::mem::forget(attempt);
+            Ok(abandoned)
+        })
         .expect("the abandoned attempt releases its execution lease");
 
-        assert!(recover_dead(
-            store.root(),
-            store.graph_budget(),
-            &mut crate::store::recovery::Budget::new(),
-        )
-        .expect("the globally dead attempt recovers"));
+        assert!(
+            recover_dead(store.root(), &mut crate::store::recovery::Budget::new(),)
+                .expect("the globally dead attempt recovers")
+        );
         assert!(!abandoned.exists());
         fs::remove_dir_all(fixture).expect("the global-orphan fixture retires");
     }
@@ -4581,9 +3122,8 @@ mod tests {
         let root = store.root().to_path_buf();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let graph = store.graph_budget().clone();
         let worker = std::thread::spawn(move || {
-            super::super::lease::with_execution(&root, &graph, execution, || {
+            super::super::lease::with_execution(&root, execution, || {
                 let attempt = Attempt::allocate(&root, execution, budget(1024 * 1024, 64))?;
                 let abandoned = attempt.root();
                 std::mem::forget(attempt);
@@ -4598,12 +3138,10 @@ mod tests {
         });
         let abandoned = ready_rx.recv().expect("the live attempt reports its root");
 
-        assert!(!recover_dead(
-            store.root(),
-            store.graph_budget(),
-            &mut crate::store::recovery::Budget::new(),
-        )
-        .expect("the live attempt is inspected without waiting"));
+        assert!(
+            !recover_dead(store.root(), &mut crate::store::recovery::Budget::new(),)
+                .expect("the live attempt is inspected without waiting")
+        );
         assert!(abandoned.is_dir());
         release_tx
             .send(())
@@ -4613,12 +3151,10 @@ mod tests {
             .expect("the live-attempt worker joins")
             .expect("the live execution lease retires");
 
-        assert!(recover_dead(
-            store.root(),
-            store.graph_budget(),
-            &mut crate::store::recovery::Budget::new(),
-        )
-        .expect("the retired attempt recovers"));
+        assert!(
+            recover_dead(store.root(), &mut crate::store::recovery::Budget::new(),)
+                .expect("the retired attempt recovers")
+        );
         assert!(!abandoned.exists());
         fs::remove_dir_all(fixture).expect("the live-orphan fixture retires");
     }
@@ -4630,29 +3166,20 @@ mod tests {
         for identity in 40..=40 + MAX_ORPHANS {
             let execution = execution(identity as u8);
             abandoned.push(
-                super::super::lease::with_execution(
-                    store.root(),
-                    store.graph_budget(),
-                    execution,
-                    || {
-                        let attempt =
-                            Attempt::allocate(store.root(), execution, budget(1024 * 1024, 64))?;
-                        let root = attempt.root();
-                        std::mem::forget(attempt);
-                        Ok(root)
-                    },
-                )
+                super::super::lease::with_execution(store.root(), execution, || {
+                    let attempt =
+                        Attempt::allocate(store.root(), execution, budget(1024 * 1024, 64))?;
+                    let root = attempt.root();
+                    std::mem::forget(attempt);
+                    Ok(root)
+                })
                 .expect("the dead-attempt fixture releases its execution lease"),
             );
         }
 
         for remaining in [1, 0] {
-            recover_dead(
-                store.root(),
-                store.graph_budget(),
-                &mut crate::store::recovery::Budget::new(),
-            )
-            .expect("bounded dead-bundle recovery never refuses");
+            recover_dead(store.root(), &mut crate::store::recovery::Budget::new())
+                .expect("bounded dead-bundle recovery never refuses");
             assert_eq!(
                 abandoned.iter().filter(|path| path.exists()).count(),
                 remaining
@@ -4669,7 +3196,7 @@ mod tests {
         interrupt: impl FnOnce(Attempt) -> Result<(), Error>,
     ) -> PathBuf {
         let key = LeaseKey::Execution(execution);
-        super::super::lease::with_publication(store.root(), store.graph_budget(), |publication| {
+        super::super::lease::with_publication(store.root(), |publication| {
             prepare_execution(publication, store.root(), execution)?;
             accounting::reserve(
                 publication,
@@ -4680,19 +3207,14 @@ mod tests {
             .map(drop)
         })
         .expect("the interrupted owner reserves its execution");
-        let abandoned = super::super::lease::with_execution(
-            store.root(),
-            store.graph_budget(),
-            execution,
-            || {
-                let attempt = Attempt::allocate(store.root(), execution, budget(1024 * 1024, 64))?;
-                let root = attempt.root();
-                interrupt(attempt)?;
-                Ok(root)
-            },
-        )
+        let abandoned = super::super::lease::with_execution(store.root(), execution, || {
+            let attempt = Attempt::allocate(store.root(), execution, budget(1024 * 1024, 64))?;
+            let root = attempt.root();
+            interrupt(attempt)?;
+            Ok(root)
+        })
         .expect("the killed owner releases its execution lease");
-        super::super::lease::with_publication(store.root(), store.graph_budget(), |publication| {
+        super::super::lease::with_publication(store.root(), |publication| {
             accounting::recover_key(
                 publication,
                 store.root(),
@@ -4721,12 +3243,10 @@ mod tests {
             Ok(())
         });
         assert!(abandoned.is_dir());
-        assert!(recover_dead(
-            store.root(),
-            store.graph_budget(),
-            &mut crate::store::recovery::Budget::new(),
-        )
-        .expect("dead-bundle recovery removes the unpublished remains"));
+        assert!(
+            recover_dead(store.root(), &mut crate::store::recovery::Budget::new(),)
+                .expect("dead-bundle recovery removes the unpublished remains")
+        );
         assert!(!abandoned.exists());
         super::super::accounting::physical_usage(store.root()).expect("the store stays usable");
         fs::remove_dir_all(fixture).expect("the interrupted-unpublished fixture retires");
@@ -4753,20 +3273,14 @@ mod tests {
             BundleId(decode_identifier(abandoned.file_name().unwrap()).unwrap()),
         );
         let guard = pin(store.root(), reference).expect("a reader pins the remains");
-        recover_dead(
-            store.root(),
-            store.graph_budget(),
-            &mut crate::store::recovery::Budget::new(),
-        )
-        .expect("a pinned unregistered bundle is skipped");
+        recover_dead(store.root(), &mut crate::store::recovery::Budget::new())
+            .expect("a pinned unregistered bundle is skipped");
         assert!(abandoned.is_dir(), "a pinned bundle is never deleted");
         drop(guard);
-        assert!(recover_dead(
-            store.root(),
-            store.graph_budget(),
-            &mut crate::store::recovery::Budget::new(),
-        )
-        .expect("dead-bundle recovery removes the unregistered publication"));
+        assert!(
+            recover_dead(store.root(), &mut crate::store::recovery::Budget::new(),)
+                .expect("dead-bundle recovery removes the unregistered publication")
+        );
         assert!(!abandoned.exists());
         super::super::accounting::physical_usage(store.root()).expect("the store stays usable");
         fs::remove_dir_all(fixture).expect("the interrupted-published fixture retires");
@@ -4843,7 +3357,7 @@ mod tests {
                 crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
             ))
         );
-        remove_bundle_checked(&root).expect("the frozen budget fixture retires");
+        remove_bundle(&root).expect("the frozen budget fixture retires");
     }
 
     #[test]
@@ -4889,7 +3403,7 @@ mod tests {
             Some(crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1),
             "callbacks share the exact ten-operation walk"
         );
-        remove_bundle_checked(&root).unwrap();
+        remove_bundle(&root).unwrap();
     }
 
     #[cfg(unix)]

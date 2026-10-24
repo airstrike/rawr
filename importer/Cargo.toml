@@ -16,8 +16,6 @@ rustc-driver = ["unicode-hosts"]
 # UTS46 processing of non-ASCII and uppercase host names in manifest URLs.
 # Every command that reads manifests has it; a project's runner does not.
 unicode-hosts = ["dep:icu_collections", "dep:icu_normalizer", "dep:idna_adapter"]
-# Private launch evidence for the canonical import baseline only.
-import-baseline = ["rustc-driver", "test-fixtures", "dep:nix"]
 test-fixtures = ["unicode-hosts"]
 # Embed the Rawr source tree a generated harness builds against, so an
 # installed `rawr` never reads a development checkout.
@@ -43,8 +41,6 @@ rawr-location = { path = "../location" }
 rawr-canonical = { path = "../canonical" }
 # No nix: every nix version asks libc for `extra_traits`, which would make a
 # project's runner build a second libc, and with it a second iced.
-# The private baseline evidence (`import-baseline`) alone keeps nix.
-nix = { version = "0.27.1", features = ["fs", "poll", "process", "signal", "socket", "time", "user"], optional = true }
 libc = "0.2"
 rustix = { version = "1.1.4", features = ["event", "fs", "net", "process", "termios", "time"] }
 rawr-toml = { path = "../toml" }

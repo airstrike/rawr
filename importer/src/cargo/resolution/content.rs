@@ -67,25 +67,6 @@ impl Scope {
         )
     }
 
-    /// Measurement only: production continues to retain the complete Build role.
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn from_query_observations(
-        root: &Path,
-        input: &stored::Stored,
-        build: &build::Retained,
-        capture: &Capture,
-        toolchain: &toolchain::Proof,
-        target: &str,
-        budget: &GraphBudget,
-    ) -> Result<Self, Error> {
-        if !capture.shares_with(budget) {
-            return Err(Error::Codec("query scope capture belongs to another graph"));
-        }
-        let mut builder = Builder::bind(root, budget)?;
-        builder.namespace(capture.namespace())?;
-        Self::derive(builder, input, build, capture, toolchain, target)
-    }
-
     fn derive(
         mut builder: Builder<'_>,
         input: &stored::Stored,
@@ -213,7 +194,7 @@ impl<'a> Builder<'a> {
         })
     }
 
-    #[cfg(any(test, feature = "import-baseline"))]
+    #[cfg(test)]
     fn namespace(
         &mut self,
         namespace: Option<&crate::extract::plan::namespace::Retained>,

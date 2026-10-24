@@ -52,19 +52,12 @@ impl Fixture {
             super::super::Store::open(&root, [0x38; 32]).expect("the fixture store opens");
         for value in 1..EXECUTIONS {
             let execution = ExecutionKey::from_bytes([value; 32]);
-            super::super::lease::with_publication(
-                store.root(),
-                store.graph_budget(),
-                |publication| prepare_execution(publication, store.root(), execution),
-            )
+            super::super::lease::with_publication(store.root(), |publication| {
+                prepare_execution(publication, store.root(), execution)
+            })
             .expect("the execution parent is admitted");
-            super::super::lease::with_execution(
-                store.root(),
-                store.graph_budget(),
-                execution,
-                || Ok(()),
-            )
-            .expect("the execution lock is admitted");
+            super::super::lease::with_execution(store.root(), execution, || Ok(()))
+                .expect("the execution lock is admitted");
         }
         Self {
             root,

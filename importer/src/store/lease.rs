@@ -1,6 +1,3 @@
-#[cfg(feature = "import-baseline")]
-use crate::metrics::principal::{creation, retirement};
-
 use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
@@ -54,21 +51,16 @@ pub(crate) fn with_ownership<T>(
 
 pub(crate) struct Publication<'store> {
     root: &'store Path,
-    #[cfg(feature = "import-baseline")]
-    graph: &'store crate::node::GraphBudget,
-    #[cfg(feature = "import-baseline")]
-    observation: u64,
 }
 
 /// Explicit project bootstrap, before evaluating even an entirely shared graph.
 /// Existing controls are validated without admission or temporary recovery.
 pub(super) fn enroll_project(
     root: &Path,
-    graph: &crate::node::GraphBudget,
     project: Digest,
     budget: &mut super::recovery::Budget,
 ) -> Result<(), Error> {
-    with_publication(root, graph, |publication| {
+    with_publication(root, |publication| {
         let name = format!("{}.lock", project.directory());
         let owner = root.join("locks/owners").join(&name);
         let project_lock = root.join("locks/projects").join(&name);
@@ -78,23 +70,13 @@ pub(super) fn enroll_project(
         let exists = |path: &Path| -> Result<bool, Error> {
             match fs::symlink_metadata(path) {
                 Ok(metadata) => {
-                    #[cfg(feature = "import-baseline")]
-                    let observation =
-                        creation::Context::published(publication, creation::Source::Migration)
-                            .start(path, false);
-                    validate_file_with(
-                        path,
-                        #[cfg(feature = "import-baseline")]
-                        Some(&observation),
-                    )?;
+                    validate_file_with(path)?;
                     if metadata.len() != 0 {
                         return Err(Error::Corrupt {
                             path: path.to_path_buf(),
                             reason: "project enrollment control bytes changed",
                         });
                     }
-                    #[cfg(feature = "import-baseline")]
-                    observation.completed(true);
                     Ok(true)
                 }
                 Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -133,49 +115,14 @@ pub(super) fn enroll_project(
             budget,
         )?;
         budget.deletion(super::control::file_charge(0)?)?;
-        #[cfg(feature = "import-baseline")]
-        let mut observation = crate::metrics::publication::Attempt::start(
-            crate::metrics::publication::Class::Retirement(
-                crate::metrics::publication::Retirement::Enrollment,
-            ),
-        );
-        #[cfg(feature = "import-baseline")]
-        let retirement = retirement::Attempt::start(
-            publication,
-            &pending,
-            retirement::Cause::Enrollment,
-            retirement::Facts::default(),
-        );
-        let temporary = super::entry::stage_admitted_retirement(
-            admitted,
-            publication,
-            root,
-            &pending,
-            #[cfg(feature = "import-baseline")]
-            &mut observation,
-            #[cfg(feature = "import-baseline")]
-            Some(super::entry::Retirement::Allocation(&retirement)),
-        )?;
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup_started();
-        #[cfg(feature = "import-baseline")]
-        retirement.removal_started();
-        let cleanup = fs::remove_file(&temporary).map_err(|source| Error::Io {
+        let temporary =
+            super::entry::stage_admitted_retirement(admitted, publication, root, &pending)?;
+        fs::remove_file(&temporary).map_err(|source| Error::Io {
             operation: "finish project enrollment",
             path: temporary,
             source,
-        });
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup(cleanup.is_ok());
-        #[cfg(feature = "import-baseline")]
-        retirement.removal_finished(cleanup.is_ok());
-        cleanup?;
-        let result = super::entry::sync_directory(&root.join("temporaries"));
-        #[cfg(feature = "import-baseline")]
-        retirement.completed(result.is_ok());
-        #[cfg(feature = "import-baseline")]
-        let result = observation.finish(result);
-        result
+        })?;
+        super::entry::sync_directory(&root.join("temporaries"))
     })
 }
 
@@ -183,42 +130,19 @@ impl<'store> Publication<'store> {
     pub(crate) const fn root(&self) -> &Path {
         self.root
     }
-
-    #[cfg(feature = "import-baseline")]
-    pub(crate) const fn graph(&self) -> &'store crate::node::GraphBudget {
-        self.graph
-    }
-
-    #[cfg(feature = "import-baseline")]
-    pub(crate) const fn observation(&self) -> u64 {
-        self.observation
-    }
 }
 
 pub(crate) fn with_bootstrap<T>(
     root: &Path,
     fresh: bool,
-    #[cfg(feature = "import-baseline")] graph: &crate::node::GraphBudget,
     evaluate: impl FnOnce() -> Result<T, Error>,
 ) -> Result<T, Error> {
     let path = root.join("bootstrap.lock");
     {
-        #[cfg(feature = "import-baseline")]
-        let observation = creation::Context::unleased(root, graph, creation::Source::Bootstrap)
-            .start(&path, false);
-        let result = match fs::symlink_metadata(&path) {
-            Ok(_) => validate_file_with(
-                &path,
-                #[cfg(feature = "import-baseline")]
-                Some(&observation),
-            ),
+        match fs::symlink_metadata(&path) {
+            Ok(_) => validate_file_with(&path),
             Err(source) if source.kind() == std::io::ErrorKind::NotFound && fresh => {
-                create_bootstrap(
-                    root,
-                    &path,
-                    #[cfg(feature = "import-baseline")]
-                    Some(&observation),
-                )
+                create_bootstrap(root, &path)
             }
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => Err(
                 Error::CleanupRequired("typed store bootstrap lease is missing"),
@@ -230,67 +154,31 @@ pub(crate) fn with_bootstrap<T>(
                     source,
                 })
             }
-        };
-        #[cfg(feature = "import-baseline")]
-        observation.completed(result.is_ok());
-        result?;
+        }?;
     }
     with_file(&path, "acquire typed store bootstrap lease", evaluate)
 }
 
-fn create_bootstrap(
-    root: &Path,
-    path: &Path,
-    #[cfg(feature = "import-baseline")] observation: Option<&creation::Attempt<'_>>,
-) -> Result<(), Error> {
+fn create_bootstrap(root: &Path, path: &Path) -> Result<(), Error> {
     match OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
         .open(path)
     {
-        Ok(_) => {
-            #[cfg(feature = "import-baseline")]
-            if let Some(observation) = observation {
-                observation.created(creation::Outcome::Created);
-            }
-            let result = super::entry::sync_directory(root);
-            #[cfg(feature = "import-baseline")]
-            if let Some(observation) = observation {
-                observation.synced(creation::Sync::Parent, result.is_ok());
-            }
-            result
-        }
+        Ok(_) => super::entry::sync_directory(root),
         Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
-            #[cfg(feature = "import-baseline")]
-            if let Some(observation) = observation {
-                observation.created(creation::Outcome::Contended);
-            }
-            validate_file_with(
-                path,
-                #[cfg(feature = "import-baseline")]
-                observation,
-            )
+            validate_file_with(path)
         }
-        Err(source) => {
-            #[cfg(feature = "import-baseline")]
-            if let Some(observation) = observation {
-                observation.created(creation::Outcome::Failed);
-            }
-            Err(Error::Io {
-                operation: "create typed store bootstrap lease",
-                path: path.to_path_buf(),
-                source,
-            })
-        }
+        Err(source) => Err(Error::Io {
+            operation: "create typed store bootstrap lease",
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
-pub(crate) fn initialize(
-    root: &Path,
-    fresh: bool,
-    #[cfg(feature = "import-baseline")] graph: &crate::node::GraphBudget,
-) -> Result<(), Error> {
+pub(crate) fn initialize(root: &Path, fresh: bool) -> Result<(), Error> {
     let locks = super::entry::existing_directory(root, Path::new("locks"))?.ok_or_else(|| {
         Error::Corrupt {
             path: root.join("locks"),
@@ -299,9 +187,6 @@ pub(crate) fn initialize(
     })?;
     for name in ["heavy.lock", "publication.lock"] {
         let path = locks.join(name);
-        #[cfg(feature = "import-baseline")]
-        let observation =
-            creation::Context::unleased(root, graph, creation::Source::Fixed).start(&path, false);
         if fresh {
             match OpenOptions::new()
                 .read(true)
@@ -310,25 +195,12 @@ pub(crate) fn initialize(
                 .open(&path)
             {
                 Ok(_) => {
-                    #[cfg(feature = "import-baseline")]
-                    observation.created(creation::Outcome::Created);
-                    let result = super::entry::sync_directory(&locks);
-                    #[cfg(feature = "import-baseline")]
-                    observation.synced(creation::Sync::Parent, result.is_ok());
-                    result?;
+                    super::entry::sync_directory(&locks)?;
                 }
                 Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
-                    #[cfg(feature = "import-baseline")]
-                    observation.created(creation::Outcome::Contended);
-                    validate_file_with(
-                        &path,
-                        #[cfg(feature = "import-baseline")]
-                        Some(&observation),
-                    )?;
+                    validate_file_with(&path)?;
                 }
                 Err(source) => {
-                    #[cfg(feature = "import-baseline")]
-                    observation.created(creation::Outcome::Failed);
                     return Err(Error::Io {
                         operation: "initialize typed store fixed lease",
                         path,
@@ -337,21 +209,14 @@ pub(crate) fn initialize(
                 }
             }
         } else {
-            validate_file_with(
-                &path,
-                #[cfg(feature = "import-baseline")]
-                Some(&observation),
-            )?;
+            validate_file_with(&path)?;
         }
-        #[cfg(feature = "import-baseline")]
-        observation.completed(true);
     }
     Ok(())
 }
 
 pub(crate) fn with_action<T>(
     root: &Path,
-    graph: &crate::node::GraphBudget,
     action: ActionKey,
     evaluate: impl FnOnce() -> Result<T, Error>,
 ) -> Result<T, Error> {
@@ -361,7 +226,7 @@ pub(crate) fn with_action<T>(
             reason: "action lease directory is missing",
         })?;
     let path = directory.join(format!("{}.lock", action.directory()));
-    ensure_keyed(root, graph, &path)?;
+    ensure_keyed(root, &path)?;
     with_file(&path, "typed node action", evaluate)
 }
 
@@ -381,7 +246,6 @@ pub(crate) fn with_heavy<T>(
 
 pub(crate) fn with_execution<T>(
     root: &Path,
-    graph: &crate::node::GraphBudget,
     execution: ExecutionKey,
     evaluate: impl FnOnce() -> Result<T, Error>,
 ) -> Result<T, Error> {
@@ -391,7 +255,7 @@ pub(crate) fn with_execution<T>(
             reason: "execution lease directory is missing",
         })?;
     let exact = executions.join(format!("{}.lock", execution.directory()));
-    ensure_keyed(root, graph, &exact)?;
+    ensure_keyed(root, &exact)?;
     with_file(&exact, "acquire typed node execution lease", evaluate)
 }
 
@@ -567,8 +431,6 @@ pub(crate) fn with_project<T>(
 
 pub(crate) fn with_publication<T>(
     root: &Path,
-    #[cfg_attr(not(feature = "import-baseline"), allow(unused_variables))]
-    graph: &crate::node::GraphBudget,
     evaluate: impl FnOnce(&Publication<'_>) -> Result<T, Error>,
 ) -> Result<T, Error> {
     let locks = super::entry::existing_directory(root, Path::new("locks"))?.ok_or_else(|| {
@@ -580,19 +442,7 @@ pub(crate) fn with_publication<T>(
     with_file(
         &locks.join("publication.lock"),
         "acquire typed node publication lease",
-        || {
-            evaluate(&Publication {
-                root,
-                #[cfg(feature = "import-baseline")]
-                graph,
-                #[cfg(feature = "import-baseline")]
-                observation: if crate::metrics::principal_enabled() {
-                    crate::metrics::principal::next()
-                } else {
-                    0
-                },
-            })
-        },
+        || evaluate(&Publication { root }),
     )
 }
 
@@ -670,18 +520,9 @@ pub(super) fn ensure_control_file(
     path: &Path,
     budget: &mut super::recovery::Budget,
 ) -> Result<(), Error> {
-    #[cfg(feature = "import-baseline")]
-    let observation =
-        creation::Context::published(publication, creation::Source::Migration).start(path, false);
     match fs::symlink_metadata(path) {
         Ok(_) => {
-            let result = validate_file_with(
-                path,
-                #[cfg(feature = "import-baseline")]
-                Some(&observation),
-            );
-            #[cfg(feature = "import-baseline")]
-            observation.completed(result.is_ok());
+            let result = validate_file_with(path);
             return result;
         }
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
@@ -705,54 +546,24 @@ pub(super) fn ensure_control_file(
         .write(true)
         .create_new(true)
         .open(path)
-        .inspect(|_| {
-            #[cfg(feature = "import-baseline")]
-            observation.created(creation::Outcome::Created);
-        })
-        .inspect_err(|_source| {
-            #[cfg(feature = "import-baseline")]
-            observation.created(if _source.kind() == std::io::ErrorKind::AlreadyExists {
-                creation::Outcome::Contended
-            } else {
-                creation::Outcome::Failed
-            });
-        })
-        .and_then(|file| {
-            let result = file.sync_all();
-            #[cfg(feature = "import-baseline")]
-            observation.synced(creation::Sync::File, result.is_ok());
-            result
-        })
+        .inspect(|_| {})
+        .inspect_err(|_source| {})
+        .and_then(|file| file.sync_all())
         .map_err(|source| Error::Io {
             operation: "create store control",
             path: path.to_path_buf(),
             source,
         })?;
-    let result = super::entry::sync_directory(
+    super::entry::sync_directory(
         path.parent()
             .ok_or(Error::State("store control has no parent"))?,
-    );
-    #[cfg(feature = "import-baseline")]
-    {
-        observation.synced(creation::Sync::Parent, result.is_ok());
-        observation.completed(result.is_ok());
-    }
-    result
+    )
 }
 
-fn ensure_keyed(root: &Path, graph: &crate::node::GraphBudget, path: &Path) -> Result<(), Error> {
+fn ensure_keyed(root: &Path, path: &Path) -> Result<(), Error> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
-            #[cfg(feature = "import-baseline")]
-            let observation = creation::Context::unleased(root, graph, creation::Source::Keyed)
-                .start(path, false);
-            let result = validate_file_with(
-                path,
-                #[cfg(feature = "import-baseline")]
-                Some(&observation),
-            );
-            #[cfg(feature = "import-baseline")]
-            observation.completed(result.is_ok());
+            let result = validate_file_with(path);
             return result;
         }
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
@@ -764,24 +575,15 @@ fn ensure_keyed(root: &Path, graph: &crate::node::GraphBudget, path: &Path) -> R
             })
         }
     }
-    with_publication(root, graph, |publication| {
+    with_publication(root, |publication| {
         super::recovery::recover_temporaries(
             publication,
             root,
             &mut super::recovery::Budget::new(),
         )?;
-        #[cfg(feature = "import-baseline")]
-        let observation =
-            creation::Context::published(publication, creation::Source::Keyed).start(path, false);
         match fs::symlink_metadata(path) {
             Ok(_) => {
-                let result = validate_file_with(
-                    path,
-                    #[cfg(feature = "import-baseline")]
-                    Some(&observation),
-                );
-                #[cfg(feature = "import-baseline")]
-                observation.completed(result.is_ok());
+                let result = validate_file_with(path);
                 return result;
             }
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
@@ -801,48 +603,25 @@ fn ensure_keyed(root: &Path, graph: &crate::node::GraphBudget, path: &Path) -> R
             .write(true)
             .create_new(true)
             .open(path)
-            .inspect(|_| {
-                #[cfg(feature = "import-baseline")]
-                observation.created(creation::Outcome::Created);
-            })
-            .inspect_err(|_source| {
-                #[cfg(feature = "import-baseline")]
-                observation.created(if _source.kind() == std::io::ErrorKind::AlreadyExists {
-                    creation::Outcome::Contended
-                } else {
-                    creation::Outcome::Failed
-                });
-            })
+            .inspect(|_| {})
+            .inspect_err(|_source| {})
             .map_err(|source| Error::Io {
                 operation: "create typed store keyed lease",
                 path: path.to_path_buf(),
                 source,
             })?;
-        let result = super::entry::sync_directory(
+        super::entry::sync_directory(
             path.parent()
                 .ok_or(Error::State("typed store keyed lease has no parent"))?,
-        );
-        #[cfg(feature = "import-baseline")]
-        {
-            observation.synced(creation::Sync::Parent, result.is_ok());
-            observation.completed(result.is_ok());
-        }
-        result
+        )
     })
 }
 
 fn validate_file(path: &Path) -> Result<(), Error> {
-    validate_file_with(
-        path,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
+    validate_file_with(path)
 }
 
-fn validate_file_with(
-    path: &Path,
-    #[cfg(feature = "import-baseline")] observation: Option<&creation::Attempt<'_>>,
-) -> Result<(), Error> {
+fn validate_file_with(path: &Path) -> Result<(), Error> {
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect typed store fixed lease",
         path: path.to_path_buf(),
@@ -850,10 +629,6 @@ fn validate_file_with(
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || hard_linked(&metadata) {
         return Err(Error::Shape(path.to_path_buf()));
-    }
-    #[cfg(feature = "import-baseline")]
-    if let Some(observation) = observation {
-        observation.adopted(&metadata);
     }
     Ok(())
 }

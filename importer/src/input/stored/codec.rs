@@ -52,11 +52,6 @@ pub(super) fn encode(
 }
 
 impl Writer<'_> {
-    #[cfg(feature = "import-baseline")]
-    pub(super) const fn position(&self) -> usize {
-        self.length
-    }
-
     pub(super) fn raw(&mut self, value: &[u8]) -> Result<()> {
         let end = self
             .length

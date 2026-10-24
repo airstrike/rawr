@@ -353,15 +353,7 @@ fn inspect<'store>(
         repair,
         project_ledgers: 0,
     };
-    let walked = state.walk(Path::new(""));
-    #[cfg(feature = "import-baseline")]
-    {
-        use crate::metrics::accounting::Scalar;
-        // On refusal these are reached quantities, not a complete inventory.
-        crate::metrics::record_scalar(Scalar::ControlInventoryBytes, state.control.bytes);
-        crate::metrics::record_scalar(Scalar::ControlInventoryMembers, state.control.members);
-    }
-    walked?;
+    state.walk(Path::new(""))?;
     if registrations
         .iter()
         .any(|registered| !state.observed.contains(registered))

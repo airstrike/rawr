@@ -1,5 +1,3 @@
-#[cfg(feature = "import-baseline")]
-use crate::metrics::principal::ledger::{Before, Cause, Write};
 use std::fs;
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -87,20 +85,7 @@ impl Capacity {
                 "project reservation changed its admitted ledger length",
             ));
         }
-        super::entry::replace_admitted_file(
-            admitted,
-            publication,
-            root,
-            &self.target,
-            &bytes,
-            #[cfg(feature = "import-baseline")]
-            crate::metrics::publication::Replacement::ProjectReservation,
-            #[cfg(feature = "import-baseline")]
-            Some(Write::project(
-                self.ledger.project,
-                Cause::Reservation(key.observed()),
-            )),
-        )?;
+        super::entry::replace_admitted_file(admitted, publication, root, &self.target, &bytes)?;
         Ok(Reservation {
             key: self.key,
             charge,
@@ -133,16 +118,6 @@ struct Ledger {
 }
 
 impl Role {
-    #[cfg(feature = "import-baseline")]
-    fn observed(self) -> crate::metrics::publication::Role {
-        match self {
-            Self::Live => crate::metrics::publication::Role::Live,
-            Self::LastGood => crate::metrics::publication::Role::LastGood,
-            Self::Prepared => crate::metrics::publication::Role::Prepared,
-            Self::InFlight => crate::metrics::publication::Role::InFlight,
-        }
-    }
-
     const fn from_code(code: u8) -> Option<Self> {
         match code {
             1 => Some(Self::Live),
@@ -222,8 +197,6 @@ impl Ledger {
     fn read(root: &Path, project: Digest) -> Result<Self, Error> {
         let path = ledger_path(root, project);
         let bytes = super::entry::read_file(&path, MAX_LEDGER_BYTES)?;
-        #[cfg(feature = "import-baseline")]
-        observe_read(bytes.len());
         let ledger = Self::decode(&bytes).map_err(|_| Error::Corrupt {
             path,
             reason: "project logical ledger decoding failed",
@@ -270,8 +243,6 @@ impl Ledger {
             }
             Ok(_) => {
                 let bytes = super::entry::read_file(&path, MAX_LEDGER_BYTES)?;
-                #[cfg(feature = "import-baseline")]
-                observe_read(bytes.len());
                 Self::decode(&bytes).map_err(|_| Error::Corrupt {
                     path: path.clone(),
                     reason: "project logical ledger decoding failed",
@@ -494,11 +465,6 @@ impl Ledger {
             }
         }
         debug_assert_eq!(bytes.len(), length);
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::record_scalar(
-            crate::metrics::accounting::Scalar::ProjectLedgerEncodedBytes,
-            bytes.len() as u64,
-        );
         Ok(bytes.into_boxed_slice())
     }
 
@@ -630,15 +596,7 @@ pub(crate) fn reserve(
     let mut ledger = Ledger::read_or_empty(root, project)?;
     ledger.reserve(key, charge)?;
     ledger.enforce_with_index(root)?;
-    save(
-        publication,
-        root,
-        &ledger,
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::publication::Replacement::ProjectReservation,
-        #[cfg(feature = "import-baseline")]
-        Cause::Reservation(key.observed()),
-    )?;
+    save(publication, root, &ledger)?;
     Ok(Reservation { key, charge })
 }
 
@@ -672,15 +630,7 @@ pub(crate) fn cancel(
 ) -> Result<(), Error> {
     let mut ledger = Ledger::read(root, project)?;
     ledger.cancel(reservation)?;
-    save_or_retire(
-        publication,
-        root,
-        &ledger,
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::publication::Replacement::ProjectCancel,
-        #[cfg(feature = "import-baseline")]
-        Cause::Cancel(reservation.key.observed()),
-    )
+    save_or_retire(publication, root, &ledger)
 }
 
 pub(crate) fn release_in_flight(
@@ -691,15 +641,7 @@ pub(crate) fn release_in_flight(
 ) -> Result<(), Error> {
     let mut ledger = Ledger::read(root, project)?;
     let released = ledger.release(Role::InFlight, proof)?;
-    save_or_retire(
-        publication,
-        root,
-        &ledger,
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::publication::Replacement::InFlightRelease,
-        #[cfg(feature = "import-baseline")]
-        Cause::InFlightRelease,
-    )?;
+    save_or_retire(publication, root, &ledger)?;
     lock::retire_released(publication, root, project, &released)
 }
 
@@ -715,15 +657,7 @@ pub(crate) fn recover(
     let mut ledger = Ledger::read_or_empty_recovery(root, project, &registrations)?;
     let Some(existing) = ledger.reservations.first() else {
         return if ledger.is_empty() {
-            save_or_retire(
-                publication,
-                root,
-                &ledger,
-                #[cfg(feature = "import-baseline")]
-                crate::metrics::publication::Replacement::ProjectRecovery,
-                #[cfg(feature = "import-baseline")]
-                Cause::Recovery(None),
-            )
+            save_or_retire(publication, root, &ledger)
         } else {
             Ok(())
         };
@@ -734,18 +668,8 @@ pub(crate) fn recover(
             "another project mutation still has an installation reservation",
         ));
     }
-    #[cfg(feature = "import-baseline")]
-    let removed = existing.key;
     ledger.reservations.clear();
-    save_or_retire(
-        publication,
-        root,
-        &ledger,
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::publication::Replacement::ProjectRecovery,
-        #[cfg(feature = "import-baseline")]
-        Cause::Recovery(Some(removed.observed())),
-    )
+    save_or_retire(publication, root, &ledger)
 }
 
 #[cfg(test)]
@@ -800,15 +724,7 @@ pub(super) fn recover_abandoned(
             .reservations
             .retain(|reservation| live.binary_search(&reservation.key).is_ok());
         if ledger.reservations.len() != before || ledger.is_empty() {
-            save_or_retire(
-                publication,
-                root,
-                &ledger,
-                #[cfg(feature = "import-baseline")]
-                crate::metrics::publication::Replacement::ProjectRecovery,
-                #[cfg(feature = "import-baseline")]
-                Cause::Recovery(None),
-            )?;
+            save_or_retire(publication, root, &ledger)?;
         }
     }
     Ok(())
@@ -886,8 +802,6 @@ pub(super) fn recover_empty_before_new_project(
             }
             let path = ledger_path(root, project);
             let bytes = super::entry::read_file(&path, length as usize)?;
-            #[cfg(feature = "import-baseline")]
-            observe_read(bytes.len());
             let mut ledger = Ledger::decode(&bytes).map_err(|_| Error::Corrupt {
                 path: path.clone(),
                 reason: "reclaimable project logical ledger decoding failed",
@@ -907,15 +821,7 @@ pub(super) fn recover_empty_before_new_project(
             }
             ledger.reservations.clear();
             budget.deletion(super::recovery::tree_charge(&path, 1)?)?;
-            save_or_retire(
-                publication,
-                root,
-                &ledger,
-                #[cfg(feature = "import-baseline")]
-                crate::metrics::publication::Replacement::ProjectRecovery,
-                #[cfg(feature = "import-baseline")]
-                Cause::Recovery(None),
-            )?;
+            save_or_retire(publication, root, &ledger)?;
             return Ok(());
         }
         return Err(Error::Limit {
@@ -1002,8 +908,6 @@ pub(super) fn recover_reservation_only(
                 path: path.clone(),
                 source,
             })?;
-        #[cfg(feature = "import-baseline")]
-        observe_read(reservation.len());
         if reservation[1..8].iter().any(|byte| *byte != 0) {
             return Err(Error::Corrupt {
                 path,
@@ -1015,8 +919,6 @@ pub(super) fn recover_reservation_only(
             continue;
         }
         let bytes = super::entry::read_file(&path, HEADER_BYTES + RESERVATION_BYTES)?;
-        #[cfg(feature = "import-baseline")]
-        observe_read(bytes.len());
         let mut ledger = Ledger::decode(&bytes).map_err(|_| Error::Corrupt {
             path: path.clone(),
             reason: "reservation-only project logical ledger decoding failed",
@@ -1033,15 +935,7 @@ pub(super) fn recover_reservation_only(
             .is_some_and(|reservation| reservation.key == key)
         {
             ledger.reservations.clear();
-            return save_or_retire(
-                publication,
-                root,
-                &ledger,
-                #[cfg(feature = "import-baseline")]
-                crate::metrics::publication::Replacement::ProjectRecovery,
-                #[cfg(feature = "import-baseline")]
-                Cause::Recovery(None),
-            );
+            return save_or_retire(publication, root, &ledger);
         }
     }
     Ok(())
@@ -1117,15 +1011,7 @@ pub(crate) fn retire_project_runner(
             ledger.roots.remove(index);
         }
         ledger.enforce_with_index(root)?;
-        save_or_retire(
-            publication,
-            root,
-            &ledger,
-            #[cfg(feature = "import-baseline")]
-            crate::metrics::publication::Replacement::ProjectRunnerRetirement,
-            #[cfg(feature = "import-baseline")]
-            Cause::RunnerRetirement,
-        )?;
+        save_or_retire(publication, root, &ledger)?;
     }
     for stale in snapshot.into_stale() {
         if stale.project() == project && stale.references().binary_search(&runner).is_ok() {
@@ -1159,109 +1045,41 @@ fn save(
     publication: &super::lease::Publication<'_>,
     root: &Path,
     ledger: &Ledger,
-    #[cfg(feature = "import-baseline")] purpose: crate::metrics::publication::Replacement,
-    #[cfg(feature = "import-baseline")] cause: Cause,
 ) -> Result<(), Error> {
-    save_bytes(
-        publication,
-        root,
-        ledger.project,
-        &ledger.encode()?,
-        #[cfg(feature = "import-baseline")]
-        purpose,
-        #[cfg(feature = "import-baseline")]
-        cause,
-        #[cfg(feature = "import-baseline")]
-        Before::Unknown,
-    )
+    save_bytes(publication, root, ledger.project, &ledger.encode()?)
 }
 
 fn save_or_retire(
     publication: &super::lease::Publication<'_>,
     root: &Path,
     ledger: &Ledger,
-    #[cfg(feature = "import-baseline")] purpose: crate::metrics::publication::Replacement,
-    #[cfg(feature = "import-baseline")] cause: Cause,
 ) -> Result<(), Error> {
     if !ledger.is_empty() {
-        return save(
-            publication,
-            root,
-            ledger,
-            #[cfg(feature = "import-baseline")]
-            purpose,
-            #[cfg(feature = "import-baseline")]
-            cause,
-        );
+        return save(publication, root, ledger);
     }
     let target = ledger_path(root, ledger.project);
-    #[cfg(feature = "import-baseline")]
-    let attempt = crate::metrics::principal::pin::Attempt::start(
-        publication,
-        &target,
-        None,
-        crate::metrics::principal::pin::Operation::Project {
-            project: ledger.project.as_bytes(),
-            purpose,
-            cause,
-        },
-    );
     let result = match fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
             Err(Error::Shape(target))
         }
         Ok(_) => {
-            #[cfg(feature = "import-baseline")]
-            let mut observation = crate::metrics::publication::Attempt::start(
-                crate::metrics::publication::Class::ProjectRetirement(purpose),
-            );
-            let temporary = super::entry::stage_retirement(
-                publication,
-                root,
-                &target,
-                #[cfg(feature = "import-baseline")]
-                &mut observation,
-                #[cfg(feature = "import-baseline")]
-                Some(crate::store::entry::Retirement::Pin(&attempt)),
-            )?;
-            #[cfg(feature = "import-baseline")]
-            observation.cleanup_started();
-            #[cfg(feature = "import-baseline")]
-            attempt.step(crate::metrics::principal::pin::Step::RemovalStarted);
-            let cleanup = fs::remove_file(&temporary).map_err(|source| Error::Io {
+            let temporary = super::entry::stage_retirement(publication, root, &target)?;
+            fs::remove_file(&temporary).map_err(|source| Error::Io {
                 operation: "retire empty project logical ledger",
                 path: temporary.clone(),
                 source,
-            });
-            #[cfg(feature = "import-baseline")]
-            observation.cleanup(cleanup.is_ok());
-            #[cfg(feature = "import-baseline")]
-            attempt.step(if cleanup.is_ok() {
-                crate::metrics::principal::pin::Step::Removed
-            } else {
-                crate::metrics::principal::pin::Step::RemovalFailed
-            });
-            cleanup?;
-            let result = super::entry::sync_directory(temporary.parent().ok_or(Error::State(
+            })?;
+            super::entry::sync_directory(temporary.parent().ok_or(Error::State(
                 "empty project logical ledger has no temporary directory",
-            ))?);
-            #[cfg(feature = "import-baseline")]
-            let result = observation.finish(result);
-            result
+            ))?)
         }
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-            #[cfg(feature = "import-baseline")]
-            attempt.step(crate::metrics::principal::pin::Step::Absent);
-            Ok(())
-        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(Error::Io {
             operation: "inspect empty project logical ledger",
             path: target,
             source,
         }),
     };
-    #[cfg(feature = "import-baseline")]
-    attempt.completed(result.is_ok());
     result
 }
 
@@ -1270,9 +1088,6 @@ fn save_bytes(
     root: &Path,
     project: Digest,
     bytes: &[u8],
-    #[cfg(feature = "import-baseline")] purpose: crate::metrics::publication::Replacement,
-    #[cfg(feature = "import-baseline")] cause: Cause,
-    #[cfg(feature = "import-baseline")] before: Before<'_>,
 ) -> Result<(), Error> {
     let target = ledger_path(root, project);
     let admitted = super::accounting::admit_control(
@@ -1280,29 +1095,11 @@ fn save_bytes(
         root,
         super::control::Plan::replacement(&target, bytes.len()),
     )?;
-    super::entry::replace_admitted_file(
-        admitted,
-        publication,
-        root,
-        &target,
-        bytes,
-        #[cfg(feature = "import-baseline")]
-        purpose,
-        #[cfg(feature = "import-baseline")]
-        Some(Write::project(project, cause).with_before(before)),
-    )
+    super::entry::replace_admitted_file(admitted, publication, root, &target, bytes)
 }
 
 fn ledger_path(root: &Path, project: Digest) -> PathBuf {
     root.join("ledgers/projects").join(project.directory())
-}
-
-#[cfg(feature = "import-baseline")]
-fn observe_read(bytes: usize) {
-    crate::metrics::record_scalar(
-        crate::metrics::accounting::Scalar::ProjectLedgerReadBytes,
-        bytes as u64,
-    );
 }
 
 fn project_from_name(name: &std::ffi::OsStr) -> Option<Digest> {
@@ -1372,60 +1169,6 @@ fn array_at(bytes: &[u8], offset: usize) -> Result<[u8; 32], Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn allocation_observation_project_ledger_and_pin_transactions() {
-        use crate::metrics::{accounting::Scalar, recorder::Recorder};
-
-        let store = fixture_store("accounting");
-        let recipe =
-            crate::node::Direct::<Artifact>::capture([0x32; 32], b"accounting", 4_096, &[], 1)
-                .unwrap();
-        let evaluator = crate::node::Evaluator::new(&store, &crate::metrics::Noop);
-        let value = evaluator.direct(&recipe, || Ok(Artifact(1))).unwrap();
-        let proof = evaluator
-            .seal_read_set([value.receipt().read_set().clone()])
-            .unwrap();
-        let prepared = store.acquire_pin(Role::Prepared, &proof).unwrap();
-        let before = fs::read(ledger_path(store.root(), store.project)).unwrap();
-        let recorder = Recorder::transform(1_000_000).unwrap();
-        let scope = recorder.scope().unwrap();
-        assert!(matches!(
-            transaction::with_post_bind_failure(|| store.pin_live_last_good(&proof)),
-            Err(Error::State("injected pin transaction failure"))
-        ));
-        assert_eq!(
-            fs::read(ledger_path(store.root(), store.project)).unwrap(),
-            before
-        );
-        let live = store.pin_live_last_good(&proof).unwrap();
-        drop(scope);
-        let accounting = recorder.snapshot().unwrap().accounting;
-        assert_eq!(
-            accounting.scalar(Scalar::PinRolesRequested).unwrap().total,
-            4
-        );
-        assert_eq!(
-            accounting.scalar(Scalar::PinRolesCommitted).unwrap().total,
-            2
-        );
-        assert_eq!(
-            accounting
-                .scalar(Scalar::PinRolesRollbackRequested)
-                .unwrap()
-                .total,
-            2
-        );
-        for key in [
-            Scalar::ProjectLedgerReadBytes,
-            Scalar::ProjectLedgerEncodedBytes,
-        ] {
-            assert!(accounting.scalar(key).unwrap().max > 0, "{key:?}");
-        }
-        drop((live, prepared));
-        store.retire_fixture().unwrap();
-    }
 
     fn fixture_store(label: &str) -> crate::store::Store {
         let root =
@@ -1633,18 +1376,14 @@ mod tests {
                     members: 262_144 - charge.members,
                 })
                 .unwrap();
-            let result = super::super::lease::with_publication(
-                store.root(),
-                store.graph_budget(),
-                |publication| {
-                    recover_empty_before_new_project(
-                        publication,
-                        store.root(),
-                        store.project,
-                        &mut budget,
-                    )
-                },
-            );
+            let result = super::super::lease::with_publication(store.root(), |publication| {
+                recover_empty_before_new_project(
+                    publication,
+                    store.root(),
+                    store.project,
+                    &mut budget,
+                )
+            });
             // One byte past the pass's deletion target still retires.
             result.expect("the remaining deletion charge never refuses");
             assert!(!last.exists());
@@ -1656,22 +1395,14 @@ mod tests {
     fn abandoned_recovery_retires_an_existing_empty_project_ledger() {
         let store = fixture_store("empty-project-ledger");
         let project = Digest::from_bytes([0x96; 32]);
-        super::super::lease::with_publication(store.root(), store.graph_budget(), |publication| {
-            save(
-                publication,
-                store.root(),
-                &Ledger::empty(project),
-                #[cfg(feature = "import-baseline")]
-                crate::metrics::publication::Replacement::ProjectRecovery,
-                #[cfg(feature = "import-baseline")]
-                Cause::Recovery(None),
-            )
+        super::super::lease::with_publication(store.root(), |publication| {
+            save(publication, store.root(), &Ledger::empty(project))
         })
         .expect("the empty project ledger is staged");
         let path = ledger_path(store.root(), project);
         assert!(path.is_file());
 
-        super::super::lease::with_publication(store.root(), store.graph_budget(), |publication| {
+        super::super::lease::with_publication(store.root(), |publication| {
             recover_abandoned(
                 publication,
                 store.root(),
@@ -1717,17 +1448,9 @@ mod tests {
         }
         let project = Digest::from_bytes([0xff; 32]);
         let mut recovery = super::super::recovery::Budget::new();
-        super::super::lease::with_publication(store.root(), store.graph_budget(), |publication| {
+        super::super::lease::with_publication(store.root(), |publication| {
             recover_empty_before_new_project(publication, store.root(), project, &mut recovery)?;
-            save(
-                publication,
-                store.root(),
-                &Ledger::empty(project),
-                #[cfg(feature = "import-baseline")]
-                crate::metrics::publication::Replacement::ProjectRecovery,
-                #[cfg(feature = "import-baseline")]
-                Cause::Recovery(None),
-            )
+            save(publication, store.root(), &Ledger::empty(project))
         })
         .expect("pin-first admission reclaims exact-cap empty ledgers before replacement");
         assert_eq!(

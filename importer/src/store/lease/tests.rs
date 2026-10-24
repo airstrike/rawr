@@ -90,25 +90,13 @@ fn concurrent_missing_observations_accept_one_bootstrap_identity() {
                 );
                 barrier.wait();
                 // Both enter the creation branch: exactly one sees AlreadyExists.
-                create_bootstrap(
-                    &root.0,
-                    &path,
-                    #[cfg(feature = "import-baseline")]
-                    None,
-                )
-                .expect("accept contender creation");
-                with_bootstrap(
-                    &root.0,
-                    false,
-                    #[cfg(feature = "import-baseline")]
-                    &crate::node::GraphBudget::new(),
-                    || {
-                        assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
-                        completed.fetch_add(1, Ordering::SeqCst);
-                        assert_eq!(active.fetch_sub(1, Ordering::SeqCst), 1);
-                        Ok(())
-                    },
-                )
+                create_bootstrap(&root.0, &path).expect("accept contender creation");
+                with_bootstrap(&root.0, false, || {
+                    assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
+                    completed.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(active.fetch_sub(1, Ordering::SeqCst), 1);
+                    Ok(())
+                })
                 .expect("acquire the same bootstrap lease");
             });
         }
@@ -125,101 +113,19 @@ fn contender_created_bootstrap_rejects_nonexclusive_file_shapes() {
     fs::write(&target, []).expect("create target");
     std::os::unix::fs::symlink(&target, &path).expect("create symlink contender");
     assert!(matches!(
-        create_bootstrap(
-            &root.0,
-            &path,
-            #[cfg(feature = "import-baseline")]
-            None,
-        ),
+        create_bootstrap(&root.0, &path,),
         Err(Error::Shape(_))
     ));
     fs::remove_file(&path).expect("remove symlink");
     fs::hard_link(&target, &path).expect("create hard-linked contender");
     assert!(matches!(
-        create_bootstrap(
-            &root.0,
-            &path,
-            #[cfg(feature = "import-baseline")]
-            None,
-        ),
+        create_bootstrap(&root.0, &path,),
         Err(Error::Shape(_))
     ));
     fs::remove_file(&path).expect("remove hard link");
     fs::create_dir(&path).expect("create directory contender");
     assert!(matches!(
-        create_bootstrap(
-            &root.0,
-            &path,
-            #[cfg(feature = "import-baseline")]
-            None,
-        ),
+        create_bootstrap(&root.0, &path,),
         Err(Error::Shape(_))
     ));
-}
-
-#[cfg(feature = "import-baseline")]
-#[test]
-fn adopted_bootstrap_metadata_does_not_claim_empty_content() {
-    use crate::metrics::{cell::project, principal, recorder};
-    use principal::creation;
-
-    let root = Root::prepare();
-    let path = root.0.join("bootstrap.lock");
-    fs::write(&path, b"existing control bytes").unwrap();
-    let before = project::Manifest::read(&root.0).unwrap();
-    let graph = crate::node::GraphBudget::new();
-    let recorder = recorder::Recorder::transform(10_000).unwrap();
-    let scope = recorder.scope().unwrap();
-    {
-        let observation = creation::Context::unleased(&root.0, &graph, creation::Source::Bootstrap)
-            .start(&path, false);
-        let result = create_bootstrap(&root.0, &path, Some(&observation));
-        observation.completed(result.is_ok());
-        result.unwrap();
-    }
-    drop(scope);
-    let mut snapshot = recorder.snapshot().unwrap();
-    let evidence = snapshot.principal.as_mut().unwrap();
-    evidence
-        .prepare_cell_transport(&mut snapshot.accounting, 10_000)
-        .unwrap();
-    let history: principal::Evidence =
-        serde_json::from_slice(&serde_json::to_vec(evidence).unwrap()).unwrap();
-    let empty = principal::Evidence {
-        cell_transport: true,
-        ..Default::default()
-    };
-    let after = project::Manifest::read(&root.0).unwrap();
-    assert_eq!(before, after);
-    let retirements =
-        principal::retirement::join::pair([(1, &history), (2, &empty)], &root.0, &before, &after)
-            .unwrap();
-    let joined = creation::join::pair(
-        [(1, &history), (2, &empty)],
-        &root.0,
-        &before,
-        &after,
-        &retirements,
-    )
-    .unwrap();
-    let attempt = &joined.attempts[0];
-    assert_eq!(attempt.creation, Some(creation::Outcome::Contended));
-    assert_eq!(
-        attempt.adopted.as_ref().unwrap().bytes,
-        Some(b"existing control bytes".len() as u64)
-    );
-    let endpoint = joined.endpoints.iter().find(|row| !row.directory).unwrap();
-    assert!(endpoint.creations.is_empty());
-    assert_eq!(endpoint.adoptions.len(), 1);
-    assert!(endpoint.initial_contents);
-    let mut omitted = before;
-    omitted.members = Box::default();
-    assert!(creation::join::pair(
-        [(1, &history), (2, &empty)],
-        &root.0,
-        &omitted,
-        &after,
-        &retirements
-    )
-    .is_err());
 }

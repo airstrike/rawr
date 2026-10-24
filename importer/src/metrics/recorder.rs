@@ -1,4 +1,4 @@
-//! Scoped checked recorder used by tests and the canonical baseline harness.
+//! Scoped checked recorder used by tests.
 
 use super::{Milestone, NodeEvent, NodeKind, ProcessKind, Scope, ScopeError, Sink};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -36,8 +36,6 @@ pub(crate) const PROCESS_KINDS: [ProcessKind; 12] = [
     ProcessKind::CargoRunner,
     ProcessKind::Runner,
 ];
-/// The node counters a snapshot holds: each node kind's events.
-pub(crate) const NODE_COUNT: usize = NODE_KINDS.len() * NODE_EVENTS.len();
 
 pub(crate) const MILESTONES: [Milestone; 6] = [
     Milestone::RunnerSpawned,
@@ -61,13 +59,6 @@ pub struct Snapshot {
     pub runner: Option<super::runner::Owned>,
     /// One fixed allocation keeps nested report construction off the call stack.
     pub accounting: Box<super::accounting::Evidence>,
-    #[cfg(feature = "import-baseline")]
-    pub profile: Option<super::profile::Evidence>,
-    #[cfg(feature = "import-baseline")]
-    pub pipeline: Option<super::pipeline::Evidence>,
-    #[cfg(feature = "import-baseline")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub principal: Option<super::principal::Evidence>,
 }
 
 /// Failure to create, scope, or read a checked recorder.
@@ -87,12 +78,6 @@ pub enum Error {
     ScopeBalance,
     #[error("runner evidence is duplicated or invalid")]
     Runner,
-    #[cfg(feature = "import-baseline")]
-    #[error("profile evidence is duplicated or invalid")]
-    Profile,
-    #[cfg(feature = "import-baseline")]
-    #[error("pipeline evidence is duplicated or invalid")]
-    Pipeline,
 }
 
 /// Stable identity of one bounded counter.
@@ -123,8 +108,6 @@ pub struct Recorder {
 
 struct Inner {
     state: Mutex<State>,
-    #[cfg(feature = "import-baseline")]
-    principal: Mutex<super::principal::History>,
     limit: u64,
     origin_ns: u64,
 }
@@ -140,16 +123,6 @@ struct State {
     runner: Option<super::runner::Owned>,
     runner_ambiguous: bool,
     accounting: super::accounting::Evidence,
-    #[cfg(feature = "import-baseline")]
-    profile: Option<super::profile::Evidence>,
-    #[cfg(feature = "import-baseline")]
-    profile_ambiguous: bool,
-    #[cfg(feature = "import-baseline")]
-    pipeline: Option<super::pipeline::Evidence>,
-    #[cfg(feature = "import-baseline")]
-    pipeline_ambiguous: bool,
-    #[cfg(feature = "import-baseline")]
-    targets: [Option<super::pipeline::target::Target>; 2],
 }
 
 impl Recorder {
@@ -167,8 +140,6 @@ impl Recorder {
         }
         Ok(Self {
             inner: Arc::new(Inner {
-                #[cfg(feature = "import-baseline")]
-                principal: Mutex::new(super::principal::History::default()),
                 state: Mutex::new(State {
                     nodes: [[0; NODE_EVENTS.len()]; NODE_KINDS.len()],
                     processes: [0; PROCESS_KINDS.len()],
@@ -180,16 +151,6 @@ impl Recorder {
                     runner: None,
                     runner_ambiguous: false,
                     accounting: super::accounting::Evidence::default(),
-                    #[cfg(feature = "import-baseline")]
-                    profile: None,
-                    #[cfg(feature = "import-baseline")]
-                    profile_ambiguous: false,
-                    #[cfg(feature = "import-baseline")]
-                    pipeline: None,
-                    #[cfg(feature = "import-baseline")]
-                    pipeline_ambiguous: false,
-                    #[cfg(feature = "import-baseline")]
-                    targets: [None; 2],
                 }),
                 limit,
                 origin_ns,
@@ -205,16 +166,7 @@ impl Recorder {
 
     /// Copy every counter in canonical enum order, rejecting any overflow.
     pub fn snapshot(&self) -> Result<Snapshot, Error> {
-        // Account callbacks lock State; never hold it while copying this history.
-        #[cfg(feature = "import-baseline")]
-        let (principal, late_charge) = lock(&self.inner.principal).snapshot();
         let state = lock(&self.inner.state);
-        #[cfg(feature = "import-baseline")]
-        let mut state = state;
-        #[cfg(feature = "import-baseline")]
-        if let Some(observation) = late_charge {
-            state.accounting.record_graph(observation, self.inner.limit);
-        }
         if let Some(counter) = state.overflow {
             return Err(Error::Overflow { counter });
         }
@@ -232,44 +184,6 @@ impl Recorder {
         if state.runner_ambiguous || state.runner.as_ref().is_some_and(|runner| !runner.valid()) {
             return Err(Error::Runner);
         }
-        #[cfg(feature = "import-baseline")]
-        if state.profile_ambiguous
-            || state
-                .profile
-                .as_ref()
-                .is_some_and(|profile| !profile.valid())
-        {
-            return Err(Error::Profile);
-        }
-        #[cfg(feature = "import-baseline")]
-        if state.pipeline_ambiguous
-            || state
-                .pipeline
-                .as_ref()
-                .is_some_and(|pipeline| !pipeline.valid())
-        {
-            return Err(Error::Pipeline);
-        }
-        #[cfg(feature = "import-baseline")]
-        let pipeline = state
-            .pipeline
-            .clone()
-            .map(|mut pipeline| {
-                let [resolution, runner] = state.targets;
-                if pipeline
-                    .resolution_target
-                    .is_some_and(|value| Some(value) != resolution)
-                    || pipeline
-                        .runner_target
-                        .is_some_and(|value| Some(value) != runner)
-                {
-                    return Err(Error::Pipeline);
-                }
-                pipeline.resolution_target = resolution;
-                pipeline.runner_target = runner;
-                Ok(pipeline)
-            })
-            .transpose()?;
         let state = &*state;
         let nodes = NODE_KINDS
             .iter()
@@ -312,51 +226,11 @@ impl Recorder {
             milestones,
             runner: state.runner.clone(),
             accounting: Box::new(state.accounting),
-            #[cfg(feature = "import-baseline")]
-            profile: state.profile.clone(),
-            #[cfg(feature = "import-baseline")]
-            pipeline,
-            #[cfg(feature = "import-baseline")]
-            principal: Some(principal),
         })
     }
 }
 
 impl Sink for Inner {
-    #[cfg(feature = "import-baseline")]
-    fn principal_enabled(&self) -> bool {
-        true
-    }
-    #[cfg(feature = "import-baseline")]
-    fn principal(&self, observation: &super::principal::Observation<'_>) {
-        let unscoped = lock(&self.state).scopes == 0;
-        let mut history = lock(&self.principal);
-        if unscoped {
-            history
-                .fault
-                .get_or_insert(super::principal::Fault::Unscoped);
-        }
-        history.record(observation);
-    }
-    #[cfg(feature = "import-baseline")]
-    fn publication(&self, class: super::publication::Class, event: super::publication::Event) {
-        let mut state = lock(&self.state);
-        let unscoped = state.scopes == 0;
-        let history =
-            state
-                .accounting
-                .publications
-                .get_or_insert_with(|| super::publication::Evidence {
-                    fault: Some(super::publication::Fault::Unscoped),
-                    ..super::publication::Evidence::default()
-                });
-        if unscoped {
-            history
-                .fault
-                .get_or_insert(super::publication::Fault::Unscoped);
-        }
-        history.record(class, event, self.limit);
-    }
     fn native(
         &self,
         runner_pid: u32,
@@ -431,68 +305,8 @@ impl Sink for Inner {
         }
     }
 
-    #[cfg(feature = "import-baseline")]
-    fn profile(&self, evidence: &super::profile::Evidence) {
-        let mut state = lock(&self.state);
-        if state.profile.replace(evidence.clone()).is_some() {
-            state.profile_ambiguous = true;
-        }
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn pipeline(&self, evidence: &super::pipeline::Evidence) {
-        let mut state = lock(&self.state);
-        if state.pipeline.replace(evidence.clone()).is_some() {
-            state.pipeline_ambiguous = true;
-        }
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn target(&self, kind: super::pipeline::target::Kind, target: super::pipeline::target::Target) {
-        let index = match kind {
-            super::pipeline::target::Kind::Resolution => 0,
-            super::pipeline::target::Kind::Runner => 1,
-        };
-        let mut state = lock(&self.state);
-        if state.targets[index].replace(target).is_some() || !target.valid() {
-            state.pipeline_ambiguous = true;
-        }
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn bundle(
-        &self,
-        kind: NodeKind,
-        target: super::pipeline::target::Target,
-        event: super::bundle::Event,
-    ) {
-        let mut state = lock(&self.state);
-        let unscoped = state.scopes == 0;
-        let history = state
-            .accounting
-            .bundles
-            .get_or_insert(super::bundle::Evidence {
-                fault: Some(super::bundle::Fault::Unscoped),
-                ..super::bundle::Evidence::default()
-            });
-        if unscoped {
-            history.fault.get_or_insert(super::bundle::Fault::Unscoped);
-        }
-        history.record(kind, target, event, self.limit);
-    }
-
     fn scope_opened(&self) {
         let mut state = lock(&self.state);
-        #[cfg(feature = "import-baseline")]
-        state
-            .accounting
-            .publications
-            .get_or_insert_with(super::publication::Evidence::default);
-        #[cfg(feature = "import-baseline")]
-        state
-            .accounting
-            .bundles
-            .get_or_insert_with(super::bundle::Evidence::default);
         match increment(state.scopes, self.limit) {
             Some(next) => state.scopes = next,
             None => record_overflow(&mut state, Counter::Scope),
@@ -509,18 +323,6 @@ impl Sink for Inner {
 }
 
 impl Sink for Recorder {
-    #[cfg(feature = "import-baseline")]
-    fn principal_enabled(&self) -> bool {
-        true
-    }
-    #[cfg(feature = "import-baseline")]
-    fn principal(&self, observation: &super::principal::Observation<'_>) {
-        self.inner.principal(observation);
-    }
-    #[cfg(feature = "import-baseline")]
-    fn publication(&self, class: super::publication::Class, event: super::publication::Event) {
-        self.inner.publication(class, event);
-    }
     fn native(
         &self,
         runner_pid: u32,
@@ -559,31 +361,6 @@ impl Sink for Recorder {
 
     fn runner_owned(&self, owned: &super::runner::Owned) {
         self.inner.runner_owned(owned);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn profile(&self, evidence: &super::profile::Evidence) {
-        self.inner.profile(evidence);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn pipeline(&self, evidence: &super::pipeline::Evidence) {
-        self.inner.pipeline(evidence);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn target(&self, kind: super::pipeline::target::Kind, target: super::pipeline::target::Target) {
-        self.inner.target(kind, target);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn bundle(
-        &self,
-        kind: NodeKind,
-        target: super::pipeline::target::Target,
-        event: super::bundle::Event,
-    ) {
-        self.inner.bundle(kind, target, event);
     }
 
     fn scope_opened(&self) {
@@ -669,216 +446,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use super::{Counter, Error, Recorder};
     use crate::metrics::{self, Milestone, NodeEvent, NodeKind, ProcessKind};
-
-    #[cfg(feature = "import-baseline")]
-    fn pipeline() -> metrics::pipeline::Evidence {
-        metrics::pipeline::Evidence {
-            toolchain: [1; 32],
-            resolution: [2; 32],
-            api: [3; 32],
-            generic: [4; 32],
-            profile: [5; 32],
-            facade: [6; 32],
-            checked: [7; 32],
-            profile_proof: [8; 32],
-            native_inputs: [9; 32],
-            native_product: [10; 32],
-            overlay: [11; 32],
-            resolution_target: None,
-            runner_target: None,
-        }
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn target(byte: u8) -> metrics::pipeline::target::Target {
-        metrics::pipeline::target::Target::observe(crate::store::bundle::BundleRef::new(
-            crate::node::ExecutionKey::from_bytes([byte; 32]),
-            crate::store::bundle::BundleId::from_bytes([byte; 32]),
-        ))
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn targets_bind_at_snapshot_after_the_actual_owner_seams() {
-        use metrics::pipeline::target::Kind;
-        let recorder = Recorder::transform(10).expect("bounded recorder");
-        {
-            let _scope = recorder.scope().expect("scope");
-            metrics::record_target(Kind::Resolution, target(1));
-            metrics::record_pipeline(&pipeline());
-            metrics::record_target(Kind::Runner, target(2));
-        }
-        let actual = recorder
-            .snapshot()
-            .expect("joined snapshot")
-            .pipeline
-            .expect("pipeline");
-        assert_eq!(actual.resolution_target, Some(target(1)));
-        assert_eq!(actual.runner_target, Some(target(2)));
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn targets_reject_duplicates_and_unobserved_pipeline_associations() {
-        use metrics::pipeline::target::Kind;
-        let recorder = Recorder::transform(10).expect("bounded recorder");
-        {
-            let _scope = recorder.scope().expect("scope");
-            metrics::record_target(Kind::Resolution, target(1));
-            metrics::record_target(Kind::Resolution, target(1));
-        }
-        assert_eq!(recorder.snapshot(), Err(Error::Pipeline));
-        let recorder = Recorder::transform(10).expect("bounded recorder");
-        {
-            let _scope = recorder.scope().expect("scope");
-            let mut supplied = pipeline();
-            supplied.resolution_target = Some(target(1));
-            metrics::record_pipeline(&supplied);
-        }
-        assert_eq!(recorder.snapshot(), Err(Error::Pipeline));
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn historical_pipeline_without_target_observations_stays_absent() {
-        let recorder = Recorder::transform(10).expect("bounded recorder");
-        {
-            let _scope = recorder.scope().expect("scope");
-            metrics::record_pipeline(&pipeline());
-        }
-        assert_eq!(
-            recorder.snapshot().expect("snapshot").pipeline,
-            Some(pipeline())
-        );
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn bundle_history_presence_is_explicit_and_historical_bytes_stay_canonical() {
-        let recorder = Recorder::transform_at(10, 1).unwrap();
-        let historical = recorder.snapshot().unwrap();
-        assert!(historical.accounting.bundles.is_none());
-        assert!(historical.accounting.publications.is_none());
-        let bytes = serde_json::to_vec(&historical).unwrap();
-        assert!(!String::from_utf8_lossy(&bytes).contains("\"bundles\""));
-        assert!(!String::from_utf8_lossy(&bytes).contains("\"publications\""));
-        let restored: super::Snapshot = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(serde_json::to_vec(&restored).unwrap(), bytes);
-        {
-            let _scope = recorder.scope().unwrap();
-        }
-        let observed = recorder.snapshot().unwrap();
-        assert_eq!(
-            observed.accounting.publications,
-            Some(metrics::publication::Evidence::default())
-        );
-        assert_eq!(
-            observed.accounting.bundles,
-            Some(metrics::bundle::Evidence::default())
-        );
-        assert_eq!(
-            serde_json::from_slice::<super::Snapshot>(&serde_json::to_vec(&observed).unwrap())
-                .unwrap(),
-            observed
-        );
-        let mut previous = observed;
-        previous.accounting.publications = None;
-        let bytes = serde_json::to_vec(&previous).unwrap();
-        let restored: super::Snapshot = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(
-            serde_json::to_vec(&restored).unwrap(),
-            bytes,
-            "the preceding bundle-history wire shape also remains canonical"
-        );
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn bundle_history_faults_direct_events_before_or_after_scope_without_erasing_them() {
-        for joined in [false, true] {
-            let recorder = Recorder::transform_at(10, 1).unwrap();
-            if joined {
-                let _scope = recorder.scope().unwrap();
-                metrics::record_bundle(
-                    NodeKind::Runner,
-                    target(1),
-                    metrics::bundle::Event::Allocated,
-                );
-            }
-            super::Sink::bundle(
-                &recorder,
-                NodeKind::Runner,
-                target(1),
-                metrics::bundle::Event::CleanupStarted,
-            );
-            let observed = recorder.snapshot().unwrap().accounting.bundles.unwrap();
-            assert_eq!(observed.fault, Some(metrics::bundle::Fault::Unscoped));
-            assert_eq!(observed.runner.allocated, u64::from(joined));
-            assert_eq!(observed.runner.cleanup_started, 1);
-            let _scope = recorder.scope().unwrap();
-            metrics::record_bundle(NodeKind::Runner, target(1), metrics::bundle::Event::Removed);
-            drop(_scope);
-            let observed = recorder.snapshot().unwrap().accounting.bundles.unwrap();
-            assert_eq!(observed.fault, Some(metrics::bundle::Fault::Unscoped));
-            assert_eq!(observed.runner.removed, 1);
-        }
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn bundle_history_repeated_scopes_preserve_counts_identity_and_faults() {
-        let recorder = Recorder::transform_at(1, 1).unwrap();
-        for value in [1, 2] {
-            let _scope = recorder.scope().unwrap();
-            metrics::record_bundle(
-                NodeKind::Resolution,
-                target(value),
-                metrics::bundle::Event::Allocated,
-            );
-        }
-        let observed = recorder.snapshot().unwrap().accounting.bundles.unwrap();
-        assert_eq!(observed.fault, Some(metrics::bundle::Fault::Identity));
-        assert_eq!(observed.resolution.target, Some(target(1)));
-        assert_eq!(observed.resolution.allocated, 1);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn publication_history_preserves_unscoped_and_overflow_faults() {
-        use metrics::publication::{Class, Event, Fault};
-        for joined in [false, true] {
-            let recorder = Recorder::transform_at(1, 1).unwrap();
-            if joined {
-                drop(recorder.scope().unwrap());
-            }
-            super::Sink::publication(&recorder, Class::Content(NodeKind::Api), Event::Started);
-            let scope = recorder.scope().unwrap();
-            metrics::record_publication(Class::Content(NodeKind::Api), Event::Started);
-            drop(scope);
-            let observed = recorder
-                .snapshot()
-                .unwrap()
-                .accounting
-                .publications
-                .unwrap();
-            assert_eq!(observed.fault, Some(Fault::Unscoped));
-            assert_eq!(observed.nodes[2].content.started, 1);
-        }
-        let recorder = Recorder::transform_at(1, 1).unwrap();
-        let scope = recorder.scope().unwrap();
-        for _ in 0..2 {
-            metrics::record_publication(Class::Content(NodeKind::Api), Event::Started);
-        }
-        drop(scope);
-        let observed = recorder
-            .snapshot()
-            .unwrap()
-            .accounting
-            .publications
-            .unwrap();
-        assert_eq!(observed.fault, Some(Fault::Overflow));
-        assert!(!observed.closed());
-    }
 
     #[test]
     fn snapshots_keep_fixed_accounting_storage_out_of_nested_report_stack_frames() {

@@ -162,91 +162,6 @@ struct Document<'a> {
     demand: &'a [cargo::DemandPath],
 }
 
-#[cfg(feature = "import-baseline")]
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AttributionDocument {
-    schema: u32,
-    protocol_schema: u32,
-    canonical_items: usize,
-    canonical_bytes: usize,
-    compiler_commit: Box<str>,
-    host: Box<str>,
-    selected_target: Box<str>,
-    entries: Box<[Entry<Sealed>]>,
-    dependency_directories: Box<[Box<str>]>,
-    #[serde(default, rename = "demand")]
-    _demand: Box<[Box<[Box<str>]>]>,
-}
-
-#[cfg(feature = "import-baseline")]
-pub(crate) struct AttributionEntry {
-    pub(crate) invocation_nonce: Box<str>,
-    pub(crate) unit_correlation: Box<str>,
-}
-
-#[cfg(feature = "import-baseline")]
-pub(crate) fn attribution_entries(bytes: &[u8]) -> Result<Box<[AttributionEntry]>> {
-    let document: AttributionDocument =
-        serde_json::from_slice(bytes).map_err(|error| Error::Extraction {
-            code: "baseline-attribution-plan-schema",
-            reason: error.to_string().into_boxed_str(),
-        })?;
-    if document.schema != PLAN_SCHEMA
-        || document.protocol_schema != protocol::SCHEMA
-        || document.canonical_items == 0
-        || document.canonical_bytes == 0
-        || document.compiler_commit.is_empty()
-        || document.host.is_empty()
-        || document.selected_target.is_empty()
-        || document.entries.is_empty()
-        || document
-            .dependency_directories
-            .iter()
-            .any(|directory| directory.is_empty())
-    {
-        return Err(extraction(
-            "baseline-attribution-plan-schema",
-            "the active extraction plan does not match the reviewed schema",
-        ));
-    }
-    let mut correlations = BTreeSet::new();
-    let mut nonces = BTreeSet::new();
-    let mut entries = Vec::new();
-    entries
-        .try_reserve_exact(document.entries.len())
-        .map_err(|error| Error::Allocation {
-            operation: "baseline attribution allocation",
-            source: error,
-        })?;
-    for entry in document.entries {
-        if !lower_hex(entry.unit_correlation.as_ref(), 64)
-            || !lower_hex(entry.invocation_nonce.as_ref(), 64)
-            || !correlations.insert(entry.unit_correlation.clone())
-            || !nonces.insert(entry.invocation_nonce.clone())
-        {
-            return Err(extraction(
-                "baseline-attribution-plan-identity",
-                "the plan has an invalid or repeated correlation/nonce",
-            ));
-        }
-        entries.push(AttributionEntry {
-            invocation_nonce: entry.invocation_nonce,
-            unit_correlation: entry.unit_correlation,
-        });
-    }
-    Ok(entries.into_boxed_slice())
-}
-
-#[cfg(feature = "import-baseline")]
-fn lower_hex(value: &str, length: usize) -> bool {
-    value.len() == length
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        && value.bytes().any(|byte| byte != b'0')
-}
-
 impl Plan {
     pub(crate) fn prepare(
         harness_root: &Path,
@@ -1366,13 +1281,6 @@ impl Write for CountedBytes {
 }
 
 impl Capture {
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn shares_with(&self, graph: &crate::node::GraphBudget) -> bool {
-        self.graph_budget
-            .as_ref()
-            .is_some_and(|original| original.shares_with(graph))
-    }
-
     pub(crate) fn namespace(&self) -> Option<&namespace::Retained> {
         self.namespace.as_deref()
     }

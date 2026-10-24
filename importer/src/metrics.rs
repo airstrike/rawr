@@ -12,26 +12,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 pub mod accounting;
-#[cfg(feature = "import-baseline")]
-pub mod attribution;
-#[cfg(feature = "import-baseline")]
-pub mod bundle;
-#[cfg(feature = "import-baseline")]
-pub mod cell;
-#[cfg(feature = "import-baseline")]
-pub mod evidence;
-#[cfg(feature = "import-baseline")]
-pub mod pipeline;
-#[cfg(feature = "import-baseline")]
-pub mod principal;
-#[cfg(feature = "import-baseline")]
-pub mod profile;
-#[cfg(feature = "import-baseline")]
-pub mod publication;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod recorder;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub mod report;
 pub mod runner;
 
 /// One closed transform in the generated-owner dependency pipeline.
@@ -121,22 +103,6 @@ pub trait Sink: Send + Sync {
     }
     /// Record incomplete native telemetry without replacing the product result.
     fn native_fault(&self, _runner_pid: u32, _epoch: u64, _cause: accounting::NativeFault) {}
-    #[cfg(feature = "import-baseline")]
-    fn profile(&self, evidence: &profile::Evidence);
-    #[cfg(feature = "import-baseline")]
-    fn pipeline(&self, evidence: &pipeline::Evidence);
-    #[cfg(feature = "import-baseline")]
-    fn target(&self, _kind: pipeline::target::Kind, _target: pipeline::target::Target) {}
-    #[cfg(feature = "import-baseline")]
-    fn bundle(&self, _kind: NodeKind, _target: pipeline::target::Target, _event: bundle::Event) {}
-    #[cfg(feature = "import-baseline")]
-    fn publication(&self, _class: publication::Class, _event: publication::Event) {}
-    #[cfg(feature = "import-baseline")]
-    fn principal(&self, _observation: &principal::Observation<'_>) {}
-    #[cfg(feature = "import-baseline")]
-    fn principal_enabled(&self) -> bool {
-        false
-    }
     fn scope_opened(&self);
     fn scope_joined(&self);
 }
@@ -153,12 +119,6 @@ impl Sink for Noop {
     fn milestone(&self, _milestone: Milestone, _observed_ns: Option<u64>) {}
 
     fn runner_owned(&self, _owned: &runner::Owned) {}
-
-    #[cfg(feature = "import-baseline")]
-    fn profile(&self, _evidence: &profile::Evidence) {}
-
-    #[cfg(feature = "import-baseline")]
-    fn pipeline(&self, _evidence: &pipeline::Evidence) {}
 
     fn scope_opened(&self) {}
 
@@ -209,40 +169,6 @@ impl Sink for Current {
 
     fn graph(&self, graph: accounting::Graph) {
         record_graph(graph);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn profile(&self, evidence: &profile::Evidence) {
-        record_profile(evidence);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn pipeline(&self, evidence: &pipeline::Evidence) {
-        record_pipeline(evidence);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn target(&self, kind: pipeline::target::Kind, target: pipeline::target::Target) {
-        record_target(kind, target);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn bundle(&self, kind: NodeKind, target: pipeline::target::Target, event: bundle::Event) {
-        record_bundle(kind, target, event);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn publication(&self, class: publication::Class, event: publication::Event) {
-        record_publication(class, event);
-    }
-
-    #[cfg(feature = "import-baseline")]
-    fn principal(&self, observation: &principal::Observation<'_>) {
-        record_principal(observation);
-    }
-    #[cfg(feature = "import-baseline")]
-    fn principal_enabled(&self) -> bool {
-        principal_enabled()
     }
 
     fn scope_opened(&self) {}
@@ -371,53 +297,6 @@ pub fn record_native(
 #[doc(hidden)]
 pub fn record_native_fault(runner_pid: u32, epoch: u64, cause: accounting::NativeFault) {
     with_sink(|sink, _| sink.native_fault(runner_pid, epoch, cause));
-}
-
-/// Record one selected profile after its normal semantic proof seals.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub fn record_profile(evidence: &profile::Evidence) {
-    with_sink(|sink, _| sink.profile(evidence));
-}
-
-/// Record one complete current-pipeline identity bundle after normal sealing.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub fn record_pipeline(evidence: &pipeline::Evidence) {
-    with_sink(|sink, _| sink.pipeline(evidence));
-}
-
-/// Observe an association already proved by the successful owner transformation.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub fn record_target(kind: pipeline::target::Kind, target: pipeline::target::Target) {
-    with_sink(|sink, _| sink.target(kind, target));
-}
-
-/// Observe an actual bundle boundary without granting allocation or cleanup authority.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub fn record_bundle(kind: NodeKind, target: pipeline::target::Target, event: bundle::Event) {
-    with_sink(|sink, _| sink.bundle(kind, target, event));
-}
-
-/// Observe actual lightweight publication boundaries without granting write authority.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub fn record_publication(class: publication::Class, event: publication::Event) {
-    with_sink(|sink, _| sink.publication(class, event));
-}
-
-#[cfg(feature = "import-baseline")]
-pub(crate) fn principal_enabled() -> bool {
-    let mut enabled = false;
-    with_sink(|sink, _| enabled = sink.principal_enabled());
-    enabled
-}
-
-#[cfg(feature = "import-baseline")]
-pub(crate) fn record_principal(observation: &principal::Observation<'_>) {
-    with_sink(|sink, _| sink.principal(observation));
 }
 
 /// Observe one current linear transform as a miss and, on success, publication.

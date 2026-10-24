@@ -9,19 +9,6 @@ use super::{evidence, projection, resolution};
 
 const IDENTITY: &str = "rawr.framework.iced";
 pub(super) const VERSION: u32 = 17;
-#[cfg(feature = "import-baseline")]
-const VARIANT_VERSION: u32 = 18;
-#[cfg(feature = "import-baseline")]
-const VARIANT_HOOK: &str = "phase9-direct-widget-element";
-
-/// Closed nonproduction profile-fixture authority selected only by the import-baseline feature.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Fixture {
-    Baseline,
-    Variant,
-}
 
 /// Exact checked-program proof consumed by iced profile demand.
 pub struct Checked {
@@ -35,8 +22,6 @@ pub struct Definition {
     identity: profile::Identity,
     version: profile::Version,
     universe: rawr_import::cargo::universe::Catalog,
-    #[cfg(feature = "import-baseline")]
-    fixture: Fixture,
 }
 
 impl Checked {
@@ -132,36 +117,7 @@ impl Definition {
             identity,
             version,
             universe,
-            #[cfg(feature = "import-baseline")]
-            fixture: Fixture::Baseline,
         })
-    }
-
-    /// Construct exactly one of the two import-baseline profile fixtures.
-    #[cfg(feature = "import-baseline")]
-    #[doc(hidden)]
-    pub fn fixture(
-        fixture: Fixture,
-        limits: &rawr_import::cargo::Limits,
-    ) -> Result<Self, profile::Error> {
-        let identity = profile::Identity::new(IDENTITY, limits)?;
-        let version = profile::Version::new(fixture.version())?;
-        let universe =
-            resolution::catalog(limits).map_err(|_| profile::Error::ResolutionUniverse)?;
-        Ok(Self {
-            identity,
-            version,
-            universe,
-            fixture,
-        })
-    }
-
-    /// Return the exact selected import-baseline fixture.
-    #[cfg(feature = "import-baseline")]
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn selected_fixture(&self) -> Fixture {
-        self.fixture
     }
 
     /// The iced paths the profile's evidence selection reads,
@@ -208,29 +164,7 @@ impl Definition {
             limits,
         )?;
         let names = features.iter().map(|feature| feature.name());
-        #[cfg(feature = "import-baseline")]
-        let names = names.chain(["import-baseline"]);
         dependency.features(names, false)
-    }
-}
-
-#[cfg(feature = "import-baseline")]
-impl Fixture {
-    /// Return the semantic profile rule version bound to this fixture.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn version(self) -> u32 {
-        match self {
-            Self::Baseline => VERSION,
-            Self::Variant => VARIANT_VERSION,
-        }
-    }
-
-    pub(super) const fn hook(self) -> &'static str {
-        match self {
-            Self::Baseline => projection::HOOK,
-            Self::Variant => VARIANT_HOOK,
-        }
     }
 }
 
@@ -410,9 +344,6 @@ impl Definition {
             .projection_sources()
             .next()
             .ok_or(profile::Error::ForeignEvidence)?;
-        #[cfg(feature = "import-baseline")]
-        let hook = self.fixture.hook();
-        #[cfg(not(feature = "import-baseline"))]
         let hook = projection::HOOK;
         output.hook(source.implementation(), hook)?;
         for pair in contract.projections() {
@@ -437,16 +368,7 @@ impl Definition {
             .next()
             .copied()
             .ok_or(profile::Error::ForeignEvidence)?;
-        output.projection(
-            hook,
-            projection::source(
-                hook,
-                demand,
-                #[cfg(feature = "import-baseline")]
-                self.fixture,
-            )
-            .as_bytes(),
-        )?;
+        output.projection(hook, projection::source(hook, demand).as_bytes())?;
         Ok(())
     }
 }
@@ -521,109 +443,5 @@ impl Hasher for CheckedHasher {
 
     fn write(&mut self, bytes: &[u8]) {
         self.0.update(bytes);
-    }
-}
-
-#[cfg(all(test, feature = "import-baseline"))]
-mod tests {
-    use super::{Checked, Definition, Fixture};
-
-    #[test]
-    fn baseline_fixture_is_exact_and_variant_changes_real_profile_rules() {
-        let limits = rawr_import::cargo::Limits::standard();
-        let graph = rawr_import::test_fixture::iced_profile();
-        let checked = Checked::from_fingerprint([0x51; 32]);
-
-        let ordinary = Definition::new(&limits).expect("ordinary profile constructs");
-        let baseline =
-            Definition::fixture(Fixture::Baseline, &limits).expect("baseline fixture constructs");
-        let variant =
-            Definition::fixture(Fixture::Variant, &limits).expect("variant fixture constructs");
-        assert_eq!(
-            ordinary.resolution_universe().identity(),
-            baseline.resolution_universe().identity()
-        );
-        assert_eq!(
-            baseline.resolution_universe().identity(),
-            variant.resolution_universe().identity()
-        );
-
-        for definition in [&ordinary, &baseline, &variant] {
-            let adapter = definition.trusted_adapter();
-            assert_eq!(adapter.identity(), definition.identity);
-            assert_eq!(adapter.version(), definition.version);
-            assert!(adapter.owns_product_lifecycle());
-        }
-
-        let ordinary_contract = rawr_import::profile::classify(&ordinary, &graph, &limits)
-            .expect("ordinary profile classifies");
-        let baseline_contract = rawr_import::profile::classify(&baseline, &graph, &limits)
-            .expect("baseline profile classifies");
-        let variant_contract = rawr_import::profile::classify(&variant, &graph, &limits)
-            .expect("variant profile classifies");
-        let ordinary_demand =
-            rawr_import::profile::demand(&ordinary, &ordinary_contract, &checked, &limits)
-                .expect("ordinary demand seals");
-        let baseline_demand =
-            rawr_import::profile::demand(&baseline, &baseline_contract, &checked, &limits)
-                .expect("baseline demand seals");
-        let variant_demand =
-            rawr_import::profile::demand(&variant, &variant_contract, &checked, &limits)
-                .expect("variant demand seals");
-        let edited_checked = Checked::from_fingerprint([0x52; 32]);
-        let edited_demand =
-            rawr_import::profile::demand(&baseline, &baseline_contract, &edited_checked, &limits)
-                .expect("edited application demand seals");
-
-        assert_eq!(
-            ordinary_contract.rules_digest(),
-            baseline_contract.rules_digest()
-        );
-        assert_eq!(
-            ordinary_demand.rules_digest(),
-            baseline_demand.rules_digest()
-        );
-        assert_ne!(
-            baseline_demand.rules_digest(),
-            variant_demand.rules_digest()
-        );
-
-        let ordinary = rawr_import::profile::Proof::generate(&ordinary, &ordinary_demand, &limits)
-            .expect("ordinary profile generates");
-        let edited = rawr_import::profile::Proof::generate(&baseline, &edited_demand, &limits)
-            .expect("edited application profile generates");
-        let baseline = rawr_import::profile::Proof::generate(&baseline, &baseline_demand, &limits)
-            .expect("baseline profile generates");
-        let variant = rawr_import::profile::Proof::generate(&variant, &variant_demand, &limits)
-            .expect("variant profile generates");
-        assert_eq!(ordinary.fingerprint(), baseline.fingerprint());
-        assert_eq!(ordinary.generated_source(), baseline.generated_source());
-        assert_ne!(baseline.fingerprint(), edited.fingerprint());
-        assert_eq!(baseline.generated_source(), edited.generated_source());
-        assert_ne!(baseline.fingerprint(), variant.fingerprint());
-        assert_ne!(baseline.generated_source(), variant.generated_source());
-        assert!(variant
-            .generated_source()
-            .windows(b"PROFILE_FIXTURE".len())
-            .any(|window| window == b"PROFILE_FIXTURE"));
-        assert!(variant
-            .generated_source()
-            .windows(b"PROFILE_VERSION".len())
-            .any(|window| window == b"PROFILE_VERSION"));
-    }
-
-    #[test]
-    fn profile_join_rejects_missing_or_foreign_universe_evidence() {
-        let limits = rawr_import::cargo::Limits::standard();
-        let definition = Definition::new(&limits).expect("ordinary profile constructs");
-        for graph in [
-            rawr_import::test_fixture::graph(),
-            rawr_import::test_fixture::iced_profile_with_universe([0xa5; 32]),
-        ] {
-            assert!(matches!(
-                rawr_import::profile::classify(&definition, &graph, &limits),
-                Err(rawr_import::profile::Error::ForeignEvidence)
-            ));
-        }
     }
 }

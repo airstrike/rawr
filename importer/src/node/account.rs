@@ -7,9 +7,6 @@ use std::sync::{Arc, Mutex};
 
 use super::{Error, GraphBudget};
 
-#[cfg(feature = "import-baseline")]
-pub(crate) mod evidence;
-
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
 /// Stable identity only: a key never retains a graph or its account storage.

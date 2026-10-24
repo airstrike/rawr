@@ -877,11 +877,6 @@ impl Graph<Captured> {
                     reason: "semantic API ownership audit differs".into(),
                 });
             }
-            #[cfg(feature = "import-baseline")]
-            crate::metrics::record_scalar(
-                crate::metrics::accounting::Scalar::ApiSelectedBytes,
-                stored.selected.len() as u64,
-            );
             Ok(graph)
         })()
         .map_err(|error| allocation.retained_failure(error))
@@ -1071,11 +1066,6 @@ impl Graph<Captured> {
             retained: Usage { items: 0, bytes: 0 },
             evidence: (),
         };
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::record_scalar(
-            crate::metrics::accounting::Scalar::ApiCanonicalBytes,
-            graph.canonical.len() as u64,
-        );
         graph
             .validate_cardinality(allocation)
             .map_err(|error| allocation.failure(error))?;
@@ -1116,13 +1106,6 @@ impl Graph<Captured> {
             })?
             .usage();
         allocation.validate_retained(graph.retained.items, graph.retained.bytes)?;
-        #[cfg(feature = "import-baseline")]
-        if let Some(stored) = &graph.stored {
-            crate::metrics::record_scalar(
-                crate::metrics::accounting::Scalar::ApiSelectedBytes,
-                stored.selected.len() as u64,
-            );
-        }
         Ok(graph)
     }
 
@@ -1958,55 +1941,6 @@ mod tests {
             assert_eq!(axis.high_water, actual as u64);
             assert!(record.axis(other).is_none());
         }
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn preseal_retained_exceedance_keeps_original_transaction_and_retained_usage() {
-        use crate::metrics::accounting::{Scalar, SemanticStage};
-
-        let mut measured = Allocation::with_limits(usize::MAX, usize::MAX);
-        let retained = seal(&mut measured).unwrap().retained;
-        let recorder = crate::metrics::recorder::Recorder::transform_at(10, 1).unwrap();
-        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX)
-            .with_retained_limits(usize::MAX, retained.bytes - 1);
-        let reached;
-        {
-            let _scope = recorder.scope().unwrap();
-            // The retained byte target records and the seal continues.
-            let graph = seal(&mut allocation).expect("a retained target never refuses");
-            reached = allocation.usage();
-            assert_eq!(graph.retained, retained);
-            assert_eq!((graph.transaction.items, graph.transaction.bytes), reached);
-            let record = allocation.exceedances();
-            let axis = record
-                .axis("retained graph bytes")
-                .expect("the retained byte target is recorded");
-            assert_eq!(axis.target, (retained.bytes - 1) as u64);
-            assert_eq!(axis.high_water, retained.bytes as u64);
-            assert!(record.axis("retained graph items").is_none());
-            // Dropping the account reports its cumulative transaction usage.
-            drop(allocation);
-        }
-        let evidence = recorder.snapshot().unwrap().accounting;
-        for (scalar, expected) in [
-            (Scalar::ApiTransactionItems, reached.0),
-            (Scalar::ApiTransactionBytes, reached.1),
-            (Scalar::ApiRetainedItems, retained.items),
-            (Scalar::ApiRetainedBytes, retained.bytes),
-        ] {
-            assert_eq!(evidence.scalar(scalar).unwrap().max, expected as u64);
-        }
-        for stage in [SemanticStage::ApiRetained, SemanticStage::ApiTransaction] {
-            assert_eq!(evidence.scalar(Scalar::SemanticRefusals(stage)), None);
-            assert_eq!(
-                evidence.scalar(Scalar::SemanticRefusedRequired(stage)),
-                None
-            );
-            assert_eq!(evidence.scalar(Scalar::SemanticRefusedLimit(stage)), None);
-        }
-        assert!(evidence.scalar(Scalar::ApiSelectedBytes).is_some());
-        assert!(evidence.scalar(Scalar::ApiCanonicalBytes).is_some());
     }
 
     #[test]

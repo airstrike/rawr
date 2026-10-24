@@ -473,10 +473,6 @@ pub enum Error {
     /// Previews and snapshots need an application, and a plain program has none.
     #[error("this program has no application, so it has no previews or snapshots. Its `main` does not end in `iced::run` or `iced::application`.")]
     PlainProgram,
-    /// The generated and linked import-baseline fixture identities disagree.
-    #[cfg(feature = "import-baseline")]
-    #[error("generated iced profile fixture disagrees with the linked host")]
-    ProfileFixture,
     /// A live candidate failed or timed out before iced installation feedback.
     #[error("generated iced reload transaction failed: {0}")]
     Reload(Box<str>),
@@ -1513,72 +1509,6 @@ fn install_compiler_accounted(
     })
 }
 
-/// Install one generated fixture after validating its linked host version.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the agreement wraps the existing exact generated proof without weakening it"
-)]
-pub fn install_compiler_fixture(
-    engine: &mut rawr::Engine,
-    fixture: super::Fixture,
-    version: u32,
-    bytes: &[u8],
-    profile: [u8; 32],
-    rules: [u8; 32],
-    aliases: &[AliasTarget<'_>],
-    sources: &[ProjectionSourceSite<'_>],
-    abis: &[ExtensionAbi<'_>],
-    endpoints: &[OperationEndpoint<'_>],
-    projections: &[Projection<'_>],
-) -> Result<Compiler, Error> {
-    validate_fixture(fixture, version)?;
-    install_compiler(
-        engine,
-        bytes,
-        profile,
-        rules,
-        aliases,
-        sources,
-        abis,
-        endpoints,
-        projections,
-    )
-}
-
-/// Reconstruct the exact baseline fixture with retained generated ownership.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub fn install_compiler_fixture_retained(
-    engine: &mut rawr::Engine,
-    fixture: super::Fixture,
-    version: u32,
-    bytes: &[u8],
-    profile: [u8; 32],
-    rules: [u8; 32],
-    aliases: &[AliasTarget<'_>],
-    sources: &[ProjectionSourceSite<'_>],
-    abis: &[ExtensionAbi<'_>],
-    endpoints: &[OperationEndpoint<'_>],
-    projections: &[Projection<'_>],
-    native: &mut rawr::package::import::runner::account::Native,
-) -> Result<Compiler, Error> {
-    validate_fixture(fixture, version)?;
-    install_compiler_retained(
-        engine,
-        bytes,
-        profile,
-        rules,
-        aliases,
-        sources,
-        abis,
-        endpoints,
-        projections,
-        native,
-    )
-}
-
 #[derive(Clone, Copy)]
 struct CompatibilitySeal {
     exact: [u8; 32],
@@ -1648,47 +1578,6 @@ pub fn install_compiler_contract(
             )
         },
     )
-}
-
-/// Install a parent-side import-baseline contract under the same fixture/version agreement.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub fn install_compiler_contract_fixture(
-    engine: &mut rawr::Engine,
-    fixture: super::Fixture,
-    version: u32,
-    bytes: &[u8],
-    profile: [u8; 32],
-    contract: &rawr_import::profile::Contract,
-) -> Result<Compiler, Error> {
-    validate_fixture(fixture, version)?;
-    with_contract_rows(
-        contract,
-        |aliases, sources, abis, endpoints, projections| {
-            install_compiler_fixture(
-                engine,
-                fixture,
-                version,
-                bytes,
-                profile,
-                *contract.rules_digest(),
-                aliases,
-                sources,
-                abis,
-                endpoints,
-                projections,
-            )
-        },
-    )
-}
-
-#[cfg(feature = "import-baseline")]
-fn validate_fixture(fixture: super::Fixture, version: u32) -> Result<(), Error> {
-    if fixture.version() == version {
-        Ok(())
-    } else {
-        Err(Error::ProfileFixture)
-    }
 }
 
 fn with_contract_rows<T>(
@@ -3234,22 +3123,6 @@ mod alias_proof_tests {
             [3; 32],
             &PARAMETERS,
         )
-    }
-
-    #[cfg(feature = "import-baseline")]
-    #[test]
-    fn generated_and_linked_profile_fixture_versions_must_agree() {
-        for fixture in [
-            super::super::Fixture::Baseline,
-            super::super::Fixture::Variant,
-        ] {
-            super::validate_fixture(fixture, fixture.version())
-                .expect("the selected generated and linked fixture agrees");
-            assert!(matches!(
-                super::validate_fixture(fixture, fixture.version().wrapping_add(1)),
-                Err(super::Error::ProfileFixture)
-            ));
-        }
     }
 
     #[test]

@@ -1017,39 +1017,6 @@ pub(crate) fn decode_handshakes(bytes: &[u8]) -> Result<Document> {
     })
 }
 
-#[cfg(feature = "import-baseline")]
-pub(crate) fn attribution_handshake(bytes: &[u8]) -> Result<(Box<str>, Box<str>, Box<str>)> {
-    let fragment: Fragment = serde_json::from_slice(bytes).map_err(|error| Error::Extraction {
-        code: "baseline-attribution-protocol-schema",
-        reason: error.to_string().into_boxed_str(),
-    })?;
-    let handshake = fragment.handshake;
-    if handshake.schema != SCHEMA
-        || !lower_hex(&handshake.unit_correlation, 64)
-        || !lower_hex(&handshake.invocation_nonce, 64)
-        || !lower_hex(&handshake.probe_arguments_digest, 64)
-    {
-        return Err(Error::Extraction {
-            code: "baseline-attribution-protocol-identity",
-            reason: "the protocol handshake does not match the reviewed schema".into(),
-        });
-    }
-    Ok((
-        handshake.unit_correlation.into_boxed_str(),
-        handshake.invocation_nonce.into_boxed_str(),
-        handshake.probe_arguments_digest.into_boxed_str(),
-    ))
-}
-
-#[cfg(feature = "import-baseline")]
-fn lower_hex(value: &str, length: usize) -> bool {
-    value.len() == length
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        && value.bytes().any(|byte| byte != b'0')
-}
-
 #[cfg(test)]
 pub(crate) fn reset_accounted_decodes() {
     ACCOUNTED_DECODES.with(|count| count.set(0));

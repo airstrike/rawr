@@ -56,11 +56,6 @@ enum Mode {
 const DECLARED_DIRECTORY: &str = "declared";
 const RECORD_NAME: &str = "resolution.record";
 
-#[cfg(feature = "import-baseline")]
-pub(crate) fn observed_record(bundle: PathBuf) -> PathBuf {
-    bundle.join(DECLARED_DIRECTORY).join(RECORD_NAME)
-}
-
 impl Layout {
     /// Bind every output path while the original bundle reservation is live.
     pub(crate) fn bind(

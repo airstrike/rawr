@@ -95,25 +95,6 @@ pub(crate) fn root(path: Option<&PathBuf>) -> Result<PathBuf, Error> {
 
 /// Prepare and run one integrated native preview selector.
 pub fn execute(path: Option<PathBuf>) -> Result<(), Error> {
-    execute_transform(
-        path,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-
-#[cfg(feature = "import-baseline")]
-pub(crate) fn execute_with_profile(
-    path: Option<PathBuf>,
-    profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<(), Error> {
-    execute_transform(path, profile)
-}
-
-fn execute_transform(
-    path: Option<PathBuf>,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<(), Error> {
     let loaded = crate::base::load(path.as_ref()).map_err(Error::Diagnostic)?;
     #[cfg(feature = "native-runner")]
     if !loaded.graph.declares_rust_import() {
@@ -127,21 +108,9 @@ fn execute_transform(
             &loaded.target,
             Some(loaded.graph),
             rawr_import::process::Lifecycle::Preview,
-            #[cfg(feature = "import-baseline")]
-            profile,
         )
         .map(|_| ())
         .map_err(Error::Diagnostic);
-    }
-    #[cfg(feature = "import-baseline")]
-    if profile.is_some() {
-        return Err(Error::Diagnostic(
-            diagnostic::Report::error(
-                diagnostic::code::FRAMEWORK_NATIVE,
-                "private profile selection requires a declared Rust import",
-            )
-            .finish(),
-        ));
     }
     let root = root(path.as_ref())?;
     let launch = crate::watch::Launch::open(loaded).map_err(Error::Diagnostic)?;

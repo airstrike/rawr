@@ -112,11 +112,6 @@ impl Proof {
         self.attestation_digest()
     }
 
-    #[cfg(feature = "import-baseline")]
-    pub(crate) fn observational_digest(&self) -> [u8; 32] {
-        self.attestation_digest()
-    }
-
     fn attestation_digest(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(b"rawr.phase9.toolchain-observation/v1");

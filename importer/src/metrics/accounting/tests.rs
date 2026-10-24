@@ -47,9 +47,6 @@ fn actual_scoped_observations_distinguish_unknown_zero_and_repeated_products() {
             .count,
         1
     );
-    assert!(evidence.qualifies(&[Scalar::ResolutionMetadataBytes, Scalar::ApiCanonicalBytes]));
-    assert!(!evidence.qualifies(&[Scalar::ResolutionUnitBytes]));
-    assert!(!Evidence::default().qualifies(&[]));
 }
 
 #[test]
@@ -90,8 +87,6 @@ fn graph_clones_share_a_row_and_late_observations_do_not_reset_high_water() {
     assert_eq!(row.first_exceedance.unwrap().admitted, [2, 3, 4, 5, 8, 9]);
     assert_eq!(evidence.graphs[1].unwrap().account, 9);
     assert!(evidence.valid());
-    // A governed miss may handle a refusal. Metrics do not infer a product result.
-    assert!(evidence.qualifies(&[]));
 }
 
 #[test]
@@ -120,9 +115,6 @@ fn scalar_overflow_retains_reached_evidence_without_replacing_product_failure() 
             .total,
         u64::MAX
     );
-    assert!(!snapshot
-        .accounting
-        .qualifies(&[Scalar::ApiTransactionBytes]));
     let encoded = serde_json::to_vec(&snapshot).unwrap();
     let decoded: recorder::Snapshot = serde_json::from_slice(&encoded).unwrap();
     assert_eq!(decoded, snapshot);
@@ -151,7 +143,6 @@ fn wider_quantities_are_checked_and_conversion_overflow_is_sticky() {
             total: 17
         })
     );
-    assert!(!evidence.qualifies(&[Scalar::ProcessElapsedNanoseconds]));
 }
 
 #[test]
@@ -184,7 +175,6 @@ fn graph_capacity_is_fixed_and_arithmetic_refusal_keeps_unknown_required_amount(
     assert_eq!(evidence.fault, Some(Fault::GraphCapacity));
     assert_eq!(evidence.graphs.iter().flatten().count(), GRAPH_ACCOUNTS);
     assert!(evidence.valid());
-    assert!(!evidence.qualifies(&[]));
 
     let mut evidence = Evidence::default();
     evidence.record_graph(
@@ -309,7 +299,6 @@ fn invalid_identity_or_refusal_marks_evidence_incomplete() {
             evidence.fault,
             Some(Fault::InvalidGraph(observation.account))
         );
-        assert!(!evidence.qualifies(&[]));
     }
 }
 
@@ -424,104 +413,6 @@ fn complete_fixed_schema_payload_has_bounded_storage_and_serialization() {
         assert!(json_size(row) <= 521, "native: {} bytes", json_size(row));
     }
     assert!(json_size(&evidence.fault) <= 88);
-
-    #[cfg(feature = "import-baseline")]
-    let (retained_bound, encoded_bound) = {
-        use metrics::{bundle, publication};
-
-        let target =
-            metrics::pipeline::target::Target::observe(crate::store::bundle::BundleRef::new(
-                crate::node::ExecutionKey::from_bytes([u8::MAX; 32]),
-                crate::store::bundle::BundleId::from_bytes([u8::MAX; 32]),
-            ));
-        let bundle = bundle::Row {
-            target: Some(target),
-            allocated: u64::MAX,
-            initialized: u64::MAX,
-            initialization_failed: u64::MAX,
-            seal_started: u64::MAX,
-            sealed: u64::MAX,
-            publication_started: u64::MAX,
-            published: u64::MAX,
-            retained: u64::MAX,
-            cleanup_started: u64::MAX,
-            thaw_failed: u64::MAX,
-            removed: u64::MAX,
-            removal_failed: u64::MAX,
-        };
-        evidence.bundles = Some(bundle::Evidence {
-            resolution: bundle,
-            runner: bundle,
-            fault: Some(bundle::Fault::Overflow),
-        });
-        let counts = publication::Counts {
-            started: u64::MAX,
-            created: u64::MAX,
-            adopted: u64::MAX,
-            renamed: u64::MAX,
-            existing: u64::MAX,
-            lost: u64::MAX,
-            operation_failed: u64::MAX,
-            cleanup_started: u64::MAX,
-            cleaned: u64::MAX,
-            cleanup_failed: u64::MAX,
-            returned: u64::MAX,
-            unresolved: u64::MAX,
-            anomaly: u64::MAX,
-        };
-        let mut history = publication::Evidence::default();
-        assert_eq!(history.nodes.len(), 11);
-        assert_eq!(history.pins.len(), 4);
-        assert_eq!(history.replacements.len(), 13);
-        assert_eq!(history.retirements.len(), 7);
-        for row in &mut history.nodes {
-            row.action = counts;
-            row.content = counts;
-            row.index = counts;
-        }
-        for row in &mut history.pins {
-            row.counts = counts;
-            row.released = counts;
-            row.stale = counts;
-        }
-        for row in &mut history.replacements {
-            row.counts = counts;
-            row.retired = counts;
-        }
-        for row in &mut history.retirements {
-            row.counts = counts;
-        }
-        history.recovered_files = counts;
-        history.recovered_directories = counts;
-        history.fault = Some(publication::Fault::Overflow);
-        evidence.publications = Some(history);
-
-        for (name, bytes, bound) in [
-            (
-                "bundles",
-                std::mem::size_of::<Option<bundle::Evidence>>(),
-                344,
-            ),
-            (
-                "publications",
-                std::mem::size_of::<Option<publication::Evidence>>(),
-                8_608,
-            ),
-        ] {
-            assert!(bytes <= bound, "{name}={bytes}, bound={bound}");
-        }
-        // Two bundle rows each contain a 64-byte target rendered as u8 arrays
-        // and twelve u64 counters. The 80 publication count rows each render
-        // thirteen u64s in at most 430 bytes; 2,048 covers all closed family
-        // labels, member names, arrays and separators (currently 1,811 bytes).
-        assert_eq!(json_size(&counts), 430);
-        assert!(json_size(&evidence.bundles) <= 1_490);
-        assert!(json_size(&evidence.publications) <= 80 * 430 + 2_048);
-        (
-            retained_bound + 344 + 8_608,
-            encoded_bound + 1_490 + 80 * 430 + 2_048,
-        )
-    };
 
     let retained_bytes = std::mem::size_of::<Evidence>();
     let encoded = serde_json::to_vec(&evidence).unwrap();

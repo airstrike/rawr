@@ -17,9 +17,6 @@ pub mod init;
 pub mod layer;
 mod mcp;
 pub mod new;
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub mod evidence;
 pub mod preview;
 pub mod run;
 pub mod snapshot;
@@ -47,9 +44,6 @@ pub enum Error {
     Mcp(std::io::Error),
     /// `rawr init` could not read or write an agent config.
     Init(init::Error),
-    /// Private baseline selection was not valid for the parsed command.
-    #[cfg(feature = "import-baseline")]
-    Evidence(evidence::Error),
 }
 
 /// Successful output from a non-interactive command.
@@ -82,54 +76,14 @@ impl Report {
 
 /// Execute one already-parsed command.
 pub fn execute(command: command::Command) -> Result<Option<Report>, Error> {
-    execute_transform(
-        command,
-        #[cfg(feature = "import-baseline")]
-        None,
-    )
-}
-
-/// Execute one command with the import-baseline private typed profile fixture.
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub fn execute_with_profile(
-    command: command::Command,
-    profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<Option<Report>, Error> {
-    let profile = evidence::authorize_profile(profile, &command).map_err(Error::Evidence)?;
-    execute_transform(command, profile)
-}
-
-fn execute_transform(
-    command: command::Command,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<Option<Report>, Error> {
     // Exceedances belong to the command that produced them. They stay in the
     // import registry; the CLI does not print them.
     #[cfg(feature = "native-runner")]
     drop(rawr_import::exceedance::drain());
-    execute_command(
-        command,
-        #[cfg(feature = "import-baseline")]
-        profile,
-    )
-}
-
-fn execute_command(
-    command: command::Command,
-    #[cfg(feature = "import-baseline")] profile: Option<rawr_iced::profile::Fixture>,
-) -> Result<Option<Report>, Error> {
-    // Whether a layer goes on the base is decided from the source, before
-    // any layer's work, from the one load the rest of the command uses. A
-    // private profile only ever selects an import.
-    #[cfg(feature = "import-baseline")]
-    let profiled = profile.is_some();
-    #[cfg(not(feature = "import-baseline"))]
-    let profiled = false;
     let layer = |path: Option<&std::path::PathBuf>| {
         Ok(match base::layer(path)? {
-            base::Program::Base(loaded) if !profiled => Err(loaded),
-            base::Program::Base(loaded) | base::Program::Layered(loaded) => Ok(loaded),
+            base::Program::Base(loaded) => Err(loaded),
+            base::Program::Layered(loaded) => Ok(loaded),
         })
     };
     match command {
@@ -153,12 +107,7 @@ fn execute_command(
                     }));
                 }
             };
-            let successful = run::execute_loaded(
-                loaded,
-                #[cfg(feature = "import-baseline")]
-                profile,
-            )
-            .map_err(Error::Run)?;
+            let successful = run::execute_loaded(loaded).map_err(Error::Run)?;
             // A program that failed printed its own error as it ran.
             Ok((!successful).then(|| Report {
                 message: String::new(),
@@ -168,9 +117,6 @@ fn execute_command(
         }
         command::Command::Preview { path, name } => {
             let path = preview::select(path, name).map_err(Error::Preview)?;
-            #[cfg(feature = "import-baseline")]
-            preview::execute_with_profile(path, profile).map_err(Error::Preview)?;
-            #[cfg(not(feature = "import-baseline"))]
             preview::execute(path).map_err(Error::Preview)?;
             Ok(None)
         }
@@ -179,10 +125,6 @@ fn execute_command(
             verbose,
             path,
         } => {
-            #[cfg(feature = "import-baseline")]
-            let outcome =
-                snapshot::execute_with_profile(mode, path, profile).map_err(Error::Snapshot)?;
-            #[cfg(not(feature = "import-baseline"))]
             let outcome = snapshot::execute(mode, path).map_err(Error::Snapshot)?;
             let successful = outcome.is_successful();
             let message = if outcome.updated() {
@@ -247,11 +189,7 @@ fn execute_command(
             // rustc checks a Cargo crate of marked files while Rawr works.
             let cargo = rawr_cli::cargo::begin(&loaded.graph);
             let checked = match program {
-                Ok(loaded) => check::execute_loaded(
-                    loaded,
-                    #[cfg(feature = "import-baseline")]
-                    profile,
-                ),
+                Ok(loaded) => check::execute_loaded(loaded),
                 Err(base) => base::check(base).map_err(compile::Error::from_report),
             };
             if cargo.is_none() {
@@ -449,12 +387,6 @@ impl Error {
                 format!("rawr init: {error}"),
             )
             .finish(),
-            #[cfg(feature = "import-baseline")]
-            Self::Evidence(error) => rawr::diagnostic::Report::error(
-                rawr::diagnostic::code::ENVIRONMENT_DIAGNOSTIC,
-                error.to_string(),
-            )
-            .finish(),
         }
     }
 }
@@ -470,8 +402,6 @@ impl std::error::Error for Error {
             Self::Clean(_) => None,
             Self::Mcp(error) => Some(error),
             Self::Init(error) => Some(error),
-            #[cfg(feature = "import-baseline")]
-            Self::Evidence(error) => Some(error),
         }
     }
 }

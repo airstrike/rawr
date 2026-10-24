@@ -1,6 +1,3 @@
-#[cfg(feature = "import-baseline")]
-use crate::metrics::principal::temporary;
-
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
@@ -18,29 +15,12 @@ pub(crate) enum Publication {
     Existing,
 }
 
-pub(crate) fn ensure_directory(
-    root: &Path,
-    relative: &Path,
-    #[cfg(feature = "import-baseline")] graph: &crate::node::GraphBudget,
-) -> Result<PathBuf, Error> {
-    ensure_directory_with(
-        None,
-        root,
-        relative,
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::principal::creation::Context::unleased(
-            root,
-            graph,
-            crate::metrics::principal::creation::Source::Directory,
-        ),
-    )
+pub(crate) fn ensure_directory(root: &Path, relative: &Path) -> Result<PathBuf, Error> {
+    ensure_directory_with(None, root, relative)
 }
 
 /// `<target>/rawr/store`, the project's typed store.
-pub(crate) fn ensure_project_root(
-    rawr: &Path,
-    #[cfg(feature = "import-baseline")] graph: &crate::node::GraphBudget,
-) -> Result<PathBuf, Error> {
+pub(crate) fn ensure_project_root(rawr: &Path) -> Result<PathBuf, Error> {
     let root = fs::create_dir_all(rawr)
         .and_then(|()| fs::canonicalize(rawr))
         .map_err(|source| Error::Io {
@@ -48,17 +28,7 @@ pub(crate) fn ensure_project_root(
             path: rawr.to_path_buf(),
             source,
         })?;
-    ensure_directory_with(
-        None,
-        &root,
-        Path::new("store"),
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::principal::creation::Context::unleased(
-            &root,
-            graph,
-            crate::metrics::principal::creation::Source::CargoHome,
-        ),
-    )
+    ensure_directory_with(None, &root, Path::new("store"))
 }
 
 pub(crate) fn ensure_admitted_directory(
@@ -66,26 +36,14 @@ pub(crate) fn ensure_admitted_directory(
     root: &Path,
     relative: &Path,
 ) -> Result<PathBuf, Error> {
-    ensure_directory_with(
-        Some(publication),
-        root,
-        relative,
-        #[cfg(feature = "import-baseline")]
-        crate::metrics::principal::creation::Context::published(
-            publication,
-            crate::metrics::principal::creation::Source::Directory,
-        ),
-    )
+    ensure_directory_with(Some(publication), root, relative)
 }
 
 fn ensure_directory_with(
     publication: Option<&super::lease::Publication<'_>>,
     root: &Path,
     relative: &Path,
-    #[cfg(feature = "import-baseline")] observer: crate::metrics::principal::creation::Context<'_>,
 ) -> Result<PathBuf, Error> {
-    #[cfg(feature = "import-baseline")]
-    use crate::metrics::principal::creation;
     if relative.is_absolute() {
         return Err(Error::OutsideRoot(relative.to_path_buf()));
     }
@@ -95,15 +53,11 @@ fn ensure_directory_with(
             return Err(Error::OutsideRoot(relative.to_path_buf()));
         };
         current.push(component);
-        #[cfg(feature = "import-baseline")]
-        let observation = observer.start(&current, true);
         match fs::symlink_metadata(&current) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() || !metadata.is_dir() {
                     return Err(Error::Shape(current));
                 }
-                #[cfg(feature = "import-baseline")]
-                observation.adopted(&metadata);
             }
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
                 if let Some(publication) = publication {
@@ -115,13 +69,8 @@ fn ensure_directory_with(
                     admitted.consume(publication, root, "directory", &current, 0)?;
                 }
                 match fs::create_dir(&current) {
-                    Ok(()) => {
-                        #[cfg(feature = "import-baseline")]
-                        observation.created(creation::Outcome::Created);
-                    }
+                    Ok(()) => {}
                     Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
-                        #[cfg(feature = "import-baseline")]
-                        observation.created(creation::Outcome::Contended);
                         let metadata =
                             fs::symlink_metadata(&current).map_err(|source| Error::Io {
                                 operation: "inspect concurrently created typed store directory",
@@ -131,12 +80,8 @@ fn ensure_directory_with(
                         if metadata.file_type().is_symlink() || !metadata.is_dir() {
                             return Err(Error::Shape(current));
                         }
-                        #[cfg(feature = "import-baseline")]
-                        observation.adopted(&metadata);
                     }
                     Err(source) => {
-                        #[cfg(feature = "import-baseline")]
-                        observation.created(creation::Outcome::Failed);
                         return Err(Error::Io {
                             operation: "create typed store directory",
                             path: current,
@@ -153,8 +98,6 @@ fn ensure_directory_with(
                 });
             }
         }
-        #[cfg(feature = "import-baseline")]
-        observation.completed(true);
     }
     let canonical = fs::canonicalize(&current).map_err(|source| Error::Io {
         operation: "canonicalize typed store directory",
@@ -434,20 +377,7 @@ pub(crate) fn publish_directory(
     target: &Path,
     file_name: &'static str,
     bytes: &[u8],
-    #[cfg(feature = "import-baseline")] class: crate::metrics::publication::Class,
-    #[cfg(feature = "import-baseline")] principal: Option<&crate::metrics::principal::Attempt<'_>>,
-    #[cfg(feature = "import-baseline")] pin: Option<&crate::metrics::principal::pin::Attempt>,
 ) -> Result<Publication, Error> {
-    #[cfg(feature = "import-baseline")]
-    let mut observation = crate::metrics::publication::Attempt::start(class);
-    #[cfg(feature = "import-baseline")]
-    let lifecycle = temporary::Attempt::start(
-        principal
-            .map(|principal| principal.temporary())
-            .or_else(|| pin.and_then(|pin| pin.temporary())),
-        temporary::Form::Directory,
-        Some(file_name),
-    );
     if !target.starts_with(root) {
         return Err(Error::OutsideRoot(target.to_path_buf()));
     }
@@ -456,17 +386,6 @@ pub(crate) fn publish_directory(
             return Err(Error::Shape(target.to_path_buf()));
         }
         Ok(_) => {
-            #[cfg(feature = "import-baseline")]
-            observation.operation(Some(true));
-            #[cfg(feature = "import-baseline")]
-            if let Some(principal) = principal {
-                principal.completed(true);
-            }
-            #[cfg(feature = "import-baseline")]
-            {
-                lifecycle.operation(temporary::Outcome::Existing);
-                lifecycle.completed(temporary::Outcome::Existing);
-            }
             return Ok(Publication::Existing);
         }
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
@@ -488,89 +407,45 @@ pub(crate) fn publish_directory(
     let process = std::process::id();
     let sequence = RESERVATION.fetch_add(1, Ordering::Relaxed);
     let reservation = format!("{process}-{sequence}");
-    #[cfg(feature = "import-baseline")]
-    lifecycle.reserved(process, sequence);
     let temporary = temporary_root.join(reservation);
-    #[cfg(feature = "import-baseline")]
-    lifecycle.step(temporary::Action::CreateDirectory);
     let created = fs::create_dir(&temporary);
-    #[cfg(feature = "import-baseline")]
-    lifecycle.result(created.is_ok());
     created.map_err(|source| Error::Io {
         operation: "create typed store publication reservation",
         path: temporary.clone(),
         source,
     })?;
-    #[cfg(feature = "import-baseline")]
-    observation.created();
     let temporary_file = temporary.join(file_name);
     let result = (|| {
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Open(temporary::Member::Primary));
         let opened = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary_file);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(opened.is_ok());
         let mut output = opened.map_err(|source| Error::Io {
             operation: "create typed store temporary payload",
             path: temporary_file.clone(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Write(temporary::Member::Primary));
         let written = output.write_all(bytes);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(written.is_ok());
         written.map_err(|source| Error::Io {
             operation: "write typed store temporary payload",
             path: temporary_file.clone(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::SyncFile(temporary::Member::Primary));
         let synced = output.sync_all();
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(synced.is_ok());
         synced.map_err(|source| Error::Io {
             operation: "sync typed store temporary payload",
             path: temporary_file.clone(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::SyncTemporary);
-        let synced = sync_directory(&temporary);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(synced.is_ok());
-        synced?;
+        sync_directory(&temporary)?;
         if target.exists() {
             return Ok(Publication::Existing);
         }
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Rename);
         let renamed = fs::rename(&temporary, target);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(renamed.is_ok());
         match renamed {
             Ok(()) => {
-                #[cfg(feature = "import-baseline")]
-                observation.renamed();
-                #[cfg(feature = "import-baseline")]
-                if let Some(pin) = pin {
-                    pin.step(crate::metrics::principal::pin::Step::Renamed);
-                }
-                #[cfg(feature = "import-baseline")]
-                if let Some(principal) = principal {
-                    principal.renamed();
-                }
                 if let Some(parent) = target.parent() {
-                    #[cfg(feature = "import-baseline")]
-                    lifecycle.step(temporary::Action::SyncParent);
-                    let synced = sync_directory(parent);
-                    #[cfg(feature = "import-baseline")]
-                    lifecycle.result(synced.is_ok());
-                    synced?;
+                    sync_directory(parent)?;
                 }
                 Ok(Publication::Published)
             }
@@ -589,49 +464,15 @@ pub(crate) fn publish_directory(
             }),
         }
     })();
-    #[cfg(feature = "import-baseline")]
-    observation.operation(
-        result
-            .as_ref()
-            .ok()
-            .map(|value| matches!(value, Publication::Existing)),
-    );
-    #[cfg(feature = "import-baseline")]
-    lifecycle.operation(match &result {
-        Ok(Publication::Published) => temporary::Outcome::Published,
-        Ok(Publication::Existing) => temporary::Outcome::Existing,
-        Err(_) => temporary::Outcome::Failed,
-    });
     let remains = temporary.exists();
-    #[cfg(feature = "import-baseline")]
-    lifecycle.cleanup_checked(remains);
     if remains {
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup_started();
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Cleanup);
         let removed = fs::remove_dir_all(&temporary);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(removed.is_ok());
-        let cleanup = removed.map_err(|source| Error::Io {
+        removed.map_err(|source| Error::Io {
             operation: "retire typed store publication reservation",
             path: temporary,
             source,
-        });
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup(cleanup.is_ok());
-        cleanup?;
+        })?;
     }
-    #[cfg(feature = "import-baseline")]
-    if let (Some(principal), Ok(value)) = (principal, &result) {
-        principal.completed(matches!(value, Publication::Existing));
-    }
-    #[cfg(feature = "import-baseline")]
-    lifecycle.completed(match &result {
-        Ok(Publication::Published) => temporary::Outcome::Published,
-        Ok(Publication::Existing) => temporary::Outcome::Existing,
-        Err(_) => temporary::Outcome::Failed,
-    });
     result
 }
 
@@ -640,22 +481,9 @@ pub(crate) fn publish_sealed_directory<T>(
     target: &Path,
     file_name: &'static str,
     bytes: &[u8],
-    #[cfg(feature = "import-baseline")] class: crate::metrics::publication::Class,
-    #[cfg(feature = "import-baseline")] principal: Option<&crate::metrics::principal::Attempt<'_>>,
     seal: impl FnOnce(&fs::Metadata) -> Result<(Box<[u8]>, T), Error>,
 ) -> Result<(Publication, Option<T>), Error> {
-    publish_sealed_with(
-        root,
-        target,
-        file_name,
-        bytes,
-        #[cfg(feature = "import-baseline")]
-        class,
-        #[cfg(feature = "import-baseline")]
-        principal,
-        seal,
-        sync_directory,
-    )
+    publish_sealed_with(root, target, file_name, bytes, seal, sync_directory)
 }
 
 fn publish_sealed_with<T>(
@@ -663,19 +491,9 @@ fn publish_sealed_with<T>(
     target: &Path,
     file_name: &'static str,
     bytes: &[u8],
-    #[cfg(feature = "import-baseline")] class: crate::metrics::publication::Class,
-    #[cfg(feature = "import-baseline")] principal: Option<&crate::metrics::principal::Attempt<'_>>,
     seal: impl FnOnce(&fs::Metadata) -> Result<(Box<[u8]>, T), Error>,
     synchronize: impl Fn(&Path) -> Result<(), Error>,
 ) -> Result<(Publication, Option<T>), Error> {
-    #[cfg(feature = "import-baseline")]
-    let mut observation = crate::metrics::publication::Attempt::start(class);
-    #[cfg(feature = "import-baseline")]
-    let lifecycle = temporary::Attempt::start(
-        principal.map(|principal| principal.temporary()),
-        temporary::Form::Sealed,
-        Some(file_name),
-    );
     if !target.starts_with(root) || file_name == "allocation" {
         return Err(Error::OutsideRoot(target.to_path_buf()));
     }
@@ -683,51 +501,31 @@ fn publish_sealed_with<T>(
     let process = std::process::id();
     let sequence = RESERVATION.fetch_add(1, Ordering::Relaxed);
     let reservation = format!("{process}-{sequence}");
-    #[cfg(feature = "import-baseline")]
-    lifecycle.reserved(process, sequence);
     let temporary = temporary_root.join(reservation);
-    #[cfg(feature = "import-baseline")]
-    lifecycle.step(temporary::Action::CreateDirectory);
     let created = fs::create_dir(&temporary);
-    #[cfg(feature = "import-baseline")]
-    lifecycle.result(created.is_ok());
     created.map_err(|source| Error::Io {
         operation: "create sealed store publication reservation",
         path: temporary.clone(),
         source,
     })?;
-    #[cfg(feature = "import-baseline")]
-    observation.created();
     let temporary_file = temporary.join(file_name);
     let result = (|| {
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Open(temporary::Member::Primary));
         let opened = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary_file);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(opened.is_ok());
         let mut output = opened.map_err(|source| Error::Io {
             operation: "create sealed store temporary payload",
             path: temporary_file.clone(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Write(temporary::Member::Primary));
         let written = output.write_all(bytes);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(written.is_ok());
         written.map_err(|source| Error::Io {
             operation: "write sealed store temporary payload",
             path: temporary_file.clone(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::SyncFile(temporary::Member::Primary));
         let synced = output.sync_all();
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(synced.is_ok());
         synced.map_err(|source| Error::Io {
             operation: "sync sealed store temporary payload",
             path: temporary_file.clone(),
@@ -740,68 +538,36 @@ fn publish_sealed_with<T>(
         })?;
         let (record, retained) = seal(&metadata)?;
         let record_path = temporary.join("allocation");
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Open(temporary::Member::Allocation));
         let opened = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&record_path);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(opened.is_ok());
         let mut record_file = opened.map_err(|source| Error::Io {
             operation: "create sealed store allocation record",
             path: record_path.clone(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Write(temporary::Member::Allocation));
         let written = record_file.write_all(&record);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(written.is_ok());
         written.map_err(|source| Error::Io {
             operation: "write sealed store allocation record",
             path: record_path.clone(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::SyncFile(temporary::Member::Allocation));
         let synced = record_file.sync_all();
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(synced.is_ok());
         synced.map_err(|source| Error::Io {
             operation: "sync sealed store allocation record",
             path: record_path,
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::SyncTemporary);
-        let synced = synchronize(&temporary);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(synced.is_ok());
-        synced?;
+        synchronize(&temporary)?;
         if target.exists() {
             return Ok((Publication::Existing, None));
         }
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Rename);
         let renamed = fs::rename(&temporary, target);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(renamed.is_ok());
         match renamed {
             Ok(()) => {
-                #[cfg(feature = "import-baseline")]
-                observation.renamed();
-                #[cfg(feature = "import-baseline")]
-                if let Some(principal) = principal {
-                    principal.renamed();
-                }
                 if let Some(parent) = target.parent() {
-                    #[cfg(feature = "import-baseline")]
-                    lifecycle.step(temporary::Action::SyncParent);
-                    let synced = synchronize(parent);
-                    #[cfg(feature = "import-baseline")]
-                    lifecycle.result(synced.is_ok());
-                    synced?;
+                    synchronize(parent)?;
                 }
                 Ok((Publication::Published, Some(retained)))
             }
@@ -820,49 +586,15 @@ fn publish_sealed_with<T>(
             }),
         }
     })();
-    #[cfg(feature = "import-baseline")]
-    observation.operation(
-        result
-            .as_ref()
-            .ok()
-            .map(|(value, _)| matches!(value, Publication::Existing)),
-    );
-    #[cfg(feature = "import-baseline")]
-    lifecycle.operation(match &result {
-        Ok((Publication::Published, _)) => temporary::Outcome::Published,
-        Ok((Publication::Existing, _)) => temporary::Outcome::Existing,
-        Err(_) => temporary::Outcome::Failed,
-    });
     let remains = temporary.exists();
-    #[cfg(feature = "import-baseline")]
-    lifecycle.cleanup_checked(remains);
     if remains {
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup_started();
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Cleanup);
         let removed = fs::remove_dir_all(&temporary);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(removed.is_ok());
-        let cleanup = removed.map_err(|source| Error::Io {
+        removed.map_err(|source| Error::Io {
             operation: "retire sealed store publication reservation",
             path: temporary,
             source,
-        });
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup(cleanup.is_ok());
-        cleanup?;
+        })?;
     }
-    #[cfg(feature = "import-baseline")]
-    if let (Some(principal), Ok((value, _))) = (principal, &result) {
-        principal.completed(matches!(value, Publication::Existing));
-    }
-    #[cfg(feature = "import-baseline")]
-    lifecycle.completed(match &result {
-        Ok((Publication::Published, _)) => temporary::Outcome::Published,
-        Ok((Publication::Existing, _)) => temporary::Outcome::Existing,
-        Err(_) => temporary::Outcome::Failed,
-    });
     result
 }
 
@@ -872,23 +604,8 @@ pub(crate) fn replace_admitted_file(
     root: &Path,
     target: &Path,
     bytes: &[u8],
-    #[cfg(feature = "import-baseline")] purpose: crate::metrics::publication::Replacement,
-    #[cfg(feature = "import-baseline")] ledger: Option<
-        crate::metrics::principal::ledger::Write<'_>,
-    >,
 ) -> Result<(), Error> {
-    replace_admitted_file_with(
-        admitted,
-        publication,
-        root,
-        target,
-        bytes,
-        #[cfg(feature = "import-baseline")]
-        purpose,
-        #[cfg(feature = "import-baseline")]
-        ledger,
-        sync_directory,
-    )
+    replace_admitted_file_with(admitted, publication, root, target, bytes, sync_directory)
 }
 
 fn replace_admitted_file_with(
@@ -897,33 +614,8 @@ fn replace_admitted_file_with(
     root: &Path,
     target: &Path,
     bytes: &[u8],
-    #[cfg(feature = "import-baseline")] purpose: crate::metrics::publication::Replacement,
-    #[cfg(feature = "import-baseline")] ledger: Option<
-        crate::metrics::principal::ledger::Write<'_>,
-    >,
     mut sync: impl FnMut(&Path) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    #[cfg(feature = "import-baseline")]
-    let mut observation = crate::metrics::publication::Attempt::start(
-        crate::metrics::publication::Class::Replacement(purpose),
-    );
-    #[cfg(feature = "import-baseline")]
-    let ledger = ledger.map(|write| {
-        crate::metrics::principal::ledger::Attempt::replace(
-            publication,
-            root,
-            target,
-            bytes,
-            purpose,
-            write,
-        )
-    });
-    #[cfg(feature = "import-baseline")]
-    let lifecycle = temporary::Attempt::start(
-        ledger.as_ref().map(|ledger| ledger.temporary()),
-        temporary::Form::Replacement,
-        None,
-    );
     admitted.consume(publication, root, "replacement", target, bytes.len())?;
     if !target.starts_with(root) {
         return Err(Error::OutsideRoot(target.to_path_buf()));
@@ -949,142 +641,63 @@ fn replace_admitted_file_with(
     let process = std::process::id();
     let sequence = RESERVATION.fetch_add(1, Ordering::Relaxed);
     let reservation = format!("{process}-{sequence}");
-    #[cfg(feature = "import-baseline")]
-    lifecycle.reserved(process, sequence);
     let temporary = root.join("temporaries").join(reservation);
     let result = (|| {
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Open(temporary::Member::Primary));
         let opened = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(opened.is_ok());
         let mut output = opened.map_err(|source| Error::Io {
             operation: "create typed store replacement file",
             path: temporary.clone(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        observation.created();
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Write(temporary::Member::Primary));
         let written = output.write_all(bytes);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(written.is_ok());
         written.map_err(|source| Error::Io {
             operation: "write typed store replacement file",
             path: temporary.clone(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::SyncFile(temporary::Member::Primary));
         let synced = output.sync_all();
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(synced.is_ok());
         synced.map_err(|source| Error::Io {
             operation: "sync typed store replacement file",
             path: temporary.clone(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Rename);
         let renamed = fs::rename(&temporary, target);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(renamed.is_ok());
         renamed.map_err(|source| Error::Io {
             operation: "replace typed store ledger",
             path: target.to_path_buf(),
             source,
         })?;
-        #[cfg(feature = "import-baseline")]
-        observation.renamed();
-        #[cfg(feature = "import-baseline")]
-        if let Some(ledger) = &ledger {
-            ledger.renamed();
-        }
         if let Some(parent) = target.parent() {
-            #[cfg(feature = "import-baseline")]
-            lifecycle.step(temporary::Action::SyncParent);
-            let synced = sync(parent);
-            #[cfg(feature = "import-baseline")]
-            lifecycle.result(synced.is_ok());
-            synced?;
+            sync(parent)?;
         }
         Ok(())
     })();
-    #[cfg(feature = "import-baseline")]
-    observation.operation(result.as_ref().ok().map(|_| false));
-    #[cfg(feature = "import-baseline")]
-    lifecycle.operation(match &result {
-        Ok(_) => temporary::Outcome::Published,
-        Err(_) => temporary::Outcome::Failed,
-    });
     let remains = temporary.exists();
-    #[cfg(feature = "import-baseline")]
-    lifecycle.cleanup_checked(remains);
     if remains {
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup_started();
-        #[cfg(feature = "import-baseline")]
-        lifecycle.step(temporary::Action::Cleanup);
         let removed = fs::remove_file(&temporary);
-        #[cfg(feature = "import-baseline")]
-        lifecycle.result(removed.is_ok());
-        let cleanup = removed.map_err(|source| Error::Io {
+        removed.map_err(|source| Error::Io {
             operation: "retire typed store replacement file",
             path: temporary,
             source,
-        });
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup(cleanup.is_ok());
-        #[cfg(feature = "import-baseline")]
-        if let Some(ledger) = &ledger {
-            ledger.cleanup(cleanup.is_ok());
-        }
-        cleanup?;
+        })?;
     }
-    #[cfg(feature = "import-baseline")]
-    if let Some(ledger) = &ledger {
-        ledger.completed(result.is_ok());
-    }
-    #[cfg(feature = "import-baseline")]
-    lifecycle.completed(match &result {
-        Ok(_) => temporary::Outcome::Published,
-        Err(_) => temporary::Outcome::Failed,
-    });
     result
-}
-
-#[cfg(feature = "import-baseline")]
-pub(crate) enum Retirement<'a> {
-    Pin(&'a crate::metrics::principal::pin::Attempt),
-    Allocation(&'a crate::metrics::principal::retirement::Attempt),
 }
 
 pub(crate) fn stage_retirement(
     publication: &super::lease::Publication<'_>,
     root: &Path,
     target: &Path,
-    #[cfg(feature = "import-baseline")] observation: &mut crate::metrics::publication::Attempt,
-    #[cfg(feature = "import-baseline")] retirement: Option<Retirement<'_>>,
 ) -> Result<PathBuf, Error> {
     let admitted = super::accounting::admit_control(
         publication,
         root,
         super::control::Plan::retirement(target),
     )?;
-    stage_admitted_retirement(
-        admitted,
-        publication,
-        root,
-        target,
-        #[cfg(feature = "import-baseline")]
-        observation,
-        #[cfg(feature = "import-baseline")]
-        retirement,
-    )
+    stage_admitted_retirement(admitted, publication, root, target)
 }
 
 pub(crate) fn stage_admitted_retirement(
@@ -1092,8 +705,6 @@ pub(crate) fn stage_admitted_retirement(
     publication: &super::lease::Publication<'_>,
     root: &Path,
     target: &Path,
-    #[cfg(feature = "import-baseline")] observation: &mut crate::metrics::publication::Attempt,
-    #[cfg(feature = "import-baseline")] retirement: Option<Retirement<'_>>,
 ) -> Result<PathBuf, Error> {
     admitted.consume(publication, root, "retirement", target, 0)?;
     let process = std::process::id();
@@ -1106,17 +717,6 @@ pub(crate) fn stage_admitted_retirement(
         path: target.to_path_buf(),
         source,
     })?;
-    #[cfg(feature = "import-baseline")]
-    observation.created();
-    #[cfg(feature = "import-baseline")]
-    if let Some(retirement) = retirement {
-        match retirement {
-            Retirement::Pin(pin) => pin.relocated(publication, &temporary),
-            Retirement::Allocation(attempt) => {
-                attempt.relocated(publication, &temporary, process, sequence)
-            }
-        }
-    }
     sync_directory(
         target
             .parent()

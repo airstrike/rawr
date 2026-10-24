@@ -1,8 +1,5 @@
 //! Deterministic miss-side reclamation of whole released DAG closures.
 
-#[cfg(feature = "import-baseline")]
-use crate::metrics::principal::retirement;
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,19 +25,18 @@ struct Interrupted {
 
 pub(super) fn recover_one(
     store: &Path,
-    graph: &crate::node::GraphBudget,
     requesting: Digest,
     local_only: bool,
     keep_roots: bool,
     budget: &mut recovery::Budget,
 ) -> Result<bool, Error> {
-    if recover_interrupted(store, graph, budget)? {
+    if recover_interrupted(store, budget)? {
         return Ok(true);
     }
-    if recover_garbage(store, graph, budget)? {
+    if recover_garbage(store, budget)? {
         return Ok(true);
     }
-    let selected = lease::with_publication(store, graph, |publication| {
+    let selected = lease::with_publication(store, |publication| {
         current_candidates(
             publication,
             store,
@@ -68,7 +64,7 @@ pub(super) fn recover_one(
         if blocked {
             continue;
         }
-        let recovered = lease::with_publication(store, graph, |publication| {
+        let recovered = lease::with_publication(store, |publication| {
             let registrations = accounting::registrations_recovery(store, budget)?;
             let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
             if !candidates(
@@ -113,12 +109,7 @@ pub(super) fn recover_one(
             for (eviction, registered) in evictions {
                 budget.bundle()?;
                 budget.deletion(registered.allocation().charge)?;
-                eviction.retire(
-                    publication,
-                    store,
-                    #[cfg(feature = "import-baseline")]
-                    registered.allocation(),
-                )?;
+                eviction.retire(publication, store)?;
             }
             retire_allocations(publication, store, &candidate.allocations, false, budget)?;
             accounting::finish_eviction(publication, store, budget)?;
@@ -132,14 +123,13 @@ pub(super) fn recover_one(
     if keep_roots {
         return Ok(false);
     }
-    recover_unrooted(store, graph, budget)
+    recover_unrooted(store, budget)
 }
 
 /// Repair only a rejected action's unrooted bundle; unrelated allocations remain
 /// subject to ordinary physical validation during every control mutation.
 pub(super) fn recover_rejected(
     store: &Path,
-    graph: &crate::node::GraphBudget,
     kind: Kind,
     schema: u32,
     actions: &[Option<(ActionKey, crate::node::Corruption)>],
@@ -147,7 +137,7 @@ pub(super) fn recover_rejected(
     budget: &mut recovery::Budget,
 ) -> Result<(), Error> {
     for (action, proof) in actions.iter().flatten().copied() {
-        let selected = lease::with_publication(store, graph, |publication| {
+        let selected = lease::with_publication(store, |publication| {
             recovery::recover_temporaries(publication, store, budget)?;
             let registrations = accounting::registrations_recovery(store, budget)?;
             let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
@@ -173,7 +163,7 @@ pub(super) fn recover_rejected(
                 "rejected candidate changed its authenticated bundle root",
             ));
         }
-        lease::with_publication(store, graph, |publication| {
+        lease::with_publication(store, |publication| {
             let registrations = accounting::registrations_recovery(store, budget)?;
             let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
             let parents = accounting::references_recovery(store, parents, budget)?;
@@ -248,20 +238,12 @@ fn rejected_closure(
     deletion_plan(&released, &rooted, registrations).map(Some)
 }
 
-pub(super) fn recover_pending(
-    store: &Path,
-    graph: &crate::node::GraphBudget,
-    budget: &mut recovery::Budget,
-) -> Result<(), Error> {
-    recover_interrupted(store, graph, budget).map(|_| ())
+pub(super) fn recover_pending(store: &Path, budget: &mut recovery::Budget) -> Result<(), Error> {
+    recover_interrupted(store, budget).map(|_| ())
 }
 
-fn recover_garbage(
-    store: &Path,
-    graph: &crate::node::GraphBudget,
-    budget: &mut recovery::Budget,
-) -> Result<bool, Error> {
-    lease::with_publication(store, graph, |publication| {
+fn recover_garbage(store: &Path, budget: &mut recovery::Budget) -> Result<bool, Error> {
+    lease::with_publication(store, |publication| {
         let Some((path, charge)) = accounting::garbage_recovery(store, budget)? else {
             return Ok(false);
         };
@@ -271,61 +253,21 @@ fn recover_garbage(
             store,
             super::control::Plan::retirement(&path),
         )?;
-        #[cfg(feature = "import-baseline")]
-        let mut observation = crate::metrics::publication::Attempt::start(
-            crate::metrics::publication::Class::Retirement(
-                crate::metrics::publication::Retirement::Garbage,
-            ),
-        );
-        #[cfg(feature = "import-baseline")]
-        let retirement = retirement::Attempt::start(
-            publication,
-            &path,
-            retirement::Cause::Garbage,
-            retirement::Facts::default(),
-        );
-        let temporary = entry::stage_admitted_retirement(
-            admitted,
-            publication,
-            store,
-            &path,
-            #[cfg(feature = "import-baseline")]
-            &mut observation,
-            #[cfg(feature = "import-baseline")]
-            Some(entry::Retirement::Allocation(&retirement)),
-        )?;
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup_started();
-        #[cfg(feature = "import-baseline")]
-        retirement.removal_started();
-        let cleanup = fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
+        let temporary = entry::stage_admitted_retirement(admitted, publication, store, &path)?;
+        fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
             operation: "remove typed store legacy or unregistered allocation",
             path: temporary.clone(),
             source,
-        });
-        #[cfg(feature = "import-baseline")]
-        observation.cleanup(cleanup.is_ok());
-        #[cfg(feature = "import-baseline")]
-        retirement.removal_finished(cleanup.is_ok());
-        cleanup?;
+        })?;
         entry::sync_directory(temporary.parent().ok_or(Error::State(
             "typed store garbage has no temporary directory",
         ))?)?;
-        let result = Ok(true);
-        #[cfg(feature = "import-baseline")]
-        retirement.completed(result.is_ok());
-        #[cfg(feature = "import-baseline")]
-        let result = observation.finish(result);
-        result
+        Ok(true)
     })
 }
 
-fn recover_unrooted(
-    store: &Path,
-    graph: &crate::node::GraphBudget,
-    budget: &mut recovery::Budget,
-) -> Result<bool, Error> {
-    let selected = lease::with_publication(store, graph, |publication| {
+fn recover_unrooted(store: &Path, budget: &mut recovery::Budget) -> Result<bool, Error> {
+    let selected = lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
         unrooted(&snapshot, &registrations)
@@ -344,7 +286,7 @@ fn recover_unrooted(
         };
         evictions.push((eviction, *registered));
     }
-    lease::with_publication(store, graph, |publication| {
+    lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
         if unrooted(&snapshot, &registrations)?.as_deref() != Some(selected.as_ref()) {
@@ -354,12 +296,7 @@ fn recover_unrooted(
         for (eviction, registered) in evictions {
             budget.bundle()?;
             budget.deletion(registered.allocation().charge)?;
-            eviction.retire(
-                publication,
-                store,
-                #[cfg(feature = "import-baseline")]
-                registered.allocation(),
-            )?;
+            eviction.retire(publication, store)?;
         }
         retire_allocations(publication, store, &selected, false, budget)?;
         accounting::finish_eviction(publication, store, budget)?;
@@ -377,13 +314,12 @@ pub(super) const RESOLUTIONS_KEPT: usize = 4;
 /// holds the build outputs it relocated.
 pub(super) fn recover_resolution_excess(
     store: &Path,
-    graph: &crate::node::GraphBudget,
     requesting: Digest,
     kind: Kind,
     keep: usize,
     budget: &mut recovery::Budget,
 ) -> Result<bool, Error> {
-    let selected = lease::with_publication(store, graph, |publication| {
+    let selected = lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
         resolution_excess(&snapshot, &registrations, requesting, kind, keep)
@@ -402,7 +338,7 @@ pub(super) fn recover_resolution_excess(
         };
         evictions.push((eviction, *registered));
     }
-    lease::with_publication(store, graph, |publication| {
+    lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
         if resolution_excess(&snapshot, &registrations, requesting, kind, keep)?.as_deref()
@@ -414,12 +350,7 @@ pub(super) fn recover_resolution_excess(
         for (eviction, registered) in evictions {
             budget.bundle()?;
             budget.deletion(registered.allocation().charge)?;
-            eviction.retire(
-                publication,
-                store,
-                #[cfg(feature = "import-baseline")]
-                registered.allocation(),
-            )?;
+            eviction.retire(publication, store)?;
         }
         retire_allocations(publication, store, &selected, false, budget)?;
         accounting::finish_eviction(publication, store, budget)?;
@@ -576,16 +507,11 @@ fn unrooted(
         .map(|content| vec![content].into_boxed_slice()))
 }
 
-fn recover_interrupted(
-    store: &Path,
-    graph: &crate::node::GraphBudget,
-    budget: &mut recovery::Budget,
-) -> Result<bool, Error> {
-    let (recovered_temporary, interrupted) =
-        lease::with_publication(store, graph, |publication| {
-            let recovered = recovery::recover_temporaries(publication, store, budget)?;
-            Ok((recovered, interrupted(store, budget)?))
-        })?;
+fn recover_interrupted(store: &Path, budget: &mut recovery::Budget) -> Result<bool, Error> {
+    let (recovered_temporary, interrupted) = lease::with_publication(store, |publication| {
+        let recovered = recovery::recover_temporaries(publication, store, budget)?;
+        Ok((recovered, interrupted(store, budget)?))
+    })?;
     let Some(interrupted) = interrupted else {
         return Ok(recovered_temporary);
     };
@@ -601,7 +527,7 @@ fn recover_interrupted(
             evictions.push((eviction, *registered));
         }
     }
-    lease::with_publication(store, graph, |publication| {
+    lease::with_publication(store, |publication| {
         if self::interrupted(store, budget)? != Some(interrupted.clone()) {
             return Err(Error::CleanupRequired(
                 "an interrupted typed store eviction changed during recovery",
@@ -629,18 +555,14 @@ fn interrupted(store: &Path, budget: &mut recovery::Budget) -> Result<Option<Int
 }
 
 #[cfg(test)]
-pub(super) fn interrupt_oldest(
-    store: &Path,
-    graph: &crate::node::GraphBudget,
-    requesting: Digest,
-) -> Result<(), Error> {
+pub(super) fn interrupt_oldest(store: &Path, requesting: Digest) -> Result<(), Error> {
     let mut budget = recovery::Budget::new();
-    if recover_interrupted(store, graph, &mut budget)? {
+    if recover_interrupted(store, &mut budget)? {
         return Err(Error::State(
             "the eviction interruption fixture found earlier recovery work",
         ));
     }
-    let candidate = lease::with_publication(store, graph, |publication| {
+    let candidate = lease::with_publication(store, |publication| {
         current_candidates(publication, store, requesting, false, false, &mut budget)
     })?
     .into_iter()
@@ -660,7 +582,7 @@ pub(super) fn interrupt_oldest(
             )?,
         );
     }
-    lease::with_publication(store, graph, |publication| {
+    lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, &mut budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, &mut budget)?;
         if !candidates(&snapshot, &registrations, requesting, false, false)?.contains(&candidate) {
@@ -688,12 +610,11 @@ pub(super) fn interrupt_oldest(
 #[cfg(test)]
 pub(super) fn interrupt_after_staging_action(
     store: &Path,
-    graph: &crate::node::GraphBudget,
     requesting: Digest,
 ) -> Result<PathBuf, Error> {
-    interrupt_oldest(store, graph, requesting)?;
+    interrupt_oldest(store, requesting)?;
     let mut budget = recovery::Budget::new();
-    lease::with_publication(store, graph, |publication| {
+    lease::with_publication(store, |publication| {
         let interrupted = interrupted(store, &mut budget)?.ok_or(Error::State(
             "the staged interruption fixture lost its eviction journal",
         ))?;
@@ -710,31 +631,16 @@ pub(super) fn interrupt_after_staging_action(
             .join(action.kind.directory())
             .join(crate::node::STORAGE_DIRECTORY)
             .join(action.key.directory());
-        #[cfg(feature = "import-baseline")]
-        let mut observation = crate::metrics::publication::Attempt::start(
-            crate::metrics::publication::Class::Retirement(
-                crate::metrics::publication::Retirement::Action,
-            ),
-        );
-        entry::stage_retirement(
-            publication,
-            store,
-            &target,
-            #[cfg(feature = "import-baseline")]
-            &mut observation,
-            #[cfg(feature = "import-baseline")]
-            None,
-        )
+        entry::stage_retirement(publication, store, &target)
     })
 }
 
 #[cfg(test)]
 pub(super) fn interrupt_after_thawing_bundle_root(
     store: &Path,
-    graph: &crate::node::GraphBudget,
     requesting: Digest,
 ) -> Result<PathBuf, Error> {
-    interrupt_oldest(store, graph, requesting)?;
+    interrupt_oldest(store, requesting)?;
     let mut budget = recovery::Budget::new();
     let interrupted = interrupted(store, &mut budget)?.ok_or(Error::State(
         "the bundle-root interruption fixture lost its eviction journal",
@@ -746,11 +652,10 @@ pub(super) fn interrupt_after_thawing_bundle_root(
         .ok_or(Error::State(
             "the bundle-root interruption fixture found no bundle allocation",
         ))?;
-    let eviction = bundle::prepare_recovery_eviction(store, registered.allocation())?
-        .ok_or(Error::State(
-            "the bundle-root interruption fixture bundle is pinned",
-        ))?;
-    lease::with_publication(store, graph, |publication| {
+    let eviction = bundle::prepare_recovery_eviction(store, registered.allocation())?.ok_or(
+        Error::State("the bundle-root interruption fixture bundle is pinned"),
+    )?;
+    lease::with_publication(store, |publication| {
         eviction.interrupt_after_root_thaw(publication, store)
     })
 }
@@ -1120,63 +1025,21 @@ fn retire_action(
         &metadata,
     )?;
     budget.deletion(allocation.charge)?;
-    #[cfg(feature = "import-baseline")]
-    let mut observation = crate::metrics::publication::Attempt::start(
-        crate::metrics::publication::Class::Retirement(
-            crate::metrics::publication::Retirement::Action,
-        ),
-    );
-    #[cfg(feature = "import-baseline")]
-    let retirement = retirement::Attempt::start(
-        publication,
-        &directory,
-        retirement::Cause::ActionEviction,
-        retirement::Facts {
-            allocation: Some(allocation.observed()),
-            owner: Some(retirement::Owner {
-                lease: record.reservation().observed(),
-                publisher: record.publisher().as_bytes(),
-            }),
-            member: Some(record.commitment()),
-        },
-    );
-    let temporary = entry::stage_retirement(
-        publication,
-        store,
-        &directory,
-        #[cfg(feature = "import-baseline")]
-        &mut observation,
-        #[cfg(feature = "import-baseline")]
-        Some(entry::Retirement::Allocation(&retirement)),
-    )?;
-    #[cfg(feature = "import-baseline")]
-    observation.cleanup_started();
-    #[cfg(feature = "import-baseline")]
-    retirement.removal_started();
-    let cleanup = fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
+    let temporary = entry::stage_retirement(publication, store, &directory)?;
+    fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
         operation: "remove whole typed store action during eviction",
         path: temporary.clone(),
         source,
-    });
-    #[cfg(feature = "import-baseline")]
-    observation.cleanup(cleanup.is_ok());
-    #[cfg(feature = "import-baseline")]
-    retirement.removal_finished(cleanup.is_ok());
-    cleanup?;
+    })?;
     entry::sync_directory(temporary.parent().ok_or(Error::State(
         "typed store action has no temporary directory",
     ))?)?;
-    let result = index::retire_action(
+    index::retire_action(
         publication,
         store,
         allocation.kind,
         ActionKey::from_bytes(allocation.key.as_bytes()),
-    );
-    #[cfg(feature = "import-baseline")]
-    retirement.completed(result.is_ok());
-    #[cfg(feature = "import-baseline")]
-    let result = observation.finish(result);
-    result
+    )
 }
 
 fn retire_content(
@@ -1227,57 +1090,15 @@ fn retire_content(
         ));
     }
     budget.deletion(allocation.charge)?;
-    #[cfg(feature = "import-baseline")]
-    let mut observation = crate::metrics::publication::Attempt::start(
-        crate::metrics::publication::Class::Retirement(
-            crate::metrics::publication::Retirement::Content,
-        ),
-    );
-    #[cfg(feature = "import-baseline")]
-    let retirement = retirement::Attempt::start(
-        publication,
-        &directory,
-        retirement::Cause::ContentEviction,
-        retirement::Facts {
-            allocation: Some(allocation.observed()),
-            owner: Some(retirement::Owner {
-                lease: record.reservation().observed(),
-                publisher: record.publisher().as_bytes(),
-            }),
-            member: None,
-        },
-    );
-    let temporary = entry::stage_retirement(
-        publication,
-        store,
-        &directory,
-        #[cfg(feature = "import-baseline")]
-        &mut observation,
-        #[cfg(feature = "import-baseline")]
-        Some(entry::Retirement::Allocation(&retirement)),
-    )?;
-    #[cfg(feature = "import-baseline")]
-    observation.cleanup_started();
-    #[cfg(feature = "import-baseline")]
-    retirement.removal_started();
-    let cleanup = fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
+    let temporary = entry::stage_retirement(publication, store, &directory)?;
+    fs::remove_dir_all(&temporary).map_err(|source| Error::Io {
         operation: "remove whole typed store content during eviction",
         path: temporary.clone(),
         source,
-    });
-    #[cfg(feature = "import-baseline")]
-    observation.cleanup(cleanup.is_ok());
-    #[cfg(feature = "import-baseline")]
-    retirement.removal_finished(cleanup.is_ok());
-    cleanup?;
-    let result = entry::sync_directory(temporary.parent().ok_or(Error::State(
+    })?;
+    entry::sync_directory(temporary.parent().ok_or(Error::State(
         "typed store content has no temporary directory",
-    ))?);
-    #[cfg(feature = "import-baseline")]
-    retirement.completed(result.is_ok());
-    #[cfg(feature = "import-baseline")]
-    let result = observation.finish(result);
-    result
+    ))?)
 }
 
 fn allocation_names(

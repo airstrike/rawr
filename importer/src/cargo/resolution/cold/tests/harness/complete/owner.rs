@@ -281,8 +281,6 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
     let cold_identity = *cold.node().value().completed_identity();
     let cold_action = cold.node().receipt().action();
     let cold_content = cold.node().content().digest();
-    #[cfg(feature = "import-baseline")]
-    let cold_observation = (cold.observed_toolchain(), cold.observed_identity());
     let cold_api = cold
         .publish(&limits)
         .expect("current owner publishes the real API");
@@ -317,11 +315,6 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
         assert_eq!(warm.node().value().completed_identity(), &cold_identity);
         assert_eq!(warm.node().receipt().action(), cold_action);
         assert_eq!(warm.node().content().digest(), cold_content);
-        #[cfg(feature = "import-baseline")]
-        assert_eq!(
-            (warm.observed_toolchain(), warm.observed_identity()),
-            cold_observation
-        );
         warm.publish(&limits)
     })
     .expect("warm owner and API launch no child")

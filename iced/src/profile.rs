@@ -8,9 +8,6 @@ mod resolution;
 pub mod runner;
 pub mod runtime;
 
-#[cfg(feature = "import-baseline")]
-#[doc(hidden)]
-pub use definition::Fixture;
 pub use definition::{Checked, Definition};
 pub use runtime::Runtime;
 

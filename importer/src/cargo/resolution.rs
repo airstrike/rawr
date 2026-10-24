@@ -1111,10 +1111,6 @@ mod tests {
             }
         }
         fn runner_owned(&self, _owned: &metrics::runner::Owned) {}
-        #[cfg(feature = "import-baseline")]
-        fn profile(&self, _evidence: &metrics::profile::Evidence) {}
-        #[cfg(feature = "import-baseline")]
-        fn pipeline(&self, _evidence: &metrics::pipeline::Evidence) {}
         fn scope_opened(&self) {}
         fn scope_joined(&self) {}
     }

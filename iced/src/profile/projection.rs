@@ -12,26 +12,9 @@ pub(super) const HOOK: &str = "direct-widget-element";
 pub(super) fn source<'a>(
     hook: profile::demand::Hook,
     demand: profile::trusted::Demand<'a>,
-    #[cfg(feature = "import-baseline")] fixture: super::Fixture,
 ) -> String {
     let mut source = String::with_capacity(2_400);
     source.push_str("mod __rawr_profile {\n");
-    #[cfg(feature = "import-baseline")]
-    {
-        source.push_str(
-            "    const PROFILE_FIXTURE: __rawr_profile_host::profile::Fixture = \
-             __rawr_profile_host::profile::Fixture::",
-        );
-        source.push_str(match fixture {
-            super::Fixture::Baseline => "Baseline",
-            super::Fixture::Variant => "Variant",
-        });
-        let _ = write!(
-            source,
-            ";\n    const PROFILE_VERSION: u32 = {};\n",
-            fixture.version()
-        );
-    }
     source.push_str("    const PROFILE_RULES: [u8; 32] = ");
     bytes(&mut source, demand.rules_digest());
     source.push_str(";\n");
@@ -490,14 +473,6 @@ pub(super) fn source<'a>(
              \x20       native: &mut __rawr_internal::package::import::runner::account::Native,\n\
              \x20   ) -> std::io::Result<(Box<[__rawr_internal::host::facade::Definition]>, ApplicationContract)> {\n",
     );
-    #[cfg(feature = "import-baseline")]
-    source.push_str(
-        "        __rawr_profile_host::profile::runner::install_compiler_fixture_retained(\n\
-         \x20           engine,\n\
-         \x20           PROFILE_FIXTURE,\n\
-         \x20           PROFILE_VERSION,\n",
-    );
-    #[cfg(not(feature = "import-baseline"))]
     source.push_str(
         "        __rawr_profile_host::profile::runner::install_compiler_retained(\n\
          \x20           engine,\n",
@@ -681,11 +656,6 @@ mod tests {
             .0;
         assert!(install
             .contains("native: &mut __rawr_internal::package::import::runner::account::Native,"));
-        #[cfg(feature = "import-baseline")]
-        assert!(install.contains(
-            "runner::install_compiler_fixture_retained(\n            engine,\n            PROFILE_FIXTURE,\n            PROFILE_VERSION,"
-        ));
-        #[cfg(not(feature = "import-baseline"))]
         assert!(install.contains("runner::install_compiler_retained(\n            engine,"));
         assert!(install.contains("PROJECTIONS,\n            native,\n        )"));
         assert!(!install.contains("runner::install_compiler("));

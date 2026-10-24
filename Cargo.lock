@@ -124,15 +124,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "apple-cf"
-version = "0.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7fd680cd0f3f02ee717b2014b26d18985c57b784384ba47213fcf8791e8c250"
-dependencies = [
- "doom-fish-utils",
-]
-
-[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -214,15 +205,6 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
-
-[[package]]
-name = "axuielement"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b73f5695be92296c35c332cfd287d2fce87d8d205306ee2e56659f6ae6386df"
-dependencies = [
- "apple-cf",
-]
 
 [[package]]
 name = "base64"
@@ -584,15 +566,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-queue"
-version = "0.3.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "803d13fb3b09d88be9f4dbc29062c66b19bf7170867ceb746d2a8689bf6c7a26"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-utils"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -744,16 +717,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
-]
-
-[[package]]
-name = "doom-fish-utils"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c801f6c2a0db1a1909d89fc395b9dccc594de9ef599659fbde9bb3b55ef67f9f"
-dependencies = [
- "crossbeam-queue",
- "futures-util",
 ]
 
 [[package]]
@@ -3098,10 +3061,8 @@ dependencies = [
 name = "rawr-iced-cli"
 version = "0.1.0"
 dependencies = [
- "axuielement",
  "core-foundation",
  "core-graphics",
- "libc",
  "nix 0.27.1",
  "rawr",
  "rawr-cli",
@@ -3109,10 +3070,7 @@ dependencies = [
  "rawr-import",
  "rawr-import-cli",
  "rawr-watch",
- "serde",
  "serde_json",
- "sha2",
- "thiserror 2.0.19",
 ]
 
 [[package]]
