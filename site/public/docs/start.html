@@ -172,7 +172,7 @@ fn main() {
 
 <h2 id="native">Native modules and dependencies</h2>
 <p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust. So is every crate in <code>[dependencies]</code>. A crate with either one goes to <a href="/docs/imports">rawr-import</a>, which compiles the native code with Cargo. The marked code calls it.</p>
-<p>The crate root must be marked today. A native <code>main</code> that calls into marked modules is planned.</p>
+<p>The crate root may stay native. Mark only the module you are working on, and your native <code>main</code> calls it through rawr. A save of that module reaches the running program at its next call. <a href="/docs/run#native-main">A native main</a> says what crosses and when the program restarts.</p>
 
 <h2 id="release">Build for release</h2>
 <div class="block"><pre><code>cargo build --release</code></pre></div>

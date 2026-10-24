@@ -199,8 +199,10 @@ rawr supports part of Rust. The
 works, what is missing, what rawr refuses and the few known cases that still
 differ from Rust.
 
-Planned and not built yet: native code that calls into marked modules, reload
-on save for programs that aren't iced apps, and a second UI host for ratatui.
+A native crate root may call marked modules, and a save reaches the running
+program at its next call. Planned and not built yet: the same from native
+modules other than the root, reload on save for other programs that aren't
+iced apps, and a second UI host for ratatui.
 
 If rawr gives a different result than Rust, or rejects Rust it says it
 supports, please [report it](https://github.com/airstrike/rawr/issues) with a

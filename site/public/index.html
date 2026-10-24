@@ -320,7 +320,8 @@ fn main() {
       <p><code>rawr check</code> runs the same check without running the program. Then it runs <code>cargo check</code>, so rustc has the final word on whether the code is valid Rust.</p>
       <p>A module whose first line isn&rsquo;t <code>// rawr</code> is native Rust, and so is every crate in <code>[dependencies]</code>. With <a href="/docs/imports">rawr-import</a> installed, <code>rawr run</code> compiles them with Cargo and the marked code calls them.</p>
       <p>For release, <code>cargo build --release</code> compiles every file. The marker is a comment, so the release build has no interpreter in it.</p>
-      <p><strong>Planned:</strong> a native crate root that calls into marked modules, and reload on save for programs that aren&rsquo;t iced apps. Today such a program runs once and exits.</p>
+      <p>The crate root may stay native and call marked modules. A save reaches the running program at its next call. <a href="/docs/run#native-main">A native main</a> says how.</p>
+      <p><strong>Planned:</strong> reload on save for other programs that aren&rsquo;t iced apps. Today such a program runs once and exits.</p>
     </div>
     <div class="stack" id="install">
       <div class="cmds">
@@ -566,7 +567,7 @@ fn label(order: Order) -&gt; String {
     <div>
       <p class="status">rawr supports part of Rust. <a href="/docs/language">Supported Rust</a> lists what works and what is missing. It also lists what rawr refuses and the few cases that still behave differently.</p>
       <p class="status">The <code>rawr</code> crate and the <code>rawr</code> command need Rust 1.95 or newer. rawr-import and rawr-iced need a Unix system and the pinned nightly <code>nightly-2026-07-11</code>. They have been tested on Apple Silicon Macs. rawr-iced supports one pinned iced revision. <a href="/docs/requirements">Requirements</a> has the details.</p>
-      <p class="status"><strong>Planned:</strong> native code that calls into marked modules, reload on save for programs that aren&rsquo;t iced apps, and a second host for ratatui.</p>
+      <p class="status"><strong>Planned:</strong> native modules other than the crate root that call into marked modules, reload on save for other programs that aren&rsquo;t iced apps, and a second host for ratatui.</p>
       <p class="status">rawr&rsquo;s API and commands may change. Report incorrect results or unexpected rejections <a href="https://github.com/airstrike/rawr/issues">on GitHub</a> with a small reproduction.</p>
     </div>
   </div>
