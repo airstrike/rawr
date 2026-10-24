@@ -1201,11 +1201,17 @@ pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableS
         ("tokio::time::Duration", "iced::time::Duration"),
         ("tokio", "rawr_iced::tokio"),
     ];
+    // `spawn_blocking` takes a Rawr closure, which the imported tokio's
+    // cannot, so it stays rawr-iced's in a program that imports tokio.
+    const BLOCKING: &str = "tokio::task::spawn_blocking";
     if host.entry(qualified).is_some() {
         return qualified.into();
     }
     for (std, facade) in REEXPORTS {
-        if std.starts_with("tokio") && host.facade_fingerprint("tokio").is_some() {
+        if std.starts_with("tokio")
+            && host.facade_fingerprint("tokio").is_some()
+            && qualified != BLOCKING
+        {
             continue;
         }
         if let Some(rest) = qualified.strip_prefix(std)
@@ -4839,6 +4845,55 @@ mod tests {
     };
     use crate::{host, program, type_def, Engine};
     use std::any::TypeId;
+
+    #[test]
+    fn spawn_blocking_stays_rawr_iced_s_in_a_program_that_imports_tokio() {
+        fn facade(root: &str, modules: &[&str], items: &[&str]) -> host::facade::Definition {
+            let mut builder =
+                host::facade::Builder::new(root, host::facade::Abi::new(1).unwrap()).unwrap();
+            for module in modules {
+                builder.module(*module).unwrap();
+            }
+            for item in items {
+                let mut signature = host::signature::Builder::new();
+                signature.output(host::type_ref::Type::builtin(host::type_ref::Builtin::I64));
+                builder
+                    .item(host::item::Definition::function(*item, signature.finish()).unwrap())
+                    .unwrap();
+            }
+            builder.finish().unwrap()
+        }
+        let mut engine = Engine::new();
+        engine
+            .register_host_facade(facade(
+                "rawr_iced",
+                &["tokio", "tokio::task"],
+                &["tokio::task::spawn_blocking", "tokio::task::yield_now"],
+            ))
+            .unwrap();
+        assert_eq!(
+            super::std_reexport("tokio::task::yield_now", &engine.host_registry).as_str(),
+            "rawr_iced::tokio::task::yield_now"
+        );
+        engine
+            .register_host_facade(facade("tokio", &["task"], &["task::block_in_place"]))
+            .unwrap();
+        let host = &engine.host_registry;
+        assert_eq!(
+            super::std_reexport("tokio::task::spawn_blocking", host).as_str(),
+            "rawr_iced::tokio::task::spawn_blocking"
+        );
+        // The imported tokio keeps its own items, and rawr-iced's others
+        // are not reached.
+        assert_eq!(
+            super::std_reexport("tokio::task::block_in_place", host).as_str(),
+            "tokio::task::block_in_place"
+        );
+        assert_eq!(
+            super::std_reexport("tokio::task::yield_now", host).as_str(),
+            "tokio::task::yield_now"
+        );
+    }
 
     #[test]
     fn forward_item_names_resolve_in_headers() {
