@@ -204,6 +204,34 @@ fn language_match_self_in_enum_impl() {
 }
 
 #[test]
+fn language_self_in_a_fn_local_impl_body() {
+    let value = run(r#"
+        struct App { base: i64 }
+        impl App {
+            fn run(&self) -> i64 {
+                struct Point { x: i64 }
+                impl Point {
+                    fn new(x: i64) -> Self { let point: Self = Self { x }; point }
+                    fn double(&self) -> Self { let next: Self = Self::new(self.x * 2); next }
+                }
+                Point::new(self.base).double().x
+            }
+        }
+        pub fn run() -> i64 {
+            struct Pair { a: i64 }
+            impl Pair {
+                fn new(a: i64) -> Self { let pair: Self = Self { a }; pair }
+                fn sum(&self) -> Self { let all: Vec<Self> = vec![Self::new(self.a + 1)]; all[0].clone() }
+            }
+            impl Clone for Pair { fn clone(&self) -> Self { Self { a: self.a } } }
+            App { base: 2 }.run() * 10 + Pair::new(5).sum().a
+        }
+        run()
+    "#);
+    assert_eq!(value, 46);
+}
+
+#[test]
 fn language_string_building() {
     let value = Engine::new()
         .eval::<String>(

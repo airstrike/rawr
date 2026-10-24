@@ -34709,6 +34709,13 @@ impl<'a> Parser<'a> {
             }
             return Ok(ty);
         }
+        // `Self` in a method body names the impl's type.
+        if name.as_str() == "Self"
+            && !matches!(self.peek(), Token::DoubleColon)
+            && let Some(self_ty) = &self.self_ty
+        {
+            return Ok(self_ty.clone());
+        }
         // A type alias: its target, resolved once with the item headers.
         if !matches!(self.peek(), Token::DoubleColon)
             && !self.generics.contains_key(name.as_str())
