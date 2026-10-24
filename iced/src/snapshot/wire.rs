@@ -26,7 +26,6 @@ pub fn encode(outcome: &Outcome) -> Result<Box<[u8]>, Error> {
                 Class::Pixel => 1,
                 Class::Size => 2,
                 Class::Stale => 3,
-                Class::Input => 4,
             },
         )?;
         path(&mut output, difference.expected())?;
@@ -72,7 +71,6 @@ pub fn decode(bytes: &[u8]) -> Result<Outcome, Error> {
             1 => Class::Pixel,
             2 => Class::Size,
             3 => Class::Stale,
-            4 => Class::Input,
             _ => return Err(Error::Malformed),
         };
         let expected = take_path(&mut input)?;

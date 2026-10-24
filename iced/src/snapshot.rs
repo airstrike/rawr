@@ -656,11 +656,10 @@ mod tests {
     }
 
     #[test]
-    fn check_classifies_missing_pixel_size_input_and_stale_artifacts() {
+    fn check_classifies_missing_pixel_size_and_stale_artifacts_and_ignores_build_facts() {
         let project = Project::new(source());
         let suite = suite(&project);
         suite.execute(Mode::Update).unwrap();
-        let manifest = fs::read_to_string(suite.baseline().join("manifest.rawr-snapshot")).unwrap();
         let baseline_pngs = pngs(suite.baseline());
         let first = baseline_pngs.first().unwrap();
 
@@ -715,13 +714,21 @@ mod tests {
             !path.exists(),
             "explicit update must remove stale artifacts"
         );
-        let changed = manifest.replace("renderer\ttiny-skia", "renderer\tambient");
+        // Build facts and preview proofs are recorded, never compared: equal
+        // pixels pass whatever the manifest says about how they were made.
+        let manifest = fs::read_to_string(suite.baseline().join("manifest.rawr-snapshot")).unwrap();
+        let fingerprint = manifest
+            .lines()
+            .find_map(|line| line.strip_prefix("artifact\t"))
+            .and_then(|row| row.split('\t').nth(1))
+            .unwrap()
+            .to_owned();
+        let changed = manifest
+            .replace("renderer\ttiny-skia", "renderer\tambient")
+            .replace(&fingerprint, &"0".repeat(fingerprint.len()));
         fs::write(suite.baseline().join("manifest.rawr-snapshot"), changed).unwrap();
-        let input = suite.execute(Mode::Check).unwrap();
-        assert!(input
-            .differences()
-            .iter()
-            .any(|difference| difference.class() == Class::Input));
+        let same = suite.execute(Mode::Check).unwrap();
+        assert!(same.differences().is_empty(), "{:?}", same.differences());
     }
 
     #[test]

@@ -89,7 +89,6 @@ impl Generation {
     ) -> Result<Vec<Difference>, Error> {
         let current = self.manifest.by_key();
         let previous = prior.map(manifest::Manifest::by_key).unwrap_or_default();
-        let facts_match = prior.is_some_and(|prior| self.manifest.same_facts(prior));
         let mut differences = Vec::new();
 
         for artifact in &self.artifacts {
@@ -111,51 +110,6 @@ impl Generation {
                 continue;
             };
             let expected_path = baseline.join(expected.relative());
-            if !facts_match {
-                differences.push(Difference::new(
-                    artifact.identity(),
-                    artifact.theme().label(),
-                    Class::Input,
-                    expected_path,
-                    actual_path,
-                    "renderer, font, scale, or pinned build facts changed",
-                ));
-                continue;
-            }
-            if expected.logical() != (artifact.logical().width(), artifact.logical().height())
-                || expected.physical() != (artifact.image().width(), artifact.image().height())
-            {
-                differences.push(Difference::new(
-                    artifact.identity(),
-                    artifact.theme().label(),
-                    Class::Size,
-                    expected_path,
-                    actual_path,
-                    format!(
-                        "baseline logical/physical {:?}/{:?}; actual {}/{} / {}/{}",
-                        expected.logical(),
-                        expected.physical(),
-                        artifact.logical().width(),
-                        artifact.logical().height(),
-                        artifact.image().width(),
-                        artifact.image().height(),
-                    ),
-                ));
-                continue;
-            }
-            if expected.fingerprint() != artifact.fingerprint()
-                || expected.relative() != artifact.relative()
-            {
-                differences.push(Difference::new(
-                    artifact.identity(),
-                    artifact.theme().label(),
-                    Class::Input,
-                    expected_path,
-                    actual_path,
-                    "preview proof or canonical artifact path changed",
-                ));
-                continue;
-            }
             let Some(expected_bytes) = inventory.bytes(expected.relative()) else {
                 differences.push(Difference::new(
                     artifact.identity(),

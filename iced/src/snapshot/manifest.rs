@@ -60,10 +60,6 @@ impl Manifest {
         Self::parse(path, text).map(Some)
     }
 
-    pub(super) fn same_facts(&self, other: &Self) -> bool {
-        self.facts == other.facts
-    }
-
     pub(super) fn entries(&self) -> &[Entry] {
         &self.entries
     }
@@ -169,18 +165,6 @@ impl Entry {
 
     pub(super) fn theme(&self) -> String {
         format!("{} `{}`", self.theme_kind, self.theme_name)
-    }
-
-    pub(super) fn fingerprint(&self) -> &str {
-        &self.fingerprint
-    }
-
-    pub(super) const fn logical(&self) -> (u32, u32) {
-        self.logical
-    }
-
-    pub(super) const fn physical(&self) -> (u32, u32) {
-        self.physical
     }
 
     pub(super) fn relative(&self) -> &Path {

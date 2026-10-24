@@ -13,8 +13,6 @@ pub enum Class {
     Size,
     /// A prior baseline no longer belongs to the rendered generation.
     Stale,
-    /// Manifest inputs or build facts differ.
-    Input,
 }
 
 impl std::fmt::Display for Class {
@@ -24,7 +22,6 @@ impl std::fmt::Display for Class {
             Self::Pixel => "pixel drift",
             Self::Size => "size mismatch",
             Self::Stale => "stale baseline",
-            Self::Input => "snapshot input mismatch",
         })
     }
 }
