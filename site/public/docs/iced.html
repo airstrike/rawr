@@ -231,14 +231,15 @@ fn main() -&gt; iced::Result {
 <h3 id="custom-widgets">Widgets of your own</h3>
 <p>A type can implement iced&rsquo;s <code>advanced::Widget</code> trait, as iced&rsquo;s <code>custom_widget</code>, <code>custom_quad</code>, <code>geometry</code> and <code>loupe</code> examples do. A value of that type goes in a view like any other widget. The trait is iced master&rsquo;s, so <code>layout</code> sets <code>tree.size</code> and returns nothing.</p>
 <ul>
-  <li><code>size</code>, <code>layout</code> and <code>draw</code> are required. <code>update</code>, <code>mouse_interaction</code>, <code>tag</code>, <code>state</code> and <code>diff</code> are optional. A method the impl leaves out runs iced&rsquo;s own default, without calling your code.</li>
+  <li><code>size</code>, <code>layout</code> and <code>draw</code> are required. <code>update</code>, <code>mouse_interaction</code>, <code>tag</code>, <code>state</code>, <code>diff</code>, <code>operate</code> and <code>overlay</code> are optional. A method the impl leaves out runs iced&rsquo;s own default, without calling your code.</li>
   <li><code>draw</code> fills quads with <code>renderer.fill_quad</code>. It draws meshes with <code>draw_mesh</code>. <code>renderer::Quad</code> takes its <code>bounds</code>, <code>border</code>, <code>shadow</code> and <code>snap</code>. <code>with_translation</code> and <code>with_transformation</code> run their closure where they are written, as in iced.</li>
   <li><code>update</code> receives iced&rsquo;s events. Its <code>Shell</code> publishes a message, requests a redraw or captures the event.</li>
-  <li>A widget can wrap an <code>Element</code>, as loupe does. It forwards <code>size</code>, <code>layout</code>, <code>draw</code>, <code>update</code> and the rest to it. The wrapped widget draws in its place among the widget&rsquo;s own drawing, inside the transformation and clipping around it.</li>
+  <li>A widget can wrap an <code>Element</code>, as loupe does. It forwards <code>size</code>, <code>layout</code>, <code>draw</code>, <code>update</code>, <code>operate</code>, <code>overlay</code> and the rest to it. iced shows the first overlay its <code>overlay</code> returns. The wrapped widget draws in its place among the widget&rsquo;s own drawing, inside the transformation and clipping around it.</li>
+  <li>A widget keeps a State of its own with <code>tree::Tag::of::&lt;State&gt;()</code> and <code>tree::State::new(value)</code>. <code>tree.state.downcast_ref::&lt;State&gt;()</code> reads it. <code>let state = tree.state.downcast_mut::&lt;State&gt;();</code> changes it. A reload keeps the State while its type and its fields stay the same. A change to them starts it again from <code>state</code>.</li>
   <li><code>Size&lt;Length&gt;</code>, <code>layout::Limits</code>, <code>Layout</code>, <code>Transformation</code>, <code>Rectangle::expand</code>, <code>graphics::color::pack</code> and <code>iced::Never</code> work as in iced. <code>iced::run((), view)</code> runs a view whose Message is <code>Never</code>.</li>
 </ul>
 <p>A widget&rsquo;s drawing is kept while its <code>draw</code> runs and shown when <code>draw</code> returns. A call that fails shows its error in the widget&rsquo;s bounds. Its drawing and its Shell requests are dropped.</p>
-<p><code>operate</code> and <code>overlay</code> are not there yet. A widget cannot keep a state of its own through <code>Tag::of</code> and <code>State::new</code> yet. A wrapped <code>Element</code> keeps its own state. ?play and snapshots draw with tiny-skia, which does not draw meshes. A mesh shows in a window.</p>
+<p>A panic in a wrapped <code>Element</code>&rsquo;s own code is an error of the call that reached it. ?play and snapshots draw with tiny-skia, which does not draw meshes. A mesh shows in a window.</p>
 <div class="block">
   <div class="file"><b>circle.rs</b></div>
   <pre><code data-lang="rust" data-run="circle.rs" id="src-circle">use iced::advanced::layout::{self, Layout};
@@ -473,7 +474,7 @@ impl App {
 <p><code>main</code> may run statements before <code>iced::application</code> or <code>iced::run</code>, such as <code>tracing_subscriber::fmt::init();</code>. They run once, when <code>rawr run</code> starts, as Rust runs <code>main</code> once. A reset or a reload boots the app again without them. An edit to them takes effect when <code>rawr run</code> restarts, and the window says so. <code>#[cfg(..)]</code> on a statement and <code>cfg!</code> follow the machine Rawr runs on.</p>
 <h3 id="not-available">Not available yet</h3>
 <ul>
-  <li>A widget of your own that implements <code>operate</code> or <code>overlay</code>, or keeps a state of its own. Its type cannot borrow yet, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>
+  <li>A widget type of your own that borrows, as <code>Circular&lt;'a, Theme&gt;</code> does.</li>
   <li><code>pane_grid</code>, <code>text_editor</code>, <code>markdown</code>, <code>grid</code>, <code>float</code> and <code>keyed_column</code>.</li>
   <li><code>iced::gradient</code>, <code>iced::clipboard</code>, <code>iced::task</code> streams, <code>Task::future</code> and <code>application::timed</code>.</li>
   <li>Multi-window apps (<code>iced::daemon</code>), shaders and <code>wgpu</code>.</li>
