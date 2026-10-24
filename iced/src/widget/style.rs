@@ -732,6 +732,7 @@ const DEFAULTS: &[&str] = &[
     "widget::text_input::Style",
     "widget::toggler::Style",
     "widget::svg::Style",
+    "widget::text::Style",
     "widget::progress_bar::Style",
     "widget::float::Style",
 ];
@@ -752,6 +753,11 @@ fn bind_defaults(iced: &mut host::runtime::Builder) {
     }
     default(iced, "iced::Shadow::default", Shadow::default);
     default(iced, "iced::widget::svg::Style::default", svg::Style::default);
+    default(
+        iced,
+        "iced::widget::text::Style::default",
+        iced::widget::text::Style::default,
+    );
     default(
         iced,
         "iced::widget::float::Style::default",
@@ -1076,6 +1082,10 @@ fields! {
         bottom_left: f32,
     }
     "widget::svg::Style" => svg::Style { color: Option<Color> }
+    "widget::text::Style" => iced::widget::text::Style {
+        color: Option<Color>,
+        selection: Option<Color>,
+    }
     "widget::float::Style" => iced::widget::float::Style {
         shadow: Shadow,
         shadow_border_radius: iced::border::Radius,
@@ -1191,6 +1201,11 @@ fn declare_types(builder: &mut facade::Builder) -> Result<(), host::Error> {
     )?;
     builder.type_::<svg::Style>(
         "widget::svg::Style",
+        &[],
+        crate::OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.type_::<iced::widget::text::Style>(
+        "widget::text::Style",
         &[],
         crate::OWNED_DEFAULT_VALUE_CAPABILITIES,
     )?;

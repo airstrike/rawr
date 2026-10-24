@@ -7,6 +7,13 @@ use crate::widget::style::Source;
 use iced::widget::{button, checkbox, radio, scrollable, slider, text_input, toggler};
 
 pub(crate) mod text {
+    /// A text's style: a pinned built-in, or a style function.
+    #[derive(Clone)]
+    pub(crate) enum Source {
+        Builtin(Style),
+        Function(rawr::item::Value),
+    }
+
     /// One compiler-sealed identity for a pinned iced text style item.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum Style {
@@ -188,7 +195,7 @@ pub(crate) struct Text {
     pub(crate) height: Option<iced::Length>,
     pub(crate) align_x: iced::advanced::text::Alignment,
     pub(crate) align_y: Option<iced::alignment::Vertical>,
-    pub(crate) style: Option<text::Style>,
+    pub(crate) style: Option<text::Source>,
     pub(crate) color: Option<iced::Color>,
     pub(crate) font: Option<iced::Font>,
     pub(crate) line_height: Option<f32>,

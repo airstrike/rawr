@@ -50,7 +50,7 @@ impl marker::container::Style {
 }
 
 impl widget::Descriptor for marker::Text {
-    fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut text = iced::widget::text(self.content.clone())
             .width(self.width)
             .align_x(self.align_x);
@@ -60,8 +60,10 @@ impl widget::Descriptor for marker::Text {
         if let Some(align_y) = self.align_y {
             text = text.align_y(align_y);
         }
-        if let Some(style) = self.style {
-            text = text.style(style.native());
+        match text_style(&self.style, context) {
+            Ok(Some(style)) => text = text.style(style),
+            Ok(None) => {}
+            Err(diagnostic) => return diagnostic,
         }
         if let Some(color) = self.color {
             text = text.color(color);
@@ -426,6 +428,39 @@ fn container_style(
         Some(Ok(style)) => Ok(Some(Box::new(move |_: &iced::Theme| *style))),
         Some(Err(error)) => {
             Err(widget::diagnostic(format!("{widget} style failed: {error}")).lower(context))
+        }
+        None => Ok(None),
+    }
+}
+
+/// A text's style function: the pinned one, or a Rawr function of the
+/// theme evaluated once per theme.
+fn text_style(
+    source: &Option<marker::text::Source>,
+    context: &widget::Context<'_>,
+) -> Result<
+    Option<Box<dyn Fn(&iced::Theme) -> iced::widget::text::Style>>,
+    iced::Element<'static, runtime::Message>,
+> {
+    let function = match source {
+        None => return Ok(None),
+        Some(marker::text::Source::Builtin(style)) => return Ok(Some(Box::new(style.native()))),
+        Some(marker::text::Source::Function(function)) => function,
+    };
+    let style = style::cached(context, function).map(Ok).or_else(|| {
+        let theme = Dynamic::from(context.theme().clone());
+        context.invoke(function, &mut [theme]).map(|style| {
+            style.and_then(|mut style| {
+                take::<iced::widget::text::Style>(&mut style, "iced::widget::text::Style")
+                    .map(|style| style::remember(context, function, style))
+                    .map_err(|error| error.to_string())
+            })
+        })
+    });
+    match style {
+        Some(Ok(style)) => Ok(Some(Box::new(move |_: &iced::Theme| *style))),
+        Some(Err(error)) => {
+            Err(widget::diagnostic(format!("text style failed: {error}")).lower(context))
         }
         None => Ok(None),
     }
@@ -1599,10 +1634,11 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 return Err(arity("Text::style", 2, args.len()));
             }
             let mut text = take::<marker::Text>(args[0], "iced::widget::Text")?;
-            text.style = Some(take::<marker::text::Style>(
-                args[1],
-                "iced::widget::text::Style",
-            )?);
+            text.style = Some(if args[1].is::<marker::text::Style>() {
+                marker::text::Source::Builtin(take(args[1], "text style")?)
+            } else {
+                marker::text::Source::Function(take(args[1], "text style function")?)
+            });
             Ok(Dynamic::from(text))
         })
         .expect("the iced facade must retain the exact Text::style item");

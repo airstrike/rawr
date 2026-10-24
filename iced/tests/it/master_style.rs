@@ -849,3 +849,47 @@ fn master_progress_bars_take_styles() {
     simulator.find("bars").unwrap();
     assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
 }
+
+/// `text::Style` and a style function that returns it, as todos writes
+/// `subtle`, beside a pinned `text::primary`.
+const TEXT_STYLE: &str = r#"
+use iced::widget::{column, text};
+use iced::{Theme, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let plain = text::Style::default();
+        column![
+            text("subtle").style(subtle),
+            text("primary").style(text::primary),
+            text(format!("{:?}", plain.color.is_none())),
+        ]
+    }
+}
+
+fn subtle(theme: &Theme) -> text::Style {
+    text::Style {
+        color: Some(theme.palette().background.strongest.color),
+        selection: None,
+    }
+}
+"#;
+
+#[test]
+fn master_text_takes_a_style_function() {
+    let adapter = boot(TEXT_STYLE);
+    find(&adapter, "subtle");
+    find(&adapter, "true");
+}

@@ -270,7 +270,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         OWNED_DEFAULT_VALUE_CAPABILITIES,
     )?;
     builder.default_value_type::<iced::Border>("Border", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
-    builder.private_type::<marker::text::Style>("widget::text::Style", &[], &[])?;
+    builder.private_type::<marker::text::Style>("widget::text::Builtin", &[], &[])?;
     builder.default_value_type::<iced::Color>("Color", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder
         .carried::<theme::CarryColor>()
@@ -735,7 +735,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     for name in BUILT_IN_TEXT_STYLES {
         builder.item(item::Definition::value(
             format!("widget::text::{name}"),
-            type_ref::Type::registered("widget::text::Style")?,
+            type_ref::Type::registered("widget::text::Builtin")?,
         )?)?;
     }
     for name in BUILT_IN_CONTAINER_STYLES {
@@ -937,14 +937,20 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         receiver::Mode::Owned,
         fixed_builder_signature("widget::Text", type_ref::Type::registered("Alignment")?)?,
     )?)?;
-    builder.item(item::Definition::method(
-        "widget::Text::style",
-        receiver::Mode::Owned,
-        fixed_builder_signature(
-            "widget::Text",
+    for input in [
+        type_ref::Type::registered("widget::text::Builtin")?,
+        // iced's `impl Fn(&Theme) -> text::Style`, as a named function.
+        type_ref::Type::callable(
+            type_ref::Type::registered("Theme")?,
             type_ref::Type::registered("widget::text::Style")?,
-        )?,
-    )?)?;
+        ),
+    ] {
+        builder.item(item::Definition::method(
+            "widget::Text::style",
+            receiver::Mode::Owned,
+            fixed_builder_signature("widget::Text", input)?,
+        )?)?;
+    }
     builder.item(item::Definition::method(
         "widget::TextInput::on_input",
         receiver::Mode::Owned,
