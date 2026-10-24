@@ -8821,28 +8821,32 @@ impl<'a> Parser<'a> {
         if actual.as_str() != "<dynamic>" {
             return error;
         }
-        let Some((name, call)) = self
+        self.unknown_call_at(*expression).unwrap_or(error)
+    }
+
+    /// The unknown function a call starting at `expression` names, with the
+    /// library function of that name to import when there is one. `None`
+    /// for a call a native module serves.
+    fn unknown_call_at(&self, expression: Span) -> Option<Error> {
+        let (name, call) = self
             .unresolved_calls
             .iter()
-            .find(|(_, call)| call.start() == expression.start())
-        else {
-            return error;
-        };
+            .find(|(_, call)| call.start() == expression.start())?;
         let native = self.native_modules.iter().any(|module| {
             module
                 .iter_fn()
                 .any(|(_, metadata)| metadata.name.as_str() == name.as_str())
         });
         if native {
-            return error;
+            return None;
         }
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
         imports.sort_by_key(|path| (path.len(), path.clone()));
-        Error::UnknownFunction {
+        Some(Error::UnknownFunction {
             name: name.clone(),
             import: imports.into_iter().next().map(Into::into),
             reference: Span::new(call.start(), text_end(call.start(), name)),
-        }
+        })
     }
 
     fn parse_method_body_unexplained(
@@ -25349,6 +25353,12 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let Some(definition_id) = self.inference.resolve(&value.ty).script() else {
+                // `nonexistent(x).scale(2.0)`: the call names no function.
+                if matches!(self.inference.resolve(&value.ty), Ty::Unknown)
+                    && let Some(error) = self.unknown_call_at(value.span)
+                {
+                    return Err(error);
+                }
                 return Err(self.unsupported("field access on a non-nominal value"));
             };
             // A scripted widget's `map` and `boxed` (`erasure_with`).

@@ -8195,3 +8195,10 @@ pub fn unit() -> Task<Message> { let none = Task::<()>::none(); none.map(|_| Mes
         )
         .unwrap_or_else(|error| panic!("{error}"));
 }
+
+#[test]
+fn language_method_on_an_unknown_call_names_the_function() {
+    let error = rejected("pub fn run() -> i64 { let x = nonexistent_widget(1).scale(2.0); 0 } run()");
+    assert!(error.contains("nonexistent_widget"), "{error}");
+    assert!(!error.contains("non-nominal"), "{error}");
+}
