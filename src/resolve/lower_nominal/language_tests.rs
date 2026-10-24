@@ -8520,3 +8520,30 @@ fn language_moves_keep_what_rust_accepts() {
     "#);
     assert_eq!(value, 2 + 2 + 1 + 3 + 2 + 4);
 }
+
+#[test]
+fn language_unsafe_impl_of_an_auto_trait() {
+    let value = run(r#"
+        struct Wide<T>(T);
+        unsafe impl<T> Sync for Wide<T> {}
+        impl Unpin for Wide<i64> {}
+        pub fn run() -> i64 {
+            struct Local { n: i64 }
+            unsafe impl Send for Local {}
+            let n = unsafe { 2 };
+            Local { n }.n * 10 + Wide(3).0
+        }
+        run()
+    "#);
+    assert_eq!(value, 23);
+    for (source, code) in [
+        ("struct T; impl Send for T {} pub fn run() -> i64 { 1 } run()", "E0200"),
+        ("struct T; pub fn run() -> i64 { unsafe impl Clone for T { fn clone(&self) -> T { T } } 1 } run()", "E0199"),
+        ("struct T; unsafe impl Unpin for T {} pub fn run() -> i64 { 1 } run()", "E0199"),
+        ("struct T; pub fn run() -> i64 { unsafe impl T {} 1 } run()", "E0197"),
+        ("struct T; unsafe impl Send for T { fn f() {} } pub fn run() -> i64 { 1 } run()", "E0407"),
+    ] {
+        let error = rejected(source);
+        assert!(error.contains(code), "{source}: {error}");
+    }
+}

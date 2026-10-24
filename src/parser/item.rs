@@ -176,14 +176,17 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                     }
                 }
             }
-            (Token::Identifier(text), position)
+            (Token::Identifier(text), _)
                 if scan.delimiter_depth == 0 && text.as_str() == "unsafe" =>
             {
-                return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
-                    "unsafe".into(),
-                    "`unsafe` items are not supported in Rawr yet".into(),
-                ))
-                .into_err(*position));
+                let start = input.peek().expect("peeked unsafe").1;
+                items.extend(parse_unsafe_item(
+                    input,
+                    &tokenizer_control,
+                    Box::default(),
+                    None,
+                    start,
+                )?);
             }
             (Token::Reserved(text), _)
                 if scan.delimiter_depth == 0 && text.as_str() == "async" =>
@@ -514,7 +517,99 @@ fn parse_item_with_leading(
         SKIPPED.with_borrow_mut(|skipped| skipped.push(Span::new(start, end)));
         return Ok(None);
     }
-    parse_enabled_item(input, tokenizer_control, attributes, visibility, start).map(Some)
+    if input
+        .peek()
+        .is_some_and(|(token, _)| matches!(token, Token::Identifier(text) if text.as_str() == "unsafe"))
+    {
+        return parse_unsafe_item(input, tokenizer_control, attributes, visibility, start);
+    }
+    match parse_enabled_item(input, tokenizer_control, attributes, visibility, start)? {
+        crate::item::Parsed::Impl(item) => marker_impl(item, None),
+        item => Ok(Some(item)),
+    }
+}
+
+/// `unsafe impl Send for T {}`: the only `unsafe` item Rawr reads. Any
+/// other `unsafe` item is not supported.
+fn parse_unsafe_item(
+    input: &mut TokenStream,
+    tokenizer_control: &TokenizerControl,
+    attributes: Box<[crate::item::Attribute]>,
+    visibility: Option<Span>,
+    start: Position,
+) -> ParseResult<Option<crate::item::Parsed>> {
+    let (_, position) = input.next().expect("peeked unsafe");
+    if !matches!(input.peek(), Some((Token::Impl, _))) {
+        return Err(PERR::BadInput(crate::LexError::ImproperSymbol(
+            "unsafe".into(),
+            "`unsafe` items other than `unsafe impl Send` and `unsafe impl Sync` are not \
+             supported in Rawr yet"
+                .into(),
+        ))
+        .into_err(position));
+    }
+    let item = parse_impl(input, tokenizer_control, attributes, visibility, start)?;
+    marker_impl(item, Some(position))
+}
+
+/// An impl of an auto trait (`Send`, `Sync`, `Unpin` and the unwind-safety
+/// markers) says what every Rawr value already is, so it is checked as
+/// rustc checks it and then dropped. `unsafe` is required for `Send` and
+/// `Sync` (E0200) and refused elsewhere (E0197, E0199).
+fn marker_impl(
+    item: crate::item::Impl,
+    unsafety: Option<Position>,
+) -> ParseResult<Option<crate::item::Parsed>> {
+    let bad = |message: String, position: Position| {
+        Err(PERR::BadInput(crate::LexError::ImproperSymbol("impl".into(), message)).into_err(position))
+    };
+    let Some(trait_) = item.trait_.as_ref() else {
+        return match unsafety {
+            Some(position) => bad("inherent impls cannot be unsafe, as in Rust (E0197)".into(), position),
+            None => Ok(Some(crate::item::Parsed::Impl(item))),
+        };
+    };
+    let name = trait_
+        .segments
+        .last()
+        .map_or_else(String::new, |last| last.name.text.to_string());
+    if !is_auto_trait(trait_) {
+        return match unsafety {
+            Some(position) => bad(
+                format!("implementing the trait `{name}` is not unsafe, as in Rust (E0199)"),
+                position,
+            ),
+            None => Ok(Some(crate::item::Parsed::Impl(item))),
+        };
+    }
+    let unsafe_trait = matches!(name.as_str(), "Send" | "Sync");
+    match unsafety {
+        None if unsafe_trait => bad(
+            format!("the trait `{name}` requires an `unsafe impl` declaration, as in Rust (E0200)"),
+            trait_.span.start(),
+        ),
+        Some(position) if !unsafe_trait => bad(
+            format!("implementing the trait `{name}` is not unsafe, as in Rust (E0199)"),
+            position,
+        ),
+        _ => {
+            if let Some(function) = item.functions.first() {
+                return bad(
+                    format!("method `{}` is not a member of trait `{name}`, as in Rust (E0407)", function.name.text),
+                    function.name.span.start(),
+                );
+            }
+            if let Some((associated, _)) = item.associated.first() {
+                return bad(
+                    format!("type `{}` is not a member of trait `{name}`, as in Rust (E0437)", associated.text),
+                    associated.span.start(),
+                );
+            }
+            #[cfg(not(feature = "no_std"))]
+            SKIPPED.with_borrow_mut(|skipped| skipped.push(item.span));
+            Ok(None)
+        }
+    }
 }
 
 fn parse_enabled_item(
@@ -585,13 +680,6 @@ fn parse_enabled_item(
         }
         (Token::Reserved(text), _) if text.as_str() == "static" => {
             parse_static(input, tokenizer_control, attributes, visibility, start)
-        }
-        (Token::Identifier(text), position) if text.as_str() == "unsafe" => {
-            Err(PERR::BadInput(crate::LexError::ImproperSymbol(
-                "unsafe".into(),
-                "`unsafe` items are not supported in Rawr yet".into(),
-            ))
-            .into_err(*position))
         }
         (_, position) => Err(PERR::MissingToken(
             "item".into(),
@@ -3840,6 +3928,30 @@ fn parse_body_syntax(
             if !attributes.is_empty() {
                 continue;
             }
+        }
+        // `unsafe impl Send for T {}` is an item; `unsafe { .. }` is a block.
+        #[cfg(not(feature = "no_std"))]
+        if boundary
+            && let Some((Token::Identifier(text), position)) = input.peek()
+            && text.as_str() == "unsafe"
+        {
+            let start = *position;
+            let (token, position) = scan
+                .next(input, tokenizer_control)
+                .expect("peeked unsafe must exist");
+            if matches!(input.peek(), Some((Token::Impl, _))) {
+                let item = parse_impl(input, tokenizer_control, Box::default(), None, start)?;
+                if let Some(item) = marker_impl(item, Some(start))? {
+                    NESTED.with_borrow_mut(|nested| nested.push(item));
+                }
+                continue;
+            }
+            tokens.push(body_token(token, position));
+            boundary = false;
+            ends_expression = false;
+            after_pub = false;
+            after_extern = false;
+            continue;
         }
         #[cfg(not(feature = "no_std"))]
         if boundary && let Some((Token::Use, position)) = input.peek() {

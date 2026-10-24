@@ -17016,6 +17016,9 @@ impl<'a> Parser<'a> {
         }
         match self.peek() {
             Token::Struct | Token::Enum | Token::Impl => true,
+            Token::Identifier(name) if name.as_str() == "unsafe" => {
+                matches!(self.peek_second(), Token::Impl)
+            }
             Token::Identifier(name) => {
                 matches!(name.as_str(), "trait" | "type")
                     && matches!(self.peek_second(), Token::Identifier(_))
