@@ -21,8 +21,6 @@ pub mod new;
 #[doc(hidden)]
 pub mod evidence;
 pub mod preview;
-#[cfg(feature = "native-runner")]
-mod release;
 pub mod run;
 pub mod snapshot;
 pub mod watch;

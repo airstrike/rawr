@@ -4,6 +4,7 @@ members = [
     "canonical",
     "cli",
     "iced-cli",
+    "import-cli",
     "codegen",
     "codegen/tests/custom_root",
     "directory",

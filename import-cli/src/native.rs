@@ -168,7 +168,7 @@ impl<B> Lane<B> {
         &mut self,
         built: rawr_import::runner::Manifest<rawr_import::runner::Built, B>,
         snapshot: rawr_import::supervisor::snapshot::Bytes,
-        adapter: &super::Adapter,
+        adapter: &rawr_watch::Adapter,
         observation: &[u8],
         checkpoint: rawr::reload::scheduler::Checkpoint,
     ) -> Result<Watched, Error> {
@@ -192,7 +192,7 @@ impl<B> Lane<B> {
         &mut self,
         built: rawr_import::runner::Manifest<rawr_import::runner::Built, B>,
         snapshot: rawr_import::supervisor::snapshot::Bytes,
-        adapter: &super::Adapter,
+        adapter: &rawr_watch::Adapter,
         observation: &[u8],
         request: rawr::reload::scheduler::Request,
     ) -> Result<Watched, Error> {

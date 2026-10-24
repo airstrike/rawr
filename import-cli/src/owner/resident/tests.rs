@@ -187,7 +187,7 @@ fn resident_parent_only_native_event_invalidates_parent_baseline() {
 
 #[test]
 fn resident_obsolete_completed_failures_do_not_publish_fresh_diagnostics() {
-    use crate::watch::native::Error;
+    use crate::native::Error;
     use rawr_import::process::RunnerError;
     let fixture = Fixture::new();
     let adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
@@ -268,7 +268,7 @@ fn resident_runner_late_event_cannot_drop_the_newest_write() {
 
 #[test]
 fn resident_runner_late_event_at_install_retries_but_real_failures_report() {
-    use crate::watch::native::Error;
+    use crate::native::Error;
     use rawr_import::process::RunnerError;
     let fixture = Fixture::new();
     let main = fixture.root.join("src/main.rs");

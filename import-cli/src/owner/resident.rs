@@ -11,10 +11,10 @@ mod tests;
 /// The exact `Cargo.toml` the admitted native owner consumed. Comparing it
 /// conservatively routes any declaration edit to preparation.
 #[derive(Clone, Eq, PartialEq)]
-pub(in crate::import) struct Manifests(Box<[(PathBuf, Box<str>)]>);
+pub struct Manifests(Box<[(PathBuf, Box<str>)]>);
 
 impl Manifests {
-    pub(in crate::import) fn from_graph(graph: &rawr::package::Graph) -> Self {
+    pub fn from_graph(graph: &rawr::package::Graph) -> Self {
         Self(
             graph
                 .entry_package()
@@ -36,7 +36,7 @@ pub(super) enum Attempt {
 
 pub(super) fn attempt(
     lane: &mut super::Lane,
-    adapter: &crate::watch::Adapter,
+    adapter: &rawr_watch::Adapter,
     watch_request: &rawr::reload::scheduler::Request,
     started: Option<rawr_import::process::hot::Started>,
     revision: rawr_import::supervisor::Revision,
@@ -51,7 +51,7 @@ pub(super) fn attempt(
     let native_current = adapter.resident_eligible(native_baseline);
     let capture = (|| {
         let graph = rawr::package::Graph::load(&rawr::Engine::new(), target)
-            .map_err(|error| crate::watch::package_report(&error, diagnostic.clone()))?;
+            .map_err(|error| crate::report::package(&error, diagnostic.clone()))?;
         // The resident route uses the same limits profile.
         let limits = graph.rust_limits();
         let eligible =
@@ -157,7 +157,7 @@ pub(super) fn attempt(
 /// this owner already scheduled. Unless a newer request supersedes this one,
 /// nothing else would retry: re-arm so the current bytes are compiled again.
 fn obsolete(
-    adapter: &crate::watch::Adapter,
+    adapter: &rawr_watch::Adapter,
     request: &rawr::reload::scheduler::Request,
     diagnostic: &rawr::diagnostic::Source,
 ) -> Result<Attempt, rawr::diagnostic::Report> {
@@ -171,12 +171,12 @@ fn obsolete(
 }
 
 fn failed(
-    error: crate::watch::native::Error,
-    adapter: &crate::watch::Adapter,
+    error: crate::native::Error,
+    adapter: &rawr_watch::Adapter,
     request: &rawr::reload::scheduler::Request,
     diagnostic: &rawr::diagnostic::Source,
 ) -> Result<Attempt, rawr::diagnostic::Report> {
-    use crate::watch::native::Error;
+    use crate::native::Error;
     use rawr_import::process::RunnerError;
     // The runner's own watcher revoked the commit: same race as `obsolete`.
     if matches!(error, Error::Process(RunnerError::HotSuperseded)) {

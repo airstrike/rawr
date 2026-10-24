@@ -26,7 +26,10 @@ mod tests {
         let mut claims = manifest.claims.clone();
         claims.prelude.clear();
         assert_eq!(known.manifest.claims, claims);
-        assert_eq!((&known.manifest.name, &known.manifest.commands), (&manifest.name, &manifest.commands));
+        assert_eq!(
+            (&known.manifest.name, &known.manifest.extends, &known.manifest.commands),
+            (&manifest.name, &manifest.extends, &manifest.commands)
+        );
         assert!(!manifest.claims.prelude.is_empty());
         assert!(known.install.iter().any(|line| line.ends_with(" rawr-iced-cli")));
     }

@@ -2,7 +2,7 @@
 
 mod launch;
 #[cfg(feature = "native-runner")]
-pub mod native;
+pub use rawr_import_cli::native;
 pub mod scheduler;
 mod session;
 

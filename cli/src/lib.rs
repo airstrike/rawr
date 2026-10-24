@@ -167,10 +167,7 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
         Ok(None) => {}
     }
     cells::tell("rawr", &loaded.cells);
-    if let Some(known) = layer::catalog()
-        .into_iter()
-        .find(|known| known.manifest.claims.claim(facts))
-    {
+    if let Some(known) = layer::known_claimant(facts) {
         let report = rawr::diagnostic::Report::error(
             rawr::diagnostic::code::FRAMEWORK_FACADE,
             format!(
@@ -187,6 +184,14 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
         .finish();
         return failure(&report);
     }
+    on_base(loaded, check)
+}
+
+/// Run or check a loaded program on the base language: its top level,
+/// then `fn main` if it has one, as in Rust. `cargo check` runs beside it
+/// for a Cargo crate.
+#[must_use]
+pub fn on_base(loaded: base::Loaded, check: bool) -> ExitCode {
     // rustc checks a Cargo crate of marked files while Rawr works.
     let cargo = cargo::begin(&loaded.graph);
     if check {

@@ -1,14 +1,15 @@
 # What `rawr-iced --rawr-manifest` prints: the programs `rawr` hands to
-# rawr-iced (those naming the `iced` crate, or importing Rust dependencies
-# or native modules through the generated iced runner) and the commands it
-# adds to `rawr`.
+# rawr-iced (those naming the `iced` crate) and the commands it adds to
+# `rawr`. rawr-iced extends rawr-import: an iced program's Rust dependencies
+# are imported the way rawr-import imports them, with iced added to its
+# runner, so a program both claim goes to rawr-iced.
 # `prelude` is what a snippet host such as `?play` imports into a snippet
 # that has no `use` of its own; such a snippet using one of these names is
 # rawr-iced's too. `rawr` itself imports nothing.
 format = 1
 name = "rawr-iced"
 crates = ["iced"]
-sections = ["rust"]
+extends = ["rawr-import"]
 prelude = [
     "iced::Alignment", "iced::Background", "iced::Border", "iced::Bottom",
     "iced::Center", "iced::Color", "iced::Element", "iced::Fill",

@@ -3107,6 +3107,7 @@ dependencies = [
  "rawr-cli",
  "rawr-iced",
  "rawr-import",
+ "rawr-import-cli",
  "rawr-watch",
  "serde",
  "serde_json",
@@ -3144,6 +3145,18 @@ dependencies = [
  "unicode-ident",
  "url",
  "utf8_iter",
+]
+
+[[package]]
+name = "rawr-import-cli"
+version = "0.1.0"
+dependencies = [
+ "nix 0.27.1",
+ "rawr",
+ "rawr-cli",
+ "rawr-import",
+ "rawr-watch",
+ "serde_json",
 ]
 
 [[package]]
