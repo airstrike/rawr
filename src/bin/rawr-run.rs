@@ -4,17 +4,22 @@ use std::{env, fs::File, io::Read, path::Path, process::exit};
 
 fn eprint_error(input: &str, mut err: EvalAltResult) {
     fn eprint_line(lines: &[&str], pos: Position, err_msg: &str) {
-        let line = pos.line().unwrap();
+        let line = pos.line().unwrap_or(0);
+        let Some(text) = line.checked_sub(1).and_then(|index| lines.get(index)) else {
+            // A position outside the script: the message alone.
+            eprintln!("{err_msg} ({pos})");
+            return;
+        };
         let line_no = format!("{line}: ");
 
-        eprintln!("{line_no}{}", lines[line - 1]);
+        eprintln!("{line_no}{text}");
 
         for (i, err_line) in err_msg.to_string().lines().enumerate() {
             // Display position marker
-            println!(
+            eprintln!(
                 "{0:>1$}{err_line}",
                 if i > 0 { "| " } else { "^ " },
-                line_no.len() + pos.position().unwrap() + 1,
+                line_no.len() + pos.position().unwrap_or(1) + 1,
             );
         }
         eprintln!();
@@ -37,6 +42,7 @@ fn eprint_error(input: &str, mut err: EvalAltResult) {
 
 fn main() {
     let mut contents = String::new();
+    let mut failed = false;
 
     for filename in env::args().skip(1) {
         let filename = match Path::new(&filename).canonicalize() {
@@ -104,6 +110,11 @@ fn main() {
             eprintln!();
 
             eprint_error(contents, *err);
+            failed = true;
         }
+    }
+
+    if failed {
+        exit(1);
     }
 }

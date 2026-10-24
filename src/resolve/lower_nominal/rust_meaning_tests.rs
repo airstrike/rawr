@@ -204,3 +204,25 @@ fn language_rust_meaning_collect_into_a_tuple_struct_pattern() {
     );
     assert_eq!(value, "3 [0, 0, 0, 1, 1]");
 }
+
+#[test]
+fn language_rust_meaning_runtime_errors_point_at_the_script() {
+    // Line 4, column 13 is `v[3]` in the script; the lowered program the
+    // evaluator runs has other lines and columns.
+    let script = "fn main_part() {}\nlet v: Vec<i64> = vec![1, 2, 3];\nlet n = 3;\nlet x = v[n] + 1;\nprintln!(\"{x}\");\n";
+    let error = Engine::new().run(script).expect_err("the index is out of bounds");
+    let position = deepest(&error).position();
+    assert_eq!((position.line(), position.position()), (Some(4), Some(9)), "{error}");
+    let ast = Engine::new().compile("pub fn get(v: Vec<i64>) -> i64 {\n    v[5]\n}").unwrap();
+    let error = Engine::new()
+        .call_fn::<i64>(&mut crate::Scope::new(), &ast, "get", (crate::Array::new(),))
+        .expect_err("the index is out of bounds");
+    assert_eq!(deepest(&error).position().line(), Some(2), "{error}");
+}
+
+fn deepest(error: &crate::EvalAltResult) -> &crate::EvalAltResult {
+    match error {
+        crate::EvalAltResult::ErrorInFunctionCall(_, _, inner, _) => deepest(inner),
+        leaf => leaf,
+    }
+}

@@ -638,7 +638,14 @@ impl Engine {
         )
         .map(|executable| {
             self.freeze_exports(executable.host_dependencies());
-            executable.into_hosted_ast()
+            // A runtime error in this program is at the script's own text,
+            // in the walker and in anything compiled from the AST.
+            let positions = executable.positions();
+            let mut ast = executable.into_hosted_ast();
+            crate::resolve::lower_nominal::relocate(&mut ast, &mut |position| {
+                positions.located(position)
+            });
+            ast
         })
     }
 

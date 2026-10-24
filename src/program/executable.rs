@@ -123,6 +123,21 @@ impl Positions {
         if position.is_none() {
             return None;
         }
+        self.original(position)
+    }
+
+    /// `position` in the lowered program as a position in the source's own
+    /// text, or none when the evidence does not cover it: code the compiler
+    /// wrote around the source's.
+    pub(crate) fn located(&self, position: crate::Position) -> crate::Position {
+        if position.is_none() {
+            return position;
+        }
+        self.original(position)
+            .map_or(crate::Position::NONE, |span| span.start())
+    }
+
+    fn original(&self, position: crate::Position) -> Option<crate::Span> {
         innermost(&self.callables, position).or_else(|| innermost(&self.helpers, position))
     }
 }
@@ -483,6 +498,12 @@ impl Executable {
 
     /// This program's [`AST`] and the [`Positions`] of its entry source.
     pub(crate) fn into_ast_with_positions(self) -> (AST, Positions) {
+        let positions = self.positions();
+        (self.ast, positions)
+    }
+
+    /// The [`Positions`] of this program's entry source.
+    pub(crate) fn positions(&self) -> Positions {
         let entry = self.sources.key(self.source.index());
         let callables = self
             .callables
@@ -496,7 +517,7 @@ impl Executable {
             .get(&entry)
             .map(|entries| entries.clone())
             .unwrap_or_default();
-        (self.ast, Positions { callables, helpers })
+        Positions { callables, helpers }
     }
 
     #[cfg(feature = "rust-import")]
@@ -758,7 +779,11 @@ fn retain_locations(
     let mut grouped: BTreeMap<item::Key, (super::source::Id, Vec<Location>)> = BTreeMap::new();
     let mut helpers: BTreeMap<super::source::Key, Vec<Location>> = BTreeMap::new();
     for location in locations {
-        let Some(callable) = callables.get(&location.callable) else {
+        let Some((key, callable)) = location
+            .callable
+            .as_ref()
+            .and_then(|key| Some((key.clone(), callables.get(key)?)))
+        else {
             helpers
                 .entry(sources.key(location.source.index()))
                 .or_default()
@@ -773,7 +798,7 @@ fn retain_locations(
             continue;
         }
         grouped
-            .entry(location.callable)
+            .entry(key)
             .or_insert_with(|| (location.source, Vec::new()))
             .1
             .push(Location {

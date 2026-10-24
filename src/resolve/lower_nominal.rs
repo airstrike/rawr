@@ -689,10 +689,12 @@ fn lower_with_context(
         retain_locations(
             &mut locations,
             body,
-            shell
-                .key
-                .as_ref()
-                .expect("resolved functions retain stable item keys"),
+            Some(
+                shell
+                    .key
+                    .as_ref()
+                    .expect("resolved functions retain stable item keys"),
+            ),
             shell.source,
             lowered.locations,
         );
@@ -747,7 +749,7 @@ fn lower_with_context(
         retain_locations(
             &mut locations,
             body,
-            definition.key(),
+            Some(definition.key()),
             definition.source(),
             lowered.locations,
         );
@@ -787,12 +789,15 @@ fn lower_with_context(
     let lowered = parser
         .parse()
         .map_err(|error| LoweringFailure::original(script.source, error.into()))?;
-    generated.body(
+    let body = generated.body(
         script.source,
         source_full_span(program.source.text_at(script.source)),
         &lowered.source,
         &lowered.locations,
     );
+    // The script's statements: a runtime error in them is reported at
+    // the script's own text.
+    retain_locations(&mut locations, body, None, script.source, lowered.locations);
     ops.extend(lowered.ops);
     patterns.extend(lowered.patterns);
 
@@ -1513,7 +1518,7 @@ fn write_default_dispatcher(
 
 /// Compiler-created evidence translating one generated callback range.
 pub(crate) struct Location {
-    pub(crate) callable: crate::item::Key,
+    pub(crate) callable: Option<crate::item::Key>,
     pub(crate) source: crate::program::source::Id,
     pub(crate) generated: Span,
     pub(crate) original: Span,
@@ -1694,7 +1699,7 @@ fn write_function(
 fn retain_locations(
     retained: &mut Vec<location::Pending>,
     body_offset: usize,
-    callable: &crate::item::Key,
+    callable: Option<&crate::item::Key>,
     source: crate::program::source::Id,
     locations: Vec<location::Output>,
 ) {
@@ -1704,7 +1709,7 @@ fn retain_locations(
             .checked_add(location.generated.end)?
             .checked_sub(1)?;
         Some(location::Pending {
-            callable: callable.clone(),
+            callable: callable.cloned(),
             source,
             generated: start..end.saturating_add(1),
             original: location.original,
@@ -39358,6 +39363,142 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
             value_matches(&lhs.flatten_clone(), &rhs.flatten_clone(), same)
         }
         _ => false,
+    }
+}
+
+/// Move every position in `ast`'s statements and functions by `locate`:
+/// from the lowered program to the script's text.
+pub(crate) fn relocate(ast: &mut AST, locate: &mut dyn FnMut(Position) -> Position) {
+    relocate_statements(ast.statements_mut(), locate);
+    #[cfg(not(feature = "no_function"))]
+    ast.for_each_fn_def_mut(|function| {
+        relocate_statements(function.body.statements_mut(), locate);
+    });
+}
+
+fn relocate_statements(statements: &mut [Stmt], locate: &mut dyn FnMut(Position) -> Position) {
+    for statement in statements {
+        relocate_statement(statement, locate);
+    }
+}
+
+fn relocate_block(block: &mut ast::StmtBlock, locate: &mut dyn FnMut(Position) -> Position) {
+    let span = block.span();
+    block.set_position(locate(span.start()), locate(span.end()));
+    relocate_statements(block.statements_mut(), locate);
+}
+
+fn relocate_statement(statement: &mut Stmt, locate: &mut dyn FnMut(Position) -> Position) {
+    // An expression statement's or a block's position is its expression's
+    // or its block's, which are moved below.
+    if !matches!(statement, Stmt::Expr(..) | Stmt::Block(..)) {
+        let position = locate(statement.position());
+        statement.set_position(position);
+    }
+    match statement {
+        Stmt::Var(value, ..) => relocate_expr(&mut value.1, locate),
+        Stmt::Assignment(value) => {
+            relocate_expr(&mut value.1.lhs, locate);
+            relocate_expr(&mut value.1.rhs, locate);
+        }
+        Stmt::FnCall(call, ..) => relocate_call(call, locate),
+        Stmt::Expr(expr) => relocate_expr(expr, locate),
+        Stmt::Block(block) => relocate_block(block, locate),
+        Stmt::If(flow, ..)
+        | Stmt::While(flow, ..)
+        | Stmt::Do(flow, ..)
+        | Stmt::TryCatch(flow, ..) => {
+            relocate_expr(&mut flow.expr, locate);
+            relocate_block(&mut flow.body, locate);
+            relocate_block(&mut flow.branch, locate);
+        }
+        Stmt::For(value, ..) => {
+            relocate_expr(&mut value.2.expr, locate);
+            relocate_block(&mut value.2.body, locate);
+        }
+        Stmt::Switch(value, ..) => {
+            relocate_expr(&mut value.0, locate);
+            for expression in &mut value.1.expressions {
+                relocate_expr(&mut expression.lhs, locate);
+                relocate_expr(&mut expression.rhs, locate);
+            }
+        }
+        Stmt::Return(expr, ..) | Stmt::BreakLoop(expr, ..) => {
+            if let Some(expr) = expr {
+                relocate_expr(expr, locate);
+            }
+        }
+        #[cfg(not(feature = "no_module"))]
+        Stmt::Import(value, ..) => relocate_expr(&mut value.0, locate),
+        _ => {}
+    }
+}
+
+fn relocate_call(call: &mut FnCallExpr, locate: &mut dyn FnMut(Position) -> Position) {
+    for arg in &mut call.args {
+        relocate_expr(arg, locate);
+    }
+}
+
+fn relocate_expr(expr: &mut ast::Expr, locate: &mut dyn FnMut(Position) -> Position) {
+    if !matches!(expr, ast::Expr::Stmt(..)) {
+        let position = locate(expr.position());
+        expr.set_position(position);
+    }
+    match expr {
+        ast::Expr::FnCall(call, ..) | ast::Expr::MethodCall(call, ..) => relocate_call(call, locate),
+        ast::Expr::Array(values, ..) | ast::Expr::InterpolatedString(values, ..) => {
+            for value in values {
+                relocate_expr(value, locate);
+            }
+        }
+        ast::Expr::And(values, ..)
+        | ast::Expr::Or(values, ..)
+        | ast::Expr::Coalesce(values, ..) => {
+            for value in values.iter_mut() {
+                relocate_expr(value, locate);
+            }
+        }
+        ast::Expr::Map(value, ..) => {
+            for (_, value) in &mut value.0 {
+                relocate_expr(value, locate);
+            }
+        }
+        ast::Expr::Stmt(block) => relocate_block(block, locate),
+        ast::Expr::Dot(binary, ..) | ast::Expr::Index(binary, ..) => {
+            relocate_expr(&mut binary.lhs, locate);
+            relocate_expr(&mut binary.rhs, locate);
+        }
+        #[cfg(not(feature = "no_custom_syntax"))]
+        ast::Expr::Custom(custom, ..) => {
+            for input in &mut custom.inputs {
+                relocate_expr(input, locate);
+            }
+        }
+        #[cfg(not(feature = "no_function"))]
+        ast::Expr::DynamicConstant(value, ..) => relocate_constant(value, locate),
+        _ => {}
+    }
+}
+
+/// A folded closure's body, or those of the closures an array holds.
+#[cfg(not(feature = "no_function"))]
+fn relocate_constant(value: &mut Dynamic, locate: &mut dyn FnMut(Position) -> Position) {
+    if let Some(pointer) = value.downcast_mut::<crate::FnPtr>() {
+        if let crate::types::fn_ptr::FnPtrType::Script(definition) = &mut pointer.typ {
+            let definition = crate::func::shared_make_mut(definition);
+            relocate_statements(definition.body.statements_mut(), locate);
+        }
+        for value in pointer.curry.iter_mut() {
+            relocate_constant(value, locate);
+        }
+        return;
+    }
+    #[cfg(not(feature = "no_index"))]
+    if let Some(array) = value.downcast_mut::<crate::Array>() {
+        for element in array.iter_mut() {
+            relocate_constant(element, locate);
+        }
     }
 }
 

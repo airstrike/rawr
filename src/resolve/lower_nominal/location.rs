@@ -12,7 +12,8 @@ pub(super) struct Output {
 }
 
 pub(super) struct Pending {
-    pub(super) callable: item::Key,
+    /// `None` for the script's own statements, which no item owns.
+    pub(super) callable: Option<item::Key>,
     pub(super) source: program::source::Id,
     pub(super) generated: Range<usize>,
     pub(super) original: Span,
