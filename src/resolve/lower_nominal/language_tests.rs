@@ -8770,3 +8770,26 @@ fn language_collect_into_a_type_checks_the_item() {
     "#);
     assert!(error.contains("mismatch"), "{error}");
 }
+
+#[test]
+fn language_an_iterator_clones_into_a_second_pass() {
+    let value = run(r#"
+        pub fn run() -> i64 {
+            let n: isize = 4;
+            let rows = -n / 2..=n / 2;
+            let columns = -n / 2..=n / 2;
+            let doubled = columns.clone().map(|column| column * 2);
+            let mut total = 0;
+            for row in rows {
+                for column in columns.clone() {
+                    total += (row * column + 1) as i64;
+                }
+            }
+            let range = 1..=3;
+            let again = range.clone();
+            total * 100 + doubled.clone().count() as i64 * 10 + again.sum::<i64>() - 6
+        }
+        run()
+    "#);
+    assert_eq!(value, 2550);
+}

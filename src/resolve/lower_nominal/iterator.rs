@@ -119,6 +119,7 @@ const ITERATOR_METHODS: &[&str] = &[
     "cloned",
     "copied",
     "into_iter",
+    "clone",
     "collect",
     "sum",
     "product",
@@ -154,12 +155,14 @@ impl Parser<'_> {
     pub(super) fn iterator_receiver(&self, ty: &Ty, member: &str) -> bool {
         match self.inference.resolve(ty) {
             Ty::Iter(_) => true,
-            Ty::InclusiveRange => ITERATOR_METHODS.contains(&member) && member != "into_iter",
+            Ty::InclusiveRange => {
+                ITERATOR_METHODS.contains(&member) && !matches!(member, "into_iter" | "clone")
+            }
             // A crate type's `impl Iterator`: the adaptors its own methods
             // do not name.
             ty @ Ty::Script(id, _) => {
                 ITERATOR_METHODS.contains(&member)
-                    && member != "next"
+                    && !matches!(member, "next" | "clone")
                     && self.models.method(id, member).is_none()
                     && self.type_implements(&ty, "Iterator")
             }
@@ -904,6 +907,20 @@ impl Parser<'_> {
             // what `peek` sees.
             "into_iter" | "peekable" => {
                 arity(0, &arguments)?;
+                return Ok(self.adapted(pipeline, item, expression));
+            }
+            // A chain runs from its sources at each use, so its clone is
+            // the chain itself. Rust's iterators are `Clone` when their
+            // items are.
+            "clone" => {
+                arity(0, &arguments)?;
+                if !self.type_provides(&item, capability::Kind::Clone) {
+                    return Err(Error::MissingCapability {
+                        owner: Ty::Iter(Box::new(item)).name(&self.models),
+                        capability: "Clone".into(),
+                        operation: expression,
+                    });
+                }
                 return Ok(self.adapted(pipeline, item, expression));
             }
             "rev" => {
