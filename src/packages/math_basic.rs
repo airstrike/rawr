@@ -191,6 +191,14 @@ mod trig_functions {
     pub fn hypot(x: FLOAT, y: FLOAT) -> FLOAT {
         x.hypot(y)
     }
+    /// Return the least non-negative remainder of `x` divided by `y`.
+    pub fn rem_euclid(x: FLOAT, y: FLOAT) -> FLOAT {
+        x.rem_euclid(y)
+    }
+    /// Return the Euclidean quotient of `x` divided by `y`.
+    pub fn div_euclid(x: FLOAT, y: FLOAT) -> FLOAT {
+        x.div_euclid(y)
+    }
 }
 
 #[cfg(not(feature = "no_float"))]

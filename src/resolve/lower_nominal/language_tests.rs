@@ -7506,6 +7506,30 @@ fn language_get_mut_and_iter_mut_find_lend_an_element() {
 }
 
 #[test]
+fn language_euclidean_division_of_floats_and_integers() {
+    let value = Engine::new()
+        .eval::<f64>(r#"
+            pub fn run() -> f64 {
+                let a: f32 = -7.5;
+                let b: f64 = 7.5;
+                let i: i64 = -7;
+                a.rem_euclid(2.0) as f64 * 1000.0 + a.div_euclid(2.0) as f64 * 100.0
+                    + b.rem_euclid(-2.0) * 10.0 + b.div_euclid(-2.0)
+                    + (i.rem_euclid(3) * 10000 + i.div_euclid(3) * 100000) as f64
+                    + f64::rem_euclid(b, 2.0) * 1000000.0
+            }
+            run()
+        "#)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let (a, b, i) = (-7.5_f32, 7.5_f64, -7_i64);
+    let expected = f64::from(a.rem_euclid(2.0)) * 1000.0 + f64::from(a.div_euclid(2.0)) * 100.0
+        + b.rem_euclid(-2.0) * 10.0 + b.div_euclid(-2.0)
+        + (i.rem_euclid(3) * 10000 + i.div_euclid(3) * 100000) as f64
+        + f64::rem_euclid(b, 2.0) * 1000000.0;
+    assert_eq!(value, expected);
+}
+
+#[test]
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
     assert!(error.contains("nknown function") && error.contains("centre"), "{error}");

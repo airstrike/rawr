@@ -3841,7 +3841,13 @@ const FLOAT_UNARY_METHODS: &[(&str, &str)] = &[
 
 /// The float methods of one argument of the same float, each with the
 /// runtime's function that computes `function(self, other)` as Rust does.
-const FLOAT_BINARY_METHODS: &[(&str, &str)] = &[("atan2", "atan"), ("hypot", "hypot"), ("log", "log")];
+const FLOAT_BINARY_METHODS: &[(&str, &str)] = &[
+    ("atan2", "atan"),
+    ("hypot", "hypot"),
+    ("log", "log"),
+    ("rem_euclid", "rem_euclid"),
+    ("div_euclid", "div_euclid"),
+];
 
 /// Whether a builtin type has an inherent method `member` of its own:
 /// Rust's method lookup finds it before any trait's function of
@@ -32110,6 +32116,17 @@ impl<'a> Parser<'a> {
         }
         if builtin == Ty::String && member.as_str() == "new" && arguments.is_empty() {
             return Ok(self.literal("\"\"", Ty::String, expression));
+        }
+        // `f64::sqrt(x)`, `f32::rem_euclid(x, y)`: the number's method on
+        // the first argument, as Rust's path call is.
+        if matches!(builtin, Ty::Int(_) | Ty::Float(_))
+            && !matches!(member.as_str(), "from" | "try_from" | "default" | "from_str_radix")
+            && !arguments.is_empty()
+        {
+            let mut receiver = arguments.remove(0);
+            self.coerce_expr(&builtin, &mut receiver)?;
+            self.pending_arguments = Some((arguments, end));
+            return self.parse_number_method(receiver, builtin, member, member_span);
         }
         // `String::default()`, `u32::default()`, `bool::default()`.
         if member.as_str() == "default" && arguments.is_empty() {
