@@ -751,6 +751,60 @@ fn master_checkbox_text_size_and_facade_defaults() {
     find(&adapter, "Contain true 0");
 }
 
+/// A slider's closure takes the number its range picks among the
+/// overloads, and a crate function's `impl Fn(f32)` types its closure, as
+/// tour's `color_slider` writes them.
+const SLIDER_CLOSURES: &str = r#"
+use iced::widget::{column, slider, text, Slider};
+use iced::{Color, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    color: Color,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    ColorChanged(Color),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::ColorChanged(color) => self.color = color,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let color = self.color;
+        column![
+            color_slider(color.r, move |r| Color { r, ..color }),
+            text("sliders"),
+        ]
+    }
+}
+
+fn color_slider<'a>(
+    component: f32,
+    update: impl Fn(f32) -> Color + 'a,
+) -> Slider<'a, f64, Message> {
+    slider(0.0..=1.0, f64::from(component), move |c| {
+        Message::ColorChanged(update(c as f32))
+    })
+    .step(0.01)
+}
+"#;
+
+#[test]
+fn master_slider_closures_take_their_parameter_types() {
+    let adapter = boot(SLIDER_CLOSURES);
+    find(&adapter, "sliders");
+}
+
 /// std's `io::Error` and `io::ErrorKind`, as editor and markdown use them.
 const IO_ERRORS: &str = r#"
 use iced::widget::{column, text};

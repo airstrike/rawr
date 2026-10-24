@@ -8425,7 +8425,7 @@ struct Parser<'a> {
     /// A host call's one signature, whose closure arguments take their
     /// parameter types from the arguments before them, as Rust infers
     /// `pick_list(selected, options, |x| x.to_string())`'s `x`.
-    deferred_hints: Option<(crate::host::item::Definition, Option<Ty>)>,
+    deferred_hints: Option<(Box<[crate::host::item::Definition]>, Option<Ty>)>,
     /// Bounds a generic call requires of its inferred type arguments,
     /// checked once they are known.
     pending_bounds: Vec<(Ty, capability::Kind, Span)>,
@@ -28877,10 +28877,7 @@ impl<'a> Parser<'a> {
     /// whose parameter there is a host callable, as iced's `.style(..)`
     /// takes a pinned style or `impl Fn(&Theme, Status) -> Style`.
     fn hint_closures(&mut self, items: &[crate::host::item::Definition], receiver: Option<&Ty>) {
-        self.deferred_hints = match items {
-            [item] => Some((item.clone(), receiver.cloned())),
-            _ => None,
-        };
+        self.deferred_hints = (!items.is_empty()).then(|| (items.into(), receiver.cloned()));
         let mut overloads =
             Vec::<Vec<Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>>>::new();
         for item in items {
@@ -28994,14 +28991,48 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The input types of the host callable parameter after `arguments`
+    /// in the overloads the arguments so far fit, when they agree:
+    /// `slider(0.0..=1.0, value, |c| ..)` takes the `f64` slider's `c`.
+    fn overload_closure_hint(
+        &mut self,
+        items: &[crate::host::item::Definition],
+        receiver: Option<&Ty>,
+        arguments: &[ParsedExpr],
+    ) -> Option<Box<[Ty]>> {
+        if let [item] = items {
+            return self.inferred_closure_hint(item, receiver, arguments, false);
+        }
+        let mut hints = items
+            .iter()
+            .filter_map(|item| self.inferred_closure_hint(item, receiver, arguments, true));
+        let hint = hints.next()?;
+        if !hints.all(|other| other == hint) {
+            return None;
+        }
+        // The facade's `f64` and `i64` stand for any float and integer, as
+        // a slider over `f32` is, so the kind stays open.
+        Some(
+            hint.iter()
+                .map(|input| match input {
+                    Ty::Float(_) => Ty::Float(Float::Var(self.inference.fresh_id())),
+                    Ty::Int(_) => Ty::Int(Int::Var(self.inference.fresh_id())),
+                    input => input.clone(),
+                })
+                .collect(),
+        )
+    }
+
     /// The input types of the host callable parameter after `arguments`,
     /// with the generics the arguments before it settle: `None` when it is
-    /// no callable or they leave an input open.
+    /// no callable or they leave an input open, or, when `exact`, when an
+    /// argument does not fit its parameter.
     fn inferred_closure_hint(
         &mut self,
         item: &crate::host::item::Definition,
         receiver: Option<&Ty>,
         arguments: &[ParsedExpr],
+        exact: bool,
     ) -> Option<Box<[Ty]>> {
         let checkpoint = self.inference.checkpoint();
         let hint = self
@@ -29012,9 +29043,14 @@ impl<'a> Parser<'a> {
                 else {
                     return None;
                 };
+                if exact && signature.inputs.len() <= arguments.len() {
+                    return None;
+                }
                 for (parameter, argument) in signature.inputs.iter().zip(arguments) {
                     let actual = self.inference.resolve(&argument.ty);
-                    let _ = self.unify_type(parameter, &actual);
+                    if !self.unify_type(parameter, &actual) && exact {
+                        return None;
+                    }
                 }
                 let Ty::Callable { inputs, .. } =
                     self.inference.resolve(&signature.inputs[arguments.len()])
@@ -33174,12 +33210,21 @@ impl<'a> Parser<'a> {
             let outer = std::mem::replace(&mut self.no_struct, false);
             self.closure_hint = hints.next().flatten();
             if self.closure_hint.is_none()
-                && let Some((item, receiver)) = &deferred
+                && let Some((items, receiver)) = &deferred
             {
-                self.closure_hint = self.inferred_closure_hint(item, receiver.as_ref(), &arguments);
+                self.closure_hint = self.overload_closure_hint(items, receiver.as_ref(), &arguments);
             }
             self.closure_output = outputs.next().flatten();
             let expected = expected.next().flatten();
+            // A closure where a crate function takes `impl Fn(f32) -> C`
+            // has those parameter types, as in Rust.
+            if self.closure_hint.is_none()
+                && let Some(Ty::Fn { inputs, .. }) =
+                    expected.as_ref().map(|expected| self.inference.resolve(expected))
+                && !inputs.iter().any(contains_inference)
+            {
+                self.closure_hint = Some(inputs);
+            }
             let argument = self.parse_expr_expecting(expected.as_ref());
             self.closure_hint = None;
             self.closure_output = None;

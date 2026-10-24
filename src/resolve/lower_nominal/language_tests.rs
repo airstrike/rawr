@@ -8793,3 +8793,18 @@ fn language_an_iterator_clones_into_a_second_pass() {
     "#);
     assert_eq!(value, 2550);
 }
+
+#[test]
+fn language_a_closure_takes_its_parameter_types_from_impl_fn() {
+    let value = run(r#"
+        fn apply<'a>(value: f32, update: impl Fn(f32) -> f64 + 'a) -> f64 {
+            update(value)
+        }
+        pub fn run() -> i64 {
+            let scale = 4.0;
+            apply(0.5, move |x| x as f64 * scale) as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 2);
+}
