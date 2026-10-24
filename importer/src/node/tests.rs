@@ -7127,43 +7127,14 @@ fn store_growth_target_eviction_keeps_live_and_last_good() {
     store_growth_pin(&store, &runners[1].1, crate::store::PinRole::LastGood);
     store_growth_pin(&store, &runners[2].1, crate::store::PinRole::Live);
 
-    crate::store::FREE_BYTES.set(0);
-    let made = store.fixture_make_room();
-    crate::store::FREE_BYTES.set(u64::MAX);
-    made.expect("eviction toward the target never refuses");
+    store
+        .fixture_make_room()
+        .expect("eviction toward the target never refuses");
     assert!(!runners[0].0.exists(), "the unpinned runner evicts");
     assert!(runners[1].0.is_dir() && runners[2].0.is_dir());
     assert_eq!(
         crate::store::bundle::count_bundles(store.root()).unwrap(),
         2
-    );
-
-    store.retire_fixture().expect("the store retires");
-    fs::remove_dir_all(root).expect("the fixture retires");
-}
-
-#[cfg(feature = "test-fixtures")]
-#[test]
-fn store_growth_low_free_space_evicts_before_a_write() {
-    let (root, store, runners) = store_growth_runners(
-        "store-growth-disk",
-        &[b"store-growth-disk-first", b"store-growth-disk-second"],
-    );
-    let floor = 5 * 1024 * 1024 * 1024;
-    crate::store::FREE_BYTES.set(floor);
-    store
-        .fixture_make_room()
-        .expect("enough free space evicts nothing");
-    assert!(runners.iter().all(|(action, _)| action.is_dir()));
-
-    crate::store::FREE_BYTES.set(floor - 1);
-    let made = store.fixture_make_room();
-    crate::store::FREE_BYTES.set(u64::MAX);
-    made.expect("low free space evicts and never refuses");
-    assert!(runners.iter().all(|(action, _)| !action.exists()));
-    assert_eq!(
-        crate::store::bundle::count_bundles(store.root()).unwrap(),
-        0
     );
 
     store.retire_fixture().expect("the store retires");

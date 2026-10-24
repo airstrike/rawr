@@ -467,13 +467,10 @@ impl Record {
 
 impl Inventory {
     fn read(store: &Path) -> Result<Self, Error> {
-        Self::catalog(store, None).map(|(inventory, _)| inventory)
+        Self::catalog(store).map(|(inventory, _)| inventory)
     }
 
-    fn catalog(
-        store: &Path,
-        mut budget: Option<&mut super::super::recovery::Budget>,
-    ) -> Result<(Self, Vec<Located>), Error> {
+    fn catalog(store: &Path) -> Result<(Self, Vec<Located>), Error> {
         let mut inventory = Self {
             roots: 0,
             edges: 0,
@@ -521,9 +518,6 @@ impl Inventory {
                 }
                 let root_path = entry.path();
                 let bytes = validate_one_member(&root_path)?;
-                if let Some(budget) = budget.as_deref_mut() {
-                    budget.metadata(bytes.len())?;
-                }
                 let record = Record::decode(&bytes).map_err(|_| Error::Corrupt {
                     path: root_path.join("root"),
                     reason: "typed store pin-root decoding failed",
@@ -593,22 +587,14 @@ impl Inventory {
 }
 
 impl Snapshot {
-    fn read_recovery(
-        publication: &crate::store::lease::Publication<'_>,
-        store: &Path,
-        budget: &mut super::super::recovery::Budget,
-    ) -> Result<Self, Error> {
-        Self::read_with_recovery(publication, store, Some(budget))
-    }
 
     fn read_with_recovery(
         publication: &crate::store::lease::Publication<'_>,
         store: &Path,
-        budget: Option<&mut super::super::recovery::Budget>,
     ) -> Result<Self, Error> {
         #[cfg(not(feature = "import-baseline"))]
         let _ = publication;
-        let (_, located) = Inventory::catalog(store, budget)?;
+        let (_, located) = Inventory::catalog(store)?;
         let mut protected = Vec::new();
         let mut stale = Vec::new();
         let mut active = Vec::new();
@@ -793,7 +779,7 @@ pub(super) fn recover_replaced(
     registrations: &[crate::store::accounting::Registered],
     budget: &mut super::super::recovery::Budget,
 ) -> Result<Snapshot, Error> {
-    let snapshot = Snapshot::read_recovery(publication, store, budget)?;
+    let snapshot = Snapshot::read_with_recovery(publication, store)?;
     let Snapshot {
         protected,
         stale,
@@ -837,7 +823,7 @@ pub(super) fn recover_replaced(
         .try_reserve_exact(projects.values().map(Vec::len).sum())
         .map_err(|_| Error::Allocation)?;
     for (project, stale) in projects {
-        let owners = super::owners_recovery(store, project, registrations, budget)?;
+        let owners = super::owners_recovery(store, project, registrations)?;
         for stale in stale {
             if owners.binary_search(&(stale.role, stale.owner)).is_err() {
                 stale.retire(publication, store, budget)?;
@@ -997,60 +983,6 @@ fn open_shared(
             .map(|source| source.owner(pin::Mode::Shared))
             .unwrap_or_default(),
     })
-}
-
-pub(in crate::store) enum Migration {
-    Quiescent(Vec<Guard>),
-    Waiting(PathBuf),
-}
-
-/// Migration retains every stale InFlight root until the ledger fence publishes.
-/// Cataloging includes displaced roots; no logical-ledger shortcut is permitted.
-pub(in crate::store) fn migration_snapshot(
-    publication: &crate::store::lease::Publication<'_>,
-    store: &Path,
-    budget: &mut super::super::recovery::Budget,
-) -> Result<Migration, Error> {
-    #[cfg(not(feature = "import-baseline"))]
-    let _ = publication;
-    let (_, located) = Inventory::catalog(store, Some(budget))?;
-    #[cfg(feature = "import-baseline")]
-    admit_guard_observations(publication, located.len());
-    let mut guards = Vec::new();
-    guards
-        .try_reserve_exact(located.len())
-        .map_err(|_| Error::Allocation)?;
-    for located in located {
-        if located.record.root.role != Role::InFlight {
-            continue;
-        }
-        // The second bounded read uses the original migration account too.
-        budget.metadata(located.bytes.len())?;
-        #[cfg(feature = "import-baseline")]
-        let source = observe(
-            publication,
-            &located.directory,
-            located.record.project,
-            &located.record.root,
-            &located.bytes,
-        );
-        match open_snapshot_with(
-            &located.directory.join("root"),
-            &located.bytes,
-            false,
-            #[cfg(feature = "import-baseline")]
-            Some(&source),
-        )? {
-            Some(SnapshotLock::Stale(file)) => guards.push(file),
-            None => return Ok(Migration::Waiting(located.directory.join("root"))),
-            Some(SnapshotLock::Active(_)) => {
-                return Err(Error::State(
-                    "nonblocking migration probe retained an active pin",
-                ));
-            }
-        }
-    }
-    Ok(Migration::Quiescent(guards))
 }
 
 fn open_snapshot(

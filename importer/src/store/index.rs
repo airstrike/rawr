@@ -7,9 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::node::{ActionKey, Error, Kind, LookupKey};
 
 const MAGIC: &[u8; 8] = b"RAWRINDX";
-const LEGACY_SCHEMA: u16 = 1;
 const SCHEMA: u16 = 2;
-const LEGACY_ROW_BYTES: usize = 80;
 const ROW_BYTES: usize = 112;
 const MAX_CANDIDATES: usize = 8;
 const MAX_BUCKETS: usize = 65_536;
@@ -515,7 +513,7 @@ impl Inventory {
                         .bytes
                         .checked_add(bytes.len())
                         .ok_or(Error::Allocation)?;
-                    if decoded.project == Some(project) {
+                    if decoded.project == project {
                         project_bucket = true;
                         inventory.project_references = inventory
                             .project_references
@@ -768,7 +766,7 @@ fn encode(
 
 struct Decoded {
     action: ActionKey,
-    project: Option<crate::node::Digest>,
+    project: crate::node::Digest,
 }
 
 fn decode(
@@ -777,13 +775,7 @@ fn decode(
     output_schema: u32,
     lookup: LookupKey,
 ) -> Result<ActionKey, Error> {
-    let decoded = decode_any(bytes, kind, lookup)?;
-    if decoded.project.is_none() {
-        return Err(Error::Codec(
-            "legacy discoverable candidate rows are clean misses",
-        ));
-    }
-    let action = decoded.action;
+    let action = decode_any(bytes, kind, lookup)?.action;
     if u32::from_le_bytes(
         bytes[12..16]
             .try_into()
@@ -801,10 +793,8 @@ fn decode_any(bytes: &[u8], kind: Kind, lookup: LookupKey) -> Result<Decoded, Er
         .and_then(|bytes| bytes.try_into().ok())
         .map(u16::from_le_bytes)
         .ok_or(Error::Codec("discoverable candidate row is truncated"))?;
-    if !matches!(
-        (schema, bytes.len()),
-        (LEGACY_SCHEMA, LEGACY_ROW_BYTES) | (SCHEMA, ROW_BYTES)
-    ) || &bytes[..8] != MAGIC
+    if (schema, bytes.len()) != (SCHEMA, ROW_BYTES)
+        || &bytes[..8] != MAGIC
         || bytes[10] != kind as u8
         || bytes[11] != 0
         || bytes[16..48] != lookup.as_bytes()
@@ -815,15 +805,11 @@ fn decode_any(bytes: &[u8], kind: Kind, lookup: LookupKey) -> Result<Decoded, Er
         .try_into()
         .map(ActionKey::from_bytes)
         .map_err(|_| Error::Codec("discoverable candidate action is truncated"))?;
-    let project = if schema == SCHEMA {
-        Some(crate::node::Digest::from_bytes(
-            bytes[80..112]
-                .try_into()
-                .map_err(|_| Error::Codec("discoverable candidate project is truncated"))?,
-        ))
-    } else {
-        None
-    };
+    let project = crate::node::Digest::from_bytes(
+        bytes[80..112]
+            .try_into()
+            .map_err(|_| Error::Codec("discoverable candidate project is truncated"))?,
+    );
     Ok(Decoded { action, project })
 }
 
@@ -1016,7 +1002,7 @@ mod tests {
     }
 
     #[test]
-    fn candidate_rows_bind_the_publishing_project_and_legacy_rows_clean_miss() {
+    fn candidate_rows_bind_the_publishing_project() {
         let kind = Kind::Runner;
         let schema = 2;
         let lookup = LookupKey::from_bytes([0x71; 32]);
@@ -1025,47 +1011,7 @@ mod tests {
         let current = encode(kind, schema, lookup, action, project);
         let decoded = decode_any(&current, kind, lookup).expect("the current row decodes");
         assert_eq!(decoded.action, action);
-        assert_eq!(decoded.project, Some(project));
-
-        let mut legacy = current[..LEGACY_ROW_BYTES].to_vec();
-        legacy[8..10].copy_from_slice(&LEGACY_SCHEMA.to_le_bytes());
-        let decoded = decode_any(&legacy, kind, lookup).expect("the legacy row decodes");
-        assert_eq!(decoded.action, action);
-        assert_eq!(decoded.project, None);
-        assert!(decode(&legacy, kind, schema, lookup).is_err());
-    }
-
-    #[test]
-    fn legacy_candidate_on_disk_is_one_rejected_clean_miss() {
-        let root = fixture_root("legacy-clean-miss");
-        let kind = Kind::Runner;
-        let schema = 2;
-        let lookup_key = LookupKey::from_bytes([0x75; 32]);
-        let action = ActionKey::from_bytes([0x76; 32]);
-        publish_fixture(&root, kind, schema, lookup_key, action)
-            .expect("the current candidate row publishes");
-
-        let row = root
-            .join(bucket_relative(kind, lookup_key))
-            .join(action.directory())
-            .join("row");
-        let current = fs::read(&row).expect("the current candidate row reads");
-        let mut legacy = current[..LEGACY_ROW_BYTES].to_vec();
-        legacy[8..10].copy_from_slice(&LEGACY_SCHEMA.to_le_bytes());
-        fs::write(&row, legacy).expect("the legacy candidate row replaces the fixture row");
-
-        let candidates = lookup(
-            &root,
-            kind,
-            schema,
-            lookup_key,
-            &crate::node::GraphBudget::new(),
-        )
-        .expect("legacy candidate lookup is advisory");
-        assert!(candidates.actions.is_empty());
-        assert!(candidates.rejected);
-
-        fs::remove_dir_all(root).expect("the legacy candidate fixture retires");
+        assert_eq!(decoded.project, project);
     }
 
     #[test]

@@ -262,7 +262,6 @@ impl Ledger {
         root: &Path,
         project: Digest,
         registrations: &[accounting::Registered],
-        budget: &mut super::recovery::Budget,
     ) -> Result<Self, Error> {
         let path = ledger_path(root, project);
         let ledger = match fs::symlink_metadata(&path) {
@@ -273,7 +272,6 @@ impl Ledger {
                 let bytes = super::entry::read_file(&path, MAX_LEDGER_BYTES)?;
                 #[cfg(feature = "import-baseline")]
                 observe_read(bytes.len());
-                budget.metadata(bytes.len())?;
                 Self::decode(&bytes).map_err(|_| Error::Corrupt {
                     path: path.clone(),
                     reason: "project logical ledger decoding failed",
@@ -714,7 +712,7 @@ pub(crate) fn recover(
 ) -> Result<(), Error> {
     let registrations = accounting::registrations_recovery(root, budget)?;
     lock::recover_replaced(publication, root, &registrations, budget)?;
-    let mut ledger = Ledger::read_or_empty_recovery(root, project, &registrations, budget)?;
+    let mut ledger = Ledger::read_or_empty_recovery(root, project, &registrations)?;
     let Some(existing) = ledger.reservations.first() else {
         return if ledger.is_empty() {
             save_or_retire(
@@ -796,7 +794,7 @@ pub(super) fn recover_abandoned(
     }
     projects.sort_unstable();
     for project in projects {
-        let mut ledger = Ledger::read_or_empty_recovery(root, project, &registrations, budget)?;
+        let mut ledger = Ledger::read_or_empty_recovery(root, project, &registrations)?;
         let before = ledger.reservations.len();
         ledger
             .reservations
@@ -879,7 +877,7 @@ pub(super) fn recover_empty_before_new_project(
         projects.push((project, length.len()));
     }
     if projects.len() == MAX_PROJECT_LEDGERS {
-        let live = accounting::reservation_keys_header_recovery(root, budget)?;
+        let live = accounting::reservation_keys_header_recovery(root)?;
         projects.sort_unstable();
         for (project, length) in projects {
             if length != HEADER_BYTES as u64 && length != (HEADER_BYTES + RESERVATION_BYTES) as u64
@@ -887,7 +885,6 @@ pub(super) fn recover_empty_before_new_project(
                 continue;
             }
             let path = ledger_path(root, project);
-            budget.metadata(length as usize)?;
             let bytes = super::entry::read_file(&path, length as usize)?;
             #[cfg(feature = "import-baseline")]
             observe_read(bytes.len());
@@ -934,7 +931,6 @@ pub(super) fn recover_reservation_only(
     publication: &super::lease::Publication<'_>,
     root: &Path,
     key: LeaseKey,
-    budget: &mut super::recovery::Budget,
 ) -> Result<(), Error> {
     let directory = root.join("ledgers/projects");
     let mut candidates = Vec::new();
@@ -1008,7 +1004,6 @@ pub(super) fn recover_reservation_only(
             })?;
         #[cfg(feature = "import-baseline")]
         observe_read(reservation.len());
-        budget.metadata(reservation.len())?;
         if reservation[1..8].iter().any(|byte| *byte != 0) {
             return Err(Error::Corrupt {
                 path,
@@ -1022,7 +1017,6 @@ pub(super) fn recover_reservation_only(
         let bytes = super::entry::read_file(&path, HEADER_BYTES + RESERVATION_BYTES)?;
         #[cfg(feature = "import-baseline")]
         observe_read(bytes.len());
-        budget.metadata(bytes.len())?;
         let mut ledger = Ledger::decode(&bytes).map_err(|_| Error::Corrupt {
             path: path.clone(),
             reason: "reservation-only project logical ledger decoding failed",
@@ -1066,9 +1060,8 @@ fn owners_recovery(
     root: &Path,
     project: Digest,
     registrations: &[accounting::Registered],
-    budget: &mut super::recovery::Budget,
 ) -> Result<Vec<(Role, Owner)>, Error> {
-    let ledger = Ledger::read_or_empty_recovery(root, project, registrations, budget)?;
+    let ledger = Ledger::read_or_empty_recovery(root, project, registrations)?;
     Ok(ledger
         .roots
         .iter()
@@ -1108,7 +1101,7 @@ pub(crate) fn retire_project_runner(
         .map(|stale| (stale.role(), stale.owner()))
         .collect::<Vec<_>>();
     if !selected.is_empty() {
-        let mut ledger = Ledger::read_or_empty_recovery(root, project, registrations, budget)?;
+        let mut ledger = Ledger::read_or_empty_recovery(root, project, registrations)?;
         for (role, owner) in &selected {
             let index = ledger
                 .roots
@@ -1655,7 +1648,6 @@ mod tests {
             // One byte past the pass's deletion target still retires.
             result.expect("the remaining deletion charge never refuses");
             assert!(!last.exists());
-            assert!(budget.metadata_bytes() < 8 * 1024 * 1024);
             store.retire_fixture().unwrap();
         }
     }
@@ -1747,7 +1739,6 @@ mod tests {
         let mut reclaimed = [0_u8; 32];
         reclaimed[24..].copy_from_slice(&((MAX_PROJECT_LEDGERS - 1) as u64).to_be_bytes());
         assert!(!ledger_path(store.root(), Digest::from_bytes(reclaimed)).exists());
-        assert!(recovery.metadata_bytes() < 8 * 1024 * 1024);
         assert!(ledger_path(store.root(), project).is_file());
         store
             .retire_fixture()

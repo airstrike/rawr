@@ -60,7 +60,6 @@ fn publish(
     execute: fn(crate::store::bundle::Attempt) -> Result<super::super::Bundled<BundleValue>, Error>,
 ) -> Published {
     seam::clear_all();
-    seam::legacy_writer(false);
     let root = temporary(label);
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
@@ -110,7 +109,6 @@ impl Published {
 
     fn retire(self) {
         seam::clear_all();
-        seam::legacy_writer(false);
         drop(self.value);
         self.store.retire_fixture().unwrap();
         let _ = fs::remove_dir_all(&self.root);
@@ -189,8 +187,7 @@ fn fact(result: &Result<impl std::fmt::Debug, Error>) -> Option<String> {
 #[test]
 fn release_passes_candidate_sites_and_the_ledger_keeps_the_recorded_charge() {
     let published = publish("release-release", inflated);
-    let (sealed, legacy) = recorded(&published.bundle);
-    assert!(!legacy, "new bundles are schema 5");
+    let sealed = recorded(&published.bundle);
     let ledger = published.store.fixture_ledger_total().unwrap();
     seam::clear_all();
     let released = measured(&published.bundle);
@@ -208,7 +205,7 @@ fn release_passes_candidate_sites_and_the_ledger_keeps_the_recorded_charge() {
         ledger,
         "the ledger keeps the recorded charge: no refund and no warm-path write"
     );
-    assert_eq!(recorded(&published.bundle).0, sealed);
+    assert_eq!(recorded(&published.bundle), sealed);
 
     // A warm lookup hits the released bundle: no rejection, no retirement.
     let store = fixture_context(&published.root).open_store().unwrap();
@@ -368,7 +365,7 @@ fn growth_hidden_by_another_members_release_is_geometry_corruption() {
     });
     seam::clear_all();
     published.validate_complete().unwrap();
-    let (sealed, _) = recorded(&published.bundle);
+    let sealed = recorded(&published.bundle);
     mutate(&published.bundle, |b| {
         set_len(&b.join("generated/extra"), 5000 + 4096)
     });
@@ -427,134 +424,6 @@ fn geometry_mismatch_drives_retirement_but_release_and_refusals_do_not() {
     published.retire();
 }
 
-#[test]
-fn schema_four_bundle_is_legacy_judged_clean_missed_and_never_deleted_or_upgraded() {
-    // An emulated legacy writer publishes a schema-4 bundle whose recorded
-    // allocation is later released.
-    let root = temporary("release-legacy");
-    let context = prepare_fixture(&root);
-    let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<BundleValue>(b"release-legacy", 4096)
-        .unwrap();
-    seam::clear_all();
-    seam::legacy_writer(true);
-    let current = store.clone();
-    let legacy = Evaluator::new(&store, &Counts::default())
-        .discover_bundled(&recipe, move |value| validate(value, &current), inflated)
-        .unwrap();
-    seam::legacy_writer(false);
-    let legacy_root = store.root().join(legacy.value().reference.relative());
-    let (sealed, is_legacy) = recorded(&legacy_root);
-    assert!(is_legacy, "the emulated old writer wrote schema 4");
-    let before = fs::read(legacy_root.join("allocation")).unwrap();
-    seam::clear_all();
-    assert!(measured(&legacy_root).0 < sealed.0);
-
-    // The legacy rule admits the released legacy bundle store-wide.
-    let ledger = store
-        .fixture_ledger_total()
-        .expect("a released schema-4 bundle passes the legacy inventory rule");
-
-    // Candidate sites clean-miss legacy authority without corruption evidence.
-    let commitment = crate::store::bundle::BundleCommitment::new(
-        legacy.value().reference,
-        legacy.value().seal_length,
-        legacy.value().seal_digest,
-    );
-    let consumer = crate::store::bundle::validate_consumer_commitment(
-        store.root(),
-        &commitment,
-        BundleValue::KIND,
-        BundleValue::SCHEMA,
-        legacy.content().digest(),
-        store.graph_budget(),
-    );
-    assert!(matches!(consumer, Err(Error::Codec(_))), "{consumer:?}");
-    let complete = legacy.value().validate_published(&store);
-    assert!(matches!(complete, Err(Error::Codec(_))), "{complete:?}");
-
-    // Same action key: the only same-action replacement route is
-    // targeted retirement, which legacy incompatibility never nominates. The
-    // import refuses with the legacy clean-miss reason and deletes nothing
-    // (the geometry referral boundary).
-    let same = fixture_context(&root).open_store().unwrap();
-    let current = same.clone();
-    let refused = Evaluator::new(&same, &Counts::default()).discover_bundled(
-        &recipe,
-        move |value| validate(value, &current),
-        plain,
-    );
-    assert!(
-        matches!(refused, Err(Error::Codec(reason)) if reason.contains("legacy schema-4")),
-        "{:?}",
-        refused.as_ref().err()
-    );
-    assert!(
-        legacy_root.exists(),
-        "legacy bundles are never deleted for migration"
-    );
-    assert_eq!(crate::store::bundle::count_bundles(same.root()).unwrap(), 1);
-
-    // A rotated identity clean-misses the legacy bundle and rebuilds once
-    // through ordinary admission, beside it.
-    let recipe = context
-        .discover::<BundleValue>(b"release-legacy-rotated", 4096)
-        .unwrap();
-    let fresh = fixture_context(&root).open_store().unwrap();
-    let counts = Counts::default();
-    let current = fresh.clone();
-    let rebuilt = Evaluator::new(&fresh, &counts)
-        .discover_bundled(&recipe, move |value| validate(value, &current), plain)
-        .unwrap();
-    assert_eq!(counts.miss.load(Ordering::Relaxed), 1);
-    let rebuilt_root = fresh.root().join(rebuilt.value().reference.relative());
-    assert!(!recorded(&rebuilt_root).1, "the rebuild is schema 5");
-    assert!(
-        legacy_root.exists(),
-        "legacy bundles are never deleted for migration"
-    );
-    assert_eq!(
-        fs::read(legacy_root.join("allocation")).unwrap(),
-        before,
-        "nothing is upgraded in place"
-    );
-    assert_eq!(
-        crate::store::bundle::count_bundles(fresh.root()).unwrap(),
-        2
-    );
-    let mixed = fresh
-        .fixture_ledger_total()
-        .expect("a mixed-format store inventories");
-    assert!(mixed.0 > ledger.0);
-
-    // The next lookup hits the rebuild: exactly one rebuild.
-    let warm = fixture_context(&root).open_store().unwrap();
-    let counts = Counts::default();
-    let current = warm.clone();
-    let hit = Evaluator::new(&warm, &counts)
-        .discover_bundled(
-            &recipe,
-            move |value| validate(value, &current),
-            |_| panic!("the schema-5 rebuild must be reused"),
-        )
-        .unwrap();
-    assert_eq!(hit.content().digest(), rebuilt.content().digest());
-    assert_eq!(counts.hit.load(Ordering::Relaxed), 1);
-
-    // Legacy growth is its consumers' to refuse, not the store's.
-    seam::set(&legacy_root.join("generated/extra"), 4 * MIB);
-    warm.fixture_ledger_total().unwrap();
-    seam::clear_all();
-
-    // Ordinary eviction may remove legacy bundles; nothing else does.
-    while warm.fixture_evict_one(false).unwrap() {}
-    warm.fixture_ledger_total().unwrap();
-    drop((legacy, rebuilt, hit));
-    store.retire_fixture().unwrap();
-    let _ = fs::remove_dir_all(root);
-}
-
 fn project_context(root: &Path, project: &str) -> Context {
     fs::create_dir(root.join(project)).unwrap();
     let cargo_home = fs::canonicalize(root.join("cargo-home")).unwrap();
@@ -590,7 +459,7 @@ fn one_released_bundle_among_several_admits_imports_enrollment_and_eviction() {
         bundles.push(store.root().join(value.value().reference.relative()));
     }
     seam::clear_all();
-    assert!(measured(&bundles[0]).0 < recorded(&bundles[0]).0 .0);
+    assert!(measured(&bundles[0]).0 < recorded(&bundles[0]).0);
 
     // Store opens and inventories.
     let fresh = fixture_context(&root).open_store().unwrap();
@@ -655,73 +524,4 @@ fn one_truncated_bundle_does_not_refuse_the_store() {
     );
     store.retire_fixture().unwrap();
     let _ = fs::remove_dir_all(root);
-}
-
-/// E4 reproduction on a copy of a live store. Run with
-/// `RAWR_LIVE_STORE_CARGO_HOME=<copied cargo home> cargo test ... -- --ignored`.
-#[test]
-#[ignore = "requires RAWR_LIVE_STORE_CARGO_HOME pointing at a copied live store"]
-fn copied_live_store_opens_and_admits_a_new_project_import() {
-    let cargo_home = PathBuf::from(
-        std::env::var_os("RAWR_LIVE_STORE_CARGO_HOME").expect("RAWR_LIVE_STORE_CARGO_HOME is set"),
-    );
-    let cargo_home = fs::canonicalize(cargo_home).unwrap();
-    let store_root = cargo_home.join("rawr/v1");
-    for bundle in crate::store::bundle::release_tests::bundle_roots(&store_root) {
-        let (recorded, legacy) = recorded(&bundle);
-        let measured = measured(&bundle);
-        eprintln!(
-            "release bundle {}: schema={} recorded=(bytes={}, allocations={}, members={}) \
-             measured=(bytes={}, allocations={}, members={}) released={}",
-            bundle.display(),
-            if legacy { 4 } else { 5 },
-            recorded.0,
-            recorded.1,
-            recorded.2,
-            measured.0,
-            measured.1,
-            measured.2,
-            recorded.0.saturating_sub(measured.0),
-        );
-    }
-    let project =
-        std::env::temp_dir().join(format!("rawr-bundle-release-live-project-{}", std::process::id()));
-    fs::create_dir_all(&project).unwrap();
-    let environment =
-        cargo::config::Environment::from_pairs([("CARGO_HOME", cargo_home.to_str().unwrap())])
-            .unwrap();
-    let context = Context::capture(
-        &project,
-        environment,
-        "test-target",
-        &cargo::Limits::standard(),
-    )
-    .unwrap();
-    let store = context.open_store().expect("the copied live store opens");
-    let ledger = store
-        .fixture_ledger_total()
-        .expect("the copied live store passes the complete physical inventory");
-    eprintln!("release ledger total before import: {ledger:?}");
-    let recipe = context
-        .discover::<BundleValue>(b"release-live-copy-new-project", 4096)
-        .unwrap();
-    let counts = Counts::default();
-    let current = store.clone();
-    let imported = Evaluator::new(&store, &counts)
-        .discover_bundled(&recipe, move |value| validate(value, &current), plain)
-        .expect("a new-project import is admitted on the copied live store");
-    let bundle = store.root().join(imported.value().reference.relative());
-    assert!(
-        !recorded(&bundle).1,
-        "the import publishes a schema-5 bundle"
-    );
-    let after = store
-        .fixture_ledger_total()
-        .expect("the copied live store still inventories after the import");
-    eprintln!(
-        "release new-project import: miss={} published={} ledger after={after:?}",
-        counts.miss.load(Ordering::Relaxed),
-        counts.published.load(Ordering::Relaxed)
-    );
-    let _ = fs::remove_dir_all(project);
 }

@@ -40,8 +40,6 @@ pub(super) enum View {
     Pending,
     /// Published and frozen: exact permission bits.
     Published,
-    /// Published with only its root thawed for whole-allocation retirement.
-    Retiring,
 }
 
 /// One complete measurement walk: the charge and the geometry.
@@ -62,10 +60,10 @@ pub(crate) enum Drift {
     Growth,
 }
 
-/// The geometry rule. `sealed` is `None` only for a schema-4 bundle record, which
-/// is judged by the labelled legacy rule: identical counts and a measured
-/// charge no greater than the recorded charge. The caller has already proven
-/// record and allocation identity, and the walk's type and link checks.
+/// The geometry rule: identical counts and geometry, and a measured charge no
+/// greater than the recorded charge. `sealed` is `None` only for a typed
+/// record. The caller has already proven record and allocation identity, and
+/// the walk's type and link checks.
 pub(crate) fn check(
     recorded: Charge,
     sealed: Option<[u8; 32]>,
@@ -126,10 +124,7 @@ impl Accumulator {
         let directory = metadata.is_dir();
         let mode = match self.view {
             View::Pending => super::frozen_mode(metadata, directory),
-            View::Retiring if relative.as_os_str().is_empty() => {
-                super::frozen_mode(metadata, directory)
-            }
-            View::Published | View::Retiring => exact_mode(metadata, directory),
+            View::Published => exact_mode(metadata, directory),
         };
         let member = Member {
             kind: if directory { DIRECTORY } else { FILE },
@@ -162,7 +157,7 @@ impl Accumulator {
                     length: BUNDLE_RECORD_BYTES as u64,
                 })
             }
-            View::Published | View::Retiring => self.control,
+            View::Published => self.control,
         };
         match control {
             Some(control) => {
@@ -220,17 +215,6 @@ pub(crate) mod seam {
 
     thread_local! {
         static ALLOCATED: RefCell<BTreeMap<(u64, u64), u64>> = const { RefCell::new(BTreeMap::new()) };
-        static LEGACY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-
-    /// Emulate a legacy (schema-4) binary on this thread: it writes schema-4 bundle
-    /// records and admits them as authority.
-    pub(crate) fn legacy_writer(enabled: bool) {
-        LEGACY.with(|legacy| legacy.set(enabled));
-    }
-
-    pub(crate) fn is_legacy_writer() -> bool {
-        LEGACY.with(std::cell::Cell::get)
     }
 
     #[cfg(unix)]

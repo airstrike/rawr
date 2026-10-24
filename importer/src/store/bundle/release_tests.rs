@@ -19,25 +19,18 @@ const KIB: u64 = 1024;
 const MIB: u64 = 1024 * KIB;
 const EXECUTIONS: u8 = 8;
 
-/// Recorded (bytes, allocations, members) and whether the record is legacy.
-pub(crate) fn recorded(root: &Path) -> ((u64, u64, u64), bool) {
-    let record = Record::read_bundle(root).expect("the bundle record decodes");
-    let charge = record.charge();
-    (
-        (charge.bytes, charge.allocations, charge.members),
-        record.is_legacy_bundle(),
-    )
+/// Recorded (bytes, allocations, members).
+pub(crate) fn recorded(root: &Path) -> (u64, u64, u64) {
+    let charge = Record::read_bundle(root)
+        .expect("the bundle record decodes")
+        .charge();
+    (charge.bytes, charge.allocations, charge.members)
 }
 
 /// The current measured (bytes, allocations, members) of a published bundle.
 pub(crate) fn measured(root: &Path) -> (u64, u64, u64) {
     let charge = measure(root, false).expect("the bundle measures");
     (charge.bytes, charge.allocations, charge.members)
-}
-
-/// Every bundle root in a store.
-pub(crate) fn bundle_roots(store: &Path) -> Vec<PathBuf> {
-    bundle_paths(store).expect("the store bundles enumerate")
 }
 
 struct Fixture {
@@ -49,7 +42,6 @@ struct Fixture {
 impl Fixture {
     fn new(label: &str) -> Self {
         seam::clear_all();
-        seam::legacy_writer(false);
         let root = std::env::temp_dir().join(format!(
             "rawr-bundle-release-{label}-{}-{}",
             std::process::id(),
@@ -136,7 +128,6 @@ impl Fixture {
 
     fn retire(self) {
         seam::clear_all();
-        seam::legacy_writer(false);
         drop(self.store);
         force_remove(&self.root);
     }
@@ -401,38 +392,6 @@ fn matrix() -> Vec<Case> {
     ]
 }
 
-fn mutate(fixture: &Path, root: &Path, case: &Case) {
-    thaw(root).expect("the fixture thaws the bundle");
-    (case.apply)(root, fixture);
-    refreeze(root);
-    (case.after)(root);
-}
-
-/// Restore frozen modes without following or rejecting unusual members.
-fn refreeze(root: &Path) {
-    let mut directories = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(path) = pending.pop() {
-        let metadata = fs::symlink_metadata(&path).unwrap();
-        if metadata.is_dir() {
-            for entry in fs::read_dir(&path).unwrap() {
-                pending.push(entry.unwrap().path());
-            }
-            directories.push(path);
-        } else if metadata.is_file() {
-            fs::set_permissions(
-                &path,
-                fs::Permissions::from_mode(frozen_mode(&metadata, false)),
-            )
-            .unwrap();
-        }
-    }
-    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
-    for directory in directories {
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
-    }
-}
-
 #[test]
 fn release_with_identical_geometry_passes_every_store_site() {
     let mut fixture = Fixture::new("release");
@@ -493,26 +452,10 @@ fn release_with_identical_geometry_passes_every_store_site() {
         accounting::BUNDLE_RECORD_BYTES as u64
     );
 
-    // Registered inventory and retirement.
-    let measured = validate_physical(&root, record.allocation())
-        .expect("inventory admits a released allocation");
-    assert_eq!(measured.members, sealed.members);
-    assert!(measured.bytes < record.charge().bytes);
-    validate_physical_retiring(&root, record.allocation())
-        .expect("the retiring check admits a released allocation");
-    thaw_root(&root).unwrap();
-    validate_physical_retiring(&root, record.allocation())
-        .expect("the thawed-root retiring check admits a released allocation");
-    assert_eq!(
-        Record::read_bundle(&root).unwrap().charge(),
-        sealed,
-        "nothing re-records the charge downward"
-    );
-
     // Repair::validate.
     freeze(&root).unwrap();
     let mut recovery = super::super::recovery::Budget::new();
-    let eviction = prepare_eviction_at(root.clone(), record.allocation(), &mut recovery)
+    let eviction = prepare_eviction_at(root.clone(), record.allocation())
         .unwrap()
         .unwrap();
     let repair = eviction
@@ -524,69 +467,6 @@ fn release_with_identical_geometry_passes_every_store_site() {
     assert_eq!(excess.bytes, 0, "a release is never an excess");
     drop(repair);
     fixture.retire();
-}
-
-#[test]
-fn release_never_falls_below_a_files_rounded_logical_length() {
-    let mut fixture = Fixture::new("rounding");
-    // 4096 bytes is exactly one block; an inflated report of one more byte
-    // rounds to two blocks at seal.
-    let (root, record) = fixture.published(&[("generated/sub/c", 4097), ("generated/b", 3 * 4096)]);
-    seam::clear_all();
-    // The filesystem now reports no allocation at all for these files: the
-    // per-file charge stays at its rounded logical length.
-    seam::set(&root.join("generated/sub/c"), 0);
-    seam::set(&root.join("generated/b"), 0);
-    seam::set(&root.join("generated/a"), 0);
-    let measured = validate_physical(&root, record.allocation())
-        .expect("allocation released below the logical length is still accepted");
-    let floor = measure(&root, false).unwrap();
-    assert_eq!(measured, floor);
-    seam::clear_all();
-    let ordinary = measure(&root, false).unwrap();
-    assert!(
-        floor.bytes <= ordinary.bytes,
-        "the logical floor never undercuts an ordinary measurement"
-    );
-    // Overflow and limit edges are refusals, never acceptance.
-    seam::set(&root.join("generated/b"), u64::MAX);
-    assert!(matches!(
-        validate_physical(&root, record.allocation()),
-        Err(Error::Allocation)
-    ));
-    seam::set(&root.join("generated/b"), MAX_BYTES);
-    assert!(matches!(
-        validate_physical(&root, record.allocation()),
-        Err(Error::Limit { .. })
-    ));
-    seam::clear_all();
-    validate_physical(&root, record.allocation()).expect("the bundle is otherwise intact");
-    fixture.retire();
-}
-
-#[test]
-fn rejection_matrix_at_inventory_and_retirement() {
-    for case in matrix() {
-        let mut fixture = Fixture::new("inventory-matrix");
-        let (root, record) = fixture.published(case.inflate);
-        seam::clear_all();
-        validate_physical(&root, record.allocation())
-            .unwrap_or_else(|error| panic!("{}: the intact bundle fails: {error:?}", case.name));
-        mutate(&fixture.root, &root, &case);
-        let inventory = validate_physical(&root, record.allocation());
-        assert!(
-            matches!(inventory, Err(Error::CleanupRequired(_))),
-            "{}: inventory must refuse with CleanupRequired, got {inventory:?}",
-            case.name
-        );
-        let retiring = validate_physical_retiring(&root, record.allocation());
-        assert!(
-            matches!(retiring, Err(Error::CleanupRequired(_))),
-            "{}: retirement must refuse with CleanupRequired, got {retiring:?}",
-            case.name
-        );
-        fixture.retire();
-    }
 }
 
 #[test]
@@ -692,23 +572,20 @@ fn published_geometry_matches_the_sealed_commitment() {
     let (root, record) = fixture.published(&[]);
     let published = survey(&root, View::Published, None, true, Error::Shape).unwrap();
     assert_eq!(Some(published.geometry), record.sealed_geometry());
-    // A frozen root is 0o755 already; any other mode on it is a change the
-    // retiring view forgives and the published one does not.
+    // A root's mode change counts.
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-    let retiring = survey(&root, View::Retiring, None, false, Error::Shape).unwrap();
-    assert_eq!(Some(retiring.geometry), record.sealed_geometry());
     let exact = survey(&root, View::Published, None, false, Error::Shape).unwrap();
     assert_ne!(
         Some(exact.geometry),
         record.sealed_geometry(),
-        "a root's mode change counts outside retirement"
+        "a root's mode change counts"
     );
     thaw_root(&root).unwrap();
     fixture.retire();
 }
 
 #[test]
-fn retirement_race_completes_when_allocation_falls_after_measurement() {
+fn retirement_charges_the_excess_from_the_larger_measurement() {
     let mut fixture = Fixture::new("retirement-race");
     let (root, record) = fixture.published(&[]);
     let allocation = record.allocation();
@@ -718,7 +595,7 @@ fn retirement_race_completes_when_allocation_falls_after_measurement() {
     larger.allocations = 1;
     assert!(larger.bytes > allocation.charge.bytes);
     let mut recovery = super::super::recovery::Budget::new();
-    let repair = prepare_eviction_at(root.clone(), allocation, &mut recovery)
+    let repair = prepare_eviction_at(root.clone(), allocation)
         .unwrap()
         .unwrap()
         .into_repair(allocation, &mut recovery)
@@ -727,80 +604,12 @@ fn retirement_race_completes_when_allocation_falls_after_measurement() {
     seam::clear_all();
     let excess = repair
         .validate(&root, allocation)
-        .expect("a fall between measurement and recheck completes retirement");
+        .expect("a change between measurement and recheck never fails retirement");
     assert_eq!(
         excess.bytes,
         larger.bytes - allocation.charge.bytes,
         "excess is charged from the larger measurement"
     );
-    // A logical change between measurement and recheck still rejects.
-    thaw(&root).unwrap();
-    set_len(&root.join("generated/a"), 9);
-    refreeze(&root);
-    assert!(matches!(
-        repair.validate(&root, allocation),
-        Err(Error::CleanupRequired(
-            "bundle changed after retirement measurement"
-        ))
-    ));
     drop(repair);
-    fixture.retire();
-}
-
-#[test]
-fn legacy_schema_four_bundle_is_judged_by_the_labelled_legacy_rule() {
-    let mut fixture = Fixture::new("legacy");
-    seam::legacy_writer(true);
-    let (root, record) = fixture.published(&[("generated/b", 256 * KIB)]);
-    seam::legacy_writer(false);
-    assert!(record.is_legacy_bundle());
-    let before = fs::read(root.join("allocation")).unwrap();
-    assert_eq!(before.len(), accounting::RECORD_BYTES);
-    assert_eq!(u16::from_le_bytes([before[8], before[9]]), 4);
-    seam::clear_all();
-    // Release: same counts, measured <= recorded.
-    validate_physical(&root, record.allocation()).expect("the legacy rule admits a release");
-    validate_physical_retiring(&root, record.allocation())
-        .expect("the legacy retiring rule admits a release");
-    // Growth rejects.
-    seam::set(&root.join("generated/a"), MIB);
-    assert!(matches!(
-        validate_physical(&root, record.allocation()),
-        Err(Error::CleanupRequired(_))
-    ));
-    seam::clear_all();
-    // A count change rejects.
-    thaw(&root).unwrap();
-    fs::write(root.join("generated/new"), b"new").unwrap();
-    refreeze(&root);
-    assert!(matches!(
-        validate_physical(&root, record.allocation()),
-        Err(Error::CleanupRequired(_))
-    ));
-    thaw(&root).unwrap();
-    fs::remove_file(root.join("generated/new")).unwrap();
-    // A writable member still rejects under the existing mode check.
-    assert!(validate_physical(&root, record.allocation()).is_err());
-    refreeze(&root);
-    validate_physical(&root, record.allocation()).unwrap();
-    // Nothing is upgraded in place.
-    assert_eq!(fs::read(root.join("allocation")).unwrap(), before);
-    assert!(Record::read_bundle(&root).unwrap().is_legacy_bundle());
-    fixture.retire();
-}
-
-#[test]
-fn bundle_record_schema_leaves_the_ledger_fence_and_typed_records_alone() {
-    let mut fixture = Fixture::new("fence");
-    let (root, _record) = fixture.published(&[]);
-    let bytes = fs::read(root.join("allocation")).unwrap();
-    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 5);
-    // An older reader, which accepts only 184-byte schema-4 records, fails
-    // closed on a schema-5 bundle record rather than reinterpreting it.
-    assert!(bytes.len() != accounting::RECORD_BYTES);
-    // The installation ledger header schema is untouched by the bundle bump.
-    let ledger = fs::read(fixture.store.root().join("ledgers/installation")).unwrap();
-    assert_eq!(&ledger[..8], b"RAWRLEDR");
-    assert_eq!(u16::from_le_bytes([ledger[8], ledger[9]]), 5);
     fixture.retire();
 }

@@ -169,7 +169,6 @@ pub(super) fn inventory(
 pub(super) fn admit_plan(
     root: &Path,
     registrations: &[Registered],
-    evictions: &[Registered],
     plan: &Plan,
 ) -> Result<(), Error> {
     if let Some(target) = plan.retirement_target() {
@@ -188,14 +187,6 @@ pub(super) fn admit_plan(
                     return Err(Error::CleanupRequired(
                         "typed store retirement targeted a bundle outside the eviction journal",
                     ));
-                }
-                if registered(evictions) {
-                    if allocation.charge.allocations != 1 {
-                        return Err(Error::CleanupRequired(
-                            "typed store registered bundle changed physical charge",
-                        ));
-                    }
-                    super::bundle::validate_physical_retiring(target, allocation)?;
                 }
             }
         }
@@ -556,13 +547,12 @@ impl State<'_> {
             self.control = self
                 .control
                 .checked_add(repair.validate(&root, allocation)?)?;
-        } else if self.retirement.as_deref() == Some(root.as_path()) {
-            if required {
-                return Err(Error::CleanupRequired(
-                    "typed store retirement targeted a bundle outside the eviction journal",
-                ));
-            }
-            super::bundle::validate_physical_retiring(&root, allocation)?;
+        } else if self.retirement.as_deref() == Some(root.as_path()) && required {
+            // A bundle journaled for eviction is retired as it stands: its
+            // tree may differ from its seal, and it is being deleted anyway.
+            return Err(Error::CleanupRequired(
+                "typed store retirement targeted a bundle outside the eviction journal",
+            ));
         }
         // Otherwise the record names a registered allocation, which is all the
         // inventory needs: a bundle's tree is checked when it is sealed and
@@ -731,7 +721,6 @@ fn valid_plan(relative: &Path, operation: Operation) -> bool {
         },
         Operation::File => {
             project_pending_position(relative)
-                || relative == Path::new("locks/ownership.ready")
                 || matches!(
                     parts.as_slice(),
                     [first, class, key]
@@ -889,7 +878,7 @@ fn valid_existing(relative: &Path, metadata: &fs::Metadata) -> bool {
             if *first == "locks"
                 && matches!(
                     lock.to_str(),
-                    Some("heavy.lock" | "publication.lock" | "ownership.ready")
+                    Some("heavy.lock" | "publication.lock")
                 ) =>
         {
             file
@@ -1073,15 +1062,15 @@ mod tests {
         let (allocations, control) = super::super::accounting::physical_usage(store.root())
             .expect("the bootstrap inventory reads");
         assert_eq!(allocations, Charge::zero());
-        // Root + 17 fixed directories, then seven retained files: bootstrap,
-        // heavy/publication locks, ownership.ready, installation ledger, and
-        // this project's project/owner locks. Enrollment's pending file retires.
+        // Root + 17 fixed directories, then six retained files: bootstrap,
+        // heavy/publication locks, installation ledger, and this project's
+        // project/owner locks. Enrollment's pending file retires.
         assert_eq!(
             control,
             Charge {
-                bytes: 25 * BLOCK_BYTES,
+                bytes: 24 * BLOCK_BYTES,
                 allocations: 0,
-                members: 25,
+                members: 24,
             }
         );
         store

@@ -15,8 +15,6 @@ use crate::node::{
 mod accounting;
 #[cfg(feature = "import-baseline")]
 pub(crate) use accounting::matches_observed_bundle;
-#[cfg(test)]
-pub(crate) use accounting::FREE_BYTES;
 mod batch;
 pub(crate) use batch::Batch;
 pub(crate) mod bundle;
@@ -163,6 +161,11 @@ impl Drop for TestProject {
 
 /// Remove a test tree, first making sealed read-only directories writable.
 fn remove_test_tree(root: &Path) {
+    let _ = remove_tree(root);
+}
+
+/// Remove a tree whose sealed directories may be read-only.
+fn remove_tree(root: &Path) -> std::io::Result<()> {
     fn thaw(path: &Path) {
         let Ok(metadata) = fs::symlink_metadata(path) else {
             return;
@@ -177,17 +180,32 @@ fn remove_test_tree(root: &Path) {
             permissions.set_mode(permissions.mode() | 0o700);
         }
         #[cfg(not(unix))]
-        #[allow(clippy::permissions_set_readonly_false, reason = "test cleanup")]
+        #[allow(clippy::permissions_set_readonly_false, reason = "removal")]
         permissions.set_readonly(false);
         let _ = fs::set_permissions(path, permissions);
         for entry in fs::read_dir(path).into_iter().flatten().flatten() {
             thaw(&entry.path());
         }
     }
-    if fs::remove_dir_all(root).is_err() {
-        thaw(root);
-        let _ = fs::remove_dir_all(root);
+    match fs::remove_dir_all(root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => {
+            thaw(root);
+            fs::remove_dir_all(root)
+        }
+        Ok(()) => Ok(()),
     }
+}
+
+/// Empty a store root another format wrote, so it bootstraps fresh.
+fn clear(root: &Path) -> Result<(), Error> {
+    remove_tree(root)
+        .and_then(|()| fs::create_dir(root))
+        .map_err(|source| Error::Io {
+            operation: "clear a typed store of another format",
+            path: root.to_path_buf(),
+            source,
+        })
 }
 
 /// One canonical versioned typed-node store. Clones share its graph budget.
@@ -248,64 +266,51 @@ impl Store {
             path: root.to_path_buf(),
             source,
         })?;
-        let fresh = match fs::symlink_metadata(root.join("ledgers/installation")) {
-            Ok(_) => false,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => true,
-            Err(source) => {
-                return Err(Error::Io {
-                    operation: "inspect typed store bootstrap state",
-                    path: root.join("ledgers/installation"),
-                    source,
-                });
+        // A store another format wrote is a clean miss: it is removed and
+        // rebuilt, never migrated.
+        let fresh = match accounting::current_format(&root)? {
+            Some(true) => false,
+            Some(false) => {
+                clear(&root)?;
+                true
             }
+            None => true,
         };
         let mut budget = recovery::Budget::new();
-        loop {
-            let step = lease::with_bootstrap(
-                &root,
-                fresh,
-                #[cfg(feature = "import-baseline")]
-                &graph_budget,
-                || {
-                    for directory in FIXED_DIRECTORIES {
-                        if *directory == "locks/owners" {
-                            continue; // The migration publishes this control only after the fence.
-                        }
-                        if fresh {
-                            entry::ensure_directory(
-                                &root,
-                                Path::new(directory),
-                                #[cfg(feature = "import-baseline")]
-                                &graph_budget,
-                            )?;
-                        } else if entry::existing_directory(&root, Path::new(directory))?.is_none()
-                        {
-                            return Err(Error::CleanupRequired(
-                                "typed store fixed directory disappeared after bootstrap",
-                            ));
-                        }
-                    }
-                    lease::initialize(
-                        &root,
-                        fresh,
-                        #[cfg(feature = "import-baseline")]
-                        &graph_budget,
-                    )?;
+        lease::with_bootstrap(
+            &root,
+            fresh,
+            #[cfg(feature = "import-baseline")]
+            &graph_budget,
+            || {
+                for directory in FIXED_DIRECTORIES {
                     if fresh {
-                        lease::with_publication(&root, &graph_budget, |publication| {
-                            accounting::initialize(publication, &root, &mut budget)
-                        })?;
+                        entry::ensure_directory(
+                            &root,
+                            Path::new(directory),
+                            #[cfg(feature = "import-baseline")]
+                            &graph_budget,
+                        )?;
+                    } else if entry::existing_directory(&root, Path::new(directory))?.is_none() {
+                        return Err(Error::CleanupRequired(
+                            "typed store fixed directory disappeared after bootstrap",
+                        ));
                     }
+                }
+                lease::initialize(
+                    &root,
+                    fresh,
+                    #[cfg(feature = "import-baseline")]
+                    &graph_budget,
+                )?;
+                if fresh {
                     lease::with_publication(&root, &graph_budget, |publication| {
-                        accounting::migration::advance(publication, &root, &mut budget)
-                    })
-                },
-            )?;
-            match step {
-                accounting::migration::Step::Complete => break,
-                accounting::migration::Step::Wait(path) => lease::wait_migration(&path)?,
-            }
-        }
+                        accounting::initialize(publication, &root, &mut budget)
+                    })?;
+                }
+                Ok(())
+            },
+        )?;
         lease::enroll_project(
             &root,
             &graph_budget,
@@ -433,8 +438,13 @@ impl Store {
     }
 
     #[cfg(test)]
+    /// Make room for a write as large as the whole installation target.
     pub(crate) fn fixture_make_room(&self) -> Result<(), Error> {
-        self.make_room(accounting::Charge::zero())
+        self.make_room(accounting::Charge {
+            bytes: u64::MAX / 2,
+            allocations: 0,
+            members: 0,
+        })
     }
 
     #[cfg(test)]
@@ -1163,10 +1173,10 @@ impl Store {
         })
     }
 
-    /// Store and project sizes and low free disk space are eviction targets,
-    /// never refusals: evict released closures, oldest first, while a target is
-    /// exceeded and something is evictable; each project's Live and LastGood
-    /// runners stay. Each eviction is its own bounded recovery pass.
+    /// Store and project sizes are eviction targets, never refusals: evict
+    /// released closures, oldest first, while a target is exceeded and
+    /// something is evictable; each project's Live and LastGood runners stay.
+    /// Each eviction is its own bounded recovery pass.
     fn make_room(&self, estimate: accounting::Charge) -> Result<(), Error> {
         // A project keeps a few unrooted resolutions, whatever the caps.
         while eviction::recover_resolution_excess(
@@ -1178,8 +1188,7 @@ impl Store {
             &mut recovery::Budget::new(),
         )? {}
         loop {
-            let low_disk = accounting::low_disk(&self.root, estimate);
-            let installation = accounting::over_cap(&self.root, estimate)? || low_disk;
+            let installation = accounting::over_cap(&self.root, estimate)?;
             if !(installation || pins::over_cap(&self.root, self.project, estimate)?) {
                 return Ok(());
             }
@@ -1301,14 +1310,14 @@ impl Store {
         current: accounting::LeaseKey,
         budget: &mut recovery::Budget,
     ) -> Result<(), Error> {
-        let keys = accounting::reservation_keys_header_recovery(&self.root, budget)?;
+        let keys = accounting::reservation_keys_header_recovery(&self.root)?;
         for key in keys.iter().copied().filter(|key| *key != current) {
             let Some(_guard) = lease::try_key(&self.root, key)? else {
                 continue;
             };
             lease::with_publication(&self.root, &self.graph_budget, |publication| {
                 recovery::recover_temporaries(publication, &self.root, budget)?;
-                pins::recover_reservation_only(publication, &self.root, key, budget)?;
+                pins::recover_reservation_only(publication, &self.root, key)?;
                 accounting::recover_key(publication, &self.root, key, budget)?;
                 Ok(())
             })?;

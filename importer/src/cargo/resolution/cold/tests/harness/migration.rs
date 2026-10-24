@@ -16,7 +16,7 @@ struct Preflight {
     complete: [u8; 32],
 }
 
-fn exercise(tamper: bool) {
+fn exercise() {
     let mut fixture = Fixture::open();
     let limits = Limits::standard();
     let request = &mut fixture.request;
@@ -102,9 +102,6 @@ fn exercise(tamper: bool) {
         .unwrap();
         Ok(())
     });
-    if tamper {
-        fs::write(legacy.join("Cargo.lock"), b"tampered").unwrap();
-    }
     let names = [
         cargo::HARNESS_MANIFEST,
         "src/lib.rs",
@@ -118,68 +115,51 @@ fn exercise(tamper: bool) {
     Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
         let (metadata, units) = documents(request, layout.final_form());
         let mut allocation = request.allocation;
-        if tamper {
-            let result = super::super::script(layout, Vec::new())
-                .run(|| {
-                    request.prepare_harness_in(
-                        layout,
-                        &cached,
-                        &limits,
-                        &limits,
-                        &mut allocation,
-                        unit::Allocation::begin(&limits),
-                    )
-                })
-                .unwrap();
-            assert!(result.is_err());
-            assert!(!layout.final_form().manifest().exists());
-        } else {
-            // The compatibility constructor still rejects Persisted before commands.
-            assert!(request
-                .prepare_fresh_harness_in(
+        // The compatibility constructor still rejects Persisted before commands.
+        assert!(request
+            .prepare_fresh_harness_in(
+                layout,
+                &cached,
+                &limits,
+                &limits,
+                &mut allocation,
+                unit::Allocation::begin(&limits)
+            )
+            .is_err());
+        let steps = vec![
+            expected_reply(
+                request,
+                native,
+                layout.final_form(),
+                Command::Metadata(true),
+                true,
+                move |_| test_launch::Reply::stdout(metadata),
+            ),
+            expected_reply(
+                request,
+                native,
+                layout.final_form(),
+                Command::Units,
+                true,
+                move |_| test_launch::Reply::stdout(units),
+            ),
+        ];
+        let harness = super::super::script(layout, steps)
+            .run(|| {
+                request.prepare_harness_in(
                     layout,
                     &cached,
                     &limits,
                     &limits,
                     &mut allocation,
-                    unit::Allocation::begin(&limits)
+                    unit::Allocation::begin(&limits),
                 )
-                .is_err());
-            let steps = vec![
-                expected_reply(
-                    request,
-                    native,
-                    layout.final_form(),
-                    Command::Metadata(true),
-                    true,
-                    move |_| test_launch::Reply::stdout(metadata),
-                ),
-                expected_reply(
-                    request,
-                    native,
-                    layout.final_form(),
-                    Command::Units,
-                    true,
-                    move |_| test_launch::Reply::stdout(units),
-                ),
-            ];
-            let harness = super::super::script(layout, steps)
-                .run(|| {
-                    request.prepare_harness_in(
-                        layout,
-                        &cached,
-                        &limits,
-                        &limits,
-                        &mut allocation,
-                        unit::Allocation::begin(&limits),
-                    )
-                })
-                .unwrap()?;
-            assert_eq!(harness.harness_root, layout.final_form().root());
-            assert_eq!(fs::read(layout.final_form().lock()).unwrap(), retained[2]);
-            assert!(!layout.provisional().manifest().exists());
-            assert!(!layout.receipt().exists());
-        }
+            })
+            .unwrap()?;
+        assert_eq!(harness.harness_root, layout.final_form().root());
+        assert_eq!(fs::read(layout.final_form().lock()).unwrap(), retained[2]);
+        assert!(!layout.provisional().manifest().exists());
+        assert!(!layout.receipt().exists());
         for (name, expected) in names.iter().zip(&retained) {
             assert_eq!(&fs::read(legacy.join(name)).unwrap(), expected);
         }
@@ -190,10 +170,5 @@ fn exercise(tamper: bool) {
 
 #[test]
 fn persisted_inputs_reconstruct_with_only_locked_layout_commands() {
-    exercise(false);
-}
-
-#[test]
-fn invalid_persisted_lock_rejects_before_layout_mutation() {
-    exercise(true);
+    exercise();
 }

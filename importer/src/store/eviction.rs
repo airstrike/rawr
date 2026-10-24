@@ -58,7 +58,7 @@ pub(super) fn recover_one(
             .iter()
             .filter(|registered| registered.allocation().class == Class::Bundle)
         {
-            let Some(eviction) = bundle::prepare_eviction(store, registered.allocation(), budget)?
+            let Some(eviction) = bundle::prepare_eviction(store, registered.allocation())?
             else {
                 blocked = true;
                 break;
@@ -165,7 +165,7 @@ pub(super) fn recover_rejected(
                 "rejected candidate changed its authenticated allocation",
             ));
         }
-        let Some(eviction) = bundle::prepare_eviction(store, allocation, budget)? else {
+        let Some(eviction) = bundle::prepare_eviction(store, allocation)? else {
             continue;
         };
         if !eviction.matches_reference(store, proof.reference()) {
@@ -338,7 +338,7 @@ fn recover_unrooted(
         .iter()
         .filter(|registered| registered.allocation().class == Class::Bundle)
     {
-        let Some(eviction) = bundle::prepare_eviction(store, registered.allocation(), budget)?
+        let Some(eviction) = bundle::prepare_eviction(store, registered.allocation())?
         else {
             return Ok(false);
         };
@@ -396,7 +396,7 @@ pub(super) fn recover_resolution_excess(
         .iter()
         .filter(|registered| registered.allocation().class == Class::Bundle)
     {
-        let Some(eviction) = bundle::prepare_eviction(store, registered.allocation(), budget)?
+        let Some(eviction) = bundle::prepare_eviction(store, registered.allocation())?
         else {
             return Ok(false);
         };
@@ -596,7 +596,7 @@ fn recover_interrupted(
         .filter(|registered| registered.allocation().class == Class::Bundle)
     {
         if let Some(eviction) =
-            bundle::prepare_recovery_eviction(store, registered.allocation(), budget)?
+            bundle::prepare_recovery_eviction(store, registered.allocation())?
         {
             evictions.push((eviction, *registered));
         }
@@ -655,7 +655,7 @@ pub(super) fn interrupt_oldest(
         .filter(|registered| registered.allocation().class == Class::Bundle)
     {
         bundles.push(
-            bundle::prepare_eviction(store, registered.allocation(), &mut budget)?.ok_or(
+            bundle::prepare_eviction(store, registered.allocation())?.ok_or(
                 Error::State("the eviction interruption fixture bundle is pinned"),
             )?,
         );
@@ -746,7 +746,7 @@ pub(super) fn interrupt_after_thawing_bundle_root(
         .ok_or(Error::State(
             "the bundle-root interruption fixture found no bundle allocation",
         ))?;
-    let eviction = bundle::prepare_recovery_eviction(store, registered.allocation(), &mut budget)?
+    let eviction = bundle::prepare_recovery_eviction(store, registered.allocation())?
         .ok_or(Error::State(
             "the bundle-root interruption fixture bundle is pinned",
         ))?;
@@ -1091,7 +1091,6 @@ fn retire_action(
     }
     let envelope_path = directory.join("envelope");
     let bytes = entry::read_file(&envelope_path, MAX_ENVELOPE_BYTES)?;
-    budget.metadata(bytes.len())?;
     let envelope = Envelope::decode(&bytes)?;
     if envelope.kind != allocation.kind
         || envelope.output_schema != allocation.schema
@@ -1101,7 +1100,7 @@ fn retire_action(
             "a typed store action envelope changed identity during eviction",
         ));
     }
-    let record = accounting::Record::read_recovery(&directory, budget)?;
+    let record = accounting::Record::read(&directory)?;
     if record.allocation() != allocation {
         return Err(Error::CleanupRequired(
             "a typed store action allocation changed during eviction",
@@ -1221,7 +1220,7 @@ fn retire_content(
     if metadata.file_type().is_symlink() || !metadata.is_file() || hard_linked(&metadata) {
         return Err(Error::Shape(payload));
     }
-    let record = accounting::Record::read_recovery(&directory, budget)?;
+    let record = accounting::Record::read(&directory)?;
     if record.allocation() != allocation {
         return Err(Error::CleanupRequired(
             "a typed store content allocation changed identity during eviction",

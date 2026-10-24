@@ -47,14 +47,8 @@ const ICED_PROFILE: [u8; 32] = [
     0xfb, 0x80, 0xda, 0x22, 0xdc, 0x39, 0x10, 0x65, 0x81, 0x04, 0x8b, 0xf6, 0xc0, 0xb8, 0xe4, 0xe4,
     0x1b, 0x7b, 0xc9, 0x3d, 0xfd, 0xdf, 0x0c, 0x0d, 0x67, 0x7e, 0x74, 0x48, 0x84, 0x18, 0xd1, 0xe4,
 ];
-const ICED_HISTORICAL: [u8; 32] = [
-    0x7e, 0xad, 0xd1, 0x64, 0xea, 0x91, 0xd9, 0xe5, 0x5e, 0x41, 0x73, 0x5f, 0xb8, 0xe6, 0x17, 0x8b,
-    0xde, 0xd0, 0xfd, 0x41, 0xa1, 0x30, 0xc0, 0xcc, 0x66, 0xfb, 0x15, 0xe9, 0x47, 0xa3, 0xf7, 0x75,
-];
 const ICED_SEED_BYTES: &[u8] =
     include_bytes!("../../../iced/src/profile/resolution/current-v2.lock");
-const ICED_HISTORICAL_BYTES: &[u8] =
-    include_bytes!("../../../iced/src/profile/resolution/august-29-v17.lock");
 
 /// Exact bounded canonical protected source/build facts observed after build.
 #[derive(Debug, Eq, PartialEq)]
@@ -85,23 +79,10 @@ pub(crate) struct Definition {
     identity: Digest,
 }
 
-/// One selected current universe plus explicitly supported predecessors.
+/// One selected current universe.
 #[derive(Clone)]
 pub struct Catalog {
     current: Definition,
-    historical: Box<[Historical]>,
-}
-
-/// Exact non-runnable lock bytes recognized only as preserved migration input.
-#[derive(Clone)]
-pub(crate) struct Historical {
-    bytes: &'static [u8],
-    digest: Digest,
-}
-
-pub(crate) enum Persisted {
-    Current,
-    Historical,
 }
 
 /// A candidate lock whose project-specific packages have not yet been admitted.
@@ -683,7 +664,7 @@ impl Definition {
 }
 
 impl Catalog {
-    /// Authenticate the only product-known iced cohort and its fixed historical input.
+    /// Authenticate the only product-known iced cohort.
     #[doc(hidden)]
     pub fn iced_current_v2(limits: &Limits) -> Result<Self> {
         let current = Definition::new(
@@ -700,8 +681,7 @@ impl Catalog {
             ICED_CARGO_COMMIT,
             limits,
         )?;
-        let historical = Historical::new(ICED_HISTORICAL_BYTES, ICED_HISTORICAL, limits)?;
-        Self::new(current).with_historical(historical)
+        Ok(Self::new(current))
     }
 
     /// The universe of a runner with no host profile: it governs the
@@ -725,32 +705,9 @@ impl Catalog {
         .map(Self::new)
     }
 
-    /// Select one current universe and no implicit predecessors.
+    /// Select one current universe.
     pub(crate) fn new(current: Definition) -> Self {
-        Self {
-            historical: Box::default(),
-            current,
-        }
-    }
-
-    /// Add exact historical bytes as non-runnable migration input.
-    #[doc(hidden)]
-    pub(crate) fn with_historical(mut self, historical: Historical) -> Result<Self> {
-        if self
-            .historical
-            .iter()
-            .any(|known| known.digest == historical.digest)
-        {
-            return Err(Error::Request {
-                field: "resolution universe catalog",
-                reason: "duplicate historical lock identity".into(),
-            });
-        }
-        let mut known = self.historical.into_vec();
-        known.push(historical);
-        known.sort_unstable_by_key(|historical| historical.digest);
-        self.historical = known.into_boxed_slice();
-        Ok(self)
+        Self { current }
     }
 
     pub(crate) const fn current(&self) -> &Definition {
@@ -771,52 +728,6 @@ impl Catalog {
     #[must_use]
     pub const fn identity(&self) -> &[u8; 32] {
         self.current.identity()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn select_persisted(&self, bytes: Box<[u8]>, limits: &Limits) -> Result<Persisted> {
-        self.select_persisted_in(bytes, limits, &mut super::ControlAccount::legacy())
-    }
-
-    pub(super) fn select_persisted_in(
-        &self,
-        bytes: Box<[u8]>,
-        limits: &Limits,
-        account: &mut super::ControlAccount<'_>,
-    ) -> Result<Persisted> {
-        account.hash(bytes.len())?;
-        let digest = Digest(Sha256::digest(&bytes).into());
-        if self
-            .historical
-            .iter()
-            .any(|historical| historical.digest == digest && historical.bytes == bytes.as_ref())
-        {
-            return Ok(Persisted::Historical);
-        }
-        self.current
-            .candidate_in(bytes, limits, account)
-            .map(|_| Persisted::Current)
-    }
-}
-
-impl Historical {
-    /// Authenticate exact historical lock bytes without granting execution.
-    pub(crate) fn new(
-        bytes: &'static [u8],
-        expected_digest: [u8; 32],
-        limits: &Limits,
-    ) -> Result<Self> {
-        // Historical lock bytes are compiled-in program text whose size
-        // is fixed at build time; an accounting target never refuses them.
-        let _ = limits;
-        let digest = Digest(Sha256::digest(bytes).into());
-        if digest.as_bytes() != &expected_digest {
-            return Err(Error::Request {
-                field: "historical migration lock",
-                reason: "does not match its authenticated digest".into(),
-            });
-        }
-        Ok(Self { bytes, digest })
     }
 }
 
@@ -4095,9 +4006,6 @@ mod tests {
         limits.json_bytes = SEED.len() - 1;
         super::Closure::parse(SEED.as_bytes(), &limits)
             .expect("compiled-in seed bytes parse under no account");
-        let bytes: &'static [u8] = b"version = 4\n";
-        super::Historical::new(bytes, Sha256::digest(bytes).into(), &limits)
-            .expect("compiled-in historical lock bytes are not gated by a target");
     }
 
     /// The lock's package, edge, lookup-work and string targets are
@@ -5801,28 +5709,5 @@ mod tests {
             .unwrap();
             assert_ne!(current.identity(), previous.identity());
         }
-    }
-
-    #[test]
-    fn closed_current_catalog_recognizes_only_the_fixed_historical_input() {
-        let limits = Limits::standard();
-        let catalog = super::Catalog::iced_current_v2(&limits)
-            .expect("the internally fixed current catalog authenticates");
-        assert!(matches!(
-            catalog
-                .select_persisted(super::ICED_HISTORICAL_BYTES.into(), &limits)
-                .expect("the fixed historical bytes select without current parsing"),
-            super::Persisted::Historical
-        ));
-
-        let mut drift = super::ICED_HISTORICAL_BYTES.to_vec();
-        let last = drift
-            .last_mut()
-            .expect("the fixed historical lock is nonempty");
-        *last = if *last == b'\n' { b' ' } else { b'\n' };
-        assert!(!matches!(
-            catalog.select_persisted(drift.into_boxed_slice(), &limits),
-            Ok(super::Persisted::Historical)
-        ));
     }
 }

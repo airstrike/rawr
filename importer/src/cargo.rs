@@ -3600,54 +3600,16 @@ impl<'a> ControlAccount<'a> {
     }
 }
 
-fn select_placement_inner(
-    request: &Request,
-    catalog: &universe::Catalog,
-    provisional_manifest: &str,
+/// The fixed namespace's placement when a completed receipt for this request
+/// is there, `None` when it is another request's, and an error when it is not
+/// this version's.
+fn fixed_placement(
+    fixed: &Path,
+    request_identity: Digest,
+    definition: &universe::Definition,
     limits: &Limits,
     account: &mut ControlAccount<'_>,
-) -> Result<Placement> {
-    let definition = catalog.current();
-    account.hash(
-        b"rawr.import.cargo.resolution-request/v2".len()
-            + provisional_manifest.len()
-            + HARNESS_SOURCE.len()
-            + request.target.len()
-            + 112,
-    )?;
-    for input in &request.inputs {
-        account
-            .hash(input.path.as_os_str().len() + 9 + usize::from(input.digest.is_some()) * 32)?;
-    }
-    let request_identity = versioned_request_identity(request, definition, provisional_manifest);
-    let fixed = request.cache_root.join(HARNESS_DIRECTORY);
-    account.path(&fixed)?;
-    match fs::symlink_metadata(&fixed) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Placement {
-                root: fixed,
-                request: request_identity,
-                state: PlacementState::Fresh,
-                exclusive: true,
-            });
-        }
-        Err(source) => {
-            return Err(Error::Io {
-                operation: "inspect final resolution namespace",
-                path: fixed,
-                source,
-            });
-        }
-        Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
-            return Err(Error::Path {
-                field: "final resolution namespace",
-                path: fixed,
-                reason: "must be a real directory".into(),
-            });
-        }
-        Ok(_) => {}
-    }
-
+) -> Result<Option<Placement>> {
     let fixed_lock_path = fixed.join("Cargo.lock");
     account.path(&fixed_lock_path)?;
     if !fixed_lock_path.exists() {
@@ -3706,28 +3668,75 @@ fn select_placement_inner(
             fixed_lock.digest(),
         )?;
         if receipt.matches_request(request_identity) {
-            return Ok(Placement {
-                root: fixed,
+            return Ok(Some(Placement {
+                root: fixed.to_path_buf(),
                 request: request_identity,
                 state: PlacementState::Persisted {
                     lock: fixed_lock,
                     receipt,
                 },
                 exclusive: false,
-            });
-        }
-    } else {
-        match catalog.select_persisted_in(fixed_lock_bytes.into_boxed_slice(), limits, account)? {
-            universe::Persisted::Current => {
-                return Err(Error::ResolutionDrift {
-                    command: "persisted universe selection",
-                    field: "current runnable receipt is absent",
-                });
-            }
-            universe::Persisted::Historical => {}
+            }));
         }
     }
+    Ok(None)
+}
 
+fn select_placement_inner(
+    request: &Request,
+    catalog: &universe::Catalog,
+    provisional_manifest: &str,
+    limits: &Limits,
+    account: &mut ControlAccount<'_>,
+) -> Result<Placement> {
+    let definition = catalog.current();
+    account.hash(
+        b"rawr.import.cargo.resolution-request/v2".len()
+            + provisional_manifest.len()
+            + HARNESS_SOURCE.len()
+            + request.target.len()
+            + 112,
+    )?;
+    for input in &request.inputs {
+        account
+            .hash(input.path.as_os_str().len() + 9 + usize::from(input.digest.is_some()) * 32)?;
+    }
+    let request_identity = versioned_request_identity(request, definition, provisional_manifest);
+    let fixed = request.cache_root.join(HARNESS_DIRECTORY);
+    account.path(&fixed)?;
+    match fs::symlink_metadata(&fixed) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Placement {
+                root: fixed,
+                request: request_identity,
+                state: PlacementState::Fresh,
+                exclusive: true,
+            });
+        }
+        Err(source) => {
+            return Err(Error::Io {
+                operation: "inspect final resolution namespace",
+                path: fixed,
+                source,
+            });
+        }
+        Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+            return Err(Error::Path {
+                field: "final resolution namespace",
+                path: fixed,
+                reason: "must be a real directory".into(),
+            });
+        }
+        Ok(_) => {}
+    }
+
+    // A namespace another version wrote, or one whose receipt is absent or
+    // for another request, is a clean miss: a side-by-side candidate is built.
+    match fixed_placement(&fixed, request_identity, definition, limits, account) {
+        Ok(Some(placement)) => return Ok(placement),
+        Err(error @ Error::Io { .. }) => return Err(error),
+        Ok(None) | Err(_) => {}
+    }
     let candidate = fixed
         .join(CANDIDATE_DIRECTORY)
         .join(format!("{request_identity}"));
@@ -5479,8 +5488,6 @@ fn append_framed(output: &mut Vec<u8>, bytes: &[u8]) {
 #[cfg(test)]
 mod universe_placement_tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-    use std::sync::Arc;
 
     #[test]
     fn current_control_read_records_exceedance_before_touching_path_when_graph_is_exhausted() {
@@ -5519,7 +5526,6 @@ mod universe_placement_tests {
     }
 
     const SEED: &str = "version = 4\n\n[[package]]\nname = \"rawr-iced\"\nversion = \"1.0.0\"\ndependencies = [\"shared\"]\n\n[[package]]\nname = \"shared\"\nversion = \"1.2.3\"\nsource = \"registry+exact\"\nchecksum = \"aa\"\n";
-    const HISTORICAL_SEED: &str = "version = 4\n\n[[package]]\nname = \"rawr-iced\"\nversion = \"0.9.0\"\ndependencies = [\"shared\"]\n\n[[package]]\nname = \"shared\"\nversion = \"1.1.0\"\nsource = \"registry+historical\"\nchecksum = \"00\"\n";
     const UNKNOWN_SEED: &str =
         "version = 4\n\n[[package]]\nname = \"other\"\nversion = \"1.0.0\"\n";
     const MIXED_SEED: &str = "version = 4\n\n[[package]]\nname = \"rawr-iced\"\nversion = \"1.0.0\"\ndependencies = [\"shared\", \"skew\"]\n\n[[package]]\nname = \"shared\"\nversion = \"1.2.3\"\nsource = \"registry+exact\"\nchecksum = \"aa\"\n\n[[package]]\nname = \"skew\"\nversion = \"9.9.9\"\nsource = \"registry+skew\"\nchecksum = \"ff\"\n";
@@ -5550,36 +5556,6 @@ mod universe_placement_tests {
     }
 
     struct Project(PathBuf);
-
-    #[derive(Default)]
-    struct CachedEntryCounts {
-        nodes: AtomicUsize,
-        processes: AtomicUsize,
-    }
-
-    impl crate::metrics::Sink for CachedEntryCounts {
-        fn node(&self, _kind: crate::metrics::NodeKind, _event: crate::metrics::NodeEvent) {
-            self.nodes.fetch_add(1, AtomicOrdering::Relaxed);
-        }
-
-        fn process(&self, _kind: crate::metrics::ProcessKind) {
-            self.processes.fetch_add(1, AtomicOrdering::Relaxed);
-        }
-
-        fn milestone(&self, _milestone: crate::metrics::Milestone, _observed_ns: Option<u64>) {}
-
-        fn runner_owned(&self, _owned: &crate::metrics::runner::Owned) {}
-
-        #[cfg(feature = "import-baseline")]
-        fn profile(&self, _evidence: &crate::metrics::profile::Evidence) {}
-
-        #[cfg(feature = "import-baseline")]
-        fn pipeline(&self, _evidence: &crate::metrics::pipeline::Evidence) {}
-
-        fn scope_opened(&self) {}
-
-        fn scope_joined(&self) {}
-    }
 
     impl Project {
         fn new(label: &str) -> Self {
@@ -6141,107 +6117,52 @@ mod universe_placement_tests {
         );
     }
 
-    #[test]
-    fn persisted_source_skew_rejects_before_any_provisional_write() {
-        let limits = Limits::standard();
-        let project = Project::new("skew");
-        let request = request(&project, false, &limits);
-        let universe = universe::Catalog::new(definition(&limits));
-        let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
-        let fixed = project.cache().join(HARNESS_DIRECTORY);
-        install_legacy(&fixed, &manifest, SEED);
-        fs::write(fixed.join("src/lib.rs"), b"skew").expect("source skews");
-
-        assert!(select_placement(&request, &universe, &manifest, &limits).is_err());
-        assert!(!fixed.join(PROVISIONAL_DIRECTORY).exists());
-        assert!(!fixed.join(CANDIDATE_DIRECTORY).exists());
+    /// The side-by-side candidate a clean miss selects: fresh, exclusive,
+    /// not yet created, and the stale namespace left as it was.
+    fn assert_clean_miss(selected: Result<Placement>, fixed: &Path, lock: &str) {
+        let selected = selected.expect("a stale namespace is a clean miss");
+        assert!(matches!(selected.state, PlacementState::Fresh));
+        assert!(selected.exclusive);
+        assert_eq!(
+            selected.root.parent().and_then(Path::file_name),
+            Some(std::ffi::OsStr::new(CANDIDATE_DIRECTORY))
+        );
+        assert!(!selected.root.exists());
+        assert_eq!(
+            fs::read(fixed.join("Cargo.lock")).expect("the stale lock remains"),
+            lock.as_bytes()
+        );
     }
 
     #[test]
-    fn parseable_unknown_changed_request_rejects_before_write_or_command() {
+    fn a_namespace_another_version_wrote_is_a_clean_miss() {
         let limits = Limits::standard();
-        let project = Project::new("unknown-preflight");
-        let current = request(&project, false, &limits);
-        let changed = request(&project, true, &limits);
-        let catalog = universe::Catalog::new(definition(&limits));
-        let current_manifest =
-            render_manifest(&current, None, &limits).expect("current manifest renders");
-        let changed_manifest =
-            render_manifest(&changed, None, &limits).expect("changed manifest renders");
-        let fixed = project.cache().join(HARNESS_DIRECTORY);
-        install_legacy(&fixed, &current_manifest, UNKNOWN_SEED);
-        let before = filesystem_entries(&project.0);
-
-        let (selected, commands) =
-            select_before_command(&changed, &catalog, &changed_manifest, &limits);
-
-        assert!(selected.is_err());
-        assert_eq!(commands, 0);
-        assert_eq!(filesystem_entries(&project.0), before);
-        assert!(!fixed.join(PROVISIONAL_DIRECTORY).exists());
-        assert!(!fixed.join(CANDIDATE_DIRECTORY).exists());
-    }
-
-    #[test]
-    fn cached_production_entry_rejects_unknown_placement_before_toolchain_or_process_work() {
-        let limits = Limits::standard();
-        let project = Project::new("cached-entry-preflight");
-        let mut request = request(&project, false, &limits);
-        let catalog = universe::Catalog::new(definition(&limits));
-        let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
-        let fixed = project.cache().join(HARNESS_DIRECTORY);
-        install_legacy(&fixed, &manifest, UNKNOWN_SEED);
-        request.universe = Some(catalog);
-        #[cfg(feature = "rustc-driver")]
-        let mut prepared_request = self::request(&project, false, &limits);
-        #[cfg(feature = "rustc-driver")]
-        {
-            prepared_request.universe = Some(universe::Catalog::new(definition(&limits)));
+        for (label, lock, skew_source) in [
+            ("skew", SEED, true),
+            ("unknown", UNKNOWN_SEED, false),
+            ("mixed", MIXED_SEED, false),
+            ("receipt-absent", SEED, false),
+        ] {
+            let project = Project::new(label);
+            let request = request(&project, false, &limits);
+            let catalog = universe::Catalog::new(definition(&limits));
+            let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
+            let fixed = project.cache().join(HARNESS_DIRECTORY);
+            install_legacy(&fixed, &manifest, lock);
+            if skew_source {
+                fs::write(fixed.join("src/lib.rs"), b"skew").expect("source skews");
+            }
+            let before = filesystem_entries(&project.0);
+            let (selected, commands) =
+                select_before_command(&request, &catalog, &manifest, &limits);
+            assert_eq!(commands, 1, "{label}");
+            assert_eq!(filesystem_entries(&project.0), before, "{label}");
+            assert_clean_miss(selected, &fixed, lock);
         }
-        let before = filesystem_entries(&project.0);
-        let counts = Arc::new(CachedEntryCounts::default());
-        let scope = crate::metrics::Scope::transform_at(
-            Arc::clone(&counts) as Arc<dyn crate::metrics::Sink>,
-            1,
-        )
-        .expect("the cached-entry metric scope opens");
-
-        let result = request.resolve_cached(&limits);
-        #[cfg(feature = "rustc-driver")]
-        let prepared_result = prepared_request.prepare_cached(&limits);
-        drop(scope);
-
-        assert!(result.is_err());
-        #[cfg(feature = "rustc-driver")]
-        assert!(prepared_result.is_err());
-        assert_eq!(counts.nodes.load(AtomicOrdering::Relaxed), 0);
-        assert_eq!(counts.processes.load(AtomicOrdering::Relaxed), 0);
-        assert_eq!(filesystem_entries(&project.0), before);
-        assert!(!fixed.join(PROVISIONAL_DIRECTORY).exists());
-        assert!(!fixed.join(CANDIDATE_DIRECTORY).exists());
     }
 
     #[test]
-    fn mixed_protected_closure_matching_manifest_rejects_before_write_or_command() {
-        let limits = Limits::standard();
-        let project = Project::new("mixed-preflight");
-        let request = request(&project, false, &limits);
-        let catalog = universe::Catalog::new(definition(&limits));
-        let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
-        let fixed = project.cache().join(HARNESS_DIRECTORY);
-        install_legacy(&fixed, &manifest, MIXED_SEED);
-        let before = filesystem_entries(&project.0);
-
-        let (selected, commands) = select_before_command(&request, &catalog, &manifest, &limits);
-        assert!(selected.is_err());
-        assert_eq!(commands, 0);
-        assert_eq!(filesystem_entries(&project.0), before);
-        assert!(!fixed.join(PROVISIONAL_DIRECTORY).exists());
-        assert!(!fixed.join(CANDIDATE_DIRECTORY).exists());
-    }
-
-    #[test]
-    fn current_receipt_lock_and_universe_skew_reject_before_write_or_command() {
+    fn current_receipt_lock_and_universe_skew_are_clean_misses() {
         let limits = Limits::standard();
         let project = Project::new("receipt-skew");
         let request = request(&project, false, &limits);
@@ -6249,97 +6170,18 @@ mod universe_placement_tests {
         let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
         let fixed = project.cache().join(HARNESS_DIRECTORY);
         install_legacy(&fixed, &manifest, SEED);
-        write_fixture_receipt(
-            &fixed,
-            &request,
-            catalog.current(),
-            &manifest,
-            [0x91; 32],
-            [0x92; 32],
-        );
-        let before = filesystem_entries(&project.0);
-
-        let (universe_skew, commands) =
-            select_before_command(&request, &catalog, &manifest, &limits);
-        assert!(universe_skew.is_err());
-        assert_eq!(commands, 0);
-        assert_eq!(filesystem_entries(&project.0), before);
-
-        write_fixture_receipt(
-            &fixed,
-            &request,
-            catalog.current(),
-            &manifest,
-            *catalog.current().identity(),
-            [0x92; 32],
-        );
-        let lock_skew_before = filesystem_entries(&project.0);
-        let (lock_skew, commands) = select_before_command(&request, &catalog, &manifest, &limits);
-        assert!(lock_skew.is_err());
-        assert_eq!(commands, 0);
-        assert_eq!(filesystem_entries(&project.0), lock_skew_before);
-        assert!(!fixed.join(PROVISIONAL_DIRECTORY).exists());
-        assert!(!fixed.join(CANDIDATE_DIRECTORY).exists());
-    }
-
-    #[test]
-    fn current_lock_without_completed_receipt_cannot_run_or_migrate() {
-        let limits = Limits::standard();
-        let project = Project::new("receipt-absent");
-        let current = request(&project, false, &limits);
-        let changed = request(&project, true, &limits);
-        let catalog = universe::Catalog::new(definition(&limits));
-        let current_manifest =
-            render_manifest(&current, None, &limits).expect("current manifest renders");
-        let changed_manifest =
-            render_manifest(&changed, None, &limits).expect("changed manifest renders");
-        let fixed = project.cache().join(HARNESS_DIRECTORY);
-        install_legacy(&fixed, &current_manifest, SEED);
-        let before = filesystem_entries(&project.0);
-
-        for (request, manifest) in [(&current, &current_manifest), (&changed, &changed_manifest)] {
-            let (selected, commands) = select_before_command(request, &catalog, manifest, &limits);
-            assert!(selected.is_err());
-            assert_eq!(commands, 0);
-            assert_eq!(filesystem_entries(&project.0), before);
+        for universe in [[0x91; 32], *catalog.current().identity()] {
+            write_fixture_receipt(
+                &fixed,
+                &request,
+                catalog.current(),
+                &manifest,
+                universe,
+                [0x92; 32],
+            );
+            let (selected, _) = select_before_command(&request, &catalog, &manifest, &limits);
+            assert_clean_miss(selected, &fixed, SEED);
         }
-    }
-
-    #[test]
-    fn historical_definition_selects_a_current_side_by_side_candidate_without_parsing_as_current() {
-        let limits = Limits::standard();
-        let project = Project::new("historical-migration");
-        let request = request(&project, false, &limits);
-        let historical = universe::Historical::new(
-            HISTORICAL_SEED.as_bytes(),
-            Sha256::digest(HISTORICAL_SEED.as_bytes()).into(),
-            &limits,
-        )
-        .expect("historical migration input authenticates without runnable authority");
-        let catalog = universe::Catalog::new(definition(&limits))
-            .with_historical(historical)
-            .expect("distinct historical cohort joins the catalog");
-        let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
-        let fixed = project.cache().join(HARNESS_DIRECTORY);
-        install_legacy(&fixed, &manifest, HISTORICAL_SEED);
-        let before = filesystem_entries(&project.0);
-
-        let (migration, commands) = select_before_command(&request, &catalog, &manifest, &limits);
-        let migration = migration.expect("historical last-good selects a fresh current candidate");
-
-        assert_eq!(commands, 1, "exact historical state reaches the next stage");
-        assert_eq!(filesystem_entries(&project.0), before);
-        assert!(matches!(migration.state, PlacementState::Fresh));
-        assert!(migration.exclusive);
-        assert_eq!(
-            migration.root.parent().and_then(Path::file_name),
-            Some(std::ffi::OsStr::new(CANDIDATE_DIRECTORY))
-        );
-        assert_eq!(
-            fs::read(fixed.join("Cargo.lock")).expect("historical lock remains preserved"),
-            HISTORICAL_SEED.as_bytes()
-        );
-        assert!(!migration.root.exists());
     }
 
     #[test]

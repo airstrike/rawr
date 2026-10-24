@@ -4,12 +4,9 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use sha2::{Digest as _, Sha256};
-
 use super::accounting::Charge;
 use crate::node::Error;
 
-const MAX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DELETED_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_DELETED_MEMBERS: u64 = 262_144;
 const MAX_BUNDLES: usize = 8;
@@ -42,7 +39,6 @@ pub(super) fn same_installation(left: &fs::Metadata, right: &fs::Metadata) -> bo
 }
 
 pub(super) struct Budget {
-    metadata_bytes: u64,
     deleted: Charge,
     bundles: usize,
     temporaries: usize,
@@ -60,7 +56,6 @@ impl Drop for Budget {
         // Observe this pass once, including the cumulative request that refused.
         // Cleanup errors keep their original precedence and no work is repeated.
         for (key, value) in [
-            (Scalar::RecoveryMetadataBytes, self.metadata_bytes),
             (Scalar::RecoveryDeletionBytes, self.deleted.bytes),
             (Scalar::RecoveryDeletionMembers, self.deleted.members),
             (Scalar::RecoveryBundles, self.bundles as u64),
@@ -74,7 +69,6 @@ impl Drop for Budget {
 impl Budget {
     pub(super) const fn new() -> Self {
         Self {
-            metadata_bytes: 0,
             deleted: Charge::zero(),
             bundles: 0,
             temporaries: 0,
@@ -104,41 +98,15 @@ impl Budget {
         self.installation = Some((root.to_path_buf(), metadata, ledger));
     }
 
-    #[cfg(test)]
-    pub(super) const fn metadata_bytes(&self) -> u64 {
-        self.metadata_bytes
-    }
-
-    pub(super) fn metadata(&mut self, bytes: usize) -> Result<(), Error> {
-        let bytes = u64::try_from(bytes).map_err(|_| Error::Limit {
-            resource: "typed store recovery metadata bytes",
-            limit: MAX_METADATA_BYTES as usize,
-            actual: usize::MAX,
-        })?;
-        self.metadata_bytes = self
-            .metadata_bytes
-            .checked_add(bytes)
-            .ok_or(Error::Allocation)?;
-        enforce(
-            "typed store recovery metadata bytes",
-            self.metadata_bytes,
-            MAX_METADATA_BYTES,
-        )
-    }
-
     pub(super) fn remaining_deleted_members(&self) -> u64 {
         MAX_DELETED_MEMBERS.saturating_sub(self.deleted.members)
     }
 
-    /// Charge work this pass already chose. Freed bytes never refuse it;
-    /// they only make `fits` defer further optional work to a later pass.
+    /// Charge work this pass already chose. It is never refused; the total
+    /// only makes `fits` defer further optional work to a later pass.
     pub(super) fn deletion(&mut self, charge: Charge) -> Result<(), Error> {
         self.deleted = self.deleted.checked_add(charge)?;
-        enforce(
-            "typed store recovery deleted filesystem members",
-            self.deleted.members,
-            MAX_DELETED_MEMBERS,
-        )
+        Ok(())
     }
 
     /// Count one bundle this pass already chose; like freed bytes, the count
@@ -319,71 +287,10 @@ pub(crate) fn valid_temporary_name(name: &std::ffi::OsStr) -> bool {
 }
 
 pub(super) fn tree_charge(root: &Path, member_limit: u64) -> Result<Charge, Error> {
-    tree_measure(root, member_limit, None)
+    tree_measure(root, member_limit)
 }
 
-/// The retirement measurement and its recheck: the charge plus a digest of
-/// the tree's logical geometry, independent of directory enumeration order.
-pub(super) fn tree_geometry(root: &Path, member_limit: u64) -> Result<(Charge, [u8; 32]), Error> {
-    let mut members = Vec::new();
-    let charge = tree_measure(root, member_limit, Some(&mut members))?;
-    members.sort_unstable();
-    let mut digest = Sha256::new();
-    digest.update(b"RAWRBNDL-RETIREMENT-GEOMETRY-v1\0");
-    digest.update((members.len() as u64).to_le_bytes());
-    for member in &members {
-        digest.update(member);
-    }
-    Ok((charge, digest.finalize().into()))
-}
-
-#[cfg(unix)]
-fn geometry_entry(root: &Path, path: &Path, metadata: &fs::Metadata) -> Result<[u8; 32], Error> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let relative = path
-        .strip_prefix(root)
-        .map_err(|_| Error::OutsideRoot(path.to_path_buf()))?
-        .as_os_str()
-        .as_encoded_bytes();
-    let directory = metadata.is_dir();
-    let mut digest = Sha256::new();
-    digest.update((relative.len() as u64).to_le_bytes());
-    digest.update(relative);
-    digest.update([u8::from(directory)]);
-    // Retirement thaws only the root itself; every descendant mode counts.
-    let mode = if relative.is_empty() {
-        0
-    } else {
-        metadata.mode() & 0o7777
-    };
-    digest.update(mode.to_le_bytes());
-    digest.update(if directory { 0 } else { metadata.nlink() }.to_le_bytes());
-    digest.update(if directory { 0 } else { metadata.len() }.to_le_bytes());
-    Ok(digest.finalize().into())
-}
-
-#[cfg(not(unix))]
-fn geometry_entry(root: &Path, path: &Path, metadata: &fs::Metadata) -> Result<[u8; 32], Error> {
-    let relative = path
-        .strip_prefix(root)
-        .map_err(|_| Error::OutsideRoot(path.to_path_buf()))?
-        .as_os_str()
-        .as_encoded_bytes();
-    let directory = metadata.is_dir();
-    let mut digest = Sha256::new();
-    digest.update((relative.len() as u64).to_le_bytes());
-    digest.update(relative);
-    digest.update([u8::from(directory)]);
-    digest.update(if directory { 0 } else { metadata.len() }.to_le_bytes());
-    Ok(digest.finalize().into())
-}
-
-fn tree_measure(
-    root: &Path,
-    member_limit: u64,
-    mut geometry: Option<&mut Vec<[u8; 32]>>,
-) -> Result<Charge, Error> {
+fn tree_measure(root: &Path, member_limit: u64) -> Result<Charge, Error> {
     if member_limit == 0 {
         return Err(Error::Limit {
             resource: "typed store recovery deleted filesystem members",
@@ -430,16 +337,12 @@ fn tree_measure(
                 );
             }
             BLOCK_BYTES
-        } else if metadata.is_file() && (geometry.is_none() || !hard_linked(&metadata)) {
+        } else if metadata.is_file() {
             // Removing a dead tree's extra link only drops that name.
             round_block(metadata.len())?.max(round_block(allocated_bytes(&metadata)?)?)
         } else {
             return Err(Error::Shape(path));
         };
-        if let Some(geometry) = geometry.as_mut() {
-            geometry.try_reserve(1).map_err(|_| Error::Allocation)?;
-            geometry.push(geometry_entry(root, &path, &metadata)?);
-        }
         charge = charge.checked_add(Charge {
             bytes,
             allocations: 0,
@@ -604,17 +507,6 @@ fn set_writable(
     })
 }
 
-fn enforce(resource: &'static str, actual: u64, limit: u64) -> Result<(), Error> {
-    if actual > limit {
-        return Err(Error::Limit {
-            resource,
-            limit: usize::try_from(limit).unwrap_or(usize::MAX),
-            actual: usize::try_from(actual).unwrap_or(usize::MAX),
-        });
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -623,81 +515,22 @@ mod tests {
 
     static FIXTURE: AtomicU64 = AtomicU64::new(1);
 
-    #[cfg(feature = "import-baseline")]
     #[test]
-    fn recovery_observation_keeps_the_refused_cumulative_request() {
-        use crate::metrics::{accounting::Scalar, recorder::Recorder};
-        let recorder = Recorder::transform(10).unwrap();
-        {
-            let _scope = recorder.scope().unwrap();
-            let mut budget = Budget::new();
-            budget.metadata(MAX_METADATA_BYTES as usize).unwrap();
-            assert!(
-                matches!(budget.metadata(1), Err(Error::Limit { actual, .. }) if actual == MAX_METADATA_BYTES as usize + 1)
-            );
-        }
-        let evidence = recorder.snapshot().unwrap().accounting;
-        assert_eq!(
-            evidence.scalar(Scalar::RecoveryMetadataBytes).unwrap().max,
-            MAX_METADATA_BYTES + 1
-        );
-        assert_eq!(evidence.scalar(Scalar::RecoveryBundles).unwrap().total, 0);
-        assert_eq!(
-            evidence
-                .scalar(Scalar::RecoveryDeletionBytes)
-                .unwrap()
-                .count,
-            1
-        );
-        assert!(evidence.scalar(Scalar::BundleMeasuredBytes).is_none());
-    }
-
-    #[test]
-    fn recovery_limits_admit_exact_caps_reject_unit_floors_and_defer_freed_bytes() {
-        let mut metadata = Budget::new();
-        metadata
-            .metadata(MAX_METADATA_BYTES as usize)
-            .expect("the exact metadata cap admits");
-        assert!(matches!(
-            metadata.metadata(1),
-            Err(Error::Limit {
-                resource: "typed store recovery metadata bytes",
-                ..
-            })
-        ));
-
+    fn recovery_limits_defer_further_work_and_never_refuse_chosen_work() {
         let mut deletion = Budget::new();
         deletion
             .deletion(Charge {
                 bytes: MAX_DELETED_BYTES,
                 allocations: 0,
-                members: MAX_DELETED_MEMBERS,
+                members: MAX_DELETED_MEMBERS + 1,
             })
-            .expect("the exact deletion caps admit");
-        let over = Charge {
+            .expect("chosen deletion is never refused");
+        // Past the pass's target only further optional work is deferred.
+        assert!(!deletion.fits(Charge {
             bytes: 1,
             allocations: 0,
             members: 0,
-        };
-        // Chosen deletion past the byte target proceeds; only further
-        // optional work is deferred to a later pass.
-        assert!(!deletion.fits(over));
-        deletion
-            .deletion(over)
-            .expect("freeing more bytes is never refused");
-
-        let mut members = Budget::new();
-        assert!(matches!(
-            members.deletion(Charge {
-                bytes: 0,
-                allocations: 0,
-                members: MAX_DELETED_MEMBERS + 1,
-            }),
-            Err(Error::Limit {
-                resource: "typed store recovery deleted filesystem members",
-                ..
-            })
-        ));
+        }));
 
         let mut counts = Budget::new();
         for _ in 0..MAX_BUNDLES {

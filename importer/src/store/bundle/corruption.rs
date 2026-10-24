@@ -65,16 +65,6 @@ impl Corruption {
         budget: &GraphBudget,
     ) -> Result<Self, Error> {
         let record = Record::read_bundle_budgeted(root, budget)?;
-        // Legacy incompatibility never fabricates corruption evidence.
-        #[cfg(test)]
-        let legacy = record.is_legacy_bundle() && !super::geometry::seam::is_legacy_writer();
-        #[cfg(not(test))]
-        let legacy = record.is_legacy_bundle();
-        if legacy {
-            return Err(Error::Codec(
-                "legacy schema-4 runner bundle record is not corruption evidence",
-            ));
-        }
         record.validate_bundle_descriptor(
             kind,
             schema,

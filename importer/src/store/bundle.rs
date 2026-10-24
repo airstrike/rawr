@@ -117,7 +117,6 @@ pub(super) struct Repair {
     eviction: Eviction,
     allocation: Allocation,
     actual: Charge,
-    geometry: [u8; 32],
 }
 
 impl Repair {
@@ -161,32 +160,20 @@ impl Repair {
                 "bundle retirement lease identity changed",
             ));
         }
-        let (mut actual, geometry) = super::recovery::tree_geometry(root, self.actual.members)?;
-        actual.allocations = 1;
-        // Only allocated blocks may fall between the retirement
-        // measurement and this recheck; the excess is charged from the
-        // larger, earlier measurement.
-        if Record::read_bundle(root)?.allocation() != allocation
-            || check(
-                self.actual,
-                Some(self.geometry),
-                Measured {
-                    charge: actual,
-                    geometry,
-                },
-            )
-            .is_err()
-        {
-            return Err(Error::CleanupRequired(
-                "bundle changed after retirement measurement",
-            ));
-        }
+        // The bundle is being deleted, so a change since the retirement
+        // measurement only moves the excess: it is charged from the larger.
+        let actual = super::recovery::tree_charge(root, u64::MAX)?;
         Ok(Charge {
-            bytes: self.actual.bytes.saturating_sub(allocation.charge.bytes),
+            bytes: self
+                .actual
+                .bytes
+                .max(actual.bytes)
+                .saturating_sub(allocation.charge.bytes),
             allocations: 0,
             members: self
                 .actual
                 .members
+                .max(actual.members)
                 .saturating_sub(allocation.charge.members),
         })
     }
@@ -946,12 +933,6 @@ impl Pending {
         }
         let (bytes, record) =
             Record::seal_bundle(identity, &self.seal, &metadata, self.charge, self.geometry)?;
-        #[cfg(test)]
-        let (bytes, record) = if geometry::seam::is_legacy_writer() {
-            record.legacy_twin()
-        } else {
-            (bytes, record)
-        };
         if let Some(budget) = budget {
             budget.paths(4)?;
         }
@@ -1102,7 +1083,6 @@ pub(crate) fn validate_complete(
             reason: "runner Cargo bundle allocation decoding failed",
         },
     })?;
-    reject_legacy(&record)?;
     if let Err(drift) = check(record.charge(), record.sealed_geometry(), measured) {
         return Err(Error::from(Corruption::observed(
             &root,
@@ -1260,8 +1240,7 @@ impl<'store> Completion<'store> {
                     member,
                 )?;
                 let record = Record::read_bundle_budgeted(root, budget)?;
-                reject_legacy(&record)?;
-                if let Err(drift) = check(record.charge(), record.sealed_geometry(), measured) {
+                            if let Err(drift) = check(record.charge(), record.sealed_geometry(), measured) {
                     return Err(Error::from(Corruption::observed(
                         root,
                         store,
@@ -1393,7 +1372,6 @@ fn validate_commitment_with(
 ) -> Result<PathBuf, Error> {
     let (root, seal_path, seal) = read_commitment_with(store, commitment, budget, mismatch)?;
     let record = Record::read_bundle_budgeted(&root, budget)?;
-    reject_legacy(&record)?;
     budget.paths(1)?;
     super::path::input(&seal_path, budget)?;
     let metadata = fs::metadata(&seal_path).map_err(|source| Error::Io {
@@ -1449,66 +1427,6 @@ fn read_commitment_with(
         return Err(mismatch(&root, seal_path));
     }
     Ok((root, seal_path, seal))
-}
-
-/// Geometry rule at registered-bundle inventory: identical record and allocation
-/// identity, counts and sealed geometry, and a measured charge no greater than
-/// the recorded charge, which the ledger keeps. A schema-4 record is judged by
-/// the labelled legacy rule (no geometry) inside the same check. The store
-/// inventory no longer re-walks registered bundles; tests keep it.
-#[cfg(test)]
-pub(super) fn validate_physical(root: &Path, expected: Allocation) -> Result<Charge, Error> {
-    validate_top_level(root, State::Published)?;
-    validate_lease(root)?;
-    let actual = survey(root, View::Published, None, false, |_| {
-        Error::CleanupRequired("registered runner bundle physical allocation changed")
-    })?;
-    let record = Record::read_bundle(root)?;
-    if record.allocation() != expected
-        || check(expected.charge, record.sealed_geometry(), actual).is_err()
-    {
-        return Err(Error::CleanupRequired(
-            "registered runner bundle physical allocation changed",
-        ));
-    }
-    validate_frozen(root)?;
-    Ok(actual.charge)
-}
-
-pub(super) fn validate_physical_retiring(
-    root: &Path,
-    expected: Allocation,
-) -> Result<Charge, Error> {
-    validate_top_level(root, State::Published)?;
-    validate_lease(root)?;
-    let actual = survey(root, View::Retiring, None, false, |_| {
-        Error::CleanupRequired("retiring runner bundle physical allocation changed")
-    })?;
-    let record = Record::read_bundle(root)?;
-    if record.allocation() != expected
-        || check(expected.charge, record.sealed_geometry(), actual).is_err()
-    {
-        return Err(Error::CleanupRequired(
-            "retiring runner bundle physical allocation changed",
-        ));
-    }
-    validate_frozen_retiring(root)?;
-    Ok(actual.charge)
-}
-
-/// A schema-4 bundle record clean-misses admission and authority; it is never
-/// corruption evidence and is never upgraded in place.
-fn reject_legacy(record: &Record) -> Result<(), Error> {
-    #[cfg(test)]
-    if geometry::seam::is_legacy_writer() {
-        return Ok(());
-    }
-    if record.is_legacy_bundle() {
-        return Err(Error::Codec(
-            "legacy schema-4 runner bundle record is not current authority",
-        ));
-    }
-    Ok(())
 }
 
 fn pending_drift(root: &Path, result: Result<(), Drift>) -> Result<(), Error> {
@@ -1636,19 +1554,14 @@ fn lock_pinned_with_budget(
 pub(super) fn prepare_eviction(
     store: &Path,
     allocation: Allocation,
-    budget: &mut super::recovery::Budget,
 ) -> Result<Option<Eviction>, Error> {
-    let root = locate_allocation(store, allocation, budget)?.ok_or(Error::CleanupRequired(
+    let root = locate_allocation(store, allocation)?.ok_or(Error::CleanupRequired(
         "a registered immutable bundle is missing during eviction",
     ))?;
-    prepare_eviction_at(root, allocation, budget)
+    prepare_eviction_at(root, allocation)
 }
 
-fn prepare_eviction_at(
-    root: PathBuf,
-    allocation: Allocation,
-    budget: &mut super::recovery::Budget,
-) -> Result<Option<Eviction>, Error> {
+fn prepare_eviction_at(root: PathBuf, allocation: Allocation) -> Result<Option<Eviction>, Error> {
     let path = root.join("lease");
     let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
         operation: "inspect runner bundle eviction lease",
@@ -1703,14 +1616,13 @@ fn prepare_eviction_at(
     }
     validate_top_level(&root, State::Published)?;
     let lease = super::entry::read_file(&root.join("lease"), LEASE_BYTES.len())?;
-    budget.metadata(lease.len())?;
     if lease.as_ref() != LEASE_BYTES {
         return Err(Error::Corrupt {
             path: root.join("lease"),
             reason: "runner Cargo bundle lease identity changed",
         });
     }
-    if Record::read_bundle_recovery(&root, budget)?.allocation() != allocation {
+    if Record::read_bundle(&root)?.allocation() != allocation {
         return Err(Error::Corrupt {
             path: root.join("allocation"),
             reason: "runner bundle allocation changed during eviction",
@@ -1722,12 +1634,11 @@ fn prepare_eviction_at(
 pub(super) fn prepare_recovery_eviction(
     store: &Path,
     allocation: Allocation,
-    budget: &mut super::recovery::Budget,
 ) -> Result<Option<Eviction>, Error> {
-    let Some(root) = locate_allocation(store, allocation, budget)? else {
+    let Some(root) = locate_allocation(store, allocation)? else {
         return Ok(None);
     };
-    let Some(eviction) = prepare_eviction_at(root, allocation, budget)? else {
+    let Some(eviction) = prepare_eviction_at(root, allocation)? else {
         return Err(Error::CleanupRequired(
             "a runner process still pins an interrupted bundle eviction",
         ));
@@ -1749,13 +1660,12 @@ impl Eviction {
     ) -> Result<Repair, Error> {
         validate_top_level(&self.root, State::Published)?;
         validate_lease(&self.root)?;
-        if Record::read_bundle_recovery(&self.root, budget)?.allocation() != allocation {
+        if Record::read_bundle(&self.root)?.allocation() != allocation {
             return Err(Error::CleanupRequired(
                 "bundle retirement allocation changed",
             ));
         }
-        let (mut actual, geometry) =
-            super::recovery::tree_geometry(&self.root, budget.remaining_deleted_members())?;
+        let mut actual = super::recovery::tree_charge(&self.root, u64::MAX)?;
         actual.allocations = 1;
         budget.bundle()?;
         budget.deletion(actual)?;
@@ -1763,7 +1673,6 @@ impl Eviction {
             eviction: self,
             allocation,
             actual,
-            geometry,
         })
     }
 
@@ -1850,11 +1759,7 @@ impl Eviction {
     }
 }
 
-fn locate_allocation(
-    store: &Path,
-    allocation: Allocation,
-    budget: &mut super::recovery::Budget,
-) -> Result<Option<PathBuf>, Error> {
+fn locate_allocation(store: &Path, allocation: Allocation) -> Result<Option<PathBuf>, Error> {
     if allocation.class != Class::Bundle {
         return Err(Error::State(
             "bundle eviction requires one registered immutable bundle",
@@ -1862,7 +1767,7 @@ fn locate_allocation(
     }
     let mut matched = None;
     for path in bundle_paths(store)? {
-        let record = match Record::read_bundle_recovery(&path, budget) {
+        let record = match Record::read_bundle(&path) {
             Ok(record) => record,
             Err(_) => continue,
         };
@@ -1958,7 +1863,7 @@ fn recover_planned_inner(
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(Error::Shape(bundle));
         }
-        let record = match Record::read_bundle_recovery(&bundle, budget) {
+        let record = match Record::read_bundle(&bundle) {
             Ok(record) => record,
             Err(_) => {
                 if incomplete.replace(bundle).is_some() {
@@ -2177,7 +2082,7 @@ pub(super) fn recover_dead(
                     if !budget.bundle_fits() || !budget.fits(allocation.charge) {
                         return Ok(());
                     }
-                    let Some(_eviction) = prepare_eviction_at(path.clone(), allocation, budget)?
+                    let Some(_eviction) = prepare_eviction_at(path.clone(), allocation)?
                     else {
                         continue;
                     };
@@ -2778,32 +2683,6 @@ fn validate_frozen(root: &Path) -> Result<(), Error> {
             return Err(Error::Corrupt {
                 path,
                 reason: "runner Cargo bundle member is writable",
-            });
-        }
-        if metadata.is_dir() {
-            for child in read_sorted(&path)? {
-                pending.push(child.path());
-            }
-        } else if !metadata.is_file() || metadata.file_type().is_symlink() || hard_linked(&metadata)
-        {
-            return Err(Error::Shape(path));
-        }
-    }
-    Ok(())
-}
-
-fn validate_frozen_retiring(root: &Path) -> Result<(), Error> {
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(path) = pending.pop() {
-        let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
-            operation: "inspect retiring immutable runner bundle",
-            path: path.clone(),
-            source,
-        })?;
-        if path != root && writable(&metadata) {
-            return Err(Error::Corrupt {
-                path,
-                reason: "retiring runner Cargo bundle descendant is writable",
             });
         }
         if metadata.is_dir() {
@@ -4484,7 +4363,7 @@ mod tests {
             .unwrap();
         let allocation = record.allocation();
         let mut recovery = super::super::recovery::Budget::new();
-        let eviction = prepare_eviction_at(root.clone(), allocation, &mut recovery)
+        let eviction = prepare_eviction_at(root.clone(), allocation)
             .unwrap()
             .unwrap();
         let repair = eviction.into_repair(allocation, &mut recovery).unwrap();
@@ -4500,25 +4379,6 @@ mod tests {
             ))
         ));
         drop(repair);
-        let mut exhausted = super::super::recovery::Budget::new();
-        exhausted
-            .deletion(Charge {
-                bytes: 0,
-                allocations: 0,
-                members: exhausted.remaining_deleted_members(),
-            })
-            .unwrap();
-        let eviction = prepare_eviction_at(root.clone(), allocation, &mut exhausted)
-            .unwrap()
-            .unwrap();
-        assert!(matches!(
-            eviction.into_repair(allocation, &mut exhausted),
-            Err(Error::Limit {
-                resource: "typed store recovery deleted filesystem members",
-                ..
-            })
-        ));
-        assert!(root.exists(), "refusal never starts retirement");
         drop(pending);
         fs::remove_dir_all(fixture).unwrap();
     }
@@ -4637,37 +4497,6 @@ mod tests {
         assert!(worker.join().expect("the blocked pin joins").is_err());
         remove_bundle_checked(&moved).expect("the moved pin-race bundle retires");
         fs::remove_dir_all(fixture).expect("the pin-race fixture retires");
-    }
-
-    #[test]
-    fn physical_inventory_rejects_registered_bundle_tree_drift() {
-        let (fixture, store) = store("physical-drift");
-        let execution = execution(23);
-        super::super::lease::with_publication(store.root(), store.graph_budget(), |publication| {
-            prepare_execution(publication, store.root(), execution)
-        })
-        .expect("the physical-drift execution parent is admitted");
-        let attempt = Attempt::allocate(store.root(), execution, budget(1024 * 1024, 64))
-            .expect("the physical-drift attempt allocates");
-        let root = attempt.root();
-        let mut pending = attempt
-            .seal(Box::<[u8]>::from(b"physical-drift".as_slice()))
-            .expect("the physical-drift attempt seals");
-        let record = pending
-            .publish(
-                Kind::Runner,
-                2,
-                Digest::from_bytes([0x64; 32]),
-                LeaseKey::Execution(execution),
-                Digest::from_bytes([0x65; 32]),
-            )
-            .expect("the physical-drift bundle publishes");
-        pending.retain();
-        thaw(&root).expect("the fixture makes the immutable bundle writable");
-        fs::write(root.join("undeclared"), b"drift").expect("the undeclared bundle member exists");
-        assert!(validate_physical(&root, record.allocation()).is_err());
-        remove_bundle_checked(&root).expect("the physical-drift bundle retires");
-        fs::remove_dir_all(fixture).expect("the physical-drift fixture retires");
     }
 
     #[test]

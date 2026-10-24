@@ -3,7 +3,6 @@ use crate::metrics::principal::retirement;
 
 #[cfg(feature = "import-baseline")]
 use crate::metrics::principal::ledger::{Before, Cause, Write};
-pub(super) mod migration;
 
 use std::fs;
 use std::io::Read as _;
@@ -15,11 +14,12 @@ use crate::node::{ActionKey, Digest, Error, ExecutionKey, Kind};
 
 const LEDGER_MAGIC: &[u8; 8] = b"RAWRLEDR";
 const RECORD_MAGIC: &[u8; 8] = b"RAWRALOC";
-/// Typed (action and content) records, and legacy schema-4 bundle records.
+/// Typed (action and content) records.
 const RECORD_SCHEMA: u16 = 4;
 /// Bundle records: schema 4 plus the sealed logical-geometry commitment.
 const BUNDLE_RECORD_SCHEMA: u16 = 5;
-const LEDGER_SCHEMA: u16 = 5;
+/// The store's format. Any other value is a clean miss: the store is rebuilt.
+const LEDGER_SCHEMA: u16 = 6;
 const LEDGER_HEADER_BYTES: usize = 64;
 const RESERVATION_BYTES: usize = 136;
 const ALLOCATION_BYTES: usize = 96;
@@ -32,8 +32,6 @@ pub(super) const MAX_RECORD_BYTES: usize = BUNDLE_RECORD_BYTES;
 const MAX_LEDGER_BYTES: usize = 8 * 1024 * 1024;
 const BLOCK_BYTES: u64 = 4 * 1024;
 const INSTALLATION_BYTES: u64 = 10 * 1024 * 1024 * 1024;
-/// Free space kept on the store's volume before a write (evict, never refuse).
-const FREE_FLOOR_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 const INSTALLATION_ALLOCATIONS: u64 = 65_536;
 pub(super) const INSTALLATION_MEMBERS: u64 = 2_097_152;
 const MAX_RESERVATIONS: usize = 64;
@@ -120,8 +118,7 @@ pub(crate) struct Record {
     length: u64,
     digest: [u8; 32],
     charge: Charge,
-    /// Sealed logical geometry; `None` only for typed records and legacy
-    /// schema-4 bundle records.
+    /// Sealed logical geometry; `None` only for typed records.
     geometry: Option<[u8; 32]>,
 }
 
@@ -482,15 +479,6 @@ impl Record {
         Ok((record.encode(), record))
     }
 
-    /// Test-only legacy writer: this record as a legacy writer encoded it,
-    /// a schema-4 bundle record without the geometry commitment.
-    #[cfg(test)]
-    pub(crate) fn legacy_twin(&self) -> (Box<[u8]>, Self) {
-        let mut record = *self;
-        record.geometry = None;
-        (record.encode(), record)
-    }
-
     pub(crate) fn read(path: &Path) -> Result<Self, Error> {
         let bytes = super::entry::read_file(&path.join("allocation"), RECORD_BYTES)?;
         Self::decode(&bytes)
@@ -517,17 +505,7 @@ impl Record {
         Self::decode(&bytes)
     }
 
-    pub(super) fn read_recovery(
-        path: &Path,
-        budget: &mut super::recovery::Budget,
-    ) -> Result<Self, Error> {
-        let bytes = super::entry::read_file(&path.join("allocation"), RECORD_BYTES)?;
-        budget.metadata(bytes.len())?;
-        Self::decode(&bytes)
-    }
-
-    /// Read a runner-bundle allocation record: schema 5, or legacy schema 4.
-    /// Typed (action and content) records keep the exact schema-4 read bound.
+    /// Read a runner-bundle allocation record.
     pub(crate) fn read_bundle(path: &Path) -> Result<Self, Error> {
         let bytes = super::entry::read_file(&path.join("allocation"), MAX_RECORD_BYTES)?;
         Self::decode(&bytes)
@@ -539,15 +517,6 @@ impl Record {
     ) -> Result<Self, Error> {
         let bytes =
             super::entry::read_file_budgeted(&path.join("allocation"), MAX_RECORD_BYTES, budget)?;
-        Self::decode(&bytes)
-    }
-
-    pub(super) fn read_bundle_recovery(
-        path: &Path,
-        budget: &mut super::recovery::Budget,
-    ) -> Result<Self, Error> {
-        let bytes = super::entry::read_file(&path.join("allocation"), MAX_RECORD_BYTES)?;
-        budget.metadata(bytes.len())?;
         Self::decode(&bytes)
     }
 
@@ -629,16 +598,9 @@ impl Record {
         }
     }
 
-    /// The sealed geometry; `None` for a legacy schema-4 bundle record.
+    /// The sealed geometry; `None` for a typed record.
     pub(crate) const fn sealed_geometry(&self) -> Option<[u8; 32]> {
         self.geometry
-    }
-
-    /// A schema-4 bundle record: decodable for inventory, ledger accounting,
-    /// eviction and retirement, judged by the legacy physical rule, and never
-    /// admitted as current authority.
-    pub(crate) const fn is_legacy_bundle(&self) -> bool {
-        matches!(self.identity.class, Class::Bundle) && self.geometry.is_none()
     }
 
     /// Authenticate the recorded seal identity without claiming that the whole
@@ -765,7 +727,7 @@ impl Record {
             return Err(Error::Codec("typed store allocation record changed"));
         }
         let geometry = match (u16_at(bytes, 8)?, bytes.len()) {
-            (RECORD_SCHEMA, RECORD_BYTES) => None,
+            (RECORD_SCHEMA, RECORD_BYTES) if bytes[10] != 3 => None,
             (BUNDLE_RECORD_SCHEMA, BUNDLE_RECORD_BYTES) if bytes[10] == 3 => {
                 Some(array_at(bytes, RECORD_BYTES)?)
             }
@@ -834,7 +796,7 @@ impl Ledger {
     }
 
     fn read(root: &Path) -> Result<Self, Error> {
-        Self::read_with_recovery(root, None)
+        Self::read_with_recovery(root)
     }
 
     fn read_budgeted(root: &Path, budget: &crate::node::GraphBudget) -> Result<Self, Error> {
@@ -859,7 +821,7 @@ impl Ledger {
         if let Some(ledger) = budget.installation(root, &before) {
             return Ok(ledger);
         }
-        let ledger = std::sync::Arc::new(Self::read_with_recovery(root, Some(budget))?);
+        let ledger = std::sync::Arc::new(Self::read_with_recovery(root)?);
         let after = recovery_metadata(root)?;
         if !super::recovery::same_installation(&before, &after) {
             return Err(Error::CleanupRequired(
@@ -870,10 +832,7 @@ impl Ledger {
         Ok(ledger)
     }
 
-    fn read_with_recovery(
-        root: &Path,
-        budget: Option<&mut super::recovery::Budget>,
-    ) -> Result<Self, Error> {
+    fn read_with_recovery(root: &Path) -> Result<Self, Error> {
         let path = ledger_path(root);
         let bytes = super::entry::read_file(&path, MAX_LEDGER_BYTES)?;
         #[cfg(feature = "import-baseline")]
@@ -881,9 +840,6 @@ impl Ledger {
             crate::metrics::accounting::Scalar::LedgerReadBytes,
             bytes.len() as u64,
         );
-        if let Some(budget) = budget {
-            budget.metadata(bytes.len())?;
-        }
         Self::decode(&bytes).map_err(|_| Error::Corrupt {
             path,
             reason: "installation ledger decoding failed",
@@ -1146,10 +1102,6 @@ impl Ledger {
     }
 
     fn encode(&self) -> Result<Box<[u8]>, Error> {
-        self.encode_schema(LEDGER_SCHEMA)
-    }
-
-    fn encode_schema(&self, schema: u16) -> Result<Box<[u8]>, Error> {
         let mut publishers = self
             .allocations
             .iter()
@@ -1266,7 +1218,7 @@ impl Ledger {
             .try_reserve_exact(length)
             .map_err(|_| Error::Allocation)?;
         bytes.extend_from_slice(LEDGER_MAGIC);
-        bytes.extend_from_slice(&schema.to_le_bytes());
+        bytes.extend_from_slice(&LEDGER_SCHEMA.to_le_bytes());
         bytes.extend_from_slice(&[0; 6]);
         bytes.extend_from_slice(&self.used.bytes.to_le_bytes());
         bytes.extend_from_slice(&self.used.allocations.to_le_bytes());
@@ -1326,13 +1278,9 @@ impl Ledger {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        Self::decode_schema(bytes, LEDGER_SCHEMA)
-    }
-
-    fn decode_schema(bytes: &[u8], schema: u16) -> Result<Self, Error> {
         if bytes.len() < LEDGER_HEADER_BYTES
             || &bytes[..8] != LEDGER_MAGIC
-            || u16_at(bytes, 8)? != schema
+            || u16_at(bytes, 8)? != LEDGER_SCHEMA
             || bytes[10..16].iter().any(|byte| *byte != 0)
         {
             return Err(Error::Codec("typed store installation ledger changed"));
@@ -1512,12 +1460,35 @@ impl Ledger {
             validate_eviction_selection(&ledger.allocations, &ledger.evictions)
                 .map_err(|_| Error::Codec("typed store eviction journal changed ownership"))?;
         }
-        if ledger.encode_schema(schema)?.as_ref() != bytes {
+        if ledger.encode()?.as_ref() != bytes {
             return Err(Error::Codec(
                 "typed store installation ledger is not canonical",
             ));
         }
         Ok(ledger)
+    }
+}
+
+/// Whether the store's installation ledger is this format's, or `None` when
+/// the store has none yet.
+pub(super) fn current_format(root: &Path) -> Result<Option<bool>, Error> {
+    let path = ledger_path(root);
+    let mut header = [0; 10];
+    match fs::File::open(&path).and_then(|mut file| {
+        use std::io::Read as _;
+        file.read_exact(&mut header)
+    }) {
+        Ok(()) => Ok(Some(
+            &header[..8] == LEDGER_MAGIC
+                && u16::from_le_bytes([header[8], header[9]]) == LEDGER_SCHEMA,
+        )),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) if source.kind() == std::io::ErrorKind::UnexpectedEof => Ok(Some(false)),
+        Err(source) => Err(Error::Io {
+            operation: "read typed store format",
+            path,
+            source,
+        }),
     }
 }
 
@@ -2176,10 +2147,7 @@ pub(super) fn reservation_keys_recovery(
     Ok(keys.into_boxed_slice())
 }
 
-pub(super) fn reservation_keys_header_recovery(
-    root: &Path,
-    budget: &mut super::recovery::Budget,
-) -> Result<Box<[LeaseKey]>, Error> {
+pub(super) fn reservation_keys_header_recovery(root: &Path) -> Result<Box<[LeaseKey]>, Error> {
     let path = ledger_path(root);
     let mut source = fs::File::open(&path).map_err(|source| Error::Io {
         operation: "open typed store installation ledger header",
@@ -2207,7 +2175,6 @@ pub(super) fn reservation_keys_header_recovery(
         path: path.clone(),
         source,
     })?;
-    budget.metadata(header.len())?;
     if &header[..8] != LEDGER_MAGIC
         || u16_at(&header, 8)? != LEDGER_SCHEMA
         || header[10..16].iter().any(|byte| *byte != 0)
@@ -2259,7 +2226,6 @@ pub(super) fn reservation_keys_header_recovery(
         path: path.clone(),
         source,
     })?;
-    budget.metadata(bytes.len())?;
     let mut keys = Vec::new();
     keys.try_reserve_exact(reservation_count)
         .map_err(|_| Error::Allocation)?;
@@ -2419,7 +2385,7 @@ fn admit_control_with<'lease>(
             "typed store control publication authority changed root",
         ));
     }
-    super::control::admit_plan(root, &ledger.allocations, &ledger.evictions, &plan)?;
+    super::control::admit_plan(root, &ledger.allocations, &plan)?;
     super::control::Admitted::seal(publication, root, plan)
 }
 
@@ -2495,7 +2461,7 @@ fn recover_planned(
         Err(error) => return Err(error),
     };
     validate_recovery_members(&directory, payload_name)?;
-    let record = Record::read_recovery(&directory, budget).map_err(recovery_record_error)?;
+    let record = Record::read(&directory).map_err(recovery_record_error)?;
     let length = usize::try_from(record.length).map_err(|_| {
         Error::CleanupRequired("a planned typed store allocation length is not addressable")
     })?;
@@ -2504,7 +2470,6 @@ fn recover_planned(
             "a planned typed store allocation exceeds its payload limit",
         ));
     }
-    budget.metadata(length)?;
     let payload_path = directory.join(payload_name);
     let payload =
         super::entry::read_file(&payload_path, payload_limit).map_err(recovery_record_error)?;
@@ -2633,32 +2598,21 @@ fn ledger_path(root: &Path) -> PathBuf {
     root.join("ledgers/installation")
 }
 
-/// The installation size target is an eviction trigger, never a refusal.
+/// The installation size target and the ledger's bundle table are eviction
+/// triggers, never refusals: room for one more bundle is made before a write.
 pub(super) fn over_cap(root: &Path, additional: Charge) -> Result<bool, Error> {
     // Committed allocations only: a pending reservation is not yet a size.
-    let charge = Ledger::read(root)?.used.checked_add(additional)?;
+    let ledger = Ledger::read(root)?;
+    let charge = ledger.used.checked_add(additional)?;
+    let bundles = ledger
+        .allocations
+        .iter()
+        .filter(|registered| registered.allocation.class == Class::Bundle)
+        .count();
     Ok(charge.bytes > INSTALLATION_BYTES
         || charge.allocations > INSTALLATION_ALLOCATIONS
-        || charge.members > INSTALLATION_MEMBERS)
-}
-
-/// Low free space on the store's volume is an eviction trigger, never a refusal.
-pub(super) fn low_disk(root: &Path, additional: Charge) -> bool {
-    #[cfg(test)]
-    let free = Some(FREE_BYTES.get());
-    #[cfg(not(test))]
-    let free = rustix::fs::statvfs(root)
-        .ok()
-        .map(|volume| volume.f_bavail.saturating_mul(volume.f_frsize));
-    #[cfg(test)]
-    let _ = root;
-    free.is_some_and(|free| free < additional.bytes.saturating_mul(2).max(FREE_FLOOR_BYTES))
-}
-
-#[cfg(test)]
-thread_local! {
-    /// The injected free-space reading of this test thread.
-    pub(crate) static FREE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
+        || charge.members > INSTALLATION_MEMBERS
+        || bundles >= super::bundle::MAX_BUNDLES)
 }
 
 fn round_block(bytes: u64) -> Result<u64, Error> {
@@ -3032,7 +2986,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_recovers_atomic_replacement_temporary_and_rejects_partial_final_ledger() {
+    fn bootstrap_recovers_atomic_replacement_temporary_and_rebuilds_a_partial_final_ledger() {
         let root = std::env::temp_dir().join(format!(
             "rawr-store-accounting-bootstrap-crash-{}",
             std::process::id()
@@ -3053,13 +3007,14 @@ mod tests {
         assert!(!temporary.exists());
         drop(reopened);
 
+        // A ledger this format did not write is a clean miss: the store is
+        // rebuilt, never refused.
         fs::write(&ledger, b"partial final")
             .expect("the fixture replaces the final ledger with partial bytes");
-        assert!(crate::store::Store::open(&root, [0x81; 32]).is_err());
+        drop(crate::store::Store::open(&root, [0x81; 32]).expect("the store rebuilds"));
         assert_eq!(
-            fs::read(&ledger).expect("the failed-open ledger still reads"),
-            b"partial final",
-            "an existing malformed final ledger must fail closed, not be reinitialized"
+            current_format(&root).expect("the rebuilt ledger reads"),
+            Some(true)
         );
         fs::remove_dir_all(root).expect("the bootstrap crash fixture retires");
     }
@@ -3161,7 +3116,7 @@ mod tests {
     }
 
     #[test]
-    fn bundle_record_schema_five_round_trips_and_schema_four_stays_decodable() {
+    fn bundle_record_schema_five_round_trips_and_schema_four_bundles_reject() {
         let key = LeaseKey::Execution(ExecutionKey::from_bytes([7; 32]));
         let record = Record {
             identity: fixture_identity(Class::Bundle, Digest::from_bytes([9; 32]), key),
@@ -3180,36 +3135,22 @@ mod tests {
         assert_eq!(u16_at(&current, 8).unwrap(), BUNDLE_RECORD_SCHEMA);
         let decoded = Record::decode(&current).expect("schema 5 decodes");
         assert_eq!(decoded.sealed_geometry(), Some([0x5e; 32]));
-        assert!(!decoded.is_legacy_bundle());
         assert_eq!(decoded.encode(), current);
-        // Schema 4 bundle records stay decodable and are labelled legacy.
-        let (legacy, twin) = record.legacy_twin();
-        assert_eq!(legacy.len(), RECORD_BYTES);
-        assert_eq!(
-            &legacy[..],
-            &current[..RECORD_BYTES]
-                .iter()
-                .enumerate()
-                .map(|(index, byte)| if index == 8 { 4 } else { *byte })
-                .collect::<Vec<_>>()[..]
-        );
-        let decoded = Record::decode(&legacy).expect("schema 4 bundle records decode");
-        assert!(decoded.is_legacy_bundle());
-        assert_eq!(decoded.charge(), record.charge());
-        assert_ne!(twin.allocation().record, record.allocation().record);
+        // A bundle record without its geometry is another format's.
+        let mut legacy = current[..RECORD_BYTES].to_vec();
+        legacy[8..10].copy_from_slice(&RECORD_SCHEMA.to_le_bytes());
+        assert!(Record::decode(&legacy).is_err(), "schema 4 bundle records reject");
         // Unknown schemas, length/schema mismatches and typed schema-5 records reject.
         for schema in [3_u16, 6, u16::MAX] {
             let mut unknown = current.to_vec();
             unknown[8..10].copy_from_slice(&schema.to_le_bytes());
             assert!(Record::decode(&unknown).is_err(), "schema {schema}");
         }
-        let mut short = current[..RECORD_BYTES].to_vec();
+        let short = current[..RECORD_BYTES].to_vec();
         assert!(
             Record::decode(&short).is_err(),
             "schema 5 needs its geometry"
         );
-        short[8..10].copy_from_slice(&RECORD_SCHEMA.to_le_bytes());
-        assert!(Record::decode(&short).is_ok());
         let mut long = legacy.to_vec();
         long.extend_from_slice(&[0x5e; 32]);
         assert!(Record::decode(&long).is_err(), "schema 4 has no geometry");
@@ -3230,45 +3171,7 @@ mod tests {
         let content_bytes = content.encode();
         assert_eq!(content_bytes.len(), RECORD_BYTES);
         assert_eq!(u16_at(&content_bytes, 8).unwrap(), RECORD_SCHEMA);
-        assert!(!Record::decode(&content_bytes).unwrap().is_legacy_bundle());
-    }
-
-    #[test]
-    fn ledger_version_fence_changes_only_header_and_preserves_allocation_records() {
-        let mut ledger = Ledger::empty();
-        let key = LeaseKey::Action(ActionKey::from_bytes([7; 32]));
-        ledger
-            .insert_reservation(key, Charge::node(16, 16).expect("charge"))
-            .expect("reservation");
-        let old = ledger.encode_schema(4).expect("legacy ledger");
-        let fenced = ledger.encode_schema(5).expect("fenced ledger");
-        assert_eq!(&old[..8], &fenced[..8]);
-        assert_eq!(&old[10..], &fenced[10..]);
-        assert!(Ledger::decode_schema(&fenced, 4).is_err());
-        assert!(Ledger::decode_schema(&old, 5).is_err());
-        assert_eq!(
-            Ledger::decode_schema(&fenced, 5)
-                .expect("new decoder")
-                .encode_schema(4)
-                .expect("same semantic ledger"),
-            old
-        );
-
-        let record = Record {
-            identity: fixture_identity(Class::Content, Digest::from_bytes([3; 32]), key),
-            length: 0,
-            digest: Sha256::digest([]).into(),
-            charge: Charge::allocation(0).expect("allocation charge"),
-            geometry: None,
-        };
-        let record_bytes = record.encode();
-        assert_eq!(u16_at(&record_bytes, 8).expect("record header"), 4);
-        assert_eq!(
-            Record::decode(&record_bytes)
-                .expect("unchanged allocation decoder")
-                .encode(),
-            record_bytes
-        );
+        assert!(Record::decode(&content_bytes).is_ok());
     }
 
     #[test]
@@ -3338,30 +3241,6 @@ mod tests {
     }
 
     #[test]
-    fn one_recovery_budget_decodes_one_installation_snapshot_once() {
-        let root = fixture_root("one-recovery-ledger-snapshot");
-        let store = crate::store::Store::open(&root, [0xa7; 32])
-            .expect("the recovery snapshot store opens");
-        let expected = fs::metadata(root.join("ledgers/installation"))
-            .expect("the installation ledger exists")
-            .len();
-        let mut budget = super::super::recovery::Budget::new();
-        assert!(pending_eviction_recovery(store.root(), &mut budget)
-            .expect("pending eviction reads")
-            .is_empty());
-        assert!(registrations_recovery(store.root(), &mut budget)
-            .expect("registrations reuse the snapshot")
-            .is_empty());
-        assert!(garbage_recovery(store.root(), &mut budget)
-            .expect("garbage recovery reuses the snapshot")
-            .is_none());
-        assert_eq!(budget.metadata_bytes(), expected);
-        store
-            .retire_fixture()
-            .expect("the recovery snapshot fixture retires");
-    }
-
-    #[test]
     fn recovery_snapshot_refreshes_after_intervening_publication() {
         for inspect_garbage in [false, true] {
             let root = fixture_root(if inspect_garbage {
@@ -3380,7 +3259,6 @@ mod tests {
             });
             let mut budget = super::super::recovery::Budget::new();
             published(&root, |_| Ledger::read_recovery(&root, &mut budget));
-            let before = budget.metadata_bytes();
 
             // A separate publication epoch completes an unrelated direct node.
             let action = ActionKey::from_bytes([72; 32]);
@@ -3452,10 +3330,6 @@ mod tests {
             );
             assert!(current.reservations.is_empty());
             assert!(content_path.exists() && action_path.exists());
-            assert!(
-                budget.metadata_bytes() > before,
-                "changed authority is reread using the same budget"
-            );
             fs::remove_dir_all(root).expect("epoch fixture retires");
         }
     }

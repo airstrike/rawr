@@ -121,9 +121,9 @@ pub(super) fn enroll_project(
             }
         }
         super::recovery::recover_temporaries(publication, root, budget)?;
-        ensure_migration_file(publication, root, &pending, budget)?;
-        ensure_migration_file(publication, root, &owner, budget)?;
-        ensure_migration_file(publication, root, &project_lock, budget)?;
+        ensure_control_file(publication, root, &pending, budget)?;
+        ensure_control_file(publication, root, &owner, budget)?;
+        ensure_control_file(publication, root, &project_lock, budget)?;
         super::entry::sync_directory(&root.join("locks/owners"))?;
         super::entry::sync_directory(&root.join("locks/projects"))?;
         let admitted = super::accounting::admit_control_recovery(
@@ -664,60 +664,7 @@ fn with_file<T>(
     evaluate()
 }
 
-/// Wait only after dropping publication and every migration probe guard.
-pub(super) fn wait_migration(path: &Path) -> Result<(), Error> {
-    let before = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(Error::Io {
-                operation: "inspect legacy migration waiter",
-                path: path.to_path_buf(),
-                source,
-            })
-        }
-    };
-    if before.file_type().is_symlink() || !before.is_file() || hard_linked(&before) {
-        return Err(Error::Shape(path.to_path_buf()));
-    }
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(Error::Io {
-                operation: "open legacy migration waiter",
-                path: path.to_path_buf(),
-                source,
-            })
-        }
-    };
-    let opened = file.metadata().map_err(|source| Error::Io {
-        operation: "inspect opened legacy migration waiter",
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if hard_linked(&opened) || !same_file(&before, &opened) {
-        return Err(Error::Shape(path.to_path_buf()));
-    }
-    #[cfg(unix)]
-    {
-        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive).map_err(
-            |source| Error::Io {
-                operation: "wait for legacy store operation",
-                path: path.to_path_buf(),
-                source: std::io::Error::from_raw_os_error(source.raw_os_error()),
-            },
-        )?;
-    }
-    #[cfg(not(unix))]
-    return Err(Error::State(
-        "ownership migration requires Unix advisory locks",
-    ));
-    // No authority is derived from the waiter: bootstrap rescans under publication.
-    Ok(())
-}
-
-pub(super) fn ensure_migration_file(
+pub(super) fn ensure_control_file(
     publication: &Publication<'_>,
     root: &Path,
     path: &Path,
@@ -740,7 +687,7 @@ pub(super) fn ensure_migration_file(
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
         Err(source) => {
             return Err(Error::Io {
-                operation: "inspect migration control",
+                operation: "inspect store control",
                 path: path.to_path_buf(),
                 source,
             })
@@ -777,13 +724,13 @@ pub(super) fn ensure_migration_file(
             result
         })
         .map_err(|source| Error::Io {
-            operation: "create migration control",
+            operation: "create store control",
             path: path.to_path_buf(),
             source,
         })?;
     let result = super::entry::sync_directory(
         path.parent()
-            .ok_or(Error::State("migration control has no parent"))?,
+            .ok_or(Error::State("store control has no parent"))?,
     );
     #[cfg(feature = "import-baseline")]
     {
