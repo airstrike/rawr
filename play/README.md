@@ -68,8 +68,9 @@ exit status 1.
 
 ## Formats
 
-UI renders are flat colour and text. Lossless WebP is the smallest and
-Discord previews it inline, so the bot sends WebP by default (`PLAY_FORMAT`):
+UI renders are flat colour and text. The bot sends PNG by default, and
+`PLAY_FORMAT` picks another format. Discord shows a PNG unchanged. Lossless
+WebP is the smallest of the three:
 
 | Sample | PNG | WebP (lossless) | JPEG q90 |
 | --- | --- | --- | --- |
