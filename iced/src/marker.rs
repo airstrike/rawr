@@ -152,6 +152,15 @@ pub(crate) struct Row {
     pub(crate) align_y: iced::Alignment,
 }
 
+/// `row.wrap()`: iced's `row::Wrapping`, the row's children in as many
+/// lines as they need.
+#[derive(Clone)]
+pub(crate) struct Wrapping {
+    pub(crate) row: Row,
+    pub(crate) vertical_spacing: Option<f32>,
+    pub(crate) align_x: iced::Alignment,
+}
+
 #[derive(Clone)]
 pub(crate) struct Container {
     pub(crate) witness: rawr::host::runtime::Witness,

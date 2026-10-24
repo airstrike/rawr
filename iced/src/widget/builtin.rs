@@ -375,6 +375,33 @@ impl widget::Descriptor for marker::Row {
     }
 }
 
+impl widget::Descriptor for marker::Wrapping {
+    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+        let row = &self.row;
+        let mut wrapping = iced::widget::row(
+            row.children
+                .iter()
+                .map(|child| child.lower(context))
+                .collect::<Vec<_>>(),
+        )
+        .spacing(row.spacing)
+        .padding(row.padding)
+        .width(row.width)
+        .height(row.height)
+        .align_y(row.align_y)
+        .wrap()
+        .align_x(self.align_x);
+        if let Some(spacing) = self.vertical_spacing {
+            wrapping = wrapping.vertical_spacing(spacing);
+        }
+        wrapping.boxed()
+    }
+
+    fn identity(&self) -> widget::Identity {
+        self.row.identity.clone()
+    }
+}
+
 impl widget::Descriptor for marker::Container {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut container = iced::widget::container(self.child.lower(context))
@@ -933,6 +960,21 @@ fn bind_profile_attestations(builder: &mut host::runtime::Builder) {
             expected.attest_witness(Some(&value.witness))
         })
         .expect("the iced facade must declare generic widget::Row exactly once");
+    builder
+        .bind_type_attestation("iced::widget::row::Wrapping", |value, expected| {
+            let value = value.read_lock::<marker::Wrapping>()?;
+            if expected.argument_count() != 1
+                || !value
+                    .row
+                    .children
+                    .iter()
+                    .all(|child| expected.arguments_match_witness(child.witness()))
+            {
+                return None;
+            }
+            expected.attest_witness(Some(&value.row.witness))
+        })
+        .expect("the iced facade must declare generic widget::row::Wrapping exactly once");
     builder
         .bind_type_attestation("iced::widget::Container", |value, expected| {
             let value = value.read_lock::<marker::Container>()?;
@@ -1855,6 +1897,11 @@ fn bind_projections(builder: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain the exact Row to Element projection");
     builder
+        .bind_projection_with_context("iced::widget::row::Wrapping", "iced::Element", |call, args| {
+            project::<marker::Wrapping>(call, args, "iced::widget::row::Wrapping")
+        })
+        .expect("the iced facade must retain the exact Wrapping to Element projection");
+    builder
         .bind_projection_with_context("iced::widget::Container", "iced::Element", |call, args| {
             project::<marker::Container>(call, args, "iced::widget::Container")
         })
@@ -1938,6 +1985,39 @@ fn bind_row_builders(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(row))
         })
         .expect("the iced facade must retain the exact Row::align_y item");
+    builder
+        .bind_with_context("iced::widget::Row::wrap", |call, args| {
+            let [row] = args else {
+                return Err(arity("Row::wrap", 1, args.len()));
+            };
+            let mut row = take::<marker::Row>(row, "iced::widget::Row")?;
+            row.witness = call.transform_witness(&row.witness).map_err(witness_error)?;
+            Ok(Dynamic::from(marker::Wrapping {
+                row,
+                vertical_spacing: None,
+                align_x: iced::Alignment::Start,
+            }))
+        })
+        .expect("the iced facade must retain the exact Row::wrap item");
+    for path in [
+        "iced::widget::row::Wrapping::vertical_spacing",
+        "iced::widget::row::Wrapping::align_x",
+    ] {
+        builder
+            .bind(path, move |args| {
+                if args.len() != 2 {
+                    return Err(arity(path, 2, args.len()));
+                }
+                let mut wrapping = take::<marker::Wrapping>(args[0], "iced::widget::row::Wrapping")?;
+                if path.ends_with("align_x") {
+                    wrapping.align_x = alignment(args[1])?;
+                } else {
+                    wrapping.vertical_spacing = Some(spacing(args[1], path)?);
+                }
+                Ok(Dynamic::from(wrapping))
+            })
+            .expect("the iced facade must retain every Wrapping builder");
+    }
 }
 
 fn bind_container_builders(builder: &mut host::runtime::Builder) {
@@ -3006,6 +3086,12 @@ impl Witnessed for marker::Column {
 impl Witnessed for marker::Row {
     fn witness(&self) -> &host::runtime::Witness {
         &self.witness
+    }
+}
+
+impl Witnessed for marker::Wrapping {
+    fn witness(&self) -> &host::runtime::Witness {
+        &self.row.witness
     }
 }
 

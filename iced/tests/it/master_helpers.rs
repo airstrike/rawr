@@ -2528,3 +2528,52 @@ impl canvas::Program<Message> for State {
         .to_string();
     assert!(error.contains("canvas"), "{error}");
 }
+
+/// `row(..).wrap()`, as layout writes it, and `row::Wrapping`'s builders.
+const WRAPPED_ROW: &str = r#"
+use iced::widget::{column, container, row, text};
+use iced::{Center, Fill, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+fn square(size: u32) -> impl Widget<Message> {
+    container(text(format!("square {size}"))).width(size).height(size)
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            "Content!",
+            row((1..10).map(|i| square(if i % 2 == 0 { 20 } else { 40 })))
+                .spacing(20)
+                .align_y(Center)
+                .wrap(),
+            row![text("left"), text("right")]
+                .wrap()
+                .vertical_spacing(10)
+                .align_x(Center),
+            "The end"
+        ]
+        .spacing(40)
+        .width(Fill)
+    }
+}
+"#;
+
+#[test]
+fn master_row_wraps() {
+    let adapter = boot(WRAPPED_ROW);
+    find(&adapter, "The end");
+    find(&adapter, "square 40");
+    find(&adapter, "right");
+}

@@ -188,6 +188,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::progress_bar")?;
     builder.module("widget::float")?;
     builder.module("widget::radio")?;
+    builder.module("widget::row")?;
     builder.module("widget::rule")?;
     builder.module("widget::image")?;
     builder.module("widget::svg")?;
@@ -326,6 +327,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.trait_::<marker::Program>("Program", &[])?;
     builder.type_::<marker::Column>("widget::Column", &["Message"], &[])?;
     builder.type_::<marker::Row>("widget::Row", &["Message"], &[])?;
+    builder.type_::<marker::Wrapping>("widget::row::Wrapping", &["Message"], &[])?;
     builder.type_::<marker::Container>("widget::Container", &["Message"], &[])?;
     builder.type_::<marker::Button>("widget::Button", &["Message"], &[])?;
     builder.type_::<marker::Text>("widget::Text", &[], &[])?;
@@ -596,6 +598,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.value_type::<marker::Instant>("time::Instant", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.project("widget::Column", "Element", &["Message"])?;
     builder.project("widget::Row", "Element", &["Message"])?;
+    builder.project("widget::row::Wrapping", "Element", &["Message"])?;
     builder.project("widget::Container", "Element", &["Message"])?;
     builder.project("widget::Button", "Element", &["Message"])?;
     builder.project_with(
@@ -1062,6 +1065,28 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         receiver::Mode::Owned,
         registered_builder_signature("widget::Row", "Alignment")?,
     )?)?;
+    // `row.wrap()`, a `row::Wrapping`, with its own spacing between lines
+    // and alignment of each line.
+    let mut wrap = signature::Builder::new();
+    wrap.type_parameter("Message", &[])?;
+    wrap.output(type_ref::Type::applied(
+        "widget::row::Wrapping",
+        [type_ref::Type::parameter("Message")?],
+    )?);
+    builder.item(item::Definition::method(
+        "widget::Row::wrap",
+        receiver::Mode::Owned,
+        wrap.finish(),
+    )?)?;
+    pixels_builders(&mut builder, "widget::row::Wrapping", "vertical_spacing")?;
+    // `impl Into<alignment::Horizontal>`, which an `Alignment` is too.
+    for alignment in ["alignment::Horizontal", "Alignment"] {
+        builder.item(item::Definition::method(
+            "widget::row::Wrapping::align_x",
+            receiver::Mode::Owned,
+            registered_builder_signature("widget::row::Wrapping", alignment)?,
+        )?)?;
+    }
     for owner in ["widget::Column", "widget::Row"] {
         // iced's `push(impl Into<Element>)`, so loops can build children.
         builders(

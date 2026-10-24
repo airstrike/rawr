@@ -1361,7 +1361,7 @@ fn into_element(view: Dynamic) -> Result<widget::Value, String> {
         return Ok(view.cast::<widget::Value>());
     }
     widgets!(
-        Text, TextInput, Checkbox, Toggler, Slider, ProgressBar, Transition, Button, Column, Row,
+        Text, TextInput, Checkbox, Toggler, Slider, ProgressBar, Transition, Button, Column, Row, Wrapping,
         Container, Tooltip, Scrollable, Logo, Sensor, Space, Radio, PickList, ComboBox, Stack,
         Pin, Float, MouseArea, Image, Svg, QrCode, Rich
     );
