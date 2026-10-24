@@ -17758,7 +17758,15 @@ impl<'a> Parser<'a> {
         if borrowing {
             self.mutable_borrow = Some(self.expression_stack.len() + 1);
         }
-        let value = self.parse_expr();
+        // `let W(a) = iter.collect();`: the pattern's struct is the type
+        // the value is expected to have, as its annotation would be.
+        let expected = annotation.clone().or_else(|| match &syntax {
+            PatternSyntax::TupleStruct { ty, .. } | PatternSyntax::UnitStruct { ty, .. } => {
+                Some(ty.clone())
+            }
+            _ => None,
+        });
+        let value = self.parse_expr_expecting(expected.as_ref());
         self.mutable_borrow = outer;
         let mut value = value?;
         // `let (a, b) = &mut pair;`: the bindings are the place's parts.

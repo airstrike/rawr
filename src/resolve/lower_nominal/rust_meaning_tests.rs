@@ -178,3 +178,29 @@ fn language_rust_meaning_byte_literals() {
     );
     assert_eq!(value, "3 [104, 101, 121] 10 127 92 122 last");
 }
+
+#[test]
+fn language_rust_meaning_collect_into_a_tuple_struct_pattern() {
+    let value = text(
+        r#"
+        struct Histogram([usize; 26]);
+        impl FromIterator<char> for Histogram {
+            fn from_iter<I: IntoIterator<Item = char>>(iter: I) -> Self {
+                let mut counts = [0; 26];
+                for c in iter {
+                    if c.is_ascii_lowercase() {
+                        counts[(c as u8 - b'a') as usize] += 1;
+                    }
+                }
+                Histogram(counts)
+            }
+        }
+        let text = "hello world";
+        let Histogram(counts) = text.chars().collect();
+        let h: Histogram = text.chars().collect();
+        let Histogram(again) = h;
+        format!("{} {:?}", counts[11], &again[..5])
+        "#,
+    );
+    assert_eq!(value, "3 [0, 0, 0, 1, 1]");
+}
