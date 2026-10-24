@@ -985,8 +985,32 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every field reader");
     }
-    reader::<iced::Size>(builder, "iced::Size::width", |size| size.width);
-    reader::<iced::Size>(builder, "iced::Size::height", |size| size.height);
+    // `size.width`, and `Size { width: Length::Fill, .. }`, which makes
+    // iced's `Size<Length>`.
+    for name in ["width", "height"] {
+        let path = format!("iced::Size::{name}");
+        builder
+            .bind(path.clone(), move |args| match args {
+                [size] => {
+                    let size = size
+                        .read_lock::<iced::Size>()
+                        .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                    Ok(Dynamic::from(f64::from(if name == "width" { size.width } else { size.height })))
+                }
+                [_, length] => {
+                    let length = super::builtin::length(length)?;
+                    let mut size = iced::Size::new(iced::Length::Shrink, iced::Length::Shrink);
+                    if name == "width" {
+                        size.width = length;
+                    } else {
+                        size.height = length;
+                    }
+                    Ok(Dynamic::from(super::custom::LengthSize(size)))
+                }
+                _ => Err(arity(&path, 1, args.len())),
+            })
+            .expect("the iced facade must retain every Size field");
+    }
     reader::<iced::Point>(builder, "iced::Point::x", |point| point.x);
     reader::<iced::Point>(builder, "iced::Point::y", |point| point.y);
     reader::<iced::Vector>(builder, "iced::Vector::x", |vector| vector.x);

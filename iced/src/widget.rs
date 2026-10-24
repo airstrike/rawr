@@ -8,6 +8,7 @@ mod canvas;
 pub mod children;
 mod column;
 mod component;
+pub(crate) mod custom;
 pub(crate) mod diagnostic;
 pub mod draw;
 pub mod event;
@@ -47,6 +48,7 @@ pub(crate) fn bind(
     builtin::bind(iced, rawr);
     canvas::bind(iced);
     component::bind(iced);
+    custom::bind(iced);
     protocol::bind(iced, rawr);
     script::bind(iced);
 }
@@ -59,6 +61,7 @@ pub(crate) fn bind_profile(
     builtin::bind_profile(iced, rawr);
     canvas::bind(iced);
     component::bind(iced);
+    custom::bind(iced);
     protocol::bind_profile(iced, rawr);
     script::bind(iced);
 }
