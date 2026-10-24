@@ -80,6 +80,8 @@ pub fn run(
 
     let mut refresh_at = Instant::now();
     let mut refresh_required = false;
+    // The preparation a restart was last announced for.
+    let mut announced = None;
     let mut native_inputs = None;
     loop {
         match lane.reap_if_exited() {
@@ -168,8 +170,23 @@ pub fn run(
                     continue;
                 }
             };
+            // A program with native islands (D501) keeps its runner while
+            // the native build stays the same: the new generation swaps in
+            // at its next call through a trampoline. Any other program's
+            // swap went by the resident route above.
+            let started = if next_manifests.has_islands() {
+                match lane.begin_compile() {
+                    Ok(started) => started,
+                    Err(error) => {
+                        settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
             let preparation =
-                match lane.prepare_started_compile(None, request, snapshot, &observation) {
+                match lane.prepare_started_compile(started, request, snapshot, &observation) {
                     Ok(preparation) => preparation,
                     Err(error) => {
                         settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
@@ -210,6 +227,14 @@ pub fn run(
                     .map(|_| crate::native::Watched::Installed)
                     .map_err(|error| framework(error, source.clone())),
                 rawr_import::process::hot::Preparation::Miss(miss) => {
+                    // D500.4: a new native build restarts the program, and
+                    // says why in one line, once for each new build.
+                    if announced.as_ref() != Some(&next_manifests)
+                        && let Some(reason) = manifests.restart_reason(&next_manifests)
+                    {
+                        eprintln!("rawr: {reason}; restarting the program");
+                        announced = Some(next_manifests.clone());
+                    }
                     let (request, snapshot) = miss.into_parts();
                     request
                         .generate(&limits)

@@ -293,8 +293,12 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
         })?;
         let capability = random()?;
         let mut command = Command::new(self.artifact().executable());
+        // A program `rawr run` runs sees the environment `cargo run` would
+        // give it; every other lifecycle starts from none.
+        if process.lifecycle != Lifecycle::Run {
+            command.env_clear();
+        }
         command
-            .env_clear()
             .env("RAWR_PROTOCOL_SOCKET", &socket)
             .env("RAWR_PROTOCOL_CAPABILITY", hex(&capability))
             .env("RAWR_GENERATION_KEY", hex(key.as_bytes()))

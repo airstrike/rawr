@@ -8,10 +8,12 @@ use rawr_import::{process::resident, supervisor::snapshot::attempt::Scope};
 #[cfg(test)]
 mod tests;
 
-/// The exact `Cargo.toml` the admitted native owner consumed. Comparing it
-/// conservatively routes any declaration edit to preparation.
+/// The exact `Cargo.toml` the admitted native owner consumed, and what
+/// native code sees of the marked modules when the crate root is native
+/// (D501). Comparing them conservatively routes any declaration edit, and
+/// any edit that changes a trampoline, to preparation.
 #[derive(Clone, Eq, PartialEq)]
-pub struct Manifests(Box<[(PathBuf, Box<str>)]>);
+pub struct Manifests(Box<[(PathBuf, Box<str>)]>, Option<rawr::package::Shape>);
 
 impl Manifests {
     pub fn from_graph(graph: &rawr::package::Graph) -> Self {
@@ -22,6 +24,30 @@ impl Manifests {
                 .map(|(path, text)| (path.to_path_buf(), text.into()))
                 .into_iter()
                 .collect(),
+            graph.island_shape(),
+        )
+    }
+
+    /// Whether the program's crate root is native and calls marked
+    /// modules (D501).
+    pub fn has_islands(&self) -> bool {
+        self.1.is_some()
+    }
+
+    /// Why a program with native islands restarts when its next
+    /// preparation is `next`, in one line. `None` for a program without
+    /// islands, whose host says what a new runner means.
+    pub fn restart_reason(&self, next: &Self) -> Option<String> {
+        let (Some(shape), Some(next_shape)) = (&self.1, &next.1) else {
+            return None;
+        };
+        if self.0 != next.0 {
+            return Some("`Cargo.toml` changed".to_owned());
+        }
+        Some(
+            shape
+                .change(next_shape)
+                .unwrap_or_else(|| "native code changed".to_owned()),
         )
     }
 }

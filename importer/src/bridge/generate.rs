@@ -1365,25 +1365,39 @@ mod __rawr_profile {
             .map_err(|error| std::io::Error::other(error.to_string()))
     }
 
+    fn bind(program: &mut super::Program) -> Result<__rawr_internal::reload::installation::Bootstrap, String> {
+        let candidate = program.candidate.take().ok_or("generation program unavailable")?;
+        let runtime = super::imported_runtime(&program.engine, &program._facades)
+            .map_err(|error| error.to_string())?;
+        candidate.bind(&program.engine, runtime).map_err(|error| error.to_string())
+    }
+
     /// Run the program's `fn main` once, as Rust runs it, bound to the
     /// imported runtime: an `Err` from `main` is `Error: {err:?}` on stderr
     /// with status 1, and a run-time failure is a panic, status 101. The
     /// status is the process's.
-    pub fn run(program: &mut super::Program) -> i32 {
-        let bound = (|| -> Result<_, String> {
-            let candidate = program.candidate.take().ok_or("generation program unavailable")?;
-            let runtime = super::imported_runtime(&program.engine, &program._facades)
-                .map_err(|error| error.to_string())?;
-            candidate.bind(&program.engine, runtime).map_err(|error| error.to_string())
-        })();
-        let bootstrap = match bound {
+    ///
+    /// A program whose crate root is native (D501) registers its native
+    /// `main` from its Rawr one. `None` is that `main` running on a thread
+    /// of its own, its calls into marked code handed to `forward` for this
+    /// thread to answer; the process exits when it returns.
+    pub fn run(
+        program: &mut super::Program,
+        forward: impl Fn(__rawr_internal::island::Call) + Send + Sync + 'static,
+    ) -> Option<i32> {
+        let bootstrap = match bind(program) {
             Ok(bootstrap) => bootstrap,
             Err(error) => {
                 eprintln!("error: {error}");
-                return 101;
+                return Some(101);
             }
         };
-        match bootstrap.invoke_main() {
+        __rawr_internal::island::publish(bootstrap);
+        let result = __rawr_internal::island::invoke_main();
+        if __rawr_internal::island::start(forward) {
+            return None;
+        }
+        Some(match result {
             None => 0,
             Some(Ok(value)) => match value.try_cast::<Result<__rawr_internal::Dynamic, __rawr_internal::Dynamic>>() {
                 Some(Err(error)) => {
@@ -1396,7 +1410,13 @@ mod __rawr_profile {
                 eprintln!("error: {error}");
                 101
             }
-        }
+        })
+    }
+
+    /// Make a committed generation the one a running native `main` calls.
+    pub fn publish(program: &mut super::Program) -> Result<(), String> {
+        __rawr_internal::island::publish(bind(program)?);
+        Ok(())
     }
 
     pub fn compile_generation(
@@ -1475,6 +1495,24 @@ fn decode_hex(value: &str) -> std::io::Result<[u8; 32]> {
     Ok(output)
 }
 
+/// What the protocol thread waits for: the parent's next frame, or a call
+/// from the program's native `main` into marked code (D501).
+enum Event {
+    Frame(std::io::Result<(u8, Vec<u8>)>),
+    Call(__rawr_internal::island::Call),
+}
+
+/// The parent's next frame, answering the native calls that come first.
+fn next_frame(events: &std::sync::mpsc::Receiver<Event>) -> std::io::Result<(u8, Vec<u8>)> {
+    loop {
+        match events.recv() {
+            Ok(Event::Frame(frame)) => return frame,
+            Ok(Event::Call(call)) => call.answer(),
+            Err(_) => return Err(std::io::Error::other("protocol reader stopped")),
+        }
+    }
+}
+
 struct PendingProgram {
     key: [u8; 32],
     nonce: [u8; 16],
@@ -1495,8 +1533,18 @@ fn run_protocol() -> std::io::Result<()> {
     authentication.extend_from_slice(&capability);
     authentication.extend_from_slice(GENERATED_MANIFEST);
     send_frame(&mut stream, 1, &authentication)?;
+    let (events, received) = std::sync::mpsc::channel::<Event>();
+    let mut reader = stream.try_clone()?;
+    let frames = events.clone();
+    std::thread::spawn(move || loop {
+        let frame = receive_frame(&mut reader);
+        let end = frame.is_err();
+        if frames.send(Event::Frame(frame)).is_err() || end {
+            break;
+        }
+    });
     loop {
-        let (tag, payload) = receive_frame(&mut stream)?;
+        let (tag, payload) = next_frame(&received)?;
         match tag {
             3 if !prepared && payload.len() >= 48 && payload[..32] == key => {
                 let nonce: [u8; 16] = payload[32..48].try_into().map_err(|_| std::io::Error::other("transition nonce"))?;
@@ -1594,6 +1642,13 @@ fn run_protocol() -> std::io::Result<()> {
                 install_arena(next);
                 key = next;
                 let retired = retire_program(std::mem::replace(&mut program, candidate.program));
+                // A running native `main` calls the new generation next.
+                if __rawr_internal::island::running()
+                    && let Some(program) = &mut program
+                    && let Err(error) = __rawr_profile::publish(program)
+                {
+                    eprintln!("rawr: native code keeps calling the previous generation: {error}");
+                }
                 report_accounts(&mut stream, tag, &payload, [program_account(&program), observed_account(&retired)]);
                 send_frame(&mut stream, 8, &payload)?;
             }
@@ -1621,16 +1676,45 @@ fn run_protocol() -> std::io::Result<()> {
             35 if admitted && payload.len() > 32 && payload[..32] == key => {
                 send_frame(&mut stream, 36, &key)?;
             }
+            // A program that keeps running (a native `main`, D501) hears from
+            // its owner: it asks for no refresh, prints no diagnostic of its
+            // own (the owner printed it), and carries no State to the runner
+            // a restart starts.
+            43 if admitted && payload.as_slice() == key => {
+                let mut response = [0_u8; 33];
+                response[..32].copy_from_slice(&key);
+                send_frame(&mut stream, 44, &response)?;
+            }
+            11 if admitted && payload.len() >= 32 && payload[..32] == key => {
+                send_frame(&mut stream, 11, &key)?;
+            }
+            46 if admitted && pending.is_none() && payload.as_slice() == key => {
+                let mut response = [0_u8; 33];
+                response[..32].copy_from_slice(&key);
+                send_frame(&mut stream, 47, &response)?;
+            }
+            48 if admitted && payload.len() >= 32 && payload[..32] == key => {
+                let mut response = [0_u8; 33];
+                response[..32].copy_from_slice(&key);
+                send_frame(&mut stream, 49, &response)?;
+            }
             20 if admitted && payload.as_slice() == key => {
                 send_frame(&mut stream, 21, &key)?;
-                let status = match &mut program {
-                    Some(program) => __rawr_profile::run(program),
-                    None => 0,
+                let calls = events.clone();
+                let forward = move |call| {
+                    let _ = calls.send(Event::Call(call));
                 };
-                use std::io::Write as _;
-                let _ = std::io::stdout().flush();
-                let _ = std::io::stderr().flush();
-                std::process::exit(status);
+                let status = match &mut program {
+                    Some(program) => __rawr_profile::run(program, forward),
+                    None => Some(0),
+                };
+                // A native `main` runs on its own thread; this one serves it.
+                if let Some(status) = status {
+                    use std::io::Write as _;
+                    let _ = std::io::stdout().flush();
+                    let _ = std::io::stderr().flush();
+                    std::process::exit(status);
+                }
             }
             17 if admitted => match invoke_adapter(&key, &payload) {
                 Ok(value) => send_frame(&mut stream, 18, &value)?,
@@ -1646,7 +1730,7 @@ fn run_protocol() -> std::io::Result<()> {
             _ => {
                 report_accounts(&mut stream, tag, &payload,
                     [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
-                return Err(std::io::Error::other("invalid protocol transition"));
+                return Err(std::io::Error::other(format!("invalid protocol transition (message {tag})")));
             }
         }
     }
@@ -6794,10 +6878,15 @@ mod tests {
         // A runner with no host profile starts its program by calling `main`
         // bound to the imported runtime.
         assert!(neutral.contains("candidate.bind(&program.engine, runtime)"));
-        assert!(neutral.contains("bootstrap.invoke_main()"));
+        assert!(neutral.contains("__rawr_internal::island::invoke_main()"));
+        // A native `main` (D501) is started after the Rawr one registers it,
+        // and each committed generation is published for its calls.
+        assert!(neutral.contains("__rawr_internal::island::start(forward)"));
         let runner = std::str::from_utf8(RUNNER_MAIN).expect("runner source is UTF-8");
         assert!(runner.contains("20 if admitted && payload.as_slice() == key"));
-        assert!(runner.contains("__rawr_profile::run(program)"));
+        assert!(runner.contains("__rawr_profile::run(program, forward)"));
+        assert!(runner.contains("__rawr_profile::publish(program)"));
+        assert!(runner.contains("Ok(Event::Call(call)) => call.answer(),"));
     }
 
     #[test]
