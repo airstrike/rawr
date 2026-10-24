@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::prelude::v1::*;
 
 pub(crate) mod carry;
+#[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+pub(crate) mod island;
 
 type EnumConstruction = (
     type_def::Identity,

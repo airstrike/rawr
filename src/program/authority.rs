@@ -55,6 +55,12 @@ impl Authority {
         self.executable.package()
     }
 
+    /// The runtime model of this generation's script types.
+    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    pub(crate) fn model(&self) -> &super::model::Model {
+        self.executable.model()
+    }
+
     /// Return stable symbolic values declared by this generation.
     pub fn items(&self) -> impl ExactSizeIterator<Item = &item::Value> {
         self.executable.items()

@@ -143,6 +143,9 @@ pub mod grain;
 /// Host type metadata visible during Rawr resolution.
 pub mod host;
 /// Source-level Rawr items.
+#[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+#[doc(hidden)]
+pub mod island;
 pub mod item;
 /// Resolved inherent method metadata.
 pub mod method;
