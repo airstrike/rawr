@@ -180,6 +180,58 @@ async fn run() -> String {
 }
 
 #[test]
+fn tokio_mpsc_closes_when_the_moved_sender_ends() {
+    shows_at(
+        "use tokio::sync::mpsc;
+async fn run() -> String {
+    let (sender, mut receiver) = mpsc::channel(2);
+    let producer = async move {
+        for n in 1..=4 {
+            sender.send(n).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    let consumer = async move {
+        let mut sum = 0;
+        while let Some(n) = receiver.recv().await {
+            sum += n;
+        }
+        sum
+    };
+    let (_, sum) = tokio::join!(producer, consumer);
+    format!(\"sum {sum}\")
+}",
+        "sum 10",
+        Duration::from_millis(400),
+    );
+}
+
+#[test]
+fn tokio_mpsc_closes_when_the_last_sender_leaves_its_block() {
+    shows_at(
+        "use tokio::sync::mpsc;
+async fn run() -> String {
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    {
+        let other = sender.clone();
+        other.send(1).unwrap();
+    }
+    {
+        let last = sender;
+        last.send(2).unwrap();
+    }
+    let mut got = Vec::new();
+    while let Some(n) = receiver.recv().await {
+        got.push(n);
+    }
+    format!(\"{got:?}\")
+}",
+        "[1, 2]",
+        Duration::ZERO,
+    );
+}
+
+#[test]
 fn tokio_mpsc_unbounded_and_cloned_senders() {
     shows_at(
         "use tokio::sync::mpsc;
