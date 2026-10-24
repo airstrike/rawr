@@ -391,7 +391,7 @@ impl Native {
     fn lower(self) -> iced::Task<Result<Dynamic, Error>> {
         match self {
             Self::Sleep(duration) => {
-                iced::Task::future(sleep(duration)).map(|()| Ok(Dynamic::UNIT))
+                iced::Task::future(crate::tokio_facade::sleep(duration)).map(|()| Ok(Dynamic::UNIT))
             }
             Self::Exit => iced::exit(),
             Self::LatestWindow => {
@@ -747,34 +747,6 @@ impl Plan {
             }
         })
     }
-}
-
-/// Wait `duration`. On a recording's simulated clock, the wait ends when the
-/// clock passes it, and it keeps the clock running until then. Elsewhere a
-/// thread sleeps, so no particular executor is needed.
-fn sleep(duration: std::time::Duration) -> iced::futures::future::BoxFuture<'static, ()> {
-    use iced::futures::FutureExt as _;
-
-    if let Some(now) = crate::snapshot::clock::now() {
-        let deadline = now + duration;
-        let armed = crate::snapshot::clock::Armed::new();
-        return iced::futures::future::poll_fn(move |_| {
-            let _ = &armed;
-            match crate::snapshot::clock::now() {
-                Some(now) if now < deadline => std::task::Poll::Pending,
-                _ => std::task::Poll::Ready(()),
-            }
-        })
-        .boxed();
-    }
-    let (sender, receiver) = iced::futures::channel::oneshot::channel();
-    let _ = std::thread::Builder::new()
-        .name("rawr sleep".into())
-        .spawn(move || {
-            std::thread::sleep(duration);
-            let _ = sender.send(());
-        });
-    receiver.map(|_| ()).boxed()
 }
 
 /// The outputs of a join so far. The first output of each plan fills its

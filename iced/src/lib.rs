@@ -29,6 +29,7 @@ pub mod task;
 #[cfg(test)]
 mod task_thread_tests;
 pub mod theme;
+mod tokio_facade;
 pub mod widget;
 
 /// What brings a program to rawr-iced, as data: the manifest the

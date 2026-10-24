@@ -19,6 +19,10 @@ rawr_import = { package = "rawr-import", path = "../importer" }
 rawr-watch = { path = "../watch" }
 sha2 = "0.10.9"
 thiserror = "2"
+# tokio's timers and channels for Rawr code without a tokio dependency (src/tokio_facade.rs).
+# No `fs`, `net`, `process`, `signal` or `io-std`. `test-util` pauses a
+# recording's clock.
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "test-util", "time"] }
 # Fallback lists for bundled fonts (src/snapshot/fonts.rs); the version cosmic-text uses.
 unicode-script = "0.5"
 
