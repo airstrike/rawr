@@ -884,6 +884,7 @@ impl Parser<'_> {
                 },
                 mutable: true,
                 available: true,
+                moved_fields: Default::default(),
                 declaration,
                 kind: BindingKind::Local,
             },

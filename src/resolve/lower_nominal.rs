@@ -6927,6 +6927,9 @@ struct Binding {
     ty: Ty,
     mutable: bool,
     available: bool,
+    /// The fields moved out of a struct local, each with where it moved:
+    /// the local is partially moved, as rustc has it.
+    moved_fields: BTreeMap<ImmutableString, Span>,
     declaration: Span,
     kind: BindingKind,
 }
@@ -6993,6 +6996,8 @@ struct FieldLvalue {
     binding: ImmutableString,
     definition: type_def::Definition,
     slot: usize,
+    /// The field's name, as written.
+    member: ImmutableString,
     ty: Ty,
 }
 
@@ -8272,6 +8277,12 @@ struct Parser<'a> {
     closures: Vec<ClosureScope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
     moved_at: BTreeMap<Span, Span>,
+    /// The closures that own a capture which is not `Copy`, so they move
+    /// as values that are not `Copy` do.
+    owning_closures: BTreeSet<crate::item::Key>,
+    /// The closures that move out a capture: `FnOnce`, so a call moves
+    /// the closure.
+    once_closures: BTreeSet<crate::item::Key>,
     closure_count: usize,
     lifted: Vec<LiftedClosure>,
     /// Parameter types of the host callable each call argument fills.
@@ -8570,6 +8581,8 @@ impl<'a> Parser<'a> {
             loops: Vec::new(),
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
+            owning_closures: BTreeSet::new(),
+            once_closures: BTreeSet::new(),
             closure_count: 0,
             lifted: Vec::new(),
             closure_hints: Vec::new(),
@@ -8706,6 +8719,7 @@ impl<'a> Parser<'a> {
                 Binding {
                     mutable: matches!(ty, Ty::Reference { mutable: true, .. }),
                     available: true,
+                    moved_fields: BTreeMap::new(),
                     ty,
                     declaration: parameter.name.span,
                     kind: if invocation {
@@ -8753,6 +8767,7 @@ impl<'a> Parser<'a> {
                     ty,
                     mutable,
                     available: true,
+                    moved_fields: BTreeMap::new(),
                     declaration: definition
                         .receiver_span()
                         .expect("resolved receiver modes retain their declaration span"),
@@ -8820,6 +8835,7 @@ impl<'a> Parser<'a> {
                         ty: ty.clone(),
                         mutable: true,
                         available: true,
+                        moved_fields: BTreeMap::new(),
                         declaration: parameter.name.span,
                         kind: BindingKind::Local,
                     },
@@ -8839,6 +8855,7 @@ impl<'a> Parser<'a> {
                 Binding {
                     mutable: matches!(ty, Ty::Reference { mutable: true, .. }),
                     available: true,
+                    moved_fields: BTreeMap::new(),
                     ty,
                     declaration: parameter.name.span,
                     kind: if invocation {
@@ -10874,6 +10891,7 @@ impl<'a> Parser<'a> {
                     ty,
                     mutable: false,
                     available: true,
+                    moved_fields: BTreeMap::new(),
                     declaration,
                     kind: BindingKind::Local,
                 },
@@ -11508,6 +11526,7 @@ impl<'a> Parser<'a> {
                 ty: actual,
                 mutable: false,
                 available: true,
+                moved_fields: BTreeMap::new(),
                 declaration: value.span,
                 kind: BindingKind::Local,
             },
@@ -16565,6 +16584,11 @@ impl<'a> Parser<'a> {
     /// the value drops with its new owner. A closure's capture moves only in
     /// a `move` closure or async block, which owns it.
     fn move_local(&mut self, value: &mut ParsedExpr) {
+        if let Some(Lvalue::Field(field)) = &value.lvalue {
+            let field = field.clone();
+            self.move_field(value, &field);
+            return;
+        }
         let Some(Lvalue::Binding { binding: name, .. }) = &value.lvalue else {
             return;
         };
@@ -16579,19 +16603,46 @@ impl<'a> Parser<'a> {
             return;
         }
         let declaration = binding.declaration;
-        if self.closures.last().is_some_and(|scope| {
-            !scope.owns_captures && scope.outer.get(name.as_str()) == Some(&declaration)
-        }) {
-            return;
-        }
         if !self.moves_by_value(&value.ty) {
             return;
+        }
+        // A closure that moves out a capture is `FnOnce`. One that is not
+        // `move` takes that capture by value, as Rust's closure capture
+        // does.
+        if let Some(scope) = self.closures.last_mut()
+            && scope.outer.get(name.as_str()) == Some(&declaration)
+        {
+            scope.consumed.insert(name.clone());
         }
         if let Some(binding) = self.bindings.get_mut(name.as_str()) {
             binding.available = false;
         }
         self.moved_at.insert(declaration, value.span);
         value.source = origin::Fragment::call(crate::engine::KEYWORD_MOVE, [value.source.clone()]);
+    }
+
+    /// `local.field` by value, where the field's type is not `Copy`: the
+    /// local is partially moved. A later use of the field, or of the
+    /// whole local, is rustc's E0382. The other fields stay usable, and
+    /// assigning the field makes it usable again.
+    fn move_field(&mut self, value: &ParsedExpr, field: &FieldLvalue) {
+        let Some(binding) = self.bindings.get(field.binding.as_str()) else {
+            return;
+        };
+        let declaration = binding.declaration;
+        if !matches!(binding.kind, BindingKind::Local)
+            || !matches!(self.inference.resolve(&binding.ty), Ty::Script(..))
+            || !value.prelude.is_empty()
+            || !self.moves_by_value(&value.ty)
+            || self.closures.last().is_some_and(|scope| {
+                scope.outer.get(field.binding.as_str()) == Some(&declaration)
+            })
+        {
+            return;
+        }
+        if let Some(binding) = self.bindings.get_mut(field.binding.as_str()) {
+            binding.moved_fields.insert(field.member.clone(), value.span);
+        }
     }
 
     /// Whether a `move` closure or async block written at `at` takes the
@@ -16605,12 +16656,16 @@ impl<'a> Parser<'a> {
             || self.aliases.contains_key(name.as_str())
             || self.entry_aliases.contains_key(name.as_str())
             || !binding.available
-            || self.closures.last().is_some_and(|scope| {
-                !scope.owns_captures && scope.outer.get(name.as_str()) == Some(&declaration)
-            })
             || !self.moves_by_value(&binding.ty.clone())
         {
             return false;
+        }
+        // Inside a closure, a capture moved on is taken by that closure
+        // too.
+        if let Some(scope) = self.closures.last_mut()
+            && scope.outer.get(name.as_str()) == Some(&declaration)
+        {
+            scope.consumed.insert(name.clone());
         }
         if let Some(binding) = self.bindings.get_mut(name.as_str()) {
             binding.available = false;
@@ -16635,6 +16690,15 @@ impl<'a> Parser<'a> {
             binding.available = going
                 .iter()
                 .all(|arm| arm.get(name).is_some_and(|binding| binding.available));
+            for arm in &going {
+                if let Some(after) = arm.get(name)
+                    && after.declaration == binding.declaration
+                {
+                    for (field, at) in &after.moved_fields {
+                        binding.moved_fields.entry(field.clone()).or_insert(*at);
+                    }
+                }
+            }
         }
     }
 
@@ -16642,6 +16706,9 @@ impl<'a> Parser<'a> {
     /// is not `Copy`. References and trait objects are used in place.
     fn moves_by_value(&self, ty: &Ty) -> bool {
         let resolved = self.inference.resolve(ty);
+        if let Ty::FnItem { key, .. } = &resolved {
+            return self.owning_closures.contains(&**key);
+        }
         !matches!(
             resolved,
             Ty::Infer(_)
@@ -16958,6 +17025,7 @@ impl<'a> Parser<'a> {
                 ty,
                 mutable,
                 available: true,
+                moved_fields: BTreeMap::new(),
                 declaration: name_span,
                 kind: BindingKind::Local,
             },
@@ -17515,6 +17583,7 @@ impl<'a> Parser<'a> {
                     ty: binding.ty.clone(),
                     mutable,
                     available: true,
+                    moved_fields: BTreeMap::new(),
                     declaration: binding.span,
                     kind: BindingKind::Local,
                 },
@@ -17694,6 +17763,7 @@ impl<'a> Parser<'a> {
                         ty,
                         mutable: *mutable,
                         available: true,
+                        moved_fields: BTreeMap::new(),
                         declaration: *span,
                         kind: BindingKind::Local,
                     },
@@ -17718,6 +17788,7 @@ impl<'a> Parser<'a> {
                         },
                         mutable: false,
                         available: true,
+                        moved_fields: BTreeMap::new(),
                         declaration: *span,
                         kind: BindingKind::Local,
                     },
@@ -18436,6 +18507,7 @@ impl<'a> Parser<'a> {
                 rendered.push_text(";");
                 if let Some(binding) = self.bindings.get_mut(&binding_name) {
                     binding.available = true;
+                    binding.moved_fields.clear();
                 }
                 rendered
             }
@@ -18447,6 +18519,9 @@ impl<'a> Parser<'a> {
                 rendered
             }
             Lvalue::Field(field) => {
+                if let Some(binding) = self.bindings.get_mut(&field.binding) {
+                    binding.moved_fields.remove(&field.member);
+                }
                 let helper = self.push_op(Op::SetField {
                     definition: field.definition,
                     slot: field.slot,
@@ -20277,12 +20352,15 @@ impl<'a> Parser<'a> {
                         && !matches!(self.peek_second(), Token::Reserved(ref text) if text.as_str() == "@") =>
                 {
                     let (name, declaration) = self.expect_name("match binding")?;
+                    // The binding takes the subject by value.
+                    self.move_local(&mut place.clone());
                     self.bindings.insert(
                         name.clone(),
                         Binding {
                             ty: binding_ty.clone(),
                             mutable: false,
                             available: true,
+                            moved_fields: BTreeMap::new(),
                             declaration,
                             kind: BindingKind::Local,
                         },
@@ -20334,6 +20412,15 @@ impl<'a> Parser<'a> {
                     &resolved.bindings,
                     &scrutinee,
                 )?;
+                // A pattern that binds a part by value, whose type is not
+                // `Copy`, moves the subject in this arm, as in Rust.
+                if resolved
+                    .bindings
+                    .iter()
+                    .any(|binding| self.moves_by_value(&binding.ty))
+                {
+                    self.move_local(&mut place.clone());
+                }
                 for binding in &resolved.bindings {
                     let written = write_back.as_ref().is_some_and(|write_back| {
                         write_back
@@ -20347,6 +20434,7 @@ impl<'a> Parser<'a> {
                             ty: binding.ty.clone(),
                             mutable: binding.mutable || written,
                             available: true,
+                            moved_fields: BTreeMap::new(),
                             declaration: binding.span,
                             kind: BindingKind::Local,
                         },
@@ -20592,6 +20680,7 @@ impl<'a> Parser<'a> {
                     ty: binding.ty.clone(),
                     mutable: binding.mutable || written,
                     available: true,
+                    moved_fields: BTreeMap::new(),
                     declaration: binding.span,
                     kind: BindingKind::Local,
                 },
@@ -20740,6 +20829,25 @@ impl<'a> Parser<'a> {
         // A body that goes on to its next iteration with a local of the
         // loop's scope moved uses the moved value there, as rustc's E0382.
         if !matches!(self.inference.resolve(&body.value.ty), Ty::Never)
+            && let Some((name, after)) = self.bindings.iter().find_map(|(name, binding)| {
+                let after = inner.get(name)?;
+                if after.declaration != binding.declaration {
+                    return None;
+                }
+                after
+                    .moved_fields
+                    .iter()
+                    .find(|(field, _)| !binding.moved_fields.contains_key(*field))
+                    .map(|(field, at)| (format!("{name}.{field}"), *at))
+            })
+        {
+            return Err(Error::MovedValue {
+                name: name.into(),
+                moved: after,
+                reference: after,
+            });
+        }
+        if !matches!(self.inference.resolve(&body.value.ty), Ty::Never)
             && let Some((name, binding)) = self.bindings.iter().find(|(name, binding)| {
                 binding.available
                     && inner.get(*name).is_some_and(|after| {
@@ -20760,6 +20868,13 @@ impl<'a> Parser<'a> {
         }
         for (name, binding) in &mut self.bindings {
             binding.available &= inner.get(name).is_some_and(|binding| binding.available);
+            if let Some(after) = inner.get(name)
+                && after.declaration == binding.declaration
+            {
+                for (field, at) in &after.moved_fields {
+                    binding.moved_fields.entry(field.clone()).or_insert(*at);
+                }
+            }
         }
         self.require_type(&Ty::Unit, &body.value.ty, body.value.span)?;
         source.push_text(" ");
@@ -21212,6 +21327,7 @@ impl<'a> Parser<'a> {
                 ty: ty.clone(),
                 mutable,
                 available: true,
+                moved_fields: BTreeMap::new(),
                 declaration,
                 kind: BindingKind::Local,
             },
@@ -21288,6 +21404,7 @@ impl<'a> Parser<'a> {
                         ty: subject_ty.clone(),
                         mutable: *mutable,
                         available: true,
+                        moved_fields: BTreeMap::new(),
                         declaration: *declaration,
                         kind: BindingKind::Local,
                     },
@@ -21480,6 +21597,7 @@ impl<'a> Parser<'a> {
                     ty: binding.ty.clone(),
                     mutable: binding.mutable,
                     available: true,
+                    moved_fields: BTreeMap::new(),
                     declaration: binding.span,
                     kind: BindingKind::Local,
                 },
@@ -22597,9 +22715,13 @@ impl<'a> Parser<'a> {
                 source.push_text("; }");
                 if let Some(binding) = self.bindings.get_mut(&binding_name) {
                     binding.available = true;
+                    binding.moved_fields.clear();
                 }
             }
             Lvalue::Field(field) => {
+                if let Some(binding) = self.bindings.get_mut(&field.binding) {
+                    binding.moved_fields.remove(&field.member);
+                }
                 let helper = self.push_op(Op::SetField {
                     definition: field.definition,
                     slot: field.slot,
@@ -22874,6 +22996,12 @@ impl<'a> Parser<'a> {
                 }
             }
             let operator = self.next().0;
+            // `String + &str` takes the `String` by value.
+            if matches!(operator, Token::Plus)
+                && matches!(self.inference.resolve(&lhs.ty), Ty::String)
+            {
+                self.move_local(&mut lhs);
+            }
             let rhs = self.parse_binary(precedence + 1)?;
             lhs = self.apply_binary(operator, lhs, rhs)?;
             if precedence == COMPARISON && binary_precedence(&self.peek()) == Some(COMPARISON) {
@@ -24102,6 +24230,19 @@ impl<'a> Parser<'a> {
                                         "cannot find value `{name}` in this scope"
                                     )));
                                 };
+                                if !binding.available || !binding.moved_fields.is_empty() {
+                                    return Err(Error::MovedValue {
+                                        name: name.as_str().into(),
+                                        moved: if binding.available {
+                                            binding.moved_fields.values().next()
+                                        } else {
+                                            this.moved_at.get(&binding.declaration)
+                                        }
+                                        .copied()
+                                        .unwrap_or(binding.declaration),
+                                        reference: expression,
+                                    });
+                                }
                                 let captured = ParsedExpr {
                                     prelude: origin::Fragment::default(),
                                     source: origin::Fragment::plain(name.clone()),
@@ -25644,6 +25785,7 @@ impl<'a> Parser<'a> {
                 ty: value.ty.clone(),
                 mutable: false,
                 available: true,
+                moved_fields: BTreeMap::new(),
                 declaration: value.span,
                 kind: BindingKind::Local,
             },
@@ -26478,6 +26620,7 @@ impl<'a> Parser<'a> {
                         binding,
                         definition: definition.clone(),
                         slot,
+                        member: member.clone(),
                         ty: ty.clone(),
                     })
                 }),
@@ -28335,6 +28478,43 @@ impl<'a> Parser<'a> {
                 reference: name_span,
             });
         }
+        // A partially moved local: its other fields may be used, and a
+        // moved field may be assigned again.
+        if !binding.moved_fields.is_empty() && !assigned {
+            let moved_fields = binding.moved_fields.clone();
+            let field = match (self.peek(), self.peek_second(), self.peek_nth(2)) {
+                (Token::Period, Token::Identifier(field), after)
+                    if !matches!(after, Token::LeftParen | Token::DoubleColon) =>
+                {
+                    Some((field, matches!(after, Token::Equals)))
+                }
+                _ => None,
+            };
+            match field {
+                Some((field, assigned)) => {
+                    if let Some(moved) = moved_fields.get(field.as_str())
+                        && !assigned
+                    {
+                        return Err(Error::MovedValue {
+                            name: format!("{name}.{field}").into(),
+                            moved: *moved,
+                            reference: name_span,
+                        });
+                    }
+                }
+                None => {
+                    let moved = *moved_fields.values().next().expect("a moved field");
+                    return Err(Error::MovedValue {
+                        name,
+                        moved,
+                        reference: name_span,
+                    });
+                }
+            }
+        }
+        let Some(binding) = self.bindings.get(name.as_str()) else {
+            return Err(self.unknown_variable(&name, name_span));
+        };
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
             source: origin::Fragment::plain(name.to_string()),
@@ -28357,7 +28537,36 @@ impl<'a> Parser<'a> {
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
         self.record_capture(&name);
-        let mut ty = self.inference.resolve(&self.bindings[name.as_str()].ty);
+        let binding = &self.bindings[name.as_str()];
+        let mut ty = self.inference.resolve(&binding.ty);
+        if !binding.available {
+            return Err(Error::MovedValue {
+                moved: self
+                    .moved_at
+                    .get(&binding.declaration)
+                    .copied()
+                    .unwrap_or(binding.declaration),
+                name,
+                reference: name_span,
+            });
+        }
+        // A closure that moves out a capture is `FnOnce`: its call moves it.
+        if let Ty::FnItem { key, .. } = &ty
+            && self.once_closures.contains(&**key)
+            && matches!(binding.kind, BindingKind::Local)
+        {
+            let declaration = binding.declaration;
+            let outer = self
+                .closures
+                .last()
+                .is_some_and(|scope| scope.outer.get(name.as_str()) == Some(&declaration));
+            if !outer {
+                if let Some(binding) = self.bindings.get_mut(name.as_str()) {
+                    binding.available = false;
+                }
+                self.moved_at.insert(declaration, name_span);
+            }
+        }
         // `f: &dyn Fn(A) -> B` (or `Box<dyn Fn>`) is called through the
         // reference, as in Rust; references and boxes are values at runtime.
         while let Ty::Reference { target, .. } | Ty::Boxed(target) = ty {
@@ -28429,6 +28638,7 @@ impl<'a> Parser<'a> {
         }
         for (expected, argument) in inputs.iter().zip(arguments.iter_mut()) {
             self.coerce_expr(expected, argument)?;
+            self.move_local(argument);
         }
         let places = self.mutable_arguments(&arguments, copied)?;
         let pointer = if choice { "[1]" } else { "" };
@@ -30825,6 +31035,7 @@ impl<'a> Parser<'a> {
                 ty: value.ty.clone(),
                 mutable: true,
                 available: true,
+                moved_fields: BTreeMap::new(),
                 declaration: value.span,
                 kind: BindingKind::Local,
             };
@@ -31705,6 +31916,7 @@ impl<'a> Parser<'a> {
                 .map(|(name, binding)| (name.clone(), binding.declaration))
                 .collect(),
             captures: BTreeSet::new(),
+            consumed: BTreeSet::new(),
             owns_captures: moved,
             asynchronous: async_step.is_some(),
         });
@@ -31730,6 +31942,7 @@ impl<'a> Parser<'a> {
                     ty: ty.clone(),
                     mutable: copied.contains(name),
                     available: true,
+                    moved_fields: BTreeMap::new(),
                     declaration: *declaration,
                     kind: BindingKind::Local,
                 },
@@ -31848,18 +32061,15 @@ impl<'a> Parser<'a> {
         let output = Box::new(annotated.unwrap_or_else(|| body.ty.clone()));
         let expression = span(start.start(), body.span.end());
         // `move` moves each capture that is not `Copy` into the closure as
-        // it is created, and copies the others.
-        let moving = if moved {
-            scope
-                .captures
-                .iter()
-                .filter(|name| *name != "this")
-                .filter(|name| self.move_capture(name, expression))
-                .cloned()
-                .collect()
-        } else {
-            BTreeSet::new()
-        };
+        // it is created, and copies the others. A closure that is not
+        // `move` moves in only the captures its body moves out.
+        let moving: BTreeSet<ImmutableString> = scope
+            .captures
+            .iter()
+            .filter(|name| *name != "this" && (moved || scope.consumed.contains(*name)))
+            .filter(|name| self.move_capture(name, expression))
+            .cloned()
+            .collect();
         let ty = match &self.callable {
             Some(callable) => {
                 self.closure_count += 1;
@@ -31909,15 +32119,27 @@ impl<'a> Parser<'a> {
             }
             None => Ty::Fn { inputs, output },
         };
-        if moved && !scope.captures.is_empty() {
+        // A closure that owns a capture which is not `Copy` is not `Copy`,
+        // and one that moves out a capture is called once.
+        if let Ty::FnItem { key, .. } = &ty {
+            if !moving.is_empty() {
+                self.owning_closures.insert((**key).clone());
+            }
+            if !scope.consumed.is_empty() {
+                self.once_closures.insert((**key).clone());
+            }
+        }
+        if moved && !scope.captures.is_empty() || !moved && !moving.is_empty() {
             let mut copied = origin::Fragment::plain("{ ");
             for name in &scope.captures {
                 if name == "this" {
-                    copied.push_text(format!("let {SELF_CAPTURE} = {SELF_CAPTURE}; "));
+                    if moved {
+                        copied.push_text(format!("let {SELF_CAPTURE} = {SELF_CAPTURE}; "));
+                    }
                 } else if moving.contains(name) {
                     let take = crate::engine::KEYWORD_MOVE;
                     copied.push_text(format!("let {name} = {take}({name}); "));
-                } else {
+                } else if moved {
                     copied.push_text(format!("let {name} = {name}; "));
                 }
             }
@@ -37860,6 +38082,12 @@ impl<'a> Parser<'a> {
         self.expect(Token::GreaterThan, construct)
     }
 
+    /// The token `n` tokens after the next one.
+    fn peek_nth(&mut self, n: usize) -> Token {
+        let mut ahead = self.input.clone();
+        ahead.nth(n).map_or(Token::EOF, |(token, _)| token)
+    }
+
     /// The token after the next one.
     fn peek_second(&mut self) -> Token {
         let mut ahead = self.input.clone();
@@ -37913,6 +38141,9 @@ impl<'a> Parser<'a> {
 struct ClosureScope {
     outer: BTreeMap<ImmutableString, Span>,
     captures: BTreeSet<ImmutableString>,
+    /// The captures the body moves out, which a closure that is not
+    /// `move` takes by value. A closure that has one is `FnOnce`.
+    consumed: BTreeSet<ImmutableString>,
     /// A `move` closure or async block, which owns what it captures.
     owns_captures: bool,
     /// An async body, where `.await` may appear.

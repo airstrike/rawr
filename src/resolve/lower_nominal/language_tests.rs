@@ -242,7 +242,8 @@ fn language_string_building() {
                 s.push_str(" and ");
                 s.push('!');
                 let tail = String::new() + "x" + &unit;
-                s + &tail + &format!("{}", s.len()) + &n.to_string().to_uppercase()
+                let len = s.len();
+                s + &tail + &format!("{}", len) + &n.to_string().to_uppercase()
             }
             run(5)
         "#,
@@ -8546,4 +8547,103 @@ fn language_unsafe_impl_of_an_auto_trait() {
         let error = rejected(source);
         assert!(error.contains(code), "{source}: {error}");
     }
+}
+
+#[test]
+fn language_partial_match_concat_and_closure_moves_are_rejected() {
+    for (source, name) in [
+        (
+            "struct P { name: String, age: i64 } \
+             pub fn run() -> i64 { let p = P { name: String::new(), age: 1 }; let n = p.name; \
+             p.name.len() as i64 } run()",
+            "p.name",
+        ),
+        (
+            "struct P { name: String, age: i64 } \
+             pub fn run() -> i64 { let p = P { name: String::new(), age: 1 }; let n = p.name; \
+             let q = p; 0 } run()",
+            "p",
+        ),
+        (
+            "pub fn run() -> i64 { let o = Some(String::new()); \
+             match o { Some(s) => {}, None => {} } o.is_some() as i64 } run()",
+            "o",
+        ),
+        (
+            "pub fn run() -> i64 { let a = String::new(); let b = a + \"b\"; a.len() as i64 } run()",
+            "a",
+        ),
+        (
+            "pub fn run() -> i64 { let a = String::new(); let f = || drop(a); f(); a.len() as i64 } run()",
+            "a",
+        ),
+        ("pub fn run() -> i64 { let a = String::new(); let f = || drop(a); f(); f(); 0 } run()", "f"),
+        (
+            "pub fn run() -> i64 { let a = String::new(); let f = move || a.len(); drop(f); f() as i64 } run()",
+            "f",
+        ),
+        (
+            "pub fn run() -> i64 { let a = String::new(); let b = a; let c = format!(\"{a}\"); 0 } run()",
+            "a",
+        ),
+    ] {
+        let error = rejected(source);
+        assert!(error.contains(&format!("moved value '{name}'")), "{source}: {error}");
+    }
+}
+
+#[test]
+fn language_partial_match_concat_and_closure_moves_keep_what_rust_accepts() {
+    let value = run(r#"
+        struct P { name: String, age: i64 }
+        pub fn run() -> i64 {
+            let mut p = P { name: String::from("ab"), age: 3 };
+            let n = p.name;
+            let age = p.age;
+            p.name = String::from("xyz");
+            let q = p;
+            let o = Some(String::from("o"));
+            let inside = match o {
+                Some(s) => s.len() as i64,
+                None => o.is_none() as i64,
+            };
+            let r = Some(String::from("rr"));
+            match &r {
+                Some(s) => {}
+                None => {}
+            }
+            let a = String::from("a");
+            let b = a + "bc";
+            let kept = String::from("kk");
+            let f = || kept.len() as i64;
+            let g = f;
+            let k = 5;
+            let h = move || k + 1;
+            let h2 = h;
+            n.len() as i64 * 1000 + q.name.len() as i64 * 100 + age * 10 + inside
+                + r.unwrap().len() as i64 + b.len() as i64 + f() + g() + h() + h2()
+        }
+        run()
+    "#);
+    assert_eq!(value, 2000 + 300 + 30 + 1 + 2 + 3 + 2 + 2 + 6 + 6);
+}
+
+#[test]
+fn language_a_closure_drops_what_it_moved_in() {
+    let value = run_guarded(
+        r#"
+fn look(guard: &Guard) -> i64 { 1 }
+pub fn run() -> i64 {
+    let first = guard();
+    let f = || drop(first);
+    f();
+    let after_call = alive();
+    let second = guard();
+    let g = move || look(&second);
+    drop(g);
+    after_call * 10 + alive()
+}
+"#,
+    );
+    assert_eq!(value, 0);
 }
