@@ -277,3 +277,82 @@ async fn run() -> String {
         Duration::from_millis(500),
     );
 }
+
+#[test]
+fn tokio_select_takes_the_first_branch_that_ends() {
+    shows_at(
+        "use tokio::sync::mpsc;
+use tokio::time::sleep;
+async fn run() -> String {
+    let (sender, mut receiver) = mpsc::channel(1);
+    let send = async move {
+        sleep(Duration::from_millis(100)).await;
+        sender.send(5).await.unwrap();
+    };
+    let wait = async move {
+        tokio::select! {
+            Some(n) = receiver.recv() => format!(\"got {n}\"),
+            _ = sleep(Duration::from_millis(300)) => \"timed out\".to_string(),
+        }
+    };
+    let (_, first) = tokio::join!(send, wait);
+    let second = tokio::select! {
+        biased;
+        _ = sleep(Duration::from_millis(200)) => \"slow\".to_string(),
+        n = async { 7 } => {
+            format!(\"ready {n}\")
+        }
+    };
+    let (sender, mut receiver) = mpsc::channel::<i64>(1);
+    drop(sender);
+    let third = tokio::select! {
+        Some(n) = receiver.recv() => format!(\"{n}\"),
+        else => \"closed\".to_string(),
+    };
+    format!(\"{first}, {second}, {third}\")
+}",
+        "got 5, ready 7, closed",
+        Duration::from_millis(100),
+    );
+}
+
+/// The compile error `?play` gives for an app with `items`.
+fn rejected(items: &str) -> String {
+    let source = app(items, "Task::perform(run(), Message::Shown)");
+    match super::render(&source, &Options::default()) {
+        Err(super::PlayError::Compile(error)) => error,
+        Err(error) => panic!("{error}"),
+        Ok(_) => panic!("the snippet compiled"),
+    }
+}
+
+#[test]
+fn tokio_spawn_says_what_to_use_instead() {
+    let error = rejected(
+        "async fn run() -> String {
+    tokio::spawn(async { 1 });
+    String::new()
+}",
+    );
+    assert!(error.contains("`tokio::spawn` in a program without a tokio dependency"), "{error}");
+    assert!(error.contains("tokio::join!"), "{error}");
+}
+
+#[test]
+fn tokio_files_sockets_and_processes_are_unknown() {
+    for path in [
+        "tokio::fs::read_to_string(\"/etc/passwd\")",
+        "tokio::net::TcpStream::connect(\"example.com:80\")",
+        "tokio::process::Command::new(\"ls\")",
+        "tokio::io::stdin()",
+        "tokio::signal::ctrl_c()",
+    ] {
+        let error = rejected(&format!(
+            "async fn run() -> String {{
+    let _ = {path};
+    String::new()
+}}"
+        ));
+        assert!(error.contains("error[RAWR-RESOLVE-UNKNOWN-"), "{path}: {error}");
+    }
+}
