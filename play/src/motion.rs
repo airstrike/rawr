@@ -39,7 +39,10 @@ pub const PAUSE: Duration = Duration::from_secs(1);
 /// Largest GIF answered: Discord's upload limit.
 pub const MAX_GIF: usize = 8 * 1024 * 1024;
 /// Most frames after a repeat that must match before it counts as a loop.
-const CONFIRM: usize = 8;
+/// The clock is simulated and the State drives the view, so two matching
+/// frames, with matching gaps, are enough, and a 40-frame loop is found
+/// after 43 frames.
+const CONFIRM: usize = 2;
 
 /// The note on a GIF over [`MAX_GIF`].
 pub const TOO_LARGE: &str = "The animation is over 8 MB. This is its last frame.";
@@ -615,6 +618,13 @@ mod tests {
         // A stopwatch: each value shows for a while and never comes back.
         let hashes: Vec<u64> = (0..60).map(|at| at / 20).collect();
         assert_eq!(cycle(&hashes, &times(60)), None);
+    }
+
+    #[test]
+    fn a_long_loop_is_found_two_frames_after_it_repeats() {
+        let hashes: Vec<u64> = (0..43).map(|at| at % 40).collect();
+        assert_eq!(cycle(&hashes, &times(hashes.len())), Some((0, 40)));
+        assert_eq!(cycle(&hashes[..42], &times(42)), None);
     }
 
     #[test]
