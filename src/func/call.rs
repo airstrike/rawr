@@ -1346,6 +1346,13 @@ impl Engine {
                     .unwrap_or(Dynamic::FALSE));
             }
 
+            // Handle __rawr_drop(value): the value drops at once.
+            crate::engine::KEYWORD_DROP if num_args == 1 => {
+                let arg = first_arg.unwrap();
+                drop(self.get_arg_value(global, caches, scope, this_ptr, arg)?);
+                return Ok(Dynamic::UNIT);
+            }
+
             // Handle __rawr_move(x): the local's value, leaving `()` in it.
             // A shared local (one a closure captured) gives its value up for
             // every holder, so the value drops with its new owner.
