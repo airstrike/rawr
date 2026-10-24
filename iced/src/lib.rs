@@ -985,6 +985,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     pixels_builders(&mut builder, "widget::Toggler", "spacing")?;
     length_builders(&mut builder, "widget::Toggler", &["width"])?;
     pixels_builders(&mut builder, "widget::Checkbox", "size")?;
+    pixels_builders(&mut builder, "widget::Checkbox", "text_size")?;
     pixels_builders(&mut builder, "widget::Checkbox", "spacing")?;
     length_builders(&mut builder, "widget::Checkbox", &["width"])?;
     // iced's slider takes `width(impl Into<Length>)` and `height(impl

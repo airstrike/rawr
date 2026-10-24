@@ -130,6 +130,9 @@ impl widget::Descriptor for marker::Checkbox {
         if let Some(size) = self.size {
             checkbox = checkbox.size(size);
         }
+        if let Some(text_size) = self.text_size {
+            checkbox = checkbox.text_size(text_size);
+        }
         if let Some(width) = self.width {
             checkbox = checkbox.width(width);
         }
@@ -1246,6 +1249,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 on_toggle: None,
                 style: None,
                 size: None,
+                text_size: None,
                 width: None,
                 spacing: None,
                 icon: None,
@@ -2258,6 +2262,13 @@ fn bind_intrinsic_control_builders(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(checkbox))
         })
         .expect("the iced facade must retain the exact Checkbox::size item");
+    builder
+        .bind("iced::widget::Checkbox::text_size", |args| {
+            let mut checkbox = take_checkbox(args, "Checkbox::text_size")?;
+            checkbox.text_size = Some(pixels(args[1], "Checkbox::text_size")?);
+            Ok(Dynamic::from(checkbox))
+        })
+        .expect("the iced facade must retain the exact Checkbox::text_size item");
     builder
         .bind("iced::widget::Checkbox::width", |args| {
             let mut checkbox = take_checkbox(args, "Checkbox::width")?;

@@ -259,6 +259,7 @@ pub(crate) struct Checkbox {
     pub(crate) on_toggle: Option<item::Value>,
     pub(crate) style: Option<Source<checkbox::Status, checkbox::Style>>,
     pub(crate) size: Option<f32>,
+    pub(crate) text_size: Option<f32>,
     pub(crate) width: Option<iced::Length>,
     pub(crate) spacing: Option<f32>,
     pub(crate) icon: Option<iced::widget::checkbox::Icon>,
