@@ -510,7 +510,7 @@ use iced::Element;
 use iced::widget::text;
 struct State { value: i64 }
 #[derive(Debug, Clone, Copy)] enum Message { Loaded(i64) }
-pub fn loaded(value: i64) -> Message { throw "mapper must not run" }
+pub fn loaded(value: i64) -> Message { panic!("mapper must not run") }
 impl State {
     fn boot() -> (State, Task<Message>) {
         (State { value: 0 }, Task::perform(step(9), loaded))

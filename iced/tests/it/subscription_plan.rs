@@ -482,11 +482,11 @@ use iced::widget::{button, column};
 struct State { status: String }
 #[derive(Debug, Clone, Copy)] enum Message { Fail, Recover }
 impl State {
-    fn new() -> State { State { status: "invalid" } }
+    fn new() -> State { State { status: "invalid".to_string() } }
     fn update(&mut self, message: Message) {
         match message {
-            Message::Fail => self.status = "invalid",
-            Message::Recover => self.status = "valid",
+            Message::Fail => self.status = "invalid".to_string(),
+            Message::Recover => self.status = "valid".to_string(),
         }
     }
     fn view(&self) -> Element<'_, Message> {
@@ -495,7 +495,7 @@ impl State {
         column![fail, recover]
     }
     fn subscription(&self) -> Subscription<Message> {
-        let valid = guard(self.status);
+        let valid = guard(self.status.clone());
         Subscription::none()
     }
 }

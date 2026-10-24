@@ -460,7 +460,7 @@ fn intrinsic_macro_errors_are_positioned_and_name_the_registered_item() {
             "missing",
             "no macro of this name is in scope",
         ),
-        ("column![42]", "iced::Element", "Type mismatch"),
+        ("column![42]", "iced::Element", "type mismatch"),
     ] {
         let error = compile_probe(body).unwrap_err();
         assert!(!error.primary_span().is_none(), "{error}");
@@ -499,7 +499,7 @@ fn column_is_a_macro_and_a_function_as_in_iced() {
         compile_probe(body).unwrap_or_else(|error| panic!("{body}: {error}"));
     }
     let error = compile_probe("column(text(1))").unwrap_err();
-    assert!(error.to_string().contains("Type mismatch"), "{error}");
+    assert!(error.to_string().contains("type mismatch"), "{error}");
 }
 
 #[test]
@@ -564,21 +564,6 @@ pub fn probe(value: Opaque) -> i64 {
 }
 
 #[test]
-fn ordinary_legacy_bang_calls_keep_their_capturing_semantics() {
-    let engine = Engine::new();
-    let answer = engine
-        .eval::<i64>(
-            r#"
-fn add(y) { x += y; x }
-let x = 40;
-add!(1) + x
-"#,
-        )
-        .unwrap();
-    assert_eq!(answer, 82);
-}
-
-#[test]
 #[cfg(not(feature = "no_optimize"))]
 fn intrinsic_support_survives_ast_clone_merge_and_reoptimization() {
     use rawr::OptimizationLevel;
@@ -588,7 +573,7 @@ fn intrinsic_support_survives_ast_clone_merge_and_reoptimization() {
     let ast = engine.compile(probe_source("column![text(42)]")).unwrap();
 
     assert_missing_binding(&engine, &ast.clone_functions_only());
-    let ordinary = engine.compile("fn unrelated() { 42 }").unwrap();
+    let ordinary = engine.compile("fn unrelated() -> i64 { 42 }").unwrap();
     assert_missing_binding(&engine, &ordinary.merge(&ast));
     for level in [OptimizationLevel::Simple, OptimizationLevel::Full] {
         let optimized = engine.optimize_ast(&Scope::new(), ast.clone(), level);

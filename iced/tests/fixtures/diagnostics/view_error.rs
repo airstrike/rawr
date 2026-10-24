@@ -17,6 +17,6 @@ impl Counter {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        throw "initial view failed";
+        panic!("initial view failed")
     }
 }

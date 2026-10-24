@@ -354,7 +354,7 @@ fn invalid_operation_output_reports_task_failure_without_invoking_the_mapper() {
     let adapter = boot_with_operation(
         &perform_source().replace(
             "pub fn loaded(value: i64) -> Message { Message::Loaded(value) }",
-            "pub fn loaded(value: i64) -> Message { throw \"mapper must not run\" }",
+            "pub fn loaded(value: i64) -> Message { panic!(\"mapper must not run\") }",
         ),
         effects.clone(),
         operation_registry_with(effects, starts.clone(), Some(Dynamic::from(true))),
@@ -382,7 +382,7 @@ fn mapper_failure_reports_task_diagnostic_after_one_factory_start() {
     let starts = Arc::new(AtomicUsize::new(0));
     let source = perform_source().replace(
         "pub fn loaded(value: i64) -> Message { Message::Loaded(value) }",
-        "pub fn loaded(value: i64) -> Message { throw \"mapper failed\" }",
+        "pub fn loaded(value: i64) -> Message { panic!(\"mapper failed\") }",
     );
     let adapter = boot_with_operation(
         &source,
