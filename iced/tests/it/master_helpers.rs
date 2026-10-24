@@ -502,6 +502,58 @@ fn master_duration_and_instant_operators_compute_as_rust() {
     find(&adapter, "true true");
 }
 
+/// std's `PathBuf`, `Path`, `OsStr` and `OsString`, as iced's editor and
+/// todos examples use them.
+const PATHS: &str = r#"
+use std::ffi;
+use std::path::{Path, PathBuf};
+use iced::widget::{column, text};
+use iced::Widget;
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {}
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        let mut path = PathBuf::from("/notes");
+        path.push("todo.md");
+        let file = Some(path.clone());
+        let extension = file
+            .clone()
+            .and_then(|path| path.extension())
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("rs");
+        let parent = path.parent().map(|dir| dir.display().to_string()).unwrap_or_default();
+        let name = ffi::OsString::from("todo.md");
+        let same = path.file_name() == Some(name) && self.file.is_none();
+        column![
+            text(format!("{} {extension} {parent}", path.display())),
+            text(format!("{same} {}", path.to_path_buf().join("x").to_string_lossy())),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn std_path_and_ffi_types_compute_as_rust() {
+    let adapter = boot(PATHS);
+    find(&adapter, "/notes/todo.md md /notes");
+    find(&adapter, "true /notes/todo.md/x");
+}
+
 /// Closure parameters take their types from the library function's other
 /// arguments, as Rust infers them.
 const INFERRED: &str = r#"

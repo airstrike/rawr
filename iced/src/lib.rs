@@ -28,6 +28,7 @@ pub mod subscription;
 pub mod task;
 #[cfg(test)]
 mod task_thread_tests;
+mod path_facade;
 pub mod theme;
 mod tokio_facade;
 pub mod widget;
@@ -97,6 +98,7 @@ const OWNED_EQ_DEFAULT_VALUE_CAPABILITIES: &[capability::Kind] = &[
 fn register_debug() {
     use rawr::host::debug::register;
     tokio_facade::register_debug();
+    path_facade::register_debug();
     register::<iced::Border>();
     register::<iced::Color>();
     register::<iced::ContentFit>();
@@ -1173,6 +1175,8 @@ fn extension_with_exports(
     )?)?;
     // tokio, for a program without tokio (`resolve::std_reexport`).
     tokio_facade::declare(&mut builder, &exports.task, &exports.duration, &exports.instant)?;
+    // std's `path` and `ffi` types (`resolve::std_reexport`).
+    path_facade::declare(&mut builder)?;
     builder.item(item::Definition::function(
         "theme::custom",
         extension_theme_signature(&exports.theme)?,
@@ -1307,6 +1311,7 @@ pub fn runtime_facades() -> Result<[host::runtime::Facade; 2], host::Error> {
     subscription::bind(&mut iced_builder, &mut rawr_builder);
     task::bind(&mut iced_builder, &mut rawr_builder);
     tokio_facade::bind(&mut rawr_builder);
+    path_facade::bind(&mut rawr_builder);
     theme::bind(&mut iced_builder, &mut rawr_builder);
     widget::bind(&mut iced_builder, &mut rawr_builder);
     Ok([iced_builder.finish(), rawr_builder.finish()])

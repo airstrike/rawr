@@ -1168,8 +1168,10 @@ pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableS
     // tokio in a program that does not import it, as a `?play` snippet, is
     // rawr-iced's: its timers follow a recording's clock. Its `Instant` is
     // the facade's, which reads that clock too, and its `Duration` is std's.
-    const REEXPORTS: [(&str, &str); 5] = [
+    const REEXPORTS: [(&str, &str); 7] = [
         ("std::time", "iced::time"),
+        ("std::path", "rawr_iced::path"),
+        ("std::ffi", "rawr_iced::ffi"),
         ("core::time", "iced::time"),
         ("tokio::time::Instant", "iced::time::Instant"),
         ("tokio::time::Duration", "iced::time::Duration"),
