@@ -871,8 +871,14 @@ impl Engine {
                     depth = depth.saturating_sub(1);
                     None
                 }
-                Token::SemiColon if depth == 0 => Some("found `;`"),
-                Token::Let if first => Some("found `let` statement"),
+                Token::SemiColon if depth == 0 => Some("found `;`".to_owned()),
+                Token::Let if first => Some("found `let` statement".to_owned()),
+                // An item is not an expression: `fn f() {}`, `const X: i64 = 1;`.
+                Token::Fn | Token::Const | Token::Reserved(_) | Token::Identifier(_)
+                    if first && starts_item(&token) =>
+                {
+                    Some(format!("found {}", crate::parser::item::found(&token)))
+                }
                 _ => None,
             };
             first = false;
@@ -887,5 +893,17 @@ impl Engine {
             }
         }
         Ok(())
+    }
+}
+
+/// Whether `token` starts an item, which is not an expression.
+fn starts_item(token: &Token) -> bool {
+    match token {
+        Token::Fn | Token::Const => true,
+        Token::Reserved(word) | Token::Identifier(word) => matches!(
+            word.as_str(),
+            "struct" | "enum" | "impl" | "trait" | "use" | "mod" | "static" | "type" | "pub"
+        ),
+        _ => false,
     }
 }

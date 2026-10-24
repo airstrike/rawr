@@ -8906,7 +8906,12 @@ impl<'a> Parser<'a> {
         self.finish_bounds()?;
         self.finish_witnesses()?;
         let ops = self.finish_ops()?;
-        let (source, locations) = std::mem::take(&mut self.output).finish();
+        let (mut source, locations) = std::mem::take(&mut self.output).finish();
+        // As in a block, a script whose last statement ends with `;` has
+        // the value `()`.
+        if source.trim_end().ends_with(';') {
+            source.push_str("\n()");
+        }
 
         Ok(Lowered {
             source,
@@ -8924,16 +8929,14 @@ impl<'a> Parser<'a> {
     /// name to import when there is one.
     fn unknown_function(&self, name: &ImmutableString, at: Span) -> Option<Error> {
         // The untyped standard library (`len`, `pad`, `type_of`) is the
-        // evaluator's: Rust has no such free functions.
-        let native = self
-            .native_modules
-            .iter()
-            .filter(|module| !module.is_standard_lib())
-            .any(|module| {
-                module
-                    .iter_fn()
-                    .any(|(_, metadata)| metadata.name.as_str() == name.as_str())
-            });
+        // evaluator's: Rust has no such free functions. A package built on
+        // it keeps the functions it adds.
+        let native = self.native_modules.iter().any(|module| {
+            module.iter_fn().any(|(_, metadata)| {
+                metadata.name.as_str() == name.as_str()
+                    && !(module.is_standard_lib() && standard_function(name))
+            })
+        });
         if native {
             return None;
         }
@@ -40859,6 +40862,27 @@ fn assignment_token(token: &Token) -> bool {
 
 fn point_span(position: Position) -> Span {
     span(position, position)
+}
+
+/// Whether the evaluator's standard library has a function `name`.
+#[cfg(not(feature = "no_std"))]
+fn standard_function(name: &str) -> bool {
+    use crate::packages::Package as _;
+    static NAMES: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    NAMES
+        .get_or_init(|| {
+            crate::packages::StandardPackage::new()
+                .as_shared_module()
+                .iter_fn()
+                .map(|(_, metadata)| metadata.name.to_string())
+                .collect()
+        })
+        .contains(name)
+}
+
+#[cfg(feature = "no_std")]
+fn standard_function(_: &str) -> bool {
+    true
 }
 
 fn text_end(mut position: Position, text: &str) -> Position {
