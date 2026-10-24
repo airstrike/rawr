@@ -23,10 +23,12 @@ attempt=1
 until npx wrangler deploy --containers-rollout=immediate >"$logs/release-deploy.log" 2>&1; do
   if grep -q -e 100146 -e "Internal Server Error" "$logs/release-deploy.log" && [ "$attempt" -lt 5 ]; then
     echo "Cloudflare answered 100146 or a 500; retrying in 30 s (attempt $attempt)."
+    grep -e 100146 -e "Internal Server Error" -e ERROR "$logs/release-deploy.log" | head -5
     attempt=$((attempt + 1))
     sleep 30
   else
-    echo "wrangler deploy failed; see $logs/release-deploy.log" >&2
+    echo "wrangler deploy failed; the end of $logs/release-deploy.log:" >&2
+    tail -40 "$logs/release-deploy.log" >&2
     exit 1
   fi
 done
