@@ -12,7 +12,7 @@ use crate::contract::{self, Classified, Contract};
 pub(crate) mod cached;
 pub mod representability;
 
-const CONTRACT_SCHEMA: u32 = 5;
+const CONTRACT_SCHEMA: u32 = 6;
 const CLASSIFIER_VERSION: u32 = 12;
 const COMPILER_ABI: u32 = 1;
 
@@ -739,18 +739,34 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .parameters()
             .filter(|parameter| !strings.contains(&parameter.index()))
         {
-            let kind = match parameter.kind() {
-                model::ParameterKind::Type { .. } => representability::signature::Kind::Type,
-                model::ParameterKind::Const { .. } => representability::signature::Kind::Constant,
+            let (kind, default) = match parameter.kind() {
+                model::ParameterKind::Type { default, .. } => {
+                    (representability::signature::Kind::Type, default)
+                }
+                model::ParameterKind::Const { .. } => {
+                    (representability::signature::Kind::Constant, &model::Default::Absent)
+                }
                 model::ParameterKind::Lifetime { .. } => {
                     unreachable!("lifetime parameters are rejected before plan ownership")
                 }
             };
-            parameters.push(representability::signature::Parameter::new(
-                parameter.index(),
-                parameter.name().into(),
-                kind,
-            ));
+            // A default Rawr cannot hold leaves the argument required.
+            let default = match default {
+                model::Default::Present(ty) => match self.convert(ty) {
+                    Ok(ty) => Some(ty),
+                    Err(Failure::Reject(_)) => None,
+                    Err(error) => return Err(error),
+                },
+                model::Default::Absent => None,
+            };
+            parameters.push(
+                representability::signature::Parameter::new(
+                    parameter.index(),
+                    parameter.name().into(),
+                    kind,
+                )
+                .with_default(default),
+            );
         }
         Ok(parameters.into_boxed_slice())
     }
@@ -1294,6 +1310,9 @@ impl DriverAudit {
         self.add(0, std::mem::size_of_val(parameters))?;
         for parameter in parameters {
             self.add(0, parameter.name().len())?;
+            if let Some(default) = parameter.default() {
+                self.ty(default)?;
+            }
         }
         Some(())
     }
@@ -4778,6 +4797,28 @@ mod tests {
         );
         // A bound is rustc's to check where the bridge names the type.
         assert!(context.parameters(&predicate_generics).is_ok());
+        // `T = f32` is what a type written without `T` takes.
+        let defaulted_generics = model::Generics::new(
+            Box::from([model::Parameter::new(
+                id.clone(),
+                0,
+                "T".into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Present(model::Type::Primitive("f32".into())),
+                },
+            )]),
+            Box::default(),
+        );
+        let Ok(defaulted) = context.parameters(&defaulted_generics) else {
+            panic!("a defaulted type parameter is admitted");
+        };
+        assert_eq!(
+            defaulted[0].default(),
+            Some(&super::representability::convert::Type::Builtin(
+                super::representability::convert::Builtin::F32
+            ))
+        );
         assert_eq!(
             rejection(context.constant(
                 &model::Type::Primitive("i64".into()),

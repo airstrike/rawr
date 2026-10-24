@@ -13764,6 +13764,37 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The defaulted arguments a type is written without, as rustc fills
+    /// them: `let content: text_editor::Content` is a `Content<Renderer>`.
+    /// Nothing is filled unless every missing argument has a default.
+    fn default_host_arguments(
+        &mut self,
+        definition: &crate::host::type_def::Definition,
+        owner: Option<&crate::host::facade::Dependency>,
+        arguments: &mut Vec<Ty>,
+    ) {
+        let mut parameters = definition
+            .parameters()
+            .iter()
+            .cloned()
+            .zip(arguments.iter().cloned())
+            .collect::<BTreeMap<_, _>>();
+        let mut filled = Vec::new();
+        for index in arguments.len()..definition.parameters().len() {
+            let Some(Some(default)) = definition.defaults().get(index) else {
+                return;
+            };
+            let Ok(ty) =
+                self.instantiate_host_type(default, &mut parameters, "type", owner, Some(definition))
+            else {
+                return;
+            };
+            parameters.insert(definition.parameters()[index].clone(), ty.clone());
+            filled.push(ty);
+        }
+        arguments.extend(filled);
+    }
+
     fn instantiate_host_type(
         &mut self,
         ty: &crate::host::type_ref::Type,
@@ -35525,6 +35556,7 @@ impl<'a> Parser<'a> {
         }
         match host {
             Some((definition, owner)) if generic || !definition.parameters().is_empty() => {
+                self.default_host_arguments(&definition, owner.as_ref(), &mut arguments);
                 if arguments.len() != definition.parameters().len() {
                     return Err(Error::TypeMismatch {
                         expected: format!(
@@ -41963,6 +41995,7 @@ pub fn run() -> i64 {
                 false,
                 false,
                 Box::default(),
+                Box::default(),
                 pair_shape,
                 &mut allocation,
             )
@@ -41975,6 +42008,7 @@ pub fn run() -> i64 {
                 false,
                 false,
                 false,
+                Box::default(),
                 Box::default(),
                 host::type_def::Shape::Struct {
                     form: host::type_def::Form::Record,
@@ -42018,6 +42052,7 @@ pub fn run() -> i64 {
                 false,
                 false,
                 Box::default(),
+                Box::default(),
                 host::type_def::Shape::Struct {
                     form: host::type_def::Form::Record,
                     constructor: Some(rawr_import::surface::identity::Selector::Unavailable),
@@ -42041,6 +42076,7 @@ pub fn run() -> i64 {
                 true,
                 true,
                 Box::default(),
+                Box::default(),
                 host::type_def::Shape::Struct {
                     form: host::type_def::Form::Record,
                     constructor: Some(rawr_import::surface::identity::Selector::Unavailable),
@@ -42063,6 +42099,7 @@ pub fn run() -> i64 {
                 false,
                 false,
                 true,
+                Box::default(),
                 Box::default(),
                 host::type_def::Shape::Enum(Box::from([
                     host::type_def::Variant::new(
@@ -42188,6 +42225,7 @@ pub fn run() -> i64 {
                     false,
                     false,
                     false,
+                    Box::default(),
                     Box::default(),
                     shape.clone(),
                     &mut allocation,

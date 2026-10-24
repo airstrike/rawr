@@ -370,6 +370,7 @@ impl Builder {
         debug: bool,
         clone: bool,
         parameters: Box<[ImmutableString]>,
+        defaults: Box<[Option<host::type_ref::Type>]>,
         shape: crate::Shared<host::type_def::Shape>,
         allocation: &mut impl host::ImportAllocation,
     ) -> Result<&mut Self, host::Error> {
@@ -378,7 +379,7 @@ impl Builder {
         self.ensure_vacant(&path, "type")?;
         let definition =
             host::type_def::Definition::imported(
-                path, identity, copy, default, debug, clone, parameters, shape,
+                path, identity, copy, default, debug, clone, parameters, defaults, shape,
             )?;
         self.insert_type(definition)?;
         Ok(self)
@@ -2449,6 +2450,7 @@ mod imported_allocation_tests {
                     false,
                     false,
                     Box::default(),
+                    Box::default(),
                     host::type_def::Shape::Struct {
                         form,
                         constructor: None,
@@ -2658,6 +2660,7 @@ mod imported_allocation_tests {
                     false,
                     false,
                     false,
+                    Box::default(),
                     Box::default(),
                     shape,
                     &mut allocation,

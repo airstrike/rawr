@@ -322,6 +322,7 @@ fn executable_use_collection_retains_profile_event_mapper_seals() {
             false,
             false,
             Box::from(["Message".into()]),
+            Box::default(),
             Shared::new(host::type_def::Shape::Opaque),
             &mut host::TestImportAllocation::default(),
         )
@@ -385,6 +386,7 @@ fn executable_use_collection_requires_and_retains_exact_structural_adapters() {
             false,
             false,
             false,
+            Box::default(),
             Box::default(),
             Shared::new(host::type_def::Shape::Struct {
                 form: host::type_def::Form::Tuple,
@@ -812,6 +814,7 @@ fn cloning_an_imported_value_leaves_it_available() {
             false,
             true,
             Box::default(),
+            Box::default(),
             Shared::new(host::type_def::Shape::Opaque),
             &mut host::TestImportAllocation::default(),
         )
@@ -843,3 +846,91 @@ fn cloning_an_imported_value_leaves_it_available() {
         .unwrap_err();
     assert!(error.to_string().contains("already moved"), "{error}");
 }
+
+/// palette's `Hsl<S = Srgb, T = f32>`, which `make` returns as
+/// `Hsl<Srgb, f32>`, and `Pair<A, B>` with no defaults.
+fn defaulted_facade() -> facade::Definition {
+    let srgb = host::type_def::import::Identity::new([0x61; 32]);
+    let hsl = host::type_def::import::Identity::new([0x62; 32]);
+    let pair = host::type_def::import::Identity::new([0x63; 32]);
+    let mut builder = facade::Builder::new("palette", facade::Abi::new(1).unwrap()).unwrap();
+    let mut allocation = host::TestImportAllocation::default();
+    for (path, identity, parameters, defaults) in [
+        ("Srgb", srgb, Box::default(), Box::default()),
+        (
+            "Hsl",
+            hsl,
+            Box::from(["S".into(), "T".into()]),
+            Box::from([
+                Some(type_ref::Type::imported(srgb, [])),
+                Some(type_ref::Type::builtin(type_ref::Builtin::F32)),
+            ]),
+        ),
+        ("Pair", pair, Box::from(["A".into(), "B".into()]), Box::default()),
+    ] {
+        builder
+            .imported_type(
+                path,
+                identity,
+                true,
+                false,
+                false,
+                true,
+                parameters,
+                defaults,
+                Shared::new(host::type_def::Shape::Opaque),
+                &mut allocation,
+            )
+            .unwrap();
+    }
+    let mut make = signature::Builder::new();
+    make.output(type_ref::Type::imported(
+        hsl,
+        [
+            type_ref::Type::imported(srgb, []),
+            type_ref::Type::builtin(type_ref::Builtin::F32),
+        ],
+    ));
+    builder
+        .item(
+            item::Definition::function("make", make.finish())
+                .unwrap()
+                .imported(selector(2)),
+        )
+        .unwrap();
+    builder.finish().unwrap()
+}
+
+#[test]
+fn an_imported_type_written_without_its_defaulted_arguments_takes_them() {
+    let mut engine = Engine::new();
+    engine.register_host_facade(defaulted_facade()).unwrap();
+    engine
+        .compile_executable(
+            "use palette::{make, Hsl, Srgb};
+             struct Picker { color: Hsl }
+             struct Partial { color: Hsl<Srgb> }
+             pub fn run() -> Hsl {
+                 let color: Hsl = make();
+                 let partial = Partial { color };
+                 let picker = Picker { color: partial.color };
+                 picker.color
+             }",
+        )
+        .unwrap();
+    let error = engine
+        .compile_executable(
+            "use palette::{make, Hsl};
+             pub fn run() -> Hsl<i64> { make() }",
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("mismatch"), "{error}");
+    let error = engine
+        .compile_executable("use palette::Pair; struct Holder { pair: Pair }")
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("expected 2, found 0"),
+        "{error}"
+    );
+}
+

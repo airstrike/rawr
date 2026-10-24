@@ -607,7 +607,7 @@ fn resolve_path(
         }
         _ => target,
     };
-    if let Target::Host { definition, .. } = &target {
+    if let Target::Host { definition, owner } = &target {
         if definition.role() == host::type_def::Role::Trait {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!("the trait `{name}` as a type (write `impl {name}<..>`)").into(),
@@ -639,6 +639,7 @@ fn resolve_path(
         {
             arguments.remove(position);
         }
+        defaulted_arguments(definition, owner.as_ref(), &mut arguments, host, span);
         let actual = arguments
             .iter()
             .filter(|argument| matches!(argument, Argument::Type(_)))
@@ -658,6 +659,115 @@ fn resolve_path(
         target,
         arguments: arguments.into_boxed_slice(),
         span,
+    })
+}
+
+/// The defaulted arguments a type is written without, as rustc fills them:
+/// `palette::Hsl` is `Hsl<Srgb, f32>`. Nothing is filled unless every
+/// missing argument has a default Rawr can name.
+fn defaulted_arguments(
+    definition: &host::type_def::Definition,
+    owner: Option<&host::facade::Dependency>,
+    arguments: &mut Vec<Argument>,
+    host: &host::Registry,
+    span: Span,
+) {
+    let mut filled = arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            Argument::Type(ty) => Some(ty.clone()),
+            Argument::Lifetime(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let written = filled.len();
+    for index in written..definition.parameters().len() {
+        let Some(Some(default)) = definition.defaults().get(index) else {
+            return;
+        };
+        let parameters = &definition.parameters()[..index];
+        let Some(ty) = host_type(default, parameters, &filled, owner, definition, host, span)
+        else {
+            return;
+        };
+        filled.push(ty);
+    }
+    arguments.extend(filled.drain(written..).map(Argument::Type));
+}
+
+/// A host signature type as a header names it, with `parameters` read as
+/// `arguments`. `None` when the header cannot name it.
+fn host_type(
+    ty: &host::type_ref::Type,
+    parameters: &[ImmutableString],
+    arguments: &[Type],
+    owner: Option<&host::facade::Dependency>,
+    originating: &host::type_def::Definition,
+    host: &host::Registry,
+    span: Span,
+) -> Option<Type> {
+    use host::type_ref::Shape;
+    let convert = |types: &[host::type_ref::Type], owner: Option<&host::facade::Dependency>| {
+        types
+            .iter()
+            .map(|ty| host_type(ty, parameters, arguments, owner, originating, host, span))
+            .map(|ty| ty.map(Argument::Type))
+            .collect::<Option<Box<[_]>>>()
+    };
+    let path = |name: &str, target: Target, arguments: Box<[Argument]>| {
+        Type::Path(Path {
+            name: name.into(),
+            target,
+            arguments,
+            span,
+        })
+    };
+    Some(match ty.shape() {
+        Shape::Unit => Type::Unit(span),
+        Shape::Tuple(members) => Type::Tuple {
+            members: members
+                .iter()
+                .map(|member| host_type(member, parameters, arguments, owner, originating, host, span))
+                .collect::<Option<_>>()?,
+            span,
+        },
+        Shape::Builtin(builtin) => path(builtin.name()?, Target::Builtin, Box::default()),
+        Shape::Option(element) => path(
+            "Option",
+            Target::Builtin,
+            convert(std::slice::from_ref(element.as_ref()), owner)?,
+        ),
+        Shape::Result(ok, err) => path(
+            "Result",
+            Target::Builtin,
+            convert(&[ok.as_ref().clone(), err.as_ref().clone()], owner)?,
+        ),
+        Shape::Parameter(name) => {
+            let name = name.to_string();
+            let index = parameters.iter().position(|parameter| *parameter == name)?;
+            arguments.get(index)?.clone()
+        }
+        Shape::Registered {
+            path: registered,
+            arguments: inner,
+        } => {
+            let name = registered.to_string();
+            let definition = host.type_(&name)?.clone();
+            let owner = host.type_owner(&name).cloned();
+            let inner = convert(inner, owner.as_ref())?;
+            path(&name, Target::Host { definition, owner }, inner)
+        }
+        #[cfg(feature = "rust-import")]
+        Shape::Imported {
+            identity,
+            arguments: inner,
+        } => {
+            let imported = host.imported_type(identity, owner?, Some(originating))?;
+            let definition = imported.definition.clone();
+            let owner = imported.owner.cloned();
+            let inner = convert(inner, owner.as_ref())?;
+            path(&definition.path(), Target::Host { definition, owner }, inner)
+        }
+        _ => return None,
     })
 }
 

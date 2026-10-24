@@ -44,6 +44,28 @@ pub enum Builtin {
 }
 
 impl Builtin {
+    /// The Rust name of a builtin `primitive` reads, or `None` for a range.
+    pub(crate) const fn name(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Bool => "bool",
+            Self::Char => "char",
+            Self::F64 => "f64",
+            Self::I64 => "i64",
+            Self::U64 => "u64",
+            Self::U32 => "u32",
+            Self::String => "String",
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::Isize => "isize",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::Usize => "usize",
+            Self::F32 => "f32",
+            Self::InclusiveRange | Self::FloatInclusiveRange => return None,
+        })
+    }
+
     /// The builtin a Rust primitive name is.
     #[must_use]
     pub fn primitive(name: &str) -> Option<Self> {

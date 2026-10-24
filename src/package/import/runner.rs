@@ -942,6 +942,18 @@ fn build(
             }
         };
         let parameters = ty.parameters().map(ImmutableString::from).collect();
+        let defaults = ty
+            .defaults()
+            .iter()
+            .map(|default| {
+                default
+                    .as_ref()
+                    .map(|default| self::ty(facade, default, profile, installed))
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|source| entry_error(facade.root(), ty.path(), source))?
+            .into_boxed_slice();
         builder
             .imported_type(
                 ty.path(),
@@ -951,6 +963,7 @@ fn build(
                 ty.debug(),
                 ty.cloneable(),
                 parameters,
+                defaults,
                 shape,
                 allocation,
             )

@@ -151,6 +151,9 @@ pub struct TypeDefinition {
     path: Box<str>,
     identity: [u8; 32],
     parameters: Box<[Box<str>]>,
+    /// Each parameter's default type, by position.
+    #[serde(default)]
+    defaults: Box<[Option<Type>]>,
     copy: bool,
     default: bool,
     debug: bool,
@@ -706,6 +709,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             .map(|parameter| format!("T{parameter}").into_boxed_str())
             .collect::<Vec<_>>()
             .into_boxed_slice(),
+        defaults: Box::default(),
         copy: false,
         default: false,
         debug: false,
@@ -767,6 +771,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 path: path.into(),
                 identity,
                 parameters: Box::default(),
+                defaults: Box::default(),
                 copy: false,
                 default: false,
                 debug: false,
@@ -803,6 +808,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         path: "Dial".into(),
         identity: [0xd1; 32],
         parameters: Box::from([Box::<str>::from("Message")]),
+        defaults: Box::default(),
         copy: false,
         default: false,
         debug: false,
@@ -1689,6 +1695,10 @@ impl TypeDefinition {
     pub fn parameters(&self) -> impl ExactSizeIterator<Item = &str> {
         self.parameters.iter().map(AsRef::as_ref)
     }
+    /// Return each parameter's default type, by position.
+    pub const fn defaults(&self) -> &[Option<Type>] {
+        &self.defaults
+    }
     /// Return whether the native type is copyable.
     pub const fn copy(&self) -> bool {
         self.copy
@@ -1811,9 +1821,12 @@ fn type_definition(
         .identity()
         .definition()
         .ok_or(super::Error::ForeignIdentity)?;
-    let (parameters, copyable, default, debug, clone, shape) = match outcome.representability() {
+    let (parameters, defaults, copyable, default, debug, clone, shape) = match outcome
+        .representability()
+    {
         Representability::Struct(plan) => (
             parameters(plan.parameters())?,
+            defaults(plan.parameters())?,
             plan.copy(),
             plan.default(),
             plan.debug(),
@@ -1843,11 +1856,12 @@ fn type_definition(
             }
             (
                 parameters(plan.parameters())?,
+                defaults(plan.parameters())?,
                 plan.copy(),
                 plan.default(),
                 plan.debug(),
                 plan.cloneable(),
-                Shape::Enum {
+                    Shape::Enum {
                     variants: variants.into_boxed_slice(),
                 },
             )
@@ -1865,6 +1879,7 @@ fn type_definition(
         path: copy(path)?,
         identity: *definition.as_bytes(),
         parameters,
+        defaults,
         copy: copyable,
         default,
         debug,
@@ -2006,6 +2021,28 @@ fn parameters(
         .map_err(|_| super::Error::Allocation)?;
     for parameter in source {
         output.push(copy(parameter.name())?);
+    }
+    Ok(output.into_boxed_slice())
+}
+
+/// Each parameter's default type, or none when no parameter has one.
+fn defaults(
+    source: &[representability::signature::Parameter],
+) -> Result<Box<[Option<Type>]>, super::Error> {
+    if source.iter().all(|parameter| parameter.default().is_none()) {
+        return Ok(Box::default());
+    }
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(source.len())
+        .map_err(|_| super::Error::Allocation)?;
+    for parameter in source {
+        output.push(
+            parameter
+                .default()
+                .map(|default| ty(default, source))
+                .transpose()?,
+        );
     }
     Ok(output.into_boxed_slice())
 }

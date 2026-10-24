@@ -7,6 +7,9 @@ pub struct Parameter {
     index: u32,
     name: Box<str>,
     kind: Kind,
+    /// A type's defaulted parameter (`Hsl<S = Srgb>`): what a type written
+    /// without the argument takes.
+    default: Option<super::convert::Type>,
 }
 
 /// One admitted generic substitution kind.
@@ -26,7 +29,17 @@ pub struct Signature {
 
 impl Parameter {
     pub(crate) const fn new(index: u32, name: Box<str>, kind: Kind) -> Self {
-        Self { index, name, kind }
+        Self {
+            index,
+            name,
+            kind,
+            default: None,
+        }
+    }
+
+    pub(crate) fn with_default(mut self, default: Option<super::convert::Type>) -> Self {
+        self.default = default;
+        self
     }
 
     #[must_use]
@@ -42,6 +55,12 @@ impl Parameter {
     #[must_use]
     pub const fn kind(&self) -> Kind {
         self.kind
+    }
+
+    /// The type a type written without this argument takes.
+    #[must_use]
+    pub const fn default(&self) -> Option<&super::convert::Type> {
+        self.default.as_ref()
     }
 
     pub(crate) fn mark_callable(&mut self) {

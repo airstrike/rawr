@@ -1444,9 +1444,13 @@ fn build(
     }
 
     for entry in &facade.entries {
-        let (parameters, copy, default, debug, clone) = match entry.outcome.representability() {
+        let (parameters, defaults, copy, default, debug, clone) = match entry
+            .outcome
+            .representability()
+        {
             Representability::Struct(plan) => (
                 names(plan.parameters(), allocation)?,
+                defaults(&types, plan.parameters(), allocation)?,
                 plan.copy(),
                 plan.default(),
                 plan.debug(),
@@ -1454,6 +1458,7 @@ fn build(
             ),
             Representability::Enum(plan) => (
                 names(plan.parameters(), allocation)?,
+                defaults(&types, plan.parameters(), allocation)?,
                 plan.copy(),
                 plan.default(),
                 plan.debug(),
@@ -1558,6 +1563,7 @@ fn build(
             debug,
             clone,
             parameters,
+            defaults,
             shape,
             allocation,
         )?;
@@ -1934,6 +1940,30 @@ fn names(
         names.push(parameter.name().into());
     }
     Ok(names.into_boxed_slice())
+}
+
+/// Each parameter's default type, or none when no parameter has one.
+fn defaults(
+    types: &Types,
+    parameters: &[representability::signature::Parameter],
+    allocation: &mut rawr_import::contract::Allocation,
+) -> Result<Box<[Option<host::type_ref::Type>]>, Error> {
+    if parameters.iter().all(|parameter| parameter.default().is_none()) {
+        return Ok(Box::default());
+    }
+    let mut defaults = Vec::new();
+    defaults
+        .try_reserve_exact(parameters.len())
+        .map_err(|_| Error::Allocation)?;
+    for parameter in parameters {
+        defaults.push(
+            parameter
+                .default()
+                .map(|default| types.convert(default, parameters, allocation))
+                .transpose()?,
+        );
+    }
+    Ok(defaults.into_boxed_slice())
 }
 
 fn receiver(receiver: representability::ownership::Receiver) -> receiver::Mode {

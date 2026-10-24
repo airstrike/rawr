@@ -2824,6 +2824,7 @@ mod tests {
                 false,
                 false,
                 parameters.clone(),
+                Box::default(),
                 shape,
                 &mut allocation,
             )?;

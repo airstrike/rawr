@@ -41,6 +41,9 @@ pub struct Definition {
     shape: Option<Shared<Shape>>,
     projections: Box<[Projection]>,
     exact_arity: bool,
+    /// Each parameter's default (`Hsl<S = Srgb, T = f32>`), which a type
+    /// written without the argument takes. Empty when none has one.
+    defaults: Box<[Option<host::type_ref::Type>]>,
 }
 
 /// The exact structural contract of one facade type.
@@ -195,10 +198,15 @@ impl Definition {
             .try_fold(0_usize, |bytes, projection| {
                 bytes.checked_add(projection.retained_bytes()?)
             })?;
+        let defaults = self
+            .defaults
+            .len()
+            .checked_mul(std::mem::size_of::<Option<host::type_ref::Type>>())?;
         std::mem::size_of::<Self>()
             .checked_add(path)?
             .checked_add(parameters)?
-            .checked_add(projections)
+            .checked_add(projections)?
+            .checked_add(defaults)
     }
 
     #[cfg(feature = "rust-import")]
@@ -254,6 +262,7 @@ impl Definition {
             shape: self.shape.clone(),
             projections: projections.into_boxed_slice(),
             exact_arity: self.exact_arity,
+            defaults: self.defaults.clone(),
         })
     }
 
@@ -304,6 +313,7 @@ impl Definition {
             shape: None,
             projections: Box::default(),
             exact_arity: true,
+            defaults: Box::default(),
         })
     }
 
@@ -320,6 +330,7 @@ impl Definition {
             shape: None,
             projections: Box::default(),
             exact_arity: false,
+            defaults: Box::default(),
         }
     }
 
@@ -342,6 +353,7 @@ impl Definition {
         debug: bool,
         clone: bool,
         parameters: Box<[ImmutableString]>,
+        defaults: Box<[Option<host::type_ref::Type>]>,
         shape: Shared<Shape>,
     ) -> Result<Self, host::Error> {
         validate_parameters(&path, &parameters)?;
@@ -367,6 +379,7 @@ impl Definition {
             shape: (!matches!(shape.as_ref(), Shape::Opaque)).then_some(shape),
             projections: Box::default(),
             exact_arity: true,
+            defaults,
         })
     }
 
@@ -401,6 +414,13 @@ impl Definition {
     #[must_use]
     pub const fn parameters(&self) -> &[ImmutableString] {
         &self.parameters
+    }
+
+    /// Return each parameter's default type, by position. A parameter past
+    /// the end has none.
+    #[must_use]
+    pub const fn defaults(&self) -> &[Option<host::type_ref::Type>] {
+        &self.defaults
     }
 
     /// Return the capabilities explicitly promised by the host.
@@ -465,6 +485,7 @@ impl Definition {
             && self.shape == other.shape
             && self.projections == other.projections
             && self.exact_arity == other.exact_arity
+            && self.defaults == other.defaults
     }
 
     pub(crate) fn contract(&self) -> Contract {
