@@ -108,6 +108,26 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
         .bind("iced::Radians::PI", |_| Ok(Dynamic::from(Radians::PI)))
         .expect("the iced facade must retain Radians::PI");
     builder
+        .bind("iced::Degrees::RANGE", |_| {
+            Ok(Dynamic::from(crate::marker::AngleRange::Degrees(Degrees::RANGE)))
+        })
+        .expect("the iced facade must retain Degrees::RANGE");
+    builder
+        .bind("iced::Radians::RANGE", |_| {
+            Ok(Dynamic::from(crate::marker::AngleRange::Radians(Radians::RANGE)))
+        })
+        .expect("the iced facade must retain Radians::RANGE");
+    // A range is of the angle it starts with.
+    builder
+        .bind_type_attestation("iced::RangeInclusive", |value, expected| {
+            let start = match &*value.read_lock::<crate::marker::AngleRange>()? {
+                crate::marker::AngleRange::Degrees(range) => Dynamic::from(*range.start()),
+                crate::marker::AngleRange::Radians(range) => Dynamic::from(*range.start()),
+            };
+            expected.attest(expected.argument_count() == 1 && expected.argument_matches(0, &start))
+        })
+        .expect("the iced facade must declare RangeInclusive exactly once");
+    builder
         .bind("iced::Degrees::mul", |args| {
             let [degrees, factor] = args else {
                 return Err(arity("Degrees::mul", 2, args.len()));

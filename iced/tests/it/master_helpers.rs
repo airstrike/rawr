@@ -657,6 +657,57 @@ fn master_pick_list_takes_an_array_of_script_values() {
     find(&adapter, "floating");
 }
 
+/// `slider(Degrees::RANGE, ..)` over the rotation's degrees, as ferris
+/// writes it, and an associated const of the script's own.
+const ANGLE_SLIDER: &str = r#"
+use iced::widget::{column, slider, text};
+use iced::{Degrees, Radians, Rotation, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State {
+    rotation: Rotation,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    RotationChanged(Degrees),
+    RadiansChanged(Radians),
+}
+
+struct Turn;
+
+impl Turn {
+    const QUARTER: f32 = 90.0;
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::RotationChanged(rotation) => self.rotation = Rotation::Floating(rotation.into()),
+            Message::RadiansChanged(rotation) => self.rotation = Rotation::Solid(rotation),
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            slider(Degrees::RANGE, self.rotation.degrees(), Message::RotationChanged),
+            slider(Radians::RANGE, self.rotation.radians(), Message::RadiansChanged),
+            text(format!("quarter {}", Turn::QUARTER)),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_slider_moves_over_an_angle_range() {
+    let adapter = boot(ANGLE_SLIDER);
+    find(&adapter, "quarter 90");
+}
+
 /// std's `io::Error` and `io::ErrorKind`, as editor and markdown use them.
 const IO_ERRORS: &str = r#"
 use iced::widget::{column, text};

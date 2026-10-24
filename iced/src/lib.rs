@@ -297,6 +297,13 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             _ => builder.value_type::<iced::Radians>(path, &[], capabilities)?,
         };
     }
+    // `Degrees::RANGE` and `Radians::RANGE`, a `RangeInclusive` of the angle.
+    // Source cannot name it, as Rawr's ranges are of numbers.
+    builder.private_type::<marker::AngleRange>(
+        "RangeInclusive",
+        &["T"],
+        &[capability::Kind::Clone, capability::Kind::Send, capability::Kind::Static],
+    )?;
     builder.default_value_type::<iced::mouse::Interaction>(
         "mouse::Interaction",
         &[],
@@ -816,6 +823,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     for name in ["widget::slider", "widget::vertical_slider"] {
         for number in [type_ref::Builtin::I64, type_ref::Builtin::F64] {
             builder.item(item::Definition::function(name, slider_signature(number)?)?)?;
+        }
+        for angle in ["Degrees", "Radians"] {
+            builder.item(item::Definition::function(name, angle_slider_signature(angle)?)?)?;
         }
     }
     declare_progress(&mut builder)?;
@@ -1999,6 +2009,24 @@ fn slider_signature(number: type_ref::Builtin) -> Result<signature::Definition, 
     signature.output(type_ref::Type::applied(
         "widget::Slider",
         [type_ref::Type::builtin(number), type_ref::Type::parameter("Message")?],
+    )?);
+    Ok(signature.finish())
+}
+
+/// `slider(Degrees::RANGE, degrees, on_change)`, or over `Radians`.
+fn angle_slider_signature(angle: &str) -> Result<signature::Definition, host::Error> {
+    let angle = || type_ref::Type::registered(angle);
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Message", &[])?;
+    signature.parameter(type_ref::Type::applied("RangeInclusive", [angle()?])?);
+    signature.parameter(angle()?);
+    signature.parameter(type_ref::Type::callable(
+        angle()?,
+        type_ref::Type::parameter("Message")?,
+    ));
+    signature.output(type_ref::Type::applied(
+        "widget::Slider",
+        [angle()?, type_ref::Type::parameter("Message")?],
     )?);
     Ok(signature.finish())
 }
@@ -4028,6 +4056,12 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
         builders(builder, "widget::Image", "rotation", [input])?;
     }
     builder.item(item::Definition::associated_value("Radians::PI", radians()?)?)?;
+    for (path, angle) in [("Degrees", degrees()?), ("Radians", radians()?)] {
+        builder.item(item::Definition::associated_value(
+            format!("{path}::RANGE"),
+            type_ref::Type::applied("RangeInclusive", [angle])?,
+        )?)?;
+    }
     for (owner, name, input, output) in [
         ("Degrees", "mul", f64(), degrees()?),
         ("Radians", "add", radians()?, radians()?),

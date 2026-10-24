@@ -196,11 +196,19 @@ impl widget::Descriptor for marker::Slider {
             Err(diagnostic) => return diagnostic,
         };
         let mapper = context.message_mapper(self.on_change.clone());
-        // iced's slider over this slider's number: `i64`, or `f64`.
+        // iced's slider over this slider's number: `i64`, or `f64`. An
+        // angle's slider moves over its `f64` and hands back the angle.
+        let number = self.number;
         macro_rules! native {
             ($slider:path, $number:ty, $along:ident, $across:ident) => {{
                 let range = (*self.range.start() as $number)..=(*self.range.end() as $number);
-                let on_change = move |value: $number| mapper.map(Dynamic::from(value));
+                let on_change = move |value: $number| {
+                    mapper.map(match number {
+                        marker::SliderNumber::Degrees => Dynamic::from(iced::Degrees(value as f32)),
+                        marker::SliderNumber::Radians => Dynamic::from(iced::Radians(value as f32)),
+                        _ => Dynamic::from(value),
+                    })
+                };
                 let mut slider = $slider(range, self.value as $number, on_change).step(self.step as $number);
                 if let Some(default) = self.default {
                     slider = slider.default(default as $number);
@@ -221,7 +229,7 @@ impl widget::Descriptor for marker::Slider {
                 slider.boxed()
             }};
         }
-        match (self.vertical, self.float) {
+        match (self.vertical, number != marker::SliderNumber::Integer) {
             (false, false) => native!(iced::widget::slider, rawr::INT, width, height),
             (false, true) => native!(iced::widget::slider, f64, width, height),
             (true, false) => native!(iced::widget::vertical_slider, rawr::INT, height, width),
@@ -1271,15 +1279,22 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 if args.len() != 3 {
                     return Err(arity("slider", 3, args.len()));
                 }
-                let float = args[0].is::<std::ops::RangeInclusive<rawr::FLOAT>>();
-                let range = number_range(args[0], "slider")?;
-                let value = number(args[1], "slider value")?;
+                let (number, range, value) = if args[0].is::<marker::AngleRange>() {
+                    angle_slider(args)?
+                } else {
+                    let float = args[0].is::<std::ops::RangeInclusive<rawr::FLOAT>>();
+                    (
+                        if float { marker::SliderNumber::Float } else { marker::SliderNumber::Integer },
+                        number_range(args[0], "slider")?,
+                        number(args[1], "slider value")?,
+                    )
+                };
                 Ok(Dynamic::from(marker::Slider {
                     witness: call.output_witness().map_err(witness_error)?,
                     identity: widget::Identity::unique(),
                     range,
                     value,
-                    float,
+                    number,
                     on_change: take::<rawr::item::Value>(args[2], "symbolic message mapper")?,
                     step: 1.0,
                     default: None,
@@ -3091,6 +3106,26 @@ pub(super) fn number(value: &Dynamic, operation: &str) -> Result<f64, Box<EvalAl
             value.type_name()
         ))),
     }
+}
+
+/// `slider(Degrees::RANGE, degrees, on_change)`, or over `Radians`: the
+/// angle's number, its range and its value in that unit.
+fn angle_slider(
+    args: &mut [&mut Dynamic],
+) -> Result<(marker::SliderNumber, std::ops::RangeInclusive<f64>, f64), Box<EvalAltResult>> {
+    let range = take::<marker::AngleRange>(args[0], "iced::RangeInclusive")?;
+    Ok(match range {
+        marker::AngleRange::Degrees(range) => (
+            marker::SliderNumber::Degrees,
+            f64::from(range.start().0)..=f64::from(range.end().0),
+            f64::from(take::<iced::Degrees>(args[1], "iced::Degrees")?.0),
+        ),
+        marker::AngleRange::Radians(range) => (
+            marker::SliderNumber::Radians,
+            f64::from(range.start().0)..=f64::from(range.end().0),
+            f64::from(take::<iced::Radians>(args[1], "iced::Radians")?.0),
+        ),
+    })
 }
 
 /// An ascending `RangeInclusive` of `i64` or `f64`.

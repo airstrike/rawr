@@ -339,15 +339,32 @@ pub(crate) struct ComboBox {
     pub(crate) size: Option<f32>,
 }
 
-/// A slider over `i64`, or over `f64` when `float`; its numbers are kept
-/// as `f64` either way.
+/// The number a slider moves over.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SliderNumber {
+    Integer,
+    Float,
+    Degrees,
+    Radians,
+}
+
+/// iced's `Degrees::RANGE` or `Radians::RANGE`, a `RangeInclusive` of
+/// an angle.
+#[derive(Clone)]
+pub(crate) enum AngleRange {
+    Degrees(std::ops::RangeInclusive<iced::Degrees>),
+    Radians(std::ops::RangeInclusive<iced::Radians>),
+}
+
+/// A slider over `i64`, `f64`, `Degrees` or `Radians`; its numbers are
+/// kept as `f64` in every case.
 #[derive(Clone)]
 pub(crate) struct Slider {
     pub(crate) witness: rawr::host::runtime::Witness,
     pub(crate) identity: widget::Identity,
     pub(crate) range: std::ops::RangeInclusive<f64>,
     pub(crate) value: f64,
-    pub(crate) float: bool,
+    pub(crate) number: SliderNumber,
     pub(crate) on_change: item::Value,
     pub(crate) step: f64,
     pub(crate) default: Option<f64>,
