@@ -838,6 +838,62 @@ pub fn main() -> iced::Result {{ iced::application(State::new, State::update, St
     assert!(error.contains("f64") && error.contains("E0308"), "{error}");
 }
 
+/// A `gradient::Linear` converts into a `Background` (iced's `From`) where
+/// the field needs one, and into the container style where a style is
+/// needed. A value the field does not take is a mismatch with its type.
+#[test]
+fn gradients_convert_into_backgrounds_and_styles() {
+    let adapter = boot_with(
+        r#"column![
+            container(text("field")).style(move |_theme| container::Style {
+                background: Some(fade().into()),
+                ..container::Style::default()
+            }),
+            container(text("whole")).style(move |_theme| fade().into()),
+            container(text("bound")).style(move |_theme| {
+                let fill: iced::Background = fade().into();
+                container::Style { background: Some(fill), ..container::Style::default() }
+            }),
+        ]"#,
+        r#"
+use iced::{gradient, Degrees};
+fn fade() -> gradient::Linear {
+    gradient::Linear::new(Degrees(90.0))
+        .add_stop(0.0, Color::BLACK)
+        .add_stop(1.0, Color::WHITE)
+}
+"#,
+    );
+    styled(&adapter, "field");
+    styled(&adapter, "whole");
+    styled(&adapter, "bound");
+    let source = r#"
+use iced::widget::{container, text};
+use iced::Element;
+#[derive(Debug, Clone)] enum Message {}
+#[derive(Default)] struct State;
+impl State {
+    fn update(&mut self, _message: Message) {}
+    fn view(&self) -> Element<'_, Message> {
+        container(text("x"))
+            .style(|_theme| container::Style { background: Some(5), ..container::Style::default() })
+            .boxed()
+    }
+}
+pub fn main() -> iced::Result { iced::run(State::update, State::view) }
+"#;
+    let error = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check_source(source)
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("expected 'Option<iced::Background>', found 'Option<{integer}>'"),
+        "{error}"
+    );
+}
+
 #[test]
 fn container_styles_read_their_border() {
     let adapter = boot_with(

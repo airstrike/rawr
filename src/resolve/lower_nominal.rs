@@ -7918,6 +7918,16 @@ struct PendingConversion {
     source: Ty,
     target: Ty,
     span: Span,
+    /// A facade value's `.into()`: its type's own `into` forms, chosen by
+    /// their output, or the target's `from` of it.
+    host: Option<HostInto>,
+}
+
+/// The `into` forms of a facade value's type, and the value's span.
+struct HostInto {
+    forms: Vec<crate::host::item::Definition>,
+    owner: Option<crate::host::facade::Dependency>,
+    receiver: Span,
 }
 
 /// The generic parameter `ty` is, or refers to.
@@ -12356,12 +12366,132 @@ impl<'a> Parser<'a> {
             source,
             target: target.clone(),
             span: expression,
+            host: None,
         });
         // `placeholder(value))`: the placeholder becomes `helper(`, or
         // `dispatcher(witness, ` for a generic target.
         let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
         rendered.push_text(")");
         self.operator_expr(rendered, target, expression)
+    }
+
+    /// `value.into()` of a facade value whose type has its own `into`
+    /// forms: a conversion chosen once the target is known
+    /// (`finish_conversions`), by an `into` form's output or the target's
+    /// `from` of the value, as Rust's `Into` comes from `From`.
+    fn parse_host_into(&mut self, value: ParsedExpr, source: &Ty, end: Position) -> ParsedExpr {
+        let expression = span(value.span.start(), end);
+        let Ty::Host { proof, .. } = source else {
+            return value;
+        };
+        let path = format!("{}::into", proof.definition.path());
+        let forms = self
+            .models
+            .host_items(&path)
+            .map(<[_]>::to_vec)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|item| {
+                item.kind() == crate::host::item::Kind::Method && item.signature().parameters().is_empty()
+            })
+            .collect();
+        let owner = self.models.item_owner(&path).cloned();
+        let placeholder = conversion_placeholder(self.pending_conversions.len());
+        // Room for the longest helper an op can be named.
+        let width = placeholder.len() + 1;
+        let placeholder = format!("{placeholder:_<width$}");
+        let target = self.inference.fresh();
+        self.pending_conversions.push(PendingConversion {
+            placeholder: placeholder.clone(),
+            source: source.clone(),
+            target: target.clone(),
+            span: expression,
+            host: Some(HostInto {
+                forms,
+                owner,
+                receiver: value.span,
+            }),
+        });
+        let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
+        rendered.push_text(")");
+        self.operator_expr(rendered, target, expression)
+    }
+
+    /// The helper of a facade value's `.into()` into `target`: an `into`
+    /// form of its type whose output is `target`, or `target`'s `from` that
+    /// takes it. `None` when neither converts it.
+    fn host_into_helper(
+        &mut self,
+        host: &HostInto,
+        source: &Ty,
+        target: &Ty,
+        call: Span,
+    ) -> Result<Option<String>, Error> {
+        for item in &host.forms {
+            let checkpoint = self.inference.checkpoint();
+            let fits = self
+                .instantiate_host_signature(item, Some(source), Some(&[]))
+                .ok()
+                .filter(|signature| self.unify_type(&signature.output, target));
+            let Some(signature) = fits else {
+                self.inference.rollback(checkpoint);
+                continue;
+            };
+            self.inference.commit(checkpoint);
+            let receiver = self.operator_expr(origin::Fragment::default(), source.clone(), host.receiver);
+            let output = self.inference.resolve(&signature.output);
+            return self
+                .push_intrinsic(
+                    item.clone(),
+                    host.owner.clone(),
+                    Some(&receiver),
+                    &mut Vec::new(),
+                    output,
+                    signature.requirements,
+                    call,
+                )
+                .map(Some);
+        }
+        let Ty::Host { proof, .. } = target else {
+            return Ok(None);
+        };
+        let path = format!("{}::from", proof.definition.path());
+        let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+            return Ok(None);
+        };
+        let owner = self.models.item_owner(&path).cloned();
+        let argument = self.operator_expr(origin::Fragment::default(), source.clone(), host.receiver);
+        for item in items {
+            if item.kind() != crate::host::item::Kind::AssociatedFunction {
+                continue;
+            }
+            let checkpoint = self.inference.checkpoint();
+            let fits = self
+                .instantiate_host_signature(&item, None, Some(std::slice::from_ref(&argument)))
+                .ok()
+                .filter(|signature| {
+                    matches!(&signature.inputs[..], [input] if self.unify_type(input, source))
+                        && self.unify_type(&signature.output, target)
+                });
+            let Some(signature) = fits else {
+                self.inference.rollback(checkpoint);
+                continue;
+            };
+            self.inference.commit(checkpoint);
+            let output = self.inference.resolve(&signature.output);
+            return self
+                .push_intrinsic(
+                    item,
+                    owner,
+                    None,
+                    &mut vec![argument],
+                    output,
+                    signature.requirements,
+                    call,
+                )
+                .map(Some);
+        }
+        Ok(None)
     }
 
     /// The generic parameters `T` in scope with a bound `T: From<S>` that
@@ -12408,6 +12538,24 @@ impl<'a> Parser<'a> {
             } else if self.unifies(&target, &conversion.source) {
                 self.unify_type(&target, &conversion.source);
                 String::new()
+            } else if let Some(host) = &conversion.host {
+                let source = self.inference.resolve(&conversion.source);
+                match self.host_into_helper(host, &source, &target, conversion.span)? {
+                    Some(helper) => helper,
+                    None => {
+                        let (source, target) = (source.name(&self.models), target.name(&self.models));
+                        return Err(Error::InvalidMethodCall {
+                            owner: source.clone(),
+                            method: "into".into(),
+                            reason: format!(
+                                "`{target}` has no `From<{source}>`, so `{source}` does not convert \
+                                 into it (E0277)"
+                            )
+                            .into(),
+                            call: conversion.span,
+                        });
+                    }
+                }
             } else if let Ty::Param(param) = &target
                 && let Some((_, from)) = self
                     .generic_from_sources(&conversion.source)
@@ -13609,19 +13757,46 @@ impl<'a> Parser<'a> {
         }
 
         match match_count {
-            0 => Err(Error::InvalidHostOperation {
-                item: first.path().into(),
-                reason: format!(
-                    "no form of it takes ({})",
-                    arguments
-                        .iter()
-                        .map(|argument| self.inference.resolve(&argument.ty).name(&self.models))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-                .into(),
-                operation: call,
-            }),
+            0 => {
+                // What each form takes, for the mismatch the error names.
+                let mut forms = Vec::<String>::new();
+                for item in items {
+                    let checkpoint = self.inference.checkpoint();
+                    if let Ok(signature) = self.instantiate_host_signature(item, receiver, None)
+                        && signature.inputs.len() == arguments.len()
+                    {
+                        let form = signature
+                            .inputs
+                            .iter()
+                            .map(|input| self.inference.resolve(input).name(&self.models).to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let form = format!("({form})");
+                        if !forms.contains(&form) {
+                            forms.push(form);
+                        }
+                    }
+                    self.inference.rollback(checkpoint);
+                }
+                let takes = match forms.as_slice() {
+                    [] => String::new(),
+                    [form] => format!("; it takes {form}"),
+                    forms => format!("; its forms take {}", forms.join(", ")),
+                };
+                Err(Error::InvalidHostOperation {
+                    item: first.path().into(),
+                    reason: format!(
+                        "no form of it takes ({}){takes}",
+                        arguments
+                            .iter()
+                            .map(|argument| self.inference.resolve(&argument.ty).name(&self.models))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                    .into(),
+                    operation: call,
+                })
+            }
             1 => {
                 let Some((item, signature, patch)) = matched else {
                     return Err(Error::InvalidHostOperation {
@@ -26673,8 +26848,17 @@ impl<'a> Parser<'a> {
                             })
                         })
                 {
-                    self.pending_arguments = Some((Vec::new(), end));
-                    value = self.parse_host_method(value, "into".into(), member_span)?;
+                    // Chosen by the type the use site needs, as Rust infers
+                    // `Into`'s target: `gradient.into()` is a container
+                    // style, or a `Background` through `Background::from`.
+                    // A generic body's facade calls carry witnesses, so it
+                    // calls the type's own `into`.
+                    if self.host_witnesses.is_empty() {
+                        value = self.parse_host_into(value, &source, end);
+                    } else {
+                        self.pending_arguments = Some((Vec::new(), end));
+                        value = self.parse_host_method(value, "into".into(), member_span)?;
+                    }
                     continue;
                 }
                 value = if self.projected_host_types(&source).is_empty()
@@ -33561,6 +33745,9 @@ impl<'a> Parser<'a> {
         let end = self.expect(Token::RightBrace, "'}' after struct fields")?;
         let mut prelude = origin::Fragment::plain("({\n");
         let mut values = Vec::new();
+        // Each field's declared type, which a value no builder takes is
+        // reported against.
+        let mut declared_types = Vec::new();
         for (field, field_span, value) in fields {
             // The field's declared type is the value's expected type, as in
             // Rust: `background: Some(color.into())` converts into the
@@ -33588,6 +33775,7 @@ impl<'a> Parser<'a> {
                         matches!(item.signature().parameters(), [input] if input == output)
                     })
                 });
+            let mut field_type = None;
             if let Some(declared) = reader
                 && let Ok(declared) = self.instantiate_host_type(
                     &declared,
@@ -33603,7 +33791,9 @@ impl<'a> Parser<'a> {
                 } else {
                     self.inference.rollback(checkpoint);
                 }
+                field_type = Some(declared);
             }
+            declared_types.push(field_type);
             let temporary = self.temporary("field");
             prelude.push_text(format!("let {temporary} = "));
             prelude.push(value.rendered_source());
@@ -33662,9 +33852,28 @@ impl<'a> Parser<'a> {
                 self.parse_host_function(items.into_boxed_slice(), owner, name_span)?
             }
         };
-        for (field, field_span, bound) in values {
+        for ((field, field_span, bound), declared) in values.into_iter().zip(declared_types) {
+            // A value no builder of the field takes is a mismatch with the
+            // field's type, at the value, as rustc reports it (E0308).
+            let mismatch = declared.map(|declared| {
+                (
+                    self.inference.resolve(&declared).name(&self.models),
+                    self.inference.resolve(&bound.ty).name(&self.models),
+                    bound.span,
+                )
+            });
             self.pending_arguments = Some((vec![bound], end));
-            value = self.parse_host_method(value, field, field_span)?;
+            value = match (self.parse_host_method(value, field, field_span), mismatch) {
+                (Ok(value), _) => value,
+                (Err(Error::InvalidHostOperation { .. }), Some((expected, actual, expression))) => {
+                    return Err(Error::TypeMismatch {
+                        expected,
+                        actual,
+                        expression,
+                    });
+                }
+                (Err(error), _) => return Err(error),
+            };
         }
         // An enum's struct variant (`HandleShape::Rectangle { .. }`) is a
         // builder of its own, which its `into` makes the enum.

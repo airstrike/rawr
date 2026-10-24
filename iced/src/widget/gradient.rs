@@ -1,4 +1,5 @@
-//! iced's `gradient::Linear`, which a container style is made from.
+//! iced's `gradient::Linear`, which a container style or a background is
+//! made from.
 
 use iced::gradient::Linear;
 use iced::{Color, Radians};
@@ -43,4 +44,15 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(iced::widget::container::Style::from(linear)))
         })
         .expect("the iced facade must retain gradient::Linear::into");
+    // `Background::from(linear)`, and `linear.into()` where a `Background`
+    // is expected.
+    builder
+        .bind("iced::Background::from", |args| {
+            let [linear] = args else {
+                return Err(arity("Background::from", 1, args.len()));
+            };
+            let linear = take::<Linear>(linear, "iced::gradient::Linear")?;
+            Ok(Dynamic::from(iced::Background::from(linear)))
+        })
+        .expect("the iced facade must retain Background::from");
 }

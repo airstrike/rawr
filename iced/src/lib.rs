@@ -4162,6 +4162,16 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
         receiver::Mode::Owned,
         output_signature("widget::container::Style")?,
     )?)?;
+    // iced's `impl From<gradient::Linear> for Background`, which
+    // `linear.into()` takes where a `Background` is expected.
+    let mut background = signature::Builder::new();
+    background
+        .parameter(linear()?)
+        .output(type_ref::Type::registered("Background")?);
+    builder.item(item::Definition::associated_function(
+        "Background::from",
+        background.finish(),
+    )?)?;
     // `f32::from(degrees)`: the angle as a number.
     for path in ["Degrees", "Radians"] {
         builder.item(item::Definition::method(
