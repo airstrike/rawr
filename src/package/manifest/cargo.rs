@@ -101,8 +101,33 @@ impl Cargo {
             .and_then(|item| item.get("name"))
             .and_then(|item| item.as_str())
             .map_or_else(|| name.replace('-', "_"), str::to_owned);
-        let dependencies =
-            rust::cargo_dependencies(&text, root, table.get("dependencies"), inherited.as_ref())?;
+        let mut dependencies =
+            rust::cargo_dependencies(&text, root, table.get("dependencies"), inherited.as_ref())?
+                .into_vec();
+        // `[target.'cfg(..)'.dependencies]` whose `cfg` holds here, as
+        // Cargo builds them for this target.
+        for (key, target) in table
+            .get("target")
+            .and_then(Item::as_table_like)
+            .into_iter()
+            .flat_map(|targets| targets.iter())
+        {
+            if crate::resolve::cfg_text_holds(key) != Some(true) {
+                continue;
+            }
+            let more = rust::cargo_dependencies(
+                &text,
+                root,
+                target.as_table_like().and_then(|target| target.get("dependencies")),
+                inherited.as_ref(),
+            )?;
+            for dependency in more {
+                if !dependencies.iter().any(|known| known.alias == dependency.alias) {
+                    dependencies.push(dependency);
+                }
+            }
+        }
+        let dependencies = dependencies.into_boxed_slice();
         Ok(Some(Self {
             path,
             package: name,
@@ -112,5 +137,47 @@ impl Cargo {
             dependencies,
             text,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cargo;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn target_dependencies_join_when_their_cfg_holds_here() {
+        let text = r#"
+[package]
+name = "tour"
+version = "0.1.0"
+
+[dependencies]
+iced = "0.13"
+
+[target."cfg(not(target_arch = \"wasm32\"))".dependencies]
+tracing-subscriber = "0.3"
+
+[target.'cfg(any(unix, windows))'.dependencies]
+open = "5"
+
+[target."cfg(target_arch = \"wasm32\")".dependencies]
+console_log = "1.0"
+"#;
+        let cargo = Cargo::parse(
+            PathBuf::from("/tour/Cargo.toml"),
+            text.to_owned(),
+            Path::new("/tour"),
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        let aliases = cargo
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.alias.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(aliases, ["iced", "tracing_subscriber", "open"]);
+        assert_eq!(crate::resolve::cfg_text_holds("x86_64-pc-windows-msvc"), None);
     }
 }

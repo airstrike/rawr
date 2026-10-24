@@ -1919,7 +1919,7 @@ fn body_source(source: &str, body: &item::Body) -> String {
 }
 
 /// Whether `cfg(name = "value")` holds on the target Rawr runs on.
-fn cfg_value(name: &str, value: &str) -> bool {
+pub(crate) fn cfg_value(name: &str, value: &str) -> bool {
     let actual = match name {
         "target_arch" => {
             if cfg!(target_arch = "aarch64") {
@@ -1973,7 +1973,7 @@ fn cfg_value(name: &str, value: &str) -> bool {
 }
 
 /// Whether the `cfg` flag `name` is set on the target Rawr runs on.
-fn cfg_flag(name: &str) -> bool {
+pub(crate) fn cfg_flag(name: &str) -> bool {
     match name {
         "unix" => cfg!(unix),
         "windows" => cfg!(windows),

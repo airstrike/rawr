@@ -1472,6 +1472,51 @@ pub(crate) fn std_cell(path: &str) -> bool {
     )
 }
 
+/// Whether the `cfg(..)` text of a Cargo `[target.'cfg(..)'.dependencies]`
+/// key holds on the target Rawr runs on: `None` when it is no `cfg`.
+pub(crate) fn cfg_text_holds(text: &str) -> Option<bool> {
+    fn predicate(text: &mut &str) -> Option<bool> {
+        *text = text.trim_start();
+        let end = text
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(text.len());
+        let (name, rest) = text.split_at(end);
+        *text = rest.trim_start();
+        if let Some(rest) = text.strip_prefix('(') {
+            *text = rest;
+            let mut values = Vec::new();
+            loop {
+                *text = text.trim_start();
+                if let Some(rest) = text.strip_prefix(')') {
+                    *text = rest;
+                    break;
+                }
+                values.push(predicate(text)?);
+                *text = text.trim_start();
+                if let Some(rest) = text.strip_prefix(',') {
+                    *text = rest;
+                }
+            }
+            return match name {
+                "all" => Some(values.iter().all(|value| *value)),
+                "any" => Some(values.iter().any(|value| *value)),
+                "not" if values.len() == 1 => Some(!values[0]),
+                _ => None,
+            };
+        }
+        if let Some(rest) = text.strip_prefix('=') {
+            let rest = rest.trim_start().strip_prefix('"')?;
+            let close = rest.find('"')?;
+            *text = &rest[close + 1..];
+            return Some(lower_nominal::cfg_value(name, &rest[..close]));
+        }
+        Some(lower_nominal::cfg_flag(name))
+    }
+    let mut inner = text.trim().strip_prefix("cfg(")?.strip_suffix(')')?;
+    let holds = predicate(&mut inner)?;
+    inner.trim().is_empty().then_some(holds)
+}
+
 /// `std::rc::Rc` or `std::sync::Arc` as a path is written: the pointer's
 /// name.
 pub(crate) fn std_pointer(path: &str) -> Option<&'static str> {
