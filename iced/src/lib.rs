@@ -759,6 +759,12 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             generic_empty_signature(owner)?,
         )?)?;
     }
+    // iced's `keyed_column(pairs)`: a Column whose children carry the key
+    // of their `(key, element)` pair.
+    builder.item(item::Definition::function(
+        "widget::keyed_column",
+        keyed_children_signature("widget::Column")?,
+    )?)?;
     builder.item(item::Definition::function(
         "widget::container",
         container_signature()?,
@@ -1864,6 +1870,21 @@ fn children_signature(output: &str) -> Result<signature::Definition, host::Error
     let mut signature = signature::Builder::new();
     signature.type_parameter("Message", &[])?;
     signature.parameter(children()?);
+    signature.output(type_ref::Type::applied(
+        output,
+        [type_ref::Type::parameter("Message")?],
+    )?);
+    Ok(signature.finish())
+}
+
+fn keyed_children_signature(output: &str) -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    signature.type_parameter("Key", &[])?;
+    signature.type_parameter("Message", &[])?;
+    signature.parameter(type_ref::Type::slice(type_ref::Type::tuple([
+        type_ref::Type::parameter("Key")?,
+        type_ref::Type::applied("Element", [type_ref::Type::parameter("Message")?])?,
+    ])?));
     signature.output(type_ref::Type::applied(
         output,
         [type_ref::Type::parameter("Message")?],

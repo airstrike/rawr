@@ -1069,6 +1069,14 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             })
             .expect("the iced facade must retain the exact column functions");
     }
+    builder
+        .bind_with_context("iced::widget::keyed_column", |call, args| {
+            if args.len() != 1 {
+                return Err(arity("keyed_column", 1, args.len()));
+            }
+            new_column(call, take_keyed_children(args[0])?)
+        })
+        .expect("the iced facade must retain the exact keyed_column function");
     for path in [
         "iced::widget::row",
         "iced::widget::Row::with_children",
@@ -2431,6 +2439,43 @@ pub(super) fn take_children(value: &mut Dynamic) -> Result<Vec<widget::Value>, B
         .into_iter()
         .map(|mut child| take::<widget::Value>(&mut child, "iced::Element"))
         .collect()
+}
+
+/// The children of `keyed_column(..)`: a list of `(key, element)` pairs,
+/// each element keyed by its pair's key.
+fn take_keyed_children(value: &mut Dynamic) -> Result<Vec<widget::Value>, Box<EvalAltResult>> {
+    let pairs = value.take().into_array().map_err(|actual| {
+        runtime_error(format!("expected a list of keyed widgets, found `{actual}`"))
+    })?;
+    pairs
+        .into_iter()
+        .map(|pair| {
+            let mut pair = pair.into_array().map_err(|actual| {
+                runtime_error(format!("expected a `(key, widget)` pair, found `{actual}`"))
+            })?;
+            let [key, child] = pair.as_mut_slice() else {
+                return Err(runtime_error(format!(
+                    "expected a `(key, widget)` pair, found {} values",
+                    pair.len()
+                )));
+            };
+            let child = take::<widget::Value>(child, "iced::Element")?;
+            Ok(child.keyed(key_value(key)))
+        })
+        .collect()
+}
+
+/// The reconciliation key of one Rawr value. An integer or a string keys
+/// by itself. Any other value keys by its `Debug` text, which is the
+/// canonical text of an imported value such as a `Uuid`.
+fn key_value(key: &Dynamic) -> widget::key::Value {
+    if let Ok(key) = key.as_int() {
+        widget::key::Value::integer(key)
+    } else if let Ok(key) = key.as_immutable_string_ref() {
+        widget::key::Value::string(key.clone())
+    } else {
+        widget::key::Value::string(format!("{key:?}").into())
+    }
 }
 
 fn new_column(

@@ -1286,3 +1286,24 @@ fn float_scales_translates_and_styles_its_content() {
     find(&adapter, "Big text");
     find(&adapter, "moved");
 }
+
+#[test]
+fn keyed_column_keys_each_child_by_its_pair() {
+    let adapter = boot(
+        r#"
+        column![
+            iced::widget::keyed_column(
+                ["first", "second"]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, label)| (index as i64, text(*label).boxed())),
+            )
+            .spacing(10),
+            iced::widget::keyed_column(vec![("third", text("third").boxed())]),
+        ]
+        "#,
+    );
+    find(&adapter, "first");
+    find(&adapter, "second");
+    find(&adapter, "third");
+}

@@ -35656,6 +35656,24 @@ impl<'a> Parser<'a> {
         };
         let fixed = matches!(source, Ty::Array { length: Some(_), .. });
         let iterator = matches!(source, Ty::Iter(_));
+        // iced's `keyed_column(pairs)`: an iterator of `(key, Element)`
+        // pairs, a facade slice of tuples that hold a widget.
+        if iterator
+            && let Ty::Tuple(members) = &target_element
+            && members
+                .iter()
+                .any(|member| matches!(self.inference.resolve(member), Ty::Host { .. }))
+        {
+            let checkpoint = self.inference.checkpoint();
+            if !self.unify_type(&target_element, &source_element) {
+                self.inference.rollback(checkpoint);
+                return Ok(false);
+            }
+            self.inference.commit(checkpoint);
+            self.collect_children(value);
+            value.ty = target.clone();
+            return Ok(true);
+        }
         if !matches!(target_element, Ty::Host { .. })
             || !matches!(source_element, Ty::Host { .. } | Ty::Script(..))
         {
