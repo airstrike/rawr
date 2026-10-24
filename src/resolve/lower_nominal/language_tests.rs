@@ -8137,3 +8137,59 @@ fn language_one_variant_enum_let_is_irrefutable() {
     );
     assert!(error.contains("refutable pattern"), "{error}");
 }
+
+#[derive(Clone)]
+struct UiTask;
+
+/// An iced-shaped `Task<M>` with `none`, `done` and `map`.
+fn task_facade() -> crate::host::facade::Definition {
+    use crate::host::{facade, item, signature, type_ref};
+    let mut builder = facade::Builder::new("ui", facade::Abi::new(1).unwrap()).unwrap();
+    builder.type_::<UiTask>("Task", &["Message"], &[]).unwrap();
+    let message = || type_ref::Type::parameter("Message").unwrap();
+    let task = |ty| type_ref::Type::applied("Task", [ty]).unwrap();
+    let mut none = signature::Builder::new();
+    none.type_parameter("Message", &[]).unwrap();
+    none.output(task(message()));
+    builder
+        .item(item::Definition::associated_function("Task::none", none.finish()).unwrap())
+        .unwrap();
+    let mut done = signature::Builder::new();
+    done.type_parameter("Message", &[]).unwrap();
+    done.parameter(message()).output(task(message()));
+    builder
+        .item(item::Definition::associated_function("Task::done", done.finish()).unwrap())
+        .unwrap();
+    let mut map = signature::Builder::new();
+    map.type_parameter("Message", &[]).unwrap();
+    map.type_parameter("Parent", &[]).unwrap();
+    let parent = || type_ref::Type::parameter("Parent").unwrap();
+    map.parameter(type_ref::Type::callable(message(), parent()))
+        .output(task(parent()));
+    builder
+        .item(
+            item::Definition::method("Task::map", crate::receiver::Mode::Owned, map.finish())
+                .unwrap(),
+        )
+        .unwrap();
+    builder.finish().unwrap()
+}
+
+#[test]
+fn language_variant_constructor_keeps_its_payload_type_as_a_host_callable() {
+    let mut engine = Engine::new();
+    engine.register_host_facade(task_facade()).unwrap();
+    engine
+        .compile_executable(
+            r#"
+use ui::Task;
+#[derive(Debug, Clone)]
+enum Message { Number(u32), Byte(u8), Pair(u32, bool) }
+fn count() -> Task<u32> { Task::done(7) }
+pub fn numbers() -> Task<Message> { count().map(Message::Number) }
+pub fn bytes() -> Task<Message> { Task::done(7u8).map(Message::Byte) }
+pub fn none() -> Task<Message> { Task::<Message>::none() }
+"#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+}

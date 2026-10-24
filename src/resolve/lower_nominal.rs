@@ -12631,7 +12631,20 @@ impl<'a> Parser<'a> {
         // slider's `i64`, takes it as its runtime kind, as the facade's
         // number inputs do (`deref_facade_strings`).
         let facade = items.iter().all(|item| item.imported_identity().is_none());
-        for argument in arguments.iter_mut() {
+        // A callable whose input is the item's type parameter, as
+        // `Task::map`'s, takes the function's own input type.
+        let generic_input = |index: usize| {
+            items.iter().any(|item| {
+                item.signature().parameters().get(index).is_some_and(|parameter| {
+                    matches!(
+                        parameter.shape(),
+                        crate::host::type_ref::Shape::Callable { input, .. }
+                            if matches!(input.shape(), crate::host::type_ref::Shape::Parameter(_))
+                    )
+                })
+            })
+        };
+        for (index, argument) in arguments.iter_mut().enumerate() {
             // A local `fn` pointer, as `message: fn(f32) -> _`, is passed
             // as the closure that calls it.
             if facade
@@ -12662,6 +12675,7 @@ impl<'a> Parser<'a> {
                 argument.ty = target;
             }
             if facade
+                && !generic_input(index)
                 && let Ty::Callable {
                     inputs,
                     output,
@@ -12915,6 +12929,15 @@ impl<'a> Parser<'a> {
                 })
             })
         };
+        // A number passed as an item's type parameter, as `Task::done`'s,
+        // keeps its type, as a function passed to it does.
+        let generic = |index: usize| {
+            items.iter().any(|item| {
+                item.signature().parameters().get(index).is_some_and(|parameter| {
+                    matches!(parameter.shape(), crate::host::type_ref::Shape::Parameter(_))
+                })
+            })
+        };
         // A facade takes `&str`, slices and borrowed facade values, such as
         // iced's `&Theme`, as their owned types. Its `f64` and `i64` inputs stand
         // for iced's `f32` and `u16`/`u32` (`impl Into<Pixels>`, `Padding`):
@@ -12960,8 +12983,8 @@ impl<'a> Parser<'a> {
                 {
                     argument.ty = Ty::Option(target.clone());
                 }
-                Ty::Float(Float::F32) => argument.ty = Ty::Float(Float::F64),
-                Ty::Int(kind) if !matches!(kind, Int::I64 | Int::Var(_)) => {
+                Ty::Float(Float::F32) if !generic(index) => argument.ty = Ty::Float(Float::F64),
+                Ty::Int(kind) if !matches!(kind, Int::I64 | Int::Var(_)) && !generic(index) => {
                     argument.ty = Ty::Int(Int::I64);
                 }
                 // A generic `T: IntoFragment` is its text, as iced's
