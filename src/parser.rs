@@ -47,7 +47,7 @@ impl PERR {
     #[cold]
     #[inline(never)]
     fn into_err(self, pos: Position) -> ParseError {
-        ParseError(self.into(), pos)
+        ParseError(self.into(), pos, crate::types::parse_error::Rendered::default())
     }
 }
 
@@ -3173,7 +3173,7 @@ impl Engine {
                 Ok(false) => return Err(PERR::ForbiddenVariable(name.into()).into_err(pos)),
                 Err(err) => {
                     return Err(match *err {
-                        EvalAltResult::ErrorParsing(e, pos) => e.into_err(pos),
+                        EvalAltResult::ErrorParsing(e, pos, _) => e.into_err(pos),
                         _ => PERR::ForbiddenVariable(name.into()).into_err(pos),
                     })
                 }

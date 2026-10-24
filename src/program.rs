@@ -6,6 +6,7 @@ pub mod construction;
 mod error;
 mod executable;
 mod generation;
+pub(crate) mod hosted;
 pub(crate) mod model;
 pub(crate) mod origin;
 mod path;

@@ -31,6 +31,9 @@ pub struct AST {
     /// cannot discard their proof-carrying operations.
     #[cfg(not(feature = "no_function"))]
     support: crate::SharedModule,
+    /// The exported host items this program calls, bound to its engine's
+    /// registry on first evaluation.
+    host: Option<crate::Shared<crate::program::hosted::Hosted>>,
     /// Embedded module resolver, if any.
     #[cfg(not(feature = "no_module"))]
     pub(crate) resolver: Option<crate::Shared<crate::module::resolvers::StaticModuleResolver>>,
@@ -89,6 +92,7 @@ impl AST {
             lib: functions.into(),
             #[cfg(not(feature = "no_function"))]
             support: crate::Module::new().into(),
+            host: None,
             #[cfg(not(feature = "no_module"))]
             resolver: None,
         }
@@ -138,6 +142,7 @@ impl AST {
             lib: crate::Module::new().into(),
             #[cfg(not(feature = "no_function"))]
             support: crate::Module::new().into(),
+            host: None,
             #[cfg(not(feature = "no_module"))]
             resolver: None,
         }
@@ -227,6 +232,14 @@ impl AST {
     pub(crate) const fn shared_support(&self) -> &crate::SharedModule {
         &self.support
     }
+    /// The exported host items this program calls.
+    pub(crate) fn host(&self) -> Option<&crate::program::hosted::Hosted> {
+        self.host.as_deref()
+    }
+    /// Retain the exported host items this program calls.
+    pub(crate) fn set_host(&mut self, host: crate::program::hosted::Hosted) {
+        self.host = Some(crate::Shared::new(host));
+    }
     /// Merge compiler-owned runtime support into this AST.
     #[cfg(not(feature = "no_function"))]
     pub(crate) fn add_support(&mut self, support: impl Into<crate::SharedModule>) {
@@ -282,6 +295,7 @@ impl AST {
             body: <_>::default(),
             lib: lib.into(),
             support: self.support.clone(),
+            host: self.host.clone(),
             #[cfg(not(feature = "no_module"))]
             resolver: self.resolver.clone(),
         }
@@ -300,6 +314,7 @@ impl AST {
             lib: crate::Module::new().into(),
             #[cfg(not(feature = "no_function"))]
             support: self.support.clone(),
+            host: self.host.clone(),
             #[cfg(not(feature = "no_module"))]
             resolver: self.resolver.clone(),
         }
@@ -523,6 +538,7 @@ impl AST {
         {
             _ast.support = support.into();
         }
+        _ast.host = self.host.clone().or_else(|| other.host.clone());
 
         #[cfg(not(feature = "no_module"))]
         match (
@@ -632,6 +648,10 @@ impl AST {
                     resolver.insert(k, crate::func::shared_take_or_clone(v));
                 }
             }
+        }
+
+        if self.host.is_none() {
+            self.host = other.host.clone();
         }
 
         match (self.body.as_ref(), other.body.as_ref()) {

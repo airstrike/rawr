@@ -27,6 +27,7 @@ mod decrement;
 mod diagnostic;
 mod enum_switch;
 mod eval;
+mod export;
 mod expressions;
 mod float;
 mod fn_ptr;

@@ -588,12 +588,29 @@ impl Engine {
         scope: &Scope,
         scripts: impl AsRef<[S]>,
     ) -> ParseResult<AST> {
-        self.compile_scripts_with_scope_raw(
+        self.compile_scripts_named(scope, scripts, "<script>")
+    }
+
+    /// Compile scripts whose error, if any, prints as rustc prints it, with
+    /// `identity` naming the source.
+    pub(crate) fn compile_scripts_named<S: AsRef<str>>(
+        &self,
+        scope: &Scope,
+        scripts: impl AsRef<[S]>,
+        #[cfg_attr(feature = "no_std", allow(unused_variables))] identity: &str,
+    ) -> ParseResult<AST> {
+        let compiled = self.compile_scripts_with_scope_raw(
             Some(scope),
-            scripts,
+            &scripts,
             #[cfg(not(feature = "no_optimize"))]
             self.optimization_level,
-        )
+        );
+        #[cfg(not(feature = "no_std"))]
+        let compiled = compiled.map_err(|error| {
+            let text: String = scripts.as_ref().iter().map(AsRef::as_ref).collect();
+            error.rendered(identity, &text)
+        });
+        compiled
     }
     /// Join a list of strings and compile into an [`AST`] using own scope at a specific optimization level.
     ///
@@ -618,7 +635,10 @@ impl Engine {
             #[cfg(not(feature = "no_optimize"))]
             optimization_level,
         )
-        .map(program::Executable::into_ast)
+        .map(|executable| {
+            self.freeze_exports(executable.host_dependencies());
+            executable.into_hosted_ast()
+        })
     }
 
     fn compile_executable_scripts_with_scope_raw<S: AsRef<str>>(

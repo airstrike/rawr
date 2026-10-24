@@ -21,7 +21,6 @@ use std::prelude::v1::*;
 ///
 /// Currently, [`EvalAltResult`] is neither [`Send`] nor [`Sync`].
 /// Turn on the `sync` feature to make it [`Send`] `+` [`Sync`].
-#[derive(Debug)]
 #[non_exhaustive]
 #[must_use]
 pub enum EvalAltResult {
@@ -33,7 +32,7 @@ pub enum EvalAltResult {
     ErrorSystem(String, Box<dyn Error + Send + Sync>),
 
     /// Syntax error.
-    ErrorParsing(ParseErrorType, Position),
+    ErrorParsing(ParseErrorType, Position, crate::types::parse_error::Rendered),
 
     /// Shadowing of an existing variable disallowed. Wrapped value is the variable name.
     ErrorVariableExists(String, Position),
@@ -130,12 +129,68 @@ pub enum EvalAltResult {
 
 impl Error for EvalAltResult {}
 
+/// The structure of an error, as `#[derive(Debug)]` writes it. A compile
+/// error the compiler kept its source for prints as rustc prints it, which
+/// is what `fn main() -> Result` shows.
+impl fmt::Debug for EvalAltResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        macro_rules! tuple {
+            ($name:literal, $($field:expr),+) => {
+                f.debug_tuple($name)$(.field($field))+.finish()
+            };
+        }
+        match self {
+            Self::ErrorParsing(.., rendered) if rendered.text().is_some() => {
+                f.write_str(rendered.text().unwrap_or_default())
+            }
+            Self::ErrorParsing(a0, a1, _) => tuple!("ErrorParsing", a0, a1),
+            Self::ErrorSystem(a0, a1) => tuple!("ErrorSystem", a0, a1),
+            Self::ErrorVariableExists(a0, a1) => tuple!("ErrorVariableExists", a0, a1),
+            Self::ErrorForbiddenVariable(a0, a1) => tuple!("ErrorForbiddenVariable", a0, a1),
+            Self::ErrorVariableNotFound(a0, a1) => tuple!("ErrorVariableNotFound", a0, a1),
+            Self::ErrorPropertyNotFound(a0, a1) => tuple!("ErrorPropertyNotFound", a0, a1),
+            Self::ErrorIndexNotFound(a0, a1) => tuple!("ErrorIndexNotFound", a0, a1),
+            Self::ErrorFunctionNotFound(a0, a1) => tuple!("ErrorFunctionNotFound", a0, a1),
+            Self::ErrorModuleNotFound(a0, a1) => tuple!("ErrorModuleNotFound", a0, a1),
+            Self::ErrorInFunctionCall(a0, a1, a2, a3) => tuple!("ErrorInFunctionCall", a0, a1, a2, a3),
+            Self::ErrorInModule(a0, a1, a2) => tuple!("ErrorInModule", a0, a1, a2),
+            Self::ErrorUnboundThis(a0) => tuple!("ErrorUnboundThis", a0),
+            Self::ErrorMismatchDataType(a0, a1, a2) => tuple!("ErrorMismatchDataType", a0, a1, a2),
+            Self::ErrorMismatchOutputType(a0, a1, a2) => tuple!("ErrorMismatchOutputType", a0, a1, a2),
+            Self::ErrorIndexingType(a0, a1) => tuple!("ErrorIndexingType", a0, a1),
+            Self::ErrorArrayBounds(a0, a1, a2) => tuple!("ErrorArrayBounds", a0, a1, a2),
+            Self::ErrorStringBounds(a0, a1, a2) => tuple!("ErrorStringBounds", a0, a1, a2),
+            Self::ErrorBitFieldBounds(a0, a1, a2) => tuple!("ErrorBitFieldBounds", a0, a1, a2),
+            Self::ErrorFor(a0) => tuple!("ErrorFor", a0),
+            Self::ErrorDataRace(a0, a1) => tuple!("ErrorDataRace", a0, a1),
+            Self::ErrorNonPureMethodCallOnConstant(a0, a1) => tuple!("ErrorNonPureMethodCallOnConstant", a0, a1),
+            Self::ErrorAssignmentToConstant(a0, a1) => tuple!("ErrorAssignmentToConstant", a0, a1),
+            Self::ErrorDotExpr(a0, a1) => tuple!("ErrorDotExpr", a0, a1),
+            Self::ErrorArithmetic(a0, a1) => tuple!("ErrorArithmetic", a0, a1),
+            Self::ErrorTooManyOperations(a0) => tuple!("ErrorTooManyOperations", a0),
+            Self::ErrorTooManyVariables(a0) => tuple!("ErrorTooManyVariables", a0),
+            Self::ErrorTooManyModules(a0) => tuple!("ErrorTooManyModules", a0),
+            Self::ErrorStackOverflow(a0) => tuple!("ErrorStackOverflow", a0),
+            Self::ErrorDataTooLarge(a0, a1) => tuple!("ErrorDataTooLarge", a0, a1),
+            Self::ErrorTerminated(a0, a1) => tuple!("ErrorTerminated", a0, a1),
+            Self::ErrorCustomSyntax(a0, a1, a2) => tuple!("ErrorCustomSyntax", a0, a1, a2),
+            Self::ErrorRuntime(a0, a1) => tuple!("ErrorRuntime", a0, a1),
+            Self::LoopBreak(a0, a1, a2) => tuple!("LoopBreak", a0, a1, a2),
+            Self::Return(a0, a1) => tuple!("Return", a0, a1),
+            Self::Exit(a0, a1) => tuple!("Exit", a0, a1),
+        }
+    }
+}
+
 impl EvalAltResult {
     fn display(&self, f: &mut fmt::Formatter<'_>, call_src: &str) -> fmt::Result {
         match self {
             Self::ErrorSystem(s, err) if s.is_empty() => write!(f, "{err}")?,
             Self::ErrorSystem(s, err) => write!(f, "{s}: {err}")?,
 
+            Self::ErrorParsing(.., rendered) if rendered.text().is_some() => {
+                return f.write_str(rendered.text().unwrap_or_default());
+            }
             Self::ErrorParsing(p, ..) => write!(f, "Syntax error: {p}")?,
 
             #[cfg(not(feature = "no_function"))]
@@ -484,7 +539,7 @@ impl EvalAltResult {
         match self {
             Self::ErrorSystem(..) => Position::NONE,
 
-            Self::ErrorParsing(.., pos)
+            Self::ErrorParsing(_, pos, _)
             | Self::ErrorFunctionNotFound(.., pos)
             | Self::ErrorInFunctionCall(.., pos)
             | Self::ErrorInModule(.., pos)
@@ -546,7 +601,7 @@ impl EvalAltResult {
         match self {
             Self::ErrorSystem(..) => (),
 
-            Self::ErrorParsing(.., pos)
+            Self::ErrorParsing(_, pos, _)
             | Self::ErrorFunctionNotFound(.., pos)
             | Self::ErrorInFunctionCall(.., pos)
             | Self::ErrorInModule(.., pos)

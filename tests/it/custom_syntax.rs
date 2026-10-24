@@ -561,7 +561,7 @@ fn test_compact_script_preserves_raw_custom_syntax_body() {
                     map.insert("depth".into(), Dynamic::from_int(0));
                     Ok(Some("$raw$".into()))
                 }
-                n => Err(ParseError(Box::new(ParseErrorType::BadInput(LexError::UnexpectedInput(format!("unexpected len={}", n)))), Position::NONE)),
+                n => Err(ParseError(Box::new(ParseErrorType::BadInput(LexError::UnexpectedInput(format!("unexpected len={}", n)))), Position::NONE, Default::default())),
             }
         },
         false,

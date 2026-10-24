@@ -351,10 +351,112 @@ fn resolution_report_at(
     error: &resolve::Error,
     primary: Span,
 ) -> Result<Report, Error> {
-    Ok(resolution_builder(error)
+    Ok(sourced_builder(error, &source, primary)
         .source(source.clone())
         .primary(source, primary, None)?
         .finish())
+}
+
+/// The builder for `error`, which reads `source` where rustc's error for it
+/// depends on how the source names the item.
+fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Builder {
+    let resolve::Error::UnknownMember { owner, member, .. } = error else {
+        return resolution_builder(error);
+    };
+    let Some(kind) = member_kind(source, primary, member) else {
+        return resolution_builder(error);
+    };
+    let builder = match kind {
+        Member::Field => Report::error(
+            code::RESOLVE_NO_FIELD,
+            format!("no field `{member}` on type `{}`", short(owner)),
+        ),
+        Member::Method => Report::error(
+            code::RESOLVE_NO_METHOD,
+            format!(
+                "no method named `{member}` found for `{}` in the current scope",
+                short(owner)
+            ),
+        ),
+        Member::Associated => {
+            let item = if member.starts_with(char::is_uppercase) {
+                "variant or associated item"
+            } else {
+                "function or associated item"
+            };
+            Report::error(
+                code::RESOLVE_NO_METHOD,
+                format!(
+                    "no {item} named `{member}` found for `{}` in the current scope",
+                    short(owner)
+                ),
+            )
+        }
+    };
+    // rustc adds no help to these: the name is misspelled or the item
+    // isn't there.
+    builder
+}
+
+/// An unknown member's span, which covers its name as rustc underlines it.
+fn member_span(error: &resolve::Error) -> Span {
+    let primary = error.primary_span();
+    let (resolve::Error::UnknownMember { member, .. } | resolve::Error::MemberKind { member, .. }) =
+        error
+    else {
+        return primary;
+    };
+    let start = primary.start();
+    match (start.line(), start.position(), u16::try_from(member.chars().count())) {
+        (Some(line), Some(column), Ok(length)) if primary.end() == start && length > 0 => {
+            let line = u16::try_from(line).unwrap_or(u16::MAX);
+            let column = u16::try_from(column).unwrap_or(u16::MAX);
+            Span::new(start, crate::Position::new(line, column.saturating_add(length)))
+        }
+        _ => primary,
+    }
+}
+
+/// A type as rustc names one the script imported: its last segment.
+fn short(owner: &str) -> &str {
+    if owner.contains('<') {
+        return owner;
+    }
+    owner.rsplit("::").next().unwrap_or(owner)
+}
+
+/// How source names a member: `value.member()`, `value.member` or
+/// `Type::member`.
+enum Member {
+    Method,
+    Field,
+    Associated,
+}
+
+/// `None` for a struct literal or a pattern, which rustc reports apart.
+fn member_kind(source: &Source, at: Span, member: &str) -> Option<Member> {
+    let start = at.start();
+    let line = start.line()?;
+    let column = start.position()?;
+    let text = source.text().split('\n').nth(line.saturating_sub(1))?;
+    let characters: Vec<char> = text.chars().collect();
+    let column = column.saturating_sub(1).min(characters.len());
+    let before: String = characters[..column].iter().collect();
+    let before = before.trim_end();
+    if before.ends_with("::") {
+        return Some(Member::Associated);
+    }
+    if !before.ends_with('.') {
+        return None;
+    }
+    let end = (column + member.chars().count()).min(characters.len());
+    let after: String = characters[end..].iter().collect();
+    let after = after.trim_start();
+    Some(if after.starts_with('(') || after.starts_with("::") {
+        Member::Method
+    } else {
+        Member::Field
+    })
 }
 
 fn resolution_report_with_sources(
@@ -362,14 +464,14 @@ fn resolution_report_with_sources(
     secondary_source: Option<Source>,
     error: &resolve::Error,
 ) -> Result<Report, Error> {
-    let builder = resolution_builder(error);
+    let builder = sourced_builder(error, &source, error.primary_span());
     let secondary_message = error.secondary_span().map(|_| match error {
         resolve::Error::MovedValue { .. } => "value moved here",
         _ => "first declaration or related definition is here",
     });
     let mut builder = builder.source(source.clone());
     if !error.primary_span().is_none() {
-        builder = builder.primary(source.clone(), error.primary_span(), None)?;
+        builder = builder.primary(source.clone(), member_span(error), None)?;
     }
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
         builder = builder.secondary(
@@ -382,6 +484,40 @@ fn resolution_report_with_sources(
 }
 
 fn resolution_builder(error: &resolve::Error) -> Builder {
+    // A member used as the other kind, which rustc reports apart.
+    match error {
+        resolve::Error::MemberKind {
+            owner,
+            member,
+            field: true,
+            ..
+        } => {
+            return Report::error(
+                code::RESOLVE_NO_METHOD,
+                format!(
+                    "no method named `{member}` found for `{}` in the current scope",
+                    short(owner)
+                ),
+            )
+            .help(format!("to use the field `{member}`, remove the parentheses"));
+        }
+        resolve::Error::MemberKind {
+            owner,
+            member,
+            field: false,
+            ..
+        } => {
+            return Report::error(
+                code::RESOLVE_METHOD_VALUE,
+                format!(
+                    "attempted to take value of method `{member}` on type `{}`",
+                    short(owner)
+                ),
+            )
+            .help("use parentheses to call the method");
+        }
+        _ => {}
+    }
     let stable_code = match error.category() {
         resolve::Category::DuplicateItem => code::RESOLVE_DUPLICATE_ITEM,
         resolve::Category::UnknownType => code::RESOLVE_UNKNOWN_TYPE,
@@ -625,6 +761,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::UnknownMember { owner, member, .. } => {
             format!("unknown member `{owner}::{member}`")
         }
+        resolve::Error::MemberKind { owner, member, .. } => {
+            format!("member `{owner}::{member}` used as the other kind")
+        }
         resolve::Error::UnknownFunction { name, .. } => format!("unknown function `{name}`"),
         resolve::Error::UnknownVariable { name, .. } => format!("unknown variable `{name}`"),
         resolve::Error::MovedValue { name, .. } => format!("use of moved value: `{name}`"),
@@ -803,6 +942,7 @@ mod tests {
                 previous_declaration: generated_previous,
             })),
             generated_declaration.start(),
+            Default::default(),
         );
         let translated = Span::new(Position::new(2, 8), Position::new(2, 12));
         let source = Source::new("src/lib.rs", "fn one() {}\nfn view() {}\n")
@@ -823,7 +963,11 @@ mod tests {
 
     #[test]
     fn unmapped_generated_error_retains_context_without_a_fabricated_label() {
-        let error = ParseError(Box::new(ParseErrorType::UnexpectedEOF), Position::new(9, 4));
+        let error = ParseError(
+            Box::new(ParseErrorType::UnexpectedEOF),
+            Position::new(9, 4),
+            Default::default(),
+        );
         let report =
             Report::from_parse_unpositioned(&error, "generated diagnostic has no origin proof");
 

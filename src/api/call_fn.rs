@@ -226,6 +226,7 @@ impl Engine {
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
     ) -> RawrResult {
+        self.bind_exports(ast, global)?;
         let statements = ast.statements();
 
         let orig_source = mem::replace(&mut global.source, ast.source_raw().cloned());

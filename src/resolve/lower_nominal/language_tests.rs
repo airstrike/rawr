@@ -8257,7 +8257,7 @@ fn rejected_at(source: &str) -> (String, Option<usize>, Option<usize>) {
         .compile(source)
         .expect_err("Rust rejects this program");
     let position = error.position();
-    (error.to_string(), position.line(), position.position())
+    (error.err_type().to_string(), position.line(), position.position())
 }
 
 #[test]

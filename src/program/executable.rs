@@ -465,6 +465,22 @@ impl Executable {
         self.ast
     }
 
+    /// This program's [`AST`], which keeps the facade items it calls so
+    /// its first evaluation binds them (D494 item 15).
+    pub(crate) fn into_hosted_ast(self) -> AST {
+        let mut ast = self.ast;
+        if !self.host_dependencies.is_empty() {
+            ast.set_host(super::hosted::Hosted::new(
+                self.origin,
+                self.host_dependencies,
+                self.runtime_requirements,
+                self.projection_requirements,
+                self.widget_requirements,
+            ));
+        }
+        ast
+    }
+
     /// This program's [`AST`] and the [`Positions`] of its entry source.
     pub(crate) fn into_ast_with_positions(self) -> (AST, Positions) {
         let entry = self.sources.key(self.source.index());

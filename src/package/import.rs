@@ -858,7 +858,8 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::UnsupportedNominalSyntax { .. }
         | R::Application(_)
         | R::InvalidPreview { .. }
-        | R::InvalidWidget { .. } => None,
+        | R::InvalidWidget { .. }
+        | R::MemberKind { .. } => None,
     }
 }
 

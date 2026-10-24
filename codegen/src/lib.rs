@@ -38,6 +38,7 @@ use syn::{parse_macro_input, spanned::Spanned, DeriveInput, Path};
 
 mod attrs;
 mod custom_type;
+mod export;
 mod function;
 mod module;
 mod rawr_module;
@@ -295,6 +296,62 @@ pub fn set_exported_global_fn(args: TokenStream) -> TokenStream {
         }
         Err(e) => e.to_compile_error().into(),
     }
+}
+
+/// Export an app's struct, its impl block or a free function to typed
+/// scripts.
+///
+/// On a struct, it exports the type and its pub fields. On the struct's
+/// impl block, it exports the pub methods and associated functions, with
+/// their receivers. On a free function, it exports the function. Add each
+/// export to a `rawr::Exports` and install it with `Engine::export`.
+///
+/// ```
+/// #[derive(Clone)]
+/// #[rawr::export]
+/// pub struct Order {
+///     pub customer: String,
+///     pub items: i64,
+/// }
+///
+/// #[rawr::export]
+/// impl Order {
+///     pub fn add(&mut self, n: i64) {
+///         self.items += n;
+///     }
+/// }
+///
+/// #[rawr::export]
+/// fn tax_rate(state: &str) -> f64 {
+///     if state == "NY" { 0.08875 } else { 0.0 }
+/// }
+///
+/// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
+/// let mut shop = rawr::Exports::new("shop");
+/// shop.add::<Order>().add::<tax_rate>();
+/// let mut engine = rawr::Engine::new();
+/// engine.export(shop)?;
+///
+/// let ast = engine.compile(
+///     "use shop::{tax_rate, Order};
+///      fn more(mut order: Order) -> i64 { order.add(2); order.items }",
+/// )?;
+/// let order = Order { customer: "Ada".into(), items: 1 };
+/// let items: i64 = engine.call_fn(&mut rawr::Scope::new(), &ast, "more", (order,))?;
+/// assert_eq!(items, 3);
+/// # Ok(())
+/// # }
+/// ```
+#[proc_macro_attribute]
+pub fn export(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args: proc_macro2::TokenStream = args.into();
+    if !args.is_empty() {
+        return syn::Error::new(args.span(), "`#[rawr::export]` takes no arguments")
+            .to_compile_error()
+            .into();
+    }
+    let item = parse_macro_input!(input as syn::Item);
+    export::expand(item).into()
 }
 
 /// Macro to implement the [`CustomType`] trait.

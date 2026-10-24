@@ -122,6 +122,7 @@ impl Engine {
     pub fn run_ast_with_scope(&self, scope: &mut Scope, ast: &AST) -> RawrResultOf<()> {
         let caches = &mut Caches::new();
         let global = &mut self.new_global_runtime_state();
+        self.bind_exports(ast, global)?;
         global.source = ast.source_raw().cloned();
 
         #[cfg(not(feature = "no_function"))]

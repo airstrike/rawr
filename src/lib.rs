@@ -290,6 +290,8 @@ pub use api::{eval::eval, run::run};
 pub use ast::{FnAccess, AST};
 use defer::Deferred;
 pub use engine::{Engine, OP_CONTAINS, OP_EQUALS};
+#[cfg(not(feature = "no_std"))]
+pub use host::export::{Export, Exports};
 pub use eval::{EvalContext, EvalContextFrameGuard};
 #[cfg(not(feature = "no_function"))]
 #[cfg(not(feature = "no_object"))]

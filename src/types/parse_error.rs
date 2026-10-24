@@ -60,8 +60,39 @@ impl LexError {
     #[cold]
     #[inline(never)]
     pub fn into_err(self, pos: Position) -> ParseError {
-        ParseError(Box::new(self.into()), pos)
+        ParseError(Box::new(self.into()), pos, Rendered::default())
     }
+}
+
+/// A compile error as rustc prints it, when the compiler kept the source it
+/// failed on. It takes no part in comparisons.
+#[derive(Clone, Default)]
+pub struct Rendered(Option<crate::ImmutableString>);
+
+impl Rendered {
+    /// The rendered error, when there is one.
+    #[must_use]
+    pub fn text(&self) -> Option<&str> {
+        self.0.as_deref()
+    }
+}
+
+impl fmt::Debug for Rendered {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.0.is_some() { "Rendered" } else { "None" })
+    }
+}
+
+impl PartialEq for Rendered {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Rendered {}
+
+impl std::hash::Hash for Rendered {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
 /// Error encountered when parsing a script.
@@ -316,6 +347,12 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnknownMember { owner, member, .. } => {
                     write!(f, "Unknown member '{owner}::{member}'")
                 }
+                crate::resolve::Error::MemberKind {
+                    owner, member, field: true, ..
+                } => write!(f, "Field '{owner}::{member}' called like a method"),
+                crate::resolve::Error::MemberKind {
+                    owner, member, field: false, ..
+                } => write!(f, "Method '{owner}::{member}' read like a field"),
                 crate::resolve::Error::UnknownFunction { name, .. } => {
                     write!(f, "Unknown function '{name}'")
                 }
@@ -422,19 +459,33 @@ impl From<LexError> for ParseErrorType {
 }
 
 /// Error when parsing a script.
-#[derive(Debug, Eq, PartialEq, Clone, Hash)]
+#[derive(Eq, PartialEq, Clone, Hash)]
 #[must_use]
 pub struct ParseError(
     /// Parse error type.
     pub Box<ParseErrorType>,
     /// [Position] of the parse error.
     pub Position,
+    /// The error as rustc prints it, when the compiler kept its source.
+    pub Rendered,
 );
 
 impl Error for ParseError {}
 
+impl fmt::Debug for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.2.text() {
+            Some(text) => f.write_str(text),
+            None => f.debug_tuple("ParseError").field(&self.0).field(&self.1).finish(),
+        }
+    }
+}
+
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(text) = self.2.text() {
+            return f.write_str(text);
+        }
         fmt::Display::fmt(&self.0, f)?;
 
         // Do not write any position if None
@@ -447,6 +498,18 @@ impl fmt::Display for ParseError {
 }
 
 impl ParseError {
+    /// Keep this error as rustc prints it, against `text`, the source the
+    /// compiler failed on, which `identity` names.
+    #[cfg(not(feature = "no_std"))]
+    pub(crate) fn rendered(mut self, identity: &str, text: &str) -> Self {
+        if let Ok(source) = crate::diagnostic::Source::new(identity, text)
+            && let Ok(report) = crate::diagnostic::Report::from_parse(source, &self)
+        {
+            let text = crate::diagnostic::render(&report);
+            self.2 = Rendered(Some(text.trim_end().into()));
+        }
+        self
+    }
     /// Get the [type][ParseErrorType] of this parse error.
     #[cold]
     #[inline(never)]
@@ -499,7 +562,7 @@ impl From<ParseErrorType> for ERR {
     #[cold]
     #[inline(never)]
     fn from(err: ParseErrorType) -> Self {
-        Self::ErrorParsing(err, Position::NONE)
+        Self::ErrorParsing(err, Position::NONE, Rendered::default())
     }
 }
 
@@ -515,6 +578,6 @@ impl From<ParseError> for ERR {
     #[cold]
     #[inline(never)]
     fn from(err: ParseError) -> Self {
-        Self::ErrorParsing(*err.0, err.1)
+        Self::ErrorParsing(*err.0, err.1, err.2)
     }
 }

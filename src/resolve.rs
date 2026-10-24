@@ -142,9 +142,9 @@ impl LoweringFailure {
         match self.evidence {
             LoweringEvidence::Original(_) => self.error,
             LoweringEvidence::Generated { span, .. } => {
-                crate::ParseError(self.error.0, span.start())
+                crate::ParseError(self.error.0, span.start(), self.error.2)
             }
-            LoweringEvidence::Unmapped(_) => crate::ParseError(self.error.0, crate::Position::NONE),
+            LoweringEvidence::Unmapped(_) => crate::ParseError(self.error.0, crate::Position::NONE, self.error.2),
         }
     }
 }

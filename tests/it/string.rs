@@ -41,7 +41,7 @@ string: "## + "\u2764""###
         "Test\"\nstring: ❤"
     );
     let bad_result = *engine.eval::<String>(r###"#"Test string: \"##"###).unwrap_err();
-    if let EvalAltResult::ErrorParsing(parse_error, pos) = bad_result {
+    if let EvalAltResult::ErrorParsing(parse_error, pos, _) = bad_result {
         assert_eq!(parse_error, ParseErrorType::UnknownOperator("#".to_string()));
         assert_eq!(pos, Position::new(1, 19));
     } else {
@@ -53,7 +53,7 @@ string: "## + "\u2764""###
     \"#"###,
         )
         .unwrap_err();
-    if let EvalAltResult::ErrorParsing(parse_error, pos) = bad_result {
+    if let EvalAltResult::ErrorParsing(parse_error, pos, _) = bad_result {
         assert_eq!(parse_error, ParseErrorType::BadInput(LexError::UnterminatedString));
         assert_eq!(pos, Position::new(1, 1));
     } else {

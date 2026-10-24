@@ -8,6 +8,7 @@ mod source;
 mod view;
 
 pub use render::render;
+pub use crate::types::Rendered;
 pub use report::{
     Builder, Category, Error, ExternalLabel, ExternalPosition, Label, LabelKind, Report, Severity,
 };

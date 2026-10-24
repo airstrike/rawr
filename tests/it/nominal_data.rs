@@ -406,7 +406,8 @@ fn resolution_error(engine: &Engine, source: &str, category: Category, message: 
     };
 
     assert_eq!(resolution.category(), category, "{error}");
-    assert!(error.to_string().contains(message), "diagnostic `{error}` did not contain `{message}`");
+    // The structured message: Display prints the rustc-style report.
+    assert!(error.err_type().to_string().contains(message), "diagnostic `{error}` did not contain `{message}`");
     assert!(!error.primary_span().is_none());
     error
 }

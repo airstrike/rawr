@@ -29,7 +29,7 @@ pub use float::FloatWrapper;
 pub use fn_ptr::FnPtr;
 pub use immutable_string::ImmutableString;
 pub use interner::StringsInterner;
-pub use parse_error::{LexError, ParseError, ParseErrorType};
+pub use parse_error::{LexError, ParseError, ParseErrorType, Rendered};
 pub use var_def::VarDefInfo;
 
 #[cfg(not(feature = "no_position"))]

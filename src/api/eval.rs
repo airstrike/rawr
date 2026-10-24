@@ -194,6 +194,7 @@ impl Engine {
         ast: &AST,
     ) -> RawrResultOf<T> {
         let global = &mut self.new_global_runtime_state();
+        self.bind_exports(ast, global)?;
         let caches = &mut Caches::new();
 
         let result = self.eval_ast_with_scope_raw(global, caches, scope, ast)?;

@@ -217,6 +217,18 @@ pub enum Error {
         /// Exact source reference.
         reference: Span,
     },
+    /// A member used as the other kind: a field called like a method
+    /// (rustc's E0599), or a method read like a field (rustc's E0615).
+    MemberKind {
+        /// Nominal owner type.
+        owner: ImmutableString,
+        /// The field or method.
+        member: ImmutableString,
+        /// Whether the member is a field, which the source called.
+        field: bool,
+        /// Exact source reference.
+        reference: Span,
+    },
     /// A nominal construction omits, duplicates, or miscounts members.
     InvalidConstruction {
         /// Nominal owner type.
@@ -378,7 +390,7 @@ impl Error {
             Self::LoweringUnavailable { .. } => Category::LoweringUnavailable,
             Self::InvalidDerive { .. } => Category::InvalidDerive,
             Self::DuplicateMember { .. } => Category::DuplicateMember,
-            Self::UnknownMember { .. } => Category::UnknownMember,
+            Self::UnknownMember { .. } | Self::MemberKind { .. } => Category::UnknownMember,
             Self::UnknownFunction { .. } => Category::UnknownFunction,
             Self::UnknownVariable { .. } => Category::UnknownVariable,
             Self::MovedValue { .. } => Category::MovedValue,
@@ -418,6 +430,7 @@ impl Error {
                 owner.as_str()
             }
             Self::UnknownMember { owner, .. }
+            | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
             | Self::MissingCapability { owner, .. }
             | Self::InvalidMatch { owner, .. } => owner.as_str(),
@@ -450,7 +463,9 @@ impl Error {
             Self::LoweringUnavailable { body, .. } => *body,
             Self::InvalidDerive { attribute, .. } => *attribute,
             Self::DuplicateMember { declaration, .. } => *declaration,
-            Self::UnknownMember { reference, .. } => *reference,
+            Self::UnknownMember { reference, .. } | Self::MemberKind { reference, .. } => {
+                *reference
+            }
             Self::UnknownFunction { reference, .. } => *reference,
             Self::UnknownVariable { reference, .. } => *reference,
             Self::MovedValue { reference, .. } => *reference,
@@ -500,6 +515,7 @@ impl Error {
             | Self::InvalidTypeArguments { .. }
             | Self::LoweringUnavailable { .. } => None,
             Self::UnknownMember { .. }
+            | Self::MemberKind { .. }
             | Self::UnknownFunction { .. }
             | Self::UnknownVariable { .. }
             | Self::InvalidConstruction { .. }
@@ -593,6 +609,18 @@ impl fmt::Display for Written<'_> {
                 member,
                 reference,
             } => write!(formatter, "unknown member `{owner}::{member}` at {reference}"),
+            Error::MemberKind {
+                owner,
+                member,
+                field: true,
+                reference,
+            } => write!(formatter, "field `{owner}::{member}` called like a method at {reference}"),
+            Error::MemberKind {
+                owner,
+                member,
+                field: false,
+                reference,
+            } => write!(formatter, "method `{owner}::{member}` read like a field at {reference}"),
             Error::UnknownFunction {
                 name, reference, ..
             } => write!(formatter, "unknown function `{name}` at {reference}"),
@@ -764,7 +792,11 @@ impl From<Error> for crate::ParseError {
     fn from(error: Error) -> Self {
         let position = error.primary_span().start();
 
-        Self(Box::new(crate::PERR::Resolution(error)), position)
+        Self(
+            Box::new(crate::PERR::Resolution(error)),
+            position,
+            crate::types::Rendered::default(),
+        )
     }
 }
 

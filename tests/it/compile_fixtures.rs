@@ -72,7 +72,7 @@ fn failure_record(error: &ParseError) -> String {
     };
     let secondary = error.secondary_span().map_or_else(|| "none".to_string(), |span| span.to_string());
 
-    format!("category={category}\nname={name}\nprimary={}\nsecondary={secondary}\nmessage={error}\n", error.primary_span())
+    format!("category={category}\nname={name}\nprimary={}\nsecondary={secondary}\nmessage={} ({})\n", error.primary_span(), error.err_type(), error.position())
 }
 
 fn fixture(name: &str, outcome: &str, extension: &str) -> String {

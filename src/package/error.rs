@@ -388,6 +388,7 @@ mod tests {
         let error = ParseError(
             Box::new(ParseErrorType::UnexpectedEOF),
             Position::new(19, 7),
+            Default::default(),
         );
         let failure = Error::compilation(
             sources,

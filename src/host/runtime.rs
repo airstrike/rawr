@@ -1179,6 +1179,11 @@ impl Registry {
         }
     }
 
+    /// Whether a facade with this root is installed.
+    pub(crate) fn contains(&self, root: &str) -> bool {
+        self.facades.contains_key(root)
+    }
+
     /// Install one finished runtime facade without replacing an existing root.
     pub fn install(&mut self, facade: Facade) -> Result<&mut Self, Error> {
         let root: ImmutableString = facade.dependency.root().into();

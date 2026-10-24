@@ -3,6 +3,8 @@
 #[cfg(not(feature = "no_std"))]
 pub mod debug;
 #[cfg(not(feature = "no_std"))]
+pub mod export;
+#[cfg(not(feature = "no_std"))]
 pub mod display;
 pub(crate) mod endpoint;
 pub mod value;
@@ -28,6 +30,10 @@ use crate::ImmutableString;
 use std::any::TypeId;
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
+
+/// The name an exported field's items take beside the type's methods:
+/// `Order::__rawr_field_items` for the field `items`.
+pub(crate) const EXPORTED_FIELD: &str = "__rawr_field_";
 
 const BUILTIN_TYPES: &[&str] = &[
     "bool", "char", "f64", "i64", "String", "i8", "i16", "i32", "isize", "u8", "u16", "u32", "u64",
@@ -143,6 +149,9 @@ pub struct Registry {
     facades: Vec<facade::Dependency>,
     /// Facade re-exports, sorted: a path and the canonical path it names.
     aliases: Vec<(path::Path, path::Path)>,
+    /// Roots an app exported with `#[rawr::export]`. Their types keep
+    /// fields and methods apart, as Rust does.
+    exported: Vec<ImmutableString>,
 }
 
 #[cfg(feature = "rust-import")]
@@ -198,7 +207,21 @@ impl Registry {
             items: Vec::new(),
             facades: Vec::new(),
             aliases: Vec::new(),
+            exported: Vec::new(),
         }
+    }
+
+    /// Mark `root` as an app's exported items.
+    #[cfg(not(feature = "no_std"))]
+    pub(crate) fn mark_exported(&mut self, root: &str) {
+        self.exported.push(root.into());
+    }
+
+    /// Whether the type or item at `path` is an app's export, whose fields
+    /// and methods are apart.
+    pub(crate) fn is_exported(&self, path: &str) -> bool {
+        let root = path.split("::").next().unwrap_or(path);
+        self.exported.iter().any(|exported| exported == root)
     }
 
     #[cfg(feature = "rust-import")]
@@ -320,6 +343,7 @@ impl Registry {
         for (alias, target) in &self.aliases {
             clone.aliases.push((alias.try_clone()?, target.try_clone()?));
         }
+        clone.exported.clone_from(&self.exported);
         Ok(clone)
     }
 
