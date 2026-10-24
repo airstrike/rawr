@@ -129,7 +129,23 @@ fn an_unmarked_crate_is_not_a_rawr_project() {
     let error = Target::discover(temp.path().join("plain")).unwrap_err();
 
     assert!(matches!(error, project::Error::Unmarked { ref entry, .. } if entry == &fs::canonicalize(&main).unwrap()));
-    assert!(error.to_string().ends_with("is not a Rawr file. Its first line is not `// rawr`."));
+    assert!(error.to_string().ends_with(
+        "is not a Rawr file. Its first line is not `// rawr`, and no module it declares starts with it."
+    ));
+}
+
+#[test]
+fn an_unmarked_crate_that_declares_a_marked_module_is_a_rawr_project() {
+    let temp = Temp::new("native-root");
+    temp.file("app/Cargo.toml", "[package]\nname = \"app\"\n");
+    let main = temp.file("app/src/main.rs", "mod sim;\nfn main() { sim::world::run(); }\n");
+    temp.file("app/src/sim.rs", "pub mod world;\n");
+    temp.file("app/src/sim/world.rs", "// rawr\npub fn run() {}\n");
+
+    let discovered = project(Target::discover(temp.path().join("app")).unwrap());
+
+    // Found through the native module `sim`; the entry is the native root.
+    assert_eq!(discovered.source().path(), fs::canonicalize(&main).unwrap());
 }
 
 #[test]

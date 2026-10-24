@@ -104,9 +104,12 @@ impl Graph {
                 source: graph.sources()[package.source().index()]
                     .path()
                     .to_path_buf(),
+                // A native root is a Rust input too, with its whole text;
+                // its Rawr source holds only its `mod` declarations.
                 rust_modules: package
-                    .rust_modules()
-                    .iter()
+                    .native_root()
+                    .into_iter()
+                    .chain(package.rust_modules())
                     .map(|module| (module.path().to_path_buf(), module.text().to_owned()))
                     .collect(),
                 cargo: package
@@ -169,6 +172,7 @@ impl Inputs {
             .map(|source| source.path.clone())
             .collect::<BTreeSet<_>>();
         let mut paths = sources.clone();
+        let mut native = BTreeSet::new();
         // A `.rs` module edit takes the Rust-change path, never hot reload.
         for (path, _) in graph
             .packages
@@ -176,9 +180,11 @@ impl Inputs {
             .flat_map(|package| package.rust_modules.iter().chain(&package.cargo))
         {
             paths.insert(path.clone());
+            native.insert(path.clone());
         }
         let mut inputs = Self::from_paths(paths, BTreeSet::new());
-        inputs.sources = sources.into_iter().collect();
+        // A native root is both: its edits are native.
+        inputs.sources = sources.difference(&native).cloned().collect();
         inputs
     }
 
@@ -324,23 +330,25 @@ impl Snapshot {
     /// Capture the exact bytes already retained by one compiled source graph.
     #[must_use]
     pub fn from_graph(graph: &Graph) -> Self {
+        // Native files first: a native root's whole text is kept over its
+        // Rawr source, which holds only its `mod` declarations.
         let mut files = graph
-            .sources
+            .packages
             .iter()
-            .map(|source| File {
-                path: source.path.clone(),
-                contents: source.text().as_bytes().into(),
+            .flat_map(|package| {
+                package
+                    .rust_modules
+                    .iter()
+                    .chain(&package.cargo)
+                    .map(|(path, text)| File {
+                        path: path.clone(),
+                        contents: text.as_bytes().into(),
+                    })
             })
             .collect::<Vec<_>>();
-        files.extend(graph.packages.iter().flat_map(|package| {
-            package
-                .rust_modules
-                .iter()
-                .chain(&package.cargo)
-                .map(|(path, text)| File {
-                    path: path.clone(),
-                    contents: text.as_bytes().into(),
-                })
+        files.extend(graph.sources.iter().map(|source| File {
+            path: source.path.clone(),
+            contents: source.text().as_bytes().into(),
         }));
         // The imported snapshot is keyed by path bytes, not path components:
         // `src/theme.rs` sorts after `src/theme/button.rs`.

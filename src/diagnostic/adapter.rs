@@ -314,7 +314,7 @@ impl Report {
             ),
             ProjectError::Unmarked { .. } => (
                 code::ENVIRONMENT_MISSING_SOURCE,
-                "add `// rawr` as the first line of the crate root to run it with Rawr",
+                "add `// rawr` as the first line of the crate root, or of a module it declares, to run it with Rawr",
             ),
             ProjectError::EscapesRoot { .. } => (
                 code::ENVIRONMENT_ESCAPES_ROOT,

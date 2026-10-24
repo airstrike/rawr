@@ -6,8 +6,9 @@ mod error;
 pub(crate) mod graph;
 #[cfg(feature = "rust-import")]
 pub mod import;
+pub(crate) mod island;
 mod manifest;
-mod polyglot;
+pub(crate) mod polyglot;
 #[cfg(feature = "rust-import")]
 mod rust;
 #[cfg(feature = "rust-import")]
@@ -17,3 +18,4 @@ pub mod source;
 pub use cell::{Cells, Counts};
 pub use error::{Category, Error};
 pub use graph::{Graph, RustModule};
+pub use island::Shape;

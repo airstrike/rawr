@@ -187,8 +187,59 @@ fn a_marked_iced_crate_imports_its_dependencies_with_or_without_a_native_module(
     assert!(graph.declares_rust_import());
 }
 
-/// Native code must not use marked code: Rawr builds the native modules
-/// without the marked ones. Cargo builds the same crate.
+/// A crate whose root is native Rust and declares a marked module is a
+/// Rawr project (D501). Rawr reads the root's `mod` declarations, as the
+/// root of the marked modules, and the marked files; the root and the
+/// other modules are native, and the crate imports Rust.
+#[test]
+fn an_unmarked_root_that_declares_a_marked_module_is_a_project() {
+    let sandbox = Sandbox::new("marked-islands");
+    let root = copy("rs-marker-islands", &sandbox.work());
+
+    let graph = graph(&root, None).unwrap();
+
+    let sources: Vec<_> = graph
+        .sources()
+        .iter()
+        .map(|source| source.path().strip_prefix(&root).unwrap().to_path_buf())
+        .collect();
+    assert_eq!(
+        sources,
+        [
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/physics.rs")
+        ]
+    );
+    // The root's Rawr text: its declarations at their places, and a `main`
+    // that starts the native one.
+    let rawr = graph.sources()[0].text();
+    assert_eq!(rawr.lines().nth(1), Some("mod physics;"));
+    assert_eq!(rawr.lines().nth(2), Some("mod units;"));
+    assert!(!rawr.contains("ball.advance"), "{rawr}");
+    let package = graph.entry_package();
+    assert_eq!(
+        package.native_root().map(rawr::package::RustModule::path),
+        Some(root.join("src/main.rs").as_path())
+    );
+    assert_eq!(package.rust_modules().len(), 1);
+    assert_eq!(package.rust_modules()[0].modules(), ["units"]);
+    assert!(graph.declares_rust_import());
+    assert!(graph.island_shape().is_some_and(|shape| !shape.is_empty()));
+
+    // Without a marked module, the unmarked root is no Rawr program.
+    let physics = root.join("src/physics.rs");
+    let text = fs::read_to_string(&physics).unwrap();
+    fs::write(&physics, text.replacen("// rawr\n", "", 1)).unwrap();
+    let error = self::graph(&root, None).unwrap_err();
+    assert!(
+        error.contains("no module it declares starts with it"),
+        "{error}"
+    );
+}
+
+/// With a marked crate root, native code must not use marked code: Rawr
+/// builds the native modules without the marked ones. Cargo builds the
+/// same crate. (A native root calls its marked modules through rawr.)
 #[test]
 fn native_code_cannot_use_marked_code() {
     let sandbox = Sandbox::new("marked-direction");
@@ -201,9 +252,10 @@ fn native_code_cannot_use_marked_code() {
         error.contains(&format!(
             "native module `crate::pricing` uses `crate::Item`. \
              `crate::Item` is in the marked module `crate` (`{}`). \
-             Rawr builds the native modules without the marked ones. \
-             Native code cannot use marked code. \
-             Move the item into a native module, or mark `{}` with `// rawr`.",
+             With a marked crate root, Rawr builds the native modules without the marked ones, \
+             so native code cannot use marked code. \
+             Move the item into a native module, mark `{}` with `// rawr`, \
+             or leave the crate root unmarked so native code calls marked modules through rawr.",
             root.join("src/main.rs").display(),
             pricing.display()
         )),
@@ -254,6 +306,10 @@ fn an_unmarked_crate_root_is_not_a_rawr_program() {
     let main = root.join("src/main.rs");
     let text = fs::read_to_string(&main).unwrap();
     fs::write(&main, text.replacen("// rawr\n", "//rawr\n", 1)).unwrap();
+    // No module it declares is marked either.
+    let item = root.join("src/item.rs");
+    let text = fs::read_to_string(&item).unwrap();
+    fs::write(&item, text.replacen("// rawr\n", "", 1)).unwrap();
 
     let checked = sandbox.rawr(&["check", "rs-marker-cart"]);
 
@@ -261,7 +317,8 @@ fn an_unmarked_crate_root_is_not_a_rawr_program() {
     let text = stderr(&checked);
     assert!(
         text.contains(&format!(
-            "`{}` is not a Rawr file. Its first line is not `// rawr`.",
+            "`{}` is not a Rawr file. Its first line is not `// rawr`, \
+             and no module it declares starts with it.",
             main.display()
         )),
         "{text}"
