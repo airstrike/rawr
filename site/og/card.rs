@@ -1,4 +1,4 @@
-// The link preview for rawr.airstrike.fyi, drawn by Rawr itself in
+// The link preview for rawr.airstrike.fyi, drawn by rawr itself in
 // RawrGallery's Ink sheet. Render it with:
 //   rawr-play site/og/card.rs --size 600x315 --fonts target/play/fonts -o site/public/og/card.png
 use iced::theme::palette::Seed;
@@ -38,76 +38,72 @@ impl Card {
         let mark = container(space().width(8).height(8)).style(|theme: &Theme| {
             container::Style::default().background(theme.palette().primary.base.color)
         });
-        let brand = row![mark, text("RAWR").size(13).font(Font::MONOSPACE), caption("PRE-ALPHA")]
+        let brand = row![mark, text("rawr").size(13).font(Font::MONOSPACE), caption("pre-alpha")]
             .spacing(10)
             .align_y(Center);
 
-        let lede = column![
-            row![
-                text("//").size(11).font(Font::MONOSPACE).style(text::primary),
-                caption("A SCRIPTING LANGUAGE THAT READS LIKE RUST"),
-            ]
-            .spacing(8),
-            row![word("R", "ust"), word("A", "ugmented"), word("W", "ith"), word("R", "ust")]
-                .spacing(9),
-            text("Embed it in any Rust program. With iced, apps reload in about 0.2 s.")
-                .size(14)
-                .style(text::secondary),
+        // The site's title: the word, and a line under it as wide as the word.
+        let title = column![
+            text("rawr").size(100).line_height(1.0).style(text::primary),
+            text("is rust augmented with rust").size(16),
         ]
-        .spacing(10);
+        .spacing(0);
+        let lede = column![
+            title,
+            space().height(22),
+            text("A Rust interpreter for your dev builds.").size(17),
+        ]
+        .width(216);
+
+        let files = column![
+            file("compiled by Cargo", "cargo run"),
+            file("interpreted by rawr", "rawr run"),
+        ]
+        .spacing(10)
+        .width(Fill);
 
         container(
             column![
                 brand,
-                lede,
-                row![file("main.rs", "cargo run"), file("cart.rs", "rawr run cart.rs")].spacing(16),
-                row![
-                    caption("RAWR.AIRSTRIKE.FYI"),
-                    space().width(Fill),
-                    caption("WRITTEN IN RAWR · RENDERED BY ICED"),
-                ],
+                row![lede, files].spacing(26).height(Fill),
+                caption("rawr.airstrike.fyi"),
             ]
-            .spacing(10),
+            .spacing(12),
         )
-        .padding([14, 28])
+        .padding([16, 28])
         .width(Fill)
         .height(Fill)
     }
 }
 
-/// One word of the tagline, its initial in pink: R-A-W-R.
-fn word(initial: &str, rest: &str) -> impl Widget<Message> {
-    row![
-        text(initial.to_string()).size(26).style(text::primary),
-        text(rest.to_string()).size(26),
-    ]
-}
-
-/// The same cart file as Rust and as Rawr: only the command differs.
-fn file(name: &str, command: &str) -> impl Widget<Message> {
+/// One copy of the cart's `src/main.rs`, and the command that runs it.
+fn file(how: &str, command: &str) -> impl Widget<Message> {
+    let header = row![code("src/main.rs"), space().width(Fill), caption(how)];
     let source = container(
         column![
             code("fn total(items: &[Item]) -> f64 {"),
             code("    let mut sum = 0.0;"),
             code("    for item in items {"),
-            code("        sum += item.price();"),
         ]
         .spacing(1),
     )
-    .padding([8, 12])
+    .padding([7, 12])
     .width(Fill)
     .style(panel);
     let shell = container(
-        row![text("$").size(11).font(Font::MONOSPACE).style(text::secondary), code(command)]
-            .spacing(7),
+        row![
+            text("$").size(11).font(Font::MONOSPACE).style(text::secondary),
+            code(command),
+            space().width(Fill),
+            text("total: 27").size(11).font(Font::MONOSPACE).style(text::success),
+        ]
+        .spacing(7),
     )
     .padding([5, 12])
     .width(Fill)
     .style(terminal);
 
-    column![caption(name), column![source, shell]]
-        .spacing(6)
-        .width(Fill)
+    column![header, column![source, shell]].spacing(5).width(Fill)
 }
 
 fn code(line: &str) -> iced::widget::Text<'static> {
