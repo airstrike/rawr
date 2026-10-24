@@ -180,6 +180,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::selector")?;
     builder.module("widget::operation::scrollable")?;
     builder.module("window")?;
+    builder.module("futures")?;
+    builder.module("futures::future")?;
     builder.module("event")?;
     builder.module("keyboard")?;
     builder.module("keyboard::key")?;
@@ -1628,6 +1630,42 @@ fn declare_sippers(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let task = |message: &str| type_ref::Type::applied("Task", [parameter(message)?]);
     let sipper = || type_ref::Type::applied("task::Sipper", [parameter("Output")?, parameter("Progress")?]);
     let handle = || type_ref::Type::registered("task::Handle");
+
+    // `futures::future::join(a, b)` and `try_join(a, b)`, which iced
+    // re-exports: both futures run at once.
+    let mut join = signature::Builder::new();
+    join.type_parameter("A", &[])?;
+    join.type_parameter("B", &[])?;
+    join.parameter(task("A")?);
+    join.parameter(task("B")?);
+    join.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::tuple([parameter("A")?, parameter("B")?])?],
+    )?);
+    builder.item(item::Definition::function("futures::future::join", join.finish())?)?;
+    let fallible = |name: &str| -> Result<type_ref::Type, host::Error> {
+        type_ref::Type::applied(
+            "Task",
+            [type_ref::Type::result(parameter(name)?, parameter("E")?)],
+        )
+    };
+    let mut try_join = signature::Builder::new();
+    try_join.type_parameter("A", &[])?;
+    try_join.type_parameter("B", &[])?;
+    try_join.type_parameter("E", &[])?;
+    try_join.parameter(fallible("A")?);
+    try_join.parameter(fallible("B")?);
+    try_join.output(type_ref::Type::applied(
+        "Task",
+        [type_ref::Type::result(
+            type_ref::Type::tuple([parameter("A")?, parameter("B")?])?,
+            parameter("E")?,
+        )],
+    )?);
+    builder.item(item::Definition::function(
+        "futures::future::try_join",
+        try_join.finish(),
+    )?)?;
 
     // `sipper(async |mut progress| { progress.send(value).await; .. })`.
     let sender = || type_ref::Type::applied("task::Sender", [parameter("Progress")?]);

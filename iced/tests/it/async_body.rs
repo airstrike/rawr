@@ -203,3 +203,59 @@ fn tokio_sleep_without_tokio_waits_and_then_goes_on() {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
 }
+
+#[test]
+fn editor_shaped_futures_return_impl_future_and_await_in_a_branch() {
+    let source = app(
+        r#"
+#[derive(Debug, Clone)] enum Error { DialogClosed }
+fn pick(found: bool) -> Task<Option<String>> {
+    Task::done(if found { Some("notes.txt".to_string()) } else { None })
+}
+fn open_file(found: bool) -> impl Future<Output = Result<i64, Error>> + use<> {
+    let label = "opened".to_string();
+    async move {
+        let picked = pick(found).await.ok_or(Error::DialogClosed)?;
+        Ok(picked.len() as i64 + label.len() as i64)
+    }
+}
+async fn save_file(path: Option<String>) -> Result<i64, Error> {
+    let path = if let Some(path) = path {
+        path
+    } else {
+        pick(true).await.ok_or(Error::DialogClosed)?
+    };
+    Ok(path.len() as i64)
+}
+async fn total() -> i64 {
+    let opened = open_file(true).await.unwrap_or(0);
+    let closed = open_file(false).await.unwrap_or(100);
+    let saved = save_file(None).await.unwrap_or(0) + save_file(Some("ab".to_string())).await.unwrap_or(0);
+    opened + closed + saved
+}
+"#,
+        "total()",
+    );
+    assert_eq!(loaded(&source), 15 + 100 + 9 + 2);
+}
+
+#[test]
+fn try_join_runs_a_script_future_beside_another_and_stops_at_an_err() {
+    let source = app(
+        r#"
+use iced::futures;
+async fn half(n: i64) -> Result<i64, String> {
+    if Task::done(n).await % 2 == 0 { Ok(n / 2) } else { Err("odd".to_string()) }
+}
+async fn total() -> i64 {
+    let entry = async { half(8).await };
+    let (a, b) = futures::future::try_join(entry, half(6)).await.unwrap_or((0, 0));
+    let failed = futures::future::try_join(half(4), half(5)).await.is_err();
+    let (c, d) = futures::future::join(half(2), Task::done(7)).await;
+    a + b + if failed { 100 } else { 0 } + c.unwrap_or(0) + d
+}
+"#,
+        "total()",
+    );
+    assert_eq!(loaded(&source), 4 + 3 + 100 + 1 + 7);
+}

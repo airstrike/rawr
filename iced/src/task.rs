@@ -62,6 +62,7 @@ enum PreparedKind {
     },
     Script(item::Value),
     Send { sender: Sender, value: Dynamic },
+    Join { plans: Box<[Prepared]>, fallible: bool },
 }
 
 /// One value a Rust task yields, turned into a Rawr value on the UI thread.
@@ -474,6 +475,9 @@ enum Kind {
     /// `sender.send(value)`: the value goes to the sipper's progress, and
     /// the task gives `()`.
     Send { sender: Sender, value: Dynamic },
+    /// `futures::future::join` (or `try_join`, which ends at the first
+    /// `Err`): the plans run at once, and the task gives their outputs.
+    Join { plans: Box<[Plan]>, fallible: bool },
 }
 
 /// Current executable authority used only while a symbolic plan is lowered.
@@ -594,7 +598,8 @@ impl Plan {
             | Kind::Sip { .. }
             | Kind::Abortable { .. }
             | Kind::Script(_)
-            | Kind::Send { .. } => None,
+            | Kind::Send { .. }
+            | Kind::Join { .. } => None,
             Kind::Done(payload) => Some(payload),
         }
     }
@@ -671,6 +676,15 @@ impl Plan {
             },
             Kind::Script(step) => PreparedKind::Script(step),
             Kind::Send { sender, value } => PreparedKind::Send { sender, value },
+            Kind::Join { plans, fallible } => PreparedKind::Join {
+                plans: plans
+                    .into_vec()
+                    .into_iter()
+                    .map(|plan| plan.prepare_application(authority))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+                fallible,
+            },
         };
         Ok(Prepared { kind, witness })
     }
@@ -720,6 +734,17 @@ impl Plan {
             Kind::Abortable { plan, abort } => abort.attach(plan.lower_with(lowering, next)?),
             Kind::Script(step) => lowering.script(step, Dynamic::UNIT, next),
             Kind::Send { sender, value } => lowering.send(&sender, value, next),
+            Kind::Join { plans, fallible } => {
+                let joined = Joined::new(plans.len(), fallible, next);
+                iced::Task::batch(
+                    plans
+                        .into_vec()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, plan)| plan.lower_with(lowering, joined.slot(index)))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+            }
         })
     }
 }
@@ -750,6 +775,49 @@ fn sleep(duration: std::time::Duration) -> iced::futures::future::BoxFuture<'sta
             let _ = sender.send(());
         });
     receiver.map(|_| ()).boxed()
+}
+
+/// The outputs of a join so far. The first output of each plan fills its
+/// slot; once every slot is full, or a `try_join` plan gives an `Err`, the
+/// join gives its one output.
+#[derive(Clone)]
+struct Joined(Arc<Mutex<(Vec<Option<Dynamic>>, Option<Next>)>>, bool);
+
+impl Joined {
+    fn new(count: usize, fallible: bool, next: Next) -> Self {
+        Self(Arc::new(Mutex::new((vec![None; count], Some(next)))), fallible)
+    }
+
+    fn slot(&self, index: usize) -> Next {
+        let joined = self.clone();
+        Arc::new(move |mut output| {
+            let mut state = joined.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let (slots, next) = &mut *state;
+            if next.is_none() || slots[index].is_some() {
+                return iced::Task::none();
+            }
+            if joined.1 {
+                match rawr::result::take(&mut output) {
+                    Some(Ok(value)) => output = value,
+                    Some(Err(error)) => {
+                        let next = next.take().expect("the join has not ended");
+                        drop(state);
+                        return next(rawr::result::err(error));
+                    }
+                    None => return iced::Task::none(),
+                }
+            }
+            slots[index] = Some(output);
+            if slots.iter().any(Option::is_none) {
+                return iced::Task::none();
+            }
+            let outputs = slots.iter_mut().filter_map(Option::take).collect();
+            let next = next.take().expect("the join has not ended");
+            drop(state);
+            let outputs = Dynamic::from_array(outputs);
+            next(if joined.1 { rawr::result::ok(outputs) } else { outputs })
+        })
+    }
 }
 
 /// The continuation of a discarded task: nothing.
@@ -1037,6 +1105,16 @@ impl Prepared {
             }
             PreparedKind::Script(step) => lowering.script(step, Dynamic::UNIT, next),
             PreparedKind::Send { sender, value } => lowering.send(&sender, value, next),
+            PreparedKind::Join { plans, fallible } => {
+                let joined = Joined::new(plans.len(), fallible, next);
+                iced::Task::batch(
+                    plans
+                        .into_vec()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, plan)| plan.lower_with(context, lowering, joined.slot(index))),
+                )
+            }
         }
     }
 }
@@ -1517,6 +1595,26 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             }))
         })
         .expect("the iced facade must retain Task::sip");
+    for (path, fallible) in [
+        ("iced::futures::future::join", false),
+        ("iced::futures::future::try_join", true),
+    ] {
+        builder
+            .bind_with_context(path, move |call, args| {
+                let plans = args
+                    .iter_mut()
+                    .map(|plan| take(plan, path))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Dynamic::from(Plan {
+                    kind: Kind::Join {
+                        plans: plans.into_boxed_slice(),
+                        fallible,
+                    },
+                    witness: Some(call.output_witness().map_err(witness_error)?),
+                }))
+            })
+            .expect("the iced facade must retain futures::future::join and try_join");
+    }
     builder
         .bind_with_context("iced::task::sipper", |call, args| {
             let [builder] = args else {
