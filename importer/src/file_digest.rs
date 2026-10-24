@@ -68,8 +68,8 @@ impl Identity {
             device: stat.st_dev as u64,
             inode: stat.st_ino,
             length: stat.st_size as u64,
-            modified: (stat.st_mtime, stat.st_mtime_nsec),
-            changed: (stat.st_ctime, stat.st_ctime_nsec),
+            modified: (stat.st_mtime as i64, stat.st_mtime_nsec as i64),
+            changed: (stat.st_ctime as i64, stat.st_ctime_nsec as i64),
         })
     }
 }
