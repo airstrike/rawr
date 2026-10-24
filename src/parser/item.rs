@@ -443,6 +443,22 @@ fn begins_body_item(token: &Token) -> bool {
     }
 }
 
+/// Whether `token` starts an item that may follow a statement in a body.
+#[cfg_attr(feature = "no_function", allow(dead_code))]
+fn begins_statement_item(token: &Token) -> bool {
+    match token {
+        Token::Fn
+        | Token::Struct
+        | Token::Enum
+        | Token::Impl
+        | Token::Mod
+        | Token::Use
+        | Token::Const => true,
+        Token::Identifier(name) => name.as_str() == "trait",
+        _ => false,
+    }
+}
+
 fn is_attribute_marker(token: &Token) -> bool {
     match token {
         Token::Hash => true,
@@ -3754,6 +3770,12 @@ fn parse_body_syntax(
     let mut tokens = Vec::new();
     // Whether a statement may start here: a nested `fn` item.
     let mut boundary = true;
+    // Whether the last token can end an expression, and what that depends
+    // on: `pub(crate)` and `extern "C"` lead items, not expressions.
+    let mut ends_expression = false;
+    let mut after_pub = false;
+    let mut after_extern = false;
+    let mut visibility = None;
     // Each open parenthesis: the callback roles of an `iced::run(..)` or
     // `iced::application(..)` call it opens, and the argument it is at.
     let mut calls: Vec<Option<(&'static [&'static str], usize)>> = Vec::new();
@@ -3826,8 +3848,49 @@ fn parse_body_syntax(
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Use(used)));
             continue;
         }
+        // `{ 2 fn f() {} }`: an expression that is not block-like needs a
+        // `;` before an item, as in Rust.
+        if !boundary
+            && ends_expression
+            && let Some((token, position)) = input.peek()
+            && begins_statement_item(token)
+        {
+            return Err(PERR::MissingToken(
+                Token::SemiColon.into(),
+                "after the expression before this item".into(),
+            )
+            .into_err(*position));
+        }
         if let Some((token, _)) = input.peek() {
             boundary = matches!(token, Token::LeftBrace | Token::RightBrace | Token::SemiColon);
+            let closes_visibility =
+                matches!(token, Token::RightParen) && visibility == Some(scan.delimiter_depth);
+            if closes_visibility {
+                visibility = None;
+            }
+            if matches!(token, Token::LeftParen) && after_pub {
+                visibility = Some(scan.delimiter_depth + 1);
+            }
+            ends_expression = !closes_visibility
+                && match token {
+                    Token::Identifier(name) => !matches!(
+                        name.as_str(),
+                        "unsafe" | "safe" | "extern" | "default" | "auto" | "raw"
+                    ),
+                    Token::StringConstant(_) => !after_extern,
+                    #[cfg(not(feature = "no_float"))]
+                    Token::FloatConstant(_) => true,
+                    Token::IntegerConstant(_)
+                    | Token::CharConstant(_)
+                    | Token::True
+                    | Token::False
+                    | Token::RightParen
+                    | Token::RightBracket => true,
+                    Token::Reserved(word) => word.as_str() == "?",
+                    _ => false,
+                };
+            after_pub = matches!(token, Token::Pub);
+            after_extern = matches!(token, Token::Identifier(name) if name.as_str() == "extern");
         }
         match scan
             .next(input, tokenizer_control)
@@ -4713,6 +4776,30 @@ fn view(state: &Counter) -> iced::widget::Column<'_, Message> { () }
             assert!(error.to_string().contains(expected), "{source}: {error}");
             assert!(!error.position().is_none(), "{source}: {error}");
         }
+    }
+
+    #[test]
+    fn items_after_an_expression_need_a_semicolon_unless_it_is_block_like() {
+        for (source, line, column) in [
+            ("fn main() {\n    let v = { 1\n        struct S { x: i64 }\n    };\n}", 3, 9),
+            ("fn main() {\n    let w = { 2 fn f() {} };\n}", 2, 17),
+        ] {
+            let error = Engine::new().parse_unit(source).unwrap_err();
+            assert!(
+                error.to_string().contains("';' after the expression"),
+                "{source}: {error}"
+            );
+            assert_eq!(error.position(), Position::new(line, column), "{source}");
+        }
+
+        let unit = Engine::new()
+            .parse_unit(
+                "fn main() {\n    struct A;\n    let x = 1;\n    if x > 0 {} struct B;\n    \
+                 let w = { loop { break; } fn f() {} 5 };\n    m! { x } enum E { V }\n    \
+                 let f: fn(i64) -> i64 = g;\n}",
+            )
+            .unwrap();
+        assert_eq!(unit.items().len(), 5);
     }
 
     #[test]
