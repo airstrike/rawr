@@ -2001,7 +2001,9 @@ mod tests {
                     crate::classify::representability::convert::Type::Builtin(
                         crate::classify::representability::convert::Builtin::I64
                     )
-                ) && value.ty() == "i64" && value.value() == "42"
+                ) && value
+                    .as_ref()
+                    .is_some_and(|value| value.ty() == "i64" && value.value() == "42")
         )));
         assert!(demand.adapter_plans().iter().any(|plan| {
             matches!(plan.operation(), Operation::Function { signature, .. } if signature.inputs().len() == 1)

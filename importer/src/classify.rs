@@ -12,7 +12,7 @@ use crate::contract::{self, Classified, Contract};
 pub(crate) mod cached;
 pub mod representability;
 
-const CONTRACT_SCHEMA: u32 = 6;
+const CONTRACT_SCHEMA: u32 = 7;
 const CLASSIFIER_VERSION: u32 = 12;
 const COMPILER_ABI: u32 = 1;
 
@@ -1388,10 +1388,9 @@ impl DriverAudit {
                 self.ty(plan.ty())?;
                 self.add(
                     0,
-                    plan.value()
-                        .ty()
-                        .len()
-                        .checked_add(plan.value().value().len())?,
+                    plan.value().map_or(Some(0), |value| {
+                        value.ty().len().checked_add(value.value().len())
+                    })?,
                 )?;
             }
             R::FunctionItem(item) => {
@@ -2265,10 +2264,15 @@ fn field_type_nameable(
         Type::FunctionItem { input, output } => {
             field_type_nameable(input, nominal) && field_type_nameable(output, nominal)
         }
-        Type::ProfileMessage { payload, .. } | Type::Option(payload) => {
-            field_type_nameable(payload, nominal)
-        }
+        Type::ProfileMessage { payload, .. }
+        | Type::Option(payload)
+        | Type::Sequence {
+            element: payload, ..
+        } => field_type_nameable(payload, nominal),
         Type::Result(ok, err) => field_type_nameable(ok, nominal) && field_type_nameable(err, nominal),
+        Type::Tuple(members) => members
+            .iter()
+            .all(|member| field_type_nameable(member, nominal)),
         Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
     }
 }
@@ -2421,9 +2425,15 @@ fn type_nameable(
             all_nameable([&**input, &**output], root, names)
         }
         representability::convert::Type::ProfileMessage { payload, .. }
-        | representability::convert::Type::Option(payload) => type_nameable(payload, root, names),
+        | representability::convert::Type::Option(payload)
+        | representability::convert::Type::Sequence {
+            element: payload, ..
+        } => type_nameable(payload, root, names),
         representability::convert::Type::Result(ok, err) => {
             all_nameable([&**ok, &**err], root, names)
+        }
+        representability::convert::Type::Tuple(members) => {
+            all_nameable(members.iter(), root, names)
         }
         representability::convert::Type::Unit
         | representability::convert::Type::Builtin(_)
@@ -3029,6 +3039,11 @@ impl<P: api::Phase> Context<'_, P> {
             } => self.function(signature, generics),
             model::Kind::Module => Err(Failure::Reject(reject::Kind::Module)),
             model::Kind::Union { .. } => Err(Failure::Reject(reject::Kind::Union)),
+            model::Kind::Static {
+                ty,
+                mutable: false,
+                thread_local: false,
+            } => self.statik(ty).map(Representability::Constant),
             model::Kind::Static { .. } => Err(Failure::Reject(reject::Kind::Static)),
             model::Kind::Trait { .. } => Err(Failure::Reject(reject::Kind::Trait)),
             model::Kind::AssociatedType { .. } => {
@@ -3217,9 +3232,91 @@ impl<P: api::Phase> Context<'_, P> {
             self.retain_str(value)?;
         }
         Ok(representability::constant::Plan::new(
-            self.convert(ty)?,
-            constant(value)?,
+            self.convert_value(ty)?,
+            Some(constant(value)?),
         ))
+    }
+
+    /// An immutable `static`, read by its path where the bridge runs: a
+    /// slice of values the bridge clones (game_of_life's `pub static ALL:
+    /// &[Preset]`), or a primitive.
+    fn statik(&self, ty: &model::Type) -> Result<representability::constant::Plan, Failure> {
+        use representability::convert::Type;
+        let ty = self.convert_value(ty)?;
+        if !matches!(
+            ty,
+            Type::Unit | Type::Builtin(_) | Type::Sequence { owned: false, .. }
+        ) {
+            return Err(representability::reject::Kind::Static.into());
+        }
+        Ok(representability::constant::Plan::new(ty, None))
+    }
+
+    /// A value the bridge gives Rawr: as `convert`, and a `Vec<T>`, a
+    /// borrowed slice `&[T]` of `Clone` elements, or a tuple, which
+    /// cross as Rawr's arrays and tuples.
+    fn convert_value(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        use representability::convert::Type;
+        match ty {
+            model::Type::Reference {
+                mutability: model::Mutability::Shared,
+                ty,
+                ..
+            } if let model::Type::Slice(element) = ty.as_ref() => {
+                let element = self.convert_value(element)?;
+                if !self.clones(&element) {
+                    return Err(representability::reject::Kind::SliceType.into());
+                }
+                Ok(Type::Sequence {
+                    element: Box::new(element),
+                    owned: false,
+                })
+            }
+            model::Type::Definition { id, arguments }
+                if let Some(element) = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|definition| vec_element(definition, arguments)) =>
+            {
+                Ok(Type::Sequence {
+                    element: Box::new(self.convert_value(element)?),
+                    owned: true,
+                })
+            }
+            model::Type::Tuple(members) if members.len() >= 2 => {
+                let mut converted = Vec::new();
+                self.retain_array::<Type>(members.len())?;
+                converted
+                    .try_reserve_exact(members.len())
+                    .map_err(|_| Error::Allocation)?;
+                for member in members {
+                    converted.push(self.convert_value(member)?);
+                }
+                Ok(Type::Tuple(converted.into_boxed_slice()))
+            }
+            ty => self.convert(ty),
+        }
+    }
+
+    /// Whether the crate's values of `ty` clone, so a slice of them can
+    /// be copied out.
+    fn clones(&self, ty: &representability::convert::Type) -> bool {
+        use representability::convert::Type;
+        match ty {
+            Type::Unit | Type::Builtin(_) => true,
+            Type::Nominal { definition, .. } => self
+                .graph
+                .definitions()
+                .position(|candidate| {
+                    crate::surface::identity::Definition::of(candidate.id()) == *definition
+                })
+                .is_some_and(|index| self.implements_for_any(index, "Clone")),
+            Type::Option(element) | Type::Sequence { element, .. } => self.clones(element),
+            Type::Result(ok, err) => self.clones(ok) && self.clones(err),
+            Type::Tuple(members) => members.iter().all(|member| self.clones(member)),
+            Type::FunctionItem { .. } | Type::ProfileMessage { .. } | Type::Parameter(_) => false,
+        }
     }
 
     fn value(
@@ -3289,7 +3386,7 @@ impl<P: api::Phase> Context<'_, P> {
             model::Receiver::None | model::Receiver::Value { .. } => {
                 self.convert_output(signature.output())
             }
-            _ => self.convert(signature.output()),
+            _ => self.convert_value(signature.output()),
         };
         let output = match output {
             Ok(output) => output,
@@ -3454,7 +3551,7 @@ impl<P: api::Phase> Context<'_, P> {
             _ => None,
         };
         let Some(output) = output else {
-            return self.convert(ty);
+            return self.convert_value(ty);
         };
         Ok(representability::convert::Type::Nominal {
             definition: crate::surface::identity::Definition::future(),
@@ -3841,6 +3938,11 @@ fn selector(definition: &model::Definition) -> Result<crate::surface::identity::
             Owner::Free => Selector::Constant { item },
         },
         Kind::Struct { .. } | Kind::Enum { .. } => Selector::Declaration,
+        Kind::Static {
+            mutable: false,
+            thread_local: false,
+            ..
+        } if matches!(definition.owner(), Owner::Free) => Selector::Constant { item },
         Kind::Module
         | Kind::Union { .. }
         | Kind::Static { .. }
@@ -3850,6 +3952,24 @@ fn selector(definition: &model::Definition) -> Result<crate::surface::identity::
         | Kind::AssociatedType { .. }
         | Kind::Sysroot { .. } => Selector::Unavailable,
     })
+}
+
+/// `T` of alloc's `Vec<T>`, with its allocator or without.
+fn vec_element<'a>(
+    definition: &model::Definition,
+    arguments: &'a [model::Argument],
+) -> Option<&'a model::Type> {
+    let unit = definition.id().unit();
+    if unit.authority().sysroot().is_none()
+        || !matches!(unit.crate_name(), "alloc" | "std")
+        || definition.display_path().last() != Some("Vec")
+    {
+        return None;
+    }
+    match arguments {
+        [model::Argument::Type(element)] | [model::Argument::Type(element), _] => Some(element),
+        _ => None,
+    }
 }
 
 fn constant(value: &model::Const) -> Result<representability::convert::Constant, Failure> {
@@ -4623,7 +4743,7 @@ mod tests {
             (
                 model::Kind::Static {
                     ty: model::Type::Primitive("i64".into()),
-                    mutable: false,
+                    mutable: true,
                     thread_local: false,
                 },
                 Kind::Static,
@@ -4678,6 +4798,51 @@ mod tests {
                 Ok(Representability::Rejected(reason)) if reason.kind() == expected
             ));
         }
+
+        // An immutable static of a slice is read where the bridge runs, as
+        // a Rawr array of its cloned elements; a pair crosses as a tuple.
+        let pair = || {
+            model::Type::Tuple(Box::from([
+                model::Type::Primitive("isize".into()),
+                model::Type::Primitive("isize".into()),
+            ]))
+        };
+        let statik = model::Definition::new(
+            id.clone(),
+            Box::from([Box::<str>::from("fixture"), Box::<str>::from("ALL")]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Static {
+                ty: model::Type::Reference {
+                    lifetime: model::Lifetime::Static,
+                    mutability: model::Mutability::Shared,
+                    ty: Box::new(model::Type::Slice(Box::new(pair()))),
+                },
+                mutable: false,
+                thread_local: false,
+            },
+            rejection_span(),
+            model::Origin::Source,
+        );
+        let Ok(Representability::Constant(plan)) = context.classify_definition(0, &statik) else {
+            panic!("an immutable static of a slice is admitted");
+        };
+        let isize = || {
+            super::representability::convert::Type::Builtin(
+                super::representability::convert::Builtin::Isize,
+            )
+        };
+        assert_eq!(
+            plan.ty(),
+            &super::representability::convert::Type::Sequence {
+                element: Box::new(super::representability::convert::Type::Tuple(Box::from([
+                    isize(),
+                    isize()
+                ]))),
+                owned: false,
+            }
+        );
+        assert!(plan.value().is_none());
 
         let safe = |async_function, variadic, abi: &str, binders, receiver| {
             model::Signature::new(

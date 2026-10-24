@@ -1749,7 +1749,8 @@ fn ty_ok(
         Type::FunctionItem { input, output } | Type::Result(input, output) => {
             ty_ok(input, declared) && ty_ok(output, declared)
         }
-        Type::Option(element) => ty_ok(element, declared),
+        Type::Option(element) | Type::Sequence { element, .. } => ty_ok(element, declared),
+        Type::Tuple(members) => members.iter().all(|ty| ty_ok(ty, declared)),
         Type::ProfileMessage { payload, .. } => ty_ok(payload, declared),
         Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
     }
@@ -1848,6 +1849,15 @@ impl Types {
                 Self::convert_charged(ok, parameters)?,
                 Self::convert_charged(err, parameters)?,
             ),
+            Type::Sequence { element, .. } => {
+                host::type_ref::Type::slice(Self::convert_charged(element, parameters)?)
+            }
+            Type::Tuple(members) => host::type_ref::Type::tuple(
+                members
+                    .iter()
+                    .map(|member| Self::convert_charged(member, parameters))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?,
         })
     }
 }
@@ -1915,8 +1925,21 @@ fn type_usage(
                     .ok_or(Error::Allocation)?,
             )
         }
-        Type::ProfileMessage { payload, .. } | Type::Option(payload) => {
-            type_usage(payload, parameters)?
+        Type::ProfileMessage { payload, .. }
+        | Type::Option(payload)
+        | Type::Sequence {
+            element: payload, ..
+        } => type_usage(payload, parameters)?,
+        Type::Tuple(members) => {
+            members
+                .iter()
+                .try_fold((0_usize, 0_usize), |(items, bytes), member| {
+                    let (member_items, member_bytes) = type_usage(member, parameters)?;
+                    Ok::<_, Error>((
+                        items.checked_add(member_items).ok_or(Error::Allocation)?,
+                        bytes.checked_add(member_bytes).ok_or(Error::Allocation)?,
+                    ))
+                })?
         }
         Type::Unit | Type::Builtin(_) => (0, 0),
     };

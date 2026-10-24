@@ -1260,6 +1260,15 @@ fn ty(
         facade::Type::Result(ok, err) => {
             host::type_ref::Type::result(ty(facade, ok, profile, installed)?, ty(facade, err, profile, installed)?)
         }
+        facade::Type::Array(element) => {
+            host::type_ref::Type::slice(ty(facade, element, profile, installed)?)
+        }
+        facade::Type::Tuple(members) => host::type_ref::Type::tuple(
+            members
+                .iter()
+                .map(|member| ty(facade, member, profile, installed))
+                .collect::<Result<Vec<_>, _>>()?,
+        )?,
     })
 }
 

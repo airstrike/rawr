@@ -843,6 +843,7 @@ fn runtime_invoke(
             // A Rust value inside an `Option` or a `Result` takes the
             // witness of its own type argument.
             attest_inner(&output, &witness, arguments.arena)?;
+            attest_elements(&output, &witness, arguments.arena)?;
         }
         Ok(output)
     })
@@ -881,6 +882,33 @@ fn attest_inner(
             {
                 arena.attest(handle, witness)?;
             }
+        }
+    }
+    Ok(())
+}
+
+/// The Rust values inside an array or tuple, as a `Vec`, a slice or a
+/// tuple output gives them, each with the witness of its own type.
+fn attest_elements(
+    value: &Dynamic,
+    witness: &__rawr_internal::host::runtime::Witness,
+    arena: &mut Arena,
+) -> Result<(), Error> {
+    let Ok(elements) = value.as_array_ref() else {
+        return Ok(());
+    };
+    for (index, element) in elements.iter().enumerate() {
+        // An array's elements share its argument; a tuple's members have
+        // one each.
+        let Some(witness) = witness
+            .argument_witness(index)
+            .or_else(|| witness.argument_witness(0))
+        else {
+            continue;
+        };
+        match element.read_lock::<NativeHandle>().map(|value| *value) {
+            Some(handle) => arena.attest(handle, witness)?,
+            None => attest_elements(element, &witness, arena)?,
         }
     }
     Ok(())
@@ -5052,6 +5080,25 @@ fn render_rust_type(
             render_rust_type(err, facade, output)?;
             output.write_all(b">").map_err(|_| request::Error::Encoding)
         }
+        convert::Type::Sequence { element, .. } => {
+            output
+                .write_all(b"Vec<")
+                .map_err(|_| request::Error::Encoding)?;
+            render_rust_type(element, facade, output)?;
+            output.write_all(b">").map_err(|_| request::Error::Encoding)
+        }
+        convert::Type::Tuple(members) => {
+            output
+                .write_all(b"(")
+                .map_err(|_| request::Error::Encoding)?;
+            for member in members {
+                render_rust_type(member, facade, output)?;
+                output
+                    .write_all(b", ")
+                    .map_err(|_| request::Error::Encoding)?;
+            }
+            output.write_all(b")").map_err(|_| request::Error::Encoding)
+        }
         convert::Type::Parameter(_) => Err(request::Error::Drift {
             field: "unconstrained generated projection message",
         }),
@@ -5450,6 +5497,11 @@ fn render_take(
                 field: "static function item entered runtime argument decoding",
             });
         }
+        convert::Type::Sequence { .. } | convert::Type::Tuple(_) => {
+            return Err(request::Error::Drift {
+                field: "output-only sequence or tuple entered runtime argument decoding",
+            });
+        }
         convert::Type::ProfileMessage { payload, .. } => {
             return render_take(local, index, payload, output);
         }
@@ -5507,7 +5559,10 @@ fn render_give(
         convert::Type::ProfileMessage { payload, .. } => {
             return render_give(payload, value, output);
         }
-        convert::Type::Option(_) | convert::Type::Result(..) => {
+        convert::Type::Option(_)
+        | convert::Type::Result(..)
+        | convert::Type::Sequence { .. }
+        | convert::Type::Tuple(_) => {
             let mut converted = String::new();
             render_to_dynamic(ty, value, 0, &mut converted)?;
             writeln!(output, "    {converted}")
@@ -5599,6 +5654,11 @@ fn render_from_dynamic(
                 field: "static function item entered runtime argument decoding",
             });
         }
+        convert::Type::Sequence { .. } | convert::Type::Tuple(_) => {
+            return Err(request::Error::Drift {
+                field: "output-only sequence or tuple entered runtime argument decoding",
+            });
+        }
     }
     .map_err(|_| request::Error::Encoding)
 }
@@ -5651,6 +5711,34 @@ fn render_to_dynamic(
                 output,
                 "match {value} {{ Ok({inner}) => ({ok_converted}).map(__rawr_internal::result::ok), Err({inner}) => ({err_converted}).map(__rawr_internal::result::err) }}"
             )
+        }
+        // A `Vec`'s elements are moved out, a slice's cloned.
+        convert::Type::Sequence { element, owned } => {
+            let inner = format!("inner_{depth}");
+            let mut converted = String::new();
+            render_to_dynamic(element, &inner, depth + 1, &mut converted)?;
+            let elements = if *owned { "into_iter()" } else { "iter().cloned()" };
+            write!(
+                output,
+                "{value}.{elements}.map(|{inner}| {converted}).collect::<Result<Vec<Dynamic>, Error>>().map(Dynamic::from_array)"
+            )
+        }
+        convert::Type::Tuple(members) => {
+            let names = (0..members.len())
+                .map(|member| format!("inner_{depth}_{member}"))
+                .collect::<Vec<_>>();
+            write!(
+                output,
+                "(|| {{ let ({},) = {value}; Ok::<Dynamic, Error>(Dynamic::from_array(vec![",
+                names.join(", ")
+            )
+            .map_err(|_| request::Error::Encoding)?;
+            for (member, name) in members.iter().zip(&names) {
+                let mut converted = String::new();
+                render_to_dynamic(member, name, depth + 1, &mut converted)?;
+                write!(output, "({converted})?, ").map_err(|_| request::Error::Encoding)?;
+            }
+            write!(output, "])) }})()")
         }
         convert::Type::FunctionItem { .. } => {
             return Err(request::Error::Drift {
@@ -6000,6 +6088,15 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             concrete_type(err)?
         ),
         convert::Type::ProfileMessage { payload, .. } => concrete_type(payload)?,
+        convert::Type::Sequence { element, .. } => format!("Vec<{}>", concrete_type(element)?),
+        convert::Type::Tuple(members) => format!(
+            "({},)",
+            members
+                .iter()
+                .map(concrete_type)
+                .collect::<Option<Vec<_>>>()?
+                .join(", ")
+        ),
         convert::Type::FunctionItem { .. } | convert::Type::Parameter(_) => return None,
     })
 }
@@ -6073,7 +6170,9 @@ fn render_generic_arguments(
                         // known; Rust infers it otherwise.
                         convert::Type::Nominal { .. }
                         | convert::Type::Option(_)
-                        | convert::Type::Result(..) => {
+                        | convert::Type::Result(..)
+                        | convert::Type::Sequence { .. }
+                        | convert::Type::Tuple(_) => {
                             concrete.as_deref().unwrap_or("_").as_bytes()
                         }
                         convert::Type::FunctionItem { .. } => {
@@ -6452,6 +6551,8 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         // `Result` has no `Default`, as in Rust.
         convert::Type::Result(..)
         | convert::Type::Nominal { .. }
+        | convert::Type::Sequence { .. }
+        | convert::Type::Tuple(_)
         | convert::Type::FunctionItem { .. }
         | convert::Type::Parameter(_) => {
             return Err(request::Error::Drift {

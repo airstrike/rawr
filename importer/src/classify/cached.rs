@@ -131,7 +131,7 @@ impl Product {
 
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Generic;
-    const SCHEMA: u32 = 3;
+    const SCHEMA: u32 = 4;
 
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
         if self.canonical.len() > limit {

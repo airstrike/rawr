@@ -104,6 +104,11 @@ pub enum Type {
     Option(Box<Type>),
     /// Rust's `Result<T, E>`: a Rawr `Result` of the converted `T` and `E`.
     Result(Box<Type>, Box<Type>),
+    /// An output `Vec<T>`, or a borrowed slice `&[T]` whose elements are
+    /// cloned (`owned` false): a Rawr array of the converted `T`.
+    Sequence { element: Box<Type>, owned: bool },
+    /// An output tuple: a Rawr tuple of the converted members.
+    Tuple(Box<[Type]>),
     /// One direct compile-time imported function-item operand.
     FunctionItem {
         input: Box<Type>,

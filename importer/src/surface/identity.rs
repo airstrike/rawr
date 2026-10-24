@@ -759,12 +759,17 @@ fn type_bytes(ty: &convert::Type) -> Option<usize> {
         convert::Type::ProfileMessage { payload, .. } => type_bytes(payload)?
             .checked_add(std::mem::size_of::<convert::Type>())
             .and_then(|bytes| bytes.checked_add(16)),
-        convert::Type::Option(element) => {
+        convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
             type_bytes(element)?.checked_add(std::mem::size_of::<convert::Type>())
         }
         convert::Type::Result(ok, err) => type_bytes(ok)?
             .checked_add(type_bytes(err)?)?
             .checked_add(std::mem::size_of::<convert::Type>().checked_mul(2)?),
+        convert::Type::Tuple(members) => members.iter().try_fold(0_usize, |bytes, member| {
+            bytes
+                .checked_add(std::mem::size_of::<convert::Type>())?
+                .checked_add(type_bytes(member)?)
+        }),
         convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Parameter(_) => Some(0),
     }
 }
@@ -1261,6 +1266,18 @@ impl Framed {
                 self.byte(7);
                 self.converted_type(ok);
                 self.converted_type(err);
+            }
+            convert::Type::Sequence { element, owned } => {
+                self.byte(8);
+                self.byte(u8::from(*owned));
+                self.converted_type(element);
+            }
+            convert::Type::Tuple(members) => {
+                self.byte(9);
+                self.count(members.len());
+                for member in members {
+                    self.converted_type(member);
+                }
             }
             convert::Type::Parameter(index) => {
                 self.byte(3);

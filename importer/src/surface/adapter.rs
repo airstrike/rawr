@@ -65,7 +65,7 @@ pub(crate) enum Operation {
     },
     Constant {
         ty: convert::Type,
-        value: convert::Constant,
+        value: Option<convert::Constant>,
         associated: bool,
     },
     Builder {
@@ -535,9 +535,11 @@ fn operation_bytes(
             representability::Representability::Constant(plan),
             identity::Selector::Constant { .. } | identity::Selector::AssociatedConstant { .. },
         ) => type_dynamic_bytes(plan.ty()).and_then(|bytes| {
-            bytes
-                .checked_add(plan.value().ty().len())?
-                .checked_add(plan.value().value().len())
+            plan.value().map_or(Some(bytes), |value| {
+                bytes
+                    .checked_add(value.ty().len())?
+                    .checked_add(value.value().len())
+            })
         }),
         (
             representability::Representability::Value(_)
@@ -689,7 +691,7 @@ fn clone_operation(
             | identity::Selector::AssociatedConstant { .. }),
         ) => Ok(Operation::Constant {
             ty: clone_type(plan.ty())?,
-            value: clone_constant(plan.value())?,
+            value: plan.value().map(clone_constant).transpose()?,
             associated: matches!(selector, identity::Selector::AssociatedConstant { .. }),
         }),
         (
@@ -888,6 +890,11 @@ fn clone_type(source: &convert::Type) -> Result<convert::Type, Error> {
         convert::Type::Result(ok, err) => {
             convert::Type::Result(Box::new(clone_type(ok)?), Box::new(clone_type(err)?))
         }
+        convert::Type::Sequence { element, owned } => convert::Type::Sequence {
+            element: Box::new(clone_type(element)?),
+            owned: *owned,
+        },
+        convert::Type::Tuple(members) => convert::Type::Tuple(clone_types(members)?),
         convert::Type::Parameter(index) => convert::Type::Parameter(*index),
     })
 }
@@ -982,12 +989,13 @@ fn type_dynamic_bytes(ty: &convert::Type) -> Option<usize> {
         convert::Type::ProfileMessage { payload, .. } => type_dynamic_bytes(payload)?
             .checked_add(mem::size_of::<convert::Type>())
             .and_then(|bytes| bytes.checked_add(16)),
-        convert::Type::Option(element) => {
+        convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
             type_dynamic_bytes(element)?.checked_add(mem::size_of::<convert::Type>())
         }
         convert::Type::Result(ok, err) => type_dynamic_bytes(ok)?
             .checked_add(type_dynamic_bytes(err)?)?
             .checked_add(mem::size_of::<convert::Type>().checked_mul(2)?),
+        convert::Type::Tuple(members) => type_slice_bytes(members),
         convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Parameter(_) => Some(0),
     }
 }

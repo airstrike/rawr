@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 10;
+const SCHEMA: u32 = 11;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -278,6 +278,10 @@ pub enum Type {
     Option(Box<Type>),
     /// Rust's `Result<T, E>`, a Rawr `Result`.
     Result(Box<Type>, Box<Type>),
+    /// An output `Vec<T>` or slice, a Rawr array.
+    Array(Box<Type>),
+    /// An output tuple, a Rawr tuple.
+    Tuple(Box<[Type]>),
 }
 
 impl Signature {
@@ -301,7 +305,8 @@ impl Type {
             Self::FunctionItem { input, output } | Self::Result(input, output) => {
                 input.declared(declared) && output.declared(declared)
             }
-            Self::Option(element) => element.declared(declared),
+            Self::Option(element) | Self::Array(element) => element.declared(declared),
+            Self::Tuple(members) => members.iter().all(|ty| ty.declared(declared)),
             _ => true,
         }
     }
@@ -2120,6 +2125,17 @@ fn ty(
             Box::new(ty(ok, parameters)?),
             Box::new(ty(err, parameters)?),
         ),
+        Source::Sequence { element, .. } => Type::Array(Box::new(ty(element, parameters)?)),
+        Source::Tuple(members) => {
+            let mut converted = Vec::new();
+            converted
+                .try_reserve_exact(members.len())
+                .map_err(|_| super::Error::Allocation)?;
+            for member in members {
+                converted.push(ty(member, parameters)?);
+            }
+            Type::Tuple(converted.into_boxed_slice())
+        }
         Source::Parameter(index) => {
             let parameter = parameters
                 .iter()

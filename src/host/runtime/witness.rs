@@ -87,13 +87,15 @@ impl Witness {
 
     /// The witness of this type's argument at `index`, under the same
     /// authority: a `Task<T>` witness gives the witness of each `T` its
-    /// native task yields. An `Option<T>` has `T` at 0, and a `Result<T, E>`
-    /// has `T` at 0 and `E` at 1.
+    /// native task yields. An `Option<T>` has `T` at 0, a `Result<T, E>`
+    /// has `T` at 0 and `E` at 1, and an array or slice has its element at 0.
     #[doc(hidden)]
     #[must_use]
     pub fn argument_witness(&self, index: usize) -> Option<Self> {
         let ty = match (&*self.ty, index) {
-            (Type::Option(element), 0) | (Type::Result(element, _), 0) => (**element).clone(),
+            (Type::Option(element), 0)
+            | (Type::Result(element, _), 0)
+            | (Type::Array { element, .. }, 0) => (**element).clone(),
             (Type::Result(_, error), 1) => (**error).clone(),
             (Type::Tuple(members), index) => members.get(index)?.clone(),
             _ => self.ty.arguments().get(index)?.clone(),
@@ -128,5 +130,13 @@ mod tests {
         let result = Witness::issue(authority, Type::result(ok.clone(), Type::unit()));
         assert!(result.argument_witness(0).unwrap().matches(authority, &ok));
         assert!(result.argument_witness(1).unwrap().matches(authority, &Type::unit()));
+
+        // A slice's elements, as an imported `&[T]` or `Vec<T>` gives them.
+        let slice = Type::Array {
+            element: Box::new(ok.clone()),
+            length: None,
+        };
+        let slice = Witness::issue(authority, slice);
+        assert!(slice.argument_witness(0).unwrap().matches(authority, &ok));
     }
 }

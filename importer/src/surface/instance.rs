@@ -562,7 +562,20 @@ fn concrete_type_bytes(
                 })
         }
         convert::Type::FunctionItem { .. } => Err(super::Error::InstanceMismatch),
-        convert::Type::Option(element) => {
+        convert::Type::Tuple(members) => {
+            members
+                .iter()
+                .try_fold(std::mem::size_of::<convert::Type>(), |bytes, member| {
+                    bytes
+                        .checked_add(concrete_type_bytes(member, actual, limit)?)
+                        .ok_or(super::Error::Limit {
+                            resource: "surface instance bytes",
+                            limit: usize::MAX,
+                            actual: usize::MAX,
+                        })
+                })
+        }
+        convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
             concrete_type_bytes(element, actual, limit).and_then(|bytes| {
                 bytes
                     .checked_add(std::mem::size_of::<convert::Type>())
