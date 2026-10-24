@@ -21,6 +21,13 @@ npm test >"$logs/release-test.log" 2>&1 || { echo "npm test failed; see $logs/re
 
 attempt=1
 until npx wrangler deploy --containers-rollout=immediate >"$logs/release-deploy.log" 2>&1; do
+  # Since 2026-10-24 Cloudflare answers 100146 to wrangler's last request even
+  # though the upload and the rollout went through. The bot's poll below proves
+  # whether the new image runs, so a 100146 after the upload is not a failure.
+  if grep -q "^Uploaded rawr-play" "$logs/release-deploy.log" && grep -q 100146 "$logs/release-deploy.log"; then
+    echo "Cloudflare answered 100146 after the upload; checking the bot instead of deploying again."
+    break
+  fi
   if grep -q -e 100146 -e "Internal Server Error" "$logs/release-deploy.log" && [ "$attempt" -lt 5 ]; then
     echo "Cloudflare answered 100146 or a 500; retrying in 30 s (attempt $attempt)."
     grep -e 100146 -e "Internal Server Error" -e ERROR "$logs/release-deploy.log" | head -5
@@ -49,7 +56,7 @@ echo "The bot runs image $want after $((i * 5)) s of polling."
 # Smoke test: the runnable snippets on the landing page and in the docs must still run.
 node --input-type=module -e '
   const blocks = [];
-  for (const path of ["/", "/docs", "/docs/start", "/docs/language", "/docs/play"]) {
+  for (const path of ["/", "/docs/start", "/docs/language", "/docs/iced/reference", "/docs/play/reference"]) {
     const page = await (await fetch(process.argv[1] + path)).text();
     const found = [...page.matchAll(/<code[^>]*data-run[^>]*>([\s\S]*?)<\/code>/g)];
     if (!found.length) throw new Error("no runnable snippets on " + path);
