@@ -216,7 +216,7 @@ fn batch_and_map_reject_unproven_or_mismatched_message_types() {
     let unknown = contract_source("Task::done(Message::Increment).map(missing)", "");
     assert!(matches!(
         compile_error(&unknown),
-        resolve::Error::UnsupportedNominalSyntax { .. }
+        resolve::Error::UnknownVariable { .. }
     ));
 }
 
