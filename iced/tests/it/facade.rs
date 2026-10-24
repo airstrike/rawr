@@ -967,17 +967,22 @@ fn the_snippet_prelude_names_every_widget_helper() {
         missing.is_empty(),
         "add these to `prelude` in iced/manifest.toml: {missing:?}"
     );
-    // Each prelude name is one the facade declares.
+    // Each prelude name is one the facade declares: a type, an item, a
+    // module of them (`iced::border`), or the alias `iced::Renderer`.
     let facade = rawr_iced::facade().unwrap();
     let block = &manifest[manifest.find("prelude = [").unwrap()..];
     let block = &block[..block.find(']').unwrap()];
     let prelude = block.split('"').skip(1).step_by(2).collect::<Vec<_>>();
+    let declares = |path: &str| {
+        let module = format!("{path}::");
+        facade.types().any(|ty| ty.path() == path || ty.path().starts_with(&module))
+            || facade
+                .items()
+                .any(|item| item.path() == path || item.path().starts_with(&module))
+    };
     let unknown = prelude
         .iter()
-        .filter(|path| {
-            !facade.types().any(|ty| ty.path() == **path)
-                && !facade.items().any(|item| item.path() == **path)
-        })
+        .filter(|path| **path != "iced::Renderer" && !declares(path))
         .collect::<Vec<_>>();
     assert!(unknown.is_empty(), "the facade declares no {unknown:?}");
 }
