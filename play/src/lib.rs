@@ -1329,6 +1329,40 @@ fn view() -> impl Widget<()> {
         assert!(!super::has_top_level_use("fn view() {\n    use iced::widget::text;\n}"));
     }
 
+    /// The prelude has the modules and types iced's examples use most in a
+    /// view: `border`, `padding`, `Shadow`, `color!`, `rule`, `font`,
+    /// `alignment`, `gradient`, angles, `FillPortion` and `mouse`.
+    #[test]
+    fn the_prelude_has_what_iced_examples_use_in_views() {
+        let source = "fn view() -> impl Widget<()> {\ncolumn![\n\
+            container(text(\"bordered\")).padding(padding::all(10)).style(|_| container::Style {\n\
+                border: border::rounded(8).color(Color::BLACK).width(2),\n\
+                shadow: Shadow { color: Color::BLACK, offset: Vector::new(2.0, 2.0), blur_radius: 4.0 },\n\
+                background: Some(color!(0x88ccff).into()),\n\
+                ..container::Style::default()\n\
+            }),\n\
+            rule::horizontal(2),\n\
+            text(\"bold\").font(Font { weight: font::Weight::Bold, ..Font::default() }).align_x(alignment::Horizontal::Right),\n\
+            container(text(\"fade\")).style(|_| gradient::Linear::new(Degrees(90.0)).add_stop(0.0, Color::WHITE).into()),\n\
+            row![text(\"a\").width(FillPortion(1)), text(\"b\").width(FillPortion(2))],\n\
+            mouse_area(text(\"hand\")).interaction(mouse::Interaction::Pointer),\n\
+            container(text(\"turn\")).style(|_| gradient::Linear::new(Radians(0.5)).add_stop(1.0, Color::BLACK).into()),\n\
+            canvas::Canvas::new(Dot).width(40).height(40),\n\
+        ]\n}";
+        let source = format!(
+            "{source}\n#[derive(Debug)] struct Dot;\n\
+             impl canvas::Program<()> for Dot {{\n\
+                 type State = ();\n\
+                 fn draw(&self, _state: &(), renderer: &Renderer, _theme: &Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<canvas::Geometry> {{\n\
+                     let mut frame = canvas::Frame::new(renderer, bounds.size());\n\
+                     frame.fill_rectangle(Point::ORIGIN, Size::new(4.0, 4.0), Color::BLACK);\n\
+                     vec![frame.into_geometry()]\n\
+                 }}\n\
+             }}\n"
+        );
+        render(&source, &Options::default()).unwrap_or_else(|error| panic!("{error}"));
+    }
+
     #[test]
     fn render_compile_error_carries_diagnostics() {
         let error = render("column![text(\"hi\")", &Options::default()).unwrap_err();
