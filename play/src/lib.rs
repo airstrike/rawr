@@ -189,7 +189,9 @@ impl Default for Limits {
             string_size: 64 * 1024,
             // A 128 by 128 RGBA pixel buffer.
             array_size: 64 * 1024,
-            map_size: 10_000,
+            // One rule for every collection: a `HashMap` already counts
+            // against the array limit, so maps get the same 65,536 items.
+            map_size: 64 * 1024,
             time: Duration::from_secs(2),
             animation: Duration::from_secs(2),
         }
@@ -1220,6 +1222,16 @@ fn view() -> impl Widget<()> {
         let error = render(source, &options).unwrap_err();
         assert!(matches!(error, PlayError::Limit(_)), "{error:?}");
         assert!(error.text().contains(super::TIME_LIMIT), "{error}");
+    }
+
+    #[test]
+    fn maps_and_arrays_share_one_size_limit() {
+        let limits = super::Limits::default();
+        assert_eq!((limits.array_size, limits.map_size), (65_536, 65_536));
+        let PlayError::Limit(reason) = super::classify("Size of object map too large", &limits) else {
+            panic!("not a limit");
+        };
+        assert!(reason.contains("arrays and maps up to 65536 items"), "{reason}");
     }
 
     #[test]
