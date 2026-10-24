@@ -943,9 +943,9 @@ impl<'a> Builder<'a> {
         self.push_evidence(source);
         {
             let package = &mut self.packages[package.0];
-            // A marked crate with any Cargo dependency imports Rust: even
-            // one that uses only iced runs against the iced its own
-            // `cargo build` builds, never one built into rawr-iced.
+            // A marked crate with any Cargo dependency imports Rust: its
+            // runner builds each dependency as its own `cargo build` builds
+            // it, never one built into an installed binary.
             let imports = !package.rust_modules.is_empty() || !cargo.dependencies.is_empty();
             if imports {
                 package.rust = Some(manifest::rust::Config::from_cargo(

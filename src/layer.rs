@@ -1,7 +1,8 @@
-//! Layers over the base language. Every program gets the base: the language
-//! and its core intrinsics (`format!`, `println!`, ..). A layer (rawr-iced is
-//! the first) adds a domain on top when a program brings it in; each layer
-//! says itself what brings it in, from the [`Facts`] of the program.
+//! Extensions over the base language. Every program gets the base: the
+//! language and its core intrinsics (`format!`, `println!`, ..). An
+//! extension (an installed `rawr-<name>` binary) serves a program that
+//! brings it in; each extension says itself what brings it in, from the
+//! [`Facts`] of the program.
 
 use crate::item::{self, type_ref};
 use crate::{diagnostic, package, parse, ImmutableString};
@@ -22,14 +23,14 @@ pub struct Facts {
 /// of `crates`, or whose package manifest declares one of `sections`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Claims {
-    /// Crates whose use brings the layer in: `iced` for rawr-iced.
+    /// Crates whose use brings the extension in.
     pub crates: Vec<String>,
-    /// Kinds of import that bring the layer in: `rust` for rawr-iced, which
-    /// a crate declares with Rust dependencies in its `Cargo.toml` or with
+    /// Kinds of import that bring the extension in. Only `rust` exists: a
+    /// crate declares it with Rust dependencies in its `Cargo.toml` or with
     /// native modules.
     pub sections: Vec<String>,
     /// Paths a host may import for a snippet that writes no `use` of its
-    /// own, such as `iced::widget::column`. Only such a host (`?play`)
+    /// own. Only such a host (`?play`)
     /// reads them, through [`Claims::claim_snippet`]; `rawr` does not.
     pub prelude: Vec<String>,
 }
@@ -63,8 +64,8 @@ impl Claims {
             .collect()
     }
 
-    /// What in `facts` brings the layer in, as a user reads it: `` `iced` ``
-    /// or `Rust dependencies in Cargo.toml`.
+    /// What in `facts` brings the extension in, as a user reads it: a crate
+    /// quoted (`` `name` ``) or `Rust dependencies in Cargo.toml`.
     #[must_use]
     pub fn reason(&self, facts: &Facts) -> Option<String> {
         self.crates

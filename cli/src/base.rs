@@ -1,6 +1,6 @@
 //! The base every program gets: the language and its core intrinsics
-//! (`format!`, `println!`, ..). A program another installed binary serves
-//! (rawr-iced today) is handed to it after this one load; see `crate::main`.
+//! (`format!`, `println!`, ..). A program an installed extension serves is
+//! handed to it after this one load; see `crate::main`.
 //! A program nothing else serves runs once here: its top level, then
 //! `fn main` if there is one, as in Rust.
 
@@ -98,7 +98,8 @@ impl Session {
     }
 }
 
-/// What `claims` names, as a user reads it: `` `iced` or Rust dependencies in Cargo.toml ``.
+/// What `claims` names, as a user reads it: the crates quoted (`` `name` ``)
+/// and the sections (`Rust dependencies in Cargo.toml`), joined by "or".
 #[must_use]
 pub fn uses(claims: &Claims) -> String {
     claims

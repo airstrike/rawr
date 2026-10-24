@@ -26,14 +26,14 @@ rust-version = "1.95.0"
 edition = "2024"
 autobenches = false
 authors = ["Andy Terra"]
-description = "A Rust-shaped scripting language and application framework"
+description = "A Rust interpreter for your dev builds"
 homepage = "https://github.com/airstrike/rawr"
 repository = "https://github.com/airstrike/rawr"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 include = ["/src/**/*", "/Cargo.toml", "/README.md", "LICENSE*"]
-keywords = ["scripting", "scripting-language", "gui", "iced"]
-categories = ["gui", "parser-implementations"]
+keywords = ["scripting", "scripting-language", "interpreter", "hot-reload"]
+categories = ["development-tools", "parser-implementations"]
 
 [dependencies]
 smallvec = { version = "1.7.0", default-features = false, features = ["union", "const_new", "const_generics"] }
@@ -41,7 +41,8 @@ thin-vec = { version = "0.2.13", default-features = false }
 ahash = { version = "0.8.4", default-features = false, features = ["compile-time-rng"] }
 num-traits = { version = "0.2.14", default-features = false }
 # `portable-atomic` only for no-std targets: a project's runner links this
-# crate beside iced, and any feature added here makes a second once_cell.
+# crate beside the project's own crates, and any feature added here makes a
+# second once_cell.
 once_cell = { version = "1.20.1", default-features = false, features = ["race", "alloc"] }
 bitflags = { version = "2.3.3", default-features = false }
 futures-core = { version = "0.3.31", default-features = false }

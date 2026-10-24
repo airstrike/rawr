@@ -1,4 +1,4 @@
-//! One aggregate package compiler shared by library, CLI, and iced hosts.
+//! One aggregate package compiler shared by the library, the CLI and hosts.
 
 #[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
 pub(crate) mod captured;

@@ -1,8 +1,9 @@
 //! The `rawr` command. It runs Rawr programs on the base language. A
-//! program another installed binary serves (rawr-iced, for programs using
-//! iced) is loaded here once and handed to that binary, which reads the
-//! parse from the program's parse cells instead of parsing it again.
-//! Commands `rawr` does not run itself go to the binary that provides them.
+//! program an installed extension serves (a `rawr-<name>` binary whose
+//! manifest claims it) is loaded here once and handed to that binary, which
+//! reads the parse from the program's parse cells instead of parsing it
+//! again. Commands `rawr` does not run itself go to the binary that provides
+//! them. `rawr` knows extensions only as data.
 
 #![deny(unsafe_code)]
 
@@ -147,19 +148,20 @@ fn is_path(argument: &OsStr) -> bool {
 
 fn help(installed: &[layer::Installed]) -> String {
     let mut help = String::from(
-        "Rawr: Rust-shaped scripts and apps\n\n`rawr` runs Rawr programs.",
-    );
-    for known in layer::catalog() {
-        help.push_str(&format!(
-            " {name} adds support for programs that use {uses}. Install it and `rawr` hands those programs to it.",
-            name = known.manifest.name,
-            uses = base::uses(&known.manifest.claims),
-        ));
-    }
-    help.push_str(
-        "\n\nUsage:\n  rawr [run] [path]    Run a program\n  rawr check [path]    Check a program without running it\n  rawr new <path>      Create a crate with a marked `src/main.rs`\n  rawr doctor [path]   Report on the environment and the project\n",
+        "Rawr: a Rust interpreter for your dev builds\n\n\
+         `rawr` runs a Cargo crate whose files start with `// rawr`, or one `.rs` file. \
+         Installed extensions serve more programs and add commands: `rawr` hands a \
+         program to the extension that serves it.\n\n\
+         Usage:\n  rawr [run] [path]    Run a program\n  rawr check [path]    Check a program without running it\n  \
+         rawr new <path>      Create a crate with a marked `src/main.rs`\n  rawr doctor [path]   Report on the environment and the project\n",
     );
     for binary in installed {
+        help.push_str(&format!(
+            "\nFrom {} ({}):\n  programs that use {}\n",
+            binary.manifest.name,
+            binary.path.display(),
+            base::uses(&binary.manifest.claims),
+        ));
         let words: Vec<_> = binary
             .manifest
             .commands
@@ -167,18 +169,22 @@ fn help(installed: &[layer::Installed]) -> String {
             .filter(|command| command.word != "doctor")
             .map(ToString::to_string)
             .collect();
-        help.push_str(&format!(
-            "\nFrom {} ({}):\n  {}\n  Run `rawr <command> --help` for each one.\n",
-            binary.manifest.name,
-            binary.path.display(),
-            words.join("\n  "),
-        ));
+        if !words.is_empty() {
+            help.push_str(&format!(
+                "  {}\n  Run `rawr <command> --help` for each one.\n",
+                words.join("\n  ")
+            ));
+        }
+        if !binary.manifest.templates.is_empty() {
+            help.push_str("  `rawr new <path> --template <name>`: see `rawr new --help`\n");
+        }
     }
     for known in layer::catalog() {
         if !installed.iter().any(|binary| binary.manifest.name == known.manifest.name) {
             help.push_str(&format!(
-                "\n{} is not installed. Install it with:\n{}\n",
+                "\n{} is not installed. It serves programs that use {}. Install it with:\n{}\n",
                 known.manifest.name,
+                base::uses(&known.manifest.claims),
                 layer::install_lines(&known),
             ));
         }
