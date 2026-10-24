@@ -6,7 +6,7 @@
 | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`arrays_and_structs`](arrays_and_structs.rs)             | shows how to register a Rust type and using it with arrays                                                                                          |
 | [`callback`](callback.rs)                                 | shows how to store a Rawr closure and call it later within Rust                                                                                     |
-| [`custom_types_and_methods`](custom_types_and_methods.rs) | shows how to register a Rust type and methods/getters/setters for it                                                                                |
+| [`custom_types_and_methods`](custom_types_and_methods.rs) | shows how to export a Rust type, its fields and its methods to a typed script                                                                      |
 | [`custom_types`](custom_types.rs)                         | shows how to register a Rust type and methods/getters/setters using the `CustomType` trait.                                                         |
 | [`definitions`](./definitions)                            | shows how to generate definition files for editor tooling (requires the `metadata` feature)                                                     |
 | [`hello`](hello.rs)                                       | simple example that evaluates an expression and prints the result                                                                                   |

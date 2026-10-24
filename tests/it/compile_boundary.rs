@@ -43,7 +43,7 @@ fn unavailable_item_lowering_is_a_positioned_compile_error() {
     // As in Rust, an `if` without `else` has type `()`.
     assert!(matches!(error.err_type(), ParseErrorType::Resolution(rawr::resolve::Error::TypeMismatch { .. })));
     assert_eq!(error.position().line(), Some(2));
-    assert!(error.to_string().contains("expected '()', found '{integer}'"), "{error}");
+    assert!(error.to_string().contains("expected `()`, found `{integer}`"), "{error}");
 }
 
 #[test]

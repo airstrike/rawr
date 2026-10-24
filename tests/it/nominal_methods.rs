@@ -118,7 +118,7 @@ fn receiver_references_do_not_coerce_to_owned_values() {
         ("struct Counter { value: i64 } impl Counter { fn reject(&mut self) -> Counter { self } }", "found '&mut Counter'"),
     ] {
         let error = resolution_error(&Engine::new(), source, Category::TypeMismatch, "expected 'Counter'");
-        assert!(error.to_string().contains(actual), "{error}");
+        assert!(error.err_type().to_string().contains(actual), "{error}");
     }
 }
 
@@ -440,7 +440,8 @@ fn resolution_error(engine: &Engine, source: &str, category: Category, message: 
     };
 
     assert_eq!(resolution.category(), category, "{error}");
-    assert!(error.to_string().contains(message), "diagnostic `{error}` did not contain `{message}`");
+    // The structured message: Display prints the rustc-style report.
+    assert!(error.err_type().to_string().contains(message), "diagnostic `{error}` did not contain `{message}`");
     assert!(!error.primary_span().is_none());
     error
 }

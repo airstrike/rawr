@@ -106,7 +106,10 @@ impl Value for () {
         Dynamic::UNIT
     }
     fn from_dynamic(value: &Dynamic) -> Result<Self, Box<EvalAltResult>> {
-        value.read_lock::<()>().map(|_| ()).ok_or_else(|| mismatch::<()>(value))
+        value
+            .read_lock::<()>()
+            .map(|_| ())
+            .ok_or_else(|| mismatch::<()>(value))
     }
 }
 
@@ -153,10 +156,7 @@ impl Exports {
         self
     }
 
-    fn declare(
-        &mut self,
-        declare: impl FnOnce(&mut facade::Builder) -> Result<(), host::Error>,
-    ) {
+    fn declare(&mut self, declare: impl FnOnce(&mut facade::Builder) -> Result<(), host::Error>) {
         if let Ok(builder) = &mut self.builder
             && let Err(error) = declare(builder)
         {
@@ -181,7 +181,11 @@ impl Exports {
     pub fn type_<T: Variant + Clone>(&mut self, name: &str) -> &mut Self {
         self.declare(|builder| {
             builder
-                .type_::<T>(name, &[], &[capability::Kind::Clone, capability::Kind::Static])
+                .type_::<T>(
+                    name,
+                    &[],
+                    &[capability::Kind::Clone, capability::Kind::Static],
+                )
                 .map(|_| ())
         });
         self
@@ -198,7 +202,13 @@ impl Exports {
         owner: Result<Type, host::Error>,
         callback: Callback,
     ) -> &mut Self {
-        self.method(path, receiver::Mode::Shared, Vec::new(), ty.clone(), callback);
+        self.method(
+            path,
+            receiver::Mode::Shared,
+            Vec::new(),
+            ty.clone(),
+            callback,
+        );
         self.method(path, receiver::Mode::Owned, vec![ty], owner, callback)
     }
 
@@ -263,8 +273,11 @@ impl Exports {
 }
 
 fn failed(error: impl std::fmt::Display) -> Box<EvalAltResult> {
-    EvalAltResult::ErrorRuntime(format!("cannot export to rawr: {error}").into(), Position::NONE)
-        .into()
+    EvalAltResult::ErrorRuntime(
+        format!("cannot export to rawr: {error}").into(),
+        Position::NONE,
+    )
+    .into()
 }
 
 impl Engine {
@@ -274,8 +287,25 @@ impl Engine {
     /// # Errors
     ///
     /// Returns an error when an export is invalid or its root is taken.
+    /// Export everything before the first compile that calls an exported
+    /// item: after it, the exports can't change.
+    ///
+    /// # Errors
+    ///
+    /// Also returns an error after such a compile.
     pub fn export(&mut self, exports: Exports) -> Result<&mut Self, Box<EvalAltResult>> {
-        let definition = exports.builder.and_then(facade::Builder::finish).map_err(failed)?;
+        if self
+            .exports_frozen
+            .load(core::sync::atomic::Ordering::Acquire)
+        {
+            return Err(failed(
+                "a script compiled by this engine already calls its exports; export everything before compiling",
+            ));
+        }
+        let definition = exports
+            .builder
+            .and_then(facade::Builder::finish)
+            .map_err(failed)?;
         let root = definition.root().to_string();
         let mut runtime = host::runtime::Builder::new(definition.clone());
         for (path, callback) in exports.bindings {
@@ -360,7 +390,9 @@ pub mod __private {
         if !value.is::<T>() {
             return Err(mismatch::<T>(value));
         }
-        let mut this = value.write_lock::<T>().ok_or_else(|| mismatch::<T>(&Dynamic::UNIT))?;
+        let mut this = value
+            .write_lock::<T>()
+            .ok_or_else(|| mismatch::<T>(&Dynamic::UNIT))?;
         Ok(f(&mut this))
     }
 

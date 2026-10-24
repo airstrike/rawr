@@ -64,9 +64,7 @@ fn order() -> Order {
 fn call<T: Clone + 'static>(source: &str, name: &str, args: impl rawr::FuncArgs) -> T {
     let engine = engine();
     let ast = engine.compile(source).unwrap_or_else(|error| panic!("{error}"));
-    engine
-        .call_fn::<T>(&mut Scope::new(), &ast, name, args)
-        .unwrap_or_else(|error| panic!("{error}"))
+    engine.call_fn::<T>(&mut Scope::new(), &ast, name, args).unwrap_or_else(|error| panic!("{error}"))
 }
 
 #[test]
@@ -135,10 +133,7 @@ fn export_free_functions_borrow_their_arguments() {
 #[test]
 fn export_hides_private_items() {
     let engine = engine();
-    for source in [
-        "use shop::Order; fn f(order: Order) -> i64 { order.hidden() }",
-        "use shop::Order; fn f(order: Order) -> f64 { order.discount }",
-    ] {
+    for source in ["use shop::Order; fn f(order: Order) -> i64 { order.hidden() }", "use shop::Order; fn f(order: Order) -> f64 { order.discount }"] {
         engine.compile(source).expect_err("a private item is not exported");
     }
 }
@@ -154,29 +149,14 @@ fn export_rejects_the_wrong_receiver() {
 #[test]
 fn export_unknown_members_read_like_rustc() {
     let engine = engine();
-    let error = engine
-        .compile("use shop::Order;\nfn f(order: Order) -> i64 {\n    order.itmes\n}\n")
-        .unwrap_err();
-    assert!(matches!(
-        error.err_type(),
-        rawr::ParseErrorType::Resolution(rawr::resolve::Error::UnknownMember { .. })
-    ));
+    let error = engine.compile("use shop::Order;\nfn f(order: Order) -> i64 {\n    order.itmes\n}\n").unwrap_err();
+    assert!(matches!(error.err_type(), rawr::ParseErrorType::Resolution(rawr::resolve::Error::UnknownMember { .. })));
     let display = error.to_string();
-    assert!(
-        display.starts_with("error[E0609]: no field `itmes` on type `shop::Order`\n --> <script>:3:11"),
-        "{display}"
-    );
+    assert!(display.starts_with("error[E0609]: no field `itmes` on type `Order`\n --> <script>:3:11-3:16"), "{display}");
     assert_eq!(format!("{error:?}"), display);
 
-    let error = engine
-        .compile("use shop::Order;\nfn f(order: Order) -> f64 {\n    order.totl(1.0)\n}\n")
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .starts_with("error[E0599]: no method named `totl` found for `shop::Order` in the current scope"),
-        "{error}"
-    );
+    let error = engine.compile("use shop::Order;\nfn f(order: Order) -> f64 {\n    order.totl(1.0)\n}\n").unwrap_err();
+    assert!(error.to_string().starts_with("error[E0599]: no method named `totl` found for `Order` in the current scope"), "{error}");
 
     // `?` in `fn main() -> Result<(), Box<EvalAltResult>>` prints the Debug.
     let boxed: Box<EvalAltResult> = error.clone().into();
@@ -190,4 +170,103 @@ fn export_rejects_a_taken_root() {
     let mut again = Exports::new("shop");
     again.add::<tax_rate>();
     engine.export(again).expect_err("the root `shop` is taken");
+}
+
+static GUARDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[rawr::export]
+fn guarded() -> i64 {
+    GUARDED.fetch_add(1, std::sync::atomic::Ordering::SeqCst) as i64
+}
+
+static COUNTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[rawr::export]
+fn counted() -> i64 {
+    COUNTED.fetch_add(1, std::sync::atomic::Ordering::SeqCst) as i64
+}
+
+fn guarding() -> Engine {
+    let mut exports = Exports::new("count");
+    exports.add::<guarded>();
+    let mut engine = Engine::new();
+    engine.export(exports).unwrap();
+    engine
+}
+
+fn counting(root: &str) -> Engine {
+    let mut exports = Exports::new(root);
+    exports.add::<counted>();
+    let mut engine = Engine::new();
+    engine.export(exports).unwrap();
+    engine
+}
+
+#[test]
+fn export_freezes_at_the_first_compile_that_calls_it() {
+    let mut engine = engine();
+    // A compile that calls no export leaves the exports open.
+    engine.compile("fn f() -> i64 { 1 }").unwrap();
+    let mut more = Exports::new("more");
+    more.add::<counted>();
+    engine.export(more).unwrap();
+
+    engine.compile("use shop::tax_rate; fn f() -> f64 { tax_rate(\"NY\") }").unwrap();
+    let mut late = Exports::new("late");
+    late.add::<counted>();
+    let error = engine.export(late).expect_err("the exports are frozen");
+    assert!(error.to_string().contains("export everything before compiling"), "{error}");
+}
+
+#[test]
+fn export_binding_fails_before_a_callback_on_another_engine() {
+    let compiler = guarding();
+    let ast = compiler.compile("use count::guarded; fn f() -> i64 { guarded() }").unwrap();
+    let before = GUARDED.load(std::sync::atomic::Ordering::SeqCst);
+    let runner = guarding();
+    runner.call_fn::<i64>(&mut Scope::new(), &ast, "f", ()).expect_err("the program was compiled by another engine");
+    assert_eq!(GUARDED.load(std::sync::atomic::Ordering::SeqCst), before);
+}
+
+#[test]
+fn export_binding_fails_before_a_callback_when_a_facade_is_missing() {
+    // The engine knows `count` at compile time but implements only `other`.
+    let mut engine = Engine::new();
+    let mut builder = rawr::host::facade::Builder::new("count", rawr::host::facade::Abi::new(1).unwrap()).unwrap();
+    let mut signature = rawr::host::signature::Builder::new();
+    signature.output(rawr::host::type_ref::Type::builtin(rawr::host::type_ref::Builtin::I64));
+    builder.item(rawr::host::item::Definition::function("guarded", signature.finish()).unwrap()).unwrap();
+    engine.register_host_facade(builder.finish().unwrap()).unwrap();
+    let mut other = Exports::new("other");
+    other.add::<counted>();
+    engine.export(other).unwrap();
+
+    let ast = engine.compile("use count::guarded; fn f() -> i64 { guarded() }").unwrap();
+    let before = GUARDED.load(std::sync::atomic::Ordering::SeqCst);
+    let error = engine.call_fn::<i64>(&mut Scope::new(), &ast, "f", ()).expect_err("`count` has no runtime facade");
+    assert!(error.to_string().contains("count"), "{error}");
+    assert_eq!(GUARDED.load(std::sync::atomic::Ordering::SeqCst), before);
+}
+
+#[test]
+fn export_without_a_registry_reports_the_missing_binding() {
+    let mut engine = Engine::new();
+    let mut builder = rawr::host::facade::Builder::new("count", rawr::host::facade::Abi::new(1).unwrap()).unwrap();
+    let mut signature = rawr::host::signature::Builder::new();
+    signature.output(rawr::host::type_ref::Type::builtin(rawr::host::type_ref::Builtin::I64));
+    builder.item(rawr::host::item::Definition::function("counted", signature.finish()).unwrap()).unwrap();
+    engine.register_host_facade(builder.finish().unwrap()).unwrap();
+    let ast = engine.compile("use count::counted; fn f() -> i64 { counted() }").unwrap();
+    let error = engine.call_fn::<i64>(&mut Scope::new(), &ast, "f", ()).expect_err("nothing implements `count::counted`");
+    assert!(error.to_string().contains("missing runtime binding"), "{error}");
+}
+
+#[test]
+fn export_programs_on_one_engine_share_its_host() {
+    let engine = counting("count");
+    let first = engine.compile("use count::counted; fn f() -> i64 { counted() }").unwrap();
+    let second = engine.compile("use count::counted; fn g() -> i64 { counted() + 100 }").unwrap();
+    let a = engine.call_fn::<i64>(&mut Scope::new(), &first, "f", ()).unwrap();
+    let b = engine.call_fn::<i64>(&mut Scope::new(), &second, "g", ()).unwrap();
+    assert!(b > 100 && a < b, "{a} {b}");
 }

@@ -247,7 +247,11 @@ fn methods(block: &syn::ItemImpl) -> syn::Result<TokenStream> {
             Some(receiver) => {
                 let call = call(quote! { this, });
                 let (mode, access, argument) = if receiver.mutability.is_some() {
-                    (quote! { Mutable }, quote! { mutable }, quote! { &mut *args[0] })
+                    (
+                        quote! { Mutable },
+                        quote! { mutable },
+                        quote! { &mut *args[0] },
+                    )
                 } else {
                     (quote! { Shared }, quote! { shared }, quote! { &*args[0] })
                 };

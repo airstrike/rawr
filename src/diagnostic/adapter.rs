@@ -363,14 +363,20 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
     let resolve::Error::UnknownMember { owner, member, .. } = error else {
         return resolution_builder(error);
     };
-    let builder = match member_kind(source, primary, member) {
+    let Some(kind) = member_kind(source, primary, member) else {
+        return resolution_builder(error);
+    };
+    let builder = match kind {
         Member::Field => Report::error(
             code::RESOLVE_NO_FIELD,
-            format!("no field `{member}` on type `{owner}`"),
+            format!("no field `{member}` on type `{}`", short(owner)),
         ),
         Member::Method => Report::error(
             code::RESOLVE_NO_METHOD,
-            format!("no method named `{member}` found for `{owner}` in the current scope"),
+            format!(
+                "no method named `{member}` found for `{}` in the current scope",
+                short(owner)
+            ),
         ),
         Member::Associated => {
             let item = if member.starts_with(char::is_uppercase) {
@@ -380,14 +386,41 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
             };
             Report::error(
                 code::RESOLVE_NO_METHOD,
-                format!("no {item} named `{member}` found for `{owner}` in the current scope"),
+                format!(
+                    "no {item} named `{member}` found for `{}` in the current scope",
+                    short(owner)
+                ),
             )
         }
     };
-    match resolution_builder(error).finish().help() {
-        Some(help) => builder.help(help),
-        None => builder,
+    // rustc adds no help to these: the name is misspelled or the item
+    // isn't there.
+    builder
+}
+
+/// An unknown member's span, which covers its name as rustc underlines it.
+fn member_span(error: &resolve::Error) -> Span {
+    let primary = error.primary_span();
+    let resolve::Error::UnknownMember { member, .. } = error else {
+        return primary;
+    };
+    let start = primary.start();
+    match (start.line(), start.position(), u16::try_from(member.chars().count())) {
+        (Some(line), Some(column), Ok(length)) if primary.end() == start && length > 0 => {
+            let line = u16::try_from(line).unwrap_or(u16::MAX);
+            let column = u16::try_from(column).unwrap_or(u16::MAX);
+            Span::new(start, crate::Position::new(line, column.saturating_add(length)))
+        }
+        _ => primary,
     }
+}
+
+/// A type as rustc names one the script imported: its last segment.
+fn short(owner: &str) -> &str {
+    if owner.contains('<') {
+        return owner;
+    }
+    owner.rsplit("::").next().unwrap_or(owner)
 }
 
 /// How source names a member: `value.member()`, `value.member` or
@@ -398,28 +431,30 @@ enum Member {
     Associated,
 }
 
-fn member_kind(source: &Source, at: Span, member: &str) -> Member {
+/// `None` for a struct literal or a pattern, which rustc reports apart.
+fn member_kind(source: &Source, at: Span, member: &str) -> Option<Member> {
     let start = at.start();
-    let (Some(line), Some(column)) = (start.line(), start.position()) else {
-        return Member::Method;
-    };
-    let Some(text) = source.text().split('\n').nth(line.saturating_sub(1)) else {
-        return Member::Method;
-    };
+    let line = start.line()?;
+    let column = start.position()?;
+    let text = source.text().split('\n').nth(line.saturating_sub(1))?;
     let characters: Vec<char> = text.chars().collect();
     let column = column.saturating_sub(1).min(characters.len());
     let before: String = characters[..column].iter().collect();
-    if before.trim_end().ends_with("::") {
-        return Member::Associated;
+    let before = before.trim_end();
+    if before.ends_with("::") {
+        return Some(Member::Associated);
+    }
+    if !before.ends_with('.') {
+        return None;
     }
     let end = (column + member.chars().count()).min(characters.len());
     let after: String = characters[end..].iter().collect();
     let after = after.trim_start();
-    if after.starts_with('(') || after.starts_with("::") {
+    Some(if after.starts_with('(') || after.starts_with("::") {
         Member::Method
     } else {
         Member::Field
-    }
+    })
 }
 
 fn resolution_report_with_sources(
@@ -434,7 +469,7 @@ fn resolution_report_with_sources(
     });
     let mut builder = builder.source(source.clone());
     if !error.primary_span().is_none() {
-        builder = builder.primary(source.clone(), error.primary_span(), None)?;
+        builder = builder.primary(source.clone(), member_span(error), None)?;
     }
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
         builder = builder.secondary(

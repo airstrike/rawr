@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Embedding | rawr docs</title>
-<meta name="description" content="Embed rawr in a Rust program with rawr::Engine. Compile a script, call its functions with call_fn, capture its output with on_output, and set limits.">
+<meta name="description" content="Add rawr to a Rust app. Export your own types and functions with #[rawr::export], compile a script, call its functions with call_fn, capture its output and set limits.">
 <meta property="og:title" content="Embedding | rawr docs">
-<meta property="og:description" content="Embed rawr in a Rust program with rawr::Engine. Compile a script, call its functions with call_fn, capture its output with on_output, and set limits.">
+<meta property="og:description" content="Add rawr to a Rust app. Export your own types and functions with #[rawr::export], compile a script, call its functions with call_fn, capture its output and set limits.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/embedding">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -37,7 +37,7 @@
     <li><a href="/docs">Overview</a></li>
     <li><a href="/docs/start">Getting started</a></li>
     <li><a href="/docs/language">The language</a></li>
-    <li><a href="/docs/embedding" aria-current="page">Embedding</a><ol><li><a href="#add">Add the crate</a></li><li><a href="#example">A complete example</a></li><li><a href="#call-fn">Calling functions</a></li><li><a href="#boundary">What crosses the boundary</a></li><li><a href="#output">Capturing output</a></li><li><a href="#errors">Errors</a></li><li><a href="#limits">Limits</a></li></ol></li>
+    <li><a href="/docs/embedding" aria-current="page">Embedding</a><ol><li><a href="#add">Add the crate</a></li><li><a href="#export">Export your types</a></li><li><a href="#example">A script on its own</a></li><li><a href="#call-fn">Calling functions</a></li><li><a href="#boundary">What crosses the boundary</a></li><li><a href="#output">Capturing output</a></li><li><a href="#errors">Errors</a></li><li><a href="#limits">Limits</a></li></ol></li>
     <li><a href="/docs/iced">rawr-iced</a></li>
     <li><a href="/docs/play">?play and the playground</a></li>
     <li><a href="/docs/cli">Commands</a></li>
@@ -48,13 +48,100 @@
 <article>
 <p class="cap"><span class="slash">//</span>Embedding</p>
 <h1>Embedding rawr</h1>
-<p class="lede">The <code>rawr</code> crate is the language. A Rust program creates an <code>Engine</code>, compiles rawr source and calls the functions it defines.</p>
+<p class="lede">The <code>rawr</code> crate is the language. A Rust app exports its own types and functions with <code>#[rawr::export]</code>. It creates an <code>Engine</code>, compiles rawr scripts and calls the functions they define.</p>
 
 <h2 id="add">Add the crate</h2>
 <p>The crate builds on stable Rust 1.95 or newer. It doesn&rsquo;t depend on iced.</p>
 <div class="block"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre></div>
 
-<h2 id="example">A complete example</h2>
+<h2 id="export">Export your types</h2>
+<p>Put <code>#[rawr::export]</code> on a struct, on its impl block and on a free function. This is <code>examples/app</code> in the repository, an app with its own Cargo workspace.</p>
+<div class="block">
+  <div class="file"><b>examples/app/src/main.rs</b></div>
+  <pre><code data-lang="rust">use rawr::{Engine, Exports, Scope};
+
+#[derive(Clone)]
+#[rawr::export]
+pub struct Order {
+    pub customer: String,
+    pub items: i64,
+}
+
+#[rawr::export]
+impl Order {
+    pub fn total(&amp;self, price: f64) -&gt; f64 {
+        price * self.items as f64
+    }
+
+    pub fn add(&amp;mut self, n: i64) {
+        self.items += n;
+    }
+}
+
+#[rawr::export]
+fn tax_rate(state: &amp;str) -&gt; f64 {
+    if state == "NY" { 0.08875 } else { 0.0 }
+}
+
+fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
+    // Scripts are named relative to the app, as rustc names source files.
+    std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("the app's directory");
+    let script = std::env::args().nth(1).unwrap_or("scripts/pricing.rawr".into());
+
+    let mut shop = Exports::new("shop");
+    shop.add::&lt;Order&gt;().add::&lt;tax_rate&gt;();
+    let mut engine = Engine::new();
+    engine.export(shop)?;
+
+    let ast = engine.compile_file(script.into())?;
+    let mut scope = Scope::new();
+
+    let total = engine.call_fn::&lt;f64&gt;(&amp;mut scope, &amp;ast, "price", (100.0_f64, 2_i64))?;
+    println!("{total:.2}");
+    let receipt = engine.call_fn::&lt;String&gt;(&amp;mut scope, &amp;ast, "receipt", (100.0_f64, 5_i64))?;
+    println!("{receipt}");
+
+    let order = Order { customer: "Ada".into(), items: 2 };
+    let label = engine.call_fn::&lt;String&gt;(&amp;mut scope, &amp;ast, "label", (order.clone(),))?;
+    println!("{label}");
+    let bigger = engine.call_fn::&lt;f64&gt;(&amp;mut scope, &amp;ast, "bigger", (order,))?;
+    println!("{bigger:.2}");
+    Ok(())
+}</code></pre>
+</div>
+<p>The script imports the exports from the root the app named, as Rust code imports from a crate. It reads the pub fields and calls the methods as Rust would.</p>
+<div class="block">
+  <div class="file"><b>examples/app/scripts/pricing.rawr</b></div>
+  <pre><code data-lang="rust">use shop::{tax_rate, Order};
+
+fn price(subtotal: f64, items: i64) -&gt; f64 {
+    let rate = tax_rate("NY");
+    let shipping = if items &gt; 3 { 0.0 } else { 4.99 };
+    subtotal * (1.0 + rate) + shipping
+}
+
+fn receipt(subtotal: f64, items: i64) -&gt; String {
+    format!("{items} items, {:.2} total", price(subtotal, items))
+}
+
+fn label(order: Order) -&gt; String {
+    format!("{} x{}", order.customer, order.items)
+}
+
+fn bigger(mut order: Order) -&gt; f64 {
+    order.add(3);
+    price(order.total(10.0), order.items)
+}</code></pre>
+  <div class="run"><b>cargo run</b><span>113.87
+5 items, 108.88 total
+Ada x2
+54.44</span></div>
+</div>
+<p>On a struct, <code>#[rawr::export]</code> exports the type and its pub fields. A script reads a field and assigns it. On the impl block, it exports the pub methods and associated functions. A method keeps its receiver, so a script calls <code>add</code>, which takes <code>&amp;mut self</code>, only on a <code>mut</code> binding. On a free function, it exports the function. Private fields and methods stay private.</p>
+<p><code>Exports::new</code> names the root that scripts <code>use</code>. <code>add</code> takes each exported struct and function by name. <code>Engine::export</code> installs them. Export everything before you compile a script that uses the exports. After that compile, the exports can&rsquo;t change, and <code>Engine::export</code> returns an error. Scripts on one engine share its exports. Use another <code>Engine</code> for another set.</p>
+<p>The first release exports one impl block per struct. It doesn&rsquo;t export generic items, <code>&amp;mut</code> parameters or functions that return a reference.</p>
+
+<h2 id="example">A script on its own</h2>
 <p>This is <code>examples/cart.rs</code> in the repository. It compiles <code>examples/scripts/cart.rawr</code> and calls its <code>main</code>. That script is the cart program from the <a href="/docs/start#first-program">getting started page</a> without its <code>// rawr</code> line. A <code>.rawr</code> file is a script that an app loads. A program that <code>rawr run</code> runs is a <code>.rs</code> file.</p>
 <div class="block">
   <div class="file"><b>examples/cart.rs</b></div>
@@ -119,8 +206,8 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
   <tr><td><code>()</code></td><td>The unit return of a function such as <code>main</code>.</td></tr>
   <tr><td><code>rawr::Dynamic</code></td><td>Any value. A struct or enum defined in rawr comes back as a <code>Dynamic</code>. Rust code can hold it and pass it back. It can&rsquo;t read the fields.</td></tr>
 </table>
-<p>Register a Rust function before you compile a script that calls it. The check knows the names registered on the engine that compiles the script. A call to any other name is an <code>unknown function</code> error at the name, as in rustc.</p>
-<p>Typed rawr code knows the return type of a Rust function registered with <code>Engine::register_fn</code> when it is <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>String</code> or <code>()</code>. The check doesn&rsquo;t know any other return type. To use Rust types and functions from rawr today, use rawr-iced&rsquo;s <a href="/docs/iced#rust-crates">Rust imports</a>.</p>
+<p>An exported struct crosses as itself. A script gets the Rust value, and Rust gets back the value the script returns. The exported items take and return <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>String</code>, <code>()</code>, <code>Option</code> of these and exported structs. A parameter may borrow, as <code>&amp;str</code> or <code>&amp;Order</code> does.</p>
+<p>The check knows the items exported to the engine that compiles the script. A call to any other name is an <code>unknown function</code> error at the name, as in rustc.</p>
 
 <h2 id="output">Capturing output</h2>
 <p>By default <code>println!</code> and <code>print!</code> write to the process&rsquo;s stdout. <code>eprintln!</code> and <code>eprint!</code> write to stderr. <code>Engine::on_output</code> sends that text to a callback instead. The callback gets the stream and the exact text. <code>println!</code> text includes its newline.</p>
@@ -151,11 +238,15 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
 </div>
 
 <h2 id="errors">Errors</h2>
-<p>Both <code>compile</code> and <code>call_fn</code> return <code>Box&lt;rawr::EvalAltResult&gt;</code> on failure. Its <code>Display</code> output names the problem and the position.</p>
+<p>A compile error prints as rustc prints one, with its code, the message and the source line. <code>Display</code> prints it. So does the <code>Debug</code> output that <code>fn main() -&gt; Result</code> shows when <code>?</code> returns the error. <code>compile_file</code> names the file. <code>compile</code> names the source <code>&lt;script&gt;</code>. Run <code>examples/app</code> with a typo in its script:</p>
 <div class="block diag">
-  <div class="file"><b>engine.compile("fn f() -&gt; i64 { \"no\" }")</b></div>
-  <pre><code><span class="h">Type mismatch: expected 'i64', found 'String' (line 1, position 17)</span></code></pre>
+  <div class="file"><b>cargo run -- scripts/typo.rawr</b><span>exit 1</span></div>
+  <pre><code>Error: <span class="e">error[E0609]</span><span class="h">: no field `itmes` on type `Order`</span>
+ <span class="c">--&gt;</span> scripts/typo.rawr:4:45-4:50
+ <span class="c">4 |</span>     format!("{} x{}", order.customer, order.itmes)
+   <span class="c">|</span>                                             <span class="e">^^^^^</span></code></pre>
 </div>
+<p>To match on the error, call <code>err_type()</code> on the <code>ParseError</code> that <code>compile</code> returns. A runtime error from <code>call_fn</code> names the problem and the position.</p>
 
 <h2 id="limits">Limits</h2>
 <p>An <code>Engine</code> can bound what a script may do. Set the limits on the engine before running a script.</p>

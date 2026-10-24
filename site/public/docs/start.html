@@ -115,13 +115,13 @@ fn main() {
 <p><code>rawr check cart.rs</code> runs the check without running the program. It prints <code>Checked</code> and the path when the file is valid.</p>
 
 <h3 id="errors">Errors</h3>
-<p>rawr reports one error at a time. Each error has a code, a message and the source span. Change <code>item.price()</code> to <code>item.cost()</code> and run it again:</p>
+<p>rawr reports one error at a time. Each error has a code, a message and the source span. Where rustc has an error for the same mistake, rawr uses rustc&rsquo;s code and wording. Change <code>item.price()</code> to <code>item.cost()</code> and run it again:</p>
 <div class="block diag">
   <div class="file"><b>rawr run cart.rs</b><span>exit 1</span></div>
-  <pre><code><span class="e">error[RAWR-RESOLVE-UNKNOWN-MEMBER]</span><span class="h">: unknown member `Item::cost`</span>
- <span class="c">--&gt;</span> cart.rs:23:21
+  <pre><code><span class="e">error[E0599]</span><span class="h">: no method named `cost` found for `Item` in the current scope</span>
+ <span class="c">--&gt;</span> cart.rs:23:21-23:25
  <span class="c">23 |</span>         sum += item.cost();
-    <span class="c">|</span>                     <span class="e">^</span></code></pre>
+    <span class="c">|</span>                     <span class="e">^^^^</span></code></pre>
 </div>
 <p>The program doesn&rsquo;t start, so nothing is printed before the error.</p>
 

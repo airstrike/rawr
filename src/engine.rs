@@ -117,6 +117,9 @@ pub struct Engine {
     /// Native implementations of the app's exported items, which every
     /// evaluation this engine starts can call.
     pub(crate) host_runtime: Option<crate::Shared<crate::host::runtime::Registry>>,
+    /// Set by the first compile that calls an exported item, after which
+    /// the exports can't change (D494 item 15).
+    pub(crate) exports_frozen: core::sync::atomic::AtomicBool,
     /// Actual generated native metadata ownership, retained by every authority
     /// borrowing this compiler. It does not attest a live runner by itself.
     #[cfg(feature = "rust-import")]
@@ -281,6 +284,7 @@ impl Engine {
         registered_enums: std::collections::BTreeMap::new(),
         host_registry: crate::host::Registry::new(),
         host_runtime: None,
+        exports_frozen: core::sync::atomic::AtomicBool::new(false),
         #[cfg(feature = "rust-import")]
         imported_native: None,
         #[cfg(not(feature = "no_custom_syntax"))]
