@@ -1038,7 +1038,7 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
                 }
                 [value, number] => {
                     let mut value = super::builtin::take::<T>(value, path)?;
-                    *field(&mut value) = super::builtin::pixels(number, path)?;
+                    *field(&mut value) = super::builtin::number(number, path)? as f32;
                     Ok(Dynamic::from(value))
                 }
                 _ => Err(arity(path, 1, args.len())),

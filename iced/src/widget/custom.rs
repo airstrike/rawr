@@ -69,6 +69,12 @@ pub(crate) struct SolidMesh {
     clip_bounds: Rectangle,
 }
 
+/// The Message argument of an `Element` that a wrapping widget forwards to,
+/// which those calls never read: any Message attests as it.
+pub(crate) struct Erased;
+
+pub(crate) const ERASED: &str = "iced::advanced::widget::Erased";
+
 /// iced's `Never`, the Message of a view that sends none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Never {}
@@ -235,7 +241,10 @@ impl iced::advanced::widget::Meta for Custom {}
 impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
     fn size(&self) -> Size<Length> {
         let shrink = Size::new(Length::Shrink, Length::Shrink);
-        let (result, _) = self.call(SIZE, &mut [self.value.clone()]);
+        let (result, _) = {
+            let _loan = Loan::new(Lent::None, None, None, &self.children);
+            self.call(SIZE, &mut [self.value.clone()])
+        };
         match result {
             Ok(size) => size.try_cast::<LengthSize>().map_or(shrink, |size| size.0),
             Err(error) => {
@@ -249,7 +258,10 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
         if !self.written(TAG) {
             return tree::Tag::stateless();
         }
-        let (result, _) = self.call(TAG, &mut [self.value.clone()]);
+        let (result, _) = {
+            let _loan = Loan::new(Lent::None, None, None, &self.children);
+            self.call(TAG, &mut [self.value.clone()])
+        };
         match result {
             Ok(tag) => tag.try_cast::<tree::Tag>().unwrap_or_else(tree::Tag::stateless),
             Err(error) => {
@@ -263,7 +275,10 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
         if !self.written(STATE) {
             return tree::State::None;
         }
-        let (result, _) = self.call(STATE, &mut [self.value.clone()]);
+        let (result, _) = {
+            let _loan = Loan::new(Lent::None, None, None, &self.children);
+            self.call(STATE, &mut [self.value.clone()])
+        };
         match result {
             Ok(state) => state
                 .try_cast::<State>()
@@ -348,6 +363,8 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
         let Effects {
             commands, children, ..
         } = effects;
+        #[cfg(test)]
+        tests::REPLAYED.with(|replayed| replayed.borrow_mut().push(commands.clone()));
         crate::renderer::replay(commands, renderer, |renderer, index| {
             let Some(draw) = children.get(index) else {
                 return;
@@ -516,3 +533,152 @@ fn record<R>(what: &str, f: impl FnOnce(&mut Effects) -> R) -> Result<R, Box<Eva
 
 mod bindings;
 pub(crate) mod declare;
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use iced::{Color, Point, Size};
+
+    use crate::renderer::Command;
+
+    thread_local! {
+        /// What each `Custom::draw` replayed, in order.
+        pub(super) static REPLAYED: RefCell<Vec<Vec<Command>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    const CUSTOM_WIDGET: &str = include_str!("../../tests/fixtures/advanced/custom_widget.rs");
+    const CUSTOM_QUAD: &str = include_str!("../../tests/fixtures/advanced/custom_quad.rs");
+    const GEOMETRY: &str = include_str!("../../tests/fixtures/advanced/geometry.rs");
+    const LOUPE: &str = include_str!("../../tests/fixtures/advanced/loupe.rs");
+
+    /// The example's view drawn once, the cursor at `cursor`: the drawing
+    /// each script widget replayed.
+    fn drawn(source: &str, cursor: Option<Point>) -> Vec<Vec<Command>> {
+        REPLAYED.with(|replayed| replayed.borrow_mut().clear());
+        let adapter = crate::application::Compiler::new()
+            .unwrap()
+            .check_named_crate_source("main.rs", source)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .prepare()
+            .unwrap()
+            .into_adapter();
+        let mut simulator = iced_test::simulator(adapter.view());
+        if let Some(cursor) = cursor {
+            simulator.point_at(cursor);
+        }
+        simulator.draw(&iced::Theme::Dark);
+        assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+        REPLAYED.with(|replayed| std::mem::take(&mut *replayed.borrow_mut()))
+    }
+
+    fn quads(commands: &[Command]) -> Vec<(iced::advanced::renderer::Quad, iced::Background)> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::Quad(quad, background) => Some((*quad, *background)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn custom_widget_lays_out_its_circle_and_fills_one_rounded_quad() {
+        let drawn = drawn(CUSTOM_WIDGET, None);
+        let [commands] = &drawn[..] else {
+            panic!("one script widget draws once, found {drawn:?}");
+        };
+        let [(quad, background)] = &quads(commands)[..] else {
+            panic!("the circle is one quad, found {commands:?}");
+        };
+        assert_eq!(quad.bounds.size(), Size::new(100.0, 100.0));
+        assert_eq!(quad.border.radius, 50.0.into());
+        assert_eq!(*background, iced::Background::Color(Color::BLACK));
+    }
+
+    #[test]
+    fn custom_quad_draws_its_border_shadow_and_radius() {
+        let drawn = drawn(CUSTOM_QUAD, None);
+        let [(quad, _)] = &quads(&drawn[0])[..] else {
+            panic!("one quad, found {drawn:?}");
+        };
+        assert_eq!(quad.bounds.size(), Size::new(200.0, 200.0));
+        assert_eq!(quad.border.color, Color::from_rgb(1.0, 0.0, 0.0));
+        assert_eq!(quad.border.radius, 50.0.into());
+        assert_eq!(quad.shadow.offset, iced::Vector::new(0.0, 8.0));
+        assert_eq!(quad.shadow.blur_radius, 16.0);
+        assert!(!quad.snap);
+    }
+
+    #[test]
+    fn geometry_draws_its_mesh_translated_and_follows_the_cursor() {
+        let mesh = |cursor| {
+            let drawn = drawn(GEOMETRY, cursor);
+            let commands = drawn.into_iter().next().expect("the rainbow draws");
+            let [Command::StartTransformation(translation), Command::Mesh(mesh), Command::EndTransformation] =
+                &commands[..]
+            else {
+                panic!("a translated mesh, found {commands:?}");
+            };
+            let iced::advanced::graphics::Mesh::Solid { buffers, .. } = mesh else {
+                panic!("a solid mesh, found {mesh:?}");
+            };
+            (translation.translation(), buffers.clone())
+        };
+        let (origin, buffers) = mesh(None);
+        assert_eq!(buffers.vertices.len(), 9);
+        assert_eq!(buffers.indices.len(), 24);
+        let corner = buffers.vertices[5].position;
+        assert_eq!(buffers.vertices[0].position, [corner[0] / 2.0, corner[1] / 2.0]);
+
+        let cursor = Point::new(origin.x + 30.0, origin.y + 40.0);
+        let (_, buffers) = mesh(Some(cursor));
+        assert_eq!(buffers.vertices[0].position, [30.0, 40.0]);
+    }
+
+    #[test]
+    fn loupe_draws_its_child_in_place_and_zoomed_inside_a_layer_under_the_cursor() {
+        let drawn = drawn(LOUPE, None);
+        assert_eq!(drawn, vec![vec![Command::Child(0)]]);
+
+        let drawn = drawn_loupe_zoomed();
+        let [commands] = &drawn[..] else {
+            panic!("loupe draws once, found {drawn:?}");
+        };
+        let [Command::StartLayer(bounds), Command::StartTransformation(zoom), Command::Child(0), Command::EndTransformation, Command::EndLayer] =
+            &commands[..]
+        else {
+            panic!("a zoomed child inside a layer, found {commands:?}");
+        };
+        assert!(bounds.width > 0.0 && bounds.height > 0.0);
+        assert_eq!(zoom.scale_factor(), 3.0);
+    }
+
+    /// Loupe drawn with the cursor at the center of its bounds.
+    fn drawn_loupe_zoomed() -> Vec<Vec<Command>> {
+        let drawn = drawn(LOUPE, Some(Point::new(512.0, 384.0)));
+        if drawn.iter().flatten().any(|command| matches!(command, Command::StartLayer(_))) {
+            return drawn;
+        }
+        panic!("the window's center is over loupe's content: {drawn:?}")
+    }
+
+    #[test]
+    fn a_failing_layout_replays_nothing_and_the_widget_shows_its_failure() {
+        let failing = CUSTOM_WIDGET.replace(
+            "tree.size = Size::new(self.radius * 2.0, self.radius * 2.0);",
+            "tree.size = Size::new(self.radius * 2.0, self.radius * 2.0);\n            let _ = [1, 2][self.radius as usize];",
+        );
+        let adapter = crate::application::Compiler::new()
+            .unwrap()
+            .check_named_crate_source("main.rs", &failing)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .prepare()
+            .unwrap()
+            .into_adapter();
+        REPLAYED.with(|replayed| replayed.borrow_mut().clear());
+        let mut simulator = iced_test::simulator(adapter.view());
+        simulator.draw(&iced::Theme::Dark);
+        assert!(REPLAYED.with(|replayed| replayed.borrow().is_empty()));
+    }
+}

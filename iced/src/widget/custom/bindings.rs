@@ -12,7 +12,7 @@ use rawr::{host, Dynamic, EvalAltResult};
 use super::lend::Frame;
 use super::{record, ChildDraw, LengthSize, Shell, State, Tree};
 use crate::renderer::Command;
-use crate::widget::builtin::{arity, pixels, runtime_error, take};
+use crate::widget::builtin::{arity, number, pixels, runtime_error, take};
 use crate::widget as widgets;
 
 pub(super) fn bind(builder: &mut host::runtime::Builder) {
@@ -32,7 +32,7 @@ fn floats<const N: usize>(value: &Dynamic, path: &str) -> Result<[f32; N], Box<E
         return Err(runtime_error(format!("`{path}` expects an array of {N} numbers")));
     }
     for (float, value) in floats.iter_mut().zip(array.iter()) {
-        *float = pixels(value, path)?;
+        *float = number(value, path)? as f32;
     }
     Ok(floats)
 }
@@ -444,8 +444,8 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                 return Err(arity("Transformation::translate", 2, args.len()));
             };
             Ok(Dynamic::from(iced::Transformation::translate(
-                pixels(x, "Transformation::translate")?,
-                pixels(y, "Transformation::translate")?,
+                number(x, "Transformation::translate")? as f32,
+                number(y, "Transformation::translate")? as f32,
             )))
         })
         .expect("the iced facade must retain Transformation::translate");
@@ -454,10 +454,9 @@ fn bind_values(builder: &mut host::runtime::Builder) {
             let [scale] = args else {
                 return Err(arity("Transformation::scale", 1, args.len()));
             };
-            Ok(Dynamic::from(iced::Transformation::scale(pixels(
-                scale,
-                "Transformation::scale",
-            )?)))
+            Ok(Dynamic::from(iced::Transformation::scale(
+                number(scale, "Transformation::scale")? as f32,
+            )))
         })
         .expect("the iced facade must retain Transformation::scale");
     builder

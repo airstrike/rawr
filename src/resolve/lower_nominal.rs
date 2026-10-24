@@ -86,6 +86,11 @@ const FACADE_TRAIT_HOSTS: [(&str, &str); 2] = [
     ("Widget", "iced::Element"),
 ];
 
+/// The type argument a value bounded by one of `FACADE_TRAIT_HOSTS` takes
+/// in such a call: an `Element`'s Message is erased, as the forwarded
+/// methods never touch it.
+const FACADE_TRAIT_ERASED: &str = "iced::advanced::widget::Erased";
+
 /// The facade type of `FACADE_TRAIT_HOSTS` that `ty` is, when it
 /// implements `trait_name` that way.
 fn facade_trait_host(ty: &Ty, trait_name: &str) -> Option<&'static str> {
@@ -10281,12 +10286,18 @@ impl<'a> Parser<'a> {
             return Ok(None);
         };
         let owner = self.models.host.type_owner(host).cloned();
+        // The facade type's own arguments (an `Element`'s Message) take no
+        // part in these methods: they are erased for the call.
+        let erased = self.models.host.type_(FACADE_TRAIT_ERASED).cloned().map(|erased| Ty::Host {
+            proof: HostTyProof::new(erased, None, self.models.host.type_owner(FACADE_TRAIT_ERASED).cloned()),
+            arguments: Box::default(),
+        });
         let host_ty = Ty::Host {
             proof: HostTyProof::new(definition.clone(), None, owner),
             arguments: definition
                 .parameters()
                 .iter()
-                .map(|_| self.inference.fresh())
+                .map(|_| erased.clone().unwrap_or(Ty::Unit))
                 .collect(),
         };
         let trait_name: ImmutableString = (*trait_name).into();
@@ -10305,7 +10316,21 @@ impl<'a> Parser<'a> {
         let local = self.temporary("bounded");
         let call = span(value.span.start(), end);
         let receiver = self.operator_expr(local.as_str().into(), host_ty, value.span);
-        self.pending_arguments = Some((arguments.to_vec(), end));
+        // `self.content.layout(tree, ..)` lends its `&mut Tree`: a facade
+        // handle, which the facade changes in place.
+        let lent = arguments
+            .iter()
+            .cloned()
+            .map(|mut argument| {
+                if let Ty::Reference { mutable: true, target } = self.inference.resolve(&argument.ty)
+                    && matches!(self.inference.resolve(&target), Ty::Host { .. })
+                {
+                    argument.ty = *target;
+                }
+                argument
+            })
+            .collect();
+        self.pending_arguments = Some((lent, end));
         let host_call = self.parse_host_method(receiver, member.clone(), member_span)?;
         let mut source = origin::Fragment::plain(format!("{{ let {local} = "));
         source.push(value.rendered_source());
@@ -10317,9 +10342,9 @@ impl<'a> Parser<'a> {
         };
         match dispatch {
             Some((trait_name, function)) => {
-                let script = self.operator_expr(local.as_str().into(), value.ty.clone(), value.span);
+                // The place itself, which a `&mut self` method changes.
                 let dispatched = self.call_trait_method(
-                    script,
+                    value.clone(),
                     bounded.clone(),
                     &trait_name,
                     &function,

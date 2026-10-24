@@ -33,8 +33,10 @@ pub(crate) struct Children {
     lowered: RefCell<Vec<(widget::Identity, Element)>>,
 }
 
-/// The tree a call receives: `&Tree` for `draw`, `&mut Tree` for `layout`.
+/// The tree a call receives: `&Tree` for `draw`, `&mut Tree` for `layout`,
+/// none for `size`, `tag` and `state`.
 pub(crate) enum Lent<'a> {
+    None,
     Shared(&'a Tree),
     Mutable(&'a mut Tree),
 }
@@ -131,6 +133,7 @@ impl<'a> Loan<'a> {
 
         let nonce = Nonce(NEXT.fetch_add(1, Ordering::Relaxed));
         let (tree, mutable) = match tree {
+            Lent::None => (std::ptr::null_mut(), false),
             Lent::Mutable(tree) => (std::ptr::from_mut(tree), true),
             Lent::Shared(tree) => (std::ptr::from_ref(tree).cast_mut(), false),
         };
@@ -195,7 +198,7 @@ impl Frame {
         // SAFETY: the frame is on the stack, so its call still holds the
         // borrow this pointer came from, and no other reference to the tree
         // is in use while the script runs.
-        let mut tree = unsafe { &*self.tree };
+        let mut tree = unsafe { self.tree.as_ref() }.ok_or(Error::Missing("Tree"))?;
         for &index in path {
             tree = tree.children.get(index).ok_or_else(|| Error::Path(path.to_vec()))?;
         }
@@ -208,7 +211,7 @@ impl Frame {
             return Err(Error::ReadOnly);
         }
         // SAFETY: as in `tree`; the call lent the tree mutably.
-        let mut tree = unsafe { &mut *self.tree };
+        let mut tree = unsafe { self.tree.as_mut() }.ok_or(Error::Missing("Tree"))?;
         for &index in path {
             tree = tree
                 .children

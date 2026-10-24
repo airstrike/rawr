@@ -648,6 +648,11 @@ impl Model {
             .into());
         }
         for (index, (member, expected)) in members.iter().zip(expected).enumerate() {
+            // A generic type's value does not carry its type arguments, so a
+            // member of a parameter's type (`content: W`) holds any value.
+            if names_parameter(expected) {
+                continue;
+            }
             let ty = crate::host::runtime::type_ref::Type::from_resolved(expected, self)?;
             ty.validate(member, self, registry).map_err(|source| {
                 crate::host::runtime::type_ref::Error::Member {
@@ -658,6 +663,23 @@ impl Model {
             })?;
         }
         Ok(())
+    }
+}
+
+/// Whether `ty` names a generic parameter anywhere.
+fn names_parameter(ty: &crate::resolve::type_ref::Type) -> bool {
+    use crate::resolve::type_ref::{Argument, Target, Type};
+    match ty {
+        Type::Unit(_) => false,
+        Type::Tuple { members, .. } => members.iter().any(names_parameter),
+        Type::Reference { target, .. } => names_parameter(target),
+        Type::Path(path) => {
+            matches!(path.target, Target::Parameter | Target::Projection(..))
+                || path.arguments.iter().any(|argument| match argument {
+                    Argument::Type(ty) => names_parameter(ty),
+                    Argument::Lifetime(_) => false,
+                })
+        }
     }
 }
 

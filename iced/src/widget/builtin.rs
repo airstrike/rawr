@@ -544,6 +544,10 @@ fn bind_attestations(builder: &mut host::runtime::Builder) {
     builder
         .bind_type_attestation("iced::Element", |value, expected| {
             let value = value.read_lock::<widget::Value>()?;
+            // A wrapping widget's forwarded call, whose Message is erased.
+            if expected.argument_name(0).as_deref() == Some(super::custom::ERASED) {
+                return expected.attest(value.witness().is_some());
+            }
             (expected.argument_count() == 1)
                 .then(|| expected.attest_witness(value.witness()))
                 .flatten()

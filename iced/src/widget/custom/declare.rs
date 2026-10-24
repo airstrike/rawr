@@ -80,6 +80,9 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
     builder.implementable_trait::<RendererTrait>("advanced::renderer::Renderer", &[], RENDERER)?;
     builder.alias("advanced::Renderer", "advanced::renderer::Renderer")?;
     builder.private_type::<super::Instance>("advanced::widget::Instance", &["Message"], &[])?;
+    // The Message of an `Element` a wrapping widget forwards to: whatever it
+    // is, as these calls never touch it.
+    builder.private_type::<super::Erased>("advanced::widget::Erased", &[], &[])?;
     builder.project("advanced::widget::Widget", "advanced::widget::Instance", &["Message"])?;
     builder.project("advanced::widget::Instance", "Element", &["Message"])?;
 
