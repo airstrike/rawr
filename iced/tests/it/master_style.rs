@@ -633,7 +633,16 @@ impl State {
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
 "#,
     );
-    assert!(error.contains("Call `.boxed()` on the widget instead"), "{error}");
+    // The hint says why, in one sentence: master has no such `From`,
+    // unlike the released iced the code was likely written for.
+    assert!(
+        error.contains(
+            "iced master has no `From` conversion from a widget into `Element`, unlike iced 0.13 \
+             and 0.14, so pass the widget as it is or call `.boxed()`"
+        ),
+        "{error}"
+    );
+    assert!(error.contains("iced::widget::Column<Message>::into"), "{error}");
     // A helper's `.into()` and `Element::from(widget)` carry the same fix.
     for body in [
         "fn card(label: &str) -> Element<'static, Message> { container(text(label.to_string())).into() }",
@@ -654,7 +663,10 @@ pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
 "#
         ));
         assert!(error.contains("has no `From` conversion"), "{error}");
-        assert!(error.contains("Call `.boxed()` on the widget instead"), "{error}");
+        assert!(
+            error.contains("unlike iced 0.13 and 0.14, so pass the widget as it is or call `.boxed()`"),
+            "{error}"
+        );
     }
     // Other conversions keep `.into()`.
     let adapter = boot(

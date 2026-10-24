@@ -37582,8 +37582,9 @@ impl<'a> Parser<'a> {
             owner: if method == "from" { target.clone() } else { source.clone() },
             method: method.into(),
             reason: format!(
-                "`{source}` has no `From` conversion into `{target}`. Call `.boxed()` on the \
-                 widget instead. Where an `impl Widget` is expected, pass the widget as it is"
+                "`{source}` has no `From` conversion into `{target}`. iced master has no `From` \
+                 conversion from a widget into `Element`, unlike iced 0.13 and 0.14, so pass the \
+                 widget as it is or call `.boxed()`"
             )
             .into(),
             call,
