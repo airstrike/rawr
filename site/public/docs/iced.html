@@ -242,7 +242,7 @@ fn main() -&gt; iced::Result {
 <p>A panic in a wrapped <code>Element</code>&rsquo;s own code is an error of the call that reached it. ?play and snapshots draw with tiny-skia, which does not draw meshes. A mesh shows in a window.</p>
 <div class="block">
   <div class="file"><b>circle.rs</b></div>
-  <pre><code data-lang="rust" data-run="circle.rs" id="src-circle">use iced::advanced::layout::{self, Layout};
+  <pre><code data-lang="rust" data-run="widget.rs" id="src-widget">use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Widget};
 use iced::widget::{center, column, slider, text};
@@ -330,7 +330,7 @@ impl App {
 fn main() -&gt; iced::Result {
     iced::run(App::update, App::view)
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-circle" data-out="out-circle" data-alt="A pink circle of radius 50 above its radius and a slider, drawn by a widget written in Rawr" aria-label="Run circle.rs" hidden></button><b>rawr run circle.rs</b><span class="quiet" id="out-circle" aria-live="polite">(opens a window)</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-widget" data-out="out-widget" data-alt="A pink circle of radius 50 above its radius and a slider, drawn by a widget written in Rawr" aria-label="Run widget.rs" hidden></button><b>rawr run widget.rs</b><span class="quiet" id="out-widget" aria-live="polite">(opens a window)</span></div>
 </div>
 <h3 id="subscriptions">Subscriptions</h3>
 <p>A <code>.subscription(..)</code> method returns a <code>Subscription&lt;Message&gt;</code>. <code>iced::time::every</code>, <code>iced::keyboard::listen</code>, <code>iced::event::listen</code> and <code>iced::window::frames</code> work. Subscriptions combine with <code>map</code> and <code>filter_map</code>. <code>Subscription::run(builder)</code> takes a Rust function that returns a sipper, as <a href="#async">Async code</a> describes.</p>
