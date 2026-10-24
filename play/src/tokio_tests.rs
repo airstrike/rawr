@@ -344,7 +344,10 @@ async fn run() -> String {
     };
     let wait = async move {
         tokio::select! {
-            Some(n) = receiver.recv() => format!(\"got {n}\"),
+            value = receiver.recv() => match value {
+                Some(n) => format!(\"got {n}\"),
+                None => \"closed\".to_string(),
+            },
             _ = sleep(Duration::from_millis(300)) => \"timed out\".to_string(),
         }
     };
@@ -377,6 +380,25 @@ fn rejected(items: &str) -> String {
         Err(error) => panic!("{error}"),
         Ok(_) => panic!("the snippet compiled"),
     }
+}
+
+/// tokio waits on the other branches when one's value does not match its
+/// pattern; rawr's select would end there, so it refuses the pattern.
+#[test]
+fn tokio_select_refuses_a_pattern_that_can_fail_beside_other_branches() {
+    let error = rejected(
+        "use tokio::sync::mpsc;
+use tokio::time::sleep;
+async fn run() -> String {
+    let (sender, mut receiver) = mpsc::channel::<i64>(1);
+    drop(sender);
+    tokio::select! {
+        Some(n) = receiver.recv() => format!(\"got {n}\"),
+        _ = sleep(Duration::from_millis(300)) => \"timed out\".to_string(),
+    }
+}",
+    );
+    assert!(error.contains("`select!` branch whose pattern can fail to match"), "{error}");
 }
 
 #[test]

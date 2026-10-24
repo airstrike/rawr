@@ -11415,6 +11415,22 @@ impl<'a> Parser<'a> {
             }
         }
         let count = futures.len();
+        // tokio disables a branch whose value does not match its pattern and
+        // waits for the others; rawr's select ends there. With one branch
+        // the two agree: it goes to `else`, or panics.
+        if name == "select"
+            && count > 1
+            && let Some((pattern, _)) = branches.iter().find(|(pattern, _)| refutable_tokens(pattern))
+        {
+            let at = pattern.first().map_or(start.start(), |(_, position)| *position);
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "a `select!` branch whose pattern can fail to match beside other \
+                            branches, for which tokio keeps waiting on the others; bind the \
+                            value (`value = future`) and match it in the branch's body"
+                    .into(),
+                source: point_span(at),
+            });
+        }
         let least = if name == "select" { 1 } else { 2 };
         if count < least || count > MOST {
             return Err(unsupported(
@@ -41431,6 +41447,30 @@ enum PendingFloatKind {
     Literal(f64),
     /// The name of the `RoundF32` helper the placeholder calls.
     Round(String),
+}
+
+/// Whether a pattern written as `tokens` may fail to match: anything but
+/// names, `_`, `mut`, `ref`, `&` and tuples of them. A crate's struct
+/// pattern counts, though it always matches.
+fn refutable_tokens(tokens: &[(Token, Position)]) -> bool {
+    tokens.iter().enumerate().any(|(index, (token, _))| match token {
+        Token::Identifier(name) => {
+            name.starts_with(|first: char| first.is_uppercase())
+                || matches!(
+                    tokens.get(index + 1),
+                    Some((Token::LeftParen | Token::LeftBrace | Token::DoubleColon, _))
+                )
+        }
+        Token::Underscore
+        | Token::Mut
+        | Token::LeftParen
+        | Token::RightParen
+        | Token::Comma
+        | Token::Ampersand
+        | Token::Unit => false,
+        Token::Reserved(word) => word.as_str() != "ref",
+        _ => true,
+    })
 }
 
 /// Whether `pattern` binds some part of its value by value: a name, not a
