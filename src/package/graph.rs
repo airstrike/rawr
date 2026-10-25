@@ -518,7 +518,8 @@ impl<'a> Builder<'a> {
             });
             declarations
         } else {
-            self.packages[package.0].entry = super::entry::attribute(&text).map(Box::from);
+            self.packages[package.0].entry =
+                super::entry::attribute(&text).map(String::into_boxed_str);
             text
         };
         let root_source = self.load_module(
