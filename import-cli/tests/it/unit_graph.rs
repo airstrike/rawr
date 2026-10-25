@@ -76,11 +76,14 @@ fn keys(graph: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-#[test]
-fn the_plain_runner_builds_the_projects_own_units() {
+/// Compares a plain project that depends on `dependency` (a manifest line)
+/// with a runner that links the rawr crate with `rawr_features` beside the
+/// same line, and whose `src/main.rs` is `runner_main`. Every unit the
+/// project builds, its own crate aside, must be the runner's.
+fn compare(name: &str, dependency: &str, rawr_features: &str, runner_main: &str) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let root = fs::canonicalize(root).expect("the repository root");
-    let scratch = root.join(format!("target/unit-graph-plain-{}", std::process::id()));
+    let scratch = root.join(format!("target/unit-graph-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let project = scratch.join("app");
     let runner = scratch.join("runner");
@@ -97,7 +100,7 @@ fn the_plain_runner_builds_the_projects_own_units() {
     fs::write(
         project.join("Cargo.toml"),
         format!(
-            "{}itoa = \"1\"\n\n[workspace]\n",
+            "{}{dependency}\n\n[workspace]\n",
             rawr_cli::new::manifest("app")
         ),
     )
@@ -123,8 +126,8 @@ fn the_plain_runner_builds_the_projects_own_units() {
             "[workspace]\nresolver = \"3\"\n\n\
              [package]\nname = \"rawr-generated-runner\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
              [dependencies]\n\
-             __rawr_internal = {{ package = \"rawr\", path = {root:?}, default-features = false, features = [\"rust-import\", \"std\"] }}\n\
-             itoa = {{ version = \"1\", default-features = true }}\n\n\
+             __rawr_internal = {{ package = \"rawr\", path = {root:?}, default-features = false, features = [{rawr_features}] }}\n\
+             {dependency}\n\n\
              [profile.dev]\nincremental = false\n\n\
              [profile.dev.package]\nrawr-generated-runner = {{ incremental = true }}\n\n\
              [profile.dev.package.rawr]\ndebug = 0\nopt-level = 3\nstrip = false\n",
@@ -132,7 +135,7 @@ fn the_plain_runner_builds_the_projects_own_units() {
         ),
     )
     .unwrap();
-    fs::write(runner.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(runner.join("src/main.rs"), runner_main).unwrap();
     fs::write(
         runner.join("rust-toolchain.toml"),
         rawr_import_cli::project::toolchain(),
@@ -162,9 +165,10 @@ fn the_plain_runner_builds_the_projects_own_units() {
         .filter(|(key, local)| !shared.contains(key.as_str()) && !local.contains("\"app\""))
         .map(|(_, local)| local.as_str())
         .collect::<Vec<_>>();
+    let package = dependency.split_whitespace().next().unwrap();
     assert!(
-        template.iter().any(|(_, local)| local.contains("itoa")),
-        "the project builds itoa"
+        template.iter().any(|(_, local)| local.contains(package)),
+        "the project builds {package}"
     );
     // A unit whose own fields differ is a cause; the rest differ only through
     // a dependency.
@@ -184,3 +188,41 @@ fn the_plain_runner_builds_the_projects_own_units() {
             .join("\n")
     );
 }
+
+#[test]
+fn the_plain_runner_builds_the_projects_own_units() {
+    compare(
+        "plain",
+        "itoa = \"1\"",
+        "\"rust-import\", \"std\"",
+        "fn main() {}\n",
+    );
+}
+
+/// D513.7's first check: a runner that instantiates tokio's generics at
+/// rawr's own types (a channel of `rawr::Value`, a spawned script future)
+/// still builds the project's tokio unit. A monomorphization is not a unit,
+/// so only the rawr crate's features could change one.
+#[test]
+fn a_runner_that_instantiates_tokio_at_rawr_types_builds_the_projects_tokio() {
+    compare(
+        "tokio",
+        "tokio = { version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"time\", \"sync\"] }",
+        "\"rust-import\", \"std\", \"sync\"",
+        RUNNER_WITH_TOKIO,
+    );
+}
+
+/// What a plain runner generates for a tokio program: the project's own
+/// entry attribute around the script's `main`, a channel instantiated at
+/// `rawr::Value` and a spawned script future.
+const RUNNER_WITH_TOKIO: &str = r#"use __rawr_internal as rawr;
+
+#[tokio::main]
+async fn main() {
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<rawr::Value>(8);
+    let task = tokio::spawn(rawr::future::Script::ready(rawr::Value::from(rawr::Dynamic::UNIT)));
+    sender.send(task.await.unwrap()).await.unwrap();
+    let _ = receiver.recv().await;
+}
+"#;
