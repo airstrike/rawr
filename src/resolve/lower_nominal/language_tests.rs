@@ -9180,3 +9180,53 @@ fn language_a_closure_takes_its_parameter_types_from_impl_fn() {
     "#);
     assert_eq!(value, 2);
 }
+
+/// Words the old dialect reserved that Rust doesn't are ordinary names,
+/// even when a host disables them, as `?play` disables `eval`. rustc
+/// prints `42 49` for this program.
+#[test]
+fn language_dialect_words_are_ordinary_names() {
+    let source = r#"
+fn eval(x: i64) -> i64 { x * 2 }
+fn main() {
+    let call = 3;
+    let this = 4;
+    let print = 5;
+    let debug = 6;
+    let curry = 7;
+    let type_of = 8;
+    let go = 9;
+    let is_shared = 1;
+    let is_def_var = 1;
+    let is_def_fn = 1;
+    let throw = 1;
+    let goto = 1;
+    let var = 1;
+    let null = 1;
+    let spawn = 1;
+    let thread = 1;
+    println!("{} {}", eval(21), call + this + print + debug + curry + type_of + go + is_shared
+        + is_def_var + is_def_fn + throw - goto + var + null + spawn + thread);
+}
+main();
+"#;
+    assert_eq!(printed(source), "42 49\n");
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    for symbol in ["import", "eval", "print", "debug"] {
+        engine.disable_symbol(symbol);
+    }
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    engine.run(source).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(*lines.lock().unwrap(), "42 49\n");
+    // `throw` is a name, so a value after it is rustc's parse error.
+    let error =
+        rejected(r#"fn f(flag: bool) -> i64 { if flag { throw "branch" } else { 0 } } f(true)"#);
+    assert!(
+        error.contains(
+            "expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator, found `\"branch\"`"
+        ),
+        "{error}"
+    );
+}

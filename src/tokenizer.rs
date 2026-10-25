@@ -2762,14 +2762,15 @@ fn is_lifetime_marker(stream: &mut (impl InputStream + ?Sized)) -> bool {
 }
 
 /// The words the legacy lexer reads as keywords or reserves that are
-/// ordinary names in Rust (`throw` stays Rawr's panic statement). Checked
-/// Rawr, its items and bodies, reads each as the identifier `__rawr_<word>`
-/// (`rust_name`), so the lowered script never sees the keyword; messages and
-/// `Debug` text show the Rust name again (`demangle_names`).
-pub(crate) const RUST_NAMES: [&str; 17] = [
+/// ordinary names in Rust. Checked Rawr, its items and bodies, reads each as
+/// the identifier `__rawr_<word>` (`rust_name`), so the lowered script never
+/// sees the keyword; messages and `Debug` text show the Rust name again
+/// (`demangle_names`). `Fn` stays the trait's name.
+pub(crate) const RUST_NAMES: [&str; 19] = [
     "switch",
     "catch",
     "until",
+    "throw",
     "private",
     "import",
     "export",
@@ -2781,6 +2782,7 @@ pub(crate) const RUST_NAMES: [&str; 17] = [
     "curry",
     "type_of",
     "is_def_var",
+    "is_def_fn",
     "is_shared",
     "goto",
     "go",
@@ -2793,6 +2795,7 @@ pub(crate) fn rust_name(token: &Token) -> Option<String> {
         Token::Switch => "switch",
         Token::Catch => "catch",
         Token::Until => "until",
+        Token::Throw => "throw",
         #[cfg(not(feature = "no_function"))]
         Token::Private => "private",
         #[cfg(not(feature = "no_module"))]
@@ -3116,6 +3119,10 @@ impl Iterator for TokenIterator<'_> {
                 (.., true) => Token::Custom(s),
                 #[cfg(feature = "no_custom_syntax")]
                 (.., true) => unreachable!("no custom operators"),
+                // A word of the old dialect that is an ordinary name in Rust:
+                // checked Rawr reads it as an identifier (`rust_name`), so a
+                // host's `disable_symbol` doesn't reach it.
+                (token, false) if self.state.tokenizer_control.borrow().rust && RUST_NAMES.contains(&token) => Token::Reserved(s),
                 // Reserved keyword that is not custom and disabled.
                 (token, false) if self.engine.is_symbol_disabled(token) => {
                     let msg = format!("reserved {} '{token}' is disabled", if is_valid_identifier(token) { "keyword"} else {"symbol"});

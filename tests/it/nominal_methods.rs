@@ -327,8 +327,8 @@ fn if_unit_branches_and_divergence_boundary_are_explicit() {
         42
     );
 
-    // `throw` is not Rust.
-    assert_resolution(&engine, "pub fn rejected(flag: bool) -> i64 { if flag { throw \"branch\" } else { 0 } }", Category::Syntax, "found `throw`");
+    // `throw` is a name in Rust, so the string after it is rustc's parse error.
+    assert_resolution(&engine, "pub fn rejected(flag: bool) -> i64 { if flag { throw \"branch\" } else { 0 } }", Category::Syntax, "or an operator, found `\"branch\"`");
 }
 
 #[test]
