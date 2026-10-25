@@ -47,6 +47,18 @@ impl Resource {
     }
 }
 
+/// A trait a script's `-> impl Labelled` returns, as Freya's `fn app() ->
+/// impl IntoElement` does.
+pub trait Labelled {
+    fn label(&self) -> String;
+}
+
+impl Labelled for Resource {
+    fn label(&self) -> String {
+        format!("resource {}", self.id)
+    }
+}
+
 /// rand's shape: `R: SampleRange<T>` with an impl for `Range<T>`, so the
 /// call's `T` is the range's own.
 pub trait SampleRange<T> {

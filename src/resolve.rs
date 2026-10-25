@@ -236,10 +236,11 @@ impl ImportedFailure {
 #[cfg(feature = "rust-import")]
 pub(crate) fn lower_imported(
     engine: &crate::Engine,
-    program: &Program,
+    program: &mut Program,
     host: &host::Registry,
     allocation: &mut rawr_import::contract::Allocation,
 ) -> Result<lower_nominal::ImportedOutput, ImportedFailure> {
+    lower_nominal::reveal(engine, program, host, allocation)?;
     lower_nominal::imported(engine, program, host, allocation)
 }
 

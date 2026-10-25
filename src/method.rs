@@ -306,6 +306,15 @@ impl Definition {
         &self.output
     }
 
+    /// Name the hidden type of an opaque `impl Trait` output, as its body
+    /// revealed it (`lower_nominal::reveal`); the signature then has it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn reveal_output(&mut self, output: type_ref::Type) {
+        self.fingerprint =
+            signature::Fingerprint::function(true, self.receiver, &self.parameters, Some(&output));
+        self.output = output;
+    }
+
     pub(crate) const fn body(&self) -> Span {
         self.body
     }

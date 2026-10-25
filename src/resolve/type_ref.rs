@@ -125,6 +125,13 @@ pub(crate) enum Argument {
 /// which at runtime is the value itself.
 pub(crate) const DYN_PREFIX: &str = "dyn ";
 
+/// The builtin path name of a return type's `impl Trait` of an imported
+/// trait, until its function's body reveals the hidden type it stands for
+/// (`lower_nominal::reveal`): `opaque freya::prelude::IntoElement`. No Rust
+/// path spells it.
+#[cfg(feature = "rust-import")]
+pub(crate) const OPAQUE_PREFIX: &str = "opaque ";
+
 pub(super) fn resolve(
     parsed: item::type_ref::Type,
     types: &BTreeMap<ImmutableString, Target>,
@@ -970,12 +977,47 @@ fn resolve_impl(
             _ => None,
         });
     let unsupported = || Error::UnsupportedNominalSyntax {
-        construct: "`impl Trait` other than `impl Fn*`, `impl Iterator` or a facade trait \
-                    (`impl Widget<Message>`) as a return type"
+        construct: "`impl Trait` other than `impl Fn*`, `impl Iterator`, a facade trait \
+                    (`impl Widget<Message>`) or a dependency's trait as a return type"
             .into(),
         source: span,
     };
     let Some((bound, definition)) = found else {
+        // `impl IntoElement` of an imported trait is rustc's opaque type,
+        // whose hidden type is the body's: Rawr has none of the trait's
+        // impls to erase it to, so the body names it (`lower_nominal::
+        // reveal`). The registry holds an imported trait the program names
+        // as a module of its crate (`Facade::traits`), and the bound is
+        // written from the crate's root once `use`s are followed
+        // (`package::qualify_opaque_bounds`). No other module is a bound.
+        #[cfg(feature = "rust-import")]
+        if let Some(qualified) =
+            parsed.segments[0]
+                .arguments
+                .iter()
+                .find_map(|argument| match argument {
+                    item::type_ref::Argument::Type(item::type_ref::Type::Path(bound))
+                        if bound.segments.len() > 1 =>
+                    {
+                        let qualified = bound
+                            .segments
+                            .iter()
+                            .map(|segment| segment.name.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("::");
+                        matches!(host.entry(&qualified), Some(host::Entry::Module))
+                            .then_some(qualified)
+                    }
+                    _ => None,
+                })
+        {
+            return Ok(Path {
+                target: Target::Builtin,
+                name: format!("{OPAQUE_PREFIX}{qualified}").into(),
+                arguments: Box::default(),
+                span,
+            });
+        }
         return Err(unsupported());
     };
     let [projection] = definition.projections() else {
@@ -1278,6 +1320,36 @@ impl Type {
             })
             .collect();
         Some((path.name.as_str(), arguments))
+    }
+
+    /// The imported trait of a return type's `impl Trait` whose hidden type
+    /// is not yet revealed (`OPAQUE_PREFIX`).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn opaque_trait(&self) -> Option<&str> {
+        let Type::Path(path) = self else {
+            return None;
+        };
+        if path.target != Target::Builtin {
+            return None;
+        }
+        path.name.as_str().strip_prefix(OPAQUE_PREFIX)
+    }
+
+    /// Whether an opaque `impl Trait` is anywhere in this type.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn has_opaque(&self) -> bool {
+        match self {
+            Type::Unit(_) => false,
+            Type::Tuple { members, .. } => members.iter().any(Type::has_opaque),
+            Type::Reference { target, .. } => target.has_opaque(),
+            Type::Path(path) => {
+                self.opaque_trait().is_some()
+                    || path.arguments.iter().any(|argument| match argument {
+                        Argument::Type(ty) => ty.has_opaque(),
+                        Argument::Lifetime(_) => false,
+                    })
+            }
+        }
     }
 
     /// The trait of a trait object type `dyn Trait`.
