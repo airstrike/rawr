@@ -55,17 +55,38 @@ echo "The bot runs image $want after $((i * 5)) s of polling."
 
 # Smoke test: the runnable snippets on the landing page and in the docs must still run.
 node --input-type=module -e '
-  const blocks = [];
-  for (const path of ["/", "/docs/start", "/docs/play", "/docs/reference/overview", "/docs/reference/generics", "/docs/reference/closures", "/docs/reference/iced", "/docs/reference/play"]) {
+  import { readdirSync, readFileSync } from "node:fs";
+  import { join, relative } from "node:path";
+  // Every page of the site that holds a runnable block, read from the files
+  // (index.html is its directory'"'"'s path, other pages drop .html).
+  const root = process.argv[2];
+  const pages = readdirSync(root, { recursive: true })
+    .filter((file) => file.endsWith(".html") && readFileSync(join(root, file), "utf8").includes("data-run"))
+    .map((file) => "/" + relative(root, join(root, file)).replace(/index\.html$/, "").replace(/\.html$/, ""))
+    .map((path) => (path.length > 1 ? path.replace(/\/$/, "") : path));
+  const text = (h) => h.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "\x27").replace(/&amp;/g, "&");
+  const sources = new Set();
+  for (const path of pages) {
     const page = await (await fetch(process.argv[1] + path)).text();
     const found = [...page.matchAll(/<code[^>]*data-run[^>]*>([\s\S]*?)<\/code>/g)];
     if (!found.length) throw new Error("no runnable snippets on " + path);
-    blocks.push(...found);
+    for (const [, html] of found) sources.add(text(html));
   }
-  const text = (h) => h.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "\x27").replace(/&amp;/g, "&");
-  for (const [, html] of blocks) {
-    const response = await fetch(process.argv[1] + "/play/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: text(html) }) });
-    if (!response.ok) throw new Error("run failed: " + response.status + " " + (await response.text()).slice(0, 200));
-    console.log("ran a site snippet:", response.headers.get("content-type"));
+  // Each distinct source once. Landing runs are rate limited per IP, so a
+  // 429 waits as long as it asks and tries again.
+  for (const code of sources) {
+    for (;;) {
+      const response = await fetch(process.argv[1] + "/play/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) });
+      if (response.status === 429) {
+        const wait = Number(/(\d+) s/.exec(await response.text())?.[1] ?? 30);
+        console.log("rate limited; waiting " + wait + " s");
+        await new Promise((resolve) => setTimeout(resolve, (wait + 1) * 1000));
+        continue;
+      }
+      if (!response.ok) throw new Error("run failed: " + response.status + " " + (await response.text()).slice(0, 200));
+      console.log("ran a site snippet:", response.headers.get("content-type"));
+      break;
+    }
   }
-' "$site"
+  console.log("ran " + sources.size + " distinct site snippets from " + pages.length + " pages");
+' "$site" "$repo/site/public"
