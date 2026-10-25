@@ -8,8 +8,6 @@ use futures_core::Stream;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::pin::Pin;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::task::{Context, Poll};
 
 const IDENTITY_VERSION: &[u8] = b"rawr-stream-plan-identity-v1";
@@ -663,25 +661,8 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Binding(error) => Some(error),
-            Self::Input { source, .. }
-            | Self::Output { source, .. }
-            | Self::Message { source, .. } => Some(source),
-            Self::IdentityEncoding { source, .. } => Some(source),
-            Self::IdentityProof(error) => Some(error),
-            Self::Mapper(error) => Some(error),
-            Self::Arity { .. } | Self::MessageContract { .. } | Self::Native { .. } => None,
-        }
-    }
-}
-
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {
-    fn source(&self) -> Option<&(dyn core_error::Error + 'static)> {
         match self {
             Self::Binding(error) => Some(error),
             Self::Input { source, .. }

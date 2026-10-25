@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_index"))]
 use rawr::{Blob, Dynamic, Engine, INT};
 use std::iter::FromIterator;
 
@@ -20,7 +19,6 @@ fn test_blobs() {
     assert_eq!(engine.eval::<INT>(&format!("{x} x[x.len() - 1]")).unwrap(), 3);
     let _ = engine.eval::<INT>(&format!("{x} x[3]")).unwrap_err();
 
-    #[cfg(not(feature = "no_object"))]
     {
         assert_eq!(bytes(engine.eval::<Dynamic>(&format!("{x} x.push(4); x")).unwrap()), [1, 2, 3, 4]);
         assert_eq!(bytes(engine.eval::<Dynamic>(&format!("{x} x.insert(0, 4); x")).unwrap()), [4, 1, 2, 3]);

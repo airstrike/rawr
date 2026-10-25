@@ -1,12 +1,9 @@
 //! Host metadata consulted while resolving Rawr source.
 
-#[cfg(not(feature = "no_std"))]
 pub mod debug;
-#[cfg(not(feature = "no_std"))]
 pub mod display;
 pub(crate) mod endpoint;
 mod error;
-#[cfg(not(feature = "no_std"))]
 pub mod export;
 pub mod facade;
 pub mod item;
@@ -28,8 +25,6 @@ pub use error::Error;
 use crate::tokenizer::is_valid_identifier;
 use crate::ImmutableString;
 use std::any::TypeId;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// The name an exported field's items take beside the type's methods:
 /// `Order::__rawr_field_items` for the field `items`.
@@ -212,7 +207,6 @@ impl Registry {
     }
 
     /// Mark `root` as an app's exported items.
-    #[cfg(not(feature = "no_std"))]
     pub(crate) fn mark_exported(&mut self, root: &str) {
         self.exported.push(root.into());
     }

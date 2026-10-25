@@ -2,8 +2,6 @@
 
 use crate::resolve::{self, type_ref};
 use crate::{item, program, receiver, signature, type_def, ImmutableString, Span};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A generation-local resolved method identifier.
 ///

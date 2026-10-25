@@ -6,10 +6,6 @@ use crate::types::dynamic::Variant;
 use crate::{Engine, FuncRegistration, Identifier, RawrNativeFunc, StaticVec};
 use std::marker::PhantomData;
 
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
-
-#[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
 use crate::func::register::Mut;
 
 /// Trait to build the API of a custom type for use with an [`Engine`]
@@ -18,7 +14,6 @@ use crate::func::register::Mut;
 /// # Example
 ///
 /// ```
-/// # #[cfg(not(feature = "no_object"))]
 /// # {
 /// use rawr::{CustomType, TypeBuilder, Engine};
 ///
@@ -218,13 +213,10 @@ where
     }
 }
 
-#[cfg(not(feature = "no_object"))]
 impl<T: Variant + Clone> TypeBuilder<'_, T> {
     /// Register a getter function.
     ///
     /// The function signature must start with `&mut self` and not `&self`.
-    ///
-    /// Not available under `no_object`.
     #[inline(always)]
     pub fn with_get<const X: bool, R: Variant + Clone, const F: bool>(
         &mut self,
@@ -240,8 +232,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     }
 
     /// Register a setter function.
-    ///
-    /// Not available under `no_object`.
     #[inline(always)]
     pub fn with_set<const X: bool, R: Variant + Clone, const F: bool>(
         &mut self,
@@ -259,8 +249,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     /// Short-hand for registering both getter and setter functions.
     ///
     /// All function signatures must start with `&mut self` and not `&self`.
-    ///
-    /// Not available under `no_object`.
     #[inline(always)]
     pub fn with_get_set<
         const X1: bool,
@@ -288,13 +276,10 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     }
 }
 
-#[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
 impl<T: Variant + Clone> TypeBuilder<'_, T> {
     /// Register an index getter.
     ///
     /// The function signature must start with `&mut self` and not `&self`.
-    ///
-    /// Not available under both `no_index` and `no_object`.
     #[inline(always)]
     pub fn with_indexer_get<
         IDX: Variant + Clone,
@@ -314,8 +299,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     }
 
     /// Register an index setter.
-    ///
-    /// Not available under both `no_index` and `no_object`.
     #[inline(always)]
     pub fn with_indexer_set<
         IDX: Variant + Clone,
@@ -335,8 +318,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     }
 
     /// Short-hand for registering both index getter and setter functions.
-    ///
-    /// Not available under both `no_index` and `no_object`.
     #[inline(always)]
     pub fn with_indexer_get_set<
         IDX: Variant + Clone,

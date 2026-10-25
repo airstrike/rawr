@@ -73,7 +73,6 @@ fn test_var_scope() {
     assert_eq!(scope3.is_constant("x"), Some(true));
 }
 
-#[cfg(not(feature = "unchecked"))]
 #[test]
 fn test_var_scope_max() {
     let mut engine = Engine::new();
@@ -112,7 +111,6 @@ fn test_var_scope_max() {
 
     scope.clear();
 
-    #[cfg(not(feature = "no_function"))]
     engine
         .run_with_scope(
             &mut scope,
@@ -141,7 +139,6 @@ fn test_var_scope_max() {
 
     scope.clear();
 
-    #[cfg(not(feature = "no_function"))]
     engine
         .run_with_scope(
             &mut scope,
@@ -176,7 +173,6 @@ fn test_var_scope_max() {
 
     scope.clear();
 
-    #[cfg(not(feature = "no_function"))]
     assert!(matches!(
         *engine
             .run_with_scope(
@@ -210,7 +206,6 @@ fn test_var_scope_max() {
 
     scope.clear();
 
-    #[cfg(not(feature = "no_function"))]
     assert!(matches!(
         *engine
             .run_with_scope(

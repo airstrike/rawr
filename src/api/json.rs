@@ -1,21 +1,16 @@
 //! Module that defines JSON manipulation functions for [`Engine`].
-#![cfg(not(feature = "no_object"))]
 
 use crate::parser::{ParseSettingFlags, ParseState};
 use crate::tokenizer::Token;
 use crate::types::dynamic::Union;
 use crate::{Dynamic, Engine, LexError, Map, RawrResultOf};
 use std::fmt::Write;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 impl Engine {
     /// Parse a JSON string into an [object map][Map].
     ///
     /// This is a light-weight alternative to using, say, [`serde_json`](https://crates.io/crates/serde_json)
     /// to deserialize the JSON.
-    ///
-    /// Not available under `no_object`.
     ///
     /// The JSON string must be an object hash.  It cannot be a simple primitive value.
     ///
@@ -127,7 +122,6 @@ impl Engine {
             self.parse_global_expr(
                 state,
                 |s| s.flags |= ParseSettingFlags::DISALLOW_UNQUOTED_MAP_PROPERTIES,
-                #[cfg(not(feature = "no_optimize"))]
                 crate::OptimizationLevel::None,
             )?
         };
@@ -137,8 +131,6 @@ impl Engine {
 }
 
 /// Return the JSON representation of an [object map][Map].
-///
-/// Not available under `no_std`.
 ///
 /// This function can be used together with [`Engine::parse_json`] to work with JSON texts
 /// without using the [`serde_json`](https://crates.io/crates/serde_json) crate (which is heavy).
@@ -188,7 +180,6 @@ fn format_dynamic_as_json(result: &mut String, value: &Dynamic) {
         }
         Union::FnPtr(ref f, _, _) => write!(result, "{:?}", f.fn_name()).unwrap(),
         Union::Map(ref m, ..) => *result += &format_map_as_json(m),
-        #[cfg(not(feature = "no_index"))]
         Union::Array(ref a, _, _) => {
             *result += "[";
             for (i, x) in a.iter().enumerate() {
@@ -199,7 +190,6 @@ fn format_dynamic_as_json(result: &mut String, value: &Dynamic) {
             }
             *result += "]";
         }
-        #[cfg(not(feature = "no_index"))]
         Union::Blob(ref b, _, _) => {
             *result += "[";
             for (i, x) in b.iter().enumerate() {
@@ -210,7 +200,6 @@ fn format_dynamic_as_json(result: &mut String, value: &Dynamic) {
             }
             *result += "]";
         }
-        #[cfg(not(feature = "no_closure"))]
         Union::Shared(ref v, _, _) => {
             let value = &*crate::func::locked_read(v).unwrap();
             format_dynamic_as_json(result, value)

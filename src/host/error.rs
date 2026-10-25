@@ -346,8 +346,4 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {}
-
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {}

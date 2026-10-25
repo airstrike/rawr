@@ -6,8 +6,6 @@ use crate::resolve::type_ref;
 use crate::types::dynamic::Union;
 use crate::{program, type_def, Dynamic};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// An ordered runtime value of a resolved Rawr struct type.
 #[derive(Clone)]
@@ -224,18 +222,12 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                 "Duration" => value.is::<std::time::Duration>(),
                 "Instant" => value.is::<std::time::Instant>(),
                 "String" => value.is_string(),
-                #[cfg(not(feature = "no_float"))]
                 "f64" => value.is_float(),
-                #[cfg(feature = "no_float")]
-                "f64" => false,
                 "RangeInclusive" => {
                     value.is::<std::ops::RangeInclusive<crate::INT>>() || {
-                        #[cfg(not(feature = "no_float"))]
                         {
                             value.is::<std::ops::RangeInclusive<crate::FLOAT>>()
                         }
-                        #[cfg(feature = "no_float")]
-                        false
                     }
                 }
                 // A `Range<T>` is an iterator in Rawr.
@@ -472,7 +464,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "no_closure"))]
     fn recursive_shared_value_cycles_are_rejected_without_recursing_forever() {
         let (model, definition, _) = struct_model("struct Loop { next: Loop }", "Loop");
         let identity = type_def::Identity::Script(definition.key().clone());

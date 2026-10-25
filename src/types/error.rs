@@ -1,13 +1,8 @@
 //! Module containing error definitions for the evaluation process.
 
 use crate::{Dynamic, ParseErrorType, Position, INT};
-#[cfg(feature = "no_std")]
-use core_error::Error;
-#[cfg(not(feature = "no_std"))]
 use std::error::Error;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Evaluation result.
 ///
@@ -203,7 +198,6 @@ impl EvalAltResult {
             }
             Self::ErrorParsing(p, ..) => write!(f, "Syntax error: {p}")?,
 
-            #[cfg(not(feature = "no_function"))]
             Self::ErrorInFunctionCall(s, src, err, ..) if crate::parser::is_anonymous_fn(s) => {
                 err.display(f, src)?;
                 write!(f, "\nin closure call")?;
@@ -256,25 +250,21 @@ impl EvalAltResult {
             }
             Self::ErrorRuntime(d, ..) => write!(f, "Runtime error: {d}")?,
 
-            #[cfg(not(feature = "no_object"))]
             Self::ErrorNonPureMethodCallOnConstant(s, ..)
                 if s.starts_with(crate::engine::FN_GET) =>
             {
                 let prop = &s[crate::engine::FN_GET.len()..];
                 write!(f, "Non-pure property {prop} cannot be accessed on constant")?
             }
-            #[cfg(not(feature = "no_object"))]
             Self::ErrorNonPureMethodCallOnConstant(s, ..)
                 if s.starts_with(crate::engine::FN_SET) =>
             {
                 let prop = &s[crate::engine::FN_SET.len()..];
                 write!(f, "Cannot modify property '{prop}' of constant")?
             }
-            #[cfg(not(feature = "no_index"))]
             Self::ErrorNonPureMethodCallOnConstant(s, ..) if s == crate::engine::FN_IDX_GET => {
                 write!(f, "Non-pure indexer cannot be accessed on constant")?
             }
-            #[cfg(not(feature = "no_index"))]
             Self::ErrorNonPureMethodCallOnConstant(s, ..) if s == crate::engine::FN_IDX_SET => {
                 write!(f, "Cannot assign to indexer of constant")?
             }
@@ -450,7 +440,6 @@ impl EvalAltResult {
         )
     }
     /// Get the [position][Position] of this error.
-    #[cfg(not(feature = "no_object"))]
     #[cold]
     #[inline(never)]
     pub(crate) fn dump_fields(&self, map: &mut crate::Map) {
@@ -521,15 +510,7 @@ impl EvalAltResult {
             Self::ErrorCustomSyntax(_, tokens, _) => {
                 map.insert(
                     "tokens".into(),
-                    #[cfg(not(feature = "no_index"))]
                     Dynamic::from_array(tokens.iter().map(Into::into).collect()),
-                    #[cfg(feature = "no_index")]
-                    tokens
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                        .into(),
                 );
             }
         }

@@ -1,5 +1,3 @@
-#![cfg(not(feature = "no_time"))]
-#[cfg(not(feature = "no_float"))]
 use rawr::FLOAT;
 use rawr::{Engine, INT};
 
@@ -7,7 +5,6 @@ use rawr::{Engine, INT};
 fn test_timestamp() {
     let engine = Engine::new();
 
-    #[cfg(not(feature = "no_float"))]
     assert!(
         engine
             .eval::<FLOAT>(
@@ -56,7 +53,6 @@ fn test_timestamp() {
 fn test_timestamp_op() {
     let engine = Engine::new();
 
-    #[cfg(not(feature = "no_float"))]
     assert!(
         (engine
             .eval::<FLOAT>(
@@ -74,7 +70,6 @@ fn test_timestamp_op() {
             < 0.001
     );
 
-    #[cfg(not(feature = "no_float"))]
     assert!(
         (engine
             .eval::<FLOAT>(

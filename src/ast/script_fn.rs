@@ -1,10 +1,7 @@
 //! Module defining script-defined functions.
-#![cfg(not(feature = "no_function"))]
 
 use super::{FnAccess, StmtBlock};
 use crate::{FnArgsVec, ImmutableString};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{fmt, hash::Hash};
 
 /// _(internals)_ A type containing information on a script-defined function.
@@ -17,9 +14,7 @@ pub struct ScriptFuncDef {
     pub name: ImmutableString,
     /// Function access mode.
     pub access: FnAccess,
-    #[cfg(not(feature = "no_object"))]
     /// Type of `this` pointer, if any.
-    /// Not available under `no_object`.
     pub this_type: Option<ImmutableString>,
     /// Names of function parameters.
     pub params: FnArgsVec<ImmutableString>,
@@ -52,7 +47,6 @@ impl ScriptFuncDef {
             name: self.name.clone(),
             access: self.access,
             body: StmtBlock::NONE,
-            #[cfg(not(feature = "no_object"))]
             this_type: self.this_type.clone(),
             params: self.params.clone(),
             #[cfg(feature = "metadata")]
@@ -64,14 +58,10 @@ impl ScriptFuncDef {
 
 impl fmt::Display for ScriptFuncDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        #[cfg(not(feature = "no_object"))]
         let this_type = self
             .this_type
             .as_ref()
             .map_or(String::new(), |s| format!("{s:?}."));
-
-        #[cfg(feature = "no_object")]
-        let this_type = "";
 
         write!(
             f,
@@ -93,8 +83,6 @@ impl fmt::Display for ScriptFuncDef {
 
 /// A type containing the metadata of a script-defined function.
 ///
-/// Not available under `no_function`.
-///
 /// Created by [`AST::iter_functions`][super::AST::iter_functions].
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone, Hash)]
 #[cfg_attr(
@@ -115,8 +103,6 @@ pub struct ScriptFnMetadata<'a> {
     /// Function access mode.
     pub access: FnAccess,
     /// Type of `this` pointer, if any.
-    /// Not available under `no_object`.
-    #[cfg(not(feature = "no_object"))]
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -143,14 +129,10 @@ pub struct ScriptFnMetadata<'a> {
 
 impl fmt::Display for ScriptFnMetadata<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        #[cfg(not(feature = "no_object"))]
         let this_type = self
             .this_type
             .as_ref()
             .map_or(String::new(), |s| format!("{s:?}."));
-
-        #[cfg(feature = "no_object")]
-        let this_type = "";
 
         write!(
             f,
@@ -177,7 +159,6 @@ impl<'a> From<&'a ScriptFuncDef> for ScriptFnMetadata<'a> {
             name: &value.name,
             params: value.params.iter().map(ImmutableString::as_str).collect(),
             access: value.access,
-            #[cfg(not(feature = "no_object"))]
             this_type: value.this_type.as_deref(),
             #[cfg(feature = "metadata")]
             comments: value.comments.iter().map(<_>::as_ref).collect(),

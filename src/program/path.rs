@@ -2,8 +2,6 @@
 
 use crate::ImmutableString;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// The canonical path shared by stable semantic keys.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

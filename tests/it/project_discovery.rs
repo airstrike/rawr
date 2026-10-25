@@ -1,5 +1,3 @@
-#![cfg(not(feature = "no_std"))]
-
 use rawr::project::{self, Target};
 use std::fs;
 use std::path::{Path, PathBuf};

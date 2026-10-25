@@ -24,8 +24,6 @@ use crate::{
     StaticVec, ThinVec, VarDefInfo, AST, PERR,
 };
 use bitflags::bitflags;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::TypeId,
     convert::TryFrom,
@@ -36,7 +34,6 @@ use std::{
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
-#[cfg(not(feature = "no_function"))]
 type FnLib = StraightHashMap<Shared<ScriptFuncDef>>;
 
 /// Invalid variable name that acts as a search barrier in a [`Scope`].
@@ -63,7 +60,6 @@ pub struct ParseState<'a, 't, 'f> {
     /// Tokenizer control interface.
     pub tokenizer_control: TokenizerControl,
     /// Script-defined functions.
-    #[cfg(not(feature = "no_function"))]
     pub lib: &'f mut FnLib,
     /// Controls whether parsing of an expression should stop given the next token.
     pub expr_filter: fn(&Token) -> bool,
@@ -76,7 +72,6 @@ pub struct ParseState<'a, 't, 'f> {
     /// Size of the local variables stack upon entry of the current block scope.
     pub frame_pointer: usize,
     /// Tracks a list of external variables (variables that are not explicitly declared in the scope).
-    #[cfg(not(feature = "no_closure"))]
     pub external_vars: ThinVec<Ident>,
     /// An indicator that, when set to `false`, disables variable capturing into externals one
     /// single time up until the nearest consumed Identifier token.
@@ -87,14 +82,9 @@ pub struct ParseState<'a, 't, 'f> {
     /// All consequent calls to `Engine::access_var` will not be affected.
     pub allow_capture: bool,
     /// Encapsulates a local stack with imported [module][crate::Module] names.
-    #[cfg(not(feature = "no_module"))]
     pub imports: ThinVec<ImmutableString>,
     /// List of globally-imported [module][crate::Module] names.
-    #[cfg(not(feature = "no_module"))]
     pub global_imports: ThinVec<ImmutableString>,
-    /// Unused dummy field.
-    #[cfg(feature = "no_function")]
-    pub _dummy: &'f (),
 }
 
 impl fmt::Debug for ParseState<'_, '_, '_> {
@@ -109,11 +99,9 @@ impl fmt::Debug for ParseState<'_, '_, '_> {
             .field("stack", &self.stack)
             .field("frame_pointer", &self.frame_pointer);
 
-        #[cfg(not(feature = "no_closure"))]
         f.field("external_vars", &self.external_vars)
             .field("allow_capture", &self.allow_capture);
 
-        #[cfg(not(feature = "no_module"))]
         f.field("imports", &self.imports)
             .field("global_imports", &self.global_imports);
 
@@ -129,27 +117,20 @@ impl<'a, 't, 'f> ParseState<'a, 't, 'f> {
         external_constants: Option<&'a Scope>,
         input: &'t mut TokenStream<'a>,
         tokenizer_control: TokenizerControl,
-        #[cfg(not(feature = "no_function"))] lib: &'f mut FnLib,
-        #[cfg(feature = "no_function")] dummy: &'f (),
+        lib: &'f mut FnLib,
     ) -> Self {
         Self {
             input,
             tokenizer_control,
-            #[cfg(not(feature = "no_function"))]
             lib,
-            #[cfg(feature = "no_function")]
-            _dummy: dummy,
             expr_filter: |_| true,
-            #[cfg(not(feature = "no_closure"))]
             external_vars: ThinVec::new(),
             allow_capture: true,
             external_constants,
             global: None,
             stack: Scope::new(),
             frame_pointer: 0,
-            #[cfg(not(feature = "no_module"))]
             imports: ThinVec::new(),
-            #[cfg(not(feature = "no_module"))]
             global_imports: ThinVec::new(),
         }
     }
@@ -191,9 +172,6 @@ impl<'a, 't, 'f> ParseState<'a, 't, 'f> {
     /// Returns [`None`] when the variable name is not found in the [`ParseState`].
     ///
     /// # Panics
-    ///
-    /// Panics when called under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[must_use]
     pub fn find_module(&self, name: &str) -> Option<NonZeroUsize> {
         self.imports
@@ -247,7 +225,6 @@ pub struct ParseSettings {
     /// Current position.
     pub pos: Position,
     /// Maximum levels of expression nesting (0 for unlimited).
-    #[cfg(not(feature = "unchecked"))]
     pub max_expr_depth: usize,
 }
 
@@ -267,7 +244,6 @@ impl ParseSettings {
     /// Create a new `ParseSettings` with one higher expression level.
     #[inline]
     pub fn level_up(&self) -> ParseResult<Self> {
-        #[cfg(not(feature = "unchecked"))]
         if self.max_expr_depth > 0 && self.level >= self.max_expr_depth {
             return Err(PERR::ExprTooDeep.into_err(self.pos));
         }
@@ -287,7 +263,6 @@ impl ParseSettings {
 }
 
 /// Make an anonymous function.
-#[cfg(not(feature = "no_function"))]
 #[inline]
 #[must_use]
 pub fn make_anonymous_fn(hash: u64) -> crate::Identifier {
@@ -299,7 +274,6 @@ pub fn make_anonymous_fn(hash: u64) -> crate::Identifier {
 }
 
 /// Is this function an anonymous function?
-#[cfg(not(feature = "no_function"))]
 #[inline(always)]
 #[must_use]
 pub fn is_anonymous_fn(fn_name: &str) -> bool {
@@ -313,7 +287,6 @@ impl Expr {
             Self::Unit(..) => "()",
             Self::DynamicConstant(ref v, ..) if !v.is_bool() => v.type_name(),
             Self::IntegerConstant(..) => "a number",
-            #[cfg(not(feature = "no_float"))]
             Self::FloatConstant(..) => "a floating-point number",
             Self::CharConstant(..) => "a character",
             Self::StringConstant(..) => "a string",
@@ -334,7 +307,6 @@ impl Expr {
             Self::Unit(..) => "()",
             Self::BoolConstant(..) => "a boolean",
             Self::IntegerConstant(..) => "a number",
-            #[cfg(not(feature = "no_float"))]
             Self::FloatConstant(..) => "a floating-point number",
             Self::CharConstant(..) => "a character",
             Self::Map(..) => "an object map",
@@ -404,7 +376,6 @@ fn match_token(input: &mut TokenStream, token: &Token) -> (bool, Position) {
 }
 
 /// Process a block comment such that it indents properly relative to the start token.
-#[cfg(not(feature = "no_function"))]
 #[cfg(feature = "metadata")]
 #[inline]
 fn unindent_block_comment(comment: String, pos: usize) -> String {
@@ -456,7 +427,6 @@ fn parse_var_name(input: &mut TokenStream) -> ParseResult<(SmartString, Position
 /// # Panics
 ///
 /// Panics if the expression is not a combo chain.
-#[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
 fn optimize_combo_chain(expr: &mut Expr) {
     #[allow(clippy::type_complexity)]
     let (mut x, x_options, x_pos, mut root, mut root_options, root_pos, make_sub, make_root): (
@@ -469,16 +439,12 @@ fn optimize_combo_chain(expr: &mut Expr) {
         fn(_, _, _) -> Expr,
         fn(_, _, _) -> Expr,
     ) = match expr.take() {
-        #[cfg(not(feature = "no_index"))]
         Expr::Index(mut x, opt, pos) => match x.lhs.take() {
             Expr::Index(x2, opt2, pos2) => (x, opt, pos, x2, opt2, pos2, Expr::Index, Expr::Index),
-            #[cfg(not(feature = "no_object"))]
             Expr::Dot(x2, opt2, pos2) => (x, opt, pos, x2, opt2, pos2, Expr::Index, Expr::Dot),
             _ => unreachable!("combo chain expected"),
         },
-        #[cfg(not(feature = "no_object"))]
         Expr::Dot(mut x, opt, pos) => match x.lhs.take() {
-            #[cfg(not(feature = "no_index"))]
             Expr::Index(x2, opt2, pos2) => (x, opt, pos, x2, opt2, pos2, Expr::Dot, Expr::Index),
             Expr::Dot(x2, opt2, pos2) => (x, opt, pos, x2, opt2, pos2, Expr::Dot, Expr::Dot),
             _ => unreachable!("combo chain expected"),
@@ -510,7 +476,6 @@ fn optimize_combo_chain(expr: &mut Expr) {
                 tail = x.as_mut();
                 tail_options = options2;
             }
-            #[cfg(not(feature = "no_object"))]
             Expr::Dot(ref mut x, ref mut options2, ..) => {
                 tail = x.as_mut();
                 tail_options = options2;
@@ -530,7 +495,6 @@ fn optimize_combo_chain(expr: &mut Expr) {
 
 /// The one `trait` item `source` declares: a trait a facade lets script
 /// types implement (iced's `component::Component`).
-#[cfg(not(feature = "no_function"))]
 pub(crate) fn parse_trait(source: &str) -> Option<crate::item::Trait> {
     let (items, _) = item::parse(&Engine::new_raw(), source).ok()?;
     match <[_; 1]>::try_from(items.into_vec()).ok()? {
@@ -594,12 +558,8 @@ impl Engine {
     ) -> (Option<NonZeroUsize>, bool) {
         let (index, hit_barrier) = state.find_var(name);
 
-        #[cfg(not(feature = "no_function"))]
         let is_func_name = state.lib.values().any(|f| f.name == name);
-        #[cfg(feature = "no_function")]
-        let is_func_name = false;
 
-        #[cfg(not(feature = "no_closure"))]
         if state.allow_capture {
             if !is_func_name && index == 0 && !state.external_vars.iter().any(|v| v.name == name) {
                 let name = self.get_interned_string(name);
@@ -616,12 +576,10 @@ impl Engine {
 
     /// Convert a [`Variable`][Expr::Variable] into a [`Property`][Expr::Property].
     /// All other variants are untouched.
-    #[cfg(not(feature = "no_object"))]
     #[inline]
     #[must_use]
     fn convert_expr_into_property(&self, expr: Expr) -> Expr {
         match expr {
-            #[cfg(not(feature = "no_module"))]
             Expr::Variable(x, ..) if !x.2.is_empty() => unreachable!("qualified property"),
             Expr::Variable(x, .., pos) => {
                 let ident = x.1.clone();
@@ -647,7 +605,7 @@ impl Engine {
         id: ImmutableString,
         no_args: bool,
         capture_parent_scope: bool,
-        #[cfg(not(feature = "no_module"))] mut namespace: crate::ast::Namespace,
+        mut namespace: crate::ast::Namespace,
     ) -> ParseResult<Expr> {
         let (token, token_pos) = if no_args {
             &(Token::RightParen, Position::NONE)
@@ -674,7 +632,6 @@ impl Engine {
                     eat_token(state.input, &Token::RightParen);
                 }
 
-                #[cfg(not(feature = "no_module"))]
                 let hash = if namespace.is_empty() {
                     calc_fn_hash(None, &id, 0)
                 } else {
@@ -682,8 +639,6 @@ impl Engine {
                     let index = state.find_module(root);
                     let is_global = false;
 
-                    #[cfg(not(feature = "no_function"))]
-                    #[cfg(not(feature = "no_module"))]
                     let is_global = is_global || root == crate::engine::KEYWORD_GLOBAL;
 
                     if settings.has_option(LangOptions::STRICT_VAR)
@@ -701,8 +656,6 @@ impl Engine {
 
                     calc_fn_hash(namespace.path.iter().map(Ident::as_str), &id, 0)
                 };
-                #[cfg(feature = "no_module")]
-                let hash = calc_fn_hash(None, &id, 0);
 
                 let hashes = if is_valid_function_name(&id) {
                     FnCallHashes::from_hash(hash)
@@ -716,7 +669,6 @@ impl Engine {
                     name: self.get_interned_string(id),
                     capture_parent_scope,
                     op_token: None,
-                    #[cfg(not(feature = "no_module"))]
                     namespace,
                     hashes,
                     args,
@@ -741,18 +693,13 @@ impl Engine {
                 (Token::RightParen, ..) => {
                     eat_token(state.input, &Token::RightParen);
 
-                    #[cfg(not(feature = "no_module"))]
                     let hash = if namespace.is_empty() {
                         calc_fn_hash(None, &id, args.len())
                     } else {
                         let root = namespace.root();
                         let index = state.find_module(root);
 
-                        #[cfg(not(feature = "no_function"))]
-                        #[cfg(not(feature = "no_module"))]
                         let is_global = root == crate::engine::KEYWORD_GLOBAL;
-                        #[cfg(any(feature = "no_function", feature = "no_module"))]
-                        let is_global = false;
 
                         if settings.has_option(LangOptions::STRICT_VAR)
                             && index.is_none()
@@ -769,8 +716,6 @@ impl Engine {
 
                         calc_fn_hash(namespace.path.iter().map(Ident::as_str), &id, args.len())
                     };
-                    #[cfg(feature = "no_module")]
-                    let hash = calc_fn_hash(None, &id, args.len());
 
                     let hashes = if is_valid_function_name(&id) {
                         FnCallHashes::from_hash(hash)
@@ -784,7 +729,6 @@ impl Engine {
                         name: self.get_interned_string(id),
                         capture_parent_scope,
                         op_token: None,
-                        #[cfg(not(feature = "no_module"))]
                         namespace,
                         hashes,
                         args,
@@ -819,7 +763,6 @@ impl Engine {
 
     /// Parse an indexing chain.
     /// Indexing binds to the right, so this call parses all possible levels of indexing following in the input.
-    #[cfg(not(feature = "no_index"))]
     fn parse_index_chain(
         &self,
         state: &mut ParseState,
@@ -843,7 +786,6 @@ impl Engine {
                     Expr::StringConstant(..) | Expr::InterpolatedString(..) => Ok(()),
 
                     // lhs[float]
-                    #[cfg(not(feature = "no_float"))]
                     Expr::FloatConstant(..) => Err(PERR::MalformedIndexExpr(
                         "Object map expects string index, not a float".into(),
                     )
@@ -883,7 +825,6 @@ impl Engine {
                         .into_err(idx_expr.start_position()))
                     }
                     // lhs[float]
-                    #[cfg(not(feature = "no_float"))]
                     Expr::FloatConstant(..) => Err(PERR::MalformedIndexExpr(
                         "Array, string or bit-field expects integer index, not a float".into(),
                     )
@@ -964,7 +905,6 @@ impl Engine {
     }
 
     /// Parse an array literal.
-    #[cfg(not(feature = "no_index"))]
     fn parse_array_literal(
         &self,
         state: &mut ParseState,
@@ -978,7 +918,6 @@ impl Engine {
         loop {
             const MISSING_RBRACKET: &str = "to end this array literal";
 
-            #[cfg(not(feature = "unchecked"))]
             if self.max_array_size() > 0 && array.len() >= self.max_array_size() {
                 return Err(PERR::LiteralTooLarge(
                     "Size of array literal".into(),
@@ -1031,7 +970,6 @@ impl Engine {
     }
 
     /// Parse a map literal.
-    #[cfg(not(feature = "no_object"))]
     fn parse_map_literal(
         &self,
         state: &mut ParseState,
@@ -1108,7 +1046,6 @@ impl Engine {
                 }
             }
 
-            #[cfg(not(feature = "unchecked"))]
             if self.max_map_size() > 0 && map.len() >= self.max_map_size() {
                 return Err(PERR::LiteralTooLarge(
                     "Number of properties in object map literal".into(),
@@ -1318,7 +1255,6 @@ impl Engine {
                         // Check for numeric values after ranges
                         let forbidden = match value {
                             Dynamic(Union::Int(..)) => true,
-                            #[cfg(not(feature = "no_float"))]
                             Dynamic(Union::Float(..)) => true,
                             #[cfg(feature = "decimal")]
                             Dynamic(Union::Decimal(..)) => true,
@@ -1551,7 +1487,6 @@ impl Engine {
                 token => unreachable!("token is {:?}", token),
             },
             Token::ExclusiveRange | Token::InclusiveRange => Expr::IntegerConstant(0, settings.pos),
-            #[cfg(not(feature = "no_float"))]
             Token::FloatConstant(x) => {
                 let x = x.0;
                 state.input.next();
@@ -1620,15 +1555,12 @@ impl Engine {
             )),
 
             // | ...
-            #[cfg(not(feature = "no_function"))]
-            #[cfg(not(feature = "unchecked"))]
             Token::Pipe | Token::Or
                 if settings.has_option(LangOptions::ANON_FN)
                     && state.lib.len() >= self.max_functions() =>
             {
                 return Err(PERR::TooManyFunctions.into_err(settings.pos));
             }
-            #[cfg(not(feature = "no_function"))]
             Token::Pipe | Token::Or if settings.has_option(LangOptions::ANON_FN) => {
                 self.parse_anon_fn(state, settings, false)?
             }
@@ -1698,15 +1630,12 @@ impl Engine {
             }
 
             // Array literal
-            #[cfg(not(feature = "no_index"))]
             Token::LeftBracket => self.parse_array_literal(state, settings.level_up()?)?,
 
             // Map literal
-            #[cfg(not(feature = "no_object"))]
             Token::MapStart => self.parse_map_literal(state, settings.level_up()?)?,
 
             // Custom syntax.
-            #[cfg(not(feature = "no_custom_syntax"))]
             Token::Custom(key) | Token::Reserved(key) | Token::Identifier(key)
                 if self.custom_syntax.contains_key(&**key) =>
             {
@@ -1717,7 +1646,6 @@ impl Engine {
 
             // Identifier
             Token::Identifier(..) => {
-                #[cfg(not(feature = "no_module"))]
                 let ns = crate::ast::Namespace::NONE;
 
                 let s = match state.input.next().unwrap() {
@@ -1732,16 +1660,12 @@ impl Engine {
                         state.allow_capture = true;
 
                         Expr::Variable(
-                            #[cfg(not(feature = "no_module"))]
                             (None, self.get_interned_string(*s), ns, 0).into(),
-                            #[cfg(feature = "no_module")]
-                            (None, self.get_interned_string(*s)).into(),
                             None,
                             settings.pos,
                         )
                     }
                     // Namespace qualification
-                    #[cfg(not(feature = "no_module"))]
                     (token @ Token::DoubleColon, pos) => {
                         if options.intersects(ChainingFlags::DISALLOW_NAMESPACES) {
                             return Err(LexError::ImproperSymbol(
@@ -1779,21 +1703,13 @@ impl Engine {
                             .and_then(NonZeroU8::new);
                         let name = self.get_interned_string(*s);
 
-                        Expr::Variable(
-                            #[cfg(not(feature = "no_module"))]
-                            (index, name, ns, 0).into(),
-                            #[cfg(feature = "no_module")]
-                            (index, name).into(),
-                            short_index,
-                            settings.pos,
-                        )
+                        Expr::Variable((index, name, ns, 0).into(), short_index, settings.pos)
                     }
                 }
             }
 
             // Reserved keyword or symbol
             Token::Reserved(..) => {
-                #[cfg(not(feature = "no_module"))]
                 let ns = crate::ast::Namespace::NONE;
 
                 let s = match state.input.next().unwrap() {
@@ -1807,16 +1723,12 @@ impl Engine {
                         if is_reserved_keyword_or_symbol(&s).1 =>
                     {
                         Expr::Variable(
-                            #[cfg(not(feature = "no_module"))]
                             (None, self.get_interned_string(*s), ns, 0).into(),
-                            #[cfg(feature = "no_module")]
-                            (None, self.get_interned_string(*s)).into(),
                             None,
                             settings.pos,
                         )
                     }
                     // Access to `this` as a variable
-                    #[cfg(not(feature = "no_function"))]
                     _ if *s == crate::engine::KEYWORD_THIS => {
                         // OK within a function scope
                         if settings.has_flag(ParseSettingFlags::FN_SCOPE) {
@@ -1874,7 +1786,6 @@ impl Engine {
 
             lhs = match (lhs, tail_token) {
                 // Qualified function call with !
-                #[cfg(not(feature = "no_module"))]
                 (Expr::Variable(x, ..), Token::Bang) if !x.2.is_empty() => {
                     return match state.input.peek().unwrap() {
                         (Token::LeftParen | Token::Unit, ..) => {
@@ -1902,45 +1813,22 @@ impl Engine {
 
                     let no_args = state.input.next().unwrap().0 == Token::Unit;
 
-                    #[cfg(not(feature = "no_module"))]
                     let (_, name, ns, ..) = *x;
-                    #[cfg(feature = "no_module")]
-                    let (_, name) = *x;
 
                     settings.pos = pos;
 
-                    self.parse_fn_call(
-                        state,
-                        settings,
-                        name,
-                        no_args,
-                        true,
-                        #[cfg(not(feature = "no_module"))]
-                        ns,
-                    )?
+                    self.parse_fn_call(state, settings, name, no_args, true, ns)?
                 }
                 // Function call
                 (Expr::Variable(x, .., pos), t @ (Token::LeftParen | Token::Unit)) => {
-                    #[cfg(not(feature = "no_module"))]
                     let (_, name, ns, ..) = *x;
-                    #[cfg(feature = "no_module")]
-                    let (_, name) = *x;
 
                     let no_args = t == Token::Unit;
                     settings.pos = pos;
 
-                    self.parse_fn_call(
-                        state,
-                        settings,
-                        name,
-                        no_args,
-                        false,
-                        #[cfg(not(feature = "no_module"))]
-                        ns,
-                    )?
+                    self.parse_fn_call(state, settings, name, no_args, false, ns)?
                 }
                 // Disallowed module separator
-                #[cfg(not(feature = "no_module"))]
                 (_, token @ Token::DoubleColon)
                     if _options.intersects(ChainingFlags::DISALLOW_NAMESPACES) =>
                 {
@@ -1951,7 +1839,6 @@ impl Engine {
                     .into_err(tail_pos))
                 }
                 // module access
-                #[cfg(not(feature = "no_module"))]
                 (Expr::Variable(x, .., pos), Token::DoubleColon) => {
                     let (id2, pos2) = parse_var_name(state.input)?;
                     let (_, name, mut namespace, ..) = *x;
@@ -1964,7 +1851,6 @@ impl Engine {
                     Expr::Variable((None, var_name, namespace, 0).into(), None, pos2)
                 }
                 // Indexing
-                #[cfg(not(feature = "no_index"))]
                 (expr, token @ (Token::LeftBracket | Token::QuestionBracket)) => {
                     let opt = match token {
                         Token::LeftBracket => ASTFlags::empty(),
@@ -1975,7 +1861,6 @@ impl Engine {
                     self.parse_index_chain(state, settings, expr, opt, true)?
                 }
                 // Property access
-                #[cfg(not(feature = "no_object"))]
                 (expr, op @ (Token::Period | Token::Elvis)) => {
                     // Expression after dot must start with an identifier
                     match state.input.peek().unwrap() {
@@ -2011,14 +1896,12 @@ impl Engine {
         }
 
         // Optimize chain where the root expression is another chain
-        #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
         if matches!(lhs, Expr::Index(ref x, ..) | Expr::Dot(ref x, ..) if matches!(x.lhs, Expr::Index(..) | Expr::Dot(..)))
         {
             optimize_combo_chain(&mut lhs);
         }
 
         // Cache the hash key for namespace-qualified variables
-        #[cfg(not(feature = "no_module"))]
         let namespaced_variable = match lhs {
             Expr::Variable(ref mut x, ..) if !x.2.is_empty() => Some(&mut **x),
             Expr::Index(ref mut x, ..) | Expr::Dot(ref mut x, ..) => match x.lhs {
@@ -2028,20 +1911,16 @@ impl Engine {
             _ => None,
         };
 
-        #[cfg(not(feature = "no_module"))]
         if let Some((.., name, namespace, hash)) = namespaced_variable
             && !namespace.is_empty()
         {
             *hash = crate::calc_var_hash(namespace.path.iter().map(Ident::as_str), name);
 
-            #[cfg(not(feature = "no_module"))]
             {
                 let root = namespace.root();
                 let index = state.find_module(root);
                 let is_global = false;
 
-                #[cfg(not(feature = "no_function"))]
-                #[cfg(not(feature = "no_module"))]
                 let is_global = is_global || root == crate::engine::KEYWORD_GLOBAL;
 
                 if settings.has_option(LangOptions::STRICT_VAR)
@@ -2087,21 +1966,16 @@ impl Engine {
                         .checked_neg()
                         .map(|i| Expr::IntegerConstant(i, pos))
                         .or_else(|| {
-                            #[cfg(not(feature = "no_float"))]
                             #[allow(clippy::cast_precision_loss)]
                             return Some(Expr::FloatConstant((-(num as crate::FLOAT)).into(), pos));
-                            #[cfg(feature = "no_float")]
-                            return None;
                         })
                         .ok_or_else(|| LexError::MalformedNumber(format!("-{num}")).into_err(pos)),
 
                     // Negative float
-                    #[cfg(not(feature = "no_float"))]
                     Expr::FloatConstant(x, ..) => Ok(Expr::FloatConstant((-(*x)).into(), pos)),
 
                     // Call negative function
                     expr => Ok(FnCallExpr {
-                        #[cfg(not(feature = "no_module"))]
                         namespace: crate::ast::Namespace::NONE,
                         name: self.get_interned_string("-"),
                         hashes: FnCallHashes::from_native_only(calc_fn_hash(None, "-", 1)),
@@ -2119,12 +1993,10 @@ impl Engine {
 
                 match self.parse_unary(state, settings.level_up()?)? {
                     expr @ Expr::IntegerConstant(..) => Ok(expr),
-                    #[cfg(not(feature = "no_float"))]
                     expr @ Expr::FloatConstant(..) => Ok(expr),
 
                     // Call plus function
                     expr => Ok(FnCallExpr {
-                        #[cfg(not(feature = "no_module"))]
                         namespace: crate::ast::Namespace::NONE,
                         name: self.get_interned_string("+"),
                         hashes: FnCallHashes::from_native_only(calc_fn_hash(None, "+", 1)),
@@ -2141,7 +2013,6 @@ impl Engine {
                 let pos = eat_token(state.input, &Token::Bang);
 
                 Ok(FnCallExpr {
-                    #[cfg(not(feature = "no_module"))]
                     namespace: crate::ast::Namespace::NONE,
                     name: self.get_interned_string("!"),
                     hashes: FnCallHashes::from_native_only(calc_fn_hash(None, "!", 1)),
@@ -2272,7 +2143,6 @@ impl Engine {
     }
 
     /// Make a dot expression.
-    #[cfg(not(feature = "no_object"))]
     fn make_dot_expr(
         &self,
         lhs: Expr,
@@ -2291,7 +2161,6 @@ impl Engine {
                 Ok(Expr::Index(x, ASTFlags::empty(), pos))
             }
             // lhs.module::id - syntax error
-            #[cfg(not(feature = "no_module"))]
             (.., Expr::Variable(x, ..)) if !x.2.is_empty() => unreachable!("lhs.ns::id"),
             // lhs.id
             (lhs, var_expr @ Expr::Variable(..)) => {
@@ -2305,7 +2174,6 @@ impl Engine {
                 op_pos,
             )),
             // lhs.nnn::func(...) - syntax error
-            #[cfg(not(feature = "no_module"))]
             (.., Expr::FnCall(f, ..)) if f.is_qualified() => unreachable!("lhs.ns::func()"),
             // lhs.Fn() or lhs.eval()
             (.., Expr::FnCall(f, func_pos))
@@ -2333,16 +2201,11 @@ impl Engine {
                 // Recalculate hash
                 let args_len = f.args.len() + 1;
                 f.hashes = if is_valid_function_name(&f.name) {
-                    #[cfg(not(feature = "no_function"))]
                     {
                         FnCallHashes::from_script_and_native(
                             calc_fn_hash(None, &f.name, args_len - 1),
                             calc_fn_hash(None, &f.name, args_len),
                         )
-                    }
-                    #[cfg(feature = "no_function")]
-                    {
-                        FnCallHashes::from_native_only(calc_fn_hash(None, &f.name, args_len))
                     }
                 } else {
                     FnCallHashes::from_native_only(calc_fn_hash(None, &f.name, args_len))
@@ -2361,10 +2224,8 @@ impl Engine {
 
                 match x.lhs {
                     // lhs.module::id.dot_rhs or lhs.module::id[idx_rhs] - syntax error
-                    #[cfg(not(feature = "no_module"))]
                     Expr::Variable(x, ..) if !x.2.is_empty() => unreachable!("lhs.ns::id..."),
                     // lhs.module::func().dot_rhs or lhs.module::func()[idx_rhs] - syntax error
-                    #[cfg(not(feature = "no_module"))]
                     Expr::FnCall(f, ..) if f.is_qualified() => {
                         unreachable!("lhs.ns::func()...")
                     }
@@ -2388,18 +2249,11 @@ impl Engine {
                         // Recalculate hash
                         let args_len = f.args.len() + 1;
                         f.hashes = if is_valid_function_name(&f.name) {
-                            #[cfg(not(feature = "no_function"))]
                             {
                                 FnCallHashes::from_script_and_native(
                                     calc_fn_hash(None, &f.name, args_len - 1),
                                     calc_fn_hash(None, &f.name, args_len),
                                 )
-                            }
-                            #[cfg(feature = "no_function")]
-                            {
-                                FnCallHashes::from_native_only(calc_fn_hash(
-                                    None, &f.name, args_len,
-                                ))
                             }
                         } else {
                             FnCallHashes::from_native_only(calc_fn_hash(None, &f.name, args_len))
@@ -2446,7 +2300,6 @@ impl Engine {
             }
 
             let precedence = match current_op {
-                #[cfg(not(feature = "no_custom_syntax"))]
                 Token::Custom(c) => self
                     .custom_keywords
                     .get(&**c)
@@ -2503,7 +2356,6 @@ impl Engine {
 
             let (next_op, next_pos) = state.input.peek().unwrap();
             let next_precedence = match next_op {
-                #[cfg(not(feature = "no_custom_syntax"))]
                 Token::Custom(c) => self
                     .custom_keywords
                     .get(&**c)
@@ -2536,7 +2388,6 @@ impl Engine {
             let native_only = !is_valid_function_name(&op);
 
             let mut op_base = FnCallExpr {
-                #[cfg(not(feature = "no_module"))]
                 namespace: crate::ast::Namespace::NONE,
                 name: self.get_interned_string(&op),
                 hashes: FnCallHashes::from_native_only(hash),
@@ -2618,7 +2469,6 @@ impl Engine {
                     } else {
                         // Put a `!` call in front
                         let not_base = FnCallExpr {
-                            #[cfg(not(feature = "no_module"))]
                             namespace: crate::ast::Namespace::NONE,
                             name: self.get_interned_string(OP_NOT),
                             hashes: FnCallHashes::from_native_only(calc_fn_hash(None, OP_NOT, 1)),
@@ -2631,7 +2481,6 @@ impl Engine {
                 }
                 Token::ExclusiveRange | Token::InclusiveRange => op_base.into_fn_call_expr(pos),
 
-                #[cfg(not(feature = "no_custom_syntax"))]
                 Token::Custom(s) if self.custom_keywords.contains_key(&*s) => {
                     op_base.hashes = if native_only {
                         FnCallHashes::from_native_only(calc_fn_hash(None, &s, 2))
@@ -2647,7 +2496,6 @@ impl Engine {
     }
 
     /// Parse a custom syntax.
-    #[cfg(not(feature = "no_custom_syntax"))]
     fn parse_custom_syntax(
         &self,
         state: &mut ParseState,
@@ -2737,10 +2585,7 @@ impl Engine {
                     tokens.push(self.get_interned_string(CUSTOM_SYNTAX_MARKER_IDENT));
 
                     inputs.push(Expr::Variable(
-                        #[cfg(not(feature = "no_module"))]
                         (None, name, crate::ast::Namespace::NONE, 0).into(),
-                        #[cfg(feature = "no_module")]
-                        (None, name).into(),
                         None,
                         pos,
                     ));
@@ -2801,7 +2646,6 @@ impl Engine {
                     }
                     stmt => unreachable!("Stmt::Block expected but gets {:?}", stmt),
                 },
-                #[cfg(not(feature = "no_function"))]
                 CUSTOM_SYNTAX_MARKER_FUNC => {
                     let skip = match state.input.peek().unwrap() {
                         (Token::Or | Token::Pipe, _) => false,
@@ -2841,7 +2685,6 @@ impl Engine {
                         )
                     }
                 },
-                #[cfg(not(feature = "no_float"))]
                 CUSTOM_SYNTAX_MARKER_FLOAT => match state.input.next().unwrap() {
                     (Token::FloatConstant(f), pos) => {
                         inputs.push(Expr::FloatConstant(f.0, pos));
@@ -2900,7 +2743,6 @@ impl Engine {
             KEYWORD_SEMICOLON | KEYWORD_CLOSE_BRACE
         );
         // It is self-terminating if the last symbol is a block
-        #[cfg(not(feature = "no_function"))]
         let self_terminated = required_token == CUSTOM_SYNTAX_MARKER_FUNC || self_terminated;
 
         Ok(Expr::Custom(
@@ -3187,7 +3029,6 @@ impl Engine {
         let existing = if !hit_barrier && existing > 0 {
             match state.stack.len() - existing {
                 // Variable has been aliased
-                #[cfg(not(feature = "no_module"))]
                 offset if !state.stack.get_entry_by_index(offset).2.is_empty() => None,
                 // Defined in parent block
                 offset if offset < state.frame_pointer => None,
@@ -3205,7 +3046,6 @@ impl Engine {
             None
         };
 
-        #[cfg(not(feature = "no_module"))]
         if is_export {
             state
                 .stack
@@ -3223,7 +3063,6 @@ impl Engine {
     }
 
     /// Parse an import statement.
-    #[cfg(not(feature = "no_module"))]
     fn parse_import(&self, state: &mut ParseState, settings: ParseSettings) -> ParseResult<Stmt> {
         // import ...
         let settings = settings.level_up_with_position(eat_token(state.input, &Token::Import))?;
@@ -3252,7 +3091,6 @@ impl Engine {
     }
 
     /// Parse an export statement.
-    #[cfg(not(feature = "no_module"))]
     fn parse_export(
         &self,
         state: &mut ParseState,
@@ -3356,7 +3194,6 @@ impl Engine {
         let prev_frame_pointer = state.frame_pointer;
         state.frame_pointer = state.stack.len();
 
-        #[cfg(not(feature = "no_module"))]
         let orig_imports_len = state.imports.len();
 
         let end_pos = loop {
@@ -3417,7 +3254,6 @@ impl Engine {
         state.stack.rewind(state.frame_pointer);
         state.frame_pointer = prev_frame_pointer;
 
-        #[cfg(not(feature = "no_module"))]
         state.imports.truncate(orig_imports_len);
 
         Ok(Stmt::Block(
@@ -3457,7 +3293,6 @@ impl Engine {
     fn parse_stmt(&self, state: &mut ParseState, mut settings: ParseSettings) -> ParseResult<Stmt> {
         use AccessMode::{ReadOnly, ReadWrite};
 
-        #[cfg(not(feature = "no_function"))]
         #[cfg(feature = "metadata")]
         let comments = {
             let mut comments = StaticVec::<SmartString>::new_const();
@@ -3533,7 +3368,6 @@ impl Engine {
             Token::LeftBrace => Ok(self.parse_block(state, settings.level_up()?, false)?),
 
             // fn | private fn...
-            #[cfg(not(feature = "no_function"))]
             Token::Fn | Token::Private => {
                 let access = if matches!(token, Token::Private) {
                     eat_token(state.input, &Token::Private);
@@ -3546,7 +3380,6 @@ impl Engine {
                     (Token::Fn, _) if !settings.has_flag(ParseSettingFlags::GLOBAL_LEVEL) => {
                         Err(PERR::WrongFnDefinition.into_err(token_pos))
                     }
-                    #[cfg(not(feature = "unchecked"))]
                     (Token::Fn, pos) if state.lib.len() >= self.max_functions() => {
                         Err(PERR::TooManyFunctions.into_err(pos))
                     }
@@ -3559,7 +3392,6 @@ impl Engine {
                             state.lib,
                         );
 
-                        #[cfg(not(feature = "no_module"))]
                         {
                             // Do not allow storing an index to a globally-imported module
                             // just in case the function is separated from this `AST`.
@@ -3583,7 +3415,6 @@ impl Engine {
                             level: 0,
                             options,
                             pos,
-                            #[cfg(not(feature = "unchecked"))]
                             max_expr_depth: self.max_function_expr_depth(),
                         };
 
@@ -3597,7 +3428,6 @@ impl Engine {
 
                         let hash = calc_fn_hash(None, &f.name, f.params.len());
 
-                        #[cfg(not(feature = "no_object"))]
                         let hash = f
                             .this_type
                             .as_ref()
@@ -3696,15 +3526,12 @@ impl Engine {
             Token::Let => self.parse_let(state, settings.level_up()?, ReadWrite, false),
             Token::Const => self.parse_let(state, settings.level_up()?, ReadOnly, false),
 
-            #[cfg(not(feature = "no_module"))]
             Token::Import => self.parse_import(state, settings.level_up()?),
 
-            #[cfg(not(feature = "no_module"))]
             Token::Export if !settings.has_flag(ParseSettingFlags::GLOBAL_LEVEL) => {
                 Err(PERR::WrongExport.into_err(token_pos))
             }
 
-            #[cfg(not(feature = "no_module"))]
             Token::Export => self.parse_export(state, settings.level_up()?),
 
             _ => self.parse_expr_stmt(state, settings.level_up()?),
@@ -3766,10 +3593,7 @@ impl Engine {
             state.stack.pop();
 
             Expr::Variable(
-                #[cfg(not(feature = "no_module"))]
                 (None, catch_var.name, <_>::default(), 0).into(),
-                #[cfg(feature = "no_module")]
-                (None, catch_var.name).into(),
                 None,
                 catch_var.pos,
             )
@@ -3782,7 +3606,6 @@ impl Engine {
     }
 
     /// Parse a function definition.
-    #[cfg(not(feature = "no_function"))]
     fn parse_fn(
         &self,
         state: &mut ParseState,
@@ -3795,7 +3618,6 @@ impl Engine {
         let (token, pos) = state.input.next().unwrap();
 
         // Parse type for `this` pointer
-        #[cfg(not(feature = "no_object"))]
         let ((token, pos), this_type) = {
             let (next_token, next_pos) = state.input.peek().unwrap();
 
@@ -3804,7 +3626,6 @@ impl Engine {
                     eat_token(state.input, &Token::Period);
                     let s = match s.as_str() {
                         "int" => self.get_interned_string(std::any::type_name::<crate::INT>()),
-                        #[cfg(not(feature = "no_float"))]
                         "float" => self.get_interned_string(std::any::type_name::<crate::FLOAT>()),
                         _ => self.get_interned_string(*s),
                     };
@@ -3821,7 +3642,6 @@ impl Engine {
                     eat_token(state.input, &Token::Period);
                     let s = match s.as_str() {
                         "int" => self.get_interned_string(std::any::type_name::<crate::INT>()),
-                        #[cfg(not(feature = "no_float"))]
                         "float" => self.get_interned_string(std::any::type_name::<crate::FLOAT>()),
                         _ => self.get_interned_string(*s),
                     };
@@ -3832,7 +3652,6 @@ impl Engine {
         };
 
         let name = match token {
-            #[cfg(not(feature = "no_custom_syntax"))]
             Token::Custom(s) if is_valid_function_name(&s) => *s,
             Token::Identifier(s) if is_valid_function_name(&s) => *s,
             Token::Reserved(s) => return Err(PERR::Reserved(s.to_string()).into_err(pos)),
@@ -3910,7 +3729,6 @@ impl Engine {
         Ok(ScriptFuncDef {
             name: self.get_interned_string(name),
             access,
-            #[cfg(not(feature = "no_object"))]
             this_type,
             params,
             body,
@@ -3921,8 +3739,6 @@ impl Engine {
     }
 
     /// Creates a curried expression from a list of external variables
-    #[cfg(not(feature = "no_function"))]
-    #[cfg(not(feature = "no_closure"))]
     fn make_curry_from_externals(
         &self,
         state: &mut ParseState,
@@ -3951,15 +3767,11 @@ impl Engine {
                         Some(n) if !is_func => u8::try_from(n.get()).ok().and_then(NonZeroU8::new),
                         _ => None,
                     };
-                    #[cfg(not(feature = "no_module"))]
-                    return Expr::Variable((index, name, <_>::default(), 0).into(), idx, pos);
-                    #[cfg(feature = "no_module")]
-                    return Expr::Variable((index, name).into(), idx, pos);
+                    Expr::Variable((index, name, <_>::default(), 0).into(), idx, pos)
                 }),
         );
 
         let expr = FnCallExpr {
-            #[cfg(not(feature = "no_module"))]
             namespace: crate::ast::Namespace::NONE,
             name: self.get_interned_string(crate::engine::KEYWORD_FN_PTR_CURRY),
             hashes: FnCallHashes::from_native_only(calc_fn_hash(
@@ -3991,7 +3803,6 @@ impl Engine {
     }
 
     /// Parse an anonymous function definition.
-    #[cfg(not(feature = "no_function"))]
     fn parse_anon_fn(
         &self,
         state: &mut ParseState,
@@ -4007,7 +3818,6 @@ impl Engine {
             state.lib,
         );
 
-        #[cfg(not(feature = "no_module"))]
         {
             // Do not allow storing an index to a globally-imported module
             // just in case the function is separated from this `AST`.
@@ -4071,10 +3881,7 @@ impl Engine {
         }
 
         // Brand new options
-        #[cfg(not(feature = "no_closure"))]
         let options = self.options & !LangOptions::STRICT_VAR; // a capturing closure can access variables not defined locally, so turn off Strict Variables mode
-        #[cfg(feature = "no_closure")]
-        let options = self.options | (settings.options & LangOptions::STRICT_VAR);
 
         // Brand new flags, turn on function scope and closure scope
         let flags = ParseSettingFlags::FN_SCOPE
@@ -4096,7 +3903,6 @@ impl Engine {
 
         // External variables may need to be processed in a consistent order,
         // so extract them into a list.
-        #[cfg(not(feature = "no_closure"))]
         let (mut params, _externals) = {
             let externals = std::mem::take(&mut new_state.external_vars);
 
@@ -4105,11 +3911,6 @@ impl Engine {
 
             (params, externals)
         };
-        #[cfg(feature = "no_closure")]
-        let (mut params, _externals) = (
-            FnArgsVec::with_capacity(params_list.len()),
-            ThinVec::<Ident>::new(),
-        );
 
         let _ = new_state; // Make sure it doesn't leak into code below
 
@@ -4126,11 +3927,9 @@ impl Engine {
         let fn_def = Shared::new(ScriptFuncDef {
             name: fn_name.clone(),
             access: crate::FnAccess::Public,
-            #[cfg(not(feature = "no_object"))]
             this_type: None,
             params,
             body: body.into(),
-            #[cfg(not(feature = "no_function"))]
             #[cfg(feature = "metadata")]
             comments: <_>::default(),
             machine: None,
@@ -4140,7 +3939,6 @@ impl Engine {
         let fn_ptr = crate::FnPtr {
             name: fn_name,
             curry: ThinVec::new(),
-            #[cfg(not(feature = "no_function"))]
             env: None,
             typ: crate::types::fn_ptr::FnPtrType::Script(fn_def.clone()),
         };
@@ -4149,7 +3947,6 @@ impl Engine {
 
         // Finished with `new_state` here. Revert back to using `state`.
 
-        #[cfg(not(feature = "no_closure"))]
         for Ident { name, pos } in &_externals {
             let (index, is_func) = self.access_var(state, name, *pos);
 
@@ -4171,7 +3968,6 @@ impl Engine {
         let hash_script = calc_fn_hash(None, &fn_def.name, fn_def.params.len());
         state.lib.insert(hash_script, fn_def);
 
-        #[cfg(not(feature = "no_closure"))]
         let expr = self.make_curry_from_externals(state, expr, _externals, settings.pos);
 
         Ok(expr)
@@ -4182,7 +3978,7 @@ impl Engine {
         &self,
         mut state: ParseState,
         process_settings: impl FnOnce(&mut ParseSettings),
-        #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+        optimization_level: crate::OptimizationLevel,
     ) -> ParseResult<AST> {
         let options = self.options & !LangOptions::STMT_EXPR & !LangOptions::LOOP_EXPR;
 
@@ -4192,7 +3988,6 @@ impl Engine {
                 | ParseSettingFlags::DISALLOW_STATEMENTS_IN_BLOCKS,
             options,
             pos: Position::START,
-            #[cfg(not(feature = "unchecked"))]
             max_expr_depth: self.max_expr_depth(),
         };
         process_settings(&mut settings);
@@ -4208,21 +4003,12 @@ impl Engine {
         let mut statements = StmtBlockContainer::new_const();
         statements.push(Stmt::Expr(expr.into()));
 
-        #[cfg(not(feature = "no_optimize"))]
-        return Ok(self.optimize_into_ast(
+        Ok(self.optimize_into_ast(
             state.external_constants,
             statements,
-            #[cfg(not(feature = "no_function"))]
             state.lib.values().cloned().collect::<Vec<_>>(),
             optimization_level,
-        ));
-
-        #[cfg(feature = "no_optimize")]
-        return Ok(AST::new(
-            statements,
-            #[cfg(not(feature = "no_function"))]
-            crate::Module::from(state.lib.values().cloned()),
-        ));
+        ))
     }
 
     /// Parse the global level statements.
@@ -4238,7 +4024,6 @@ impl Engine {
             flags: ParseSettingFlags::GLOBAL_LEVEL,
             options: self.options,
             pos: Position::START,
-            #[cfg(not(feature = "unchecked"))]
             max_expr_depth: self.max_expr_depth(),
         };
         process_settings(&mut settings);
@@ -4279,10 +4064,7 @@ impl Engine {
             }
         }
 
-        #[cfg(not(feature = "no_function"))]
         let lib = state.lib.values().cloned().collect();
-        #[cfg(feature = "no_function")]
-        let lib = Vec::new();
 
         Ok((statements, lib))
     }
@@ -4292,28 +4074,15 @@ impl Engine {
     pub(crate) fn parse(
         &self,
         mut state: ParseState,
-        #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+        optimization_level: crate::OptimizationLevel,
     ) -> ParseResult<AST> {
         let (statements, _lib) = self.parse_global_level(&mut state, |_| {})?;
 
-        #[cfg(not(feature = "no_optimize"))]
-        return Ok(self.optimize_into_ast(
+        Ok(self.optimize_into_ast(
             state.external_constants,
             statements,
-            #[cfg(not(feature = "no_function"))]
             _lib,
             optimization_level,
-        ));
-
-        #[cfg(feature = "no_optimize")]
-        return Ok(AST::new(
-            statements,
-            #[cfg(not(feature = "no_function"))]
-            {
-                let mut new_lib = crate::Module::new();
-                new_lib.extend(_lib);
-                new_lib
-            },
-        ));
+        ))
     }
 }

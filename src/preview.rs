@@ -18,8 +18,6 @@ use crate::{application, capability, host, item, receiver, resolve, signature, t
 use crate::{ImmutableString, Span};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 pub(crate) const DEFAULT_WIDTH: u32 = 1024;
 pub(crate) const DEFAULT_HEIGHT: u32 = 768;
@@ -128,7 +126,6 @@ pub struct Definition {
 pub struct Fingerprint(Box<[Proof]>);
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "no_std", allow(dead_code))]
 pub(crate) enum PathTarget {
     Item(item::Key),
     Associated {

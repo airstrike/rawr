@@ -3,8 +3,6 @@
 use crate::host;
 use crate::host::runtime::type_ref::Type;
 use crate::{ImmutableString, Span};
-#[cfg(feature = "no_std")]
-use alloc::format;
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 

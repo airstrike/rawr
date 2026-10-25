@@ -62,7 +62,6 @@ qr_code = ["iced/qr_code"]
 selector = ["iced/selector"]
 svg = ["iced/svg"]
 grain = ["rawr/grain"]
-no_optimize = ["rawr/no_optimize"]
 profile-selection-diagnostic = ["rawr_import/canonical-selector-diagnostic"]
 
 [lib]

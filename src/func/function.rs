@@ -5,8 +5,6 @@ use crate::ast::{EncapsulatedEnviron, FnAccess};
 use crate::plugin::PluginFunc;
 use crate::Shared;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// _(internals)_ A type encapsulating a function callable by Rawr.
 /// Exported under the `internals` feature only.
@@ -51,7 +49,6 @@ pub enum RawrFunc {
         func: Shared<FnPlugin>,
     },
     /// A script-defined function.
-    #[cfg(not(feature = "no_function"))]
     Script {
         /// Shared reference to the [`ScriptFuncDef`][crate::ast::ScriptFuncDef] function definition.
         fn_def: Shared<crate::ast::ScriptFuncDef>,
@@ -70,7 +67,6 @@ impl fmt::Debug for RawrFunc {
             Self::Iterator { .. } => f.write_str("NativeIterator"),
             Self::Plugin { .. } => f.write_str("PluginFunction"),
 
-            #[cfg(not(feature = "no_function"))]
             Self::Script { fn_def, .. } => fmt::Debug::fmt(fn_def, f),
         }
     }
@@ -84,7 +80,6 @@ impl fmt::Display for RawrFunc {
             Self::Iterator { .. } => f.write_str("NativeIterator"),
             Self::Plugin { .. } => f.write_str("PluginFunction"),
 
-            #[cfg(not(feature = "no_function"))]
             Self::Script { fn_def, .. } => fmt::Display::fmt(fn_def, f),
         }
     }
@@ -102,7 +97,6 @@ impl RawrFunc {
 
             Self::Plugin { func, .. } => func.is_pure(),
 
-            #[cfg(not(feature = "no_function"))]
             Self::Script { .. } => false,
         }
     }
@@ -116,7 +110,6 @@ impl RawrFunc {
 
             Self::Plugin { func, .. } => func.is_method_call(),
 
-            #[cfg(not(feature = "no_function"))]
             Self::Script { .. } => false,
         }
     }
@@ -128,7 +121,6 @@ impl RawrFunc {
             Self::Iterator { .. } => true,
             Self::Pure { .. } | Self::Method { .. } | Self::Plugin { .. } => false,
 
-            #[cfg(not(feature = "no_function"))]
             Self::Script { .. } => false,
         }
     }
@@ -136,10 +128,6 @@ impl RawrFunc {
     #[inline]
     #[must_use]
     pub const fn is_script(&self) -> bool {
-        #[cfg(feature = "no_function")]
-        return false;
-
-        #[cfg(not(feature = "no_function"))]
         match self {
             Self::Script { .. } => true,
             Self::Pure { .. }
@@ -156,7 +144,6 @@ impl RawrFunc {
             Self::Plugin { .. } => true,
             Self::Pure { .. } | Self::Method { .. } | Self::Iterator { .. } => false,
 
-            #[cfg(not(feature = "no_function"))]
             Self::Script { .. } => false,
         }
     }
@@ -164,10 +151,6 @@ impl RawrFunc {
     #[inline]
     #[must_use]
     pub const fn is_native(&self) -> bool {
-        #[cfg(feature = "no_function")]
-        return true;
-
-        #[cfg(not(feature = "no_function"))]
         match self {
             Self::Pure { .. }
             | Self::Method { .. }
@@ -184,7 +167,6 @@ impl RawrFunc {
             Self::Pure { has_context, .. } | Self::Method { has_context, .. } => *has_context,
             Self::Plugin { func, .. } => func.has_context(),
             Self::Iterator { .. } => false,
-            #[cfg(not(feature = "no_function"))]
             Self::Script { .. } => false,
         }
     }
@@ -202,7 +184,6 @@ impl RawrFunc {
             Self::Plugin { func, .. } => func.is_volatile(),
 
             // Scripts are assumed to be volatile -- it can be calling volatile native functions.
-            #[cfg(not(feature = "no_function"))]
             Self::Script { .. } => true,
         }
     }
@@ -210,10 +191,6 @@ impl RawrFunc {
     #[inline]
     #[must_use]
     pub fn access(&self) -> FnAccess {
-        #[cfg(feature = "no_function")]
-        return FnAccess::Public;
-
-        #[cfg(not(feature = "no_function"))]
         match self {
             Self::Plugin { .. }
             | Self::Pure { .. }
@@ -230,14 +207,10 @@ impl RawrFunc {
             Self::Pure { func, .. } | Self::Method { func, .. } => Some(func),
             Self::Iterator { .. } | Self::Plugin { .. } => None,
 
-            #[cfg(not(feature = "no_function"))]
             Self::Script { .. } => None,
         }
     }
     /// Get a shared reference to a script-defined function definition.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     #[must_use]
     pub const fn get_script_fn_def(&self) -> Option<&Shared<crate::ast::ScriptFuncDef>> {
@@ -265,7 +238,6 @@ impl RawrFunc {
             | Self::Iterator { .. }
             | Self::Plugin { .. } => None,
 
-            #[cfg(not(feature = "no_function"))]
             Self::Script { env, .. } => env.as_ref(),
         }
     }
@@ -277,7 +249,6 @@ impl RawrFunc {
             Self::Iterator { func, .. } => Some(&**func),
             Self::Pure { .. } | Self::Method { .. } | Self::Plugin { .. } => None,
 
-            #[cfg(not(feature = "no_function"))]
             Self::Script { .. } => None,
         }
     }
@@ -289,13 +260,11 @@ impl RawrFunc {
             Self::Plugin { func, .. } => Some(func),
             Self::Pure { .. } | Self::Method { .. } | Self::Iterator { .. } => None,
 
-            #[cfg(not(feature = "no_function"))]
             Self::Script { .. } => None,
         }
     }
 }
 
-#[cfg(not(feature = "no_function"))]
 impl From<crate::ast::ScriptFuncDef> for RawrFunc {
     #[inline(always)]
     fn from(fn_def: crate::ast::ScriptFuncDef) -> Self {
@@ -306,7 +275,6 @@ impl From<crate::ast::ScriptFuncDef> for RawrFunc {
     }
 }
 
-#[cfg(not(feature = "no_function"))]
 impl From<Shared<crate::ast::ScriptFuncDef>> for RawrFunc {
     #[inline(always)]
     fn from(fn_def: Shared<crate::ast::ScriptFuncDef>) -> Self {

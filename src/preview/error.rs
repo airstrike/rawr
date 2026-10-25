@@ -2,8 +2,6 @@
 
 use crate::{application, host, program};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A complete executable could not promote into a preview catalog.
 #[derive(Debug)]
@@ -77,7 +75,6 @@ impl From<application::Error> for Error {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -87,31 +84,8 @@ impl std::error::Error for Error {
     }
 }
 
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {
-    fn source(&self) -> Option<&(dyn core_error::Error + 'static)> {
-        match self {
-            Self::Missing | Self::ApplicationSemanticMismatch | Self::RuntimeType { .. } => None,
-            Self::Application(error) => Some(error),
-        }
-    }
-}
-
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::UnknownPreview | Self::ForeignSource | Self::MissingSource => None,
-            Self::SeedConstruction(error) => Some(error),
-            Self::Invocation(error) => Some(error),
-            Self::Value(error) => Some(error),
-        }
-    }
-}
-
-#[cfg(feature = "no_std")]
-impl core_error::Error for RuntimeError {
-    fn source(&self) -> Option<&(dyn core_error::Error + 'static)> {
         match self {
             Self::UnknownPreview | Self::ForeignSource | Self::MissingSource => None,
             Self::SeedConstruction(error) => Some(error),

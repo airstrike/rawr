@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_std"))]
 #![cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 
 use crate::eval::GlobalRuntimeState;

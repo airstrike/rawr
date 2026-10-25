@@ -1,5 +1,3 @@
-#![cfg(not(feature = "no_index"))]
-
 use crate::api::deprecated::deprecated_array_functions;
 use crate::engine::OP_EQUALS;
 use crate::eval::{calc_index, calc_offset_len};
@@ -9,8 +7,6 @@ use crate::{
     def_package, Array, Dynamic, ExclusiveRange, FnPtr, ImmutableString, InclusiveRange,
     NativeCallContext, Position, RawrResultOf, ERR, INT,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{any::TypeId, cmp::Ordering, convert::TryFrom, mem};
 
 def_package! {
@@ -263,7 +259,6 @@ pub mod array_functions {
         let _ctx = ctx;
 
         // Check if array will be over max size limit
-        #[cfg(not(feature = "unchecked"))]
         if _ctx.engine().max_array_size() > 0 {
             let pad = len - array.len();
             let (a, m, s) = crate::eval::calc_array_sizes(array);
@@ -1281,7 +1276,6 @@ pub mod array_functions {
         let comparer = FnPtr {
             name: ctx.engine().get_interned_string(OP_EQUALS),
             curry: <_>::default(),
-            #[cfg(not(feature = "no_function"))]
             env: None,
             typ: FnPtrType::Normal,
         };
@@ -1594,17 +1588,9 @@ pub mod array_functions {
 
         // `slice::sort_by` may panic if the comparer function does not implement a total order.
         // Catch this instead.
-        #[cfg(not(feature = "no_std"))]
-        return std::panic::catch_unwind(std::panic::AssertUnwindSafe(closure)).map_err(|_| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(closure)).map_err(|_| {
             ERR::ErrorRuntime("error in comparer for sorting".into(), Position::NONE).into()
-        });
-
-        #[cfg(feature = "no_std")]
-        {
-            let mut closure = closure;
-            closure();
-            Ok(())
-        }
+        })
     }
     /// Sort the array.
     ///
@@ -1661,7 +1647,6 @@ pub mod array_functions {
             });
             return Ok(());
         }
-        #[cfg(not(feature = "no_float"))]
         if type_id == TypeId::of::<crate::FLOAT>() {
             array.sort_by(|a, b| {
                 let a = a.as_float().unwrap();
@@ -1768,7 +1753,6 @@ pub mod array_functions {
             });
             return Ok(());
         }
-        #[cfg(not(feature = "no_float"))]
         if type_id == TypeId::of::<crate::FLOAT>() {
             array.sort_by(|a, b| {
                 let a = a.as_float().unwrap();

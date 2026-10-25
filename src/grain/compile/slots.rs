@@ -1,6 +1,4 @@
 use rawr::ImmutableString;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Assigns a slot to every local, mirroring how rawr's own `Scope` grows.
 ///

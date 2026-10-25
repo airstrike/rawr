@@ -36,8 +36,6 @@
 
 use core::any::TypeId;
 use core::mem;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 use crate::{
     func::RawrFunc, Dynamic, FuncRegistration, ImmutableString, Module, NativeCallContext, Shared,

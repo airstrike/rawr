@@ -602,8 +602,6 @@ impl<'a> Resolver<'a> {
         } in units
         {
             let (source_map, parsed_items, statements, statement_source) = parsed.into_parts();
-            #[cfg(feature = "no_function")]
-            drop(statement_source);
 
             if context.source != self.entry_source
                 && let Some(position) = statements
@@ -655,7 +653,6 @@ impl<'a> Resolver<'a> {
                 source_map,
                 Script {
                     source: program::source::Id::from_index(context.source.index()),
-                    #[cfg(not(feature = "no_function"))]
                     text: statement_source,
                 },
             ));

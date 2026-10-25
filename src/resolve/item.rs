@@ -2,8 +2,6 @@
 
 use super::type_ref;
 use crate::{item, type_def, Span};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A generic trait's name and its type arguments: `(Convert, [i64])` of
 /// `Convert<i64>`.
@@ -46,7 +44,6 @@ pub(crate) struct Binding {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "no_std", allow(dead_code))]
 pub(crate) enum Import {
     Module,
     ModuleItem {

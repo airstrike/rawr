@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_object"))]
 use rawr::{CustomType, Engine, EvalAltResult, INT, Position, TypeBuilder};
 
 #[test]
@@ -64,7 +63,6 @@ fn test_build_type() {
                 .with_get_set("y", Self::get_y, Self::set_y)
                 .with_get_set("z", Self::get_z, Self::set_z);
 
-            #[cfg(not(feature = "no_index"))]
             builder.with_indexer_get(Self::get_component);
         }
     }

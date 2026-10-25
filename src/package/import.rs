@@ -8,7 +8,6 @@ use crate::{capability, diagnostic, host, receiver, ImmutableString};
 pub mod runner;
 
 /// Same-pass compilation against metadata owned by the retained native compiler.
-#[cfg(not(feature = "no_function"))]
 #[doc(hidden)]
 pub mod resident;
 

@@ -1,12 +1,6 @@
 use crate::plugin::*;
 use crate::{def_package, Position, RawrError, RawrResultOf, ERR, INT};
 use std::convert::TryFrom;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
-
-#[cfg(feature = "no_std")]
-#[cfg(not(feature = "no_float"))]
-use num_traits::Float;
 
 #[cold]
 #[inline(never)]
@@ -24,94 +18,58 @@ macro_rules! gen_arithmetic_functions {
             pub mod functions {
                 #[rawr_fn(name = "+", return_raw)]
                 pub fn add(x: $arg_type, y: $arg_type) -> RawrResultOf<$arg_type> {
-                    if cfg!(not(feature = "unchecked")) {
-                        x.checked_add(y).ok_or_else(|| make_err(format!("Addition overflow: {x} + {y}")))
-                    } else {
-                        Ok(x + y)
-                    }
+                    x.checked_add(y).ok_or_else(|| make_err(format!("Addition overflow: {x} + {y}")))
                 }
                 #[rawr_fn(name = "-", return_raw)]
                 pub fn subtract(x: $arg_type, y: $arg_type) -> RawrResultOf<$arg_type> {
-                    if cfg!(not(feature = "unchecked")) {
-                        x.checked_sub(y).ok_or_else(|| make_err(format!("Subtraction overflow: {x} - {y}")))
-                    } else {
-                        Ok(x - y)
-                    }
+                    x.checked_sub(y).ok_or_else(|| make_err(format!("Subtraction overflow: {x} - {y}")))
                 }
                 #[rawr_fn(name = "*", return_raw)]
                 pub fn multiply(x: $arg_type, y: $arg_type) -> RawrResultOf<$arg_type> {
-                    if cfg!(not(feature = "unchecked")) {
-                        x.checked_mul(y).ok_or_else(|| make_err(format!("Multiplication overflow: {x} * {y}")))
-                    } else {
-                        Ok(x * y)
-                    }
+                    x.checked_mul(y).ok_or_else(|| make_err(format!("Multiplication overflow: {x} * {y}")))
                 }
                 #[rawr_fn(name = "/", return_raw)]
                 pub fn divide(x: $arg_type, y: $arg_type) -> RawrResultOf<$arg_type> {
-                    if cfg!(not(feature = "unchecked")) {
-                        // Detect division by zero
-                        if y == 0 {
-                            Err(make_err(format!("Division by zero: {x} / {y}")))
-                        } else {
-                            x.checked_div(y).ok_or_else(|| make_err(format!("Division overflow: {x} / {y}")))
-                        }
+                    // Detect division by zero
+                    if y == 0 {
+                        Err(make_err(format!("Division by zero: {x} / {y}")))
                     } else {
-                        Ok(x / y)
+                        x.checked_div(y).ok_or_else(|| make_err(format!("Division overflow: {x} / {y}")))
                     }
                 }
                 #[rawr_fn(name = "%", return_raw)]
                 pub fn modulo(x: $arg_type, y: $arg_type) -> RawrResultOf<$arg_type> {
-                    if cfg!(not(feature = "unchecked")) {
-                        x.checked_rem(y).ok_or_else(|| make_err(format!("Modulo division by zero or overflow: {x} % {y}")))
-                    } else {
-                        Ok(x % y)
-                    }
+                    x.checked_rem(y).ok_or_else(|| make_err(format!("Modulo division by zero or overflow: {x} % {y}")))
                 }
                 #[rawr_fn(name = "**", return_raw)]
                 pub fn power(x: $arg_type, y: INT) -> RawrResultOf<$arg_type> {
-                    if cfg!(not(feature = "unchecked")) {
-                        if cfg!(not(feature = "only_i32")) && y > (u32::MAX as INT) {
-                            Err(make_err(format!("Exponential overflow: {x} ** {y}")))
-                        } else if y < 0 {
-                            Err(make_err(format!("Integer raised to a negative power: {x} ** {y}")))
-                        } else {
-                            x.checked_pow(u32::try_from(y).unwrap()).ok_or_else(|| make_err(format!("Exponential overflow: {x} ** {y}")))
-                        }
+                    if y > (u32::MAX as INT) {
+                        Err(make_err(format!("Exponential overflow: {x} ** {y}")))
+                    } else if y < 0 {
+                        Err(make_err(format!("Integer raised to a negative power: {x} ** {y}")))
                     } else {
-                        Ok(x.pow(u32::try_from(y).unwrap()))
+                        x.checked_pow(u32::try_from(y).unwrap()).ok_or_else(|| make_err(format!("Exponential overflow: {x} ** {y}")))
                     }
                 }
 
                 #[rawr_fn(name = "<<")]
                 pub fn shift_left(x: $arg_type, y: INT) -> $arg_type {
-                    if cfg!(not(feature = "unchecked")) {
-                        if cfg!(not(feature = "only_i32")) && y > (u32::MAX as INT) {
-                            0
-                        } else if y < 0 {
-                            shift_right(x, y.checked_abs().unwrap_or(INT::MAX))
-                        } else {
-                            x.checked_shl(u32::try_from(y).unwrap()).unwrap_or_else(|| 0)
-                        }
+                    if y > (u32::MAX as INT) {
+                        0
                     } else if y < 0 {
-                        x >> -y
+                        shift_right(x, y.checked_abs().unwrap_or(INT::MAX))
                     } else {
-                        x << y
+                        x.checked_shl(u32::try_from(y).unwrap()).unwrap_or_else(|| 0)
                     }
                 }
                 #[rawr_fn(name = ">>")]
                 pub fn shift_right(x: $arg_type, y: INT) -> $arg_type {
-                    if cfg!(not(feature = "unchecked")) {
-                        if cfg!(not(feature = "only_i32")) && y > (u32::MAX as INT) {
-                            x.wrapping_shr(u32::MAX)
-                        } else if y < 0 {
-                            shift_left(x, y.checked_abs().unwrap_or(INT::MAX))
-                        } else {
-                            x.checked_shr(u32::try_from(y).unwrap()).unwrap_or_else(|| x.wrapping_shr(u32::MAX))
-                        }
+                    if y > (u32::MAX as INT) {
+                        x.wrapping_shr(u32::MAX)
                     } else if y < 0 {
-                        x << -y
+                        shift_left(x, y.checked_abs().unwrap_or(INT::MAX))
                     } else {
-                        x >> y
+                        x.checked_shr(u32::try_from(y).unwrap()).unwrap_or_else(|| x.wrapping_shr(u32::MAX))
                     }
                 }
                 #[rawr_fn(name = "&")]
@@ -156,11 +114,7 @@ macro_rules! gen_signed_functions {
             pub mod functions {
                 #[rawr_fn(name = "-", return_raw)]
                 pub fn neg(x: $arg_type) -> RawrResultOf<$arg_type> {
-                    if cfg!(not(feature = "unchecked")) {
-                        x.checked_neg().ok_or_else(|| make_err(format!("Negation overflow: -{x}")))
-                    } else {
-                        Ok(-x)
-                    }
+                    x.checked_neg().ok_or_else(|| make_err(format!("Negation overflow: -{x}")))
                 }
                 #[rawr_fn(name = "+")]
                 pub const fn plus(x: $arg_type) -> $arg_type {
@@ -169,11 +123,7 @@ macro_rules! gen_signed_functions {
                 /// Return the absolute value of the number.
                 #[rawr_fn(return_raw)]
                 pub fn abs(x: $arg_type) -> RawrResultOf<$arg_type> {
-                    if cfg!(not(feature = "unchecked")) {
-                        x.checked_abs().ok_or_else(|| make_err(format!("Negation overflow: -{x}")))
-                    } else {
-                        Ok(x.abs())
-                    }
+                    x.checked_abs().ok_or_else(|| make_err(format!("Negation overflow: -{x}")))
                 }
                 /// Return the sign (as an integer) of the number according to the following:
                 ///
@@ -203,7 +153,6 @@ def_package! {
         combine_with_exported_module!(lib, "int", non_builtin_int_functions);
 
         // Avoid dead code warnings
-        #[cfg(not(feature = "unchecked"))]
         {
             let _ = arith_basic::INT::functions::is_zero;
             let _ = arith_basic::INT::functions::is_odd;
@@ -214,8 +163,6 @@ def_package! {
         reg_functions!(lib += signed_basic; INT);
 
         // Basic arithmetic for other integer types
-        #[cfg(not(feature = "only_i32"))]
-        #[cfg(not(feature = "only_i64"))]
         {
             gen_arithmetic_functions!(arith_numbers => i8, u8, i16, u16, i32, u32, u64);
             reg_functions!(lib += arith_numbers; i8, u8, i16, u16, i32, u32, u64);
@@ -232,7 +179,6 @@ def_package! {
         }
 
         // Basic arithmetic for floating-point
-        #[cfg(not(feature = "no_float"))]
         {
             combine_with_exported_module!(lib, "f32", f32_functions);
             combine_with_exported_module!(lib, "f64", f64_functions);
@@ -244,7 +190,6 @@ def_package! {
     }
 }
 
-#[cfg(not(feature = "unchecked"))]
 gen_arithmetic_functions!(arith_basic => INT);
 
 gen_signed_functions!(signed_basic => INT);
@@ -269,10 +214,8 @@ mod non_builtin_int_functions {
     }
 }
 
-#[cfg(not(feature = "no_float"))]
 #[export_module]
 mod f32_functions {
-    #[cfg(not(feature = "f32_float"))]
     #[allow(clippy::cast_precision_loss)]
     pub mod basic_arithmetic {
         #[rawr_fn(name = "+")]
@@ -374,7 +317,7 @@ mod f32_functions {
     }
     #[rawr_fn(name = "**", return_raw)]
     pub fn pow_f_i(x: f32, y: INT) -> RawrResultOf<f32> {
-        if cfg!(not(feature = "unchecked")) && y > (i32::MAX as INT) {
+        if y > (i32::MAX as INT) {
             Err(make_err(format!(
                 "Number raised to too large an index: {x} ** {y}"
             )))
@@ -385,77 +328,8 @@ mod f32_functions {
     }
 }
 
-#[cfg(not(feature = "no_float"))]
 #[export_module]
 mod f64_functions {
-    #[cfg(feature = "f32_float")]
-    pub mod basic_arithmetic {
-        #[rawr_fn(name = "+")]
-        pub fn add(x: f64, y: f64) -> f64 {
-            x + y
-        }
-        #[rawr_fn(name = "-")]
-        pub fn subtract(x: f64, y: f64) -> f64 {
-            x - y
-        }
-        #[rawr_fn(name = "*")]
-        pub fn multiply(x: f64, y: f64) -> f64 {
-            x * y
-        }
-        #[rawr_fn(name = "/")]
-        pub fn divide(x: f64, y: f64) -> f64 {
-            x / y
-        }
-        #[rawr_fn(name = "%")]
-        pub fn modulo(x: f64, y: f64) -> f64 {
-            x % y
-        }
-        #[rawr_fn(name = "**")]
-        pub fn pow_f_f(x: f64, y: f64) -> f64 {
-            x.powf(y)
-        }
-
-        #[rawr_fn(name = "+")]
-        pub fn add_if(x: INT, y: f64) -> f64 {
-            (x as f64) + y
-        }
-        #[rawr_fn(name = "+")]
-        pub fn add_fi(x: f64, y: INT) -> f64 {
-            x + (y as f64)
-        }
-        #[rawr_fn(name = "-")]
-        pub fn subtract_if(x: INT, y: f64) -> f64 {
-            (x as f64) - y
-        }
-        #[rawr_fn(name = "-")]
-        pub fn subtract_fi(x: f64, y: INT) -> f64 {
-            x - (y as f64)
-        }
-        #[rawr_fn(name = "*")]
-        pub fn multiply_if(x: INT, y: f64) -> f64 {
-            (x as f64) * y
-        }
-        #[rawr_fn(name = "*")]
-        pub fn multiply_fi(x: f64, y: INT) -> f64 {
-            x * (y as f64)
-        }
-        #[rawr_fn(name = "/")]
-        pub fn divide_if(x: INT, y: f64) -> f64 {
-            (x as f64) / y
-        }
-        #[rawr_fn(name = "/")]
-        pub fn divide_fi(x: f64, y: INT) -> f64 {
-            x / (y as f64)
-        }
-        #[rawr_fn(name = "%")]
-        pub fn modulo_if(x: INT, y: f64) -> f64 {
-            (x as f64) % y
-        }
-        #[rawr_fn(name = "%")]
-        pub fn modulo_fi(x: f64, y: INT) -> f64 {
-            x % (y as f64)
-        }
-    }
 
     #[rawr_fn(name = "-")]
     pub fn neg(x: f64) -> f64 {
@@ -494,7 +368,6 @@ mod f64_functions {
 pub mod decimal_functions {
     use rust_decimal::{prelude::Zero, Decimal};
 
-    #[cfg(not(feature = "unchecked"))]
     pub mod builtin {
         use rust_decimal::MathematicalOps;
 

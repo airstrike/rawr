@@ -12,12 +12,7 @@ use crate::{
     Identifier, ImmutableString, RawrResultOf, Shared, SharedModule, SmartString,
 };
 use bitflags::bitflags;
-#[cfg(feature = "no_std")]
-use hashbrown::hash_map::Entry;
-#[cfg(not(feature = "no_std"))]
 use std::collections::hash_map::Entry;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::{type_name, TypeId},
     collections::BTreeMap,
@@ -25,7 +20,6 @@ use std::{
     ops::{Add, AddAssign},
 };
 
-#[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
 use crate::func::register::Mut;
 
 /// Initial capacity of the hashmap for functions.
@@ -41,8 +35,6 @@ const FN_MAP_SIZE: usize = 16;
 #[non_exhaustive]
 pub enum FnNamespace {
     /// Module namespace only.
-    ///
-    /// Ignored under `no_module`.
     Internal,
     /// Expose to global namespace.
     Global,
@@ -164,14 +156,8 @@ pub struct FuncInfo<'a> {
     /// Function metadata.
     pub metadata: &'a FuncMetadata,
     /// Function namespace.
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     pub namespace: Identifier,
     /// Metadata if the function is scripted.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     pub script: Option<crate::ScriptFnMetadata<'a>>,
 }
 
@@ -258,8 +244,6 @@ impl FuncRegistration {
     }
     /// Create a new [`FuncRegistration`] for a property getter.
     ///
-    /// Not available under `no_object`.
-    ///
     /// # Defaults
     ///
     /// * **Accessibility**: The function namespace is [`FnNamespace::Global`].
@@ -269,15 +253,12 @@ impl FuncRegistration {
     /// * **Volatility**: The function is assumed to be _non-volatile_ -- i.e. it guarantees the same result for the same input(s).
     ///
     /// * **Metadata**: No metadata for the function is registered.
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     #[must_use]
     pub fn new_getter(prop: impl AsRef<str>) -> Self {
         Self::new(crate::engine::make_getter(prop.as_ref())).in_global_namespace()
     }
     /// Create a new [`FuncRegistration`] for a property setter.
-    ///
-    /// Not available under `no_object`.
     ///
     /// # Defaults
     ///
@@ -288,7 +269,6 @@ impl FuncRegistration {
     /// * **Volatility**: The function is assumed to be _non-volatile_ -- i.e. it guarantees the same result for the same input(s).
     ///
     /// * **Metadata**: No metadata for the function is registered.
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     #[must_use]
     pub fn new_setter(prop: impl AsRef<str>) -> Self {
@@ -298,8 +278,6 @@ impl FuncRegistration {
     }
     /// Create a new [`FuncRegistration`] for an index getter.
     ///
-    /// Not available under both `no_index` and `no_object`.
-    ///
     /// # Defaults
     ///
     /// * **Accessibility**: The function namespace is [`FnNamespace::Global`].
@@ -309,15 +287,12 @@ impl FuncRegistration {
     /// * **Volatility**: The function is assumed to be _non-volatile_ -- i.e. it guarantees the same result for the same input(s).
     ///
     /// * **Metadata**: No metadata for the function is registered.
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline(always)]
     #[must_use]
     pub fn new_index_getter() -> Self {
         Self::new(crate::engine::FN_IDX_GET).in_global_namespace()
     }
     /// Create a new [`FuncRegistration`] for an index setter.
-    ///
-    /// Not available under both `no_index` and `no_object`.
     ///
     /// # Defaults
     ///
@@ -328,7 +303,6 @@ impl FuncRegistration {
     /// * **Volatility**: The function is assumed to be _non-volatile_ -- i.e. it guarantees the same result for the same input(s).
     ///
     /// * **Metadata**: No metadata for the function is registered.
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline(always)]
     #[must_use]
     pub fn new_index_setter() -> Self {
@@ -474,15 +448,12 @@ impl FuncRegistration {
             // default to pure unless specified
             let is_pure = true;
 
-            #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
             let is_pure = is_pure
                 && (FUNC::num_params() != 3 || self.metadata.name != crate::engine::FN_IDX_SET);
 
-            #[cfg(not(feature = "no_object"))]
-            let is_pure = is_pure
-                && (FUNC::num_params() != 2
-                    || !self.metadata.name.starts_with(crate::engine::FN_SET));
             is_pure
+                && (FUNC::num_params() != 2
+                    || !self.metadata.name.starts_with(crate::engine::FN_SET))
         });
         let is_volatile = self.volatility.unwrap_or(false);
 
@@ -526,18 +497,15 @@ impl FuncRegistration {
         f.num_params = arg_types.as_ref().len();
         f.param_types.extend(arg_types.as_ref().iter().copied());
 
-        #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
         if ((f.name == crate::engine::FN_IDX_GET && f.num_params == 2)
             || (f.name == crate::engine::FN_IDX_SET && f.num_params == 3))
             && let Some(&type_id) = f.param_types.first()
         {
-            #[cfg(not(feature = "no_index"))]
             assert!(
                 type_id != TypeId::of::<crate::Array>(),
                 "Cannot register indexer for arrays."
             );
 
-            #[cfg(not(feature = "no_object"))]
             assert!(
                 type_id != TypeId::of::<crate::Map>(),
                 "Cannot register indexer for object maps."
@@ -707,7 +675,6 @@ impl fmt::Debug for Module {
     }
 }
 
-#[cfg(not(feature = "no_function"))]
 impl<T: IntoIterator<Item = Shared<crate::ast::ScriptFuncDef>>> From<T> for Module {
     fn from(iter: T) -> Self {
         let mut module = Self::new();
@@ -718,7 +685,6 @@ impl<T: IntoIterator<Item = Shared<crate::ast::ScriptFuncDef>>> From<T> for Modu
     }
 }
 
-#[cfg(not(feature = "no_function"))]
 impl<T: Into<Shared<crate::ast::ScriptFuncDef>>> Extend<T> for Module {
     fn extend<ITER: IntoIterator<Item = T>>(&mut self, iter: ITER) {
         iter.into_iter().for_each(|fn_def| {
@@ -1124,7 +1090,6 @@ impl Module {
     /// module.set_native_fn("foo", |x: &mut i64, y: i64| { *x = y; Ok(()) });
     /// assert!(!module.is_indexed());
     ///
-    /// # #[cfg(not(feature = "no_module"))]
     /// # {
     /// module.build_index();
     /// assert!(module.is_indexed());
@@ -1268,7 +1233,6 @@ impl Module {
     }
 
     /// Get a namespace-qualified [`Module`] variable as a [`Dynamic`].
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     pub(crate) fn get_qualified_var(&self, hash_var: u64) -> Option<Dynamic> {
         self.all_variables
@@ -1279,7 +1243,6 @@ impl Module {
     /// Set a script-defined function into the [`Module`].
     ///
     /// If there is an existing function of the same name and number of arguments, it is replaced.
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     pub fn set_script_fn(&mut self, fn_def: impl Into<Shared<crate::ast::ScriptFuncDef>>) -> u64 {
         let fn_def = fn_def.into();
@@ -1288,7 +1251,6 @@ impl Module {
         let namespace = FnNamespace::Internal;
         let num_params = fn_def.params.len();
         let hash_script = crate::calc_fn_hash(None, &fn_def.name, num_params);
-        #[cfg(not(feature = "no_object"))]
         let (hash_script, namespace) =
             fn_def
                 .this_type
@@ -1337,7 +1299,6 @@ impl Module {
 
     /// Get a shared reference to the script-defined function in the [`Module`] based on name
     /// and number of parameters.
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     #[must_use]
     pub fn get_script_fn(
@@ -1361,7 +1322,6 @@ impl Module {
     ///
     /// By taking a mutable reference, it is assumed that some sub-modules will be modified.
     /// Thus the [`Module`] is automatically set to be non-indexed.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     #[must_use]
     pub(crate) fn get_sub_modules_mut(&mut self) -> &mut BTreeMap<Identifier, SharedModule> {
@@ -1639,7 +1599,6 @@ impl Module {
     /// let hash = module.set_getter_fn("value", |x: &mut i64| Ok(*x));
     /// assert!(module.contains_fn(hash));
     /// ```
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn set_getter_fn<A, const X: bool, R, FUNC>(
         &mut self,
@@ -1688,7 +1647,6 @@ impl Module {
     /// });
     /// assert!(module.contains_fn(hash));
     /// ```
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn set_setter_fn<A, const X: bool, R, FUNC>(
         &mut self,
@@ -1731,7 +1689,6 @@ impl Module {
     /// assert!(module.contains_fn(hash_get));
     /// assert!(module.contains_fn(hash_set));
     /// ```
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn set_getter_setter_fn<
         A: Variant + Clone,
@@ -1791,7 +1748,6 @@ impl Module {
     ///
     /// assert!(module.contains_fn(hash));
     /// ```
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline]
     pub fn set_indexer_get_fn<A, B, const X: bool, R, FUNC>(&mut self, func: FUNC) -> u64
     where
@@ -1846,7 +1802,6 @@ impl Module {
     ///
     /// assert!(module.contains_fn(hash));
     /// ```
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline]
     pub fn set_indexer_set_fn<A, B, const X: bool, R, FUNC>(&mut self, func: FUNC) -> u64
     where
@@ -1896,7 +1851,6 @@ impl Module {
     /// assert!(module.contains_fn(hash_get));
     /// assert!(module.contains_fn(hash_set));
     /// ```
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline(always)]
     pub fn set_indexer_get_set_fn<
         A: Variant + Clone,
@@ -1948,7 +1902,6 @@ impl Module {
     /// Get a namespace-qualified function.
     ///
     /// The [`u64`] hash is calculated by [`build_index`][Module::build_index].
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     #[must_use]
     pub(crate) fn get_qualified_fn(&self, hash_qualified_fn: u64) -> Option<&RawrFunc> {
@@ -2084,8 +2037,6 @@ impl Module {
             m.merge_filtered(v, _filter);
             self.set_sub_module(k.clone(), m);
         }
-        #[cfg(feature = "no_function")]
-        self.modules.extend(other.modules.clone());
 
         self.variables.extend(other.variables.clone());
 
@@ -2133,7 +2084,6 @@ impl Module {
     }
 
     /// Filter out the functions, retaining only some script-defined functions based on a filter predicate.
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     pub(crate) fn retain_script_functions(
         &mut self,
@@ -2220,7 +2170,6 @@ impl Module {
     /// 3) Function name (as string slice).
     /// 4) Number of parameters.
     /// 5) Shared reference to function definition [`ScriptFuncDef`][crate::ast::ScriptFuncDef].
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     pub(crate) fn iter_script_fn(
         &self,
@@ -2244,7 +2193,6 @@ impl Module {
         })
     }
 
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn for_each_script_fn_mut(
         &mut self,
         mut callback: impl FnMut(&mut crate::ast::ScriptFuncDef),
@@ -2270,7 +2218,6 @@ impl Module {
     /// 4) Number of parameters.
     /// 5) _(internals)_ Shared reference to function definition [`ScriptFuncDef`][crate::ast::ScriptFuncDef].
     #[expose_under_internals]
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     fn iter_script_fn_info(
         &self,
@@ -2308,7 +2255,6 @@ impl Module {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(not(feature = "no_module"))]
     #[inline(always)]
     pub fn eval_ast_as_new(
         scope: crate::Scope,
@@ -2331,7 +2277,6 @@ impl Module {
     ///
     /// In particular, the [`global`][crate::GlobalRuntimeState] parameter allows the entire
     /// calling environment to be encapsulated, including automatic global constants.
-    #[cfg(not(feature = "no_module"))]
     pub fn eval_ast_as_new_raw(
         engine: &crate::Engine,
         scope: &mut crate::Scope,
@@ -2343,10 +2288,8 @@ impl Module {
         let orig_imports_len = global.num_imports();
         let orig_source = global.source.clone();
 
-        #[cfg(not(feature = "no_function"))]
         let orig_lib_len = global.lib.len();
 
-        #[cfg(not(feature = "no_function"))]
         let orig_constants = std::mem::take(&mut global.constants);
 
         // Run the script
@@ -2372,12 +2315,10 @@ impl Module {
         });
 
         // Restore global state
-        #[cfg(not(feature = "no_function"))]
         let constants = std::mem::replace(&mut global.constants, orig_constants);
 
         global.truncate_imports(orig_imports_len);
 
-        #[cfg(not(feature = "no_function"))]
         global.lib.truncate(orig_lib_len);
 
         global.source = orig_source;
@@ -2386,14 +2327,11 @@ impl Module {
         let _ = result?;
 
         // Encapsulated environment
-        #[cfg(not(feature = "no_function"))]
         let env = Shared::new(crate::ast::EncapsulatedEnviron {
-            #[cfg(not(feature = "no_function"))]
             lib: [ast.shared_lib().clone(), ast.shared_support().clone()]
                 .into_iter()
                 .collect(),
             imports,
-            #[cfg(not(feature = "no_function"))]
             constants,
         });
 
@@ -2410,7 +2348,6 @@ impl Module {
                 (v.clone(), a.to_vec())
             };
 
-            #[cfg(not(feature = "no_function"))]
             _value.deep_scan(|v| {
                 if let Some(fn_ptr) = v.downcast_mut::<crate::FnPtr>() {
                     fn_ptr.env = Some(env.clone());
@@ -2448,7 +2385,6 @@ impl Module {
         }
 
         // Non-private functions defined become module functions
-        #[cfg(not(feature = "no_function"))]
         ast.iter_fn_def()
             .filter(|&f| match f.access {
                 FnAccess::Public => true,
@@ -2555,11 +2491,9 @@ impl Module {
                 }
 
                 if f.is_script() {
-                    #[cfg(not(feature = "no_function"))]
                     {
                         let hash_script =
                             crate::calc_fn_hash(path.iter().copied(), &m.name, m.num_params);
-                        #[cfg(not(feature = "no_object"))]
                         let hash_script = f
                             .get_script_fn_def()
                             .unwrap()
@@ -2720,7 +2654,6 @@ impl Module {
     }
 
     /// Get the specified type iterator.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     #[must_use]
     pub(crate) fn get_qualified_iter(&self, id: TypeId) -> Option<&FnIterator> {
@@ -2736,8 +2669,6 @@ impl Module {
 }
 
 /// Module containing all built-in [module resolvers][ModuleResolver].
-#[cfg(not(feature = "no_module"))]
 pub mod resolvers;
 
-#[cfg(not(feature = "no_module"))]
 pub use resolvers::ModuleResolver;

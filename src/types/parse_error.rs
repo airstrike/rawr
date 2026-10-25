@@ -2,13 +2,8 @@
 
 use crate::tokenizer::is_valid_identifier;
 use crate::{Position, RawrError, Span, ERR};
-#[cfg(feature = "no_std")]
-use core_error::Error;
-#[cfg(not(feature = "no_std"))]
 use std::error::Error;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Error encountered when tokenizing the script text.
 #[derive(Debug, Eq, PartialEq, Clone, Hash)]
@@ -70,7 +65,6 @@ impl LexError {
 pub struct Rendered(Option<crate::ImmutableString>);
 
 impl Rendered {
-    #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
     pub(crate) fn new(text: impl Into<crate::ImmutableString>) -> Self {
         Self(Some(text.into()))
     }
@@ -523,7 +517,6 @@ impl fmt::Display for ParseError {
 impl ParseError {
     /// Keep this error as rustc prints it, against `text`, the source the
     /// compiler failed on, which `identity` names.
-    #[cfg(not(feature = "no_std"))]
     pub(crate) fn rendered(mut self, identity: &str, text: &str) -> Self {
         if let Ok(source) = crate::diagnostic::Source::new(identity, text)
             && let Ok(report) = crate::diagnostic::Report::from_parse(source, &self)

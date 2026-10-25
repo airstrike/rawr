@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_object"))]
 use rawr::{Dynamic, Engine, EvalAltResult, INT, Map};
 
 #[test]
@@ -18,7 +17,6 @@ fn test_map_json() {
     assert_eq!(map["$d e f!"].clone_cast::<String>(), "hello");
     let _: () = map["z"].as_unit().unwrap();
 
-    #[cfg(not(feature = "no_index"))]
     {
         let mut inner = Map::new();
         inner.insert("b".into(), Dynamic::from(42 as INT));

@@ -1,8 +1,6 @@
 //! Stable metadata selected by restricted application-root resolution.
 
 use crate::{host, item, Span};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Supported restricted application-root form.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

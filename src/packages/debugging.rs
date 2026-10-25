@@ -2,16 +2,9 @@
 
 use crate::def_package;
 use crate::plugin::*;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
-#[cfg(not(feature = "no_function"))]
-#[cfg(not(feature = "no_index"))]
 use crate::{Array, Dynamic, NativeCallContext};
 
-#[cfg(not(feature = "no_function"))]
-#[cfg(not(feature = "no_index"))]
-#[cfg(not(feature = "no_object"))]
 use crate::Map;
 
 def_package! {
@@ -28,10 +21,6 @@ mod debugging_functions {
     /// Get an array of object maps containing the function calls stack.
     ///
     /// If there is no debugging interface registered, an empty array is returned.
-    ///
-    /// An array of strings is returned under `no_object`.
-    #[cfg(not(feature = "no_function"))]
-    #[cfg(not(feature = "no_index"))]
     pub fn back_trace(ctx: NativeCallContext) -> Array {
         use crate::debugger::CallStackFrame;
 
@@ -55,7 +44,6 @@ mod debugging_functions {
                          }| {
                             let display = frame.to_string();
 
-                            #[cfg(not(feature = "no_object"))]
                             {
                                 use crate::INT;
 
@@ -77,8 +65,6 @@ mod debugging_functions {
                                 }
                                 Dynamic::from_map(map)
                             }
-                            #[cfg(feature = "no_object")]
-                            display.into()
                         },
                     )
                     .collect()

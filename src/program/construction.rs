@@ -8,13 +8,8 @@
 
 use super::GenerationId;
 use crate::{type_def, ImmutableString};
-#[cfg(feature = "no_std")]
-use core_error::Error as StdError;
-#[cfg(not(feature = "no_std"))]
 use std::error::Error as StdError;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// The nominal construction kind expected by the runtime model.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

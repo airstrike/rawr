@@ -1,5 +1,4 @@
 //! Module that defines the `call_fn` API of [`Engine`].
-#![cfg(not(feature = "no_function"))]
 
 use crate::ast::ScriptFuncDef;
 use crate::eval::{Caches, GlobalRuntimeState};
@@ -7,8 +6,6 @@ use crate::types::dynamic::Variant;
 use crate::{
     Dynamic, Engine, FnArgsVec, FuncArgs, Position, RawrResult, RawrResultOf, Scope, AST, ERR,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{any::type_name, mem};
 
 /// Options for calling a script-defined function via [`Engine::call_fn_with_options`].
@@ -89,8 +86,6 @@ impl<'a> CallFnOptions<'a> {
 impl Engine {
     /// Call a script function defined in an [`AST`] with multiple arguments.
     ///
-    /// Not available under `no_function`.
-    ///
     /// The [`AST`] is evaluated before calling the function.
     /// This allows a script to load the necessary modules.
     /// This is usually desired. If not, use [`call_fn_with_options`][Engine::call_fn_with_options] instead.
@@ -141,8 +136,6 @@ impl Engine {
     /// be searched in all namespaces instead, so registered native Rust functions etc. are also found.
     ///
     /// This is an advanced API.
-    ///
-    /// Not available under `no_function`.
     ///
     /// # Example
     ///
@@ -259,7 +252,6 @@ impl Engine {
 
         let mut this_ptr = options.this_ptr;
 
-        #[cfg(not(feature = "no_module"))]
         let orig_embedded_module_resolver =
             std::mem::replace(&mut global.embedded_module_resolver, ast.resolver.clone());
 
@@ -267,7 +259,6 @@ impl Engine {
         let in_all_namespaces = options.in_all_namespaces;
 
         defer! { global => move |g| {
-            #[cfg(not(feature = "no_module"))]
             {
                 g.embedded_module_resolver = orig_embedded_module_resolver;
             }
@@ -291,7 +282,6 @@ impl Engine {
             let args = &mut arg_values.iter_mut().collect::<FnArgsVec<_>>();
 
             // Check for data race.
-            #[cfg(not(feature = "no_closure"))]
             crate::func::ensure_no_data_race(name, args, false)?;
 
             if let Some(fn_def) = function {
@@ -318,7 +308,7 @@ impl Engine {
                     true
                 });
 
-                self.eval_fn_call_with_arguments::<Dynamic>(name, args, has_this, has_this)
+                self.eval_fn_call_with_arguments(name, args, has_this, has_this)
             }
         });
 

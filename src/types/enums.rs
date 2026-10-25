@@ -4,8 +4,6 @@ use crate::func::{SendSync, Shared};
 use crate::types::Variant;
 use crate::{Dynamic, Identifier};
 use std::any::TypeId;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A host callback that projects an opaque enum value into its variant index
 /// and positional payload.

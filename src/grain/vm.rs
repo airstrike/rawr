@@ -1,9 +1,6 @@
 use core::mem;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 use crate::engine::{FN_IDX_GET, FN_IDX_SET};
-#[cfg(not(feature = "unchecked"))]
 use crate::eval::calc_data_sizes;
 use crate::func::{get_builtin_binary_op_fn, get_builtin_op_assignment_fn};
 use crate::packages::string_basic::print_with_func;
@@ -29,25 +26,6 @@ use crate::grain::program::{Program, SharedModule, SharedProgram};
 /// rawr's own `RawrResult`, which it does not re-export.
 pub type VmResult = Result<Dynamic, Box<EvalAltResult>>;
 
-/// Whether a value is a shared cell.
-///
-/// Sharing is how closures capture, so under `no_closure` there are no cells,
-/// `Dynamic` has no `is_shared` to call, and the answer is a constant. The
-/// opcodes that create and read cells are compiled out with it.
-#[cfg(not(feature = "no_closure"))]
-macro_rules! is_shared {
-    ($value:expr) => {
-        $value.is_shared()
-    };
-}
-#[cfg(feature = "no_closure")]
-macro_rules! is_shared {
-    ($value:expr) => {{
-        let _ = &$value;
-        false
-    }};
-}
-
 /// A chunk that does not agree with itself — a slot past the end of the scope,
 /// an index into a pool that has no such entry, an operand stack that ran dry.
 ///
@@ -56,11 +34,6 @@ macro_rules! is_shared {
 /// time failures; the rest surface as runtime errors rather than panics, so a
 /// bad chunk cannot take the host down.
 /// Build a [`NativeCallContext`] from its parts.
-///
-/// `NativeCallContext::new_with_all_fields` is the obvious spelling but is
-/// `#[cfg(not(feature = "no_module"))]`. The `From` impl over the same five
-/// fields is not gated and assigns exactly the same ones, so this works in
-/// either configuration without a cfg of its own.
 fn native_context<'a>(
     engine: &'a Engine,
     fn_name: &'a str,
@@ -716,7 +689,6 @@ impl<'e> Vm<'e> {
         if let Some(wrappers) = wrappers {
             self.global.lib.push(wrappers);
         }
-        #[cfg(not(feature = "no_module"))]
         let orig_resolver = mem::replace(
             &mut self.global.embedded_module_resolver,
             program.resolver().cloned(),
@@ -724,7 +696,6 @@ impl<'e> Vm<'e> {
 
         let result = f(self);
 
-        #[cfg(not(feature = "no_module"))]
         {
             self.global.embedded_module_resolver = orig_resolver;
         }
@@ -841,7 +812,7 @@ impl<'e> Vm<'e> {
         // Nothing is written back for a shared root: cloning a shared
         // `Dynamic` clones the `Rc`, so a mutation through the guard already
         // landed in the cell every other holder can see.
-        let shared = is_shared!(root);
+        let shared = root.is_shared();
         let result = if shared {
             let mut guard = root.write_lock::<Dynamic>().ok_or_else(|| {
                 let name = root_name(program, chain).unwrap_or_default();
@@ -1834,7 +1805,7 @@ impl<'e> Vm<'e> {
         scope: &mut Scope,
         frame_base: usize,
     ) -> Result<(), Box<EvalAltResult>> {
-        if is_shared!(value) || value.is_read_only() {
+        if value.is_shared() || value.is_read_only() {
             return Ok(());
         }
 
@@ -1917,22 +1888,12 @@ impl<'e> Vm<'e> {
         // After every segment, against the running total — a script must not
         // be able to build a string past `max_string_size` and hand it over
         // whole.
-        #[cfg(not(feature = "unchecked"))]
-        {
-            self.engine.throw_on_size((0, 0, len)).map_err(|mut err| {
-                if err.position().is_none() {
-                    err.set_position(pos);
-                }
-                err
-            })
-        }
-        // `unchecked` removes the limits, and with them the only reason to have
-        // measured.
-        #[cfg(feature = "unchecked")]
-        {
-            let _ = (len, pos);
-            Ok(())
-        }
+        self.engine.throw_on_size((0, 0, len)).map_err(|mut err| {
+            if err.position().is_none() {
+                err.set_position(pos);
+            }
+            err
+        })
     }
 
     /// Start iterating a value, the way rawr's `for` does
@@ -1956,9 +1917,7 @@ impl<'e> Vm<'e> {
             .iter()
             .find_map(|module| module.get_iter(type_id));
 
-        // Imported and sub-modules can register iterators too, but neither
-        // exists to be searched under `no_module`.
-        #[cfg(not(feature = "no_module"))]
+        // Imported and sub-modules can register iterators too.
         let func = func.or_else(|| self.global.get_iter(type_id)).or_else(|| {
             self.engine
                 .global_sub_modules
@@ -2100,7 +2059,7 @@ impl<'e> Vm<'e> {
         // copies its first argument whatever it is handed, exactly as rawr
         // copies it before running a script function (`func/call.rs:661`).
         let by_reference = place
-            .map(|value| !is_shared!(value) && !value.is_read_only())
+            .map(|value| !value.is_shared() && !value.is_read_only())
             .unwrap_or(false)
             && program.function(name_index, argc).is_none();
 
@@ -2188,7 +2147,7 @@ impl<'e> Vm<'e> {
         // A function this compiler lowered copies its first argument whatever it
         // is handed, exactly as rawr copies one before running a script function
         // (`func/call.rs:661`), so a compiled callee rules a reference out too.
-        let by_reference = self.this.as_ref().map_or(false, |value| !is_shared!(value))
+        let by_reference = self.this.as_ref().map_or(false, |value| !value.is_shared())
             && program.function(name_index, argc).is_none();
 
         if !by_reference {
@@ -2288,7 +2247,6 @@ impl<'e> Vm<'e> {
         first: usize,
         pos: Position,
     ) -> VmResult {
-        #[cfg(not(feature = "unchecked"))]
         {
             if self.global.level > self.engine.max_call_levels() {
                 return Err(Box::new(EvalAltResult::ErrorStackOverflow(pos)));
@@ -2459,17 +2417,6 @@ impl<'e> Vm<'e> {
             self.sizes.push((0, 0, 0));
         }
 
-        // `unchecked` removes every limit this could reject against, so the
-        // running total is never read and measuring it is pure cost. The push
-        // above still happens: the stack is frame-floored either way, and the
-        // instruction that drops it does not know which build it is in.
-        #[cfg(feature = "unchecked")]
-        {
-            let _ = (map, pos);
-            Ok(())
-        }
-
-        #[cfg(not(feature = "unchecked"))]
         {
             // Rawr skips the whole measurement when no limit could reject it,
             // and measuring is a walk of the value — so this is the difference
@@ -2594,7 +2541,6 @@ impl<'e> Vm<'e> {
             let name = program
                 .name(index)
                 .ok_or_else(|| malformed(format!("no name {index}")))?;
-            #[cfg(not(feature = "unchecked"))]
             if scope.len() >= self.engine.max_variables() {
                 return Err(Box::new(EvalAltResult::ErrorTooManyVariables(
                     program.position(target),
@@ -2881,7 +2827,7 @@ impl<'e> Vm<'e> {
                     // a shared cell surviving an assignment, and of a chain
                     // over one not taking the host down.
                     let entry = scope.get_mut_by_index(index);
-                    if !is_shared!(entry) {
+                    if !entry.is_shared() {
                         let mut rhs = rhs;
                         if let Some(done) =
                             op.and_then(|op| self.store_builtin(op, entry, &mut rhs, pos))
@@ -3211,9 +3157,7 @@ impl<'e> Vm<'e> {
                     self.stack.push(scope.get_mut_by_index(index).clone());
                 }
 
-                // Emitted only for a closure capture, which cannot be parsed
-                // under `no_closure`.
-                #[cfg(not(feature = "no_closure"))]
+                // Emitted only for a closure capture.
                 code::tag::SHARE | code::tag::SHARE_NAMED => {
                     let entry = if tag == code::tag::SHARE {
                         let slot = small(1)?;
@@ -3269,7 +3213,6 @@ impl<'e> Vm<'e> {
                         FnPtr {
                             name: name.into(),
                             curry: ThinVec::new(),
-                            #[cfg(not(feature = "no_function"))]
                             env: None,
                             typ: FnPtrType::Normal,
                         }
@@ -3277,7 +3220,6 @@ impl<'e> Vm<'e> {
                     );
                 }
 
-                #[cfg(not(feature = "no_closure"))]
                 code::tag::IS_SHARED => {
                     let value = self.pop()?;
                     self.stack.push(value.is_shared().into());
@@ -3579,7 +3521,6 @@ mod tests {
                 switches: Vec::new(),
                 lib: None,
                 has_compiler_support: false,
-                #[cfg(not(feature = "no_module"))]
                 resolver: None,
                 source: None,
             },

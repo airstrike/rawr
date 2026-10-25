@@ -5,8 +5,6 @@ use crate::{
     UNSIGNED_INT,
 };
 use std::convert::TryFrom;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 def_package! {
     /// Package of basic bit-field utilities.

@@ -8,13 +8,9 @@ use crate::{
     Scope, SharedModule, TypeBuilder, AST,
 };
 use std::any::TypeId;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
-#[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
 use crate::func::register::Mut;
 
-#[cfg(not(feature = "no_std"))]
 #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 use std::path::PathBuf;
 
@@ -22,7 +18,7 @@ impl Engine {
     /// Evaluate a file, but throw away the result and only return error (if any).
     /// Useful for when you don't need the result, but still need to keep track of possible errors.
     ///
-    /// Not available under `no_std` or `WASM`.
+    /// Not available under `WASM`.
     ///
     /// # Deprecated
     ///
@@ -31,7 +27,6 @@ impl Engine {
     ///
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.1.0", note = "use `run_file` instead")]
-    #[cfg(not(feature = "no_std"))]
     #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
     #[inline(always)]
     pub fn consume_file(&self, path: PathBuf) -> RawrResultOf<()> {
@@ -41,7 +36,7 @@ impl Engine {
     /// Evaluate a file with own scope, but throw away the result and only return error (if any).
     /// Useful for when you don't need the result, but still need to keep track of possible errors.
     ///
-    /// Not available under `no_std` or `WASM`.
+    /// Not available under `WASM`.
     ///
     /// # Deprecated
     ///
@@ -50,7 +45,6 @@ impl Engine {
     ///
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.1.0", note = "use `run_file_with_scope` instead")]
-    #[cfg(not(feature = "no_std"))]
     #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
     #[inline(always)]
     pub fn consume_file_with_scope(&self, scope: &mut Scope, path: PathBuf) -> RawrResultOf<()> {
@@ -137,8 +131,6 @@ impl Engine {
     ///
     /// The function signature must start with `&mut self` and not `&self`.
     ///
-    /// Not available under `no_object`.
-    ///
     /// # Deprecated
     ///
     /// This method is deprecated.
@@ -146,7 +138,6 @@ impl Engine {
     ///
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.9.1", note = "use `register_get` instead")]
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn register_get_result<T: Variant + Clone, const X: bool, R: Variant + Clone>(
         &mut self,
@@ -157,8 +148,6 @@ impl Engine {
     }
     /// Register a setter function for a member of a registered type with the [`Engine`].
     ///
-    /// Not available under `no_object`.
-    ///
     /// # Deprecated
     ///
     /// This method is deprecated.
@@ -166,7 +155,6 @@ impl Engine {
     ///
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.9.1", note = "use `register_set` instead")]
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn register_set_result<T: Variant + Clone, V: Variant + Clone, const X: bool>(
         &mut self,
@@ -179,8 +167,6 @@ impl Engine {
     ///
     /// The function signature must start with `&mut self` and not `&self`.
     ///
-    /// Not available under both `no_index` and `no_object`.
-    ///
     /// # Deprecated
     ///
     /// This method is deprecated.
@@ -188,7 +174,6 @@ impl Engine {
     ///
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.9.1", note = "use `register_indexer_get` instead")]
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline(always)]
     pub fn register_indexer_get_result<
         T: Variant + Clone,
@@ -203,8 +188,6 @@ impl Engine {
     }
     /// Register an index setter for a custom type with the [`Engine`].
     ///
-    /// Not available under both `no_index` and `no_object`.
-    ///
     /// # Deprecated
     ///
     /// This method is deprecated.
@@ -212,7 +195,6 @@ impl Engine {
     ///
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.9.1", note = "use `register_indexer_set` instead")]
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline(always)]
     pub fn register_indexer_set_result<
         T: Variant + Clone,
@@ -227,8 +209,6 @@ impl Engine {
     }
     /// Register a custom syntax with the [`Engine`].
     ///
-    /// Not available under `no_custom_syntax`.
-    ///
     /// # Deprecated
     ///
     /// This method is deprecated.
@@ -240,7 +220,6 @@ impl Engine {
         note = "use `register_custom_syntax_with_state_raw` instead"
     )]
     #[inline(always)]
-    #[cfg(not(feature = "no_custom_syntax"))]
     pub fn register_custom_syntax_raw(
         &mut self,
         key: impl Into<Identifier>,
@@ -314,8 +293,6 @@ impl AST {
     /// _(internals)_ Get the internal [`Module`][crate::Module] containing all script-defined functions.
     /// Exported under the `internals` feature only.
     ///
-    /// Not available under `no_function`.
-    ///
     /// # Deprecated
     ///
     /// This method is deprecated. Use [`shared_lib`][AST::shared_lib] instead.
@@ -323,7 +300,6 @@ impl AST {
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.3.0", note = "use `shared_lib` instead")]
     #[cfg(feature = "internals")]
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     #[must_use]
     pub fn lib(&self) -> &crate::Module {
@@ -445,7 +421,7 @@ impl FnPtr {
         self.curry().len()
     }
     /// Call the function pointer with curried arguments (if any).
-    /// The function may be script-defined (not available under `no_function`) or native Rust.
+    /// The function may be script-defined or native Rust.
     ///
     /// This method is intended for calling a function pointer that is passed into a native Rust
     /// function as an argument.  Therefore, the [`AST`] is _NOT_ evaluated before calling the
@@ -472,7 +448,6 @@ impl FnPtr {
     }
 }
 
-#[cfg(not(feature = "no_custom_syntax"))]
 impl crate::Expression<'_> {
     /// If this expression is a variable name, return it.  Otherwise [`None`].
     ///
@@ -544,8 +519,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     ///
     /// The function signature must start with `&mut self` and not `&self`.
     ///
-    /// Not available under `no_object`.
-    ///
     /// # Deprecated
     ///
     /// This method is deprecated.
@@ -553,7 +526,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     ///
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.9.1", note = "use `with_get` instead")]
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn with_get_result<const X: bool, R: Variant + Clone>(
         &mut self,
@@ -565,8 +537,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
 
     /// Register a fallible setter function.
     ///
-    /// Not available under `no_object`.
-    ///
     /// # Deprecated
     ///
     /// This method is deprecated.
@@ -574,7 +544,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     ///
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.9.1", note = "use `with_set` instead")]
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn with_set_result<const X: bool, R: Variant + Clone>(
         &mut self,
@@ -588,8 +557,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     ///
     /// The function signature must start with `&mut self` and not `&self`.
     ///
-    /// Not available under both `no_index` and `no_object`.
-    ///
     /// # Deprecated
     ///
     /// This method is deprecated.
@@ -597,7 +564,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     ///
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.9.1", note = "use `with_indexer_get` instead")]
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline(always)]
     pub fn with_indexer_get_result<IDX: Variant + Clone, R: Variant + Clone, const X: bool>(
         &mut self,
@@ -608,8 +574,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
 
     /// Register an fallible index setter.
     ///
-    /// Not available under both `no_index` and `no_object`.
-    ///
     /// # Deprecated
     ///
     /// This method is deprecated.
@@ -617,7 +581,6 @@ impl<T: Variant + Clone> TypeBuilder<'_, T> {
     ///
     /// This method will be removed in the next major version.
     #[deprecated(since = "1.9.1", note = "use `with_indexer_set` instead")]
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline(always)]
     pub fn with_indexer_set_result<IDX: Variant + Clone, R: Variant + Clone, const X: bool>(
         &mut self,
@@ -771,10 +734,8 @@ impl Module {
     }
 }
 
-#[cfg(not(feature = "no_index"))]
 use crate::plugin::*;
 
-#[cfg(not(feature = "no_index"))]
 #[export_module]
 pub mod deprecated_array_functions {
     use crate::packages::array_basic::array_functions::*;

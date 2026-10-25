@@ -10,8 +10,6 @@ fn test_expressions() {
     assert_eq!(engine.eval_expression::<INT>("2 + (10 + 10) * 2").unwrap(), 42);
     assert_eq!(engine.eval_expression_with_scope::<INT>(&mut scope, "2 + (x + 10) * 2").unwrap(), 42);
     assert_eq!(engine.eval_expression_with_scope::<INT>(&mut scope, "if x > 0 { 42 } else { 123 }").unwrap(), 42);
-    #[cfg(not(feature = "no_index"))]
-    #[cfg(not(feature = "no_function"))]
     {
         assert_eq!(
             engine

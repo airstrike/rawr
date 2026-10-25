@@ -2,12 +2,9 @@
 
 use crate::func::SendSync;
 use crate::{host, Dynamic, ImmutableString, Shared};
-use alloc::boxed::Box;
 use core::future;
 use core::pin::Pin;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 #[cfg(feature = "sync")]
 pub(crate) type Pending = Pin<Box<dyn future::Future<Output = Dynamic> + Send + 'static>>;

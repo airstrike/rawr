@@ -1,16 +1,12 @@
 //! Preview-specific execution through exact launch-bound authority.
 
 use crate::{application, host, preview, program, Shared};
-#[cfg(not(feature = "no_function"))]
 use crate::{item, Dynamic};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A preview catalog whose complete native runtime boundary is proven.
 pub struct BoundCatalog {
     authority: program::Authority,
-    #[cfg_attr(feature = "no_function", allow(dead_code))]
     runtime: Shared<host::runtime::Registry>,
     application: Option<application::BoundLaunch>,
 }
@@ -46,7 +42,6 @@ impl BoundCatalog {
 
     /// Call the root package's `fn main` once, for a program that is not an
     /// application. `None` when the package has no `main`.
-    #[cfg(not(feature = "no_function"))]
     #[doc(hidden)]
     pub fn invoke_main(&self) -> Option<Result<Dynamic, program::Error>> {
         let package = self.authority.package();
@@ -64,14 +59,14 @@ impl BoundCatalog {
     }
 
     /// The generation's items and runtime model, for native islands.
-    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    #[cfg(feature = "rust-import")]
     pub(crate) const fn authority(&self) -> &program::Authority {
         &self.authority
     }
 
     /// Call `item` with `args` against this catalog's native runtime. A
     /// receiver or a `&mut` parameter the call changes is changed in `args`.
-    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn invoke_item(
         &self,
         item: &item::Value,
@@ -100,7 +95,6 @@ impl BoundCatalog {
     }
 
     /// Materialize the exact compiler-proven fixture for one preview.
-    #[cfg(not(feature = "no_function"))]
     pub fn seed(&self, key: &preview::Key) -> Result<Option<Dynamic>, preview::RuntimeError> {
         let definition = self.definition(key)?;
         match definition.seed() {
@@ -124,7 +118,6 @@ impl BoundCatalog {
     }
 
     /// Invoke and normalize one exact preview subject.
-    #[cfg(not(feature = "no_function"))]
     pub fn subject(
         &self,
         key: &preview::Key,
@@ -168,7 +161,6 @@ impl BoundCatalog {
     }
 
     /// Invoke one exact preview update and retain its optional durable Task value.
-    #[cfg(not(feature = "no_function"))]
     pub fn update(
         &self,
         key: &preview::Key,
@@ -193,7 +185,6 @@ impl BoundCatalog {
     }
 
     /// Evaluate one exact explicit preview theme choice.
-    #[cfg(not(feature = "no_function"))]
     pub fn theme(
         &self,
         key: &preview::Key,
@@ -224,7 +215,6 @@ impl BoundCatalog {
     }
 
     /// Map a child payload through one compiler-proven symbolic mapper.
-    #[cfg(not(feature = "no_function"))]
     pub fn map_message(
         &self,
         key: &preview::Key,
@@ -238,7 +228,6 @@ impl BoundCatalog {
     }
 
     /// Issue one compiler-proven host operation under this exact preview authority.
-    #[cfg(not(feature = "no_function"))]
     pub fn issue_operation(
         &self,
         key: &preview::Key,
@@ -256,7 +245,6 @@ impl BoundCatalog {
     }
 
     /// Invoke one task mapper without treating its intermediate output as a preview Message.
-    #[cfg(not(feature = "no_function"))]
     pub fn map_task_value(
         &self,
         key: &preview::Key,
@@ -269,7 +257,6 @@ impl BoundCatalog {
 
     /// Invoke one compiler-proven function, such as a style function, with
     /// its arguments in order.
-    #[cfg(not(feature = "no_function"))]
     pub fn invoke_function(
         &self,
         key: &preview::Key,
@@ -281,17 +268,13 @@ impl BoundCatalog {
     }
 
     /// The program and its runtime, for calls from other threads (D490).
-    #[cfg(all(
-        feature = "rust-import",
-        feature = "sync",
-        not(feature = "no_function")
-    ))]
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
     pub(crate) fn shared(&self) -> (program::Authority, Shared<host::runtime::Registry>) {
         (self.authority.clone(), self.runtime.clone())
     }
 
     /// Validate one value against the exact type a runtime witness proves.
-    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn validate_witness(
         &self,
         witness: &host::runtime::Witness,
@@ -302,7 +285,6 @@ impl BoundCatalog {
     }
 
     /// Validate one value against an exact argument carried by a runtime witness.
-    #[cfg(not(feature = "no_function"))]
     pub fn validate_witness_argument(
         &self,
         witness: &host::runtime::Witness,
@@ -314,7 +296,6 @@ impl BoundCatalog {
     }
 
     /// Validate one completed task payload against this preview's exact Message.
-    #[cfg(not(feature = "no_function"))]
     pub fn validate_message(
         &self,
         key: &preview::Key,
@@ -343,7 +324,6 @@ impl BoundCatalog {
         self.authority.widget_promotions()
     }
 
-    #[cfg(not(feature = "no_function"))]
     /// Promote owned nominal data through one current preview widget site proof.
     pub fn promote_widget(
         &self,
@@ -358,7 +338,6 @@ impl BoundCatalog {
             .promote_widget(promotion, data, definition.message(), &self.runtime)
     }
 
-    #[cfg(not(feature = "no_function"))]
     /// Bind one durable scripted widget to this exact preview selection.
     pub fn bind_widget(
         &self,
@@ -371,7 +350,6 @@ impl BoundCatalog {
         self.authority.bind_widget(descriptor, self.runtime.clone())
     }
 
-    #[cfg(not(feature = "no_function"))]
     fn definition(
         &self,
         key: &preview::Key,
@@ -382,7 +360,6 @@ impl BoundCatalog {
             .ok_or(preview::RuntimeError::UnknownPreview)
     }
 
-    #[cfg(not(feature = "no_function"))]
     fn invoke(
         &self,
         item: &item::Value,
@@ -393,7 +370,6 @@ impl BoundCatalog {
             .map_err(preview::RuntimeError::Invocation)
     }
 
-    #[cfg(not(feature = "no_function"))]
     fn validate(
         &self,
         item: &item::Value,
@@ -409,7 +385,6 @@ impl BoundCatalog {
     }
 }
 
-#[cfg(not(feature = "no_function"))]
 fn input_type(definition: &preview::Definition) -> Option<&application::Type> {
     match definition.input() {
         preview::Input::Stateless => None,

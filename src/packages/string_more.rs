@@ -3,8 +3,6 @@ use crate::{
     def_package, Dynamic, ExclusiveRange, ImmutableString, InclusiveRange, NativeCallContext,
     RawrResultOf, SmartString, INT,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{convert::TryFrom, mem};
 
 use super::string_basic::{print_with_func, FUNC_TO_STRING};
@@ -110,7 +108,6 @@ mod string_functions {
     #[rawr_fn(name = "+=")]
     pub fn add_assign_append_unit(string: &mut ImmutableString, item: ()) {}
 
-    #[cfg(not(feature = "no_index"))]
     pub mod blob_functions {
         use crate::Blob;
 
@@ -1294,7 +1291,6 @@ mod string_functions {
         let _ctx = ctx;
 
         // Check if string will be over max size limit
-        #[cfg(not(feature = "unchecked"))]
         if _ctx.engine().max_string_size() > 0 && len > _ctx.engine().max_string_size() {
             return Err(crate::ERR::ErrorDataTooLarge(
                 "Length of string".to_string(),
@@ -1315,7 +1311,6 @@ mod string_functions {
             p.push(character);
         }
 
-        #[cfg(not(feature = "unchecked"))]
         if _ctx.engine().max_string_size() > 0 && string.len() > _ctx.engine().max_string_size() {
             return Err(crate::ERR::ErrorDataTooLarge(
                 "Length of string".to_string(),
@@ -1364,7 +1359,6 @@ mod string_functions {
         let _ctx = ctx;
 
         // Check if string will be over max size limit
-        #[cfg(not(feature = "unchecked"))]
         if _ctx.engine().max_string_size() > 0 && len > _ctx.engine().max_string_size() {
             return Err(crate::ERR::ErrorDataTooLarge(
                 "Length of string".to_string(),
@@ -1392,7 +1386,6 @@ mod string_functions {
             }
         }
 
-        #[cfg(not(feature = "unchecked"))]
         if _ctx.engine().max_string_size() > 0 && string.len() > _ctx.engine().max_string_size() {
             return Err(crate::ERR::ErrorDataTooLarge(
                 "Length of string".to_string(),
@@ -1464,7 +1457,6 @@ mod string_functions {
         }
     }
 
-    #[cfg(not(feature = "no_index"))]
     pub mod arrays {
         use crate::Array;
 

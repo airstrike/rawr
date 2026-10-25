@@ -73,7 +73,6 @@ impl Output {
             program,
             allocation,
             Some(&Scope::new()),
-            #[cfg(not(feature = "no_optimize"))]
             engine.optimization_level,
         )
         .map_err(|failure| match failure {

@@ -2,8 +2,6 @@
 
 use crate::{application, host, preview, program, Shared};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A preview catalog bound to the exact Engine that compiled it.
 pub struct Launch {

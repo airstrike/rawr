@@ -1,8 +1,6 @@
 use rawr::{Dynamic, Engine, EvalAltResult, INT, NativeCallContext};
 use std::any::TypeId;
 
-#[cfg(not(feature = "no_module"))]
-#[cfg(not(feature = "unchecked"))]
 #[test]
 fn test_native_context() {
     let mut engine = Engine::new();
@@ -49,11 +47,9 @@ fn test_native_call_fn_raw_reaches_syntactic_functions() {
         context.call_fn_raw("type_of", false, false, &mut [&mut value])
     });
 
-    // A string, because its type name is the same on every build — `only_i32`
-    // and `f32_float` rename the numeric ones, and `no_index` removes arrays.
+    // A string answers with its type name.
     assert_eq!(engine.eval::<String>(r#"let s = "a"; ask_type(s)"#).unwrap(), "string");
 
-    // An integer answers with the integer type's name, whatever the numeric build is.
-    let int_name = if cfg!(feature = "only_i32") { "i32" } else { "i64" };
-    assert_eq!(engine.eval::<String>("let x = 1; ask_type(x)").unwrap(), int_name);
+    // An integer answers with the integer type's name.
+    assert_eq!(engine.eval::<String>("let x = 1; ask_type(x)").unwrap(), "i64");
 }

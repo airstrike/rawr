@@ -2,8 +2,6 @@
 
 use crate::{ImmutableString, Span};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 use super::{code::Code, Source};
 
@@ -482,8 +480,4 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {}
-
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {}

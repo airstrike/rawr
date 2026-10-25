@@ -1,7 +1,4 @@
-#![cfg(not(feature = "no_object"))]
-
 #[test]
-#[cfg(not(feature = "no_index"))]
 fn test_parse_json() {
     let engine = rawr::Engine::new();
 
@@ -34,7 +31,6 @@ fn test_parse_json() {
 }
 
 #[test]
-#[cfg(not(feature = "no_float"))]
 fn test_parse_json_scientific_notation() {
     let engine = rawr::Engine::new();
 

@@ -176,7 +176,7 @@ impl Site {
     }
 }
 
-#[cfg(all(test, not(feature = "no_function")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::host::runtime::{Builder, Registry};

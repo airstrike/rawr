@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_module"))]
 use rawr::{Dynamic, Engine, EvalAltResult, FuncRegistration, INT, Module};
 
 #[test]
@@ -36,7 +35,6 @@ fn test_module_sub_module() {
     sub_module2.build_index();
     assert!(sub_module2.contains_indexed_global_functions());
 
-    #[cfg(not(feature = "no_object"))]
     sub_module2.set_getter_fn("doubled", |x: &mut INT| Ok(*x * 2));
 
     sub_module.set_sub_module("universe", sub_module2);

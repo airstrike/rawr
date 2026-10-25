@@ -5,8 +5,6 @@ use crate::{host, Dynamic, ImmutableString, Shared};
 use futures_core::Stream;
 use std::fmt;
 use std::pin::Pin;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::task::{Context, Poll};
 
 #[cfg(feature = "sync")]

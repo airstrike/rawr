@@ -1,17 +1,11 @@
 //! Module containing utilities to hash functions and function calls.
 
 use crate::config;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::TypeId,
     hash::{BuildHasher, Hash, Hasher},
 };
 
-#[cfg(feature = "no_std")]
-pub type StraightHashMap<V> = hashbrown::HashMap<u64, V, StraightHasherBuilder>;
-
-#[cfg(not(feature = "no_std"))]
 pub type StraightHashMap<V> = std::collections::HashMap<u64, V, StraightHasherBuilder>;
 /// A hasher that only takes one single [`u64`] and returns it as a hash key.
 ///
@@ -152,8 +146,6 @@ pub fn calc_fn_hash_full(base: u64, params: impl IntoIterator<Item = TypeId>) ->
 }
 
 /// Calculate a [`u64`] hash key from a base [`u64`] hash key and the type of the `this` pointer.
-#[cfg(not(feature = "no_object"))]
-#[cfg(not(feature = "no_function"))]
 #[inline]
 #[must_use]
 pub fn calc_typed_method_hash(base: u64, this_type: &str) -> u64 {

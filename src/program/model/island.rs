@@ -14,8 +14,6 @@ use crate::types::dynamic::Union;
 use crate::types::nominal;
 use crate::{type_def, Dynamic, ImmutableString};
 use std::collections::BTreeMap;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 pub(crate) const UNIT: u8 = 0;
 pub(crate) const FALSE: u8 = 1;
@@ -133,13 +131,11 @@ impl Model {
             FALSE => false.into(),
             TRUE => true.into(),
             INT => crate::INT::from_le_bytes(reader.array()?).into(),
-            #[cfg(not(feature = "no_float"))]
             FLOAT => crate::FLOAT::from_le_bytes(reader.array()?).into(),
             CHAR => char::from_u32(u32::from_le_bytes(reader.array()?))
                 .ok_or("not a `char`")?
                 .into(),
             STR => ImmutableString::from(reader.text()?).into(),
-            #[cfg(not(feature = "no_index"))]
             ARRAY => {
                 let length = reader.members()?;
                 let mut items = crate::Array::with_capacity(length);
@@ -224,7 +220,6 @@ impl Model {
                 out.push(INT);
                 out.extend_from_slice(&(*value).to_le_bytes());
             }
-            #[cfg(not(feature = "no_float"))]
             Union::Float(value, ..) => {
                 out.push(FLOAT);
                 out.extend_from_slice(&(**value).to_le_bytes());
@@ -237,7 +232,6 @@ impl Model {
                 out.push(STR);
                 text(value, out);
             }
-            #[cfg(not(feature = "no_index"))]
             Union::Array(items, ..) => {
                 out.push(ARRAY);
                 count(items.len(), out);
@@ -268,7 +262,6 @@ impl Model {
                     self.island_write(item, out, depth)?;
                 }
             }
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(..) => self.island_write(&value.flatten_clone(), out, depth)?,
             Union::Variant(..) => {
                 let Some(option) = value.read_lock::<crate::option::Value>() else {

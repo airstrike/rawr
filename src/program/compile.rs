@@ -1,9 +1,6 @@
 //! Structured failures while compiling and authorizing a program.
 
 use crate::{program, ParseError};
-#[cfg(feature = "no_std")]
-use core_error::Error as StdError;
-#[cfg(not(feature = "no_std"))]
 use std::error::Error as StdError;
 use std::fmt;
 

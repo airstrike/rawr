@@ -3,8 +3,6 @@
 use crate::{capability, host, ImmutableString, Shared};
 use std::any::TypeId;
 use std::collections::BTreeSet;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 #[cfg(feature = "rust-import")]
 /// Exact symbolic operation selected from an imported Rust contract.

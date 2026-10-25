@@ -1,6 +1,4 @@
 use crate::{Engine, ModuleResolver, Position, RawrResultOf, SharedModule, ERR};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Empty/disabled [module][crate::Module] resolution service that acts as a dummy.
 ///

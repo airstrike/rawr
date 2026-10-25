@@ -1,8 +1,6 @@
 //! A simple bloom filter implementation for `u64` hash values only.
 
 use std::ops::{Add, AddAssign};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// _(internals)_ A simple bloom filter implementation for `u64` hash values only - i.e. all 64 bits are assumed
 /// to be relatively random.

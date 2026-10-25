@@ -127,7 +127,6 @@ fn print_debug_help() {
     println!("print, p               => print all variables de-duplicated");
     println!("print/p this           => print the `this` pointer");
     println!("print/p <variable>     => print the current value of a variable");
-    #[cfg(not(feature = "no_module"))]
     println!("imports                => print all imported modules");
     println!("node                   => print the current AST node");
     println!("list, l                => print the current source line");
@@ -138,11 +137,8 @@ fn print_debug_help() {
     println!("disable/dis <bp#>      => disable a break-point");
     println!("delete, d              => delete all break-points");
     println!("delete/d <bp#>         => delete a break-point");
-    #[cfg(not(feature = "no_position"))]
     println!("break, b               => set a new break-point at the current position");
-    #[cfg(not(feature = "no_position"))]
     println!("break/b <line#>        => set a new break-point at a line number");
-    #[cfg(not(feature = "no_object"))]
     println!("break/b .<prop>        => set a new break-point for a property access");
     println!("break/b <func>         => set a new break-point for a function call");
     println!(
@@ -248,13 +244,11 @@ fn debug_callback(
         DebuggerEvent::Step => (),
         DebuggerEvent::BreakPoint(n) => {
             match context.global_runtime_state().debugger().break_points()[n] {
-                #[cfg(not(feature = "no_position"))]
                 BreakPoint::AtPosition { .. } => (),
                 BreakPoint::AtFunctionName { ref name, .. }
                 | BreakPoint::AtFunctionCall { ref name, .. } => {
                     println!("! Call to function {name}.")
                 }
-                #[cfg(not(feature = "no_object"))]
                 BreakPoint::AtProperty { ref name, .. } => {
                     println!("! Property {name} accessed.")
                 }
@@ -358,7 +352,6 @@ fn debug_callback(
                         println!("this = {value:?}");
                     }
                 }
-                #[cfg(not(feature = "no_module"))]
                 ["imports"] => {
                     for (i, (name, module)) in context
                         .global_runtime_state()
@@ -375,7 +368,6 @@ fn debug_callback(
 
                     println!();
                 }
-                #[cfg(not(feature = "no_function"))]
                 ["backtrace" | "bt"] => {
                     for frame in context
                         .global_runtime_state()
@@ -395,7 +387,6 @@ fn debug_callback(
                         .iter()
                         .enumerate(),
                     |(i, bp)| match bp {
-                        #[cfg(not(feature = "no_position"))]
                         rawr::debugger::BreakPoint::AtPosition { pos, .. } => {
                             let line_num = format!("[{}] line ", i + 1);
                             print!("{line_num}");
@@ -497,7 +488,6 @@ fn debug_callback(
                     }
                 }
                 // Property name
-                #[cfg(not(feature = "no_object"))]
                 ["break" | "b", param] if param.starts_with('.') && param.len() > 1 => {
                     let bp = rawr::debugger::BreakPoint::AtProperty {
                         name: param[1..].into(),
@@ -511,7 +501,6 @@ fn debug_callback(
                         .push(bp);
                 }
                 // Numeric parameter
-                #[cfg(not(feature = "no_position"))]
                 ["break" | "b", param] if param.parse::<usize>().is_ok() => {
                     let n = param.parse::<usize>().unwrap();
                     let range = if source.is_none() {
@@ -549,7 +538,6 @@ fn debug_callback(
                         .break_points_mut()
                         .push(bp);
                 }
-                #[cfg(not(feature = "no_position"))]
                 ["break" | "b"] => {
                     let bp = rawr::debugger::BreakPoint::AtPosition {
                         source: source.map(|s| s.into()),
@@ -568,7 +556,6 @@ fn debug_callback(
                     let value = num.trim().parse::<INT>().unwrap().into();
                     break Err(EvalAltResult::ErrorRuntime(value, pos).into());
                 }
-                #[cfg(not(feature = "no_float"))]
                 ["throw", num] if num.trim().parse::<rawr::FLOAT>().is_ok() => {
                     let value = num.trim().parse::<rawr::FLOAT>().unwrap().into();
                     break Err(EvalAltResult::ErrorRuntime(value, pos).into());
@@ -599,7 +586,6 @@ fn main() {
     // Initialize scripting engine
     let mut engine = Engine::new();
 
-    #[cfg(not(feature = "no_optimize"))]
     engine.set_optimization_level(rawr::OptimizationLevel::None);
 
     let (ast, script) = load_script(&engine);
@@ -621,8 +607,6 @@ fn main() {
     );
 
     // Set a file module resolver without caching
-    #[cfg(not(feature = "no_module"))]
-    #[cfg(not(feature = "no_std"))]
     {
         let mut resolver = rawr::module_resolvers::FileModuleResolver::new();
         resolver.enable_cache(false);

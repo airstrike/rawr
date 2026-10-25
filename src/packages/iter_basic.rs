@@ -4,8 +4,6 @@ use crate::{
     def_package, ExclusiveRange, ImmutableString, InclusiveRange, Position, RawrResultOf, ERR, INT,
     INT_BITS,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::{type_name, TypeId},
     cmp::Ordering,
@@ -17,13 +15,11 @@ use std::{
     vec::IntoIter,
 };
 
-#[cfg(not(feature = "no_float"))]
 use crate::FLOAT;
 
 #[cfg(feature = "decimal")]
 use rust_decimal::Decimal;
 
-#[cfg(not(feature = "unchecked"))]
 #[inline(always)]
 #[allow(clippy::needless_pass_by_value)]
 fn std_add<T>(x: T, y: T) -> Option<T>
@@ -157,7 +153,6 @@ impl<T: Copy + PartialOrd> StepRange<T> {
         let mut dir = 0;
 
         if let Some(n) = add(from, step) {
-            #[cfg(not(feature = "unchecked"))]
             if n == from {
                 return Err(ERR::ErrorInFunctionCall(
                     "range".to_string(),
@@ -393,10 +388,7 @@ macro_rules! reg_range {
         })*
     };
     ($lib:ident |> $( $arg_type:ty ),*) => {
-        #[cfg(not(feature = "unchecked"))]
         reg_range!($lib |> std_add => $( $arg_type ),*);
-        #[cfg(feature = "unchecked")]
-        reg_range!($lib |> regular_add => $( $arg_type ),*);
     };
     ($lib:ident |> $add:ident => $( $arg_type:ty ),*) => {
         $({
@@ -464,7 +456,6 @@ def_package! {
         lib.set_standard_lib(true);
 
         // Register iterators for standard types.
-        #[cfg(not(feature = "no_index"))]
         {
             lib.set_iterable::<crate::Array>();
             lib.set_iterable::<crate::Blob>();
@@ -481,8 +472,6 @@ def_package! {
         // Register range functions.
         reg_range!(lib => INT);
 
-        #[cfg(not(feature = "only_i32"))]
-        #[cfg(not(feature = "only_i64"))]
         {
             reg_range!(lib => i8, u8, i16, u16, i32, u32, i64, u64);
 
@@ -492,8 +481,6 @@ def_package! {
 
         reg_range!(lib |> INT);
 
-        #[cfg(not(feature = "only_i32"))]
-        #[cfg(not(feature = "only_i64"))]
         {
             reg_range!(lib |> i8, u8, i16, u16, i32, u32, i64, u64);
 
@@ -501,7 +488,6 @@ def_package! {
             reg_range!(lib |> i128, u128);
         }
 
-        #[cfg(not(feature = "no_float"))]
         reg_range!(lib |> regular_add => FLOAT);
 
         #[cfg(feature = "decimal")]
@@ -603,7 +589,6 @@ mod iterator_functions {
     ///     print(ch);
     /// }
     /// ```
-    #[cfg(not(feature = "no_object"))]
     #[rawr_fn(get = "chars")]
     pub fn get_chars(string: &str) -> CharsStream {
         CharsStream::new(string, 0, INT::MAX)
@@ -705,7 +690,6 @@ mod iterator_functions {
     ///     print(bit);
     /// }
     /// ```
-    #[cfg(not(feature = "no_object"))]
     #[rawr_fn(get = "bits", return_raw)]
     pub fn get_bits(value: INT) -> RawrResultOf<BitRange> {
         BitRange::new(value, 0, INT::MAX)

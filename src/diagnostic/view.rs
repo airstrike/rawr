@@ -1,8 +1,6 @@
 //! Stable read-only data views for editor and serialization consumers.
 
 use super::{Category, ExternalLabel, Label, LabelKind, Report, Severity, Source};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Serializable read-only projection of a report.
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]

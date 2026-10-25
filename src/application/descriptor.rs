@@ -5,8 +5,6 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// One normalized symbolic application callback.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -344,7 +342,6 @@ impl Descriptor {
         })
     }
 
-    #[cfg(not(feature = "no_std"))]
     pub(crate) fn from_package_candidate(
         candidate: application::Candidate,
     ) -> Result<Self, (program::source::Id, application::Error)> {

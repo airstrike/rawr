@@ -3,11 +3,7 @@ use crate::plugin::*;
 use crate::types::dynamic::Tag;
 use crate::{Dynamic, Position, RawrResult, RawrResultOf, ERR, INT};
 use std::convert::TryFrom;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
-#[cfg(not(feature = "no_float"))]
-#[cfg(not(feature = "no_std"))]
 use crate::FLOAT;
 
 def_package! {
@@ -17,9 +13,6 @@ def_package! {
 
         combine_with_exported_module!(lib, "core", core_functions);
 
-        #[cfg(not(feature = "no_function"))]
-        #[cfg(not(feature = "no_index"))]
-        #[cfg(not(feature = "no_object"))]
         combine_with_exported_module!(lib, "reflection", reflection_functions);
     }
 }
@@ -132,18 +125,13 @@ mod core_functions {
     /// // Do nothing for 10 seconds!
     /// sleep(10.0);
     /// ```
-    #[cfg(not(feature = "no_float"))]
-    #[cfg(not(feature = "no_std"))]
     #[rawr_fn(name = "sleep", volatile)]
     pub fn sleep_float(seconds: FLOAT) {
         if !seconds.is_normal() || seconds.is_sign_negative() {
             return;
         }
 
-        #[cfg(not(feature = "f32_float"))]
         std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
-        #[cfg(feature = "f32_float")]
-        std::thread::sleep(std::time::Duration::from_secs_f32(seconds));
     }
     /// Block the current thread for a particular number of `seconds`.
     ///
@@ -153,7 +141,6 @@ mod core_functions {
     /// // Do nothing for 10 seconds!
     /// sleep(10);
     /// ```
-    #[cfg(not(feature = "no_std"))]
     #[rawr_fn(volatile)]
     pub fn sleep(seconds: INT) {
         if seconds <= 0 {
@@ -174,7 +161,6 @@ mod core_functions {
     ///
     /// print(m);       // prints #{"a":1, "b":2, "c":3}
     /// ```
-    #[cfg(not(feature = "no_object"))]
     #[rawr_fn(return_raw)]
     pub fn parse_json(_ctx: crate::NativeCallContext, json: &str) -> RawrResultOf<Dynamic> {
         #[cfg(feature = "metadata")]
@@ -187,17 +173,11 @@ mod core_functions {
     }
 }
 
-#[cfg(not(feature = "no_function"))]
-#[cfg(not(feature = "no_index"))]
-#[cfg(not(feature = "no_object"))]
 #[export_module]
 mod reflection_functions {
     use crate::module::FuncInfo;
     use crate::{Array, FnAccess, FnNamespace, Map, NativeCallContext, ScriptFnMetadata};
 
-    #[cfg(not(feature = "no_function"))]
-    #[cfg(not(feature = "no_index"))]
-    #[cfg(not(feature = "no_object"))]
     fn collect(
         ctx: NativeCallContext,
         filter: impl Fn(FnNamespace, FnAccess, &str, usize, &ScriptFnMetadata) -> bool,
@@ -208,7 +188,6 @@ mod reflection_functions {
             Some(&ctx),
             |FuncInfo {
                  metadata,
-                 #[cfg(not(feature = "no_module"))]
                  namespace,
                  script,
              }|
@@ -227,7 +206,6 @@ mod reflection_functions {
 
                 let mut map = Map::new();
 
-                #[cfg(not(feature = "no_module"))]
                 if !namespace.is_empty() {
                     map.insert(
                         "namespace".into(),

@@ -1,11 +1,8 @@
-#![cfg(not(feature = "no_time"))]
-
 use super::arithmetic::make_err as make_arithmetic_err;
 use crate::plugin::*;
 use crate::{def_package, RawrResult, RawrResultOf, INT};
 use std::convert::TryFrom;
 
-#[cfg(not(feature = "no_float"))]
 use crate::FLOAT;
 
 #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
@@ -55,28 +52,10 @@ mod time_functions {
     /// ```
     #[rawr_fn(name = "elapsed", get = "elapsed", return_raw)]
     pub fn elapsed(timestamp: Instant) -> RawrResult {
-        #[cfg(not(feature = "no_float"))]
         if timestamp > Instant::now() {
             Err(make_arithmetic_err("Time-stamp is later than now"))
         } else {
             Ok((timestamp.elapsed().as_secs_f64() as FLOAT).into())
-        }
-
-        #[cfg(feature = "no_float")]
-        {
-            let seconds = timestamp.elapsed().as_secs();
-
-            let Ok(seconds) = INT::try_from(seconds) else {
-                return Err(make_arithmetic_err(format!(
-                    "Integer overflow for timestamp.elapsed: {seconds}"
-                )));
-            };
-
-            if timestamp > Instant::now() {
-                return Err(make_arithmetic_err("Time-stamp is later than now"));
-            }
-
-            Ok(seconds.into())
         }
     }
 
@@ -84,89 +63,54 @@ mod time_functions {
     #[rawr_fn(return_raw, name = "-")]
     #[allow(clippy::unnecessary_wraps)]
     pub fn time_diff(timestamp1: Instant, timestamp2: Instant) -> RawrResult {
-        #[cfg(not(feature = "no_float"))]
-        return Ok(if timestamp2 > timestamp1 {
+        Ok(if timestamp2 > timestamp1 {
             -(timestamp2 - timestamp1).as_secs_f64() as FLOAT
         } else {
             (timestamp1 - timestamp2).as_secs_f64() as FLOAT
         }
-        .into());
-
-        #[cfg(feature = "no_float")]
-        if timestamp2 > timestamp1 {
-            let seconds = (timestamp2 - timestamp1).as_secs();
-
-            let Ok(seconds) = INT::try_from(seconds) else {
-                return Err(make_arithmetic_err(format!(
-                    "Integer overflow for timestamp.elapsed: {seconds}"
-                )));
-            };
-
-            Ok((-seconds).into())
-        } else {
-            let seconds = (timestamp1 - timestamp2).as_secs();
-
-            let Ok(seconds) = INT::try_from(seconds) else {
-                return Err(make_arithmetic_err(format!(
-                    "Integer overflow for timestamp.elapsed: {seconds}"
-                )));
-            };
-
-            Ok(seconds.into())
-        }
+        .into())
     }
 
-    #[cfg(not(feature = "no_float"))]
     pub mod float_functions {
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         fn add_impl(timestamp: Instant, seconds: FLOAT) -> RawrResultOf<Instant> {
             if seconds < 0.0 {
                 return subtract_impl(timestamp, -seconds);
             }
-            if cfg!(not(feature = "unchecked")) {
-                #[allow(clippy::cast_precision_loss)]
-                if seconds > (INT::MAX as FLOAT).min(u64::MAX as FLOAT) {
-                    return Err(make_arithmetic_err(format!(
-                        "Integer overflow for timestamp add: {seconds}"
-                    )));
-                }
-
-                timestamp
-                    .checked_add(Duration::from_millis((seconds * 1000.0) as u64))
-                    .ok_or_else(|| {
-                        make_arithmetic_err(format!(
-                            "Timestamp overflow when adding {seconds} second(s)"
-                        ))
-                    })
-            } else {
-                Ok(timestamp + Duration::from_millis((seconds * 1000.0) as u64))
+            #[allow(clippy::cast_precision_loss)]
+            if seconds > (INT::MAX as FLOAT).min(u64::MAX as FLOAT) {
+                return Err(make_arithmetic_err(format!(
+                    "Integer overflow for timestamp add: {seconds}"
+                )));
             }
+
+            timestamp
+                .checked_add(Duration::from_millis((seconds * 1000.0) as u64))
+                .ok_or_else(|| {
+                    make_arithmetic_err(format!(
+                        "Timestamp overflow when adding {seconds} second(s)"
+                    ))
+                })
         }
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         fn subtract_impl(timestamp: Instant, seconds: FLOAT) -> RawrResultOf<Instant> {
             if seconds < 0.0 {
                 return add_impl(timestamp, -seconds);
             }
-            if cfg!(not(feature = "unchecked")) {
-                #[allow(clippy::cast_precision_loss)]
-                if seconds > (INT::MAX as FLOAT).min(u64::MAX as FLOAT) {
-                    return Err(make_arithmetic_err(format!(
-                        "Integer overflow for timestamp subtract: {seconds}"
-                    )));
-                }
-
-                timestamp
-                    .checked_sub(Duration::from_millis((seconds * 1000.0) as u64))
-                    .ok_or_else(|| {
-                        make_arithmetic_err(format!(
-                            "Timestamp overflow when subtracting {seconds} second(s)"
-                        ))
-                    })
-            } else {
-                Ok(timestamp
-                    .checked_sub(Duration::from_millis((seconds * 1000.0) as u64))
-                    .unwrap())
+            #[allow(clippy::cast_precision_loss)]
+            if seconds > (INT::MAX as FLOAT).min(u64::MAX as FLOAT) {
+                return Err(make_arithmetic_err(format!(
+                    "Integer overflow for timestamp subtract: {seconds}"
+                )));
             }
+
+            timestamp
+                .checked_sub(Duration::from_millis((seconds * 1000.0) as u64))
+                .ok_or_else(|| {
+                    make_arithmetic_err(format!(
+                        "Timestamp overflow when subtracting {seconds} second(s)"
+                    ))
+                })
         }
 
         /// Add the specified number of `seconds` to the timestamp and return it as a new timestamp.
@@ -195,11 +139,7 @@ mod time_functions {
 
     #[inline(always)]
     fn add_inner(timestamp: Instant, seconds: u64) -> Option<Instant> {
-        if cfg!(not(feature = "unchecked")) {
-            timestamp.checked_add(Duration::from_secs(seconds))
-        } else {
-            Some(timestamp + Duration::from_secs(seconds))
-        }
+        timestamp.checked_add(Duration::from_secs(seconds))
     }
     #[inline]
     fn add_impl(timestamp: Instant, seconds: INT) -> RawrResultOf<Instant> {
@@ -217,11 +157,7 @@ mod time_functions {
     }
     #[inline(always)]
     fn subtract_inner(timestamp: Instant, seconds: u64) -> Option<Instant> {
-        #[cfg(not(feature = "unchecked"))]
-        return timestamp.checked_sub(Duration::from_secs(seconds));
-
-        #[cfg(feature = "unchecked")]
-        return Some(timestamp - Duration::from_secs(seconds));
+        timestamp.checked_sub(Duration::from_secs(seconds))
     }
     #[inline]
     fn subtract_impl(timestamp: Instant, seconds: INT) -> RawrResultOf<Instant> {

@@ -11,8 +11,6 @@ use crate::{
     Position, RawrResult, RawrResultOf, StaticVec, VarDefInfo, ERR,
 };
 use std::any::type_name;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Trait that maps to `Send + Sync` only under the `sync` feature.
 #[cfg(feature = "sync")]
@@ -30,17 +28,10 @@ impl<T> SendSync for T {}
 
 /// Immutable reference-counted container.
 #[cfg(not(feature = "sync"))]
-// TODO: Further audit no_std compatibility
-// When building with no_std + sync features, explicit imports from alloc
-// are needed despite using no_std_compat. This fixed compilation errors
-// around missing trait implementations for some users.
-pub use alloc::rc::Rc as Shared;
+pub use std::rc::Rc as Shared;
 /// Immutable reference-counted container.
 #[cfg(feature = "sync")]
-// TODO: Further audit no_std compatibility
-// While no_std_compat should map std::sync::Arc to alloc::sync::Arc,
-// there appear to be cases where this mapping fails.
-pub use alloc::sync::Arc as Shared;
+pub use std::sync::Arc as Shared;
 
 /// Synchronized shared object.
 #[cfg(not(feature = "sync"))]
@@ -152,10 +143,7 @@ impl<'a>
 impl<'a> NativeCallContext<'a> {
     /// _(internals)_ Create a new [`NativeCallContext`].
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_module`.
     #[cfg(feature = "internals")]
-    #[cfg(not(feature = "no_module"))]
     #[inline(always)]
     #[must_use]
     pub const fn new_with_all_fields(
@@ -266,26 +254,17 @@ impl<'a> NativeCallContext<'a> {
     }
     /// Get an iterator over the current set of modules imported via `import` statements in reverse order
     /// (i.e. modules imported last come first).
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     pub fn iter_imports(&self) -> impl Iterator<Item = (&str, &crate::Module)> {
         self.global.iter_imports()
     }
     /// Get an iterator over the namespaces containing definitions of all script-defined functions.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     pub fn iter_namespaces(&self) -> impl Iterator<Item = &crate::Module> {
         self.global.lib.iter().map(<_>::as_ref)
     }
     /// _(internals)_ The current stack of namespaces containing definitions of all script-defined functions.
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[cfg(feature = "internals")]
     #[inline(always)]
     #[must_use]
@@ -294,8 +273,6 @@ impl<'a> NativeCallContext<'a> {
     }
     /// _(internals)_ The current [`GlobalRuntimeState`], if any.
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_module`.
     #[expose_under_internals]
     #[inline(always)]
     #[must_use]
@@ -343,9 +320,6 @@ impl<'a> NativeCallContext<'a> {
     }
     /// Call a function as a _method_ call inside the call context with the provided arguments
     /// and a bound `this` pointer.
-    ///
-    /// Not available under `no_object`.
-    #[cfg(not(feature = "no_object"))]
     #[inline]
     pub fn call_method<T: Variant + Clone>(
         &self,
@@ -412,12 +386,9 @@ impl<'a> NativeCallContext<'a> {
     /// Call a registered native Rust function as a _method_ call inside the call context with the provided arguments
     /// and a bound object.
     ///
-    /// Not available under `no_object`.
-    ///
     /// This is often useful because Rust functions typically only want to cross-call other
     /// registered Rust functions and not have to worry about scripted functions hijacking the
     /// process unknowingly (or deliberately).
-    #[cfg(not(feature = "no_object"))]
     #[inline]
     pub fn call_native_method<T: Variant + Clone>(
         &self,
@@ -477,7 +448,6 @@ impl<'a> NativeCallContext<'a> {
     ) -> RawrResult {
         let name = fn_name.as_ref();
         let native_only = !is_valid_function_name(name);
-        #[cfg(not(feature = "no_function"))]
         let native_only = native_only && !crate::parser::is_anonymous_fn(name);
 
         self._call_fn_raw(fn_name, args, native_only, is_ref_mut, is_method_call)
@@ -572,13 +542,10 @@ impl<'a> NativeCallContext<'a> {
         // Native or script
 
         let hash = match is_method_call {
-            #[cfg(not(feature = "no_function"))]
             true => FnCallHashes::from_script_and_native(
                 calc_fn_hash(None, fn_name, args_len - 1),
                 calc_fn_hash(None, fn_name, args_len),
             ),
-            #[cfg(feature = "no_function")]
-            true => FnCallHashes::from_native_only(calc_fn_hash(None, fn_name, args_len)),
             _ => FnCallHashes::from_hash(calc_fn_hash(None, fn_name, args_len)),
         };
 
@@ -655,12 +622,7 @@ pub fn locked_read<T>(value: &Locked<T>) -> Option<LockGuard<'_, T>> {
     return value.try_borrow().ok();
 
     #[cfg(feature = "sync")]
-    #[cfg(not(feature = "no_std"))]
     {
-        #[cfg(feature = "unchecked")]
-        return value.read().ok();
-
-        #[cfg(not(feature = "unchecked"))]
         {
             // Spin-lock for a short while before giving up
             for _ in 0..5 {
@@ -676,15 +638,6 @@ pub fn locked_read<T>(value: &Locked<T>) -> Option<LockGuard<'_, T>> {
             None
         }
     }
-
-    #[cfg(feature = "sync")]
-    #[cfg(feature = "no_std")]
-    {
-        #[cfg(feature = "unchecked")]
-        return Some(value.read());
-        #[cfg(not(feature = "unchecked"))]
-        return value.try_read();
-    }
 }
 
 /// _(internals)_ Lock a [`Locked`] resource for mutable access.
@@ -697,12 +650,7 @@ pub fn locked_write<T>(value: &Locked<T>) -> Option<LockGuardMut<'_, T>> {
     return value.try_borrow_mut().ok();
 
     #[cfg(feature = "sync")]
-    #[cfg(not(feature = "no_std"))]
     {
-        #[cfg(feature = "unchecked")]
-        return value.write().ok();
-
-        #[cfg(not(feature = "unchecked"))]
         {
             // Spin-lock for a short while before giving up
             for _ in 0..5 {
@@ -717,15 +665,6 @@ pub fn locked_write<T>(value: &Locked<T>) -> Option<LockGuardMut<'_, T>> {
 
             None
         }
-    }
-
-    #[cfg(feature = "sync")]
-    #[cfg(feature = "no_std")]
-    {
-        #[cfg(feature = "unchecked")]
-        return Some(value.write());
-        #[cfg(not(feature = "unchecked"))]
-        return value.try_write();
     }
 }
 
@@ -758,11 +697,9 @@ pub type FnPlugin = dyn PluginFunc;
 pub type FnPlugin = dyn PluginFunc + Send + Sync;
 
 /// Callback function for progress reporting.
-#[cfg(not(feature = "unchecked"))]
 #[cfg(not(feature = "sync"))]
 pub type OnProgressCallback = dyn Fn(u64) -> Option<Dynamic>;
 /// Callback function for progress reporting.
-#[cfg(not(feature = "unchecked"))]
 #[cfg(feature = "sync")]
 pub type OnProgressCallback = dyn Fn(u64) -> Option<Dynamic> + Send + Sync;
 
@@ -790,7 +727,6 @@ pub type OnDebugCallback = dyn Fn(&str, Option<&str>, Position) + Send + Sync;
 /// _(internals)_ Callback function when a property accessed is not found in a [`Map`][crate::Map].
 /// Exported under the `internals` feature only.
 #[cfg(not(feature = "sync"))]
-#[cfg(not(feature = "no_index"))]
 #[cfg(feature = "internals")]
 pub type OnInvalidArrayIndexCallback = dyn for<'a> Fn(
     &'a mut crate::Array,
@@ -800,7 +736,6 @@ pub type OnInvalidArrayIndexCallback = dyn for<'a> Fn(
 /// Callback function when a property accessed is not found in a [`Map`][crate::Map].
 /// Exported under the `internals` feature only.
 #[cfg(feature = "sync")]
-#[cfg(not(feature = "no_index"))]
 #[cfg(feature = "internals")]
 pub type OnInvalidArrayIndexCallback = dyn for<'a> Fn(&'a mut crate::Array, crate::INT, EvalContext) -> RawrResultOf<crate::Target<'a>>
     + Send
@@ -809,14 +744,12 @@ pub type OnInvalidArrayIndexCallback = dyn for<'a> Fn(&'a mut crate::Array, crat
 /// _(internals)_ Callback function when a property accessed is not found in a [`Map`][crate::Map].
 /// Exported under the `internals` feature only.
 #[cfg(not(feature = "sync"))]
-#[cfg(not(feature = "no_object"))]
 #[cfg(feature = "internals")]
 pub type OnMissingMapPropertyCallback =
     dyn for<'a> Fn(&'a mut crate::Map, &str, EvalContext) -> RawrResultOf<crate::eval::Target<'a>>;
 /// Callback function when a property accessed is not found in a [`Map`][crate::Map].
 /// Exported under the `internals` feature only.
 #[cfg(feature = "sync")]
-#[cfg(not(feature = "no_object"))]
 #[cfg(feature = "internals")]
 pub type OnMissingMapPropertyCallback = dyn for<'a> Fn(&'a mut crate::Map, &str, EvalContext) -> RawrResultOf<crate::eval::Target<'a>>
     + Send

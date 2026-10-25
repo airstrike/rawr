@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_function"))]
 use rawr::resolve::Category;
 use rawr::{Dynamic, Engine, FuncRegistration, INT, Module, NativeCallContext, ParseErrorType, Shared};
 
@@ -18,7 +17,6 @@ fn test_functions() {
     assert_eq!(engine.eval::<INT>("fn mul2(mut x: i64) -> i64 { x *= 2; x } let a = 21; mul2(a); a").unwrap(), 21);
 
     // Methods on a value come from a trait implemented for its type.
-    #[cfg(not(feature = "no_object"))]
     {
         assert_eq!(
             engine
@@ -67,7 +65,6 @@ fn test_functions_dynamic() {
     assert_eq!(engine.eval::<INT>("foo(1, 2, 3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20)").unwrap(), 42);
 }
 
-#[cfg(not(feature = "no_object"))]
 #[test]
 fn test_functions_trait_object() {
     trait TestTrait {
@@ -106,7 +103,6 @@ fn test_functions_trait_object() {
 fn test_functions_namespaces() {
     let mut engine = Engine::new();
 
-    #[cfg(not(feature = "no_module"))]
     {
         let mut m = Module::new();
 
@@ -139,7 +135,6 @@ fn test_functions_constants() {
     engine.register_fn("do_stuff", |context: NativeCallContext, callback: rawr::FnPtr| -> Result<INT, _> { callback.call_within_context(&context, ()) });
 
     // A closure reads the script's constants and its own.
-    #[cfg(not(feature = "no_closure"))]
     {
         assert_eq!(engine.eval::<INT>("do_stuff(|| { const LOCAL_VALUE: i64 = 42; LOCAL_VALUE })").unwrap(), 42);
         assert_eq!(engine.eval::<INT>("const GLOBAL_VALUE: i64 = 42; do_stuff(|| GLOBAL_VALUE)").unwrap(), 42);
@@ -205,7 +200,6 @@ fn test_function_pointers() {
     assert!(matches!(error.err_type(), ParseErrorType::Resolution(e) if e.category() == Category::UnknownVariable), "{error:?}");
 
     // A struct field holds a function.
-    #[cfg(not(feature = "no_object"))]
     assert_eq!(
         engine
             .eval::<INT>(
@@ -224,7 +218,6 @@ fn test_function_pointers() {
 }
 
 #[test]
-#[cfg(not(feature = "unchecked"))]
 fn test_functions_max() {
     let mut engine = Engine::new();
     engine.set_max_functions(5);

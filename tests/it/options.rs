@@ -16,7 +16,6 @@ fn test_options_allow() {
 
     let _ = engine.compile("let x = { let z = 0; z + 1 };").unwrap_err();
 
-    #[cfg(not(feature = "no_function"))]
     {
         engine.compile("let x = || 42;").unwrap();
 
@@ -64,14 +63,12 @@ fn test_options_strict_var() {
 
     assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "{ let y = 42; x * y }").unwrap(), 42 * 42);
 
-    #[cfg(not(feature = "no_function"))]
     {
         // A function doesn't see the scope's variables.
         let _ = engine.compile_with_scope(&scope, "fn foo(x: i64) -> i64 { x + y }").unwrap_err();
 
         assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "fn foo(z: i64) -> i64 { z } let f = foo; f(x)").unwrap(), 42);
         let _ = engine.compile("let f = |y: i64| x * y;").unwrap_err();
-        #[cfg(not(feature = "no_closure"))]
         {
             engine.compile("let x = 42; let f = |y: i64| x * y;").unwrap();
             engine.compile("let x = 42; let f = |y: i64| move || x + y;").unwrap();

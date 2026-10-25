@@ -1,8 +1,6 @@
 use rawr::{Dynamic, Engine, Output};
 use std::sync::{Arc, RwLock};
 
-#[cfg(not(feature = "only_i32"))]
-#[cfg(not(feature = "only_i64"))]
 #[test]
 fn test_to_string() {
     let engine = Engine::new();
@@ -42,7 +40,6 @@ fn test_print_debug() {
     }
 }
 
-#[cfg(not(feature = "no_object"))]
 #[test]
 fn test_print_custom_type() {
     let engine = Engine::new();
@@ -63,7 +60,6 @@ fn test_print_custom_type() {
 
     assert_eq!(engine.eval::<String>(&format!("{types} let x = MyStruct {{ field: 42 }}; x.to_string()")).unwrap(), "hello: 42");
 
-    #[cfg(not(feature = "no_index"))]
     assert_eq!(
         engine
             .eval::<String>(&format!(
@@ -76,7 +72,6 @@ fn test_print_custom_type() {
         r#"(123, true, (), "world", hello: 42)"#
     );
 
-    #[cfg(not(feature = "no_index"))]
     assert_eq!(
         engine
             .eval::<String>(&format!(

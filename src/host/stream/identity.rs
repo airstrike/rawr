@@ -2,8 +2,6 @@
 
 use crate::ImmutableString;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A deterministic identity encoder could not represent one stream argument.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -112,11 +110,7 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {}
-
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {}
 
 impl fmt::Debug for Writer {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

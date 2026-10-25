@@ -1,5 +1,3 @@
-#![cfg(not(feature = "no_function"))]
-
 use rawr::diagnostic::{Report, Source, code};
 use rawr::host;
 use rawr::widget::{self, hook, message, state};

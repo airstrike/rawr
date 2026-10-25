@@ -1,8 +1,6 @@
 //! Parsed Rawr compilation units.
 
 use crate::{item, source, Position};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Parsed source items and the statements they surround.
 ///

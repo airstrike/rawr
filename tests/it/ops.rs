@@ -10,8 +10,6 @@ fn test_ops() {
     assert_eq!(engine.eval::<String>(r#"let mut s = String::from("hello"); s = s + &42.to_string(); s"#).unwrap(), "hello42");
 }
 
-#[cfg(not(feature = "only_i32"))]
-#[cfg(not(feature = "only_i64"))]
 #[test]
 fn test_ops_other_number_types() {
     let engine = Engine::new();
@@ -23,7 +21,6 @@ fn test_ops_other_number_types() {
         engine.compile("let x: u16 = 42; x == 42_i64").unwrap_err().err_type(),
         ParseErrorType::Resolution(Error::TypeMismatch { expected, .. }) if expected == "u16"
     ));
-    #[cfg(not(feature = "no_float"))]
     assert!(matches!(
         engine.compile("let x: u16 = 42; x == 42.0").unwrap_err().err_type(),
         ParseErrorType::Resolution(Error::TypeMismatch { expected, .. }) if expected == "u16"

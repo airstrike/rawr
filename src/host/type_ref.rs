@@ -1,8 +1,6 @@
 //! Structural types used by static host signatures.
 
 use crate::host;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A Rawr builtin available in host signature metadata.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

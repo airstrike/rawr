@@ -8,8 +8,6 @@ use crate::{
     calc_fn_hash, expose_under_internals, Dynamic, Engine, FnArgsVec, FuncArgs, ImmutableString,
     Position, RawrResult, RawrResultOf, Scope, StaticVec, ERR,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::type_name,
     mem,
@@ -84,7 +82,6 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     }
     /// Get an iterator over the current set of modules imported via `import` statements,
     /// in reverse order (i.e. modules imported last come first).
-    #[cfg(not(feature = "no_module"))]
     #[inline(always)]
     pub fn iter_imports(&self) -> impl Iterator<Item = (&str, &crate::Module)> {
         self.global.iter_imports()
@@ -116,18 +113,12 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
         self.global
     }
     /// Get an iterator over the namespaces containing definition of all script-defined functions.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     pub fn iter_namespaces(&self) -> impl Iterator<Item = &crate::Module> {
         self.global.lib.iter().map(<_>::as_ref)
     }
     /// _(internals)_ The current set of namespaces containing definitions of all script-defined functions.
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[cfg(feature = "internals")]
     #[inline(always)]
     #[must_use]
@@ -136,9 +127,6 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     }
     /// _(internals)_ Mutable reference to the current set of namespaces containing definitions of all script-defined functions.
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[cfg(feature = "internals")]
     #[inline(always)]
     #[must_use]
@@ -187,7 +175,6 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     /// # WARNING - Low Level API
     ///
     /// This function is very low level.  It evaluates an expression from an [`AST`][crate::AST].
-    #[cfg(not(feature = "no_custom_syntax"))]
     #[inline(always)]
     pub fn eval_expression_tree(&mut self, expr: &crate::Expression) -> crate::RawrResult {
         #[allow(deprecated)]
@@ -206,7 +193,6 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     /// # WARNING - Low Level API
     ///
     /// This function is _extremely_ low level.  It evaluates an expression from an [`AST`][crate::AST].
-    #[cfg(not(feature = "no_custom_syntax"))]
     #[deprecated = "This API is NOT deprecated, but it is considered volatile and may change in the future."]
     #[inline]
     pub fn eval_expression_tree_raw(
@@ -350,7 +336,6 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     ) -> RawrResult {
         let name = fn_name.as_ref();
         let native_only = !is_valid_function_name(name);
-        #[cfg(not(feature = "no_function"))]
         let native_only = native_only && !crate::parser::is_anonymous_fn(name);
 
         _call_fn_raw(
@@ -452,10 +437,8 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     pub fn new_frame<'f>(&'f mut self) -> EvalContextFrameGuard<'f, 'a, 's, 'ps, 'g, 'c, 't> {
         EvalContextFrameGuard {
             #[cfg(feature = "internals")]
-            #[cfg(not(feature = "no_module"))]
             imports_len: None,
             #[cfg(feature = "internals")]
-            #[cfg(not(feature = "no_function"))]
             lib_len: None,
             caches_len: None,
             scope_len: None,
@@ -517,13 +500,10 @@ fn _call_fn_raw(
     // Native or script
 
     let hash = match is_method_call {
-        #[cfg(not(feature = "no_function"))]
         true => FnCallHashes::from_script_and_native(
             calc_fn_hash(None, fn_name, args_len - 1),
             calc_fn_hash(None, fn_name, args_len),
         ),
-        #[cfg(feature = "no_function")]
-        true => FnCallHashes::from_native_only(calc_fn_hash(None, fn_name, args_len)),
         _ => FnCallHashes::from_hash(calc_fn_hash(None, fn_name, args_len)),
     };
 
@@ -550,10 +530,8 @@ pub struct EvalContextFrameGuard<'f, 'a, 's, 'ps, 'g, 'c, 't> {
     caches_len: Option<usize>,
     scope_len: Option<usize>,
     #[cfg(feature = "internals")]
-    #[cfg(not(feature = "no_module"))]
     imports_len: Option<usize>,
     #[cfg(feature = "internals")]
-    #[cfg(not(feature = "no_function"))]
     lib_len: Option<usize>,
     source: Option<Option<ImmutableString>>,
     #[cfg(feature = "internals")]
@@ -571,12 +549,10 @@ impl Drop for EvalContextFrameGuard<'_, '_, '_, '_, '_, '_, '_> {
             self.context.scope.rewind(scope_len);
         }
         #[cfg(feature = "internals")]
-        #[cfg(not(feature = "no_module"))]
         if let Some(imports_len) = self.imports_len {
             self.context.global.truncate_imports(imports_len);
         }
         #[cfg(feature = "internals")]
-        #[cfg(not(feature = "no_function"))]
         if let Some(lib_len) = self.lib_len {
             self.context.global.lib.truncate(lib_len);
         }
@@ -656,10 +632,7 @@ impl<'t> EvalContextFrameGuard<'_, '_, '_, '_, '_, '_, 't> {
     }
     /// _(internals)_ Add a new imported [module][crate::Module].
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_module`.
     #[cfg(feature = "internals")]
-    #[cfg(not(feature = "no_module"))]
     pub fn with_import(
         mut self,
         name: impl Into<ImmutableString>,
@@ -671,10 +644,7 @@ impl<'t> EvalContextFrameGuard<'_, '_, '_, '_, '_, '_, 't> {
     }
     /// _(internals)_ Add a new [module][crate::Module] containing script-defined functions.
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_function`.
     #[cfg(feature = "internals")]
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     #[must_use]
     pub fn with_namespace(mut self, module: impl Into<crate::SharedModule>) -> Self {

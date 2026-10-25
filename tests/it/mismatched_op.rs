@@ -26,7 +26,6 @@ fn test_mismatched_op_name() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_mismatched_op_custom_type() {
     #[allow(dead_code)] // used inside `register_type_with_name`
     #[derive(Debug, Clone)]

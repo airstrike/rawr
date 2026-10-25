@@ -39,8 +39,6 @@
 //! not something a script author can act on.
 
 use core::convert::TryFrom;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 mod abi;
 mod read;
@@ -85,12 +83,7 @@ mod tail_tag {
 }
 
 /// Constant-pool tags, over the subset of `Dynamic` that means the same thing
-/// in another process. Append only.
-///
-/// The whole table is defined on every build even where a restriction feature
-/// means nothing can produce a given tag — `no_float` cannot write a `FLOAT`,
-/// `no_index` an `ARRAY`. The numbering is the wire format, so it must not
-/// shift with the features of whoever compiled the writer.
+/// in another process. Append only: the numbering is the wire format.
 #[allow(dead_code)]
 mod constant {
     pub const UNIT: u8 = 0x00;

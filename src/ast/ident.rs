@@ -1,8 +1,6 @@
 //! Module defining script identifiers.
 
 use crate::{ImmutableString, Position};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{borrow::Borrow, fmt, hash::Hash};
 
 /// _(internals)_ An identifier containing a name and a [position][Position].

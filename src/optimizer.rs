@@ -1,5 +1,4 @@
 //! Module implementing the [`AST`] optimizer.
-#![cfg(not(feature = "no_optimize"))]
 
 use crate::ast::{
     ASTFlags, Expr, FlowControl, OpAssignment, Stmt, StmtBlock, StmtBlockContainer,
@@ -17,8 +16,6 @@ use crate::{
     calc_fn_hash, calc_fn_hash_full, Dynamic, Engine, FnArgsVec, FnPtr, ImmutableString, Position,
     Scope, StaticVec, AST,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::TypeId,
     borrow::Cow,
@@ -28,8 +25,6 @@ use std::{
 };
 
 /// Level of optimization performed.
-///
-/// Not available under `no_optimize`.
 #[derive(Debug, Eq, PartialEq, Clone, Copy, Default, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[non_exhaustive]
@@ -77,7 +72,6 @@ impl<'a> OptimizerState<'a> {
         let mut _global = engine.new_global_runtime_state();
         let _lib = lib;
 
-        #[cfg(not(feature = "no_function"))]
         {
             _global.lib = _lib.into();
         }
@@ -247,7 +241,6 @@ fn optimize_stmt_block(
                 Stmt::Var(x, ..) if x.1.is_constant() => true,
                 Stmt::Expr(e) if !e.is_constant() => true,
 
-                #[cfg(not(feature = "no_module"))]
                 Stmt::Import(x, ..) if !x.0.is_constant() => true,
 
                 _ => false,
@@ -407,7 +400,6 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
     #[must_use]
     fn is_variable_access(expr: &Expr, _non_qualified: bool) -> bool {
         match expr {
-            #[cfg(not(feature = "no_module"))]
             Expr::Variable(x, ..) if _non_qualified && !x.2.is_empty() => false,
             Expr::Variable(..) => true,
             _ => false,
@@ -853,7 +845,6 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
             optimize_expr(&mut x.1, state, false);
         }
         // import expr as var;
-        #[cfg(not(feature = "no_module"))]
         Stmt::Import(x, ..) => optimize_expr(&mut x.0, state, false),
         // { block }
         Stmt::Block(block) => {
@@ -938,13 +929,11 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
         Stmt::Return(Some(expr), ..) => optimize_expr(expr, state, false),
 
         // Share nothing
-        #[cfg(not(feature = "no_closure"))]
         Stmt::Share(x) if x.is_empty() => {
             state.set_dirty();
             *stmt = Stmt::Noop(Position::NONE);
         }
         // Share constants
-        #[cfg(not(feature = "no_closure"))]
         Stmt::Share(x) => {
             let orig_len = x.len();
 
@@ -971,7 +960,6 @@ fn move_constant_arg(arg_expr: &mut Expr) -> bool {
         | Expr::CharConstant(..)
         | Expr::BoolConstant(..)
         | Expr::IntegerConstant(..) => false,
-        #[cfg(not(feature = "no_float"))]
         Expr::FloatConstant(..) => false,
 
         _ => arg_expr.get_literal_value(None).is_some_and(|value| {
@@ -1013,13 +1001,11 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             if let [ Stmt::Expr(e) ] = x.statements_mut().as_mut() { state.set_dirty(); *expr = e.take(); }
         }
         // ()?.rhs
-        #[cfg(not(feature = "no_object"))]
         Expr::Dot(x, options, ..) if options.intersects(ASTFlags::NEGATED) && matches!(x.lhs, Expr::Unit(..)) => {
             state.set_dirty();
             *expr = x.lhs.take();
         }
         // lhs.rhs
-        #[cfg(not(feature = "no_object"))]
         Expr::Dot(x, ..) if !_chaining => match (&mut x.lhs, &mut x.rhs) {
             // map.string
             (Expr::Map(m, pos), Expr::Property(p, ..)) if m.0.iter().all(|(.., x)| x.is_pure()) => {
@@ -1046,7 +1032,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
                 }
             }
             // const.is_shared()
-            #[cfg(not(feature = "no_closure"))]
             (lhs, Expr::MethodCall(x, pos)) if lhs.is_constant() && x.name == crate::engine::KEYWORD_IS_SHARED && x.args.is_empty() => {
                 if lhs.get_literal_value(None).is_some() {
                     state.set_dirty();
@@ -1057,17 +1042,14 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             (lhs, rhs) => { optimize_expr(lhs, state, false); optimize_expr(rhs, state, true); }
         }
         // ....lhs.rhs
-        #[cfg(not(feature = "no_object"))]
         Expr::Dot(x,..) => { optimize_expr(&mut x.lhs, state, false); optimize_expr(&mut x.rhs, state, _chaining); }
 
         // ()?[rhs]
-        #[cfg(not(feature = "no_index"))]
         Expr::Index(x, options, ..) if options.intersects(ASTFlags::NEGATED) && matches!(x.lhs, Expr::Unit(..)) => {
             state.set_dirty();
             *expr = x.lhs.take();
         }
         // lhs[rhs]
-        #[cfg(not(feature = "no_index"))]
         Expr::Index(x, ..) if !_chaining => match (&mut x.lhs, &mut x.rhs) {
             // array[int]
             (Expr::Array(a, pos), Expr::IntegerConstant(i, ..)) if usize::try_from(*i).map(|x| x < a.len()).unwrap_or(false) && a.iter().all(Expr::is_pure) => {
@@ -1096,7 +1078,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
                 *expr = mem::take(&mut m.0).into_iter().find(|(x, ..)| x.name == s)
                             .map_or_else(|| Expr::Unit(*pos), |(.., mut expr)| { expr.set_position(*pos); expr });
             }
-            #[cfg(not(feature = "no_object"))]
             (Expr::DynamicConstant(cst, pos ), Expr::StringConstant(s, ..)) if cst.is_map() => {
                 // Constant map - promote the indexed item.
                 state.set_dirty();
@@ -1133,7 +1114,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
                 *expr = Expr::CharConstant(s.chars().rev().nth(usize::try_from(i.unsigned_abs()).unwrap() - 1).unwrap(), *pos);
             }
             // var[property] where var is a constant map variable
-            #[cfg(not(feature = "no_object"))]
             (Expr::Variable(v, _, pos) , Expr::StringConstant(s, ..))  if state.propagate_constants && state.find_literal_constant(&v.1).is_some_and(Dynamic::is_map) => {
                 let v = state.find_literal_constant(&v.1).unwrap().as_map_ref().unwrap().get(s.as_str()).cloned().unwrap_or(Dynamic::UNIT);
                 *expr = Expr::from_dynamic(v, *pos);
@@ -1145,7 +1125,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             (lhs, rhs) => { optimize_expr(lhs, state, false); optimize_expr(rhs, state, true); }
         },
         // ...[lhs][rhs]
-        #[cfg(not(feature = "no_index"))]
         Expr::Index(x, ..) => { optimize_expr(&mut x.lhs, state, false); optimize_expr(&mut x.rhs, state, _chaining); }
         // ``
         Expr::InterpolatedString(x, pos) if x.is_empty() => {
@@ -1178,22 +1157,18 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             x.shrink_to_fit();
         }
         // [ constant .. ]
-        #[cfg(not(feature = "no_index"))]
         Expr::Array(..) if expr.is_constant() => {
             state.set_dirty();
             *expr = Expr::DynamicConstant(expr.get_literal_value(None).unwrap().into(), expr.position());
         }
         // [ items .. ]
-        #[cfg(not(feature = "no_index"))]
         Expr::Array(x, ..) => x.iter_mut().for_each(|expr| optimize_expr(expr, state, false)),
         // #{ key:constant, .. }
-        #[cfg(not(feature = "no_object"))]
         Expr::Map(..) if expr.is_constant() => {
             state.set_dirty();
             *expr = Expr::DynamicConstant(expr.get_literal_value(None).unwrap().into(), expr.position());
         }
         // #{ key:value, .. }
-        #[cfg(not(feature = "no_object"))]
         Expr::Map(x, ..) => x.0.iter_mut().for_each(|(.., expr)| optimize_expr(expr, state, false)),
         // lhs && rhs
         Expr::And(x, ..) => {
@@ -1309,7 +1284,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
         }
 
         // nnn::id(args ..) -> optimize function call arguments
-        #[cfg(not(feature = "no_module"))]
         Expr::FnCall(x, ..) if x.is_qualified() => x.args.iter_mut().for_each(|arg_expr| {
             optimize_expr(arg_expr, state, false);
 
@@ -1366,7 +1340,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
                     *expr = Expr::from_dynamic(typ, *pos);
                     return;
                 }
-                #[cfg(not(feature = "no_closure"))]
                 crate::engine::KEYWORD_IS_SHARED if arg_values.len() == 1 => {
                     state.set_dirty();
                     *expr = Expr::from_dynamic(Dynamic::FALSE, *pos);
@@ -1402,7 +1375,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
         => {
             // First search for script-defined functions (can override built-in)
             let _has_script_fn = false;
-            #[cfg(not(feature = "no_function"))]
             let _has_script_fn = !x.hashes.is_native_only() && state.global.lib.iter().find_map(|m| m.get_script_fn(&x.name, x.args.len())).is_some();
 
             if !_has_script_fn {
@@ -1410,7 +1382,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
 
                 let result = match x.name.as_str() {
                     KEYWORD_TYPE_OF if arg_values.len() == 1 => Some(state.engine.map_type_name(arg_values[0].type_name()).into()),
-                    #[cfg(not(feature = "no_closure"))]
                     crate::engine::KEYWORD_IS_SHARED if arg_values.len() == 1 => Some(Dynamic::FALSE),
                     _ => state.call_fn_with_const_args(&x.name, x.op_token.as_ref(), arg_values)
                 };
@@ -1434,7 +1405,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
         }),
 
         // constant-name
-        #[cfg(not(feature = "no_module"))]
         Expr::Variable(x, ..) if !x.2.is_empty() => (),
         Expr::Variable(x, .., pos) if state.propagate_constants && state.find_literal_constant(&x.1).is_some() => {
             // Replace constant with value
@@ -1443,7 +1413,6 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
         }
 
         // Custom syntax
-        #[cfg(not(feature = "no_custom_syntax"))]
         Expr::Custom(x, ..)
             if x.scope_may_be_changed => {
                 state.propagate_constants = false;
@@ -1472,7 +1441,6 @@ impl Engine {
         }
 
         // Then check sub-modules
-        #[cfg(not(feature = "no_module"))]
         if self
             .global_sub_modules
             .values()
@@ -1536,13 +1504,12 @@ impl Engine {
         &self,
         scope: Option<&Scope>,
         statements: StmtBlockContainer,
-        #[cfg(not(feature = "no_function"))] functions: impl IntoIterator<Item = crate::Shared<crate::ast::ScriptFuncDef>>
+        functions: impl IntoIterator<Item = crate::Shared<crate::ast::ScriptFuncDef>>
             + AsRef<[crate::Shared<crate::ast::ScriptFuncDef>]>,
         optimization_level: OptimizationLevel,
     ) -> AST {
         let mut statements = statements;
 
-        #[cfg(not(feature = "no_function"))]
         let lib: crate::Shared<_> = if optimization_level == OptimizationLevel::None {
             crate::Module::from(functions).into()
         } else {
@@ -1566,8 +1533,6 @@ impl Engine {
             }))
             .into()
         };
-        #[cfg(feature = "no_function")]
-        let lib: crate::Shared<_> = crate::Module::new().into();
 
         statements.shrink_to_fit();
 
@@ -1581,7 +1546,6 @@ impl Engine {
                     optimization_level,
                 ),
             },
-            #[cfg(not(feature = "no_function"))]
             lib,
         )
     }

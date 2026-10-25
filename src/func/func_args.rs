@@ -6,8 +6,6 @@ use smallvec::SmallVec;
 
 use crate::types::dynamic::Variant;
 use crate::Dynamic;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Trait that parses arguments to a function call.
 ///
@@ -37,7 +35,6 @@ pub trait FuncArgs {
     /// }
     ///
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// # #[cfg(not(feature = "no_function"))]
     /// # {
     /// let options = Options { foo: false, bar: "world".to_string(), baz: 42 };
     ///

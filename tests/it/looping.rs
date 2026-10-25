@@ -54,7 +54,6 @@ fn test_loop() {
     assert!(outside_loop("let x = 0; break;"));
 
     // A closure body is not inside the loop around it.
-    #[cfg(not(feature = "no_function"))]
     assert!(outside_loop("loop { let f = || { break; }; }"));
 
     assert!(outside_loop("let x = 0; if x > 0 { continue; }"));

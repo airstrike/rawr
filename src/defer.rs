@@ -1,8 +1,6 @@
 //! Facility to run state restoration logic at the end of scope.
 
 use std::ops::{Deref, DerefMut};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Automatically restore state at the end of the scope.
 macro_rules! defer {

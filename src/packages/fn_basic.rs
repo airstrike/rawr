@@ -1,7 +1,5 @@
 use crate::plugin::*;
 use crate::{def_package, FnPtr, ImmutableString};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 def_package! {
     /// Package of basic function pointer utilities.
@@ -39,7 +37,6 @@ mod fn_ptr_functions {
     ///
     /// print(f.is_anonymous);      // prints true
     /// ```
-    #[cfg(not(feature = "no_function"))]
     #[rawr_fn(name = "is_anonymous", get = "is_anonymous", pure)]
     pub fn is_anonymous(fn_ptr: &mut FnPtr) -> bool {
         fn_ptr.is_anonymous()

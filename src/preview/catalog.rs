@@ -2,8 +2,6 @@
 
 use crate::{application, host, preview, program};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 type Parts = (
     program::Executable,
@@ -51,7 +49,6 @@ impl Catalog {
         Self::finish(executable, application, dependencies)
     }
 
-    #[cfg(not(feature = "no_std"))]
     pub(crate) fn from_package_generation_executable(
         executable: program::Executable,
     ) -> Result<Self, (program::source::Id, preview::Error)> {
@@ -116,14 +113,12 @@ impl Catalog {
         })
     }
 
-    #[cfg(not(feature = "no_std"))]
     pub(crate) fn from_package_executable(
         executable: program::Executable,
     ) -> Result<Self, (program::source::Id, preview::Error)> {
         Self::from_package_executable_with_presence(executable, true, false)
     }
 
-    #[cfg(not(feature = "no_std"))]
     fn from_package_executable_with_presence(
         executable: program::Executable,
         require_preview: bool,

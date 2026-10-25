@@ -1,6 +1,5 @@
 use rawr::{Engine, EvalAltResult, INT};
 
-#[cfg(not(feature = "no_float"))]
 use rawr::FLOAT;
 
 #[test]
@@ -13,22 +12,14 @@ fn test_math() {
     assert_eq!(engine.eval::<INT>("1 / 2").unwrap(), 0);
     assert_eq!(engine.eval::<INT>("3 % 2").unwrap(), 1);
 
-    #[cfg(not(feature = "no_float"))]
     assert!((engine.eval::<FLOAT>("(std::f64::consts::PI / 6.0).sin()").unwrap() - 0.5).abs() < 0.001);
 
-    #[cfg(not(feature = "no_float"))]
     assert!(engine.eval::<FLOAT>("(std::f64::consts::PI / 2.0).cos()").unwrap().abs() < 0.001);
 
-    #[cfg(not(feature = "only_i32"))]
     assert_eq!(engine.eval::<INT>("(-9223372036854775807_i64).abs()").unwrap(), 9_223_372_036_854_775_807);
-
-    #[cfg(feature = "only_i32")]
-    assert_eq!(engine.eval::<INT>("(-2147483647_i32).abs()").unwrap(), 2147483647);
 
     // Overflow, underflow and division by zero are runtime errors. The operands come in as
     // function arguments, so the checker can't see the overflow ahead of time.
-    #[cfg(not(feature = "unchecked"))]
-    #[cfg(not(feature = "only_i32"))]
     {
         let ops = "
             fn add(a: i64, b: i64) -> i64 { a + b }

@@ -1,11 +1,8 @@
 //! Module that defines the public file-based API of [`Engine`].
-#![cfg(not(feature = "no_std"))]
 #![cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 
 use crate::types::dynamic::Variant;
 use crate::{Engine, RawrResultOf, Scope, AST, ERR};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     fs::File,
     io::Read,
@@ -47,7 +44,7 @@ impl Engine {
     }
     /// Compile a script file into an [`AST`], which can be used later for evaluation.
     ///
-    /// Not available under `no_std` or `WASM`.
+    /// Not available under `WASM`.
     ///
     /// # Example
     ///
@@ -73,7 +70,7 @@ impl Engine {
     }
     /// Compile a script file into an [`AST`] using own scope, which can be used later for evaluation.
     ///
-    /// Not available under `no_std` or `WASM`.
+    /// Not available under `WASM`.
     ///
     /// ## Constants Propagation
     ///
@@ -86,7 +83,6 @@ impl Engine {
     ///
     /// ```no_run
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// # #[cfg(not(feature = "no_optimize"))]
     /// # {
     /// use rawr::{Engine, Scope, OptimizationLevel};
     ///
@@ -115,7 +111,7 @@ impl Engine {
     }
     /// Evaluate a script file, returning the result value or an error.
     ///
-    /// Not available under `no_std` or `WASM`.
+    /// Not available under `WASM`.
     ///
     /// # Example
     ///
@@ -136,7 +132,7 @@ impl Engine {
     }
     /// Evaluate a script file with own scope, returning the result value or an error.
     ///
-    /// Not available under `no_std` or `WASM`.
+    /// Not available under `WASM`.
     ///
     /// ## Constants Propagation
     ///
@@ -172,7 +168,7 @@ impl Engine {
     }
     /// Evaluate a file.
     ///
-    /// Not available under `no_std` or `WASM`.
+    /// Not available under `WASM`.
     ///
     /// # Example
     ///
@@ -193,7 +189,7 @@ impl Engine {
     }
     /// Evaluate a file with own scope.
     ///
-    /// Not available under `no_std` or `WASM`.
+    /// Not available under `WASM`.
     ///
     /// ## Constants Propagation
     ///
@@ -227,7 +223,7 @@ impl Engine {
 
 /// Evaluate a script file, returning the result value or an error.
 ///
-/// Not available under `no_std` or `WASM`.
+/// Not available under `WASM`.
 ///
 /// # Example
 ///
@@ -244,7 +240,7 @@ pub fn eval_file<T: Variant + Clone>(path: impl AsRef<Path>) -> RawrResultOf<T> 
 
 /// Evaluate a file.
 ///
-/// Not available under `no_std` or `WASM`.
+/// Not available under `WASM`.
 ///
 /// # Example
 ///

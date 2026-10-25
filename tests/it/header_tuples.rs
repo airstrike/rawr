@@ -1,5 +1,3 @@
-#![cfg(not(feature = "no_function"))]
-
 use rawr::host::{self, signature as host_signature, type_ref as host_type};
 use rawr::item::{self, type_ref};
 use rawr::{Engine, ParseErrorType, resolve};

@@ -1,17 +1,13 @@
 //! Application contracts promoted with exact native facade authority.
 
-#[cfg(not(feature = "no_function"))]
 use crate::item;
 use crate::{application, host, program, Dynamic, Shared};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A launch whose complete native facade requirements have been proven.
 #[derive(Clone)]
 pub struct BoundLaunch {
     launch: application::Launch,
-    #[cfg_attr(feature = "no_function", allow(dead_code))]
     runtime: Shared<host::runtime::Registry>,
 }
 
@@ -190,7 +186,6 @@ impl BoundLaunch {
     }
 
     /// Invoke a symbolic item with this launch's exact native facade authority.
-    #[cfg(not(feature = "no_function"))]
     pub fn invoke(
         &self,
         retained: &item::Value,
@@ -210,7 +205,6 @@ impl BoundLaunch {
     }
 
     /// Invoke the exact view callback and normalize its authenticated output.
-    #[cfg(not(feature = "no_function"))]
     pub fn invoke_view(&self, args: &mut [Dynamic]) -> Result<Dynamic, program::Error> {
         let callback = self.view().callback().item();
         let value = self
@@ -237,7 +231,6 @@ impl BoundLaunch {
     }
 
     /// Invoke and validate the exact state-derived title callback.
-    #[cfg(not(feature = "no_function"))]
     pub fn invoke_title(&self, args: &mut [Dynamic]) -> Result<Option<Dynamic>, program::Error> {
         let Some(title) = self.title() else {
             return Ok(None);
@@ -257,7 +250,6 @@ impl BoundLaunch {
     }
 
     /// Invoke and validate the exact state-derived theme callback.
-    #[cfg(not(feature = "no_function"))]
     pub fn invoke_theme(&self, args: &mut [Dynamic]) -> Result<Option<Dynamic>, program::Error> {
         let Some(theme) = self.theme() else {
             return Ok(None);
@@ -277,7 +269,6 @@ impl BoundLaunch {
     }
 
     /// Invoke and validate the exact state-derived subscription callback.
-    #[cfg(not(feature = "no_function"))]
     pub fn invoke_subscription(
         &self,
         args: &mut [Dynamic],
@@ -300,7 +291,6 @@ impl BoundLaunch {
     }
 
     /// Run `main`'s statements before the entry, when there are any.
-    #[cfg(not(feature = "no_function"))]
     pub fn invoke_prelude(&self) -> Result<(), RuntimeError> {
         let Some(prelude) = self.prelude() else {
             return Ok(());
@@ -313,7 +303,6 @@ impl BoundLaunch {
     }
 
     /// Invoke and validate the exact explicit boot callback.
-    #[cfg(not(feature = "no_function"))]
     pub fn invoke_boot(&self) -> Result<application::Startup, RuntimeError> {
         let application::Boot::Explicit { callback, task } = self.boot() else {
             return Err(RuntimeError::DefaultBoot);
@@ -348,7 +337,6 @@ impl BoundLaunch {
     }
 
     /// Invoke update and normalize its unit or durable Task result.
-    #[cfg(not(feature = "no_function"))]
     pub fn invoke_update(&self, args: &mut [Dynamic]) -> Result<Option<Dynamic>, program::Error> {
         let callback = self.update().callback();
         let output = self.invoke(callback.item(), args)?;
@@ -433,7 +421,6 @@ impl BoundLaunch {
     }
 
     /// Issue one compiler-proven host operation under this exact application authority.
-    #[cfg(not(feature = "no_function"))]
     pub fn issue_operation(
         &self,
         call: host::operation::Call,
@@ -446,7 +433,6 @@ impl BoundLaunch {
     }
 
     /// Validate one value against an exact argument carried by a runtime witness.
-    #[cfg(not(feature = "no_function"))]
     pub fn validate_witness_argument(
         &self,
         witness: &host::runtime::Witness,
@@ -462,7 +448,6 @@ impl BoundLaunch {
     ///
     /// Every recipe receives stable identity and complete input/mapper proofs,
     /// but no native stream factory starts until that recipe is consumed.
-    #[cfg(not(feature = "no_function"))]
     pub fn bind_stream_plan(
         &self,
         plan: host::stream::Plan,
@@ -485,7 +470,6 @@ impl BoundLaunch {
     }
 
     /// Map and validate one payload under this exact application authority.
-    #[cfg(not(feature = "no_function"))]
     pub fn map_message(
         &self,
         mapper: &item::Value,
@@ -572,24 +556,8 @@ impl fmt::Display for RuntimeError {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::DefaultBoot => None,
-            Self::ExplicitBoot => None,
-            Self::StateConstruction(error) => Some(error),
-            Self::State(error) | Self::Message(error) => Some(error),
-            Self::Invocation(error) | Self::Task(error) => Some(error),
-            Self::Startup(error) => Some(error),
-            Self::TaskRepresentation { .. } => None,
-        }
-    }
-}
-
-#[cfg(feature = "no_std")]
-impl core_error::Error for RuntimeError {
-    fn source(&self) -> Option<&(dyn core_error::Error + 'static)> {
         match self {
             Self::DefaultBoot => None,
             Self::ExplicitBoot => None,

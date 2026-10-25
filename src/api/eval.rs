@@ -8,8 +8,6 @@ use crate::{
     calc_fn_hash, Dynamic, Engine, FnArgsVec, FuncArgs, Position, RawrResult, RawrResultOf, Scope,
     AST, ERR,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::{type_name, TypeId},
     mem,
@@ -69,12 +67,8 @@ impl Engine {
         scope: &mut Scope,
         script: &str,
     ) -> RawrResultOf<T> {
-        let ast = self.compile_scripts_with_scope_raw(
-            Some(scope),
-            [script],
-            #[cfg(not(feature = "no_optimize"))]
-            self.optimization_level,
-        )?;
+        let ast =
+            self.compile_scripts_with_scope_raw(Some(scope), [script], self.optimization_level)?;
         self.eval_ast_with_scope(scope, &ast)
     }
     /// Evaluate a string containing an expression, returning the result value or an error.
@@ -212,25 +206,19 @@ impl Engine {
     ) -> RawrResult {
         let orig_source = mem::replace(&mut global.source, ast.source_raw().cloned());
 
-        #[cfg(not(feature = "no_function"))]
         let orig_lib_len = global.lib.len();
 
-        #[cfg(not(feature = "no_function"))]
         global.lib.push(ast.shared_lib().clone());
-        #[cfg(not(feature = "no_function"))]
         global.lib.push(ast.shared_support().clone());
 
-        #[cfg(not(feature = "no_module"))]
         let orig_embedded_module_resolver =
             mem::replace(&mut global.embedded_module_resolver, ast.resolver.clone());
 
         defer! { global => move |g| {
-            #[cfg(not(feature = "no_module"))]
             {
                 g.embedded_module_resolver = orig_embedded_module_resolver;
             }
 
-            #[cfg(not(feature = "no_function"))]
             g.lib.truncate(orig_lib_len);
 
             g.source = orig_source;
@@ -264,7 +252,6 @@ impl Engine {
     /// // Compare two values
     /// let result = engine.eval_binary_op::<bool>("==", "abc", 123_i64)?;
     /// assert!(!result);
-    /// # #[cfg(not(feature = "no_float"))]
     /// # {
     ///
     /// // Rawr by default equates floating-point integers with normal integers.
@@ -334,7 +321,7 @@ impl Engine {
             has_this = true;
         }
 
-        self.eval_fn_call_with_arguments::<T>(fn_name, args, has_this, has_this)?
+        self.eval_fn_call_with_arguments(fn_name, args, has_this, has_this)?
             .try_cast_result::<T>()
             .map_err(|v| {
                 let typename = match type_name::<T>() {
@@ -351,7 +338,7 @@ impl Engine {
             })
     }
     /// Evaluate a function call with the [`Engine`].
-    pub(crate) fn eval_fn_call_with_arguments<T: Variant + Clone>(
+    pub(crate) fn eval_fn_call_with_arguments(
         &self,
         fn_name: impl AsRef<str>,
         args: &mut [&mut Dynamic],
@@ -362,11 +349,6 @@ impl Engine {
         let op_token = Token::lookup_symbol_from_syntax(name);
 
         let hashes = if is_method_call {
-            #[cfg(feature = "no_function")]
-            {
-                panic!("method calls are not supported under `no_function`")
-            }
-            #[cfg(not(feature = "no_function"))]
             {
                 FnCallHashes::from_script_and_native(
                     calc_fn_hash(None, name, args.len() - 1),

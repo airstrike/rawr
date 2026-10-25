@@ -1,8 +1,6 @@
 //! Static host item declarations.
 
 use crate::{host, receiver, ImmutableString};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 pub(crate) type ImportedSelector = crate::host::type_def::ImportedSelector;
 

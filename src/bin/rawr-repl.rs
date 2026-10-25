@@ -56,14 +56,12 @@ fn print_help() {
     println!("!?<text>   => repeat the last history line containing some text");
     println!("scope      => print all variables in the scope");
     println!("strict     => toggle on/off Strict Variables Mode");
-    #[cfg(not(feature = "no_optimize"))]
     println!("optimize   => toggle on/off script optimization");
     #[cfg(feature = "metadata")]
     println!("functions  => print all functions defined");
     #[cfg(feature = "metadata")]
     println!("json       => output all functions to `metadata.json`");
     println!("ast        => print the last AST (optimized)");
-    #[cfg(not(feature = "no_optimize"))]
     println!("astu       => print the last raw, un-optimized AST");
     println!();
     println!("press Ctrl-Enter or end a line with `\\`");
@@ -112,8 +110,6 @@ fn print_keys() {
 }
 
 // Load script files specified in the command line.
-#[cfg(not(feature = "no_module"))]
-#[cfg(not(feature = "no_std"))]
 fn load_script_files(engine: &mut Engine) {
     // Load init scripts
     let mut contents = String::new();
@@ -294,23 +290,17 @@ fn main() {
     println!("{title}");
     println!("{0:=<1$}", "", title.len());
 
-    #[cfg(not(feature = "no_optimize"))]
     let mut optimize_level = rawr::OptimizationLevel::Full;
 
     // Initialize scripting engine
     let mut engine = Engine::new();
 
-    #[cfg(not(feature = "no_module"))]
-    #[cfg(not(feature = "no_std"))]
     load_script_files(&mut engine);
 
     // Setup Engine
-    #[cfg(not(feature = "no_optimize"))]
     engine.set_optimization_level(rawr::OptimizationLevel::None);
 
     // Set a file module resolver without caching
-    #[cfg(not(feature = "no_module"))]
-    #[cfg(not(feature = "no_std"))]
     {
         let mut resolver = rawr::module_resolvers::FileModuleResolver::new();
         resolver.enable_cache(false);
@@ -333,7 +323,6 @@ fn main() {
     let mut history_offset = 1;
 
     let mut main_ast = AST::empty();
-    #[cfg(not(feature = "no_optimize"))]
     let mut ast_u = AST::empty();
     let mut ast = AST::empty();
 
@@ -439,7 +428,6 @@ fn main() {
                 println!("Strict Variables Mode turned ON.");
                 continue;
             }
-            #[cfg(not(feature = "no_optimize"))]
             "optimize" => {
                 match optimize_level {
                     rawr::OptimizationLevel::Full => {
@@ -461,7 +449,6 @@ fn main() {
                 println!("{scope}");
                 continue;
             }
-            #[cfg(not(feature = "no_optimize"))]
             "astu" => {
                 // print the last un-optimized AST
                 println!("{ast_u:#?}\n");
@@ -479,7 +466,6 @@ fn main() {
                     println!("{f}")
                 }
 
-                #[cfg(not(feature = "no_function"))]
                 for f in main_ast.iter_functions() {
                     println!("{f}")
                 }
@@ -565,16 +551,10 @@ fn main() {
             .compile_with_scope(&scope, &input)
             .map_err(Into::into)
             .and_then(|r| {
-                #[cfg(not(feature = "no_optimize"))]
                 {
                     ast_u = r.clone();
 
                     ast = engine.optimize_ast(&scope, r, optimize_level);
-                }
-
-                #[cfg(feature = "no_optimize")]
-                {
-                    ast = r;
                 }
 
                 // Merge the AST into the main

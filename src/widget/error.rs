@@ -46,19 +46,8 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Data(error) => Some(error),
-            Self::Site | Self::Message { .. } | Self::Preview => None,
-        }
-    }
-}
-
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {
-    fn source(&self) -> Option<&(dyn core_error::Error + 'static)> {
         match self {
             Self::Data(error) => Some(error),
             Self::Site | Self::Message { .. } | Self::Preview => None,

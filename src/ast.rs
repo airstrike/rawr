@@ -10,14 +10,11 @@ pub mod script_fn;
 pub mod stmt;
 
 pub use ast::{ASTNode, EncapsulatedEnviron, AST};
-#[cfg(not(feature = "no_custom_syntax"))]
 pub use expr::CustomExpr;
 pub use expr::{BinaryExpr, Expr, FnCallExpr, FnCallHashes};
 pub use flags::{ASTFlags, FnAccess};
 pub use ident::Ident;
-#[cfg(not(feature = "no_module"))]
 pub use namespace::Namespace;
-#[cfg(not(feature = "no_function"))]
 pub use script_fn::{ScriptFnMetadata, ScriptFuncDef};
 pub use stmt::{
     CaseBlocksList, EnumCase, FlowControl, OpAssignment, RangeCase, Stmt, StmtBlock,
@@ -26,9 +23,3 @@ pub use stmt::{
 pub(crate) use stmt::{
     NominalEnumPattern, NominalLiteral, NominalPattern, NominalPayloadType, NOMINAL_MATCH_SENTINEL,
 };
-
-/// _(internals)_ Empty placeholder for a script-defined function.
-/// Exported under the `internals` feature only.
-#[cfg(feature = "no_function")]
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Default)]
-pub struct ScriptFuncDef;

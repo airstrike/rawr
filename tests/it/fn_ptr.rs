@@ -3,7 +3,6 @@ use rawr::{Engine, FnPtr, INT};
 /// A function item is a value, as in Rust: it can be bound to a local and
 /// called through it.
 #[test]
-#[cfg(not(feature = "no_function"))]
 fn test_fn_ptr() {
     let engine = Engine::new();
 
@@ -27,7 +26,6 @@ fn test_fn_ptr() {
 }
 
 #[test]
-#[cfg(not(feature = "no_closure"))]
 fn test_fn_ptr_make_closure() {
     let f = {
         let engine = Engine::new();

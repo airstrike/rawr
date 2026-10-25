@@ -166,13 +166,13 @@ pub fn check(table: &[u8]) -> Result<(), Error> {
 /// a compiler emits in address order by construction — and producing a table
 /// that silently resolves wrong is worse than not producing one.
 #[must_use]
-pub fn encode(sites: impl IntoIterator<Item = (u32, Site)>) -> alloc::vec::Vec<u8> {
-    let kept: alloc::vec::Vec<_> = sites
+pub fn encode(sites: impl IntoIterator<Item = (u32, Site)>) -> std::vec::Vec<u8> {
+    let kept: std::vec::Vec<_> = sites
         .into_iter()
         .filter(|(_, site)| site.line != 0)
         .collect();
 
-    let mut out = alloc::vec::Vec::new();
+    let mut out = std::vec::Vec::new();
     varint::put_u64(&mut out, kept.len() as u64);
 
     let mut previous = 0u32;
@@ -195,8 +195,8 @@ pub fn encode(sites: impl IntoIterator<Item = (u32, Site)>) -> alloc::vec::Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
-    use alloc::vec::Vec;
+    use std::vec;
+    use std::vec::Vec;
 
     fn site(line: u32, column: u32) -> Site {
         Site { line, column }

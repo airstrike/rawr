@@ -13,7 +13,6 @@ pub mod interner;
 pub(crate) mod nominal;
 pub mod parse_error;
 pub mod position;
-pub mod position_none;
 pub mod scope;
 pub mod var_def;
 pub mod variant;
@@ -21,10 +20,8 @@ pub mod variant;
 pub use bloom_filter::BloomFilterU64;
 pub use custom_types::{CustomTypeInfo, CustomTypesCollection};
 pub use dynamic::Dynamic;
-#[cfg(not(feature = "no_time"))]
 pub use dynamic::Instant;
 pub use error::EvalAltResult;
-#[cfg(not(feature = "no_float"))]
 pub use float::FloatWrapper;
 pub use fn_ptr::FnPtr;
 pub use immutable_string::ImmutableString;
@@ -32,10 +29,7 @@ pub use interner::StringsInterner;
 pub use parse_error::{LexError, ParseError, ParseErrorType, Rendered};
 pub use var_def::VarDefInfo;
 
-#[cfg(not(feature = "no_position"))]
 pub use position::{Position, Span};
-#[cfg(feature = "no_position")]
-pub use position_none::{Position, Span};
 
 pub use scope::Scope;
 pub use variant::Variant;

@@ -9,8 +9,6 @@
 use crate::host::{self, facade, item, signature, type_ref::Type};
 use crate::types::dynamic::Variant;
 use crate::{capability, receiver, Dynamic, Engine, EvalAltResult, ImmutableString, Position};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A native callback: the receiver first, then the arguments.
 pub type Callback = fn(&mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>;

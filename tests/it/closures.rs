@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_function"))]
 #[cfg(not(feature = "sync"))]
 use rawr::{AST, EvalAltResult};
 use rawr::{Engine, FnPtr, INT, Scope};
@@ -11,7 +10,6 @@ use std::rc::Rc;
 
 /// A closure that calls another closure is passed to a native, which calls it.
 #[test]
-#[cfg(not(feature = "no_closure"))]
 fn test_closure_call_from_native() {
     let mut engine = Engine::new();
 
@@ -36,7 +34,6 @@ fn test_closure_call_from_native() {
 }
 
 #[test]
-#[cfg(not(feature = "no_closure"))]
 fn test_closures() {
     let mut engine = Engine::new();
     let mut scope = Scope::new();
@@ -129,7 +126,6 @@ fn test_closures() {
 }
 
 #[test]
-#[cfg(not(feature = "no_closure"))]
 fn test_closures_sharing() {
     let mut engine = Engine::new();
 
@@ -178,7 +174,6 @@ fn test_closures_sharing() {
 }
 
 #[test]
-#[cfg(not(feature = "no_closure"))]
 fn test_closures_external() {
     let engine = Engine::new();
 
@@ -199,7 +194,6 @@ fn test_closures_external() {
 }
 
 #[test]
-#[cfg(not(feature = "no_closure"))]
 #[cfg(not(feature = "sync"))]
 fn test_closures_callback() {
     type SingleNode = Rc<dyn Node>;

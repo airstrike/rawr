@@ -94,7 +94,6 @@ fn lower(
         program,
         allocation,
         None,
-        #[cfg(not(feature = "no_optimize"))]
         crate::OptimizationLevel::None,
     )
 }

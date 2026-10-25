@@ -88,7 +88,6 @@ fn a_bare_function_name_is_a_pointer() {
 /// them apart. A closure that captures a script local is still a fragment, so
 /// the walker evaluates the capture and the order is its own.
 #[test]
-#[cfg(not(feature = "no_closure"))]
 fn a_capturing_closure_resolves_and_sees_its_capture() {
     let engine = corpus::engine();
     agree("let n: i64 = 10; let a = vec![1, 2, 3]; a.iter().map(|x| x * n).collect::<Vec<i64>>()");
@@ -99,7 +98,6 @@ fn a_capturing_closure_resolves_and_sees_its_capture() {
 }
 
 #[test]
-#[cfg(not(feature = "unchecked"))]
 fn a_callback_reaching_a_second_one_still_resolves() {
     // The limit is raised because reaching a chunk through rawr's dispatch
     // costs more call levels than reaching a script function does, and the
@@ -114,7 +112,6 @@ fn a_callback_reaching_a_second_one_still_resolves() {
 /// `move` copies what the closure captures, so a write after the closure is
 /// made does not reach it, however late the native calls it.
 #[test]
-#[cfg(not(feature = "no_closure"))]
 fn a_moved_closure_called_back_keeps_what_it_copied() {
     let engine = corpus::engine();
     let source = "let mut n: i64 = 1; let f = move |x: i64| x * n; n = 10; vec![1, 2, 3].into_iter().map(f).collect::<Vec<i64>>()";
@@ -138,7 +135,6 @@ fn an_error_inside_a_callback_still_arrives() {
 /// are stricter, never laxer. A program that would have run out of budget on
 /// the walker must not somehow keep going here.
 #[test]
-#[cfg(not(feature = "unchecked"))]
 fn a_callback_costs_more_call_levels() {
     // `Vec<Vec<..i64..>>`, `levels` deep.
     fn vec_type(levels: usize) -> String {

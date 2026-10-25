@@ -24,7 +24,6 @@ fn test_comments() {
 
     let _ = engine.run(" /**\n\u{1680}  */");
 
-    #[cfg(not(feature = "no_function"))]
     let _ = engine.compile("fn/*").unwrap_err();
 }
 

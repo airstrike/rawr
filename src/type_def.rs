@@ -2,8 +2,6 @@
 
 use crate::{capability, item, program, ImmutableString, Span};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A stable package- and module-qualified script type key.
 ///

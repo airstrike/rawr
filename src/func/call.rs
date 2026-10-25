@@ -16,21 +16,12 @@ use crate::{
     calc_fn_hash, calc_fn_hash_full, Dynamic, Engine, FnArgsVec, FnPtr, ImmutableString, Position,
     RawrResult, RawrResultOf, Scope, Shared, ERR,
 };
-#[cfg(feature = "no_std")]
-use hashbrown::hash_map::Entry;
-#[cfg(not(feature = "no_std"))]
 use std::collections::hash_map::Entry;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::{type_name, TypeId},
     convert::TryFrom,
     mem,
 };
-
-#[cfg(not(feature = "no_float"))]
-#[cfg(feature = "no_std")]
-use num_traits::Float;
 
 /// Arguments to a function call, which is a list of [`&mut Dynamic`][Dynamic].
 pub type FnCallArgs<'a> = [&'a mut Dynamic];
@@ -112,7 +103,6 @@ impl Drop for ArgBackup<'_> {
 }
 
 // Ensure no data races in function call arguments.
-#[cfg(not(feature = "no_closure"))]
 #[inline]
 pub fn ensure_no_data_race(fn_name: &str, args: &FnCallArgs, is_ref_mut: bool) -> RawrResultOf<()> {
     args.iter()
@@ -128,7 +118,6 @@ pub fn ensure_no_data_race(fn_name: &str, args: &FnCallArgs, is_ref_mut: bool) -
 }
 
 /// Is a function name an anonymous function?
-#[cfg(not(feature = "no_function"))]
 #[inline]
 #[must_use]
 pub fn is_anonymous_fn(name: &str) -> bool {
@@ -188,14 +177,11 @@ impl Engine {
 
                 loop {
                     // First check scripted functions in the AST or embedded environments
-                    #[cfg(not(feature = "no_function"))]
                     let func = _global
                         .lib
                         .iter()
                         .rev()
                         .find_map(|m| m.get_fn(hash).map(|f| (f, m.id_raw())));
-                    #[cfg(feature = "no_function")]
-                    let func = None;
 
                     // Then check the global namespace
                     let func = func.or_else(|| {
@@ -205,7 +191,6 @@ impl Engine {
                     });
 
                     // Then check imported modules for global functions, then global sub-modules for global functions
-                    #[cfg(not(feature = "no_module"))]
                     let func = func
                         .or_else(|| _global.get_qualified_fn(hash, true))
                         .or_else(|| {
@@ -240,14 +225,12 @@ impl Engine {
                             .iter()
                             .any(|m| m.may_contain_dynamic_fn(hash_base));
 
-                        #[cfg(not(feature = "no_function"))]
                         let has_dynamic = has_dynamic
                             || _global
                                 .lib
                                 .iter()
                                 .any(|m| m.may_contain_dynamic_fn(hash_base));
 
-                        #[cfg(not(feature = "no_module"))]
                         let has_dynamic = has_dynamic
                             || _global.may_contain_dynamic_fn(hash_base)
                             || self
@@ -447,7 +430,6 @@ impl Engine {
             let result = _result?;
 
             // Check the data size of any `&mut` object, which may be changed.
-            #[cfg(not(feature = "unchecked"))]
             if is_ref_mut && !args.is_empty() {
                 self.check_data_size(&*args[0], pos)?;
             }
@@ -482,7 +464,6 @@ impl Engine {
 
         match name {
             // index getter function not found?
-            #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
             crate::engine::FN_IDX_GET => {
                 debug_assert_eq!(args.len(), 2);
 
@@ -493,7 +474,6 @@ impl Engine {
             }
 
             // index setter function not found?
-            #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
             crate::engine::FN_IDX_SET => {
                 debug_assert_eq!(args.len(), 3);
 
@@ -505,7 +485,6 @@ impl Engine {
             }
 
             // Getter function not found?
-            #[cfg(not(feature = "no_object"))]
             _ if name.starts_with(crate::engine::FN_GET) => {
                 debug_assert_eq!(args.len(), 1);
 
@@ -522,7 +501,6 @@ impl Engine {
             }
 
             // Setter function not found?
-            #[cfg(not(feature = "no_object"))]
             _ if name.starts_with(crate::engine::FN_SET) => {
                 debug_assert_eq!(args.len(), 2);
 
@@ -576,14 +554,11 @@ impl Engine {
                 return Some(Ok(typ.into()));
             }
 
-            #[cfg(not(feature = "no_closure"))]
             crate::engine::KEYWORD_IS_SHARED if args.len() == 1 => {
                 return Some(Ok(args[0].is_shared().into()))
             }
-            #[cfg(not(feature = "no_closure"))]
             crate::engine::KEYWORD_IS_SHARED => true,
 
-            #[cfg(not(feature = "no_function"))]
             crate::engine::KEYWORD_IS_DEF_FN => true,
 
             KEYWORD_TYPE_OF | KEYWORD_FN_PTR | KEYWORD_EVAL | KEYWORD_IS_DEF_VAR
@@ -628,19 +603,16 @@ impl Engine {
         }
 
         // Check for data race.
-        #[cfg(not(feature = "no_closure"))]
         ensure_no_data_race(fn_name, args, is_ref_mut)?;
 
         defer! { let orig_level = global.level; global.level += 1 }
 
         // Script-defined function call?
-        #[cfg(not(feature = "no_function"))]
         if !hashes.is_native_only() {
             let hash = hashes.script();
             let local_entry = &mut None;
             let mut resolved = None;
 
-            #[cfg(not(feature = "no_object"))]
             if _is_method_call && !args.is_empty() {
                 let typed_hash =
                     crate::calc_typed_method_hash(hash, self.map_type_name(args[0].type_name()));
@@ -709,22 +681,22 @@ impl Engine {
         );
 
         #[cfg(feature = "internals")]
-        if result.is_err() {
-            if let Some(ref callback) = self.missing_function {
-                let mut empty_scope;
-                let scope = match _scope {
-                    Some(ref mut s) => &mut **s,
-                    None => {
-                        empty_scope = Scope::new();
-                        &mut empty_scope
-                    }
-                };
-                let context = EvalContext::new(self, global, caches, scope, None);
-                match callback(fn_name, args, _is_method_call, context) {
-                    Ok(Some(value)) => return Ok((value, false)),
-                    Ok(None) => {}
-                    Err(err) => return Err(err),
+        if result.is_err()
+            && let Some(ref callback) = self.missing_function
+        {
+            let mut empty_scope;
+            let scope = match _scope {
+                Some(ref mut s) => &mut **s,
+                None => {
+                    empty_scope = Scope::new();
+                    &mut empty_scope
                 }
+            };
+            let context = EvalContext::new(self, global, caches, scope, None);
+            match callback(fn_name, args, _is_method_call, context) {
+                Ok(Some(value)) => return Ok((value, false)),
+                Ok(None) => {}
+                Err(err) => return Err(err),
             }
         }
 
@@ -766,7 +738,6 @@ impl Engine {
     }
 
     /// Call a dot method.
-    #[cfg(not(feature = "no_object"))]
     pub(crate) fn make_method_call(
         &self,
         global: &mut GlobalRuntimeState,
@@ -792,7 +763,6 @@ impl Engine {
 
                 match fn_ptr.typ {
                     // Linked to scripted function - short-circuit
-                    #[cfg(not(feature = "no_function"))]
                     FnPtrType::Script(ref fn_def) if fn_def.params.len() == args.len() => {
                         let fn_ptr = target.as_ref().read_lock::<FnPtr>().unwrap();
 
@@ -822,7 +792,6 @@ impl Engine {
                         let fn_name = fn_ptr.fn_name();
 
                         let _is_anon = false;
-                        #[cfg(not(feature = "no_function"))]
                         let _is_anon = fn_ptr.is_anonymous();
 
                         // Recalculate hashes
@@ -862,13 +831,11 @@ impl Engine {
                     })?;
 
                 let _is_anon = false;
-                #[cfg(not(feature = "no_function"))]
                 let _is_anon = fn_ptr.is_anonymous();
 
                 let FnPtr {
                     name,
                     curry,
-                    #[cfg(not(feature = "no_function"))]
                     env,
                     typ,
                 } = fn_ptr;
@@ -881,10 +848,8 @@ impl Engine {
 
                 match typ {
                     // Linked to scripted function - short-circuit
-                    #[cfg(not(feature = "no_function"))]
                     FnPtrType::Script(fn_def) if fn_def.params.len() == args.len() => {
                         // Check for data race.
-                        #[cfg(not(feature = "no_closure"))]
                         ensure_no_data_race(&fn_def.name, args, false)?;
 
                         let scope = &mut Scope::new();
@@ -925,16 +890,11 @@ impl Engine {
                         let new_hash = if !_is_anon && !is_valid_function_name(&name) {
                             FnCallHashes::from_native_only(calc_fn_hash(None, &name, num_args))
                         } else {
-                            #[cfg(not(feature = "no_function"))]
                             {
                                 FnCallHashes::from_script_and_native(
                                     calc_fn_hash(None, &name, num_args - 1),
                                     calc_fn_hash(None, &name, num_args),
                                 )
-                            }
-                            #[cfg(feature = "no_function")]
-                            {
-                                FnCallHashes::from_native_only(calc_fn_hash(None, &name, num_args))
                             }
                         };
 
@@ -965,7 +925,6 @@ impl Engine {
             }
 
             // Handle var.is_shared()
-            #[cfg(not(feature = "no_closure"))]
             crate::engine::KEYWORD_IS_SHARED if call_args.is_empty() => {
                 return Ok((target.is_shared().into(), false));
             }
@@ -978,7 +937,6 @@ impl Engine {
                 let mut call_args = call_args;
 
                 // Check if it is a map method call in OOP style
-                #[cfg(not(feature = "no_object"))]
                 if let Ok(map) = target.as_ref().as_map_ref()
                     && let Some(val) = map.get(fn_name)
                     && let Some(fn_ptr) = val.read_lock::<FnPtr>()
@@ -999,26 +957,14 @@ impl Engine {
 
                     match fn_ptr.typ {
                         // Linked to scripted function
-                        #[cfg(not(feature = "no_function"))]
                         FnPtrType::Script(ref fn_def) if fn_def.params.len() == call_args.len() => {
                             _linked = Some((Some(fn_def.clone()), None, fn_ptr.env.clone()))
                         }
                         FnPtrType::Native(ref func) => {
-                            _linked = Some((
-                                #[cfg(not(feature = "no_function"))]
-                                None,
-                                #[cfg(feature = "no_function")]
-                                Option::<()>::None,
-                                Some(func.clone()),
-                                #[cfg(not(feature = "no_function"))]
-                                fn_ptr.env.clone(),
-                                #[cfg(feature = "no_function")]
-                                Option::<()>::None,
-                            ))
+                            _linked = Some((None, Some(func.clone()), fn_ptr.env.clone()))
                         }
                         _ => {
                             let _is_anon = false;
-                            #[cfg(not(feature = "no_function"))]
                             let _is_anon = fn_ptr.is_anonymous();
 
                             // Recalculate the hash based on the new function name and new arguments
@@ -1029,18 +975,11 @@ impl Engine {
                                     None, fn_name, num_args,
                                 ))
                             } else {
-                                #[cfg(not(feature = "no_function"))]
                                 {
                                     FnCallHashes::from_script_and_native(
                                         calc_fn_hash(None, fn_name, num_args - 1),
                                         calc_fn_hash(None, fn_name, num_args),
                                     )
-                                }
-                                #[cfg(feature = "no_function")]
-                                {
-                                    FnCallHashes::from_native_only(calc_fn_hash(
-                                        None, fn_name, num_args,
-                                    ))
                                 }
                             };
                         }
@@ -1049,7 +988,6 @@ impl Engine {
 
                 match _linked {
                     // Linked to scripted function - short-circuit
-                    #[cfg(not(feature = "no_function"))]
                     Some((Some(fn_def), None, env)) => {
                         let scope = &mut Scope::new();
                         let env = env.as_deref();
@@ -1145,13 +1083,11 @@ impl Engine {
                 })?;
 
                 let _is_anon = false;
-                #[cfg(not(feature = "no_function"))]
                 let _is_anon = fn_ptr.is_anonymous();
 
                 let FnPtr {
                     name,
                     curry: extra_curry,
-                    #[cfg(not(feature = "no_function"))]
                     env,
                     typ,
                 } = fn_ptr;
@@ -1160,7 +1096,6 @@ impl Engine {
 
                 match typ {
                     // Linked to scripted function - short-circuit
-                    #[cfg(not(feature = "no_function"))]
                     FnPtrType::Script(fn_def)
                         if fn_def.params.len() == curry.len() + args_expr.len() =>
                     {
@@ -1270,7 +1205,6 @@ impl Engine {
             }
 
             // Handle is_shared(var)
-            #[cfg(not(feature = "no_closure"))]
             crate::engine::KEYWORD_IS_SHARED if num_args == 1 => {
                 let arg = first_arg.unwrap();
                 let (arg_value, ..) =
@@ -1279,7 +1213,6 @@ impl Engine {
             }
 
             // Handle is_def_fn(fn_name, arity)
-            #[cfg(not(feature = "no_function"))]
             crate::engine::KEYWORD_IS_DEF_FN if num_args == 2 => {
                 let first = first_arg.unwrap();
                 let (arg_value, arg_pos) =
@@ -1305,8 +1238,6 @@ impl Engine {
             }
 
             // Handle is_def_fn(this_type, fn_name, arity)
-            #[cfg(not(feature = "no_function"))]
-            #[cfg(not(feature = "no_object"))]
             crate::engine::KEYWORD_IS_DEF_FN if num_args == 3 => {
                 let first = first_arg.unwrap();
                 let (arg_value, arg_pos) =
@@ -1364,7 +1295,6 @@ impl Engine {
                 }
                 let mut value = match self.search_namespace(global, caches, scope, this_ptr, arg)? {
                     crate::eval::Target::RefMut(slot) => std::mem::take(slot),
-                    #[cfg(not(feature = "no_closure"))]
                     crate::eval::Target::SharedValue { mut guard, .. } => {
                         std::mem::take(&mut *guard)
                     }
@@ -1389,7 +1319,6 @@ impl Engine {
             KEYWORD_EVAL if num_args == 1 => {
                 // eval - only in function call style
                 let orig_scope_len = scope.len();
-                #[cfg(not(feature = "no_module"))]
                 let orig_imports_len = global.num_imports();
                 let arg = first_arg.unwrap();
                 let (arg_value, pos) = self.get_arg_value(global, caches, scope, this_ptr, arg)?;
@@ -1406,7 +1335,6 @@ impl Engine {
                 //            all variable offsets from this point on will be mis-aligned.
                 //            The same is true for imports.
                 let scope_changed = scope.len() != orig_scope_len;
-                #[cfg(not(feature = "no_module"))]
                 let scope_changed = scope_changed || global.num_imports() != orig_imports_len;
 
                 if scope_changed {
@@ -1459,10 +1387,7 @@ impl Engine {
         }
 
         // Call with blank scope
-        #[cfg(not(feature = "no_closure"))]
         let has_non_shared_this_ptr = this_ptr.as_ref().is_some_and(|v| !v.is_shared());
-        #[cfg(feature = "no_closure")]
-        let has_non_shared_this_ptr = this_ptr.is_some();
 
         // If the first argument is a variable, and there are no curried arguments,
         // convert to method-call style in order to leverage potential &mut first argument
@@ -1533,7 +1458,6 @@ impl Engine {
     }
 
     /// Call a namespace-qualified function in normal function-call style.
-    #[cfg(not(feature = "no_module"))]
     pub(crate) fn make_qualified_function_call(
         &self,
         global: &mut GlobalRuntimeState,
@@ -1550,10 +1474,7 @@ impl Engine {
         let args = &mut FnArgsVec::with_capacity(args_expr.len());
         let mut first_arg_value = None;
 
-        #[cfg(not(feature = "no_closure"))]
         let has_non_shared_this_ptr = this_ptr.as_ref().is_some_and(|v| !v.is_shared());
-        #[cfg(feature = "no_closure")]
-        let has_non_shared_this_ptr = this_ptr.is_some();
 
         // See if the first argument is a variable.
         // If so, convert to method-call style in order to leverage potential
@@ -1681,7 +1602,6 @@ impl Engine {
         defer! { let orig_level = global.level; global.level += 1 }
 
         match func {
-            #[cfg(not(feature = "no_function"))]
             Some(RawrFunc::Script { fn_def, env }) => {
                 let env = env.as_deref();
                 let scope = &mut Scope::new();
@@ -1757,15 +1677,10 @@ impl Engine {
 
         // Compile the script text
         // No optimizations because we only run it once
-        let ast = self.compile_scripts_with_scope_raw(
-            None,
-            [script],
-            #[cfg(not(feature = "no_optimize"))]
-            crate::OptimizationLevel::None,
-        )?;
+        let ast =
+            self.compile_scripts_with_scope_raw(None, [script], crate::OptimizationLevel::None)?;
 
         // If new functions are defined within the eval string, it is an error
-        #[cfg(not(feature = "no_function"))]
         if ast.has_functions() {
             return Err(crate::PERR::WrongFnDefinition.into());
         }
@@ -1775,12 +1690,9 @@ impl Engine {
             return Ok(Dynamic::UNIT);
         }
 
-        #[cfg(not(feature = "no_function"))]
         let orig_lib_len = global.lib.len();
-        #[cfg(not(feature = "no_function"))]
         global.lib.push(ast.shared_support().clone());
         defer! { global => move |_state| {
-            #[cfg(not(feature = "no_function"))]
             _state.lib.truncate(orig_lib_len);
         }}
 
@@ -1804,7 +1716,6 @@ impl Engine {
         pos: Position,
     ) -> RawrResult {
         let FnCallExpr {
-            #[cfg(not(feature = "no_module"))]
             namespace,
             name,
             hashes,
@@ -1878,7 +1789,6 @@ impl Engine {
                 .map(|(v, ..)| v);
         }
 
-        #[cfg(not(feature = "no_module"))]
         if !namespace.is_empty() {
             // Qualified function call
             let hash = hashes.native();

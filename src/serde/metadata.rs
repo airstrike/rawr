@@ -7,8 +7,6 @@ use crate::module::{calc_native_fn_hash, FuncMetadata};
 use crate::types::custom_types::CustomTypeInfo;
 use crate::{calc_fn_hash, Engine, FnAccess, SmartString, ThinVec, AST};
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{borrow::Cow, cmp::Ordering, collections::BTreeMap};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -66,15 +64,12 @@ impl<'a> From<(&'a str, &'a CustomTypeInfo)> for CustomTypeMetadata<'a> {
 struct FnMetadata<'a> {
     pub base_hash: u64,
     pub full_hash: u64,
-    #[cfg(not(feature = "no_module"))]
     pub namespace: crate::FnNamespace,
     pub access: FnAccess,
     pub name: &'a str,
-    #[cfg(not(feature = "no_function"))]
     pub is_anonymous: bool,
     #[serde(rename = "type")]
     pub typ: FnType,
-    #[cfg(not(feature = "no_object"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub this_type: Option<&'a str>,
     pub num_params: usize,
@@ -110,15 +105,11 @@ impl<'a> From<(&'a RawrFunc, &'a FuncMetadata)> for FnMetadata<'a> {
             (
                 FnType::Script,
                 base_hash,
-                #[cfg(not(feature = "no_function"))]
-                #[cfg(not(feature = "no_object"))]
                 f.get_script_fn_def()
                     .unwrap()
                     .this_type
                     .as_ref()
                     .map(|s| s.as_str()),
-                #[cfg(any(feature = "no_object", feature = "no_function"))]
-                None::<&str>,
             )
         } else {
             (
@@ -131,14 +122,11 @@ impl<'a> From<(&'a RawrFunc, &'a FuncMetadata)> for FnMetadata<'a> {
         Self {
             base_hash,
             full_hash,
-            #[cfg(not(feature = "no_module"))]
             namespace: m.namespace,
             access: m.access,
             name: &m.name,
-            #[cfg(not(feature = "no_function"))]
             is_anonymous: crate::parser::is_anonymous_fn(&m.name),
             typ,
-            #[cfg(not(feature = "no_object"))]
             this_type: _this_type,
             num_params: m.num_params,
             params: m
@@ -161,10 +149,6 @@ impl<'a> From<(&'a RawrFunc, &'a FuncMetadata)> for FnMetadata<'a> {
             return_type: format_param_type_for_display(&m.return_type, true),
             signature: m.gen_signature(Into::into).into(),
             doc_comments: if f.is_script() {
-                #[cfg(feature = "no_function")]
-                unreachable!("script-defined functions should not exist under no_function");
-
-                #[cfg(not(feature = "no_function"))]
                 f.get_script_fn_def()
                     .expect("`ScriptFuncDef`")
                     .comments
@@ -239,7 +223,6 @@ impl Engine {
         let mut global_doc = String::new();
         let mut global = ModuleMetadata::new();
 
-        #[cfg(not(feature = "no_module"))]
         for (name, m) in &self.global_sub_modules {
             global.modules.insert(name, m.as_ref().into());
         }
@@ -261,7 +244,6 @@ impl Engine {
                 m.iter_fn().for_each(|f| {
                     #[allow(unused_mut)]
                     let mut meta: FnMetadata = f.into();
-                    #[cfg(not(feature = "no_module"))]
                     {
                         meta.namespace = crate::FnNamespace::Global;
                     }
@@ -269,7 +251,6 @@ impl Engine {
                 })
             });
 
-        #[cfg(not(feature = "no_function"))]
         if let Some(ast) = _ast {
             ast.shared_lib()
                 .iter_custom_types()
@@ -278,7 +259,6 @@ impl Engine {
             ast.shared_lib().iter_fn().for_each(|f| {
                 #[allow(unused_mut)]
                 let mut meta: FnMetadata = f.into();
-                #[cfg(not(feature = "no_module"))]
                 {
                     meta.namespace = crate::FnNamespace::Global;
                 }

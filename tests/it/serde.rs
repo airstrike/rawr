@@ -8,11 +8,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 
-#[cfg(not(feature = "no_index"))]
 use rawr::Array;
-#[cfg(not(feature = "no_float"))]
 use rawr::FLOAT;
-#[cfg(not(feature = "no_object"))]
 use rawr::Map;
 #[cfg(feature = "decimal")]
 use rust_decimal::Decimal;
@@ -24,19 +21,9 @@ fn test_serde_ser_primary_types() {
     assert!(to_dynamic(true).unwrap().is_bool());
     assert!(to_dynamic(()).unwrap().is_unit());
 
-    #[cfg(not(feature = "no_float"))]
     assert!(to_dynamic(123.456_f64).unwrap().is::<FLOAT>());
 
-    #[cfg(not(feature = "no_float"))]
     assert!(to_dynamic(123.456_f32).unwrap().is::<FLOAT>());
-
-    #[cfg(feature = "no_float")]
-    #[cfg(feature = "decimal")]
-    assert!(to_dynamic(123.456_f64).unwrap().is::<Decimal>());
-
-    #[cfg(feature = "no_float")]
-    #[cfg(feature = "decimal")]
-    assert!(to_dynamic(123.456_f32).unwrap().is::<Decimal>());
 
     assert!(to_dynamic("hello".to_string()).unwrap().is::<String>());
 }
@@ -54,7 +41,6 @@ fn test_serde_ser_integer_types() {
 }
 
 #[test]
-#[cfg(not(feature = "no_index"))]
 fn test_serde_ser_array() {
     let arr: Vec<INT> = vec![123, 456, 42, 999];
 
@@ -64,8 +50,6 @@ fn test_serde_ser_array() {
 }
 
 #[test]
-#[cfg(not(feature = "no_index"))]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_ser_struct() {
     #[derive(Debug, Serialize, PartialEq)]
     struct Hello {
@@ -117,28 +101,22 @@ fn test_serde_ser_unit_enum() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_ser_externally_tagged_enum() {
     #[allow(clippy::enum_variant_names)]
     #[derive(Serialize)]
     enum MyEnum {
         VariantUnit,
-        #[cfg(not(feature = "no_index"))]
         VariantUnitTuple(),
         VariantNewtype(i32),
-        #[cfg(not(feature = "no_index"))]
         VariantTuple(i32, i32),
         VariantEmptyStruct {},
-        VariantStruct {
-            a: i32,
-        },
+        VariantStruct { a: i32 },
     }
 
     {
         assert_eq!("VariantUnit", to_dynamic(MyEnum::VariantUnit).unwrap().into_immutable_string().unwrap().as_str());
     }
 
-    #[cfg(not(feature = "no_index"))]
     {
         let mut map = to_dynamic(MyEnum::VariantUnitTuple()).unwrap().cast::<Map>();
         let content = map.remove("VariantUnitTuple").unwrap().cast::<Array>();
@@ -151,7 +129,6 @@ fn test_serde_ser_externally_tagged_enum() {
     assert!(map.is_empty());
     assert_eq!(Ok(123), content.as_int());
 
-    #[cfg(not(feature = "no_index"))]
     {
         let mut map = to_dynamic(MyEnum::VariantTuple(123, 456)).unwrap().cast::<Map>();
         let content = map.remove("VariantTuple").unwrap().cast::<Array>();
@@ -174,7 +151,6 @@ fn test_serde_ser_externally_tagged_enum() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_ser_internally_tagged_enum() {
     #[derive(Serialize)]
     #[serde(tag = "tag")]
@@ -194,29 +170,23 @@ fn test_serde_ser_internally_tagged_enum() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_ser_adjacently_tagged_enum() {
     #[allow(clippy::enum_variant_names)]
     #[derive(Serialize)]
     #[serde(tag = "tag", content = "content")]
     enum MyEnum {
         VariantUnit,
-        #[cfg(not(feature = "no_index"))]
         VariantUnitTuple(),
         VariantNewtype(i32),
-        #[cfg(not(feature = "no_index"))]
         VariantTuple(i32, i32),
         VariantEmptyStruct {},
-        VariantStruct {
-            a: i32,
-        },
+        VariantStruct { a: i32 },
     }
 
     let mut map = to_dynamic(MyEnum::VariantUnit).unwrap().cast::<Map>();
     assert_eq!("VariantUnit", map.remove("tag").unwrap().into_immutable_string().unwrap().as_str());
     assert!(map.is_empty());
 
-    #[cfg(not(feature = "no_index"))]
     {
         let mut map = to_dynamic(MyEnum::VariantUnitTuple()).unwrap().cast::<Map>();
         assert_eq!("VariantUnitTuple", map.remove("tag").unwrap().into_immutable_string().unwrap().as_str());
@@ -231,7 +201,6 @@ fn test_serde_ser_adjacently_tagged_enum() {
     assert!(map.is_empty());
     assert_eq!(Ok(123), content.as_int());
 
-    #[cfg(not(feature = "no_index"))]
     {
         let mut map = to_dynamic(MyEnum::VariantTuple(123, 456)).unwrap().cast::<Map>();
         assert_eq!("VariantTuple", map.remove("tag").unwrap().into_immutable_string().unwrap().as_str());
@@ -257,7 +226,6 @@ fn test_serde_ser_adjacently_tagged_enum() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_ser_untagged_enum() {
     #[derive(Serialize)]
     #[serde(untagged)]
@@ -286,26 +254,13 @@ fn test_serde_de_primary_types() {
     assert!(from_dynamic::<bool>(&true.into()).unwrap());
     let _: () = from_dynamic::<()>(&().into()).unwrap();
 
-    #[cfg(not(feature = "no_float"))]
     assert_eq!(123.456, from_dynamic::<FLOAT>(&123.456.into()).unwrap());
 
-    #[cfg(not(feature = "no_float"))]
     assert_eq!(123.456, from_dynamic::<f32>(&Dynamic::from(123.456_f32)).unwrap());
-
-    #[cfg(feature = "no_float")]
-    #[cfg(feature = "decimal")]
-    {
-        use std::str::FromStr;
-        let d: Dynamic = Decimal::from_str("123.456").unwrap().into();
-
-        assert_eq!(123.456, from_dynamic::<f64>(&d).unwrap());
-        assert_eq!(123.456, from_dynamic::<f32>(&d).unwrap());
-    }
 
     assert_eq!("hello", from_dynamic::<String>(&"hello".to_string().into()).unwrap());
 }
 
-#[cfg(not(feature = "no_object"))]
 #[test]
 fn test_serde_de_variants() {
     #[derive(Debug)]
@@ -345,15 +300,12 @@ fn test_serde_de_integer_types() {
 }
 
 #[test]
-#[cfg(not(feature = "no_index"))]
 fn test_serde_de_array() {
     let arr: Vec<INT> = vec![123, 456, 42, 999];
     assert_eq!(arr, from_dynamic::<Vec<INT>>(&arr.clone().into()).unwrap());
 }
 
 #[test]
-#[cfg(not(feature = "no_index"))]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_de_struct() {
     #[derive(Debug, Deserialize, PartialEq)]
     struct Hello {
@@ -404,28 +356,22 @@ fn test_serde_de_unit_enum() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_de_externally_tagged_enum() {
     #[allow(clippy::enum_variant_names)]
     #[derive(Debug, PartialEq, Deserialize)]
     #[serde(deny_unknown_fields)]
     enum MyEnum {
         VariantUnit,
-        #[cfg(not(feature = "no_index"))]
         VariantUnitTuple(),
         VariantNewtype(i32),
-        #[cfg(not(feature = "no_index"))]
         VariantTuple(i32, i32),
         VariantEmptyStruct {},
-        VariantStruct {
-            a: i32,
-        },
+        VariantStruct { a: i32 },
     }
 
     let d = Dynamic::from("VariantUnit".to_string());
     assert_eq!(MyEnum::VariantUnit, from_dynamic(&d).unwrap());
 
-    #[cfg(not(feature = "no_index"))]
     {
         let array: Array = vec![];
         let mut map_outer = Map::new();
@@ -437,7 +383,6 @@ fn test_serde_de_externally_tagged_enum() {
     map_outer.insert("VariantNewtype".into(), (123 as INT).into());
     assert_eq!(MyEnum::VariantNewtype(123), from_dynamic(&map_outer.into()).unwrap());
 
-    #[cfg(not(feature = "no_index"))]
     {
         let array: Array = vec![(123 as INT).into(), (456 as INT).into()];
         let mut map_outer = Map::new();
@@ -458,7 +403,6 @@ fn test_serde_de_externally_tagged_enum() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_de_internally_tagged_enum() {
     #[derive(Debug, PartialEq, Deserialize)]
     #[serde(tag = "tag", deny_unknown_fields)]
@@ -478,29 +422,23 @@ fn test_serde_de_internally_tagged_enum() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_de_adjacently_tagged_enum() {
     #[allow(clippy::enum_variant_names)]
     #[derive(Debug, PartialEq, Deserialize)]
     #[serde(tag = "tag", content = "content", deny_unknown_fields)]
     enum MyEnum {
         VariantUnit,
-        #[cfg(not(feature = "no_index"))]
         VariantUnitTuple(),
         VariantNewtype(i32),
-        #[cfg(not(feature = "no_index"))]
         VariantTuple(i32, i32),
         VariantEmptyStruct {},
-        VariantStruct {
-            a: i32,
-        },
+        VariantStruct { a: i32 },
     }
 
     let mut map_outer = Map::new();
     map_outer.insert("tag".into(), "VariantUnit".into());
     assert_eq!(MyEnum::VariantUnit, from_dynamic(&map_outer.into()).unwrap());
 
-    #[cfg(not(feature = "no_index"))]
     {
         let array: Array = vec![];
         let mut map_outer = Map::new();
@@ -514,7 +452,6 @@ fn test_serde_de_adjacently_tagged_enum() {
     map_outer.insert("content".into(), (123 as INT).into());
     assert_eq!(MyEnum::VariantNewtype(123), from_dynamic(&map_outer.into()).unwrap());
 
-    #[cfg(not(feature = "no_index"))]
     {
         let array: Array = vec![(123 as INT).into(), (456 as INT).into()];
         let mut map_outer = Map::new();
@@ -538,7 +475,6 @@ fn test_serde_de_adjacently_tagged_enum() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_de_untagged_enum() {
     #[derive(Debug, PartialEq, Deserialize)]
     #[serde(untagged, deny_unknown_fields)]
@@ -562,8 +498,6 @@ fn test_serde_de_untagged_enum() {
 
 #[test]
 #[cfg(feature = "metadata")]
-#[cfg(not(feature = "no_object"))]
-#[cfg(not(feature = "no_index"))]
 fn test_serde_json() -> serde_json::Result<()> {
     let s: ImmutableString = "hello".into();
     assert_eq!(serde_json::to_string(&s).unwrap(), r#""hello""#);
@@ -602,11 +536,9 @@ fn test_serde_json() -> serde_json::Result<()> {
 #[test]
 #[cfg(feature = "metadata")]
 #[cfg(feature = "decimal")]
-#[cfg(not(feature = "no_float"))]
 fn test_serde_json_numbers() -> serde_json::Result<()> {
     use std::str::FromStr;
 
-    #[cfg(not(feature = "only_i32"))]
     {
         let d: Dynamic = serde_json::from_str("100000000000").unwrap();
         assert!(d.is::<INT>());
@@ -625,7 +557,6 @@ fn test_serde_json_numbers() -> serde_json::Result<()> {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_optional() {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct TestStruct {
@@ -659,8 +590,6 @@ fn test_serde_optional() {
 }
 
 #[test]
-#[cfg(not(feature = "no_index"))]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_blob() {
     // A typed script's `Vec<u8>` is an array, so the blob is built in Rust.
     let mut map = Map::new();
@@ -676,7 +605,6 @@ fn test_serde_blob() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_json_borrowed_string() {
     let value = json!({ "a": "b" });
     println!("value: {value:?}");
@@ -691,7 +619,6 @@ fn test_serde_json_borrowed_string() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_serde_scope() {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct TestStruct {
@@ -716,7 +643,6 @@ fn test_serde_scope() {
 }
 
 #[test]
-#[cfg(not(feature = "no_function"))]
 fn nominal_values_require_an_explicit_serialization_capability() {
     let engine = Engine::new();
 

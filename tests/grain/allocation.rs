@@ -176,7 +176,6 @@ total;
 // `SCRIPT` uses floats, so the measurement is a default-build one, and says
 // so.
 #[test]
-#[cfg(not(feature = "no_float"))]
 fn allocation_footprint() {
     let engine = Engine::new();
 

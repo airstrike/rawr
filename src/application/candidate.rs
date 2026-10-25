@@ -75,7 +75,6 @@ impl Candidate {
         application::Descriptor::from_candidate(self)
     }
 
-    #[cfg(not(feature = "no_std"))]
     pub(crate) fn validate_package(
         self,
     ) -> Result<application::Descriptor, (program::source::Id, application::Error)> {

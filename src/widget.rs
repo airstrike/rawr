@@ -19,8 +19,6 @@ pub(crate) use resolve::resolve;
 pub use site::Site;
 
 use crate::{host, item, program, type_def, Span};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// One opaque source-qualified lifecycle location.
 #[derive(Clone, Copy, Debug)]

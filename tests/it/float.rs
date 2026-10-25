@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_float"))]
 use rawr::{Engine, FLOAT};
 
 const EPSILON: FLOAT = 0.000_000_000_1;
@@ -29,8 +28,6 @@ fn test_float_scientific() {
     let _ = engine.compile("123.456e1.23").unwrap_err();
 }
 
-#[cfg(not(feature = "unchecked"))]
-#[cfg(not(feature = "f32_float"))]
 #[test]
 fn test_float_epsilon() {
     let engine = Engine::new();
@@ -48,7 +45,6 @@ fn test_float_parse() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_struct_with_float() {
     let engine = Engine::new();
 

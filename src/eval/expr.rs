@@ -5,13 +5,10 @@ use crate::ast::Expr;
 use crate::packages::string_basic::{print_with_func, FUNC_TO_STRING};
 use crate::types::dynamic::AccessMode;
 use crate::{Dynamic, Engine, RawrResult, RawrResultOf, Scope, SmartString, ERR};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{convert::TryInto, fmt::Write, num::NonZeroUsize};
 
 impl Engine {
     /// Search for a module within an imports stack.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     #[must_use]
     pub(crate) fn search_imports(
@@ -70,7 +67,6 @@ impl Engine {
         // before: an index means the parser resolved the name to a real
         // variable, and that variable keeps winning over a function sharing its
         // name.
-        #[cfg(not(feature = "no_function"))]
         if let Expr::Variable(v, None, ..) = expr
             && let Some(func) = global
                 .lib
@@ -110,7 +106,6 @@ impl Engine {
 
             Expr::Variable(_, Some(i), ..) => i.get() as usize,
             Expr::Variable(v, None, ..) => {
-                #[cfg(not(feature = "no_module"))]
                 debug_assert!(v.2.is_empty(), "variable should not be namespace-qualified");
 
                 v.0.map_or(0, NonZeroUsize::get)
@@ -189,7 +184,6 @@ impl Engine {
             }
             Expr::Variable(v, None, ..) => match &**v {
                 // Qualified variable access
-                #[cfg(not(feature = "no_module"))]
                 (_, var_name, ns, hash_var) if !ns.is_empty() => {
                     // foo:bar::baz::VARIABLE
                     if let Some(module) = self.search_imports(global, ns) {
@@ -212,7 +206,6 @@ impl Engine {
                     }
 
                     // global::VARIABLE
-                    #[cfg(not(feature = "no_function"))]
                     if ns.path.len() == 1 && ns.root() == crate::engine::KEYWORD_GLOBAL {
                         if let Some(ref constants) = global.constants
                             && let Some(value) = crate::func::locked_write(constants)
@@ -260,17 +253,16 @@ impl Engine {
         defer! { global if Some(reset) => move |g| g.debugger_mut().reset_status(reset) }
 
         // Constants
-        let is_simple_constant = match expr {
+        let is_simple_constant = matches!(
+            expr,
             Expr::DynamicConstant(..)
-            | Expr::IntegerConstant(..)
-            | Expr::CharConstant(..)
-            | Expr::StringConstant(..)
-            | Expr::BoolConstant(..)
-            | Expr::Unit(..) => true,
-            #[cfg(not(feature = "no_float"))]
-            Expr::FloatConstant(..) => true,
-            _ => false,
-        };
+                | Expr::IntegerConstant(..)
+                | Expr::CharConstant(..)
+                | Expr::StringConstant(..)
+                | Expr::BoolConstant(..)
+                | Expr::Unit(..)
+                | Expr::FloatConstant(..)
+        );
         if is_simple_constant && let Some(value) = expr.get_literal_value(Some(global)) {
             return Ok(value);
         }
@@ -307,7 +299,6 @@ impl Engine {
                         write!(concat, "{display}").unwrap();
                     }
 
-                    #[cfg(not(feature = "unchecked"))]
                     self.throw_on_size((0, 0, concat.len()))
                         .map_err(|err| err.fill_position(pos))?;
                 }
@@ -315,11 +306,9 @@ impl Engine {
                 Ok(self.get_interned_string(concat).into())
             }
 
-            #[cfg(not(feature = "no_index"))]
             Expr::Array(x, ..) => {
                 let mut array = crate::Array::with_capacity(x.len());
 
-                #[cfg(not(feature = "unchecked"))]
                 let mut total_data_sizes = (0, 0, 0);
 
                 for item_expr in &**x {
@@ -327,7 +316,6 @@ impl Engine {
                         .eval_expr(global, caches, scope, this_ptr.as_deref_mut(), item_expr)?
                         .flatten();
 
-                    #[cfg(not(feature = "unchecked"))]
                     if self.has_data_size_limit() {
                         let val_sizes = crate::eval::calc_data_sizes(&value, true);
 
@@ -346,11 +334,9 @@ impl Engine {
                 Ok(Dynamic::from_array(array))
             }
 
-            #[cfg(not(feature = "no_object"))]
             Expr::Map(x, ..) => {
                 let mut map = x.1.clone();
 
-                #[cfg(not(feature = "unchecked"))]
                 let mut total_data_sizes = (0, 0, 0);
 
                 for (key, value_expr) in &x.0 {
@@ -358,7 +344,6 @@ impl Engine {
                         .eval_expr(global, caches, scope, this_ptr.as_deref_mut(), value_expr)?
                         .flatten();
 
-                    #[cfg(not(feature = "unchecked"))]
                     if self.has_data_size_limit() {
                         let delta = crate::eval::calc_data_sizes(&value, true);
                         total_data_sizes = (
@@ -423,7 +408,6 @@ impl Engine {
                 Ok(value)
             }
 
-            #[cfg(not(feature = "no_custom_syntax"))]
             Expr::Custom(custom, pos) => {
                 let expressions: crate::StaticVec<_> =
                     custom.inputs.iter().map(Into::into).collect();
@@ -447,12 +431,10 @@ impl Engine {
                 self.eval_stmt_block(global, caches, scope, this_ptr, x.statements(), true)
             }
 
-            #[cfg(not(feature = "no_index"))]
             Expr::Index(..) => {
                 self.eval_dot_index_chain(global, caches, scope, this_ptr, expr, None)
             }
 
-            #[cfg(not(feature = "no_object"))]
             Expr::Dot(..) => self.eval_dot_index_chain(global, caches, scope, this_ptr, expr, None),
 
             #[allow(unreachable_patterns)]

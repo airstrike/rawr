@@ -2,8 +2,6 @@
 
 use crate::{capability, program, receiver, signature, type_def, ImmutableString, Span};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Parsed type references used by item headers.
 pub mod type_ref;
@@ -667,18 +665,15 @@ pub struct Function {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 pub(crate) struct BodySyntax(Box<[BodyToken]>);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 pub(crate) struct BodyToken {
     kind: BodyTokenKind,
     span: Span,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 pub(crate) enum BodyTokenKind {
     Identifier(ImmutableString),
     DoubleColon,
@@ -705,7 +700,6 @@ pub(crate) enum BodyTokenKind {
     Other,
 }
 
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 impl BodySyntax {
     pub(crate) fn new(tokens: Vec<BodyToken>) -> Self {
         Self(tokens.into_boxed_slice())
@@ -730,7 +724,6 @@ impl BodySyntax {
     }
 }
 
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 impl BodyToken {
     pub(crate) const fn new(kind: BodyTokenKind, span: Span) -> Self {
         Self { kind, span }

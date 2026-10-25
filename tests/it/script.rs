@@ -1,8 +1,6 @@
 //! `Script` and its typed handles (D514): an app's exported types cross a
 //! checked handle, and `Script::reload` swaps every handle to a new program
 //! or keeps the old one.
-#![cfg(not(feature = "no_function"))]
-#![cfg(not(feature = "no_std"))]
 
 use rawr::{Engine, Exports, Script};
 use std::path::PathBuf;

@@ -1,10 +1,8 @@
 #![cfg(feature = "debugging")]
 use rawr::{Engine, INT};
 
-#[cfg(not(feature = "no_index"))]
 use rawr::Array;
 
-#[cfg(not(feature = "no_object"))]
 use rawr::Map;
 
 #[test]
@@ -13,12 +11,10 @@ fn test_debugging() {
 
     engine.register_debugger(|_, dbg| dbg, |_, _, _, _, _| Ok(rawr::debugger::DebuggerCommand::Continue));
 
-    #[cfg(not(feature = "no_index"))]
     assert_eq!(engine.eval::<Array>("back_trace()").unwrap().len(), 0);
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
 fn test_debugger_state() {
     let mut engine = Engine::new();
 

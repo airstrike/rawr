@@ -2,8 +2,6 @@
 
 use crate::eval::Caches;
 use crate::{Engine, RawrResultOf, Scope, AST};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 impl Engine {
     /// Evaluate a string as a script.
@@ -54,12 +52,8 @@ impl Engine {
     /// ```
     #[inline]
     pub fn run_with_scope(&self, scope: &mut Scope, script: &str) -> RawrResultOf<()> {
-        let ast = self.compile_scripts_with_scope_raw(
-            Some(scope),
-            [script],
-            #[cfg(not(feature = "no_optimize"))]
-            self.optimization_level,
-        )?;
+        let ast =
+            self.compile_scripts_with_scope_raw(Some(scope), [script], self.optimization_level)?;
         self.run_ast_with_scope(scope, &ast)
     }
     /// Evaluate an [`AST`].
@@ -116,12 +110,9 @@ impl Engine {
         self.bind_exports(ast, global)?;
         global.source = ast.source_raw().cloned();
 
-        #[cfg(not(feature = "no_function"))]
         global.lib.push(ast.shared_lib().clone());
-        #[cfg(not(feature = "no_function"))]
         global.lib.push(ast.shared_support().clone());
 
-        #[cfg(not(feature = "no_module"))]
         global.embedded_module_resolver.clone_from(&ast.resolver);
 
         let _ = self.eval_global_statements(global, caches, scope, ast.statements(), true)?;

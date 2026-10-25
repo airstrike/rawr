@@ -68,7 +68,7 @@ fn vm_agrees_with_the_engine() {
 
     let mut failures = Vec::new();
 
-    for case in corpus::CASES.iter().filter(|c| applies_to_this_build(c.name)) {
+    for case in corpus::CASES {
         let stock = run_stock(&engine, case.source);
         let vm = run_vm(&engine, case.source);
 
@@ -81,7 +81,7 @@ fn vm_agrees_with_the_engine() {
         }
     }
 
-    let applicable = corpus::CASES.iter().filter(|c| applies_to_this_build(c.name)).count();
+    let applicable = corpus::CASES.len();
     assert!(failures.is_empty(), "{} of {applicable} corpus scripts diverged:{}", failures.len(), failures.join(""),);
 }
 
@@ -96,9 +96,6 @@ fn harness_detects_a_real_difference() {
     assert_ne!(run_stock(&engine, "1 + 1"), run_stock(&engine, "1 + 2"), "differing results must compare unequal",);
     assert_ne!(run_stock(&engine, "1"), run_stock(&engine, "1.0"), "int and float must not compare equal",);
     assert_ne!(run_stock(&engine, "let a: i64 = 1; a"), run_stock(&engine, "1"), "differing leftover scope must compare unequal",);
-    // `no_position` compiles positions out, so there is no such thing as the
-    // same error at a different one and nothing here to detect.
-    #[cfg(not(feature = "no_position"))]
     assert_ne!(run_stock(&engine, "let a = vec![1]; a[9]"), run_stock(&engine, "let a = vec![1]; 0 + a[9]"), "the same error at a different position must compare unequal",);
 }
 
@@ -111,19 +108,11 @@ fn every_corpus_script_parses() {
 
     let broken: Vec<_> = corpus::CASES
         .iter()
-        .filter(|case| applies_to_this_build(case.name))
         .filter_map(|case| engine.compile(case.source).err().map(|err| format!("\n  {}: {err}", case.name)))
         .collect();
 
     assert!(broken.is_empty(), "{} corpus scripts do not parse, so they assert nothing:{}", broken.len(), broken.join(""),);
 }
-
-/// Whether a corpus case exercises anything on this build.
-///
-/// Distinct from [`MAY_FRAGMENT`], which is a tolerance: this says the syntax
-/// is not in the language on this build at all. Defined beside the cases, in
-/// `corpus`, because every harness that walks them needs the same answer.
-use corpus::applies_to_this_build;
 
 /// A case that errors unintentionally is nearly as weak as one that does not
 /// parse: both sides agree on the failure, and the machinery the case was
@@ -135,7 +124,6 @@ fn only_error_cases_error() {
     let surprises: Vec<_> = corpus::CASES
         .iter()
         .filter(|case| !case.name.starts_with("error_"))
-        .filter(|case| applies_to_this_build(case.name))
         .filter_map(|case| match run_stock(&engine, case.source).result {
             Err(err) => Some(format!("\n  {}: {err}", case.name)),
             Ok(_) => None,
@@ -233,11 +221,9 @@ fn residual_census() {
     let mut remaining = Vec::new();
     let mut regressions = Vec::new();
 
-    // Cases the build removed are counted on neither side, or the completeness
-    // check below would read their absence as a corpus that stopped compiling.
-    let applicable = corpus::CASES.iter().filter(|case| applies_to_this_build(case.name)).count();
+    let applicable = corpus::CASES.len();
 
-    for case in corpus::CASES.iter().filter(|c| applies_to_this_build(c.name)) {
+    for case in corpus::CASES {
         let Ok(ast) = engine.compile(case.source) else {
             continue;
         };
@@ -250,7 +236,7 @@ fn residual_census() {
             at_zero.push(case.name);
         } else {
             remaining.push((case.name, nodes));
-            if !MAY_FRAGMENT.contains(&case.name) && applies_to_this_build(case.name) {
+            if !MAY_FRAGMENT.contains(&case.name) {
                 regressions.push(format!("\n  {} leaves {count}", case.name));
             }
         }

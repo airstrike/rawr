@@ -1,5 +1,3 @@
-#![cfg(not(feature = "no_function"))]
-
 use rawr::resolve::Category;
 use rawr::{Dynamic, Engine, ParseError, ParseErrorType, Position, Scope};
 

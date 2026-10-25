@@ -6,8 +6,6 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// An exact canonical representation of a nominal type schema.
 ///

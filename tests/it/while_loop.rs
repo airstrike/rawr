@@ -48,7 +48,6 @@ fn test_while() {
     assert_eq!(engine.eval::<INT>("loop { break 42; }").unwrap(), 42);
 }
 
-#[cfg(not(feature = "unchecked"))]
 #[test]
 fn test_infinite_loops() {
     let mut engine = Engine::new();

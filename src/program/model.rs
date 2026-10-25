@@ -6,11 +6,9 @@ use crate::types::{dynamic::Union, nominal};
 use crate::{capability, type_def, Dynamic, ImmutableString};
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 pub(crate) mod carry;
-#[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+#[cfg(feature = "rust-import")]
 pub(crate) mod island;
 
 type EnumConstruction = (
@@ -458,7 +456,6 @@ impl Model {
                     "bool" => Ok(false.into()),
                     "char" => Ok('\0'.into()),
                     "i64" => Ok(0_i64.into()),
-                    #[cfg(not(feature = "no_float"))]
                     "f64" => Ok(0.0_f64.into()),
                     "String" => Ok(ImmutableString::new().into()),
                     "Duration" => Ok(Dynamic::from(std::time::Duration::ZERO)),
@@ -482,7 +479,6 @@ impl Model {
                     actual: "no executable Default implementation of a generic parameter".into(),
                 }),
                 type_ref::Target::Host { definition, .. } => {
-                    #[cfg(not(feature = "no_std"))]
                     if let Some(value) = definition
                         .native_identity()
                         .and_then(crate::host::value::host_default)
@@ -657,7 +653,6 @@ impl Model {
         definition: &Definition,
         shared: &mut BTreeSet<usize>,
     ) -> Result<(), construction::Error> {
-        #[cfg(not(feature = "no_closure"))]
         if let Union::Shared(cell, ..) = &value.0 {
             let address = crate::Shared::as_ptr(cell).cast::<()>() as usize;
             if !shared.insert(address) {
@@ -722,7 +717,6 @@ impl Model {
         registry: &crate::host::runtime::Registry,
         shared: &mut BTreeSet<usize>,
     ) -> Result<(), crate::host::runtime::type_ref::Error> {
-        #[cfg(not(feature = "no_closure"))]
         if let Union::Shared(cell, ..) = &value.0 {
             let address = crate::Shared::as_ptr(cell).cast::<()>() as usize;
             if !shared.insert(address) {
@@ -963,7 +957,7 @@ fn identity_name(identity: &type_def::Identity) -> ImmutableString {
     }
 }
 
-#[cfg(all(test, not(feature = "no_function")))]
+#[cfg(test)]
 mod tests {
     use super::Model;
     use crate::program::{construction, GenerationId};

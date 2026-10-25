@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_object"))]
 #[cfg(feature = "internals")]
 use rawr::{ASTNode, Expr};
 use rawr::{Engine, Exports, INT};
@@ -46,7 +45,6 @@ fn test_method_call_style() {
     assert_eq!(engine.eval::<INT>("let x: i64 = -123; x.abs(); x").unwrap(), -123);
 }
 
-#[cfg(not(feature = "no_optimize"))]
 #[test]
 fn test_method_call_with_full_optimization() {
     let mut engine = engine();

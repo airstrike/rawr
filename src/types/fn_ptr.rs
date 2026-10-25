@@ -8,8 +8,6 @@ use crate::{
     NativeCallContext, Position, RawrError, RawrResult, RawrResultOf, Shared, StaticVec, ThinVec,
     AST, ERR, PERR,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::type_name,
     convert::{TryFrom, TryInto},
@@ -29,7 +27,6 @@ pub enum FnPtrType {
     #[default]
     Normal,
     /// Linked to a script-defined function.
-    #[cfg(not(feature = "no_function"))]
     Script(Shared<crate::ast::ScriptFuncDef>),
     /// Embedded native Rust function.
     Native(Shared<NativeFn>),
@@ -41,7 +38,6 @@ impl fmt::Display for FnPtrType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Normal => f.write_str("Fn"),
-            #[cfg(not(feature = "no_function"))]
             Self::Script(..) => f.write_str("Fn*"),
             Self::Native(..) => f.write_str("Fn"),
         }
@@ -57,7 +53,6 @@ pub struct FnPtr {
     /// Curried arguments.
     pub(crate) curry: ThinVec<Dynamic>,
     /// Encapsulated environment.
-    #[cfg(not(feature = "no_function"))]
     pub(crate) env: Option<Shared<crate::ast::EncapsulatedEnviron>>,
     /// Type of function pointer.
     pub(crate) typ: FnPtrType,
@@ -74,7 +69,6 @@ impl fmt::Debug for FnPtr {
     #[inline(never)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
-            #[cfg(not(feature = "no_function"))]
             _ if self.env.is_some() => format!("{}+", self.typ),
             _ => self.typ.to_string(),
         };
@@ -196,16 +190,13 @@ impl FnPtr {
         !self.curry.is_empty()
     }
     /// Does the function pointer refer to an anonymous function?
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     #[must_use]
     pub fn is_anonymous(&self) -> bool {
         crate::func::is_anonymous_fn(&self.name)
     }
     /// Call the function pointer with curried arguments (if any).
-    /// The function may be script-defined (not available under `no_function`) or native Rust.
+    /// The function may be script-defined or native Rust.
     ///
     /// This method is intended for calling a function pointer directly, possibly on another [`Engine`].
     /// Therefore, the [`AST`] is _NOT_ evaluated before calling the function.
@@ -214,7 +205,6 @@ impl FnPtr {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// # #[cfg(not(feature = "no_function"))]
     /// # {
     /// use rawr::{Engine, FnPtr};
     ///
@@ -248,9 +238,7 @@ impl FnPtr {
 
         let global = &mut engine.new_global_runtime_state();
 
-        #[cfg(not(feature = "no_function"))]
         global.lib.push(_ast.shared_lib().clone());
-        #[cfg(not(feature = "no_function"))]
         global.lib.push(_ast.shared_support().clone());
 
         let ctx = (engine, self.fn_name(), None, &*global, Position::NONE).into();
@@ -268,13 +256,10 @@ impl FnPtr {
         })
     }
     /// Call the function pointer as a _method_ call with a bound `this` pointer and curried arguments (if any).
-    /// The function may be script-defined (not available under `no_function`) or native Rust.
-    ///
-    /// Not available under `no_object`.
+    /// The function may be script-defined or native Rust.
     ///
     /// This method is intended for calling a function pointer directly, possibly on another [`Engine`].
     /// Therefore, the [`AST`] is _NOT_ evaluated before calling the function.
-    #[cfg(not(feature = "no_object"))]
     #[inline]
     pub fn call_as_method<T: Variant + Clone>(
         &self,
@@ -289,9 +274,7 @@ impl FnPtr {
 
         let global = &mut engine.new_global_runtime_state();
 
-        #[cfg(not(feature = "no_function"))]
         global.lib.push(_ast.shared_lib().clone());
-        #[cfg(not(feature = "no_function"))]
         global.lib.push(_ast.shared_support().clone());
 
         let ctx = (engine, self.fn_name(), None, &*global, Position::NONE).into();
@@ -314,7 +297,7 @@ impl FnPtr {
             })
     }
     /// Call the function pointer with curried arguments (if any).
-    /// The function may be script-defined (not available under `no_function`) or native Rust.
+    /// The function may be script-defined or native Rust.
     ///
     /// This method is intended for calling a function pointer that is passed into a native Rust
     /// function as an argument.  Therefore, the [`AST`] is _NOT_ evaluated before calling the
@@ -341,14 +324,11 @@ impl FnPtr {
         })
     }
     /// Call the function pointer as a _method_ call with a bound `this` pointer and curried arguments (if any).
-    /// The function may be script-defined (not available under `no_function`) or native Rust.
-    ///
-    /// Not available under `no_object`.
+    /// The function may be script-defined or native Rust.
     ///
     /// This method is intended for calling a function pointer that is passed into a native Rust
     /// function as an argument.  Therefore, the [`AST`] is _NOT_ evaluated before calling the
     /// function.
-    #[cfg(not(feature = "no_object"))]
     #[inline]
     pub fn call_as_method_within_context<T: Variant + Clone>(
         &self,
@@ -377,7 +357,7 @@ impl FnPtr {
             })
     }
     /// Call the function pointer with curried arguments (if any).
-    /// The function may be script-defined (not available under `no_function`) or native Rust.
+    /// The function may be script-defined or native Rust.
     ///
     /// This method is intended for calling a function pointer that is passed into a native Rust
     /// function as an argument.  Therefore, the [`AST`] is _NOT_ evaluated before calling the
@@ -417,7 +397,6 @@ impl FnPtr {
 
         match self.typ {
             // Linked to scripted function?
-            #[cfg(not(feature = "no_function"))]
             FnPtrType::Script(ref fn_def) if fn_def.params.len() == args.len() => {
                 let global = &mut context.global_runtime_state().clone();
                 global.level += 1;
@@ -429,10 +408,7 @@ impl FnPtr {
                     caches,
                     &mut crate::Scope::new(),
                     this_ptr,
-                    #[cfg(not(feature = "no_function"))]
                     self.env.as_deref(),
-                    #[cfg(feature = "no_function")]
-                    None,
                     fn_def,
                     args,
                     true,
@@ -496,47 +472,43 @@ impl FnPtr {
         extras: [Dynamic; E],
         move_this_ptr_to_args: usize,
     ) -> RawrResult {
-        match self.typ {
-            #[cfg(not(feature = "no_function"))]
-            FnPtrType::Script(ref fn_def) => {
-                let arity = fn_def.params.len();
+        if let FnPtrType::Script(ref fn_def) = self.typ {
+            let arity = fn_def.params.len();
 
-                if arity == N + self.curry().len() {
-                    return self.call_raw(ctx, this_ptr, args);
-                }
-                if MOVE_PTR && let Some(this_ptr) = this_ptr.as_deref() {
-                    if arity == N + 1 + self.curry().len() {
-                        let mut args2 = FnArgsVec::with_capacity(args.len() + 1);
-                        if move_this_ptr_to_args == 0 {
-                            args2.push(this_ptr.clone());
-                            args2.extend(args);
-                        } else {
-                            args2.extend(args);
-                            args2.insert(move_this_ptr_to_args, this_ptr.clone());
-                        }
-                        return self.call_raw(ctx, None, args2);
+            if arity == N + self.curry().len() {
+                return self.call_raw(ctx, this_ptr, args);
+            }
+            if MOVE_PTR && let Some(this_ptr) = this_ptr.as_deref() {
+                if arity == N + 1 + self.curry().len() {
+                    let mut args2 = FnArgsVec::with_capacity(args.len() + 1);
+                    if move_this_ptr_to_args == 0 {
+                        args2.push(this_ptr.clone());
+                        args2.extend(args);
+                    } else {
+                        args2.extend(args);
+                        args2.insert(move_this_ptr_to_args, this_ptr.clone());
                     }
-                    if arity == N + E + 1 + self.curry().len() {
-                        let mut args2 = FnArgsVec::with_capacity(args.len() + extras.len() + 1);
-                        if move_this_ptr_to_args == 0 {
-                            args2.push(this_ptr.clone());
-                            args2.extend(args);
-                        } else {
-                            args2.extend(args);
-                            args2.insert(move_this_ptr_to_args, this_ptr.clone());
-                        }
-                        args2.extend(extras);
-                        return self.call_raw(ctx, None, args2);
-                    }
+                    return self.call_raw(ctx, None, args2);
                 }
-                if arity == N + E + self.curry().len() {
-                    let mut args2 = FnArgsVec::with_capacity(args.len() + extras.len());
-                    args2.extend(args);
+                if arity == N + E + 1 + self.curry().len() {
+                    let mut args2 = FnArgsVec::with_capacity(args.len() + extras.len() + 1);
+                    if move_this_ptr_to_args == 0 {
+                        args2.push(this_ptr.clone());
+                        args2.extend(args);
+                    } else {
+                        args2.extend(args);
+                        args2.insert(move_this_ptr_to_args, this_ptr.clone());
+                    }
                     args2.extend(extras);
-                    return self.call_raw(ctx, this_ptr, args2);
+                    return self.call_raw(ctx, None, args2);
                 }
             }
-            _ => (),
+            if arity == N + E + self.curry().len() {
+                let mut args2 = FnArgsVec::with_capacity(args.len() + extras.len());
+                args2.extend(args);
+                args2.extend(extras);
+                return self.call_raw(ctx, this_ptr, args2);
+            }
         }
 
         self.call_raw(ctx, this_ptr.as_deref_mut(), args.clone())
@@ -600,7 +572,6 @@ impl TryFrom<ImmutableString> for FnPtr {
             Ok(Self {
                 name: value,
                 curry: ThinVec::new(),
-                #[cfg(not(feature = "no_function"))]
                 env: None,
                 typ: FnPtrType::Normal,
             })
@@ -619,7 +590,6 @@ impl TryFrom<ImmutableString> for FnPtr {
     }
 }
 
-#[cfg(not(feature = "no_function"))]
 impl<T: Into<Shared<crate::ast::ScriptFuncDef>>> From<T> for FnPtr {
     #[inline(always)]
     fn from(value: T) -> Self {
@@ -628,7 +598,6 @@ impl<T: Into<Shared<crate::ast::ScriptFuncDef>>> From<T> for FnPtr {
         Self {
             name: fn_def.name.clone(),
             curry: ThinVec::new(),
-            #[cfg(not(feature = "no_function"))]
             env: None,
             typ: FnPtrType::Script(fn_def),
         }

@@ -1,6 +1,4 @@
 use crate::{ast::RangeCase, Dynamic, INT};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A `switch`, as one dispatch table.
 ///
@@ -149,10 +147,6 @@ mod tests {
     use super::*;
 
     /// A script integer, as a subject or a case.
-    ///
-    /// Spelled through `INT` rather than as an `i64` literal because `only_i32`
-    /// narrows it: a `Dynamic` built from the wider type there is a boxed host
-    /// value, which has no hash and so matches nothing.
     fn int(value: INT) -> Dynamic {
         Dynamic::from(value)
     }
@@ -189,17 +183,13 @@ mod tests {
 
     /// The distinction that makes this hashing rather than `==`: rawr does not
     /// match an integer against a float case, even though `1 == 1.0`.
-    #[cfg(not(feature = "no_float"))]
     #[test]
     fn a_float_does_not_match_an_integer_case() {
         let one = int(1);
         let table = table(&[(&one, 10)], Vec::new(), 99);
 
         let float = Dynamic::from(1.0 as crate::FLOAT);
-        // The subject has to reach the hasher for this to say anything. Built
-        // from a literal `f64` it would not under `f32_float`; that is a boxed
-        // host value, and it would land on the default for having no hash at
-        // all rather than for hashing differently.
+        // The subject has to reach the hasher for this to say anything.
         assert!(float.is_hashable(), "this test needs a hashable float");
         assert_eq!(table.dispatch(&float), 99);
     }
@@ -223,7 +213,6 @@ mod tests {
     /// in them — which is why the check delegates to rawr's own `RangeCase`
     /// rather than comparing integers.
     #[test]
-    #[cfg(not(feature = "no_float"))]
     fn a_range_catches_a_float_between_its_bounds() {
         let table = table(
             &[],
@@ -236,8 +225,6 @@ mod tests {
             99,
         );
 
-        // The script float type, not `f64`: under `f32_float` a `Dynamic`
-        // holding an `f64` is a foreign type and never matches a range arm.
         assert_eq!(table.dispatch(&Dynamic::from(5.5 as rawr::FLOAT)), 20);
         assert_eq!(
             table.dispatch(&Dynamic::from(10.0 as rawr::FLOAT)),

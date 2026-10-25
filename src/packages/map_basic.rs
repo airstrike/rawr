@@ -1,13 +1,8 @@
-#![cfg(not(feature = "no_object"))]
-
 use crate::engine::OP_EQUALS;
 use crate::plugin::*;
 use crate::{def_package, Dynamic, FnPtr, Map, NativeCallContext, RawrResultOf, INT};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{convert::TryFrom, mem};
 
-#[cfg(not(feature = "no_index"))]
 use crate::Array;
 
 def_package! {
@@ -269,7 +264,6 @@ mod map_functions {
     ///
     /// print(m.keys());        // prints ["a", "b", "c"]
     /// ```
-    #[cfg(not(feature = "no_index"))]
     #[rawr_fn(pure)]
     pub fn keys(map: &mut Map) -> Array {
         if map.is_empty() {
@@ -287,7 +281,6 @@ mod map_functions {
     ///
     /// print(m.values());      // prints "[1, 2, 3]""
     /// ```
-    #[cfg(not(feature = "no_index"))]
     #[rawr_fn(pure)]
     pub fn values(map: &mut Map) -> Array {
         if map.is_empty() {

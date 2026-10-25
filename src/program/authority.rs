@@ -1,14 +1,10 @@
 //! Generation-scoped capability for invoking symbolic items.
 
 use super::{Aspect, Error, Executable, GenerationId};
-#[cfg(not(feature = "no_function"))]
 use crate::eval::Caches;
 use crate::{item, Dynamic, Engine, Shared};
-#[cfg(not(feature = "no_function"))]
 use crate::{types::nominal, CallFnOptions, Scope};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// The host-only capability that authorizes one immutable executable.
 ///
@@ -17,7 +13,6 @@ use std::prelude::v1::*;
 /// let _ = Authority {};
 /// ```
 #[derive(Clone)]
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 pub struct Authority {
     engine: Shared<Engine>,
     executable: Shared<Executable>,
@@ -56,7 +51,7 @@ impl Authority {
     }
 
     /// The runtime model of this generation's script types.
-    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn model(&self) -> &super::model::Model {
         self.executable.model()
     }
@@ -114,12 +109,10 @@ impl Authority {
     /// Receiver methods take their receiver as the first value in `args`.
     /// Variant construction consumes arguments only after this generation's
     /// runtime model recursively proves their exact ordered shape.
-    #[cfg(not(feature = "no_function"))]
     pub fn invoke(&self, retained: &item::Value, args: &mut [Dynamic]) -> Result<Dynamic, Error> {
         self.invoke_inner(retained, args, None, None)
     }
 
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn invoke_bound(
         &self,
         retained: &item::Value,
@@ -129,7 +122,6 @@ impl Authority {
         self.invoke_inner(retained, args, Some(runtime), None)
     }
 
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn invoke_bound_with<T: crate::func::SendSync + 'static>(
         &self,
         retained: &item::Value,
@@ -140,7 +132,6 @@ impl Authority {
         self.invoke_inner(retained, args, Some(runtime), Some(invocation.proof()))
     }
 
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn project_bound(
         &self,
         retained: &item::Value,
@@ -157,7 +148,6 @@ impl Authority {
             })
     }
 
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn validate_bound_type(
         &self,
         retained: &item::Value,
@@ -181,7 +171,7 @@ impl Authority {
     }
 
     /// Validate `value` against the exact type `witness` proves.
-    #[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn validate_witness(
         &self,
         witness: &crate::host::runtime::Witness,
@@ -193,7 +183,6 @@ impl Authority {
             .validate(value, self.executable.model(), runtime)
     }
 
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn validate_witness_argument(
         &self,
         witness: &crate::host::runtime::Witness,
@@ -209,7 +198,6 @@ impl Authority {
         ty.validate(value, self.executable.model(), runtime)
     }
 
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn issue_operation(
         &self,
         request: crate::host::operation::Request,
@@ -267,7 +255,6 @@ impl Authority {
         }))
     }
 
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn bind_stream(
         &self,
         request: crate::host::stream::Request,
@@ -510,7 +497,6 @@ impl Authority {
             .find(|current| current.site() == retained.site() && current.compatible(retained))
     }
 
-    #[cfg(not(feature = "no_function"))]
     fn invoke_inner(
         &self,
         retained: &item::Value,

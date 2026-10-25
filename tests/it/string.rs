@@ -60,29 +60,20 @@ string: "##.to_string() + "\u{2764}""###
     assert_eq!(engine.eval::<String>(r#"format!("foo{}", 123)"#).unwrap(), "foo123");
     assert_eq!(engine.eval::<String>(r#""foo".to_string() + &123.to_string()"#).unwrap(), "foo123");
 
-    #[cfg(not(feature = "no_object"))]
     assert_eq!(engine.eval::<String>("42.to_string()").unwrap(), "42");
 
-    #[cfg(not(feature = "no_index"))]
     assert_eq!(engine.eval::<char>(r#"let y = "hello"; y.chars().nth(1).unwrap()"#).unwrap(), 'e');
 
-    #[cfg(not(feature = "no_index"))]
     assert_eq!(engine.eval::<char>(r#"let y = "hello"; y.chars().last().unwrap()"#).unwrap(), 'o');
 
-    #[cfg(not(feature = "no_object"))]
     assert_eq!(engine.eval::<INT>(r#"let y = "hello"; y.len()"#).unwrap(), 5);
 
-    #[cfg(not(feature = "no_object"))]
     assert_eq!(engine.eval::<INT>(r#"let mut y = String::from("hello"); y.clear(); y.len()"#).unwrap(), 0);
 
-    #[cfg(not(feature = "no_object"))]
-    #[cfg(not(feature = "no_index"))]
     assert_eq!(engine.eval::<char>(r#"let y = "hello"; y.as_bytes()[y.len() - 1] as char"#).unwrap(), 'o');
 
-    #[cfg(not(feature = "no_float"))]
     assert_eq!(engine.eval::<String>(r#"format!("foo{}", 123.4556)"#).unwrap(), "foo123.4556");
 }
-#[cfg(not(feature = "no_index"))]
 #[test]
 fn test_string_index() {
     let engine = Engine::new();
@@ -134,7 +125,6 @@ fn test_string_mut() {
     ));
 }
 
-#[cfg(not(feature = "no_object"))]
 #[test]
 fn test_string_substring() {
     let engine = Engine::new();
@@ -235,8 +225,6 @@ fn test_string_fn() {
     assert_eq!(engine.eval::<INT>(r#"foo4("hello")"#).unwrap(), 5);
 }
 
-#[cfg(not(feature = "no_object"))]
-#[cfg(not(feature = "no_index"))]
 #[test]
 fn test_string_split() {
     let engine = Engine::new();

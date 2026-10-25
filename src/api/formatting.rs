@@ -4,8 +4,6 @@ use crate::{
     Engine, ExclusiveRange, FnPtr, ImmutableString, InclusiveRange, Position, RawrError, ERR,
 };
 use std::any::type_name;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Map the name of a standard type into a friendly form.
 #[inline]
@@ -15,7 +13,6 @@ pub fn map_std_type_name(name: &str, shorthands: bool) -> &str {
 
     match name {
         "INT" => return type_name::<crate::INT>(),
-        #[cfg(not(feature = "no_float"))]
         "FLOAT" => return type_name::<crate::FLOAT>(),
         _ => (),
     }
@@ -40,36 +37,24 @@ pub fn map_std_type_name(name: &str, shorthands: bool) -> &str {
     if name == type_name::<FnPtr>() || name == "FnPtr" {
         return if shorthands { "Fn" } else { "FnPtr" };
     }
-    #[cfg(not(feature = "no_index"))]
     if name == type_name::<crate::Array>() || name == "Array" {
         return if shorthands { "array" } else { "Array" };
     }
-    #[cfg(not(feature = "no_index"))]
     if name == type_name::<crate::Blob>() || name == "Blob" {
         return if shorthands { "blob" } else { "Blob" };
     }
-    #[cfg(not(feature = "no_object"))]
     if name == type_name::<crate::Map>() || name == "Map" {
         return if shorthands { "map" } else { "Map" };
     }
-    #[cfg(not(feature = "no_time"))]
     if name == type_name::<crate::Instant>() || name == "Instant" {
         return if shorthands { "timestamp" } else { "Instant" };
     }
     if name == type_name::<ExclusiveRange>() || name == "ExclusiveRange" {
-        return if shorthands {
-            "range"
-        } else if cfg!(feature = "only_i32") {
-            "Range<i32>"
-        } else {
-            "Range<i64>"
-        };
+        return if shorthands { "range" } else { "Range<i64>" };
     }
     if name == type_name::<InclusiveRange>() || name == "InclusiveRange" {
         return if shorthands {
             "range="
-        } else if cfg!(feature = "only_i32") {
-            "RangeInclusive<i32>"
         } else {
             "RangeInclusive<i64>"
         };
@@ -93,7 +78,6 @@ pub fn map_std_type_name(name: &str, shorthands: bool) -> &str {
         };
     }
 
-    #[cfg(not(feature = "no_float"))]
     if name == type_name::<crate::packages::iter_basic::StepRange<crate::FLOAT>>() {
         return if shorthands {
             "range"
@@ -156,7 +140,6 @@ pub fn format_param_type_for_display(typ: &str, is_return_type: bool) -> std::bo
     match typ {
         "" | "()" if is_return_type => "".into(),
         "INT" => std::any::type_name::<crate::INT>().into(),
-        #[cfg(not(feature = "no_float"))]
         "FLOAT" => std::any::type_name::<crate::FLOAT>().into(),
         RAWR_RANGE => RAWR_RANGE_EXPAND
             .replace("{}", std::any::type_name::<crate::INT>())
@@ -205,14 +188,9 @@ impl Engine {
             .iter()
             .find_map(|m| m.get_custom_type_display_by_name(name))
             .or_else(|| {
-                #[cfg(not(feature = "no_module"))]
-                return self
-                    .global_sub_modules
+                self.global_sub_modules
                     .values()
-                    .find_map(|m| m.get_custom_type_display_by_name(name));
-
-                #[cfg(feature = "no_module")]
-                return None;
+                    .find_map(|m| m.get_custom_type_display_by_name(name))
             })
             .unwrap_or_else(|| map_std_type_name(name, true))
     }

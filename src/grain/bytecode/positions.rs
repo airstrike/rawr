@@ -1,7 +1,5 @@
 use crate::grain::pos::Site;
 use crate::Position;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Where each instruction came from, or nothing.
 ///

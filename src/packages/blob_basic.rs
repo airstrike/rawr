@@ -1,16 +1,11 @@
-#![cfg(not(feature = "no_index"))]
-
 use crate::eval::{calc_index, calc_offset_len};
 use crate::plugin::*;
 use crate::{
     def_package, Array, Blob, ExclusiveRange, InclusiveRange, NativeCallContext, RawrResultOf, INT,
     INT_BYTES,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{borrow::Cow, convert::TryFrom, mem};
 
-#[cfg(not(feature = "no_float"))]
 use crate::{FLOAT, FLOAT_BYTES};
 
 def_package! {
@@ -23,7 +18,6 @@ def_package! {
         combine_with_exported_module!(lib, "write_int", write_int_functions);
         combine_with_exported_module!(lib, "write_string", write_string_functions);
 
-        #[cfg(not(feature = "no_float"))]
         {
             combine_with_exported_module!(lib, "parse_float", parse_float_functions);
             combine_with_exported_module!(lib, "write_float", write_float_functions);
@@ -82,7 +76,6 @@ pub mod blob_functions {
         let len = usize::try_from(len).unwrap_or(usize::MAX);
 
         // Check if blob will be over max size limit
-        #[cfg(not(feature = "unchecked"))]
         _ctx.engine().throw_on_size((len, 0, 0))?;
 
         let byte = u8::try_from(value & 0x00ff).unwrap();
@@ -369,7 +362,6 @@ pub mod blob_functions {
         let len = usize::try_from(len).unwrap_or(usize::MAX);
 
         // Check if blob will be over max size limit
-        #[cfg(not(feature = "unchecked"))]
         if _ctx.engine().max_array_size() > 0 && len > _ctx.engine().max_array_size() {
             return Err(crate::ERR::ErrorDataTooLarge(
                 "Size of BLOB".to_string(),
@@ -1125,7 +1117,6 @@ mod parse_int_functions {
     }
 }
 
-#[cfg(not(feature = "no_float"))]
 #[export_module]
 mod parse_float_functions {
     #[inline]
@@ -1377,7 +1368,6 @@ mod write_int_functions {
     }
 }
 
-#[cfg(not(feature = "no_float"))]
 #[export_module]
 mod write_float_functions {
     #[inline]

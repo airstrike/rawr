@@ -1,8 +1,5 @@
 //! Variable declaration information.
 
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
-
 /// Information on a variable declaration.
 #[derive(Debug, Clone, Hash)]
 pub struct VarDefInfo<'a> {

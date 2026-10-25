@@ -2,8 +2,6 @@
 
 use super::dynamic::{AccessMode, Variant};
 use crate::{Dynamic, Identifier, ImmutableString, StaticVec, ThinVec};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     fmt, iter,
     iter::{Extend, FromIterator},
@@ -528,7 +526,6 @@ impl Scope<'_> {
             .position(|key| name == key)
             .and_then(|i| {
                 let v = &self.values[self.len() - 1 - i];
-                #[cfg(not(feature = "no_closure"))]
                 assert!(!v.is_shared());
                 v.downcast_ref()
             })
@@ -565,7 +562,6 @@ impl Scope<'_> {
             .position(|key| name == key)
             .and_then(move |i| {
                 let v = &mut self.values[len - 1 - i];
-                #[cfg(not(feature = "no_closure"))]
                 assert!(!v.is_shared());
                 v.downcast_mut()
             })
@@ -809,7 +805,6 @@ impl Scope<'_> {
     /// # Panics
     ///
     /// Panics if the index is out of bounds.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     pub(crate) fn add_alias_by_index(&mut self, index: usize, alias: ImmutableString) -> &mut Self {
         if self.aliases.len() <= index {
@@ -832,7 +827,6 @@ impl Scope<'_> {
     /// Multiple aliases can be added to any variable.
     ///
     /// Only the last variable matching the name (and not other shadowed versions) is aliased by this call.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     pub fn set_alias(
         &mut self,

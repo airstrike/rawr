@@ -3,8 +3,6 @@ use crate::{
     Engine, ModuleResolver, Position, RawrResultOf, Scope, SharedModule, StaticVec, AST, ERR,
     STATIC_VEC_INLINE_SIZE,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{ops::AddAssign, slice::Iter};
 
 /// [Module][crate::Module] resolution service that holds a collection of module resolvers,

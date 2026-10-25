@@ -41,9 +41,8 @@ smallvec = { version = "1.7.0", default-features = false, features = ["union", "
 thin-vec = { version = "0.2.13", default-features = false }
 ahash = { version = "0.8.4", default-features = false, features = ["compile-time-rng"] }
 num-traits = { version = "0.2.14", default-features = false }
-# `portable-atomic` only for no-std targets: a project's runner links this
-# crate beside the project's own crates, and any feature added here makes a
-# second once_cell.
+# A project's runner links this crate beside the project's own crates, and any
+# feature added here makes a second once_cell.
 once_cell = { version = "1.20.1", default-features = false, features = ["race", "alloc"] }
 bitflags = { version = "2.3.3", default-features = false }
 futures-core = { version = "0.3.31", default-features = false }
@@ -54,10 +53,6 @@ toml_edit = { package = "rawr-toml-edit", path = "toml/edit", default-features =
 rawr_import = { package = "rawr-import", path = "importer", optional = true }
 thiserror = { version = "2", optional = true }
 
-no-std-compat = { git = "https://gitlab.com/jD91mZM2/no-std-compat.git", version = "0.4.1", default-features = false, features = ["alloc"], optional = true }
-libm = { version = "0.2.0", default-features = false, optional = true }
-hashbrown = { version = "0.16.0", optional = true }
-core-error = { version = "0.0.0", default-features = false, features = ["alloc"], optional = true }
 serde = { version = "1.0.136", default-features = false, features = ["derive", "alloc"], optional = true }
 serde_json = { version = "1.0.45", default-features = false, features = ["alloc"], optional = true }
 unicode-xid = { version = "0.2.0", default-features = false, optional = true }
@@ -88,8 +83,8 @@ rust-import-driver = ["rust-import", "rawr_import/rustc-driver"]
 #! ### Enable Special Functionalities
 
 ## Require that all data types implement `Send + Sync` (for multi-threaded usage).
-sync = ["no-std-compat?/compat_sync", "rawr_codegen/sync"]
-## Add support for the [`Decimal`](https://crates.io/crates/rust_decimal) data type (acts as the system floating-point type under `no_float`).
+sync = ["rawr_codegen/sync"]
+## Add support for the [`Decimal`](https://crates.io/crates/rust_decimal) data type.
 decimal = ["rust_decimal"]
 ## Enable serialization/deserialization of Rawr data types via [`serde`](https://crates.io/crates/serde).
 serde = ["dep:serde", "smartstring/serde", "smallvec/serde", "thin-vec/serde"]
@@ -107,49 +102,6 @@ bin-features = ["decimal", "metadata", "serde", "debugging", "rustyline"]
 fuzz = ["arbitrary", "rust_decimal?/rust-fuzz", "serde", "grain"]
 ## Enable the experimental `grain` bytecode VM
 grain = []
-
-#! ### System Configuration Features
-
-## Use `f32` instead of `f64` as the system floating-point number type.
-f32_float = []
-## Use `i32` instead of `i64` for the system integer number type (useful for 32-bit architectures).
-## All other integer types (e.g. `u8`) are disabled.
-only_i32 = []
-## Disable all integer types (e.g. `u8`) other than `i64`.
-only_i64 = []
-
-#! ### Disable Language Features
-
-## Remove support for floating-point numbers.
-no_float = []
-## Remove support for arrays and indexing.
-no_index = []
-## Remove support for custom types, properties, method-style calls and object maps.
-no_object = []
-## Remove support for time-stamps.
-no_time = []
-## Remove support for script-defined functions (implies [`no_closure`](#feature-no_closure)).
-no_function = ["no_closure"]
-## Remove support for capturing external variables in anonymous functions (i.e. closures).
-no_closure = []
-## Remove support for loading external modules.
-no_module = []
-## Remove support for custom syntax.
-no_custom_syntax = []
-
-#! ### Performance-Related Features
-
-## Disable all safety checks.
-unchecked = []
-## Do not track position when parsing.
-no_position = []
-## Disable the script optimizer.
-no_optimize = []
-
-#! ### Compiling for `no-std`
-
-## Turn on `no-std` compilation (nightly only).
-no_std = ["no-std-compat", "num-traits/libm", "core-error", "libm", "hashbrown", "no_time", "once_cell/portable-atomic"]
 
 #! ### JavaScript Interface for WASM
 

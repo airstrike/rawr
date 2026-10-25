@@ -56,7 +56,6 @@ fn run_stock(engine: &Engine, source: &str) -> Outcome {
 fn writable(engine: &Engine) -> Vec<(&'static str, &'static str, Vec<u8>)> {
     corpus::CASES
         .iter()
-        .filter(|case| corpus::applies_to_this_build(case.name))
         .filter_map(|case| {
             let ast = engine.compile(case.source).ok()?;
             let bytes = Compiler::new().compile(&ast).write().ok()?;
@@ -108,14 +107,12 @@ fn the_round_trip_covers_something_worth_covering() {
         "int_arithmetic", // Call with an operator token
         // A float constant, whose width the ABI pins — and which `no_float`
         // removes from the language, so there is no branch left to cover.
-        #[cfg(not(feature = "no_float"))]
         "float_arithmetic",
         "shadowing_nested", // DeclareLocal and UnwindTo
         "while_loop",       // jumps, Tick, AssignLocal with an op
         "loop_break_value", // backpatched jumps
         // A position that has to survive. `unchecked` turns the failure it
         // rests on into a panic in rawr, so the case is not run at all there.
-        #[cfg(not(feature = "unchecked"))]
         "error_divide_by_zero",
         "match_range",                   // a range pattern, lowered to comparisons
         "match_guard",                   // and a guard that falls through
@@ -170,13 +167,7 @@ fn a_golden_artifact_written_by_an_older_build_still_runs() {
     // The fixture is one build's bytes and its source is that build's source,
     // which uses floats. `no_float` cannot parse it, so there is nothing here
     // to check — the same reason the ABI guard skips below, reached earlier.
-    #[cfg(feature = "no_float")]
-    {
-        println!("skipped: the golden source uses floats, which this build has no syntax for");
-        return;
-    }
 
-    #[cfg(not(feature = "no_float"))]
     {
         let engine = corpus::engine();
         let source = std::fs::read_to_string(GOLDEN_SOURCE).expect("the golden source is checked in");
@@ -344,7 +335,6 @@ fn refusing_to_write_names_the_construct_responsible() {
         assert_eq!(construct, expected, "for {source:?}");
         // Under `no_position` there is no "where" to say, and the naming half
         // above is the part that still means something.
-        #[cfg(not(feature = "no_position"))]
         assert!(!pos.is_none(), "the refusal must say where: {err}");
         let _ = pos;
         assert!(err.to_string().contains(expected), "{err}");
@@ -364,7 +354,6 @@ fn script_functions_survive_the_round_trip() {
         // Failing inside a function has to keep rawr's wrapping and position.
         // `unchecked` turns this into a panic in rawr's own built-in rather
         // than an error, so there is nothing left here to compare.
-        #[cfg(not(feature = "unchecked"))]
         "fn bad(x: i64) -> i64 { x / 0 } bad(1)",
     ] {
         let ast = engine.compile(source).expect("must compile");
@@ -388,10 +377,7 @@ fn script_functions_survive_the_round_trip() {
 fn sample(engine: &Engine) -> Vec<u8> {
     // A float in the constant pool is part of what this covers, and `no_float`
     // has no float to put there. The rest of the shape is the same either way.
-    #[cfg(not(feature = "no_float"))]
     const SECOND: &str = "let b: f64 = 2.5; let s = b * 2.0;";
-    #[cfg(feature = "no_float")]
-    const SECOND: &str = "let b: i64 = 2; let s = b * 2;";
 
     let source = format!(
         "let mut a: i64 = 1; {SECOND} while a < 10 {{ a += 1 }} \
@@ -428,8 +414,6 @@ fn a_different_value_representation_is_refused_by_name() {
     let engine = corpus::engine();
 
     let mut narrow = sample(&engine);
-    // Halved rather than named: `only_i32` already makes 4 the host's own
-    // width, and an artifact agreeing with the host is not refused at all.
     let half = narrow[6] / 2; // INT width
     narrow[6] = half;
     let message = Program::read(&narrow).unwrap_err().to_string();
@@ -483,7 +467,6 @@ fn trailing_bytes_are_refused() {
 #[test]
 // A corrupted chunk can loop, and `max_operations` is what stops it. Without
 // limits this hangs rather than fails, which is worse than not running.
-#[cfg(not(feature = "unchecked"))]
 fn no_single_bit_flip_can_panic_or_smuggle_a_bad_chunk() {
     let writer = corpus::engine();
     let bytes = sample(&writer);
@@ -520,7 +503,6 @@ fn no_single_bit_flip_can_panic_or_smuggle_a_bad_chunk() {
 /// and turns that back into the position rawr itself would have reported.
 /// There is no table to strip under `no_position`, so nothing to resolve.
 #[test]
-#[cfg(not(feature = "no_position"))]
 fn a_stripped_program_reports_an_address_the_host_can_resolve() {
     let engine = corpus::engine();
     let source = "let mut w = widget(1);\nbump(w);\nbump_then_fail(w)";
@@ -560,7 +542,6 @@ fn a_stripped_program_reports_an_address_the_host_can_resolve() {
 /// Attaching another program's table would misreport every error rather than
 /// reporting none, which is strictly worse than having no table.
 #[test]
-#[cfg(not(feature = "no_position"))]
 fn a_table_from_a_different_program_is_refused() {
     let engine = corpus::engine();
 
@@ -577,7 +558,6 @@ fn a_table_from_a_different_program_is_refused() {
 /// A stripped artifact that arrives with a table still in it is a contradiction
 /// the reader should not paper over.
 #[test]
-#[cfg(not(feature = "no_position"))]
 fn an_artifact_carrying_a_mismatched_table_does_not_load() {
     let engine = corpus::engine();
     let bytes = sample(&engine);

@@ -10,8 +10,6 @@ use super::function::RawrFunc;
 use super::native::{SendSync, Shared};
 use crate::types::dynamic::{DynamicWriteLock, Union, Variant};
 use crate::{Dynamic, Identifier, NativeCallContext, RawrResultOf};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::{type_name, TypeId},
     mem,

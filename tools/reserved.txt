@@ -31,13 +31,13 @@ struct reserved;
 %%
 # reserved under certain flags
 #
-?.,             cfg!(feature = no_object), false, false
-?[,             cfg!(feature = no_index), false, false
-fn,             cfg!(feature = no_function), false, false
-private,        cfg!(feature = no_function), false, false
-import,         cfg!(feature = no_module), false, false
-export,         cfg!(feature = no_module), false, false
-as,             cfg!(feature = no_module), false, false
+?.,             false, false, false
+?[,             false, false, false
+fn,             false, false, false
+private,        false, false, false
+import,         false, false, false
+export,         false, false, false
+as,             false, false, false
 #   
 # reserved symbols
 #   
@@ -104,5 +104,5 @@ call,           true, true, true
 curry,          true, true, true
 this,           true, false, false
 is_def_var,     true, true, false
-is_def_fn,      cfg!(not(feature = no_function)), true, false
-is_shared,      cfg!(not(feature = no_closure)), true, true
+is_def_fn,      true, true, false
+is_shared,      true, true, true

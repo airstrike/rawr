@@ -3,8 +3,6 @@
 use crate::resolve::{self, item, type_ref, LocatedError};
 use crate::{application, host, method, receiver, type_def, widget, ImmutableString, Span};
 use std::collections::BTreeMap;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 const CHILDREN: &str = "rawr_iced::widget::children::List";
 const SIZE: &str = "rawr_iced::widget::layout::Size";

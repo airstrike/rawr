@@ -9,8 +9,6 @@
 
 use crate::host;
 use crate::{EvalAltResult, Position, Shared};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 #[cfg(feature = "std")]
 type OnceCell<T> = once_cell::sync::OnceCell<T>;

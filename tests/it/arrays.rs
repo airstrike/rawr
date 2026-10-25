@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_index"))]
 use rawr::{Array, Dynamic, Engine, INT, ParseErrorType};
 use std::iter::FromIterator;
 
@@ -29,7 +28,6 @@ fn test_arrays() {
     assert_eq!(engine.eval::<Dynamic>("let y = vec![1, 2, 3]; y[..1].to_vec()").unwrap().into_typed_array::<INT>().unwrap(), vec![1]);
     assert_eq!(engine.eval::<Dynamic>("let mut y = vec![1, 2, 3]; y.truncate(1); y").unwrap().into_typed_array::<INT>().unwrap(), vec![1]);
 
-    #[cfg(not(feature = "no_object"))]
     {
         assert_eq!(engine.eval::<Dynamic>("let mut y = vec![1, 2, 3]; y.push(4); y").unwrap().into_typed_array::<INT>().unwrap(), [1, 2, 3, 4]);
         // `insert` is Vec's: it takes a `usize` index up to the length.
@@ -63,7 +61,6 @@ fn test_arrays() {
         );
     }
 
-    #[cfg(not(feature = "no_object"))]
     assert_eq!(
         engine
             .eval::<INT>(
@@ -138,8 +135,6 @@ fn test_arrays() {
     assert_eq!(array.len(), 4);
 }
 
-#[cfg(not(feature = "no_float"))]
-#[cfg(not(feature = "no_object"))]
 #[test]
 fn test_array_chaining() {
     let engine = Engine::new();
@@ -175,7 +170,6 @@ fn test_array_index_types() {
         ParseErrorType::Resolution(Error::TypeMismatch { expected, .. }) if expected == "usize"
     ));
 
-    #[cfg(not(feature = "no_float"))]
     assert!(matches!(
         engine.compile("[1, 2, 3][123.456]").unwrap_err().err_type(),
         ParseErrorType::Resolution(Error::TypeMismatch { expected, .. }) if expected == "usize"
@@ -197,9 +191,6 @@ fn test_array_index_types() {
     ));
 }
 
-#[cfg(not(feature = "no_object"))]
-#[cfg(not(feature = "no_function"))]
-#[cfg(not(feature = "no_closure"))]
 #[test]
 fn test_arrays_map_reduce() {
     let engine = Engine::new();
@@ -444,8 +435,6 @@ fn test_arrays_index_of() {
 }
 
 #[test]
-#[cfg(not(feature = "no_object"))]
-#[cfg(not(feature = "no_function"))]
 fn test_arrays_index_of_with_named_fn() {
     let engine = Engine::new();
     assert_eq!(

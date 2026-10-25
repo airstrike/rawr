@@ -6,8 +6,6 @@ use crate::{capability, host, program, type_def, ImmutableString, Span};
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// One stable structural type proof in a validated application contract.
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -253,7 +251,6 @@ impl Type {
             Shape::Unit => Some(crate::Dynamic::UNIT),
             Shape::Builtin(name) => match crate::host::runtime_builtin(name) {
                 "i64" => Some(crate::Dynamic::from_int(0)),
-                #[cfg(not(feature = "no_float"))]
                 "f64" => Some(crate::Dynamic::from_float(0.0)),
                 "bool" => Some(crate::Dynamic::FALSE),
                 "char" => Some(crate::Dynamic::from_char('\0')),
@@ -690,10 +687,7 @@ fn builtin_runtime(name: &str) -> Option<(&'static str, TypeId)> {
         "bool" => Some(("bool", TypeId::of::<bool>())),
         "char" => Some(("char", TypeId::of::<char>())),
         "i64" => Some(("i64", TypeId::of::<crate::INT>())),
-        #[cfg(not(feature = "no_float"))]
         "f64" => Some(("f64", TypeId::of::<crate::FLOAT>())),
-        #[cfg(feature = "no_float")]
-        "f64" => Some(("f64", TypeId::of::<crate::Dynamic>())),
         "String" => Some(("String", TypeId::of::<ImmutableString>())),
         _ => None,
     }

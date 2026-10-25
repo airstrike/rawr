@@ -1,10 +1,8 @@
-#![cfg(not(feature = "unchecked"))]
 use rawr::{Engine, EvalAltResult, INT};
 
 #[test]
 fn test_max_operations() {
     let mut engine = Engine::new();
-    #[cfg(not(feature = "no_optimize"))]
     engine.set_optimization_level(rawr::OptimizationLevel::None);
     engine.set_max_operations(500);
 
@@ -27,14 +25,11 @@ fn test_max_operations() {
 #[test]
 fn test_max_operations_literal() {
     let mut engine = Engine::new();
-    #[cfg(not(feature = "no_optimize"))]
     engine.set_optimization_level(rawr::OptimizationLevel::None);
     engine.set_max_operations(10);
 
-    #[cfg(not(feature = "no_index"))]
     engine.run("[1, 2, 3, 4, 5, 6, 7]").unwrap();
 
-    #[cfg(not(feature = "no_index"))]
     assert!(matches!(*engine.run("[1, 2, 3, 4, 5, 6, 7, 8, 9]").unwrap_err(), EvalAltResult::ErrorTooManyOperations(..)));
 }
 
@@ -64,7 +59,6 @@ fn test_max_operations_functions() {
         )
         .unwrap();
 
-    #[cfg(not(feature = "no_function"))]
     engine
         .run(
             r#"
@@ -76,7 +70,6 @@ fn test_max_operations_functions() {
         )
         .unwrap();
 
-    #[cfg(not(feature = "no_function"))]
     assert!(matches!(
         *engine
             .run(
@@ -99,7 +92,6 @@ fn test_max_operations_functions() {
 #[test]
 fn test_max_operations_progress() {
     let mut engine = Engine::new();
-    #[cfg(not(feature = "no_optimize"))]
     engine.set_optimization_level(rawr::OptimizationLevel::None);
     engine.set_max_operations(500);
 

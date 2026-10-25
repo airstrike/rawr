@@ -1,8 +1,6 @@
 //! Parsed type references in Rawr item headers.
 
 use crate::{item, Span};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// The builtin path name of a function type: `fn(A, ..) -> B`, `impl Fn`
 /// and `dyn Fn` parse to this one segment, whose type arguments are the

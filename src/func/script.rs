@@ -1,12 +1,9 @@
 //! Implement script function-calling mechanism for [`Engine`].
-#![cfg(not(feature = "no_function"))]
 
 use super::call::FnCallArgs;
 use crate::ast::{EncapsulatedEnviron, ScriptFuncDef};
 use crate::eval::{Caches, GlobalRuntimeState};
 use crate::{Dynamic, Engine, Position, RawrResult, Scope, ERR};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 impl Engine {
     /// # Main Entry-Point
@@ -38,7 +35,6 @@ impl Engine {
         self.track_operation(global, pos)?;
 
         // Check for stack overflow
-        #[cfg(not(feature = "unchecked"))]
         if global.level > self.max_call_levels() {
             return Err(ERR::ErrorStackOverflow(pos).into());
         }
@@ -54,7 +50,6 @@ impl Engine {
 
         let orig_scope_len = scope.len();
         let orig_lib_len = global.lib.len();
-        #[cfg(not(feature = "no_module"))]
         let orig_imports_len = global.num_imports();
 
         #[cfg(feature = "debugging")]
@@ -64,7 +59,6 @@ impl Engine {
             .map_or(0, |dbg| dbg.call_stack().len());
 
         // Guard against too many variables
-        #[cfg(not(feature = "unchecked"))]
         if scope.len() + fn_def.params.len() > self.max_variables() {
             return Err(ERR::ErrorTooManyVariables(pos).into());
         }
@@ -93,7 +87,6 @@ impl Engine {
         // Merge in encapsulated environment, if any
         let orig_fn_resolution_caches_len = caches.fn_resolution_caches_len();
 
-        #[cfg(not(feature = "no_module"))]
         let orig_constants = _env.map(
             |EncapsulatedEnviron {
                  lib,
@@ -147,13 +140,10 @@ impl Engine {
             // Other errors are wrapped in `ErrorInFunctionCall`
             _ => Err(ERR::ErrorInFunctionCall(
                 fn_def.name.to_string(),
-                #[cfg(not(feature = "no_module"))]
                 _env.and_then(|env| env.lib.last())
                     .and_then(|m| m.id())
                     .unwrap_or_else(|| global.source().unwrap_or(""))
                     .to_string(),
-                #[cfg(feature = "no_module")]
-                global.source().unwrap_or("").to_string(),
                 err,
                 pos,
             )
@@ -197,11 +187,9 @@ impl Engine {
             scope.remove_range(orig_scope_len, args.len());
         }
         global.lib.truncate(orig_lib_len);
-        #[cfg(not(feature = "no_module"))]
         global.truncate_imports(orig_imports_len);
 
         // Restore constants
-        #[cfg(not(feature = "no_module"))]
         if let Some(constants) = orig_constants {
             global.constants = constants;
         }
@@ -235,7 +223,6 @@ impl Engine {
             // Then check the global namespace and packages
             || self.global_modules.iter().any(|m| m.contains_fn(hash_script));
 
-        #[cfg(not(feature = "no_module"))]
         let result = result ||
             // Then check imported modules
             global.contains_qualified_fn(hash_script)

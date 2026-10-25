@@ -1,12 +1,6 @@
 use crate::def_package;
 use crate::plugin::*;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
-#[cfg(any(
-    not(feature = "no_float"),
-    all(not(feature = "only_i32"), not(feature = "only_i64"))
-))]
 macro_rules! gen_cmp_functions {
     ($mod_name:ident => $($arg_type:ident),+) => {
         $({
@@ -33,8 +27,6 @@ def_package! {
     pub LogicPackage(lib) {
         lib.set_standard_lib(true);
 
-        #[cfg(not(feature = "only_i32"))]
-        #[cfg(not(feature = "only_i64"))]
         {
             gen_cmp_functions!(lib => i8, u8, i16, u16, i32, u32, u64);
 
@@ -42,19 +34,12 @@ def_package! {
             gen_cmp_functions!(lib => i128, u128);
         }
 
-        #[cfg(not(feature = "no_float"))]
         {
             combine_with_exported_module!(lib, "float", float_functions);
 
-            #[cfg(not(feature = "f32_float"))]
             {
                 gen_cmp_functions!(lib => f32);
                 combine_with_exported_module!(lib, "f32", f32_functions);
-            }
-            #[cfg(feature = "f32_float")]
-            {
-                gen_cmp_functions!(lib => f64);
-                combine_with_exported_module!(lib, "f64", f64_functions);
             }
         }
 
@@ -109,7 +94,6 @@ mod min_max_functions {
     }
 }
 
-#[cfg(not(feature = "no_float"))]
 #[allow(clippy::cast_precision_loss)]
 #[export_module]
 mod float_functions {
@@ -221,14 +205,10 @@ mod float_functions {
     }
 }
 
-#[cfg(not(feature = "no_float"))]
-#[cfg(not(feature = "f32_float"))]
 #[allow(clippy::cast_precision_loss)]
 #[export_module]
 mod f32_functions {
     use crate::{FLOAT, INT};
-    #[cfg(feature = "no_std")]
-    use num_traits::Float;
 
     #[rawr_fn(name = "==")]
     pub fn eq_if(x: INT, y: f32) -> bool {
@@ -308,102 +288,6 @@ mod f32_functions {
     }
     #[rawr_fn(name = "min")]
     pub fn min_32_64(x: f32, y: FLOAT) -> FLOAT {
-        let (x, y) = (x as FLOAT, y);
-        if x <= y {
-            x
-        } else {
-            y
-        }
-    }
-}
-
-#[cfg(not(feature = "no_float"))]
-#[cfg(feature = "f32_float")]
-#[allow(clippy::cast_precision_loss)]
-#[export_module]
-mod f64_functions {
-    use crate::{FLOAT, INT};
-    #[cfg(feature = "no_std")]
-    use num_traits::Float;
-
-    #[rawr_fn(name = "==")]
-    pub fn eq_if(x: INT, y: f64) -> bool {
-        (x as f64) == y
-    }
-    #[rawr_fn(name = "==")]
-    pub fn eq_fi(x: f64, y: INT) -> bool {
-        x == (y as f64)
-    }
-    #[rawr_fn(name = "!=")]
-    pub fn neq_if(x: INT, y: f64) -> bool {
-        (x as f64) != y
-    }
-    #[rawr_fn(name = "!=")]
-    pub fn neq_fi(x: f64, y: INT) -> bool {
-        x != (y as f64)
-    }
-    #[rawr_fn(name = ">")]
-    pub fn gt_if(x: INT, y: f64) -> bool {
-        (x as f64) > y
-    }
-    #[rawr_fn(name = ">")]
-    pub fn gt_fi(x: f64, y: INT) -> bool {
-        x > (y as f64)
-    }
-    #[rawr_fn(name = ">=")]
-    pub fn gte_if(x: INT, y: f64) -> bool {
-        (x as f64) >= y
-    }
-    #[rawr_fn(name = ">=")]
-    pub fn gte_fi(x: f64, y: INT) -> bool {
-        x >= (y as f64)
-    }
-    #[rawr_fn(name = "<")]
-    pub fn lt_if(x: INT, y: f64) -> bool {
-        (x as f64) < y
-    }
-    #[rawr_fn(name = "<")]
-    pub fn lt_fi(x: f64, y: INT) -> bool {
-        x < (y as f64)
-    }
-    #[rawr_fn(name = "<=")]
-    pub fn lte_if(x: INT, y: f64) -> bool {
-        (x as f64) <= y
-    }
-    #[rawr_fn(name = "<=")]
-    pub fn lte_fi(x: f64, y: INT) -> bool {
-        x <= (y as f64)
-    }
-
-    #[rawr_fn(name = "max")]
-    pub fn max_32_64(x: FLOAT, y: f64) -> FLOAT {
-        let (x, y) = (x, y as FLOAT);
-        if x >= y {
-            x
-        } else {
-            y
-        }
-    }
-    #[rawr_fn(name = "max")]
-    pub fn max_64_32(x: f64, y: FLOAT) -> FLOAT {
-        let (x, y) = (x as FLOAT, y);
-        if x >= y {
-            x
-        } else {
-            y
-        }
-    }
-    #[rawr_fn(name = "min")]
-    pub fn min_32_64(x: FLOAT, y: f64) -> FLOAT {
-        let (x, y) = (x, y as FLOAT);
-        if x <= y {
-            x
-        } else {
-            y
-        }
-    }
-    #[rawr_fn(name = "min")]
-    pub fn min_64_32(x: f64, y: FLOAT) -> FLOAT {
         let (x, y) = (x as FLOAT, y);
         if x <= y {
             x

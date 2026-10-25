@@ -2,8 +2,6 @@ use crate::{
     Engine, Identifier, Module, ModuleResolver, Position, RawrResultOf, SharedModule, SmartString,
     ERR,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     collections::btree_map::{IntoIter, Iter},
     collections::BTreeMap,

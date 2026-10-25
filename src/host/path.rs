@@ -3,8 +3,6 @@
 use crate::tokenizer::is_valid_identifier;
 use crate::{host, ImmutableString};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Path(Box<[ImmutableString]>);

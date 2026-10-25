@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_function"))]
 use rawr::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, FuncArgs, INT, Scope};
 
 #[test]
@@ -146,10 +145,7 @@ fn test_call_fn_private() {
     assert_eq!(r, 42);
 }
 
-// A handle takes `i64`, which `INT` isn't under `only_i32`.
 #[test]
-#[cfg(not(feature = "only_i32"))]
-#[cfg(not(feature = "no_std"))]
 fn test_typed_handle() {
     let script = Engine::new().script("fn calc(x: i64, y: i64, z: i64,) -> i64 { (x + y) * z }").unwrap();
     let calc = script.func::<(INT, INT, INT), INT>("calc").unwrap();

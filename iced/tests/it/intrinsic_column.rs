@@ -561,7 +561,6 @@ pub fn probe(value: Opaque) -> i64 {
 }
 
 #[test]
-#[cfg(not(feature = "no_optimize"))]
 fn intrinsic_support_survives_ast_clone_merge_and_reoptimization() {
     use rawr::OptimizationLevel;
 

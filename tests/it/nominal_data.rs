@@ -1,6 +1,3 @@
-#![cfg(not(feature = "no_function"))]
-
-#[cfg(not(feature = "no_optimize"))]
 use rawr::OptimizationLevel;
 use rawr::resolve::Category;
 use rawr::{Dynamic, Engine, ParseError, ParseErrorType, Scope};
@@ -110,7 +107,6 @@ fn stale_nested_values_are_rejected_at_construction_and_field_boundaries() {
 }
 
 #[test]
-#[cfg(not(feature = "unchecked"))]
 fn data_limits_scan_nested_nominal_fields_and_payloads() {
     let mut engine = Engine::new();
     let value = engine
@@ -356,7 +352,6 @@ fn compiler_support_survives_ast_merge_across_schema_generations() {
 }
 
 #[test]
-#[cfg(not(feature = "no_optimize"))]
 fn reoptimization_preserves_nominal_support_and_proofs() {
     let engine = Engine::new();
     let ast = engine

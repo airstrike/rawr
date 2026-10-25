@@ -5,8 +5,6 @@ use serde::{
     de::{Error, SeqAccess, Visitor},
     Deserialize, Deserializer,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{convert::TryFrom, fmt};
 
 #[cfg(feature = "decimal")]
@@ -40,13 +38,7 @@ impl<'de> Visitor<'de> for DynamicVisitor {
     }
     #[inline]
     fn visit_i64<E: Error>(self, v: i64) -> Result<Self::Value, E> {
-        #[cfg(not(feature = "only_i32"))]
         return Ok(v.into());
-
-        #[cfg(feature = "only_i32")]
-        if v <= INT::MAX as i64 {
-            return Ok(Dynamic::from(v as INT));
-        }
 
         #[allow(unreachable_code)]
         {
@@ -55,7 +47,6 @@ impl<'de> Visitor<'de> for DynamicVisitor {
                 return Ok(Dynamic::from_decimal(n));
             }
 
-            #[cfg(not(feature = "no_float"))]
             return Ok(Dynamic::from_float(v as crate::FLOAT));
 
             Err(Error::custom(format!("integer number too large: {v}")))
@@ -74,7 +65,6 @@ impl<'de> Visitor<'de> for DynamicVisitor {
                 return Ok(Dynamic::from_decimal(n));
             }
 
-            #[cfg(not(feature = "no_float"))]
             return Ok(Dynamic::from_float(v as crate::FLOAT));
 
             Err(Error::custom(format!("integer number too large: {v}")))
@@ -90,13 +80,7 @@ impl<'de> Visitor<'de> for DynamicVisitor {
     }
     #[inline]
     fn visit_u32<E: Error>(self, v: u32) -> Result<Self::Value, E> {
-        #[cfg(not(feature = "only_i32"))]
         return Ok(Dynamic::from(v as INT));
-
-        #[cfg(feature = "only_i32")]
-        if v <= INT::MAX as u32 {
-            return Ok(Dynamic::from(v as INT));
-        }
 
         #[allow(unreachable_code)]
         {
@@ -105,7 +89,6 @@ impl<'de> Visitor<'de> for DynamicVisitor {
                 return Ok(Dynamic::from_decimal(n));
             }
 
-            #[cfg(not(feature = "no_float"))]
             return Ok(Dynamic::from_float(v as crate::FLOAT));
 
             Err(Error::custom(format!("integer number too large: {v}")))
@@ -122,7 +105,6 @@ impl<'de> Visitor<'de> for DynamicVisitor {
             return Ok(Dynamic::from_decimal(n));
         }
 
-        #[cfg(not(feature = "no_float"))]
         return Ok(Dynamic::from_float(v as crate::FLOAT));
 
         #[allow(unreachable_code)]
@@ -139,17 +121,14 @@ impl<'de> Visitor<'de> for DynamicVisitor {
             return Ok(Dynamic::from_decimal(n));
         }
 
-        #[cfg(not(feature = "no_float"))]
         return Ok(Dynamic::from_float(v as crate::FLOAT));
 
         #[allow(unreachable_code)]
         Err(Error::custom(format!("integer number too large: {v}")))
     }
 
-    #[cfg(not(feature = "no_float"))]
     #[inline(always)]
     fn visit_f32<E: Error>(self, v: f32) -> Result<Self::Value, E> {
-        #[cfg(not(feature = "no_float"))]
         return Ok((v as crate::FLOAT).into());
 
         #[allow(unreachable_code)]
@@ -164,10 +143,8 @@ impl<'de> Visitor<'de> for DynamicVisitor {
             )))
         }
     }
-    #[cfg(not(feature = "no_float"))]
     #[inline(always)]
     fn visit_f64<E: Error>(self, v: f64) -> Result<Self::Value, E> {
-        #[cfg(not(feature = "no_float"))]
         return Ok((v as crate::FLOAT).into());
 
         #[allow(unreachable_code)]
@@ -183,27 +160,6 @@ impl<'de> Visitor<'de> for DynamicVisitor {
         }
     }
 
-    #[cfg(feature = "no_float")]
-    #[cfg(feature = "decimal")]
-    #[inline]
-    fn visit_f32<E: Error>(self, v: f32) -> Result<Self::Value, E> {
-        use std::convert::TryFrom;
-
-        rust_decimal::Decimal::try_from(v)
-            .map(|v| v.into())
-            .map_err(Error::custom)
-    }
-    #[cfg(feature = "no_float")]
-    #[cfg(feature = "decimal")]
-    #[inline]
-    fn visit_f64<E: Error>(self, v: f64) -> Result<Self::Value, E> {
-        use std::convert::TryFrom;
-
-        rust_decimal::Decimal::try_from(v)
-            .map(|v| v.into())
-            .map_err(Error::custom)
-    }
-
     #[inline(always)]
     fn visit_char<E: Error>(self, v: char) -> Result<Self::Value, E> {
         Ok(v.into())
@@ -216,7 +172,6 @@ impl<'de> Visitor<'de> for DynamicVisitor {
     fn visit_string<E: Error>(self, v: String) -> Result<Self::Value, E> {
         Ok(v.into())
     }
-    #[cfg(not(feature = "no_index"))]
     #[inline(always)]
     fn visit_bytes<E: Error>(self, v: &[u8]) -> Result<Self::Value, E> {
         Ok(Dynamic::from_blob(v.to_vec()))
@@ -232,7 +187,6 @@ impl<'de> Visitor<'de> for DynamicVisitor {
         Deserialize::deserialize(de)
     }
 
-    #[cfg(not(feature = "no_index"))]
     fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
         let mut arr = crate::Array::new();
 
@@ -243,7 +197,6 @@ impl<'de> Visitor<'de> for DynamicVisitor {
         Ok(arr.into())
     }
 
-    #[cfg(not(feature = "no_object"))]
     fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
         let mut m = crate::Map::new();
 

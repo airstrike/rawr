@@ -3,8 +3,6 @@ mod poolable;
 mod slots;
 
 use core::mem;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 use crate::ast::{
     ASTFlags, Expr, FlowControl, FnCallExpr, OpAssignment, ScriptFuncDef, Stmt, StmtBlock,
@@ -21,42 +19,6 @@ use crate::grain::bytecode::{
 use crate::grain::compile::poolable::is_poolable;
 use crate::grain::compile::slots::Slots;
 use crate::grain::program::{Function, Parts, Program};
-
-/// Whether a variable reference is module-qualified, as in `foo::bar`.
-///
-/// `Expr::Variable`'s payload only carries a `Namespace` when modules are
-/// compiled in. Under `no_module` the box is two fields rather than four and
-/// nothing can be qualified, so the question has a constant answer and the
-/// field it would have read does not exist.
-#[cfg(not(feature = "no_module"))]
-macro_rules! has_namespace {
-    ($payload:expr) => {
-        !$payload.2.is_empty()
-    };
-}
-#[cfg(feature = "no_module")]
-macro_rules! has_namespace {
-    ($payload:expr) => {{
-        let _ = $payload;
-        false
-    }};
-}
-
-/// The same question for a call: is it `foo::bar()` rather than `bar()`.
-/// `FnCallExpr` carries no `namespace` field at all under `no_module`.
-#[cfg(not(feature = "no_module"))]
-macro_rules! call_has_namespace {
-    ($call:expr) => {
-        !$call.namespace.is_empty()
-    };
-}
-#[cfg(feature = "no_module")]
-macro_rules! call_has_namespace {
-    ($call:expr) => {{
-        let _ = $call;
-        false
-    }};
-}
 
 /// Lowers a rawr `AST` into a [`Program`].
 ///
@@ -220,7 +182,6 @@ impl Compiler {
                 switches: lowering.switches,
                 lib,
                 has_compiler_support,
-                #[cfg(not(feature = "no_module"))]
                 resolver: ast.resolver.clone(),
                 source: ast.source().map(Into::into),
             },
@@ -435,7 +396,7 @@ impl Lowering {
         // step that mutates lands in the caller's value — walking a copy would
         // drop the write silently. It gets a root of its own instead.
         let root_spec = match root {
-            Expr::Variable(v, ..) if !has_namespace!(v) => match self.slots.resolve(&v.1) {
+            Expr::Variable(v, ..) if v.2.is_empty() => match self.slots.resolve(&v.1) {
                 Some(slot) => Root::Local {
                     slot,
                     name: self.push_name(v.1.clone()),
@@ -889,7 +850,7 @@ impl Lowering {
             // A plain local on the left.
             Stmt::Assignment(payload)
                 if matches!(&payload.1.lhs, Expr::Variable(v, ..)
-                    if !has_namespace!(v) && self.slots.resolve(&v.1).is_some()) =>
+                    if v.2.is_empty() && self.slots.resolve(&v.1).is_some()) =>
             {
                 let (op_info, binary) = &**payload;
                 let Expr::Variable(v, ..) = &binary.lhs else {
@@ -911,7 +872,7 @@ impl Lowering {
             // lives differs.
             Stmt::Assignment(payload)
                 if matches!(&payload.1.lhs, Expr::Variable(v, ..)
-                    if self.is_variable_name(&v.1, has_namespace!(v))) =>
+                    if self.is_variable_name(&v.1, !v.2.is_empty())) =>
             {
                 let (op_info, binary) = &**payload;
                 let Expr::Variable(v, ..) = &binary.lhs else {
@@ -959,7 +920,6 @@ impl Lowering {
 
             // Emitted by the parser ahead of the `curry` call that binds a
             // closure's captures (`parser.rs:3707`).
-            #[cfg(not(feature = "no_closure"))]
             Stmt::Share(names) => {
                 for (ident, ..) in names.iter() {
                     match self.slots.resolve(&ident.name) {
@@ -1289,7 +1249,6 @@ impl Lowering {
             // statement could name it, and a qualified call is its own
             // fragment. Refusing the lowering hands the body to the walker
             // whole, which is where the alias lives long enough to be used.
-            #[cfg(not(feature = "no_module"))]
             Stmt::Import(..) => false,
 
             // Not lowered yet, and listed rather than matched with `_` on
@@ -1315,7 +1274,6 @@ impl Lowering {
                 true
             }
 
-            #[cfg(not(feature = "no_module"))]
             other @ Stmt::Export(..) => {
                 let residual = self.push_residual(wrap_statements(vec![other.clone()]));
                 self.emit(Op::EvalAst {
@@ -1336,9 +1294,6 @@ impl Lowering {
             Expr::IntegerConstant(value, ..) => self.constant(Dynamic::from(*value)),
             Expr::CharConstant(value, ..) => self.constant(Dynamic::from(*value)),
             Expr::StringConstant(value, ..) => self.constant(Dynamic::from(value.clone())),
-            // Rawr has no float literal to parse under `no_float`, so there is
-            // no variant to match.
-            #[cfg(not(feature = "no_float"))]
             Expr::FloatConstant(value, ..) => self.constant(Dynamic::from(**value)),
             // Folded by the optimizer, so it can hold anything a constant call
             // returned — including a function pointer, which must not be
@@ -1385,7 +1340,7 @@ impl Lowering {
             Expr::Variable(payload, ..) => {
                 // A qualified name resolves against imported modules, not the
                 // scope, so it is not a slot.
-                let is_qualified = has_namespace!(payload);
+                let is_qualified = !payload.2.is_empty();
 
                 match self.slots.resolve(&payload.1) {
                     Some(slot) if !is_qualified => self.emit(Op::LoadLocal(slot)),
@@ -1571,7 +1526,6 @@ impl Lowering {
             // here, so the slot model would be resolved against a scope shape
             // that is not the one at runtime. Refusing the lowering keeps the
             // walker's answer, as it does for `eval` above.
-            #[cfg(not(feature = "no_custom_syntax"))]
             Expr::Custom(..) => {
                 self.residual_expr(expr);
                 self.defeated = true;
@@ -1609,7 +1563,7 @@ impl Lowering {
     fn fn_ptr_receiver(&mut self, receiver: &Expr) -> Option<Receiver> {
         match receiver {
             Expr::ThisPtr(..) => Some(Receiver::This),
-            Expr::Variable(payload, ..) if !has_namespace!(payload) => {
+            Expr::Variable(payload, ..) if payload.2.is_empty() => {
                 match self.slots.resolve(&payload.1) {
                     Some(slot) => Some(Receiver::Local(slot)),
                     None if self.is_variable_name(&payload.1, false) => {
@@ -1646,7 +1600,7 @@ impl Lowering {
         let Some(Expr::Variable(payload, ..)) = call.args.first() else {
             return None;
         };
-        let qualified = has_namespace!(payload);
+        let qualified = !payload.2.is_empty();
 
         match self.slots.resolve(&payload.1) {
             Some(slot) if !qualified => Some(Receiver::Local(slot)),
@@ -1753,7 +1707,7 @@ impl Lowering {
     ///   default arm however well it would otherwise have matched.
     fn unflattened(&mut self, expr: &Expr) {
         match expr {
-            Expr::Variable(payload, ..) if !has_namespace!(payload) => {
+            Expr::Variable(payload, ..) if payload.2.is_empty() => {
                 match self.slots.resolve(&payload.1) {
                     Some(slot) => self.emit(Op::LoadShared(slot)),
                     // The caller's. A closure can capture one of those too, and
@@ -1781,7 +1735,7 @@ impl Lowering {
     /// exactly is what keeps the two agreeing on the failures as well as the
     /// successes.
     fn fn_ptr_call(&mut self, call: &FnCallExpr, pos: Position) -> bool {
-        if call_has_namespace!(call) || call.capture_parent_scope {
+        if !call.namespace.is_empty() || call.capture_parent_scope {
             return false;
         }
         let argc = call.args.len();
@@ -1789,11 +1743,6 @@ impl Lowering {
         match (call.name.as_str(), argc) {
             // The argument has to arrive as the cell, not its contents, or the
             // answer is always false.
-            //
-            // Not lowered under `no_closure`: rawr registers no `is_shared`
-            // there, so the call has to reach the walker and fail the way rawr
-            // fails it. Lowering it would answer a question rawr refuses.
-            #[cfg(not(feature = "no_closure"))]
             ("is_shared", 1) => {
                 self.unflattened(&call.args[0]);
                 self.emit_at(Op::IsShared, pos);
@@ -1867,7 +1816,7 @@ impl Lowering {
 
         !call.capture_parent_scope
             && !native_only
-            && !call_has_namespace!(call)
+            && call.namespace.is_empty()
             && call.args.len() <= u8::MAX as usize
             && !SYNTACTIC.contains(&call.name.as_str())
     }
@@ -2243,9 +2192,6 @@ fn flatten_chain(expr: &Expr) -> Option<(&Expr, Vec<ChainStep<'_>>)> {
 fn wrap_statements(statements: Vec<Stmt>) -> Expr {
     let span = statements.first().zip(statements.last()).map_or_else(
         || Span::new(Position::NONE, Position::NONE),
-        // `crate::types`, not `crate::types::position`: `no_position` swaps the
-        // module out for a zero-sized one and re-exports `Span` from whichever
-        // is in play.
         |(first, last)| crate::types::Span::new(first.position(), last.position()),
     );
 

@@ -33,8 +33,6 @@ fn test_packages() {
     assert_eq!(make_call(42).unwrap(), 1849);
 }
 
-#[cfg(not(feature = "no_function"))]
-#[cfg(not(feature = "no_module"))]
 #[test]
 fn test_packages_with_script() {
     let mut engine = Engine::new();

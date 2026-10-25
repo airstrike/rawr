@@ -4,8 +4,6 @@ use crate::{host, program, type_def, Dynamic, ImmutableString};
 use std::any::TypeId;
 use std::collections::BTreeSet;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 const WITNESS_PREFIX: &str = "\0rawr.witness.";
 
@@ -134,10 +132,7 @@ impl Representation {
             "bool" => (TypeId::of::<bool>(), BuiltinRepresentation::Bool),
             "char" => (TypeId::of::<char>(), BuiltinRepresentation::Char),
             "i64" => (TypeId::of::<crate::INT>(), BuiltinRepresentation::I64),
-            #[cfg(not(feature = "no_float"))]
             "f64" => (TypeId::of::<crate::FLOAT>(), BuiltinRepresentation::F64),
-            #[cfg(feature = "no_float")]
-            "f64" => (TypeId::of::<crate::Dynamic>(), BuiltinRepresentation::F64),
             "String" => (
                 TypeId::of::<crate::ImmutableString>(),
                 BuiltinRepresentation::String,
@@ -436,7 +431,6 @@ impl Type {
         }
     }
 
-    #[cfg(not(feature = "no_float"))]
     pub(crate) fn f64_range_inclusive() -> Self {
         Self::builtin(
             "RangeInclusive<f64>",
@@ -894,7 +888,6 @@ impl Type {
                     "String",
                     TypeId::of::<crate::ImmutableString>(),
                 )),
-                #[cfg(not(feature = "no_float"))]
                 "f64" => Ok(Self::builtin("f64", TypeId::of::<crate::FLOAT>())),
                 name => Err(Error::Unsupported { ty: name.into() }),
             },
@@ -1246,24 +1239,8 @@ impl From<program::construction::Error> for Error {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Nominal(error) => Some(error),
-            Self::Member { source, .. } => Some(source.as_ref()),
-            Self::Representation { .. }
-            | Self::SymbolicCallable { .. }
-            | Self::MissingAttestation { .. }
-            | Self::AttestationMismatch { .. }
-            | Self::Unsupported { .. } => None,
-        }
-    }
-}
-
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {
-    fn source(&self) -> Option<&(dyn core_error::Error + 'static)> {
         match self {
             Self::Nominal(error) => Some(error),
             Self::Member { source, .. } => Some(source.as_ref()),

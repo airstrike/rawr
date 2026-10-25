@@ -40,11 +40,7 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {}
-
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {}
 
 pub(super) fn of(proof: &Proof) -> Result<Digest, Error> {
     let mut writer = Writer::new();

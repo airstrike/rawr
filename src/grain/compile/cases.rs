@@ -13,8 +13,6 @@
 //! sharing a case value.
 
 use crate::{ast::RangeCase, INT};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 use crate::grain::bytecode::SwitchRange;
 
@@ -279,7 +277,6 @@ mod tests {
             probes.push(rawr::Dynamic::from(value as INT));
             // Halfway between two integers is where an interval that has no
             // exact form goes wrong, so the integers alone would not find it.
-            #[cfg(not(feature = "no_float"))]
             probes.push(rawr::Dynamic::from(value as rawr::FLOAT + 0.5));
         }
 

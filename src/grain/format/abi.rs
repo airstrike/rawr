@@ -1,16 +1,16 @@
 //! What a `Dynamic` is, on the machine that wrote the artifact.
 //!
-//! Rawr's feature flags change the value representation rather than just what
-//! is available: `f32_float` makes `FLOAT` an `f32`, `only_i32` narrows `INT`,
-//! `sync` swaps `Rc` for `Arc`. Loading an artifact across one of those is not
-//! a missing feature, it is a value decoded as the wrong type — so the header
-//! carries a fingerprint and the loader refuses a mismatch by name.
+//! Some of rawr's features change the value representation rather than just
+//! what is available: `sync` swaps `Rc` for `Arc`. Loading an artifact across
+//! one of those is not a missing feature, it is a value decoded as the wrong
+//! type — so the header carries a fingerprint and the loader refuses a
+//! mismatch by name.
 //!
 //! ## What the fingerprint can and cannot see
 //!
 //! Widths are *measured*, so they are right no matter how rawr was configured.
 //! The booleans are read from this crate's own features, which is why the
-//! manifest mirrors them — `cfg!(feature = "no_object")` here does not consult
+//! manifest mirrors them — `cfg!(feature = "sync")` here does not consult
 //! rawr's manifest.
 //!
 //! That leaves one gap: enabling a restriction on rawr directly, bypassing the
@@ -23,18 +23,21 @@
 ///
 /// Order is the wire order and must never change; append only. A flag's name
 /// is what the loader reports, so it has to match rawr's own spelling.
+///
+/// The bits after `decimal` belonged to rawr's retired language-trimming
+/// features. They stay in the table, always off, so the wire order holds.
 const FLAGS: &[(&str, bool)] = &[
     ("sync", cfg!(feature = "sync")),
     ("decimal", cfg!(feature = "decimal")),
-    ("no_index", cfg!(feature = "no_index")),
-    ("no_object", cfg!(feature = "no_object")),
-    ("no_closure", cfg!(feature = "no_closure")),
-    ("no_function", cfg!(feature = "no_function")),
-    ("no_module", cfg!(feature = "no_module")),
-    ("no_position", cfg!(feature = "no_position")),
-    ("no_custom_syntax", cfg!(feature = "no_custom_syntax")),
-    ("no_time", cfg!(feature = "no_time")),
-    ("unchecked", cfg!(feature = "unchecked")),
+    ("no_index", false),
+    ("no_object", false),
+    ("no_closure", false),
+    ("no_function", false),
+    ("no_module", false),
+    ("no_position", false),
+    ("no_custom_syntax", false),
+    ("no_time", false),
+    ("unchecked", false),
 ];
 
 /// `Engine` is only `Send + Sync` when rawr is built with `sync`, so claiming
@@ -48,10 +51,9 @@ const _: () = {
 /// The value representation an artifact was written against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Abi {
-    /// `size_of::<rawr::INT>()`. Measured, so `only_i32` set on rawr alone is
-    /// still caught.
+    /// `size_of::<rawr::INT>()`.
     pub int_bytes: u8,
-    /// `size_of::<rawr::FLOAT>()`, or 0 under `no_float`.
+    /// `size_of::<rawr::FLOAT>()`.
     pub float_bytes: u8,
     /// `FLAGS` as a bitmask, low bit first.
     pub flags: u32,
@@ -111,10 +113,7 @@ impl Abi {
     /// The fingerprint of the running build.
     #[must_use]
     pub fn host() -> Self {
-        #[cfg(not(feature = "no_float"))]
         let float_bytes = core::mem::size_of::<rawr::FLOAT>() as u8;
-        #[cfg(feature = "no_float")]
-        let float_bytes = 0u8;
 
         let mut flags = 0u32;
         for (bit, (_, on)) in FLAGS.iter().enumerate() {
@@ -181,24 +180,18 @@ mod tests {
     #[test]
     fn the_build_measures_the_widths_it_should() {
         let abi = Abi::host();
-        // Against the aliases rather than concrete types, so this holds under
-        // only_i32 and f32_float as well — the point is that the fingerprint
-        // reports the build it was taken on, whichever build that is.
+        // Against the aliases rather than concrete types: the point is that
+        // the fingerprint reports the build it was taken on.
         assert_eq!(abi.int_bytes as usize, core::mem::size_of::<rawr::INT>(),);
-        #[cfg(not(feature = "no_float"))]
         assert_eq!(
             abi.float_bytes as usize,
             core::mem::size_of::<rawr::FLOAT>(),
         );
-        #[cfg(feature = "no_float")]
-        assert_eq!(abi.float_bytes, 0);
     }
 
     #[test]
     fn a_narrower_int_is_refused_by_name() {
         let host = Abi::host();
-        // Halved rather than named: `only_i32` makes 4 the host's own width,
-        // and an artifact agreeing with the host is not a mismatch to report.
         let narrow = Abi {
             int_bytes: host.int_bytes / 2,
             ..host

@@ -9,7 +9,6 @@ fn test_constant() {
     // Rust refuses to assign to a constant, so the script doesn't compile.
     let _ = engine.compile("const X: i64 = 123; X = 42;").expect_err("expects error");
 
-    #[cfg(not(feature = "no_index"))]
     let _ = engine.compile("const X: [i64; 5] = [1, 2, 3, 4, 5]; X[2] = 42;").expect_err("expects error");
 }
 

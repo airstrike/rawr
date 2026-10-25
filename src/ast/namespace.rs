@@ -1,16 +1,11 @@
 //! Namespace reference type.
-#![cfg(not(feature = "no_module"))]
 
 use crate::ast::Ident;
 use crate::{Position, StaticVec};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{fmt, num::NonZeroUsize};
 
 /// _(internals)_ A chain of [module][crate::Module] names to namespace-qualify a variable or function call.
 /// Exported under the `internals` feature only.
-///
-/// Not available under `no_module`.
 ///
 /// A [`u64`] offset to the current stack of imported [modules][crate::Module] in the
 /// [global runtime state][crate::GlobalRuntimeState] is cached for quick search purposes.

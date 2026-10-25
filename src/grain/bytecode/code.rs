@@ -23,11 +23,9 @@
 //! instruction boundary — without which a jump into the middle of an operand
 //! would decode whatever the operand's bytes happen to look like.
 
-use alloc::borrow::Cow;
+use std::borrow::Cow;
 
 use crate::grain::bytecode::{Op, Receiver};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Instruction tags.
 ///

@@ -2,8 +2,6 @@
 
 use crate::{ImmutableString, Span};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Stable category for a resolution failure.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -840,8 +838,4 @@ impl From<Error> for crate::ParseError {
     }
 }
 
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {}
-
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {}

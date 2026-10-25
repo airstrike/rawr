@@ -4,8 +4,6 @@ use super::Error;
 use crate::item;
 use crate::{host, type_def, ImmutableString, Span};
 use std::collections::BTreeMap;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 // Large through a path's `Target::Host`; see `Target` for why it stays unboxed.
 #[allow(clippy::large_enum_variant)]

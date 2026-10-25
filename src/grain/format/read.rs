@@ -1,7 +1,5 @@
 use crate::{tokenizer::Token, Dynamic, ImmutableString};
 use core::convert::{TryFrom, TryInto};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 use crate::grain::bytecode::{
     AssignOp, BadTable, Chain, Chunk, Positions, Root, Step, Strings, Switch, SwitchCase,
@@ -242,7 +240,6 @@ pub(super) fn read(bytes: &[u8]) -> Result<Program<'_>, ReadError> {
             // that has any and a loaded one never does.
             lib: None,
             has_compiler_support: false,
-            #[cfg(not(feature = "no_module"))]
             resolver: None,
             source,
         },
@@ -427,7 +424,6 @@ fn get_constant(cursor: &mut Cursor, depth: usize) -> Result<Dynamic, ReadError>
             Dynamic::from(rawr::INT::try_from(value).map_err(|_| ReadError::MalformedVarint)?)
         }
 
-        #[cfg(not(feature = "no_float"))]
         constant::FLOAT => {
             let width = core::mem::size_of::<rawr::FLOAT>();
             let bits = cursor.take(width)?;

@@ -4,8 +4,6 @@ use crate::{capability, host, item, resolve, signature, type_def};
 use crate::{Engine, ImmutableString, Scope, AST};
 use std::collections::BTreeMap;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// One compiler-validated program paired with its exact AST and support.
 ///
@@ -26,11 +24,9 @@ use std::prelude::v1::*;
 pub struct Executable {
     origin: super::origin::Origin,
     package: ImmutableString,
-    #[cfg_attr(feature = "no_std", allow(dead_code))]
     source: super::source::Id,
     sources: super::source::Table,
     generation: super::GenerationId,
-    #[cfg_attr(feature = "no_function", allow(dead_code))]
     model: super::model::Model,
     schemas: super::schema::Manifest,
     callables: BTreeMap<item::Key, Callable>,
@@ -71,9 +67,7 @@ pub(crate) trait ApplicationEvidence {
     fn host_dependencies(&self) -> &[host::facade::Dependency];
 }
 
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 pub(crate) struct Callable {
-    #[cfg_attr(feature = "no_std", allow(dead_code))]
     source: super::source::Id,
     value: item::Value,
     arity: usize,
@@ -83,7 +77,6 @@ pub(crate) struct Callable {
     dispatch: Dispatch,
     application: Option<crate::application::descriptor::Signature>,
     /// A free function's signature as written, for typed handles.
-    #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
     signature: Option<super::signatures::Signature>,
     locations: Option<Locations>,
 }
@@ -164,7 +157,6 @@ fn innermost(entries: &[Location], position: crate::Position) -> Option<crate::S
         .map(|location| location.original)
 }
 
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 pub(crate) enum Dispatch {
     Function(ImmutableString),
     Method(ImmutableString),
@@ -191,62 +183,42 @@ impl Executable {
         engine: &Engine,
         program: resolve::Program,
         scope: Option<&Scope>,
-        #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+        optimization_level: crate::OptimizationLevel,
     ) -> crate::parser::ParseResult<Self> {
-        Self::from_resolved_at(
-            engine,
-            program,
-            scope,
-            #[cfg(not(feature = "no_optimize"))]
-            optimization_level,
-        )
-        .map_err(resolve::LoweringFailure::into_error)
+        Self::from_resolved_at(engine, program, scope, optimization_level)
+            .map_err(resolve::LoweringFailure::into_error)
     }
 
-    #[cfg(not(feature = "no_std"))]
     pub(crate) fn from_package_resolved(
         engine: &Engine,
         program: resolve::Program,
         scope: Option<&Scope>,
-        #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+        optimization_level: crate::OptimizationLevel,
     ) -> Result<Self, resolve::LoweringFailure> {
-        Self::from_resolved_at(
-            engine,
-            program,
-            scope,
-            #[cfg(not(feature = "no_optimize"))]
-            optimization_level,
-        )
+        Self::from_resolved_at(engine, program, scope, optimization_level)
     }
 
     fn from_resolved_at(
         engine: &Engine,
         program: resolve::Program,
         scope: Option<&Scope>,
-        #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+        optimization_level: crate::OptimizationLevel,
     ) -> Result<Self, resolve::LoweringFailure> {
         Self::from_lowering(engine, program, |program, model| {
-            resolve::lower_resolved(
-                engine,
-                program,
-                model,
-                scope,
-                #[cfg(not(feature = "no_optimize"))]
-                optimization_level,
-            )
-            .map(|output| (output, ()))
+            resolve::lower_resolved(engine, program, model, scope, optimization_level)
+                .map(|output| (output, ()))
         })
         .map(|(executable, ())| executable)
     }
 
     /// Consume one resolved program into executable support and its native-use evidence.
-    #[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn from_package_with_uses<A: host::ImportAllocation>(
         engine: &Engine,
         program: resolve::Program,
         allocation: &mut A,
         scope: Option<&Scope>,
-        #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+        optimization_level: crate::OptimizationLevel,
     ) -> Result<(Self, resolve::lower_nominal::ImportedOutput), resolve::ImportedFailure> {
         let owner = allocation.support_owner();
         let (mut executable, imported) = Self::from_lowering(engine, program, |program, model| {
@@ -256,7 +228,6 @@ impl Executable {
                 model,
                 allocation,
                 scope,
-                #[cfg(not(feature = "no_optimize"))]
                 optimization_level,
             )
         })?;
@@ -298,7 +269,6 @@ impl Executable {
                     this: None,
                     dispatch: Dispatch::Function(closure.dispatch),
                     application: None,
-                    #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
                     signature: None,
                     locations: None,
                 },
@@ -348,7 +318,6 @@ impl Executable {
         &self.package
     }
 
-    #[cfg_attr(feature = "no_function", allow(dead_code))]
     pub(crate) const fn model(&self) -> &super::model::Model {
         &self.model
     }
@@ -514,7 +483,6 @@ impl Executable {
         })
     }
 
-    #[cfg_attr(feature = "no_function", allow(dead_code))]
     pub(crate) const fn ast(&self) -> &AST {
         &self.ast
     }
@@ -541,7 +509,6 @@ impl Executable {
 
     /// This program's hosted [`AST`] and the typed signatures of its entry
     /// source's free functions, which typed handles check against (D514).
-    #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
     pub(crate) fn into_hosted_parts(mut self) -> (AST, super::signatures::Signatures) {
         let mut signatures = super::signatures::Signatures::default();
         let entry = self.source;
@@ -632,7 +599,6 @@ impl ContractEvidence {
         }
     }
 
-    #[cfg(not(feature = "no_std"))]
     pub(crate) fn application_error_source(
         &self,
         error: &crate::application::Error,
@@ -679,7 +645,6 @@ impl ApplicationEvidence for ContractEvidence {
     }
 }
 
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 impl Callable {
     pub(crate) const fn value(&self) -> &item::Value {
         &self.value
@@ -757,7 +722,6 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                             &definitions,
                             &application_runtime,
                         )),
-                        #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
                         signature: Some(super::signatures::Signature::from_resolved(function)),
                         locations: None,
                     },
@@ -798,7 +762,6 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                                 ),
                             },
                             application: None,
-                            #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
                             signature: None,
                             locations: None,
                         },
@@ -845,7 +808,6 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                     &definitions,
                     &application_runtime,
                 )),
-                #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
                 signature: None,
                 locations: None,
             },
@@ -958,7 +920,6 @@ fn deepest_position(error: &crate::EvalAltResult) -> crate::Position {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl Executable {
     pub(crate) fn application_error_source(
         &self,
@@ -977,7 +938,6 @@ impl Executable {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 fn application_error_source(
     fallback: super::source::Id,
     entry: Option<&crate::application::Entry>,

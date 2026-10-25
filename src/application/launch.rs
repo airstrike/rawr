@@ -2,8 +2,6 @@
 
 use crate::{application, host, program};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A validated application contract bound to its exact compiler Engine.
 #[derive(Clone)]

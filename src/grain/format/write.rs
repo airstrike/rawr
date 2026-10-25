@@ -1,6 +1,4 @@
 use core::ops::{Range, RangeInclusive};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 use rawr::{tokenizer::Token, Array, Blob, Dynamic, Map, INT};
 
@@ -372,14 +370,9 @@ fn put_constant(out: &mut Vec<u8>, value: &Dynamic) -> Result<(), String> {
     }
     if let Ok(number) = value.as_int() {
         out.push(constant::INT);
-        // `INT` narrows to `i32` under `only_i32`, so the widening is real
-        // there even though it is a no-op here. The fingerprint is what stops
-        // the reader from decoding the wrong width back.
-        #[allow(clippy::useless_conversion)]
-        put_ivarint(out, i64::from(number));
+        put_ivarint(out, number);
         return Ok(());
     }
-    #[cfg(not(feature = "no_float"))]
     if let Ok(number) = value.as_float() {
         out.push(constant::FLOAT);
         out.extend_from_slice(&number.to_le_bytes());

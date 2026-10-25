@@ -2,8 +2,6 @@
 
 use crate::{diagnostic, source, Shared};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A dense source identity local to one resolved program.
@@ -56,7 +54,6 @@ pub struct Source {
 impl Id {
     pub(crate) const ROOT: Self = Self(0);
 
-    #[cfg(not(feature = "no_std"))]
     pub(crate) const fn from_index(index: usize) -> Self {
         Self(index)
     }
@@ -76,7 +73,6 @@ impl Source {
         }
     }
 
-    #[cfg(not(feature = "no_std"))]
     pub(crate) fn from_graph(
         entry: Id,
         maps: Box<[source::Map]>,
@@ -97,7 +93,6 @@ impl Source {
         self.maps[self.entry.index()].text()
     }
 
-    #[cfg_attr(feature = "no_function", allow(dead_code))]
     pub(crate) fn text_at(&self, id: Id) -> &str {
         self.maps[id.index()].text()
     }

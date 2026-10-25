@@ -21,8 +21,6 @@ use crate::{host, Dynamic, EvalAltResult, ImmutableString, Shared};
 use core::future;
 use std::collections::BTreeMap;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 trait Callback: SendSync {
     fn invoke(
@@ -2119,13 +2117,9 @@ mod witness_tests {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {}
 
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {}
-
-#[cfg(all(test, not(feature = "no_function")))]
+#[cfg(test)]
 mod tests {
     use super::{type_ref, widget, Builder, Registry, Witness};
     use crate::program::{model::Model, GenerationId};

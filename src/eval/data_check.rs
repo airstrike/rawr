@@ -1,12 +1,9 @@
 //! Data size checks during evaluation.
-#![cfg(not(feature = "unchecked"))]
 
 use super::GlobalRuntimeState;
 use crate::types::dynamic::Union;
 use crate::{Dynamic, Engine, Position, RawrResultOf, ERR};
 use std::borrow::Borrow;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Recursively calculate the sizes of an array.
 ///
@@ -15,7 +12,6 @@ use std::prelude::v1::*;
 /// # Panics
 ///
 /// Panics if any interior data is shared (should never happen).
-#[cfg(not(feature = "no_index"))]
 #[inline]
 pub fn calc_array_sizes(array: &crate::Array) -> (usize, usize, usize) {
     let (mut ax, mut mx, mut sx) = (0, 0, 0);
@@ -31,7 +27,6 @@ pub fn calc_array_sizes(array: &crate::Array) -> (usize, usize, usize) {
                 sx += s;
             }
             Union::Blob(ref a, ..) => ax += 1 + a.len(),
-            #[cfg(not(feature = "no_object"))]
             Union::Map(ref m, ..) => {
                 let (a, m, s) = calc_map_sizes(m);
                 ax += a;
@@ -51,7 +46,6 @@ pub fn calc_array_sizes(array: &crate::Array) -> (usize, usize, usize) {
                 mx += m;
                 sx += s;
             }
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(..) => {
                 unreachable!("shared values discovered within data")
             }
@@ -68,7 +62,6 @@ pub fn calc_array_sizes(array: &crate::Array) -> (usize, usize, usize) {
 /// # Panics
 ///
 /// Panics if any interior data is shared (should never happen).
-#[cfg(not(feature = "no_object"))]
 #[inline]
 pub fn calc_map_sizes(map: &crate::Map) -> (usize, usize, usize) {
     let (mut ax, mut mx, mut sx) = (0, 0, 0);
@@ -77,14 +70,12 @@ pub fn calc_map_sizes(map: &crate::Map) -> (usize, usize, usize) {
         mx += 1;
 
         match value.0 {
-            #[cfg(not(feature = "no_index"))]
             Union::Array(ref a, ..) => {
                 let (a, m, s) = calc_array_sizes(a);
                 ax += a;
                 mx += m;
                 sx += s;
             }
-            #[cfg(not(feature = "no_index"))]
             Union::Blob(ref a, ..) => ax += 1 + a.len(),
             Union::Map(ref m, ..) => {
                 let (a, m, s) = calc_map_sizes(m);
@@ -105,7 +96,6 @@ pub fn calc_map_sizes(map: &crate::Map) -> (usize, usize, usize) {
                 mx += m;
                 sx += s;
             }
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(..) => {
                 unreachable!("shared values discovered within data")
             }
@@ -126,18 +116,13 @@ pub fn calc_map_sizes(map: &crate::Map) -> (usize, usize, usize) {
 #[inline]
 pub fn calc_data_sizes(value: &Dynamic, _top: bool) -> (usize, usize, usize) {
     match value.0 {
-        #[cfg(not(feature = "no_index"))]
         Union::Array(ref arr, ..) => calc_array_sizes(arr),
-        #[cfg(not(feature = "no_index"))]
         Union::Blob(ref blob, ..) => (blob.len(), 0, 0),
-        #[cfg(not(feature = "no_object"))]
         Union::Map(ref map, ..) => calc_map_sizes(map),
         Union::Str(ref s, ..) => (0, 0, s.len()),
         Union::Struct(ref value, ..) => calc_nominal_sizes(value.fields()),
         Union::Enum(ref value, ..) => calc_nominal_sizes(value.payload()),
-        #[cfg(not(feature = "no_closure"))]
         Union::Shared(..) if _top => calc_data_sizes(&value.read_lock::<Dynamic>().unwrap(), true),
-        #[cfg(not(feature = "no_closure"))]
         Union::Shared(..) => {
             unreachable!("shared values discovered within data: {}", value)
         }
@@ -157,7 +142,6 @@ impl Engine {
     ///
     /// [`Position`] in [`EvalAltResult`][crate::EvalAltResult] is always [`NONE`][Position::NONE]
     /// and should be set afterwards.
-    #[cfg(not(feature = "unchecked"))]
     pub(crate) fn throw_on_size(&self, (_arr, _map, s): (usize, usize, usize)) -> RawrResultOf<()> {
         if self.limits.string_len.is_some_and(|max| s > max.get()) {
             return Err(
@@ -165,14 +149,12 @@ impl Engine {
             );
         }
 
-        #[cfg(not(feature = "no_index"))]
         if self.limits.array_size.is_some_and(|max| _arr > max.get()) {
             return Err(
                 ERR::ErrorDataTooLarge("Size of array/BLOB".to_string(), Position::NONE).into(),
             );
         }
 
-        #[cfg(not(feature = "no_object"))]
         if self.limits.map_size.is_some_and(|max| _map > max.get()) {
             return Err(
                 ERR::ErrorDataTooLarge("Size of object map".to_string(), Position::NONE).into(),
@@ -183,7 +165,6 @@ impl Engine {
     }
 
     /// Check whether the size of a [`Dynamic`] is within limits.
-    #[cfg(not(feature = "unchecked"))]
     #[inline]
     pub(crate) fn check_data_size<T: Borrow<Dynamic>>(
         &self,
@@ -204,9 +185,6 @@ impl Engine {
     }
 
     /// Raise an error if the size of a [`Dynamic`] is out of limits (if any).
-    ///
-    /// Not available under `unchecked`.
-    #[cfg(not(feature = "unchecked"))]
     #[inline(always)]
     pub fn ensure_data_size_within_limits(&self, value: &Dynamic) -> RawrResultOf<()> {
         self.check_data_size(value, Position::NONE).map(|_| ())
@@ -222,7 +200,6 @@ impl Engine {
         global.num_operations += 1;
 
         // Guard against too many operations
-        #[cfg(not(feature = "unchecked"))]
         if self.max_operations() > 0 && global.num_operations > self.max_operations() {
             return Err(ERR::ErrorTooManyOperations(pos).into());
         }

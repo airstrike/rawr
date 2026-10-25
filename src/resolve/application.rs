@@ -2,8 +2,6 @@
 
 use super::item;
 use crate::{application, host, method, receiver, ImmutableString, Span};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Entry {

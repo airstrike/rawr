@@ -2,8 +2,6 @@
 
 use crate::Engine;
 use bitflags::bitflags;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 bitflags! {
     /// Bit-flags containing all language options for the [`Engine`].
@@ -18,7 +16,6 @@ bitflags! {
         /// Is statement-expression allowed?
         const STMT_EXPR = 0b_0000_0000_1000;
         /// Is anonymous function allowed?
-        #[cfg(not(feature = "no_function"))]
         const ANON_FN = 0b_0000_0001_0000;
         /// Is looping allowed?
         const LOOPING = 0b_0000_0010_0000;
@@ -28,7 +25,6 @@ bitflags! {
         const STRICT_VAR = 0b_0000_1000_0000;
         /// Raise error if an object map property does not exist?
         /// Returns `()` if `false`.
-        #[cfg(not(feature = "no_object"))]
         const FAIL_ON_INVALID_MAP_PROPERTY = 0b_0001_0000_0000;
         /// Fast operators mode?
         const FAST_OPS = 0b_0010_0000_0000;
@@ -49,13 +45,8 @@ impl LangOptions {
                 | Self::SHADOWING.bits()
                 | Self::FAST_OPS.bits()
                 | {
-                    #[cfg(not(feature = "no_function"))]
                     {
                         Self::ANON_FN.bits()
-                    }
-                    #[cfg(feature = "no_function")]
-                    {
-                        Self::empty().bits()
                     }
                 },
         )
@@ -117,18 +108,12 @@ impl Engine {
     }
     /// Is anonymous function allowed?
     /// Default is `true`.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     #[must_use]
     pub const fn allow_anonymous_fn(&self) -> bool {
         self.options.intersects(LangOptions::ANON_FN)
     }
     /// Set whether anonymous function is allowed.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     pub fn set_allow_anonymous_fn(&mut self, enable: bool) -> &mut Self {
         self.options.set(LangOptions::ANON_FN, enable);
@@ -175,9 +160,6 @@ impl Engine {
     }
     /// Raise error if an object map property does not exist?
     /// Default is `false`.
-    ///
-    /// Not available under `no_object`.
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     #[must_use]
     pub const fn fail_on_invalid_map_property(&self) -> bool {
@@ -185,9 +167,6 @@ impl Engine {
             .intersects(LangOptions::FAIL_ON_INVALID_MAP_PROPERTY)
     }
     /// Set whether to raise error if an object map property does not exist.
-    ///
-    /// Not available under `no_object`.
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn set_fail_on_invalid_map_property(&mut self, enable: bool) -> &mut Self {
         self.options

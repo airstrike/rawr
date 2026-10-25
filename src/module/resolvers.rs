@@ -1,8 +1,6 @@
 use crate::eval::GlobalRuntimeState;
 use crate::func::SendSync;
 use crate::{Engine, Position, RawrResultOf, Scope, SharedModule, AST};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 mod collection;
 mod dummy;
@@ -11,7 +9,6 @@ mod stat;
 
 pub use collection::ModuleResolversCollection;
 pub use dummy::DummyModuleResolver;
-#[cfg(not(feature = "no_std"))]
 #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 pub use file::FileModuleResolver;
 pub use stat::StaticModuleResolver;

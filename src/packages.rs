@@ -20,10 +20,8 @@ pub(crate) mod string_more;
 pub(crate) mod time_basic;
 
 pub use arithmetic::ArithmeticPackage;
-#[cfg(not(feature = "no_index"))]
 pub use array_basic::BasicArrayPackage;
 pub use bit_field::BitFieldPackage;
-#[cfg(not(feature = "no_index"))]
 pub use blob_basic::BasicBlobPackage;
 #[cfg(feature = "debugging")]
 pub use debugging::DebuggingPackage;
@@ -31,14 +29,12 @@ pub use fn_basic::BasicFnPackage;
 pub use iter_basic::BasicIteratorPackage;
 pub use lang_core::LanguageCorePackage;
 pub use logic::LogicPackage;
-#[cfg(not(feature = "no_object"))]
 pub use map_basic::BasicMapPackage;
 pub use math_basic::BasicMathPackage;
 pub use pkg_core::CorePackage;
 pub use pkg_std::StandardPackage;
 pub use string_basic::BasicStringPackage;
 pub use string_more::MoreStringPackage;
-#[cfg(not(feature = "no_time"))]
 pub use time_basic::BasicTimePackage;
 
 /// Trait that all packages must implement.
@@ -87,7 +83,6 @@ pub trait Package {
     ///
     /// package.register_into_engine_as(&mut engine, "core");
     /// ```
-    #[cfg(not(feature = "no_module"))]
     #[cold]
     #[inline]
     fn register_into_engine_as(&self, engine: &mut Engine, name: &str) -> &Self {

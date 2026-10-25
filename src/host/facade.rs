@@ -4,8 +4,6 @@ use crate::{capability, host, ImmutableString, Shared};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A non-zero facade ABI version.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -961,7 +959,6 @@ impl Builder {
     ) -> Result<&mut Self, host::Error> {
         let path = path.into();
         let relative = host::path::Path::parse(path.clone())?;
-        #[cfg(not(feature = "no_function"))]
         if crate::parser::parse_trait(declaration).is_none_or(|declared| {
             relative.segments().last().map(|name| name.as_str())
                 != Some(declared.name.text.as_str())

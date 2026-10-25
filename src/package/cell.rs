@@ -34,15 +34,14 @@ const FORMAT: u32 = 7;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`) and the
-/// widths and flags that change what a parse holds.
+/// widths that change what a parse holds.
 fn stamp() -> String {
     format!(
-        "{FORMAT}/{}/{}/{}.{}/{}",
+        "{FORMAT}/{}/{}/{}.{}",
         env!("CARGO_PKG_VERSION"),
         env!("RAWR_PARSER_DIGEST"),
         core::mem::size_of::<crate::INT>(),
         core::mem::size_of::<crate::FLOAT>(),
-        u8::from(cfg!(feature = "no_function")),
     )
 }
 

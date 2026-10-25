@@ -22,7 +22,6 @@ impl Command {
 #[allow(clippy::upper_case_acronyms)]
 type API = Arc<Mutex<Command>>;
 
-#[cfg(not(feature = "no_object"))]
 #[test]
 fn test_side_effects_command() {
     let mut engine = Engine::new();

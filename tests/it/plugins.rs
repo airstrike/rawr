@@ -1,5 +1,3 @@
-#![cfg(not(feature = "no_index"))]
-#![cfg(not(feature = "no_module"))]
 use rawr::plugin::*;
 use rawr::{Engine, INT, Module};
 
@@ -12,7 +10,6 @@ mod test {
 
         pub const MYSTIC_NUMBER: INT = 42;
 
-        #[cfg(not(feature = "no_object"))]
         pub mod feature {
             use rawr::{Array, Dynamic, EvalAltResult};
 

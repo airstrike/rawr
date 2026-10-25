@@ -1,5 +1,3 @@
-#![cfg(not(feature = "no_function"))]
-
 use rawr::resolve::Category;
 #[cfg(feature = "internals")]
 use rawr::{ASTNode, EnumCase, Expr, Stmt};

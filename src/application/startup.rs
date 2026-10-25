@@ -26,7 +26,6 @@ pub enum Error {
 }
 
 #[derive(Clone)]
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 pub(crate) struct Envelope {
     generation: program::GenerationId,
     state: Dynamic,
@@ -34,7 +33,6 @@ pub(crate) struct Envelope {
 }
 
 impl Startup {
-    #[cfg_attr(feature = "no_function", allow(dead_code))]
     pub(crate) const fn new(state: Dynamic, task: Option<Dynamic>) -> Self {
         Self { state, task }
     }
@@ -59,7 +57,6 @@ impl Envelope {
         }
     }
 
-    #[cfg_attr(feature = "no_function", allow(dead_code))]
     pub(crate) fn open(
         value: Dynamic,
         generation: program::GenerationId,
@@ -89,11 +86,7 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {}
-
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {}
 
 #[cfg(test)]
 mod tests {

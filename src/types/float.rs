@@ -1,7 +1,3 @@
-#![cfg(not(feature = "no_float"))]
-
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     fmt,
     hash::{Hash, Hasher},
@@ -13,8 +9,6 @@ use num_traits::float::FloatCore as Float;
 
 /// _(internals)_ A type that wraps a floating-point number and implements [`Hash`].
 /// Exported under the `internals` feature only.
-///
-/// Not available under `no_float`.
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd)]
 #[must_use]
 pub struct FloatWrapper<F>(F);

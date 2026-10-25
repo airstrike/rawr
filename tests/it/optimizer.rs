@@ -1,4 +1,3 @@
-#![cfg(not(feature = "no_optimize"))]
 use rawr::{Engine, FuncRegistration, INT, OptimizationLevel, Scope};
 
 #[test]
@@ -105,8 +104,6 @@ fn test_optimizer_scope() {
     assert_eq!(engine.eval_ast_with_scope::<INT>(&mut scope, &ast).unwrap(), 123);
 }
 
-#[cfg(not(feature = "no_function"))]
-#[cfg(not(feature = "no_closure"))]
 #[test]
 fn test_optimizer_re_optimize() {
     let engine = Engine::new();
@@ -138,7 +135,6 @@ fn test_optimizer_full() {
 
     engine.set_optimization_level(OptimizationLevel::Full);
 
-    #[cfg(not(feature = "no_function"))]
     assert_eq!(
         engine
             .eval::<INT>(

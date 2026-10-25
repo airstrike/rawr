@@ -1,5 +1,4 @@
 //! Native modules: unmarked `.rs` modules beside marked ones in one crate.
-#![cfg(not(feature = "no_std"))]
 
 use std::fs;
 use std::path::{Path, PathBuf};

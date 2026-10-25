@@ -8,51 +8,24 @@ fn check_struct_sizes() {
     use std::mem::size_of;
 
     const IS_32_BIT: bool = cfg!(target_pointer_width = "32");
-    const PACKED: bool = cfg!(all(
-        target_pointer_width = "32",
-        feature = "only_i32",
-        any(feature = "no_float", feature = "f32_float")
-    ));
     const WORD_SIZE: usize = size_of::<usize>();
 
-    assert_eq!(
-        size_of::<Dynamic>(),
-        if PACKED {
-            8
-        } else if IS_32_BIT {
-            12
-        } else {
-            16
-        }
-    );
+    assert_eq!(size_of::<Dynamic>(), if IS_32_BIT { 12 } else { 16 });
     assert_eq!(
         size_of::<Option<Dynamic>>(),
-        if PACKED {
-            8
-        } else if IS_32_BIT {
-            12
-        } else {
-            16
-        }
+        if IS_32_BIT { 12 } else { 16 }
     );
-    assert_eq!(
-        size_of::<Position>(),
-        if cfg!(feature = "no_position") { 0 } else { 4 }
-    );
+    assert_eq!(size_of::<Position>(), 4);
     assert_eq!(
         size_of::<tokenizer::Token>(),
         if IS_32_BIT {
-            if cfg!(feature = "only_i32") {
-                2 * WORD_SIZE
-            } else {
-                3 * WORD_SIZE
-            }
+            3 * WORD_SIZE
         } else {
             2 * WORD_SIZE
         }
     );
-    assert_eq!(size_of::<ast::Expr>(), if PACKED { 12 } else { 16 });
-    assert_eq!(size_of::<Option<ast::Expr>>(), if PACKED { 12 } else { 16 });
+    assert_eq!(size_of::<ast::Expr>(), 16);
+    assert_eq!(size_of::<Option<ast::Expr>>(), 16);
     assert_eq!(size_of::<ast::Stmt>(), if IS_32_BIT { 12 } else { 16 });
     assert_eq!(
         size_of::<Option<ast::Stmt>>(),
@@ -69,30 +42,9 @@ fn check_struct_sizes() {
     }
 
     assert_eq!(size_of::<Scope>(), 24);
-    assert_eq!(
-        size_of::<FnPtr>(),
-        48 - if cfg!(feature = "no_function") {
-            2 * WORD_SIZE
-        } else {
-            0
-        }
-    );
+    assert_eq!(size_of::<FnPtr>(), 48);
     assert_eq!(size_of::<LexError>(), 48);
-    assert_eq!(
-        size_of::<ParseError>(),
-        16 - if cfg!(feature = "no_position") {
-            WORD_SIZE
-        } else {
-            0
-        }
-    );
+    assert_eq!(size_of::<ParseError>(), 16);
     assert_eq!(size_of::<EvalAltResult>(), 64);
-    assert_eq!(
-        size_of::<NativeCallContext>(),
-        56 - if cfg!(feature = "no_position") {
-            WORD_SIZE
-        } else {
-            0
-        }
-    );
+    assert_eq!(size_of::<NativeCallContext>(), 56);
 }

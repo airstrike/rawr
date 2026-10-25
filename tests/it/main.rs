@@ -61,8 +61,6 @@ mod power_of;
 mod print;
 mod program_authority;
 mod project_discovery;
-#[cfg(not(feature = "no_function"))]
-#[cfg(not(feature = "no_std"))]
 mod script;
 mod serde;
 mod side_effects;
@@ -99,12 +97,9 @@ mod grain {
     mod callback;
     mod differential;
     mod format;
-    // Both are about execution staying inside a bound, which `unchecked`
-    // removes outright — and the artifact fuzzer needs `max_operations` to stop
-    // a corrupted chunk looping forever rather than failing.
-    #[cfg(not(feature = "unchecked"))]
+    // The artifact fuzzer needs `max_operations` to stop a corrupted chunk
+    // looping forever rather than failing.
     mod fuzz;
-    #[cfg(not(feature = "unchecked"))]
     mod limits;
     mod scope;
 }

@@ -61,7 +61,6 @@ fn main() {
         #[allow(unused_mut)]
         let mut engine = Engine::new();
 
-        #[cfg(not(feature = "no_optimize"))]
         engine.set_optimization_level(rawr::OptimizationLevel::Simple);
 
         let mut f = match File::open(&filename) {

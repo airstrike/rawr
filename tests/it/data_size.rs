@@ -1,7 +1,5 @@
-#![cfg(not(feature = "unchecked"))]
 use rawr::{Engine, EvalAltResult, INT, ParseErrorType};
 
-#[cfg(not(feature = "no_index"))]
 use rawr::Array;
 
 #[test]
@@ -62,7 +60,6 @@ fn test_max_string_size() {
 }
 
 #[test]
-#[cfg(not(feature = "no_index"))]
 fn test_max_array_size() {
     let mut engine = Engine::new();
     engine.set_max_array_size(10);
@@ -82,7 +79,6 @@ fn test_max_array_size() {
         EvalAltResult::ErrorDataTooLarge(..)
     ));
 
-    #[cfg(not(feature = "no_closure"))]
     assert_eq!(
         engine
             .eval::<INT>(
@@ -100,7 +96,6 @@ fn test_max_array_size() {
         10
     );
 
-    #[cfg(not(feature = "no_closure"))]
     assert!(matches!(
         *engine
             .run(

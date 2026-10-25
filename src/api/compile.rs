@@ -3,8 +3,6 @@
 use crate::parser::{ParseResult, ParseState};
 use crate::tokenizer::Token;
 use crate::{program, Engine, Scope, Shared, AST};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 impl Engine {
     /// Compile one immutable runner snapshot without consulting live files.
@@ -224,12 +222,7 @@ impl Engine {
         &self,
         script: impl AsRef<str>,
     ) -> ParseResult<crate::application::Descriptor> {
-        self.compile_application_descriptor_with_session(
-            script.as_ref(),
-            None,
-            #[cfg(not(feature = "no_std"))]
-            None,
-        )
+        self.compile_application_descriptor_with_session(script.as_ref(), None, None)
     }
 
     /// Compile an application from one exact retained source snapshot.
@@ -239,12 +232,7 @@ impl Engine {
         source: crate::diagnostic::Source,
     ) -> ParseResult<crate::application::Descriptor> {
         let text = source.text().to_owned();
-        self.compile_application_descriptor_with_session(
-            &text,
-            Some(source),
-            #[cfg(not(feature = "no_std"))]
-            None,
-        )
+        self.compile_application_descriptor_with_session(&text, Some(source), None)
     }
 
     /// Compile one in-memory source this Engine already parsed (with
@@ -266,7 +254,6 @@ impl Engine {
             self,
             program,
             Some(&Scope::new()),
-            #[cfg(not(feature = "no_optimize"))]
             self.optimization_level,
         )
         .map(program::Executable::into_ast)
@@ -289,7 +276,6 @@ impl Engine {
             self,
             program,
             Some(&Scope::new()),
-            #[cfg(not(feature = "no_optimize"))]
             self.optimization_level,
         )
         .map(program::Executable::into_ast_with_positions)
@@ -306,9 +292,7 @@ impl Engine {
             Some(&Scope::new()),
             &[text],
             Some(source),
-            #[cfg(not(feature = "no_std"))]
             None,
-            #[cfg(not(feature = "no_optimize"))]
             self.optimization_level,
         )?;
         executable
@@ -320,7 +304,6 @@ impl Engine {
     ///
     /// This is an inter-crate host seam. Timing remains observational and is
     /// never retained by the returned application descriptor.
-    #[cfg(not(feature = "no_std"))]
     #[doc(hidden)]
     pub fn compile_application_descriptor_observed(
         &self,
@@ -331,7 +314,6 @@ impl Engine {
     }
 
     /// Compile an exact retained source snapshot while recording compiler phases.
-    #[cfg(not(feature = "no_std"))]
     #[doc(hidden)]
     pub fn compile_application_descriptor_source_observed(
         &self,
@@ -362,9 +344,7 @@ impl Engine {
             Some(scope),
             &[script],
             None,
-            #[cfg(not(feature = "no_std"))]
             None,
-            #[cfg(not(feature = "no_optimize"))]
             self.optimization_level,
         )
     }
@@ -461,7 +441,6 @@ impl Engine {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// # #[cfg(not(feature = "no_optimize"))]
     /// # {
     /// use rawr::{Engine, Scope, OptimizationLevel};
     ///
@@ -493,13 +472,10 @@ impl Engine {
     /// Compile a string into an [`AST`] using own scope, which can be used later for evaluation,
     /// embedding all imported modules.
     ///
-    /// Not available under `no_module`.
-    ///
     /// Modules referred by `import` statements containing literal string paths are eagerly resolved
     /// via the current [module resolver][crate::ModuleResolver] and embedded into the resultant
     /// [`AST`]. When it is evaluated later, `import` statement directly recall pre-resolved
     /// [modules][crate::Module] and the resolution process is not performed again.
-    #[cfg(not(feature = "no_module"))]
     pub fn compile_into_self_contained(
         &self,
         scope: &Scope,
@@ -587,7 +563,6 @@ impl Engine {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// # #[cfg(not(feature = "no_optimize"))]
     /// # {
     /// use rawr::{Engine, Scope, OptimizationLevel};
     ///
@@ -629,20 +604,15 @@ impl Engine {
         &self,
         scope: &Scope,
         scripts: impl AsRef<[S]>,
-        #[cfg_attr(feature = "no_std", allow(unused_variables))] identity: &str,
+        identity: &str,
     ) -> ParseResult<AST> {
-        let compiled = self.compile_scripts_with_scope_raw(
-            Some(scope),
-            &scripts,
-            #[cfg(not(feature = "no_optimize"))]
-            self.optimization_level,
-        );
-        #[cfg(not(feature = "no_std"))]
-        let compiled = compiled.map_err(|error| {
+        let compiled =
+            self.compile_scripts_with_scope_raw(Some(scope), &scripts, self.optimization_level);
+
+        compiled.map_err(|error| {
             let text: String = scripts.as_ref().iter().map(AsRef::as_ref).collect();
             error.rendered(identity, &text)
-        });
-        compiled
+        })
     }
     /// Join a list of strings and compile into an [`AST`] using own scope at a specific optimization level.
     ///
@@ -656,15 +626,13 @@ impl Engine {
         &self,
         scope: Option<&Scope>,
         scripts: impl AsRef<[S]>,
-        #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+        optimization_level: crate::OptimizationLevel,
     ) -> ParseResult<AST> {
         self.compile_executable_scripts_with_scope_raw(
             scope,
             scripts,
             None,
-            #[cfg(not(feature = "no_std"))]
             None,
-            #[cfg(not(feature = "no_optimize"))]
             optimization_level,
         )
         .map(|executable| {
@@ -683,7 +651,6 @@ impl Engine {
     /// Compile one script into its hosted [`AST`] and the typed signatures
     /// of its free functions, for [`Script`](crate::Script). An error prints
     /// as rustc prints it, with `identity` naming the source.
-    #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
     pub(crate) fn compile_script(
         &self,
         text: &str,
@@ -694,7 +661,6 @@ impl Engine {
             [text],
             None,
             None,
-            #[cfg(not(feature = "no_optimize"))]
             self.optimization_level,
         )
         .map(|executable| {
@@ -714,8 +680,8 @@ impl Engine {
         scope: Option<&Scope>,
         scripts: impl AsRef<[S]>,
         evidence: Option<crate::diagnostic::Source>,
-        #[cfg(not(feature = "no_std"))] session: Option<&crate::timing::Session>,
-        #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+        session: Option<&crate::timing::Session>,
+        optimization_level: crate::OptimizationLevel,
     ) -> ParseResult<program::Executable> {
         let source = scripts
             .as_ref()
@@ -724,15 +690,11 @@ impl Engine {
                 source.push_str(script.as_ref());
                 source
             });
-        #[cfg(not(feature = "no_std"))]
         let unit =
             crate::timing::observe_optional(session, crate::timing::Phase::ParseItems, || {
                 self.parse_unit(&source)
             })?;
-        #[cfg(feature = "no_std")]
-        let unit = self.parse_unit(&source)?;
 
-        #[cfg(not(feature = "no_std"))]
         let program =
             crate::timing::observe_optional(session, crate::timing::Phase::Resolve, || {
                 match evidence {
@@ -742,68 +704,33 @@ impl Engine {
                     None => crate::resolve::resolve(unit, &self.host_registry),
                 }
             })?;
-        #[cfg(feature = "no_std")]
-        let program = match evidence {
-            Some(evidence) => {
-                crate::resolve::resolve_with_evidence(unit, &self.host_registry, evidence)
-            }
-            None => crate::resolve::resolve(unit, &self.host_registry),
-        }?;
 
-        #[cfg(not(feature = "no_std"))]
-        return crate::timing::observe_optional(session, crate::timing::Phase::Lower, || {
-            crate::resolve::lower_with_engine(
-                self,
-                program,
-                scope,
-                #[cfg(not(feature = "no_optimize"))]
-                optimization_level,
-            )
-        });
-        #[cfg(feature = "no_std")]
-        crate::resolve::lower_with_engine(
-            self,
-            program,
-            scope,
-            #[cfg(not(feature = "no_optimize"))]
-            optimization_level,
-        )
+        crate::timing::observe_optional(session, crate::timing::Phase::Lower, || {
+            crate::resolve::lower_with_engine(self, program, scope, optimization_level)
+        })
     }
 
     fn compile_application_descriptor_with_session(
         &self,
         script: &str,
         evidence: Option<crate::diagnostic::Source>,
-        #[cfg(not(feature = "no_std"))] session: Option<&crate::timing::Session>,
+        session: Option<&crate::timing::Session>,
     ) -> ParseResult<crate::application::Descriptor> {
         let executable = self.compile_executable_scripts_with_scope_raw(
             Some(&Scope::new()),
             [script],
             evidence,
-            #[cfg(not(feature = "no_std"))]
             session,
-            #[cfg(not(feature = "no_optimize"))]
             self.optimization_level,
         )?;
 
-        #[cfg(not(feature = "no_std"))]
-        return crate::timing::observe_optional(
-            session,
-            crate::timing::Phase::ApplicationContract,
-            || {
-                executable
-                    .require_application()
-                    .map_err(crate::resolve::Error::from)?
-                    .validate()
-                    .map_err(|error| crate::resolve::Error::from(error).into())
-            },
-        );
-        #[cfg(feature = "no_std")]
-        executable
-            .require_application()
-            .map_err(crate::resolve::Error::from)?
-            .validate()
-            .map_err(|error| crate::resolve::Error::from(error).into())
+        crate::timing::observe_optional(session, crate::timing::Phase::ApplicationContract, || {
+            executable
+                .require_application()
+                .map_err(crate::resolve::Error::from)?
+                .validate()
+                .map_err(|error| crate::resolve::Error::from(error).into())
+        })
     }
 
     #[cfg(feature = "std")]
@@ -821,7 +748,7 @@ impl Engine {
         &self,
         scope: Option<&Scope>,
         script: &str,
-        #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+        optimization_level: crate::OptimizationLevel,
     ) -> ParseResult<AST> {
         let scripts = [script];
         let (stream, tc) = self.lex(&scripts);
@@ -829,11 +756,7 @@ impl Engine {
         let input = &mut stream.peekable();
         let lib = &mut <_>::default();
         let state = ParseState::new(scope, input, tc.clone(), lib);
-        let mut _ast = self.parse(
-            state,
-            #[cfg(not(feature = "no_optimize"))]
-            optimization_level,
-        )?;
+        let mut _ast = self.parse(state, optimization_level)?;
         #[cfg(feature = "metadata")]
         {
             let global_comments = &tc.borrow().global_comments;
@@ -872,7 +795,6 @@ impl Engine {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// # #[cfg(not(feature = "no_optimize"))]
     /// # {
     /// use rawr::{Engine, Scope, OptimizationLevel};
     ///
@@ -902,12 +824,7 @@ impl Engine {
         script: impl AsRef<str>,
     ) -> ParseResult<AST> {
         self.expression_only(script.as_ref())?;
-        self.compile_scripts_with_scope_raw(
-            Some(scope),
-            [script],
-            #[cfg(not(feature = "no_optimize"))]
-            self.optimization_level,
-        )
+        self.compile_scripts_with_scope_raw(Some(scope), [script], self.optimization_level)
     }
 
     /// Refuse a script that is not one expression: a statement ends with

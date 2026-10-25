@@ -1,8 +1,6 @@
 //! Source text retained by the Rawr compiler.
 
 use crate::{ImmutableString, Position, Span};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// The source text associated with one parsed compilation unit.
 #[derive(Clone, Debug, Eq, PartialEq)]

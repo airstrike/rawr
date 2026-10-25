@@ -5,8 +5,6 @@ use rawr_codegen::expose_under_internals;
 use crate::engine::Precedence;
 use crate::func::native::OnParseTokenCallback;
 use crate::{Engine, Identifier, LexError, Position, SmartString, StaticVec, INT, UNSIGNED_INT};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     cell::RefCell,
     char, fmt,
@@ -24,7 +22,6 @@ pub struct TokenizerControlBlock {
     /// This flag allows switching the tokenizer back to _text_ parsing after an interpolation stream.
     pub is_within_text: bool,
     /// Return the next character in the input stream instead of the next token?
-    #[cfg(not(feature = "no_custom_syntax"))]
     pub in_char_mode: bool,
     /// Global comments.
     #[cfg(feature = "metadata")]
@@ -45,7 +42,6 @@ impl TokenizerControlBlock {
     pub const fn new() -> Self {
         Self {
             is_within_text: false,
-            #[cfg(not(feature = "no_custom_syntax"))]
             in_char_mode: false,
             #[cfg(feature = "metadata")]
             global_comments: String::new(),
@@ -74,9 +70,6 @@ pub enum Token {
     /// An `INT` constant.
     IntegerConstant(INT),
     /// A `FLOAT` constant, including its text representation.
-    ///
-    /// Reserved under the `no_float` feature.
-    #[cfg(not(feature = "no_float"))]
     FloatConstant(Box<(crate::types::FloatWrapper<crate::FLOAT>, Identifier)>),
     /// A [`Decimal`][rust_decimal::Decimal] constant.
     ///
@@ -150,16 +143,10 @@ pub enum Token {
     /// `.`
     Period,
     /// `?.`
-    ///
-    /// Reserved under the `no_object` feature.
-    #[cfg(not(feature = "no_object"))]
     Elvis,
     /// `??`
     DoubleQuestion,
     /// `?[`
-    ///
-    /// Reserved under the `no_object` feature.
-    #[cfg(not(feature = "no_index"))]
     QuestionBracket,
     /// `..`
     ExclusiveRange,
@@ -238,9 +225,6 @@ pub enum Token {
     /// `&&`
     And,
     /// `fn`
-    ///
-    /// Reserved under the `no_function` feature.
-    #[cfg(not(feature = "no_function"))]
     Fn,
     /// `continue`
     Continue,
@@ -277,24 +261,12 @@ pub enum Token {
     /// `**=`
     PowerOfAssign,
     /// `private`
-    ///
-    /// Reserved under the `no_function` feature.
-    #[cfg(not(feature = "no_function"))]
     Private,
     /// `import`
-    ///
-    /// Reserved under the `no_module` feature.
-    #[cfg(not(feature = "no_module"))]
     Import,
     /// `export`
-    ///
-    /// Reserved under the `no_module` feature.
-    #[cfg(not(feature = "no_module"))]
     Export,
     /// `as`
-    ///
-    /// Reserved under the `no_module` feature.
-    #[cfg(not(feature = "no_module"))]
     As,
     /// A lexer error.
     LexError(Box<LexError>),
@@ -303,14 +275,8 @@ pub enum Token {
     /// A reserved symbol.
     Reserved(Box<Identifier>),
     /// A custom keyword.
-    ///
-    /// Not available under `no_custom_syntax`.
-    #[cfg(not(feature = "no_custom_syntax"))]
     Custom(Box<Identifier>),
     /// A single character from the input stream, unprocessed.
-    ///
-    /// Not available under `no_custom_syntax`.
-    #[cfg(not(feature = "no_custom_syntax"))]
     UnprocessedRawChar(char),
     /// End of the input stream.
     /// Used as a placeholder for the end of input.
@@ -325,7 +291,6 @@ impl fmt::Display for Token {
 
         match self {
             IntegerConstant(i) => write!(f, "{i}"),
-            #[cfg(not(feature = "no_float"))]
             FloatConstant(v) => write!(f, "{}", v.0),
             #[cfg(feature = "decimal")]
             DecimalConstant(d) => write!(f, "{}", d.0),
@@ -336,9 +301,7 @@ impl fmt::Display for Token {
             CharConstant(c) => write!(f, "{c}"),
             Identifier(s) => f.write_str(s),
             Reserved(s) => f.write_str(s),
-            #[cfg(not(feature = "no_custom_syntax"))]
             Custom(s) => f.write_str(s),
-            #[cfg(not(feature = "no_custom_syntax"))]
             UnprocessedRawChar(c) => f.write_char(*c),
             LexError(err) => write!(f, "{err}"),
             Comment(s) => f.write_str(s),
@@ -438,36 +401,21 @@ static KEYWORDS_LIST: [(&str, Token); 153] = [
     ("", Token::EOF),
     ("until", Token::Until),
     ("switch", Token::Switch),
-    #[cfg(not(feature = "no_function"))]
     ("private", Token::Private),
-    #[cfg(feature = "no_function")]
-    ("", Token::EOF),
     ("try", Token::Try),
     ("true", Token::True),
     ("break", Token::Break),
     ("return", Token::Return),
-    #[cfg(not(feature = "no_function"))]
     ("fn", Token::Fn),
-    #[cfg(feature = "no_function")]
     ("", Token::EOF),
     ("", Token::EOF),
     ("", Token::EOF),
-    ("", Token::EOF),
-    #[cfg(not(feature = "no_module"))]
     ("import", Token::Import),
-    #[cfg(feature = "no_module")]
-    ("", Token::EOF),
-    #[cfg(not(feature = "no_object"))]
     ("?.", Token::Elvis),
-    #[cfg(feature = "no_object")]
     ("", Token::EOF),
     ("", Token::EOF),
     ("", Token::EOF),
-    ("", Token::EOF),
-    #[cfg(not(feature = "no_module"))]
     ("export", Token::Export),
-    #[cfg(feature = "no_module")]
-    ("", Token::EOF),
     ("in", Token::In),
     ("", Token::EOF),
     ("", Token::EOF),
@@ -523,18 +471,12 @@ static KEYWORDS_LIST: [(&str, Token); 153] = [
     ("", Token::EOF),
     ("", Token::EOF),
     ("", Token::EOF),
-    #[cfg(not(feature = "no_module"))]
     ("as", Token::As),
-    #[cfg(feature = "no_module")]
     ("", Token::EOF),
     ("", Token::EOF),
     ("", Token::EOF),
     ("", Token::EOF),
-    ("", Token::EOF),
-    #[cfg(not(feature = "no_index"))]
     ("?[", Token::QuestionBracket),
-    #[cfg(feature = "no_index")]
-    ("", Token::EOF),
     ("", Token::EOF),
     ("", Token::EOF),
     ("", Token::EOF),
@@ -583,7 +525,7 @@ static RESERVED_ASSOC_VALUES: [u8; 256] = [
 static RESERVED_LIST: [(&str, bool, bool, bool); 150] = [
     ("", false, false, false),
     ("?", true, false, false),
-    ("as", cfg!(feature = "no_module"), false, false),
+    ("as", false, false, false),
     ("use", false, false, false),
     ("case", false, false, false),
     ("async", true, false, false),
@@ -593,7 +535,7 @@ static RESERVED_LIST: [(&str, bool, bool, bool); 150] = [
     ("", false, false, false),
     ("super", true, false, false),
     ("#", false, false, false),
-    ("private", cfg!(feature = "no_function"), false, false),
+    ("private", false, false, false),
     ("var", false, false, false),
     ("protected", false, false, false),
     ("spawn", false, false, false),
@@ -606,7 +548,7 @@ static RESERVED_LIST: [(&str, bool, bool, bool); 150] = [
     // Rawr: `default` is an ordinary name, as in Rust.
     ("default", false, false, false),
     ("!==", true, false, false),
-    ("is_shared", cfg!(not(feature = "no_closure")), true, true),
+    ("is_shared", true, true, true),
     ("print", true, true, false),
     ("", false, false, false),
     ("#!", true, false, false),
@@ -614,12 +556,12 @@ static RESERVED_LIST: [(&str, bool, bool, bool); 150] = [
     ("this", true, false, false),
     ("is_def_var", true, true, false),
     ("thread", false, false, false),
-    ("?.", cfg!(feature = "no_object"), false, false),
+    ("?.", false, false, false),
     ("", false, false, false),
-    ("is_def_fn", cfg!(not(feature = "no_function")), true, false),
+    ("is_def_fn", true, true, false),
     ("yield", true, false, false),
     ("", false, false, false),
-    ("fn", cfg!(feature = "no_function"), false, false),
+    ("fn", false, false, false),
     // elevato fork: `new` is de-reserved so scripts can define `fn new()`
     // (the TEA boot function). Flipping the flag keeps the gperf hash
     // table layout intact; see `("exit", false, ...)` for the precedent.
@@ -647,12 +589,12 @@ static RESERVED_LIST: [(&str, bool, bool, bool); 150] = [
     ("", false, false, false),
     ("void", false, false, false),
     ("", false, false, false),
-    ("import", cfg!(feature = "no_module"), false, false),
+    ("import", false, false, false),
     ("--", false, false, false),
     ("nil", false, false, false),
     ("exit", false, false, false),
     ("", false, false, false),
-    ("export", cfg!(feature = "no_module"), false, false),
+    ("export", false, false, false),
     ("<|", true, false, false),
     ("", false, false, false),
     ("", false, false, false),
@@ -668,7 +610,7 @@ static RESERVED_LIST: [(&str, bool, bool, bool); 150] = [
     ("", false, false, false),
     ("", false, false, false),
     ("module", false, false, false),
-    ("?[", cfg!(feature = "no_index"), false, false),
+    ("?[", false, false, false),
     ("", false, false, false),
     ("", false, false, false),
     ("", false, false, false),
@@ -747,7 +689,6 @@ impl Token {
 
         match self {
             IntegerConstant(..) => false,
-            #[cfg(not(feature = "no_float"))]
             FloatConstant(..) => false,
             #[cfg(feature = "decimal")]
             DecimalConstant(..) => false,
@@ -758,7 +699,6 @@ impl Token {
             | CharConstant(..)
             | Identifier(..)
             | Reserved(..) => false,
-            #[cfg(not(feature = "no_custom_syntax"))]
             Custom(..) => false,
             LexError(..) | Comment(..) => false,
 
@@ -801,10 +741,8 @@ impl Token {
             Underscore => "_",
             Comma => ",",
             Period => ".",
-            #[cfg(not(feature = "no_object"))]
             Elvis => "?.",
             DoubleQuestion => "??",
-            #[cfg(not(feature = "no_index"))]
             QuestionBracket => "?[",
             ExclusiveRange => "..",
             InclusiveRange => "..=",
@@ -866,16 +804,11 @@ impl Token {
             PowerOf => "**",
             PowerOfAssign => "**=",
 
-            #[cfg(not(feature = "no_function"))]
             Fn => "fn",
-            #[cfg(not(feature = "no_function"))]
             Private => "private",
 
-            #[cfg(not(feature = "no_module"))]
             Import => "import",
-            #[cfg(not(feature = "no_module"))]
             Export => "export",
-            #[cfg(not(feature = "no_module"))]
             As => "as",
 
             _ => panic!("token is not a literal symbol"),
@@ -1091,7 +1024,6 @@ impl Token {
             Return           |
             Throw               => true,
 
-            #[cfg(not(feature = "no_index"))]
             QuestionBracket     => true,    // ?[ - is unary
 
             LexError(..)        => true,
@@ -1153,24 +1085,63 @@ impl Token {
         #[allow(clippy::enum_glob_use)]
         use Token::*;
 
-        match self {
-            LeftBrace | RightBrace | LeftParen | RightParen | LeftBracket | RightBracket | Plus
-            | UnaryPlus | Minus | UnaryMinus | Multiply | Divide | Modulo | PowerOf | LeftShift
-            | RightShift | SemiColon | Colon | DoubleColon | ThinArrow | Hash | Apostrophe
-            | Comma | Period | DoubleQuestion | ExclusiveRange | InclusiveRange | MapStart
-            | Equals | LessThan | GreaterThan | LessThanEqualsTo | GreaterThanEqualsTo
-            | EqualsTo | NotEqualsTo | Bang | Pipe | Or | XOr | Ampersand | And | PlusAssign
-            | MinusAssign | MultiplyAssign | DivideAssign | LeftShiftAssign | RightShiftAssign
-            | AndAssign | OrAssign | XOrAssign | ModuloAssign | PowerOfAssign => true,
-
-            #[cfg(not(feature = "no_object"))]
-            Elvis => true,
-
-            #[cfg(not(feature = "no_index"))]
-            QuestionBracket => true,
-
-            _ => false,
-        }
+        matches!(
+            self,
+            LeftBrace
+                | RightBrace
+                | LeftParen
+                | RightParen
+                | LeftBracket
+                | RightBracket
+                | Plus
+                | UnaryPlus
+                | Minus
+                | UnaryMinus
+                | Multiply
+                | Divide
+                | Modulo
+                | PowerOf
+                | LeftShift
+                | RightShift
+                | SemiColon
+                | Colon
+                | DoubleColon
+                | ThinArrow
+                | Hash
+                | Apostrophe
+                | Comma
+                | Period
+                | DoubleQuestion
+                | ExclusiveRange
+                | InclusiveRange
+                | MapStart
+                | Equals
+                | LessThan
+                | GreaterThan
+                | LessThanEqualsTo
+                | GreaterThanEqualsTo
+                | EqualsTo
+                | NotEqualsTo
+                | Bang
+                | Pipe
+                | Or
+                | XOr
+                | Ampersand
+                | And
+                | PlusAssign
+                | MinusAssign
+                | MultiplyAssign
+                | DivideAssign
+                | LeftShiftAssign
+                | RightShiftAssign
+                | AndAssign
+                | OrAssign
+                | XOrAssign
+                | ModuloAssign
+                | PowerOfAssign
+                | Elvis
+                | QuestionBracket
+        )
     }
 
     /// Is this token a standard keyword?
@@ -1180,19 +1151,38 @@ impl Token {
         #[allow(clippy::enum_glob_use)]
         use Token::*;
 
-        match self {
-            #[cfg(not(feature = "no_function"))]
-            Fn | Private => true,
-
-            #[cfg(not(feature = "no_module"))]
-            Import | Export | As => true,
-
-            True | False | Let | Const | Pub | Struct | Enum | Impl | Use | SelfValue | Mut
-            | If | Else | Do | While | Until | Loop | For | In | Continue | Break | Return
-            | Throw | Try | Catch => true,
-
-            _ => false,
-        }
+        matches!(
+            self,
+            Fn | Private
+                | Import
+                | Export
+                | As
+                | True
+                | False
+                | Let
+                | Const
+                | Pub
+                | Struct
+                | Enum
+                | Impl
+                | Use
+                | SelfValue
+                | Mut
+                | If
+                | Else
+                | Do
+                | While
+                | Until
+                | Loop
+                | For
+                | In
+                | Continue
+                | Break
+                | Return
+                | Throw
+                | Try
+                | Catch
+        )
     }
 
     /// Is this token a reserved keyword or symbol?
@@ -1203,7 +1193,6 @@ impl Token {
     }
 
     /// Is this token a custom keyword?
-    #[cfg(not(feature = "no_custom_syntax"))]
     #[inline(always)]
     #[must_use]
     pub const fn is_custom(&self) -> bool {
@@ -1246,9 +1235,6 @@ impl From<&Token> for SmartString {
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct TokenizeState {
     /// Maximum length of a string.
-    ///
-    /// Not available under `unchecked`.
-    #[cfg(not(feature = "unchecked"))]
     pub max_string_len: Option<std::num::NonZeroUsize>,
     /// Can the next token be a unary operator?
     pub next_token_cannot_be_unary: bool,
@@ -1404,7 +1390,6 @@ pub fn parse_raw_string_literal(
         }
 
         // Check string length
-        #[cfg(not(feature = "unchecked"))]
         if let Some(max) = state.max_string_len
             && result.len() > max.get()
         {
@@ -1464,7 +1449,6 @@ pub fn parse_string_literal(
     let start = *pos;
     let mut first_char = Position::NONE;
     let mut interpolated = false;
-    #[cfg(not(feature = "no_position"))]
     let mut skip_space_until = 0;
 
     state.is_within_text_terminated_by = Some(termination_char.to_string().into());
@@ -1528,7 +1512,6 @@ pub fn parse_string_literal(
         }
 
         // Check string length
-        #[cfg(not(feature = "unchecked"))]
         if let Some(max) = state.max_string_len
             && result.len() > max.get()
         {
@@ -1656,7 +1639,6 @@ pub fn parse_string_literal(
                 pos.new_line();
 
                 // Rust skips all the whitespace that starts the next line.
-                #[cfg(not(feature = "no_position"))]
                 {
                     skip_space_until = usize::MAX;
                 }
@@ -1683,7 +1665,6 @@ pub fn parse_string_literal(
             }
 
             // Whitespace to skip
-            #[cfg(not(feature = "no_position"))]
             ch if ch.is_whitespace() && pos.position().unwrap() < skip_space_until => (),
 
             // All other characters
@@ -1691,7 +1672,6 @@ pub fn parse_string_literal(
                 escape.clear();
                 result.push(ch);
 
-                #[cfg(not(feature = "no_position"))]
                 {
                     skip_space_until = 0;
                 }
@@ -1700,7 +1680,6 @@ pub fn parse_string_literal(
     }
 
     // Check string length
-    #[cfg(not(feature = "unchecked"))]
     if let Some(max) = state.max_string_len
         && result.len() > max.get()
     {
@@ -1783,7 +1762,6 @@ const fn is_binary_digit(c: char) -> bool {
 }
 
 /// Test if the comment block is a doc-comment.
-#[cfg(not(feature = "no_function"))]
 #[cfg(feature = "metadata")]
 #[inline]
 #[must_use]
@@ -1828,7 +1806,6 @@ fn get_next_token_inner(
 
         let return_comment = state.include_comments;
 
-        #[cfg(not(feature = "no_function"))]
         #[cfg(feature = "metadata")]
         let return_comment = return_comment || is_doc_comment(&comment);
 
@@ -1896,7 +1873,6 @@ fn get_next_token_inner(
                             result.push(ch);
                             stream.eat_next_and_advance(pos);
                         }
-                        #[cfg(any(not(feature = "no_float"), feature = "decimal"))]
                         '.' if !_has_period && radix_base.is_none() => {
                             stream.get_next().unwrap();
 
@@ -1932,7 +1908,6 @@ fn get_next_token_inner(
                                 }
                             }
                         }
-                        #[cfg(not(feature = "no_float"))]
                         ch @ ('e' | 'E') if !_has_e && radix_base.is_none() => {
                             stream.get_next().unwrap();
 
@@ -2013,7 +1988,6 @@ fn get_next_token_inner(
                         let num = INT::from_str(&result).map(Token::IntegerConstant);
 
                         // If integer parsing is unnecessary, try float instead
-                        #[cfg(not(feature = "no_float"))]
                         if num.is_err()
                             && let Ok(v) = crate::types::FloatWrapper::from_str(&result)
                         {
@@ -2022,18 +1996,18 @@ fn get_next_token_inner(
 
                         // Then try decimal
                         #[cfg(feature = "decimal")]
-                        if num.is_err() {
-                            if let Ok(v) = rust_decimal::Decimal::from_str(&result) {
-                                return Token::DecimalConstant((v, result).into());
-                            }
+                        if num.is_err()
+                            && let Ok(v) = rust_decimal::Decimal::from_str(&result)
+                        {
+                            return Token::DecimalConstant((v, result).into());
                         }
 
                         // Then try decimal in scientific notation
                         #[cfg(feature = "decimal")]
-                        if num.is_err() {
-                            if let Ok(v) = rust_decimal::Decimal::from_scientific(&result) {
-                                return Token::DecimalConstant((v, result).into());
-                            }
+                        if num.is_err()
+                            && let Ok(v) = rust_decimal::Decimal::from_scientific(&result)
+                        {
+                            return Token::DecimalConstant((v, result).into());
                         }
 
                         num.unwrap_or_else(|_| {
@@ -2165,7 +2139,6 @@ fn get_next_token_inner(
             (']', ..) => return (Token::RightBracket, start_pos),
 
             // Map literal
-            #[cfg(not(feature = "no_object"))]
             ('#', '{') => {
                 stream.eat_next_and_advance(pos);
                 return (Token::MapStart, start_pos);
@@ -2243,7 +2216,6 @@ fn get_next_token_inner(
                 stream.eat_next_and_advance(pos);
 
                 let mut comment: Option<String> = match stream.peek_next() {
-                    #[cfg(not(feature = "no_function"))]
                     #[cfg(feature = "metadata")]
                     Some('/') => {
                         stream.eat_next_and_advance(pos);
@@ -2300,7 +2272,6 @@ fn get_next_token_inner(
                 stream.eat_next_and_advance(pos);
 
                 let mut comment: Option<String> = match stream.peek_next() {
-                    #[cfg(not(feature = "no_function"))]
                     #[cfg(feature = "metadata")]
                     Some('*') => {
                         stream.eat_next_and_advance(pos);
@@ -2505,13 +2476,7 @@ fn get_next_token_inner(
 
             ('?', '.') => {
                 stream.eat_next_and_advance(pos);
-                return (
-                    #[cfg(not(feature = "no_object"))]
-                    Token::Elvis,
-                    #[cfg(feature = "no_object")]
-                    Token::Reserved(Box::new("?.".into())),
-                    start_pos,
-                );
+                return (Token::Elvis, start_pos);
             }
             ('?', '?') => {
                 stream.eat_next_and_advance(pos);
@@ -2519,13 +2484,7 @@ fn get_next_token_inner(
             }
             ('?', '[') => {
                 stream.eat_next_and_advance(pos);
-                return (
-                    #[cfg(not(feature = "no_index"))]
-                    Token::QuestionBracket,
-                    #[cfg(feature = "no_index")]
-                    Token::Reserved(Box::new("?[".into())),
-                    start_pos,
-                );
+                return (Token::QuestionBracket, start_pos);
             }
             ('?', ..) => return (Token::Reserved(Box::new("?".into())), start_pos),
 
@@ -2796,11 +2755,8 @@ pub(crate) fn rust_name(token: &Token) -> Option<String> {
         Token::Catch => "catch",
         Token::Until => "until",
         Token::Throw => "throw",
-        #[cfg(not(feature = "no_function"))]
         Token::Private => "private",
-        #[cfg(not(feature = "no_module"))]
         Token::Import => "import",
-        #[cfg(not(feature = "no_module"))]
         Token::Export => "export",
         Token::Reserved(word) if RUST_NAMES.contains(&word.as_str()) => word.as_str(),
         _ => return None,
@@ -3038,20 +2994,15 @@ impl Iterator for TokenIterator<'_> {
             }
 
             // Check if in single-character mode
-            #[cfg(not(feature = "no_custom_syntax"))]
             let in_char_mode = std::mem::take(&mut control.in_char_mode);
 
             (
                 self.state.is_within_text_terminated_by.is_some(),
-                #[cfg(not(feature = "no_custom_syntax"))]
                 in_char_mode,
-                #[cfg(feature = "no_custom_syntax")]
-                false,
                 control.compressed.is_some(),
             )
         };
 
-        #[cfg(not(feature = "no_custom_syntax"))]
         if _char_mode && let Some(ch) = self.stream.get_next() {
             let pos = self.pos;
             match ch {
@@ -3091,10 +3042,7 @@ impl Iterator for TokenIterator<'_> {
             // Reserved keyword/symbol
             (Token::Reserved(s), pos) => (match
                 (s.as_str(),
-                    #[cfg(not(feature = "no_custom_syntax"))]
                     self.engine.custom_keywords.contains_key(&*s),
-                    #[cfg(feature = "no_custom_syntax")]
-                    false
                 )
             {
                 ("===", false) => Token::LexError(LERR::ImproperSymbol(s.to_string(),
@@ -3115,10 +3063,7 @@ impl Iterator for TokenIterator<'_> {
                     "'::<>' is not a valid symbol. This is not Rust! Should it be '::'?".to_string(),
                 ).into()),
                 // Reserved keyword/operator that is custom.
-                #[cfg(not(feature = "no_custom_syntax"))]
                 (.., true) => Token::Custom(s),
-                #[cfg(feature = "no_custom_syntax")]
-                (.., true) => unreachable!("no custom operators"),
                 // A word of the old dialect that is an ordinary name in Rust:
                 // checked Rawr reads it as an identifier (`rust_name`), so a
                 // host's `disable_symbol` doesn't reach it.
@@ -3132,13 +3077,11 @@ impl Iterator for TokenIterator<'_> {
                 (.., false) => Token::Reserved(s),
             }, pos),
             // Custom keyword
-            #[cfg(not(feature = "no_custom_syntax"))]
             (Token::Identifier(s), pos) if self.engine.custom_keywords.contains_key(&*s) => {
                 (Token::Custom(s), pos)
             }
             // Registered custom syntax owns literal tokens, including punctuation that Rawr also
             // recognizes contextually in item headers.
-            #[cfg(not(feature = "no_custom_syntax"))]
             (token, pos)
                 if token.is_literal()
                     && self.engine.custom_syntax.contains_key(token.literal_syntax()) =>
@@ -3149,7 +3092,6 @@ impl Iterator for TokenIterator<'_> {
                 )
             }
             // Custom keyword/symbol - must be disabled
-            #[cfg(not(feature = "no_custom_syntax"))]
             (token, pos) if token.is_literal() && self.engine.custom_keywords.contains_key(token.literal_syntax()) => {
                 // Active standard keyword should never be a custom keyword,
                 // except the item syntax a host may override
@@ -3299,7 +3241,6 @@ impl Engine {
             TokenIterator {
                 engine: self,
                 state: TokenizeState {
-                    #[cfg(not(feature = "unchecked"))]
                     max_string_len: std::num::NonZeroUsize::new(self.max_string_size()),
                     next_token_cannot_be_unary: false,
                     tokenizer_control: buffer,

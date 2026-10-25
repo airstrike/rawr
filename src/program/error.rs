@@ -1,13 +1,8 @@
 //! Structured failures while authorizing or invoking symbolic items.
 
 use crate::{item, program, EvalAltResult};
-#[cfg(feature = "no_std")]
-use core_error::Error as StdError;
-#[cfg(not(feature = "no_std"))]
 use std::error::Error as StdError;
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// The stable metadata aspect that differs from a retained symbolic item.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

@@ -1,6 +1,3 @@
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
-
 use super::*;
 use crate::def_package;
 

@@ -3,15 +3,8 @@
 use crate::plugin::*;
 use crate::{def_package, FuncRegistration, Position, RawrResultOf, ERR, INT};
 use std::convert::TryFrom;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
-#[cfg(not(feature = "no_float"))]
 use crate::FLOAT;
-
-#[cfg(feature = "no_std")]
-#[cfg(not(feature = "no_float"))]
-use num_traits::Float;
 
 macro_rules! gen_conv_functions {
     ($mod_name:ident => $func_name:ident ( $($arg_type:ident),+ ) -> $result_type:ty) => {
@@ -37,8 +30,6 @@ def_package! {
         // Conversion functions
         gen_conv_functions!(lib => to_int(INT, char) -> INT);
 
-        #[cfg(not(feature = "only_i32"))]
-        #[cfg(not(feature = "only_i64"))]
         {
             gen_conv_functions!(lib => to_int(i8, u8, i16, u16, i32, u32, i64, u64) -> INT);
 
@@ -46,7 +37,6 @@ def_package! {
             gen_conv_functions!(lib => to_int(i128, u128) -> INT);
         }
 
-        #[cfg(not(feature = "no_float"))]
         {
             // Floating point functions
             combine_with_exported_module!(lib, "float", float_functions);
@@ -56,8 +46,6 @@ def_package! {
 
             gen_conv_functions!(lib => to_float(FLOAT, INT) -> FLOAT);
 
-            #[cfg(not(feature = "only_i32"))]
-            #[cfg(not(feature = "only_i64"))]
             {
                 gen_conv_functions!(lib => to_float(i8, u8, i16, u16, i32, u32, i64, u64) -> FLOAT);
 
@@ -76,8 +64,6 @@ def_package! {
             gen_conv_functions!(lib => to_decimal(Decimal) -> Decimal);
             gen_conv_functions!(lib => to_decimal(INT).into() -> Decimal);
 
-            #[cfg(not(feature = "only_i32"))]
-            #[cfg(not(feature = "only_i64"))]
             gen_conv_functions!(lib => to_decimal(i8, u8, i16, u16, i32, u32, i64, u64).into() -> Decimal);
         }
     }
@@ -131,7 +117,6 @@ mod int_functions {
     }
 }
 
-#[cfg(not(feature = "no_float"))]
 #[export_module]
 mod trig_functions {
     /// Return the sine of the floating-point number in radians.
@@ -201,24 +186,17 @@ mod trig_functions {
     }
 }
 
-#[cfg(not(feature = "no_float"))]
 #[export_module]
 mod float_functions {
     /// Return the natural number _e_.
     #[rawr_fn(name = "E")]
     pub const fn e() -> FLOAT {
-        #[cfg(not(feature = "f32_float"))]
-        return std::f64::consts::E;
-        #[cfg(feature = "f32_float")]
-        return std::f32::consts::E;
+        std::f64::consts::E
     }
     /// Return the number π.
     #[rawr_fn(name = "PI")]
     pub const fn pi() -> FLOAT {
-        #[cfg(not(feature = "f32_float"))]
-        return std::f64::consts::PI;
-        #[cfg(feature = "f32_float")]
-        return std::f32::consts::PI;
+        std::f64::consts::PI
     }
     /// Convert degrees to radians.
     pub fn to_radians(x: FLOAT) -> FLOAT {
@@ -294,7 +272,7 @@ mod float_functions {
     #[rawr_fn(name = "to_int", return_raw)]
     pub fn f32_to_int(x: f32) -> RawrResultOf<INT> {
         #[allow(clippy::cast_precision_loss)]
-        if cfg!(not(feature = "unchecked")) && (x > (INT::MAX as f32) || x < (INT::MIN as f32)) {
+        if x > (INT::MAX as f32) || x < (INT::MIN as f32) {
             return Err(ERR::ErrorArithmetic(
                 format!("Integer overflow: to_int({x})"),
                 Position::NONE,
@@ -308,7 +286,7 @@ mod float_functions {
     #[rawr_fn(name = "to_int", return_raw)]
     pub fn f64_to_int(x: f64) -> RawrResultOf<INT> {
         #[allow(clippy::cast_precision_loss)]
-        if cfg!(not(feature = "unchecked")) && (x > (INT::MAX as f64) || x < (INT::MIN as f64)) {
+        if x > (INT::MAX as f64) || x < (INT::MIN as f64) {
             return Err(ERR::ErrorArithmetic(
                 format!("Integer overflow: to_int({x})"),
                 Position::NONE,
@@ -338,7 +316,6 @@ mod float_functions {
         })
     }
     /// Convert the 32-bit floating-point number to 64-bit.
-    #[cfg(not(feature = "f32_float"))]
     #[rawr_fn(name = "to_float")]
     pub fn f32_to_f64(x: f32) -> f64 {
         x.into()
@@ -354,35 +331,7 @@ mod decimal_functions {
         prelude::{FromStr, RoundingStrategy},
         Decimal, MathematicalOps,
     };
-    #[cfg(not(feature = "no_float"))]
     use std::convert::TryFrom;
-
-    /// Return the natural number _e_.
-    #[cfg(feature = "no_float")]
-    #[rawr_fn(name = "PI")]
-    pub const fn pi() -> Decimal {
-        Decimal::PI
-    }
-    /// Return the number π.
-    #[cfg(feature = "no_float")]
-    #[rawr_fn(name = "E")]
-    pub const fn e() -> Decimal {
-        Decimal::E
-    }
-    /// Parse a string into a decimal number.
-    ///
-    /// # Example
-    ///
-    /// ```rawr
-    /// let x = parse_float("123.456");
-    ///
-    /// print(x);       // prints 123.456
-    /// ```
-    #[cfg(feature = "no_float")]
-    #[rawr_fn(return_raw)]
-    pub fn parse_float(s: &str) -> RawrResultOf<Decimal> {
-        parse_decimal(s)
-    }
 
     /// Return the sine of the decimal number in radians.
     pub fn sin(x: Decimal) -> Decimal {
@@ -405,32 +354,20 @@ mod decimal_functions {
     /// Return the exponential of the decimal number.
     #[rawr_fn(return_raw)]
     pub fn exp(x: Decimal) -> RawrResultOf<Decimal> {
-        if cfg!(not(feature = "unchecked")) {
-            x.checked_exp()
-                .ok_or_else(|| make_err(format!("Exponential overflow: e ** {x}")))
-        } else {
-            Ok(x.exp())
-        }
+        x.checked_exp()
+            .ok_or_else(|| make_err(format!("Exponential overflow: e ** {x}")))
     }
     /// Return the natural log of the decimal number.
     #[rawr_fn(return_raw)]
     pub fn ln(x: Decimal) -> RawrResultOf<Decimal> {
-        if cfg!(not(feature = "unchecked")) {
-            x.checked_ln()
-                .ok_or_else(|| make_err(format!("Error taking the natural log of {x}")))
-        } else {
-            Ok(x.ln())
-        }
+        x.checked_ln()
+            .ok_or_else(|| make_err(format!("Error taking the natural log of {x}")))
     }
     /// Return the log of the decimal number with base 10.
     #[rawr_fn(name = "log", return_raw)]
     pub fn log10(x: Decimal) -> RawrResultOf<Decimal> {
-        if cfg!(not(feature = "unchecked")) {
-            x.checked_log10()
-                .ok_or_else(|| make_err(format!("Error taking the log of {x}")))
-        } else {
-            Ok(x.log10())
-        }
+        x.checked_log10()
+            .ok_or_else(|| make_err(format!("Error taking the log of {x}")))
     }
     /// Return the largest whole number less than or equals to the decimal number.
     #[rawr_fn(name = "floor", get = "floor")]
@@ -452,7 +389,6 @@ mod decimal_functions {
     /// Always round mid-point towards the closest even number.
     #[rawr_fn(name = "round", return_raw)]
     pub fn round_dp(x: Decimal, digits: INT) -> RawrResultOf<Decimal> {
-        #[cfg(not(feature = "unchecked"))]
         if digits < 0 {
             return Err(make_err(format!(
                 "Invalid number of digits for rounding: {digits}"
@@ -469,7 +405,6 @@ mod decimal_functions {
     /// Always round away from zero.
     #[rawr_fn(return_raw)]
     pub fn round_up(x: Decimal, digits: INT) -> RawrResultOf<Decimal> {
-        #[cfg(not(feature = "unchecked"))]
         if digits < 0 {
             return Err(make_err(format!(
                 "Invalid number of digits for rounding: {digits}"
@@ -486,7 +421,6 @@ mod decimal_functions {
     /// Always round towards zero.
     #[rawr_fn(return_raw)]
     pub fn round_down(x: Decimal, digits: INT) -> RawrResultOf<Decimal> {
-        #[cfg(not(feature = "unchecked"))]
         if digits < 0 {
             return Err(make_err(format!(
                 "Invalid number of digits for rounding: {digits}"
@@ -503,7 +437,6 @@ mod decimal_functions {
     /// Always round mid-points away from zero.
     #[rawr_fn(return_raw)]
     pub fn round_half_up(x: Decimal, digits: INT) -> RawrResultOf<Decimal> {
-        #[cfg(not(feature = "unchecked"))]
         if digits < 0 {
             return Err(make_err(format!(
                 "Invalid number of digits for rounding: {digits}"
@@ -520,7 +453,6 @@ mod decimal_functions {
     /// Always round mid-points towards zero.
     #[rawr_fn(return_raw)]
     pub fn round_half_down(x: Decimal, digits: INT) -> RawrResultOf<Decimal> {
-        #[cfg(not(feature = "unchecked"))]
         if digits < 0 {
             return Err(make_err(format!(
                 "Invalid number of digits for rounding: {digits}"
@@ -537,28 +469,15 @@ mod decimal_functions {
     #[rawr_fn(return_raw)]
     pub fn to_int(x: Decimal) -> RawrResultOf<INT> {
         #[allow(clippy::bind_instead_of_map)]
-        x.to_i64()
-            .and_then(|n| {
-                #[cfg(feature = "only_i32")]
-                return if n > (INT::MAX as i64) || n < (INT::MIN as i64) {
-                    None
-                } else {
-                    Some(n as i32)
-                };
-
-                #[cfg(not(feature = "only_i32"))]
-                return Some(n);
-            })
-            .map_or_else(
-                || {
-                    Err(ERR::ErrorArithmetic(
-                        format!("Integer overflow: to_int({x})"),
-                        Position::NONE,
-                    )
-                    .into())
-                },
-                Ok,
-            )
+        x.to_i64().and_then(|n| Some(n)).map_or_else(
+            || {
+                Err(
+                    ERR::ErrorArithmetic(format!("Integer overflow: to_int({x})"), Position::NONE)
+                        .into(),
+                )
+            },
+            Ok,
+        )
     }
     /// Return the integral part of the decimal number.
     #[rawr_fn(name = "int", get = "int")]
@@ -593,7 +512,6 @@ mod decimal_functions {
     }
 
     /// Convert the floating-point number to decimal.
-    #[cfg(not(feature = "no_float"))]
     #[rawr_fn(name = "to_decimal", return_raw)]
     pub fn f32_to_decimal(x: f32) -> RawrResultOf<Decimal> {
         Decimal::try_from(x).map_err(|_| {
@@ -605,7 +523,6 @@ mod decimal_functions {
         })
     }
     /// Convert the floating-point number to decimal.
-    #[cfg(not(feature = "no_float"))]
     #[rawr_fn(name = "to_decimal", return_raw)]
     pub fn f64_to_decimal(x: f64) -> RawrResultOf<Decimal> {
         Decimal::try_from(x).map_err(|_| {
@@ -617,7 +534,6 @@ mod decimal_functions {
         })
     }
     /// Convert the decimal number to floating-point.
-    #[cfg(not(feature = "no_float"))]
     #[rawr_fn(return_raw)]
     pub fn to_float(x: Decimal) -> RawrResultOf<FLOAT> {
         FLOAT::try_from(x).map_err(|_| {

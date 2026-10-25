@@ -3,8 +3,6 @@
 use crate::func::{RawrFunc, StraightHashMap};
 use crate::types::BloomFilterU64;
 use crate::{ImmutableString, StaticVec};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// _(internals)_ An entry in a function resolution cache.
 /// Exported under the `internals` feature only.

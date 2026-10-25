@@ -2,12 +2,8 @@
 
 use crate::{expose_under_internals, Dynamic, Engine, ImmutableString};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Collection of globally-defined constants.
-#[cfg(not(feature = "no_module"))]
-#[cfg(not(feature = "no_function"))]
 pub type SharedGlobalConstants =
     crate::Shared<crate::Locked<std::collections::BTreeMap<ImmutableString, Dynamic>>>;
 
@@ -28,14 +24,11 @@ pub struct GlobalRuntimeState {
     /// Immutable facade proof scoped to this exact evaluator invocation.
     pub(crate) host_invocation: Option<crate::host::runtime::invocation::Proof>,
     /// Names of imported [modules][crate::Module].
-    #[cfg(not(feature = "no_module"))]
     imports: crate::ThinVec<ImmutableString>,
     /// Stack of imported [modules][crate::Module].
-    #[cfg(not(feature = "no_module"))]
     modules: crate::ThinVec<crate::SharedModule>,
 
     /// The current stack of loaded [modules][crate::Module] containing script-defined functions.
-    #[cfg(not(feature = "no_function"))]
     pub lib: crate::StaticVec<crate::SharedModule>,
     /// Source of the current context.
     ///
@@ -44,7 +37,6 @@ pub struct GlobalRuntimeState {
     /// Number of operations performed.
     pub num_operations: u64,
     /// Number of modules loaded.
-    #[cfg(not(feature = "no_module"))]
     pub num_modules_loaded: usize,
     /// The current nesting level of function calls.
     pub level: usize,
@@ -63,14 +55,11 @@ pub struct GlobalRuntimeState {
     /// When that happens, this flag is turned on.
     pub always_search_scope: bool,
     /// Embedded [module][crate::Module] resolver.
-    #[cfg(not(feature = "no_module"))]
     pub embedded_module_resolver:
         Option<crate::Shared<crate::module::resolvers::StaticModuleResolver>>,
     /// Cache of globally-defined constants.
     ///
     /// Interior mutability is needed because it is shared in order to aid in cloning.
-    #[cfg(not(feature = "no_module"))]
-    #[cfg(not(feature = "no_function"))]
     pub constants: Option<SharedGlobalConstants>,
     /// Custom state that can be used by the external host.
     pub tag: Dynamic,
@@ -89,23 +78,16 @@ impl Engine {
         GlobalRuntimeState {
             host_runtime: None,
             host_invocation: None,
-            #[cfg(not(feature = "no_module"))]
             imports: crate::ThinVec::new(),
-            #[cfg(not(feature = "no_module"))]
             modules: crate::ThinVec::new(),
-            #[cfg(not(feature = "no_function"))]
             lib: crate::StaticVec::new(),
             source: None,
             num_operations: 0,
-            #[cfg(not(feature = "no_module"))]
             num_modules_loaded: 0,
             scope_level: 0,
             level: 0,
             always_search_scope: false,
-            #[cfg(not(feature = "no_module"))]
             embedded_module_resolver: None,
-            #[cfg(not(feature = "no_module"))]
-            #[cfg(not(feature = "no_function"))]
             constants: None,
 
             tag: self.default_tag().clone(),
@@ -121,36 +103,24 @@ impl Engine {
 
 impl GlobalRuntimeState {
     /// Get the length of the stack of globally-imported [modules][crate::Module].
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline(always)]
     #[must_use]
     pub fn num_imports(&self) -> usize {
         self.modules.len()
     }
     /// Get the globally-imported [module][crate::Module] at a particular index.
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     #[must_use]
     pub fn get_shared_import(&self, index: usize) -> Option<crate::SharedModule> {
         self.modules.get(index).cloned()
     }
     /// Get the index of a globally-imported [module][crate::Module] by name.
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     #[must_use]
     pub fn find_import(&self, name: &str) -> Option<usize> {
         self.imports.iter().rposition(|key| key == name)
     }
     /// Push an imported [module][crate::Module] onto the stack.
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     pub fn push_import(
         &mut self,
@@ -161,9 +131,6 @@ impl GlobalRuntimeState {
         self.modules.push(module.into());
     }
     /// Truncate the stack of globally-imported [modules][crate::Module] to a particular length.
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline(always)]
     pub fn truncate_imports(&mut self, size: usize) {
         self.imports.truncate(size);
@@ -171,9 +138,6 @@ impl GlobalRuntimeState {
     }
     /// Get an iterator to the stack of globally-imported [modules][crate::Module] in reverse order
     /// (i.e. modules imported last come first).
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     pub fn iter_imports(&self) -> impl Iterator<Item = (&str, &crate::Module)> {
         self.imports
@@ -184,9 +148,6 @@ impl GlobalRuntimeState {
     }
     /// Get an iterator to the stack of globally-imported [modules][crate::Module] in reverse order
     /// (i.e. modules imported last come first).
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     pub fn iter_imports_raw(
         &self,
@@ -194,9 +155,6 @@ impl GlobalRuntimeState {
         self.imports.iter().rev().zip(self.modules.iter().rev())
     }
     /// Get an iterator to the stack of globally-imported [modules][crate::Module] in forward order.
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     pub fn scan_imports_raw(
         &self,
@@ -205,9 +163,6 @@ impl GlobalRuntimeState {
     }
     /// Can the particular function with [`Dynamic`] parameter(s) exist in the stack of
     /// globally-imported [modules][crate::Module]?
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     pub(crate) fn may_contain_dynamic_fn(&self, hash_script: u64) -> bool {
         self.modules
@@ -216,9 +171,6 @@ impl GlobalRuntimeState {
     }
     /// Does the specified function hash key exist in the stack of globally-imported
     /// [modules][crate::Module]?
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[allow(dead_code)]
     #[inline]
     #[must_use]
@@ -227,9 +179,6 @@ impl GlobalRuntimeState {
     }
     /// Get the specified function via its hash key from the stack of globally-imported
     /// [modules][crate::Module].
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     #[must_use]
     pub fn get_qualified_fn(
@@ -252,9 +201,6 @@ impl GlobalRuntimeState {
     }
     /// Does the specified [`TypeId`][std::any::TypeId] iterator exist in the stack of
     /// globally-imported [modules][crate::Module]?
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[allow(dead_code)]
     #[inline]
     #[must_use]
@@ -263,9 +209,6 @@ impl GlobalRuntimeState {
     }
     /// Get the specified [`TypeId`][std::any::TypeId] iterator from the stack of globally-imported
     /// [modules][crate::Module].
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline]
     #[must_use]
     pub fn get_iter(&self, id: std::any::TypeId) -> Option<&crate::func::FnIterator> {
@@ -310,7 +253,6 @@ impl GlobalRuntimeState {
     }
 }
 
-#[cfg(not(feature = "no_module"))]
 impl<K: Into<ImmutableString>, M: Into<crate::SharedModule>> Extend<(K, M)> for GlobalRuntimeState {
     #[inline]
     fn extend<T: IntoIterator<Item = (K, M)>>(&mut self, iter: T) {
@@ -327,12 +269,10 @@ impl fmt::Debug for GlobalRuntimeState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("GlobalRuntimeState");
 
-        #[cfg(not(feature = "no_module"))]
         f.field("imports", &self.scan_imports_raw().collect::<Vec<_>>())
             .field("num_modules_loaded", &self.num_modules_loaded)
             .field("embedded_module_resolver", &self.embedded_module_resolver);
 
-        #[cfg(not(feature = "no_function"))]
         f.field("lib", &self.lib);
 
         f.field("source", &self.source)
@@ -341,8 +281,6 @@ impl fmt::Debug for GlobalRuntimeState {
             .field("scope_level", &self.scope_level)
             .field("always_search_scope", &self.always_search_scope);
 
-        #[cfg(not(feature = "no_module"))]
-        #[cfg(not(feature = "no_function"))]
         f.field("constants", &self.constants);
 
         f.field("tag", &self.tag);

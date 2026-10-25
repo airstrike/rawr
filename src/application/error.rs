@@ -2,8 +2,6 @@
 
 use crate::{ImmutableString, Span};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Stable category for an application-root failure.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -466,8 +464,4 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {}
-
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {}

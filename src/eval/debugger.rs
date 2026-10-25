@@ -6,8 +6,6 @@ use crate::ast::{ASTNode, Expr, Stmt};
 use crate::{
     Dynamic, Engine, EvalAltResult, ImmutableString, Position, RawrResultOf, Scope, ThinVec,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{fmt, iter::repeat, mem};
 
 /// Callback function to initialize the debugger.
@@ -93,9 +91,6 @@ pub enum DebuggerEvent<'a> {
 #[non_exhaustive]
 pub enum BreakPoint {
     /// Break at a particular position under a particular source.
-    ///
-    /// Not available under `no_position`.
-    #[cfg(not(feature = "no_position"))]
     AtPosition {
         /// Source (empty if not available) of the break-point.
         source: Option<ImmutableString>,
@@ -121,9 +116,6 @@ pub enum BreakPoint {
         enabled: bool,
     },
     /// Break at a particular property .
-    ///
-    /// Not available under `no_object`.
-    #[cfg(not(feature = "no_object"))]
     AtProperty {
         /// Property name.
         name: ImmutableString,
@@ -135,7 +127,6 @@ pub enum BreakPoint {
 impl fmt::Display for BreakPoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            #[cfg(not(feature = "no_position"))]
             Self::AtPosition {
                 source,
                 pos,
@@ -172,7 +163,6 @@ impl fmt::Display for BreakPoint {
                 }
                 Ok(())
             }
-            #[cfg(not(feature = "no_object"))]
             Self::AtProperty { name, enabled } => {
                 write!(f, ".{name}")?;
                 if !*enabled {
@@ -190,10 +180,8 @@ impl BreakPoint {
     #[must_use]
     pub const fn is_enabled(&self) -> bool {
         match self {
-            #[cfg(not(feature = "no_position"))]
             Self::AtPosition { enabled, .. } => *enabled,
             Self::AtFunctionName { enabled, .. } | Self::AtFunctionCall { enabled, .. } => *enabled,
-            #[cfg(not(feature = "no_object"))]
             Self::AtProperty { enabled, .. } => *enabled,
         }
     }
@@ -201,12 +189,10 @@ impl BreakPoint {
     #[inline(always)]
     pub fn enable(&mut self, value: bool) {
         match self {
-            #[cfg(not(feature = "no_position"))]
             Self::AtPosition { enabled, .. } => *enabled = value,
             Self::AtFunctionName { enabled, .. } | Self::AtFunctionCall { enabled, .. } => {
                 *enabled = value
             }
-            #[cfg(not(feature = "no_object"))]
             Self::AtProperty { enabled, .. } => *enabled = value,
         }
     }
@@ -327,14 +313,11 @@ impl Debugger {
             .enumerate()
             .filter(|(.., bp)| bp.is_enabled())
             .find(|(.., bp)| match bp {
-                #[cfg(not(feature = "no_position"))]
                 BreakPoint::AtPosition { pos, .. } if pos.is_none() => false,
-                #[cfg(not(feature = "no_position"))]
                 BreakPoint::AtPosition { source, pos, .. } if pos.is_beginning_of_line() => {
                     node.position().line().unwrap_or(0) == pos.line().unwrap()
                         && _src == source.as_deref()
                 }
-                #[cfg(not(feature = "no_position"))]
                 BreakPoint::AtPosition { source, pos, .. } => {
                     node.position() == *pos && _src == source.as_deref()
                 }
@@ -358,7 +341,6 @@ impl Debugger {
                     },
                     _ => false,
                 },
-                #[cfg(not(feature = "no_object"))]
                 BreakPoint::AtProperty { name, .. } => match node {
                     ASTNode::Expr(Expr::Property(x, ..)) => x.2 == *name,
                     _ => false,

@@ -22,8 +22,6 @@ use crate::eval::{Caches, GlobalRuntimeState};
 use crate::types::dynamic::AccessMode;
 use crate::{Dynamic, Engine, EvalAltResult, ImmutableString, Position, RawrResult, Scope, INT};
 use std::fmt;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// The function an async body's `.await` is rendered as.
 pub(crate) const AWAIT: &str = "__rawr_await";
@@ -701,14 +699,11 @@ fn variable(name: &ImmutableString) -> Expr {
 }
 
 fn variable_at(name: &ImmutableString, position: Position) -> Expr {
-    #[cfg(not(feature = "no_module"))]
-    return Expr::Variable(
+    Expr::Variable(
         (None, name.clone(), crate::ast::Namespace::NONE, 0).into(),
         None,
         position,
-    );
-    #[cfg(feature = "no_module")]
-    return Expr::Variable((None, name.clone()).into(), None, position);
+    )
 }
 
 fn stmt_awaits(stmt: &Stmt) -> bool {
@@ -757,7 +752,6 @@ fn expr_awaits(expr: &Expr) -> bool {
         Expr::And(operands, _) | Expr::Or(operands, _) | Expr::Coalesce(operands, _) => {
             operands.iter().any(expr_awaits)
         }
-        #[cfg(not(feature = "no_custom_syntax"))]
         Expr::Custom(custom, _) => custom.inputs.iter().any(expr_awaits),
         _ => false,
     }
@@ -771,7 +765,6 @@ fn forget_indices(stmt: &mut Stmt) {
             var.2 = None;
             forget_expr(&mut var.1);
         }
-        #[cfg(not(feature = "no_closure"))]
         Stmt::Share(shared) => shared.iter_mut().for_each(|(_, index)| *index = None),
         Stmt::If(flow, _) | Stmt::While(flow, _) | Stmt::Do(flow, ..) | Stmt::TryCatch(flow, _) => {
             forget_flow(flow);
@@ -899,7 +892,6 @@ impl Frame {
 struct Cursor(crate::Shared<crate::Locked<Iteration>>);
 
 struct Iteration {
-    #[cfg(not(feature = "no_std"))]
     thread: std::thread::ThreadId,
     iterator: std::mem::ManuallyDrop<Box<dyn Iterator<Item = crate::RawrResultOf<Dynamic>>>>,
 }
@@ -915,10 +907,7 @@ unsafe impl Sync for Iteration {}
 
 impl Iteration {
     fn owned(&self) -> bool {
-        #[cfg(not(feature = "no_std"))]
-        return self.thread == std::thread::current().id();
-        #[cfg(feature = "no_std")]
-        return true;
+        self.thread == std::thread::current().id()
     }
 }
 
@@ -1174,7 +1163,6 @@ impl Engine {
             .global_modules
             .iter()
             .find_map(|m| m.get_iter(iter_type));
-        #[cfg(not(feature = "no_module"))]
         let iter_func = iter_func
             .or_else(|| global.get_iter(iter_type))
             .or_else(|| {
@@ -1182,11 +1170,8 @@ impl Engine {
                     .values()
                     .find_map(|m| m.get_qualified_iter(iter_type))
             });
-        #[cfg(feature = "no_module")]
-        let _ = global;
         let iter_func = iter_func.ok_or_else(|| EvalAltResult::ErrorFor(position))?;
         Ok(Cursor(crate::Shared::new(crate::Locked::new(Iteration {
-            #[cfg(not(feature = "no_std"))]
             thread: std::thread::current().id(),
             iterator: std::mem::ManuallyDrop::new(iter_func(value)),
         }))))
@@ -1234,12 +1219,7 @@ mod tests {
     fn drive(script: &str) -> (INT, Vec<INT>) {
         let engine = Engine::new();
         let mut ast = engine
-            .compile_legacy_script_with_scope_raw(
-                None,
-                script,
-                #[cfg(not(feature = "no_optimize"))]
-                crate::OptimizationLevel::None,
-            )
+            .compile_legacy_script_with_scope_raw(None, script, crate::OptimizationLevel::None)
             .unwrap();
         ast.for_each_fn_def_mut(|function| lower(function).unwrap());
         let mut awaited = Vec::new();
@@ -1325,7 +1305,6 @@ mod tests {
             .compile_legacy_script_with_scope_raw(
                 None,
                 "fn body(r) { __rawr_await(1) }",
-                #[cfg(not(feature = "no_optimize"))]
                 crate::OptimizationLevel::None,
             )
             .unwrap();

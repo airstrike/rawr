@@ -1,13 +1,7 @@
 //! An example showing how to register a Rust type and methods/getters/setters using the `CustomType` trait.
 
-#[cfg(feature = "no_object")]
-fn main() {
-    panic!("This example does not run under 'no_object'.");
-}
-
 use rawr::{CustomType, Engine, EvalAltResult, TypeBuilder};
 
-#[cfg(not(feature = "no_object"))]
 fn main() -> Result<(), Box<EvalAltResult>> {
     #[derive(Debug, Clone, CustomType)]
     #[rawr_type(extra = Self::build_extra)]

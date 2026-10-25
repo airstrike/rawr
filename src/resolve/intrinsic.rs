@@ -3,8 +3,6 @@
 pub(super) use crate::host::runtime::type_ref::Type;
 use crate::{host, Dynamic, EvalAltResult, ImmutableString, RawrResult, Span};
 use std::collections::BTreeSet;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct Operand {

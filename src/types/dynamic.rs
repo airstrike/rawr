@@ -2,8 +2,6 @@
 
 use super::nominal;
 use crate::{ExclusiveRange, FnPtr, ImmutableString, InclusiveRange, INT};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::{type_name, Any, TypeId},
     fmt,
@@ -15,18 +13,14 @@ use std::{
 
 pub use super::Variant;
 
-#[cfg(not(feature = "no_time"))]
 #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 pub use std::time::Instant;
 
-#[cfg(not(feature = "no_time"))]
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 pub use web_time::Instant;
 
-#[cfg(not(feature = "no_index"))]
 use crate::{Array, Blob};
 
-#[cfg(not(feature = "no_object"))]
 use crate::Map;
 
 /// _(internals)_ Modes of access.
@@ -76,25 +70,20 @@ pub enum Union {
     /// An integer value.
     Int(INT, Tag, AccessMode),
     /// A floating-point value.
-    #[cfg(not(feature = "no_float"))]
     Float(super::FloatWrapper<crate::FLOAT>, Tag, AccessMode),
     /// _(decimal)_ A fixed-precision decimal value.
     /// Exported under the `decimal` feature only.
     #[cfg(feature = "decimal")]
     Decimal(Box<rust_decimal::Decimal>, Tag, AccessMode),
     /// An array value.
-    #[cfg(not(feature = "no_index"))]
     Array(Box<Array>, Tag, AccessMode),
     /// An blob (byte array).
-    #[cfg(not(feature = "no_index"))]
     Blob(Box<Blob>, Tag, AccessMode),
     /// An object map value.
-    #[cfg(not(feature = "no_object"))]
     Map(Box<Map>, Tag, AccessMode),
     /// A function pointer.
     FnPtr(Box<FnPtr>, Tag, AccessMode),
     /// A timestamp value.
-    #[cfg(not(feature = "no_time"))]
     TimeStamp(Box<Instant>, Tag, AccessMode),
 
     /// A first-class Rawr struct value.
@@ -109,7 +98,6 @@ pub enum Union {
     Variant(Box<Box<dyn Variant>>, Tag, AccessMode),
 
     /// A _shared_ value of any type.
-    #[cfg(not(feature = "no_closure"))]
     Shared(crate::Shared<crate::Locked<Dynamic>>, Tag, AccessMode),
 }
 
@@ -130,7 +118,6 @@ enum DynamicReadLockInner<'d, T: Clone> {
     Reference(&'d T),
 
     /// A read guard to a _shared_ value.
-    #[cfg(not(feature = "no_closure"))]
     Guard(crate::func::native::LockGuard<'d, Dynamic>),
 }
 
@@ -141,7 +128,6 @@ impl<T: Any + Clone> Deref for DynamicReadLock<'_, T> {
     fn deref(&self) -> &Self::Target {
         match self.0 {
             DynamicReadLockInner::Reference(reference) => reference,
-            #[cfg(not(feature = "no_closure"))]
             DynamicReadLockInner::Guard(ref guard) => guard.downcast_ref().unwrap(),
         }
     }
@@ -164,7 +150,6 @@ enum DynamicWriteLockInner<'d, T: Clone> {
     Reference(&'d mut T),
 
     /// A write guard to a _shared_ value.
-    #[cfg(not(feature = "no_closure"))]
     Guard(crate::func::native::LockGuardMut<'d, Dynamic>),
 }
 
@@ -175,7 +160,6 @@ impl<T: Any + Clone> Deref for DynamicWriteLock<'_, T> {
     fn deref(&self) -> &Self::Target {
         match self.0 {
             DynamicWriteLockInner::Reference(ref reference) => reference,
-            #[cfg(not(feature = "no_closure"))]
             DynamicWriteLockInner::Guard(ref guard) => guard.downcast_ref().unwrap(),
         }
     }
@@ -186,7 +170,6 @@ impl<T: Any + Clone> DerefMut for DynamicWriteLock<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self.0 {
             DynamicWriteLockInner::Reference(ref mut reference) => reference,
-            #[cfg(not(feature = "no_closure"))]
             DynamicWriteLockInner::Guard(ref mut guard) => guard.downcast_mut().unwrap(),
         }
     }
@@ -245,17 +228,12 @@ impl Dynamic {
             | Union::Struct(_, tag, _)
             | Union::Enum(_, tag, _) => tag,
 
-            #[cfg(not(feature = "no_float"))]
             Union::Float(_, tag, _) => tag,
             #[cfg(feature = "decimal")]
             Union::Decimal(_, tag, _) => tag,
-            #[cfg(not(feature = "no_index"))]
             Union::Array(_, tag, _) | Union::Blob(_, tag, _) => tag,
-            #[cfg(not(feature = "no_object"))]
             Union::Map(_, tag, _) => tag,
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(_, tag, _) => tag,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(_, tag, _) => tag,
         }
     }
@@ -272,17 +250,12 @@ impl Dynamic {
             | Union::Struct(_, ref mut tag, _)
             | Union::Enum(_, ref mut tag, _) => *tag = value,
 
-            #[cfg(not(feature = "no_float"))]
             Union::Float(_, ref mut tag, _) => *tag = value,
             #[cfg(feature = "decimal")]
             Union::Decimal(_, ref mut tag, _) => *tag = value,
-            #[cfg(not(feature = "no_index"))]
             Union::Array(_, ref mut tag, _) | Union::Blob(_, ref mut tag, _) => *tag = value,
-            #[cfg(not(feature = "no_object"))]
             Union::Map(_, ref mut tag, _) => *tag = value,
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(_, ref mut tag, _) => *tag = value,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(_, ref mut tag, _) => *tag = value,
         }
         self
@@ -295,9 +268,6 @@ impl Dynamic {
         matches!(self.0, Union::Variant(..))
     }
     /// Is the value held by this [`Dynamic`] shared?
-    ///
-    /// Not available under `no_closure`.
-    #[cfg(not(feature = "no_closure"))]
     #[inline(always)]
     #[must_use]
     pub const fn is_shared(&self) -> bool {
@@ -312,7 +282,6 @@ impl Dynamic {
     #[inline]
     #[must_use]
     pub fn is<T: Any + Clone>(&self) -> bool {
-        #[cfg(not(feature = "no_closure"))]
         if self.is_shared() {
             return TypeId::of::<T>() == self.type_id();
         }
@@ -329,7 +298,6 @@ impl Dynamic {
         if TypeId::of::<T>() == TypeId::of::<INT>() {
             return matches!(self.0, Union::Int(..));
         }
-        #[cfg(not(feature = "no_float"))]
         if TypeId::of::<T>() == TypeId::of::<crate::FLOAT>() {
             return matches!(self.0, Union::Float(..));
         }
@@ -338,15 +306,12 @@ impl Dynamic {
         {
             return matches!(self.0, Union::Str(..));
         }
-        #[cfg(not(feature = "no_index"))]
         if TypeId::of::<T>() == TypeId::of::<Array>() {
             return matches!(self.0, Union::Array(..));
         }
-        #[cfg(not(feature = "no_index"))]
         if TypeId::of::<T>() == TypeId::of::<Blob>() {
             return matches!(self.0, Union::Blob(..));
         }
-        #[cfg(not(feature = "no_object"))]
         if TypeId::of::<T>() == TypeId::of::<Map>() {
             return matches!(self.0, Union::Map(..));
         }
@@ -363,7 +328,6 @@ impl Dynamic {
         if TypeId::of::<T>() == TypeId::of::<nominal::Enum>() {
             return matches!(self.0, Union::Enum(..));
         }
-        #[cfg(not(feature = "no_time"))]
         if TypeId::of::<T>() == TypeId::of::<crate::Instant>() {
             return matches!(self.0, Union::TimeStamp(..));
         }
@@ -384,25 +348,19 @@ impl Dynamic {
             Union::Str(..) => TypeId::of::<ImmutableString>(),
             Union::Char(..) => TypeId::of::<char>(),
             Union::Int(..) => TypeId::of::<INT>(),
-            #[cfg(not(feature = "no_float"))]
             Union::Float(..) => TypeId::of::<crate::FLOAT>(),
             #[cfg(feature = "decimal")]
             Union::Decimal(..) => TypeId::of::<rust_decimal::Decimal>(),
-            #[cfg(not(feature = "no_index"))]
             Union::Array(..) => TypeId::of::<Array>(),
-            #[cfg(not(feature = "no_index"))]
             Union::Blob(..) => TypeId::of::<Blob>(),
-            #[cfg(not(feature = "no_object"))]
             Union::Map(..) => TypeId::of::<Map>(),
             Union::FnPtr(..) => TypeId::of::<FnPtr>(),
             Union::Struct(..) => TypeId::of::<nominal::Struct>(),
             Union::Enum(..) => TypeId::of::<nominal::Enum>(),
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(..) => TypeId::of::<Instant>(),
 
             Union::Variant(ref v, ..) => (***v).type_id(),
 
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => (*crate::func::locked_read(cell).unwrap()).type_id(),
         }
     }
@@ -420,25 +378,19 @@ impl Dynamic {
             Union::Str(..) => "string",
             Union::Char(..) => "char",
             Union::Int(..) => type_name::<INT>(),
-            #[cfg(not(feature = "no_float"))]
             Union::Float(..) => type_name::<crate::FLOAT>(),
             #[cfg(feature = "decimal")]
             Union::Decimal(..) => "decimal",
-            #[cfg(not(feature = "no_index"))]
             Union::Array(..) => "array",
-            #[cfg(not(feature = "no_index"))]
             Union::Blob(..) => "blob",
-            #[cfg(not(feature = "no_object"))]
             Union::Map(..) => "map",
             Union::FnPtr(..) => "Fn",
             Union::Struct(..) => "Rawr struct",
             Union::Enum(..) => "Rawr enum",
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(..) => "timestamp",
 
             Union::Variant(ref v, ..) => (***v).type_name(),
 
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => (*crate::func::locked_read(cell).unwrap()).type_name(),
         }
     }
@@ -459,17 +411,12 @@ impl Hash for Dynamic {
             Union::Str(ref s, ..) => s.hash(state),
             Union::Char(ref c, ..) => c.hash(state),
             Union::Int(ref i, ..) => i.hash(state),
-            #[cfg(not(feature = "no_float"))]
             Union::Float(ref f, ..) => f.hash(state),
             #[cfg(feature = "decimal")]
             Union::Decimal(ref d, ..) => d.hash(state),
-            #[cfg(not(feature = "no_index"))]
             Union::Array(ref a, ..) => a.hash(state),
-            #[cfg(not(feature = "no_index"))]
             Union::Blob(ref a, ..) => a.hash(state),
-            #[cfg(not(feature = "no_object"))]
             Union::Map(ref m, ..) => m.hash(state),
-            #[cfg(not(feature = "no_function"))]
             Union::FnPtr(ref f, ..) if f.env.is_some() => {
                 unimplemented!("FnPtr with embedded environment cannot be hashed")
             }
@@ -482,14 +429,11 @@ impl Hash for Dynamic {
                 unimplemented!("Rawr nominal values require an explicit hash capability")
             }
 
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => (*crate::func::locked_read(cell).unwrap()).hash(state),
 
             Union::Variant(ref v, ..) => {
                 let _value_any = (***v).as_any();
 
-                #[cfg(not(feature = "only_i32"))]
-                #[cfg(not(feature = "only_i64"))]
                 if let Some(value) = _value_any.downcast_ref::<u8>() {
                     return value.hash(state);
                 } else if let Some(value) = _value_any.downcast_ref::<u16>() {
@@ -508,19 +452,10 @@ impl Hash for Dynamic {
                     return value.hash(state);
                 }
 
-                #[cfg(not(feature = "no_float"))]
-                #[cfg(not(feature = "f32_float"))]
                 if let Some(value) = _value_any.downcast_ref::<f32>() {
                     return value.to_ne_bytes().hash(state);
                 }
-                #[cfg(not(feature = "no_float"))]
-                #[cfg(feature = "f32_float")]
-                if let Some(value) = _value_any.downcast_ref::<f64>() {
-                    return value.to_ne_bytes().hash(state);
-                }
 
-                #[cfg(not(feature = "only_i32"))]
-                #[cfg(not(feature = "only_i64"))]
                 #[cfg(not(target_family = "wasm"))]
                 if let Some(value) = _value_any.downcast_ref::<u128>() {
                     return value.hash(state);
@@ -537,7 +472,6 @@ impl Hash for Dynamic {
                 unimplemented!("Custom type {} cannot be hashed", self.type_name())
             }
 
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(..) => unimplemented!("Timestamp cannot be hashed"),
         }
     }
@@ -552,28 +486,21 @@ impl fmt::Display for Dynamic {
             Union::Char(ref v, ..) => fmt::Display::fmt(v, f),
             Union::Int(ref v, tag, ..) if tag == UNSIGNED_TAG => fmt::Display::fmt(&(*v as u64), f),
             Union::Int(ref v, ..) => fmt::Display::fmt(v, f),
-            #[cfg(not(feature = "no_float"))]
             Union::Float(ref v, ..) => fmt::Display::fmt(v, f),
             #[cfg(feature = "decimal")]
             Union::Decimal(ref v, ..) => fmt::Display::fmt(v, f),
-            #[cfg(not(feature = "no_index"))]
             Union::Array(..) => fmt::Debug::fmt(self, f),
-            #[cfg(not(feature = "no_index"))]
             Union::Blob(..) => fmt::Debug::fmt(self, f),
-            #[cfg(not(feature = "no_object"))]
             Union::Map(..) => fmt::Debug::fmt(self, f),
             Union::FnPtr(ref v, ..) => fmt::Display::fmt(v, f),
             Union::Struct(ref v, ..) => fmt::Display::fmt(v, f),
             Union::Enum(ref v, ..) => fmt::Display::fmt(v, f),
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(..) => f.write_str("<timestamp>"),
 
             Union::Variant(ref v, ..) => {
                 let _value_any = (***v).as_any();
                 let _type_id = _value_any.type_id();
 
-                #[cfg(not(feature = "only_i32"))]
-                #[cfg(not(feature = "only_i64"))]
                 if let Some(value) = _value_any.downcast_ref::<u8>() {
                     return fmt::Display::fmt(value, f);
                 } else if let Some(value) = _value_any.downcast_ref::<u16>() {
@@ -592,19 +519,10 @@ impl fmt::Display for Dynamic {
                     return fmt::Display::fmt(value, f);
                 }
 
-                #[cfg(not(feature = "no_float"))]
-                #[cfg(not(feature = "f32_float"))]
                 if let Some(value) = _value_any.downcast_ref::<f32>() {
                     return fmt::Display::fmt(value, f);
                 }
-                #[cfg(not(feature = "no_float"))]
-                #[cfg(feature = "f32_float")]
-                if let Some(value) = _value_any.downcast_ref::<f64>() {
-                    return fmt::Display::fmt(value, f);
-                }
 
-                #[cfg(not(feature = "only_i32"))]
-                #[cfg(not(feature = "only_i64"))]
                 #[cfg(not(target_family = "wasm"))]
                 if let Some(value) = _value_any.downcast_ref::<u128>() {
                     return fmt::Display::fmt(value, f);
@@ -627,7 +545,6 @@ impl fmt::Display for Dynamic {
                 }
 
                 // An imported value its type prints with Rust's `Display`.
-                #[cfg(not(feature = "no_std"))]
                 if let Some(text) = crate::host::display::text(_value_any) {
                     return f.write_str(&text);
                 }
@@ -635,18 +552,7 @@ impl fmt::Display for Dynamic {
                 f.write_str((***v).type_name())
             }
 
-            #[cfg(not(feature = "no_closure"))]
-            Union::Shared(ref cell, ..) if cfg!(feature = "unchecked") => {
-                match crate::func::locked_read(cell) {
-                    Some(v) => write!(f, "{} (shared)", *v),
-                    _ => f.write_str("<shared>"),
-                }
-            }
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(..) => {
-                #[cfg(feature = "no_std")]
-                use hashbrown::HashSet;
-                #[cfg(not(feature = "no_std"))]
                 use std::collections::HashSet;
 
                 // Avoid infinite recursion for shared values in a reference loop.
@@ -656,7 +562,6 @@ impl fmt::Display for Dynamic {
                     dict: &mut HashSet<*const Dynamic>,
                 ) -> fmt::Result {
                     match value.0 {
-                        #[cfg(not(feature = "no_closure"))]
                         Union::Shared(ref cell, ..) => match crate::func::locked_read(cell) {
                             Some(v) => {
                                 if dict.insert(value) {
@@ -668,7 +573,6 @@ impl fmt::Display for Dynamic {
                             }
                             _ => f.write_str("<shared>"),
                         },
-                        #[cfg(not(feature = "no_index"))]
                         Union::Array(ref arr, ..) => {
                             dict.insert(value);
 
@@ -681,7 +585,6 @@ impl fmt::Display for Dynamic {
                             }
                             f.write_str("]")
                         }
-                        #[cfg(not(feature = "no_object"))]
                         Union::Map(ref map, ..) => {
                             dict.insert(value);
 
@@ -717,13 +620,10 @@ impl fmt::Debug for Dynamic {
             Union::Char(ref v, ..) => fmt::Debug::fmt(v, f),
             Union::Int(ref v, tag, ..) if tag == UNSIGNED_TAG => fmt::Debug::fmt(&(*v as u64), f),
             Union::Int(ref v, ..) => fmt::Debug::fmt(v, f),
-            #[cfg(not(feature = "no_float"))]
             Union::Float(ref v, ..) => fmt::Debug::fmt(v, f),
             #[cfg(feature = "decimal")]
             Union::Decimal(ref v, ..) => fmt::Debug::fmt(v, f),
-            #[cfg(not(feature = "no_index"))]
             Union::Array(ref v, ..) => fmt::Debug::fmt(v, f),
-            #[cfg(not(feature = "no_index"))]
             Union::Blob(ref v, ..) => {
                 f.write_str("[")?;
                 v.iter().enumerate().try_for_each(|(i, v)| {
@@ -734,7 +634,6 @@ impl fmt::Debug for Dynamic {
                 })?;
                 f.write_str("]")
             }
-            #[cfg(not(feature = "no_object"))]
             Union::Map(ref v, ..) => {
                 f.write_str("#")?;
                 fmt::Debug::fmt(v, f)
@@ -742,15 +641,12 @@ impl fmt::Debug for Dynamic {
             Union::FnPtr(ref v, ..) => fmt::Debug::fmt(v, f),
             Union::Struct(ref v, ..) => fmt::Debug::fmt(v, f),
             Union::Enum(ref v, ..) => fmt::Debug::fmt(v, f),
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(..) => write!(f, "<timestamp>"),
 
             Union::Variant(ref v, ..) => {
                 let _value_any = (***v).as_any();
                 let _type_id = _value_any.type_id();
 
-                #[cfg(not(feature = "only_i32"))]
-                #[cfg(not(feature = "only_i64"))]
                 if let Some(value) = _value_any.downcast_ref::<u8>() {
                     return fmt::Debug::fmt(value, f);
                 } else if let Some(value) = _value_any.downcast_ref::<u16>() {
@@ -769,19 +665,10 @@ impl fmt::Debug for Dynamic {
                     return fmt::Debug::fmt(value, f);
                 }
 
-                #[cfg(not(feature = "no_float"))]
-                #[cfg(not(feature = "f32_float"))]
                 if let Some(value) = _value_any.downcast_ref::<f32>() {
                     return fmt::Debug::fmt(value, f);
                 }
-                #[cfg(not(feature = "no_float"))]
-                #[cfg(feature = "f32_float")]
-                if let Some(value) = _value_any.downcast_ref::<f64>() {
-                    return fmt::Debug::fmt(value, f);
-                }
 
-                #[cfg(not(feature = "only_i32"))]
-                #[cfg(not(feature = "only_i64"))]
                 #[cfg(not(target_family = "wasm"))]
                 if let Some(value) = _value_any.downcast_ref::<u128>() {
                     return fmt::Debug::fmt(value, f);
@@ -804,7 +691,6 @@ impl fmt::Debug for Dynamic {
                 }
 
                 // A host type its facade prints with Rust's `Debug`.
-                #[cfg(not(feature = "no_std"))]
                 if let Some(text) = crate::host::debug::text(_value_any) {
                     return f.write_str(&text);
                 }
@@ -812,18 +698,7 @@ impl fmt::Debug for Dynamic {
                 f.write_str((***v).type_name())
             }
 
-            #[cfg(not(feature = "no_closure"))]
-            Union::Shared(ref cell, ..) if cfg!(feature = "unchecked") => {
-                match crate::func::locked_read(cell) {
-                    Some(v) => write!(f, "{:?} (shared)", *v),
-                    _ => f.write_str("<shared>"),
-                }
-            }
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(..) => {
-                #[cfg(feature = "no_std")]
-                use hashbrown::HashSet;
-                #[cfg(not(feature = "no_std"))]
                 use std::collections::HashSet;
 
                 // Avoid infinite recursion for shared values in a reference loop.
@@ -844,7 +719,6 @@ impl fmt::Debug for Dynamic {
                             }
                             _ => f.write_str("<shared>"),
                         },
-                        #[cfg(not(feature = "no_index"))]
                         Union::Array(ref arr, ..) => {
                             dict.insert(value);
 
@@ -857,7 +731,6 @@ impl fmt::Debug for Dynamic {
                             }
                             f.write_str("]")
                         }
-                        #[cfg(not(feature = "no_object"))]
                         Union::Map(ref map, ..) => {
                             dict.insert(value);
 
@@ -910,20 +783,15 @@ impl Clone for Dynamic {
             Union::Str(ref v, tag, ..) => Self(Union::Str(v.clone(), tag, ReadWrite)),
             Union::Char(v, tag, ..) => Self(Union::Char(v, tag, ReadWrite)),
             Union::Int(v, tag, ..) => Self(Union::Int(v, tag, ReadWrite)),
-            #[cfg(not(feature = "no_float"))]
             Union::Float(v, tag, ..) => Self(Union::Float(v, tag, ReadWrite)),
             #[cfg(feature = "decimal")]
             Union::Decimal(ref v, tag, ..) => Self(Union::Decimal(v.clone(), tag, ReadWrite)),
-            #[cfg(not(feature = "no_index"))]
             Union::Array(ref v, tag, ..) => Self(Union::Array(v.clone(), tag, ReadWrite)),
-            #[cfg(not(feature = "no_index"))]
             Union::Blob(ref v, tag, ..) => Self(Union::Blob(v.clone(), tag, ReadWrite)),
-            #[cfg(not(feature = "no_object"))]
             Union::Map(ref v, tag, ..) => Self(Union::Map(v.clone(), tag, ReadWrite)),
             Union::FnPtr(ref v, tag, ..) => Self(Union::FnPtr(v.clone(), tag, ReadWrite)),
             Union::Struct(ref v, tag, ..) => Self(Union::Struct(v.clone(), tag, ReadWrite)),
             Union::Enum(ref v, tag, ..) => Self(Union::Enum(v.clone(), tag, ReadWrite)),
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(ref v, tag, ..) => Self(Union::TimeStamp(v.clone(), tag, ReadWrite)),
 
             Union::Variant(ref v, tag, ..) => Self(Union::Variant(
@@ -932,7 +800,6 @@ impl Clone for Dynamic {
                 ReadWrite,
             )),
 
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, tag, ..) => Self(Union::Shared(cell.clone(), tag, ReadWrite)),
         }
     }
@@ -945,11 +812,6 @@ impl Default for Dynamic {
     }
 }
 
-#[cfg(not(feature = "no_float"))]
-#[cfg(feature = "f32_float")]
-use std::f32::consts as FloatConstants;
-#[cfg(not(feature = "no_float"))]
-#[cfg(not(feature = "f32_float"))]
 use std::f64::consts as FloatConstants;
 
 impl Dynamic {
@@ -980,124 +842,52 @@ impl Dynamic {
     /// A [`Dynamic`] containing the integer -2.
     pub const NEGATIVE_TWO: Self = Self::from_int(-2);
     /// A [`Dynamic`] containing `0.0`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_ZERO: Self = Self::from_float(0.0);
     /// A [`Dynamic`] containing `1.0`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_ONE: Self = Self::from_float(1.0);
     /// A [`Dynamic`] containing `2.0`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_TWO: Self = Self::from_float(2.0);
     /// A [`Dynamic`] containing `10.0`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_TEN: Self = Self::from_float(10.0);
     /// A [`Dynamic`] containing `100.0`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_HUNDRED: Self = Self::from_float(100.0);
     /// A [`Dynamic`] containing `1000.0`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_THOUSAND: Self = Self::from_float(1000.0);
     /// A [`Dynamic`] containing `1000000.0`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_MILLION: Self = Self::from_float(1_000_000.0);
     /// A [`Dynamic`] containing `-1.0`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_NEGATIVE_ONE: Self = Self::from_float(-1.0);
     /// A [`Dynamic`] containing `-2.0`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_NEGATIVE_TWO: Self = Self::from_float(-2.0);
     /// A [`Dynamic`] containing `0.5`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_HALF: Self = Self::from_float(0.5);
     /// A [`Dynamic`] containing `0.25`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_QUARTER: Self = Self::from_float(0.25);
     /// A [`Dynamic`] containing `0.2`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_FIFTH: Self = Self::from_float(0.2);
     /// A [`Dynamic`] containing `0.1`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_TENTH: Self = Self::from_float(0.1);
     /// A [`Dynamic`] containing `0.01`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_HUNDREDTH: Self = Self::from_float(0.01);
     /// A [`Dynamic`] containing `0.001`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_THOUSANDTH: Self = Self::from_float(0.001);
     /// A [`Dynamic`] containing `0.000001`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_MILLIONTH: Self = Self::from_float(0.000_001);
     /// A [`Dynamic`] containing π.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_PI: Self = Self::from_float(FloatConstants::PI);
     /// A [`Dynamic`] containing π/2.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_HALF_PI: Self = Self::from_float(FloatConstants::FRAC_PI_2);
     /// A [`Dynamic`] containing π/4.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_QUARTER_PI: Self = Self::from_float(FloatConstants::FRAC_PI_4);
     /// A [`Dynamic`] containing 2π.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_TWO_PI: Self = Self::from_float(FloatConstants::TAU);
     /// A [`Dynamic`] containing 1/π.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_INVERSE_PI: Self = Self::from_float(FloatConstants::FRAC_1_PI);
     /// A [`Dynamic`] containing _e_.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_E: Self = Self::from_float(FloatConstants::E);
     /// A [`Dynamic`] containing `log` _e_.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_LOG_E: Self = Self::from_float(FloatConstants::LOG10_E);
     /// A [`Dynamic`] containing `ln 10`.
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     pub const FLOAT_LN_10: Self = Self::from_float(FloatConstants::LN_10);
 
     /// Create a new [`Dynamic`] from a [`bool`].
@@ -1116,9 +906,6 @@ impl Dynamic {
         Self(Union::Char(value, DEFAULT_TAG_VALUE, ReadWrite))
     }
     /// Create a new [`Dynamic`] from a [`FLOAT`][crate::FLOAT].
-    ///
-    /// Not available under `no_float`.
-    #[cfg(not(feature = "no_float"))]
     #[inline(always)]
     pub const fn from_float(value: crate::FLOAT) -> Self {
         Self(Union::Float(
@@ -1136,27 +923,21 @@ impl Dynamic {
         Self(Union::Decimal(value.into(), DEFAULT_TAG_VALUE, ReadWrite))
     }
     /// Create a [`Dynamic`] from an [`Array`].
-    #[cfg(not(feature = "no_index"))]
     #[inline(always)]
     pub fn from_array(array: Array) -> Self {
         Self(Union::Array(array.into(), DEFAULT_TAG_VALUE, ReadWrite))
     }
     /// Create a [`Dynamic`] from a [`Blob`].
-    #[cfg(not(feature = "no_index"))]
     #[inline(always)]
     pub fn from_blob(blob: Blob) -> Self {
         Self(Union::Blob(blob.into(), DEFAULT_TAG_VALUE, ReadWrite))
     }
     /// Create a [`Dynamic`] from a [`Map`].
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn from_map(map: Map) -> Self {
         Self(Union::Map(map.into(), DEFAULT_TAG_VALUE, ReadWrite))
     }
     /// Create a new [`Dynamic`] from an [`Instant`].
-    ///
-    /// Not available under `no-std` or `no_time`.
-    #[cfg(not(feature = "no_time"))]
     #[inline(always)]
     pub fn from_timestamp(value: Instant) -> Self {
         Self(Union::TimeStamp(value.into(), DEFAULT_TAG_VALUE, ReadWrite))
@@ -1176,17 +957,12 @@ impl Dynamic {
             | Union::Struct(.., access)
             | Union::Enum(.., access) => access,
 
-            #[cfg(not(feature = "no_float"))]
             Union::Float(.., access) => access,
             #[cfg(feature = "decimal")]
             Union::Decimal(.., access) => access,
-            #[cfg(not(feature = "no_index"))]
             Union::Array(.., access) | Union::Blob(.., access) => access,
-            #[cfg(not(feature = "no_object"))]
             Union::Map(.., access) => access,
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(.., access) => access,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(.., access) => access,
         }
     }
@@ -1214,29 +990,23 @@ impl Dynamic {
                 }
             }
 
-            #[cfg(not(feature = "no_float"))]
             Union::Float(.., ref mut access) => *access = typ,
             #[cfg(feature = "decimal")]
             Union::Decimal(.., ref mut access) => *access = typ,
-            #[cfg(not(feature = "no_index"))]
             Union::Array(ref mut a, _, ref mut access) => {
                 *access = typ;
                 for v in a.as_mut() {
                     v.set_access_mode(typ);
                 }
             }
-            #[cfg(not(feature = "no_index"))]
             Union::Blob(.., ref mut access) => *access = typ,
-            #[cfg(not(feature = "no_object"))]
             Union::Map(ref mut m, _, ref mut access) => {
                 *access = typ;
                 for v in m.values_mut() {
                     v.set_access_mode(typ);
                 }
             }
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(.., ref mut access) => *access = typ,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(.., ref mut access) => *access = typ,
         }
         self
@@ -1274,7 +1044,6 @@ impl Dynamic {
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
     #[must_use]
     pub fn is_read_only(&self) -> bool {
-        #[cfg(not(feature = "no_closure"))]
         if let Union::Shared(ref cell, ..) = self.0 {
             return match crate::func::locked_read(cell).map_or(ReadWrite, |v| v.access_mode()) {
                 ReadWrite => false,
@@ -1309,20 +1078,14 @@ impl Dynamic {
             | Union::Char(..)
             | Union::Int(..) => true,
 
-            #[cfg(not(feature = "no_float"))]
             Union::Float(..) => true,
             #[cfg(feature = "decimal")]
             Union::Decimal(..) => true,
-            #[cfg(not(feature = "no_index"))]
             Union::Array(ref a, ..) => a.iter().all(Self::is_hashable),
-            #[cfg(not(feature = "no_index"))]
             Union::Blob(..) => true,
-            #[cfg(not(feature = "no_object"))]
             Union::Map(ref m, ..) => m.values().all(Self::is_hashable),
-            #[cfg(not(feature = "no_function"))]
             Union::FnPtr(ref f, ..) if f.env.is_some() => false,
             Union::FnPtr(ref f, ..) => f.curry().iter().all(Self::is_hashable),
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(..) => false,
             Union::Struct(..) | Union::Enum(..) => false,
 
@@ -1330,8 +1093,6 @@ impl Dynamic {
                 let _value_any = (***v).as_any();
                 let _type_id = _value_any.type_id();
 
-                #[cfg(not(feature = "only_i32"))]
-                #[cfg(not(feature = "only_i64"))]
                 if _type_id == TypeId::of::<u8>()
                     || _type_id == TypeId::of::<u16>()
                     || _type_id == TypeId::of::<u32>()
@@ -1344,19 +1105,10 @@ impl Dynamic {
                     return true;
                 }
 
-                #[cfg(not(feature = "no_float"))]
-                #[cfg(not(feature = "f32_float"))]
                 if _type_id == TypeId::of::<f32>() {
                     return true;
                 }
-                #[cfg(not(feature = "no_float"))]
-                #[cfg(feature = "f32_float")]
-                if _type_id == TypeId::of::<f64>() {
-                    return true;
-                }
 
-                #[cfg(not(feature = "only_i32"))]
-                #[cfg(not(feature = "only_i64"))]
                 #[cfg(not(target_family = "wasm"))]
                 if _type_id == TypeId::of::<u128>() || _type_id == TypeId::of::<i128>() {
                     return true;
@@ -1371,15 +1123,7 @@ impl Dynamic {
                 false
             }
 
-            #[cfg(not(feature = "no_closure"))]
-            Union::Shared(ref cell, ..) if cfg!(feature = "unchecked") => {
-                crate::func::locked_read(cell).is_some_and(|v| v.is_hashable())
-            }
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(..) => {
-                #[cfg(feature = "no_std")]
-                use hashbrown::HashSet;
-                #[cfg(not(feature = "no_std"))]
                 use std::collections::HashSet;
 
                 // Avoid infinite recursion for shared values in a reference loop.
@@ -1390,9 +1134,7 @@ impl Dynamic {
                     match value.0 {
                         Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                             .is_some_and(|v| dict.insert(value) && checked_is_hashable(&v, dict)),
-                        #[cfg(not(feature = "no_index"))]
                         Union::Array(ref a, ..) => a.iter().all(|v| checked_is_hashable(v, dict)),
-                        #[cfg(not(feature = "no_object"))]
                         Union::Map(ref m, ..) => m.values().all(|v| checked_is_hashable(v, dict)),
                         Union::FnPtr(ref f, ..) => {
                             f.env.is_none()
@@ -1443,7 +1185,6 @@ impl Dynamic {
     /// assert_eq!(new_result.type_name(), "string");
     /// assert_eq!(new_result.to_string(), "hello");
     ///
-    /// # #[cfg(not(feature = "no_index"))]
     /// # {
     /// // Arrays - this is a custom object!
     /// let result = Dynamic::from(vec![1_i64, 2, 3]);
@@ -1454,7 +1195,6 @@ impl Dynamic {
     /// assert_eq!(result.type_name(), "array");
     /// # }
     ///
-    /// # #[cfg(not(feature = "no_object"))]
     /// # {
     /// # use std::collections::HashMap;
     /// // Hash map
@@ -1477,7 +1217,6 @@ impl Dynamic {
         reify! { value => |v: Self| return v }
         reify! { value => |v: INT| return v.into() }
 
-        #[cfg(not(feature = "no_float"))]
         reify! { value => |v: crate::FLOAT| return v.into() }
 
         #[cfg(feature = "decimal")]
@@ -1490,20 +1229,15 @@ impl Dynamic {
         reify! { value => |v: &str| return v.into() }
         reify! { value => |v: ()| return v.into() }
 
-        #[cfg(not(feature = "no_index"))]
         reify! { value => |v: Array| return v.into() }
-        #[cfg(not(feature = "no_index"))]
         // don't use blob.into() because it'll be converted into an Array
         reify! { value => |v: Blob| return Self::from_blob(v) }
-        #[cfg(not(feature = "no_object"))]
         reify! { value => |v: Map| return v.into() }
         reify! { value => |v: FnPtr| return v.into() }
         reify! { value => |v: nominal::Struct| return v.into() }
         reify! { value => |v: nominal::Enum| return v.into() }
 
-        #[cfg(not(feature = "no_time"))]
         reify! { value => |v: Instant| return v.into() }
-        #[cfg(not(feature = "no_closure"))]
         reify! { value => |v: crate::Shared<crate::Locked<Self>>| return v.into() }
 
         Self(Union::Variant(
@@ -1516,8 +1250,6 @@ impl Dynamic {
     /// [`Rc<RefCell<Dynamic>>`][std::rc::Rc] or [`Arc<RwLock<Dynamic>>`][std::sync::Arc]
     /// depending on the `sync` feature.
     ///
-    /// Not available under `no_closure`.
-    ///
     /// Shared [`Dynamic`] values are relatively cheap to clone as they simply increment the
     /// reference counts.
     ///
@@ -1525,7 +1257,6 @@ impl Dynamic {
     /// values.
     ///
     /// If the [`Dynamic`] value is already shared, this method returns itself.
-    #[cfg(not(feature = "no_closure"))]
     #[inline]
     pub fn into_shared(self) -> Self {
         let _access = self.access_mode();
@@ -1602,7 +1333,6 @@ impl Dynamic {
     pub fn try_cast_result<T: Any>(mut self) -> Result<T, Self> {
         // Coded this way in order to maximally leverage potentials for dead-code removal.
 
-        #[cfg(not(feature = "no_closure"))]
         {
             self = self.flatten();
         }
@@ -1622,7 +1352,6 @@ impl Dynamic {
                 _ => Err(self),
             };
         }
-        #[cfg(not(feature = "no_float"))]
         if TypeId::of::<T>() == TypeId::of::<crate::FLOAT>() {
             return match self.0 {
                 Union::Float(v, ..) => Ok(reify! { *v => !!! T }),
@@ -1660,21 +1389,18 @@ impl Dynamic {
                 _ => Err(self),
             };
         }
-        #[cfg(not(feature = "no_index"))]
         if TypeId::of::<T>() == TypeId::of::<Array>() {
             return match self.0 {
                 Union::Array(a, ..) => Ok(reify! { *a => !!! T }),
                 _ => Err(self),
             };
         }
-        #[cfg(not(feature = "no_index"))]
         if TypeId::of::<T>() == TypeId::of::<Blob>() {
             return match self.0 {
                 Union::Blob(b, ..) => Ok(reify! { *b => !!! T }),
                 _ => Err(self),
             };
         }
-        #[cfg(not(feature = "no_object"))]
         if TypeId::of::<T>() == TypeId::of::<Map>() {
             return match self.0 {
                 Union::Map(m, ..) => Ok(reify! { *m => !!! T }),
@@ -1699,7 +1425,6 @@ impl Dynamic {
                 _ => Err(self),
             };
         }
-        #[cfg(not(feature = "no_time"))]
         if TypeId::of::<T>() == TypeId::of::<Instant>() {
             return match self.0 {
                 Union::TimeStamp(t, ..) => Ok(reify! { *t => !!! T }),
@@ -1752,15 +1477,12 @@ impl Dynamic {
             return reify! { self => !!! T };
         }
 
-        #[cfg(not(feature = "no_closure"))]
         let self_type_name = if self.is_shared() {
             // Avoid panics/deadlocks with shared values
             "<shared>"
         } else {
             self.type_name()
         };
-        #[cfg(feature = "no_closure")]
-        let self_type_name = self.type_name();
 
         self.try_cast::<T>()
             .unwrap_or_else(|| panic!("cannot cast {} to {}", self_type_name, type_name::<T>()))
@@ -1817,7 +1539,6 @@ impl Dynamic {
     #[inline]
     pub fn flatten_clone(&self) -> Self {
         match self.0 {
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).map_or_else(|| self.clone(), |v| v.flatten_clone())
             }
@@ -1843,17 +1564,12 @@ impl Dynamic {
     #[inline]
     pub fn flatten(self) -> Self {
         match self.0 {
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(cell, tag, access) => match crate::func::native::shared_try_take(cell) {
                 // If there are no outstanding references, consume the shared value and return it
                 #[cfg(not(feature = "sync"))]
                 Ok(value) => value.into_inner().flatten(),
                 #[cfg(feature = "sync")]
-                #[cfg(not(feature = "no_std"))]
                 Ok(value) => value.into_inner().unwrap().flatten(),
-                #[cfg(feature = "sync")]
-                #[cfg(feature = "no_std")]
-                Ok(value) => value.into_inner().flatten(),
                 // If there are outstanding references, return a cloned copy
                 Err(cell) => {
                     if let Some(guard) = crate::func::locked_read(&cell) {
@@ -1867,18 +1583,14 @@ impl Dynamic {
     }
     /// Is the [`Dynamic`] a _shared_ value that is locked?
     ///
-    /// Not available under `no_closure`.
-    ///
     /// ## Note
     ///
     /// Under the `sync` feature, shared values use [`RwLock`][std::sync::RwLock] and they are never locked.
     /// Access just waits until the [`RwLock`][std::sync::RwLock] is released.
     /// So this method always returns [`false`] under [`Sync`].
-    #[cfg(not(feature = "no_closure"))]
     #[inline]
     #[must_use]
     pub fn is_locked(&self) -> bool {
-        #[cfg(not(feature = "no_closure"))]
         if let Union::Shared(ref _cell, ..) = self.0 {
             #[cfg(not(feature = "sync"))]
             return _cell.try_borrow().is_err();
@@ -1904,20 +1616,16 @@ impl Dynamic {
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
     #[inline]
     pub fn read_lock<T: Any + Clone>(&self) -> Option<DynamicReadLock<'_, T>> {
-        match self.0 {
-            #[cfg(not(feature = "no_closure"))]
-            Union::Shared(ref cell, ..) => {
-                return match crate::func::locked_read(cell) {
-                    Some(guard)
-                        if TypeId::of::<Self>() == TypeId::of::<T>()
-                            || (*guard).type_id() == TypeId::of::<T>() =>
-                    {
-                        Some(DynamicReadLock(DynamicReadLockInner::Guard(guard)))
-                    }
-                    _ => None,
-                };
-            }
-            _ => (),
+        if let Union::Shared(ref cell, ..) = self.0 {
+            return match crate::func::locked_read(cell) {
+                Some(guard)
+                    if TypeId::of::<Self>() == TypeId::of::<T>()
+                        || (*guard).type_id() == TypeId::of::<T>() =>
+                {
+                    Some(DynamicReadLock(DynamicReadLockInner::Guard(guard)))
+                }
+                _ => None,
+            };
         }
 
         self.downcast_ref()
@@ -1940,20 +1648,16 @@ impl Dynamic {
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
     #[inline]
     pub fn write_lock<T: Any + Clone>(&mut self) -> Option<DynamicWriteLock<'_, T>> {
-        match self.0 {
-            #[cfg(not(feature = "no_closure"))]
-            Union::Shared(ref cell, ..) => {
-                return match crate::func::locked_write(cell) {
-                    Some(guard)
-                        if TypeId::of::<Self>() == TypeId::of::<T>()
-                            || (*guard).type_id() == TypeId::of::<T>() =>
-                    {
-                        Some(DynamicWriteLock(DynamicWriteLockInner::Guard(guard)))
-                    }
-                    _ => None,
-                };
-            }
-            _ => (),
+        if let Union::Shared(ref cell, ..) = self.0 {
+            return match crate::func::locked_write(cell) {
+                Some(guard)
+                    if TypeId::of::<Self>() == TypeId::of::<T>()
+                        || (*guard).type_id() == TypeId::of::<T>() =>
+                {
+                    Some(DynamicWriteLock(DynamicWriteLockInner::Guard(guard)))
+                }
+                _ => None,
+            };
         }
 
         self.downcast_mut()
@@ -1980,7 +1684,6 @@ impl Dynamic {
                 _ => None,
             };
         }
-        #[cfg(not(feature = "no_float"))]
         if TypeId::of::<T>() == TypeId::of::<crate::FLOAT>() {
             return match self.0 {
                 Union::Float(ref v, ..) => v.as_ref().as_any().downcast_ref::<T>(),
@@ -2012,21 +1715,18 @@ impl Dynamic {
                 _ => None,
             };
         }
-        #[cfg(not(feature = "no_index"))]
         if TypeId::of::<T>() == TypeId::of::<Array>() {
             return match self.0 {
                 Union::Array(ref v, ..) => v.as_ref().as_any().downcast_ref::<T>(),
                 _ => None,
             };
         }
-        #[cfg(not(feature = "no_index"))]
         if TypeId::of::<T>() == TypeId::of::<Blob>() {
             return match self.0 {
                 Union::Blob(ref v, ..) => v.as_ref().as_any().downcast_ref::<T>(),
                 _ => None,
             };
         }
-        #[cfg(not(feature = "no_object"))]
         if TypeId::of::<T>() == TypeId::of::<Map>() {
             return match self.0 {
                 Union::Map(ref v, ..) => v.as_ref().as_any().downcast_ref::<T>(),
@@ -2051,7 +1751,6 @@ impl Dynamic {
                 _ => None,
             };
         }
-        #[cfg(not(feature = "no_time"))]
         if TypeId::of::<T>() == TypeId::of::<Instant>() {
             return match self.0 {
                 Union::TimeStamp(ref v, ..) => v.as_ref().as_any().downcast_ref::<T>(),
@@ -2070,7 +1769,6 @@ impl Dynamic {
 
         match self.0 {
             Union::Variant(ref v, ..) => (***v).as_any().downcast_ref::<T>(),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(..) => None,
             _ => None,
         }
@@ -2095,7 +1793,6 @@ impl Dynamic {
                 _ => None,
             };
         }
-        #[cfg(not(feature = "no_float"))]
         if TypeId::of::<T>() == TypeId::of::<crate::FLOAT>() {
             return match self.0 {
                 Union::Float(ref mut v, ..) => v.as_mut().as_any_mut().downcast_mut::<T>(),
@@ -2127,21 +1824,18 @@ impl Dynamic {
                 _ => None,
             };
         }
-        #[cfg(not(feature = "no_index"))]
         if TypeId::of::<T>() == TypeId::of::<Array>() {
             return match self.0 {
                 Union::Array(ref mut v, ..) => v.as_mut().as_any_mut().downcast_mut::<T>(),
                 _ => None,
             };
         }
-        #[cfg(not(feature = "no_index"))]
         if TypeId::of::<T>() == TypeId::of::<Blob>() {
             return match self.0 {
                 Union::Blob(ref mut v, ..) => v.as_mut().as_any_mut().downcast_mut::<T>(),
                 _ => None,
             };
         }
-        #[cfg(not(feature = "no_object"))]
         if TypeId::of::<T>() == TypeId::of::<Map>() {
             return match self.0 {
                 Union::Map(ref mut v, ..) => v.as_mut().as_any_mut().downcast_mut::<T>(),
@@ -2166,7 +1860,6 @@ impl Dynamic {
                 _ => None,
             };
         }
-        #[cfg(not(feature = "no_time"))]
         if TypeId::of::<T>() == TypeId::of::<Instant>() {
             return match self.0 {
                 Union::TimeStamp(ref mut v, ..) => v.as_mut().as_any_mut().downcast_mut::<T>(),
@@ -2185,7 +1878,6 @@ impl Dynamic {
 
         match self.0 {
             Union::Variant(ref mut v, ..) => (***v).as_any_mut().downcast_mut::<T>(),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(..) => None,
             _ => None,
         }
@@ -2206,7 +1898,6 @@ impl Dynamic {
     pub fn is_unit(&self) -> bool {
         match self.0 {
             Union::Unit(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Unit(..)))
             }
@@ -2228,7 +1919,6 @@ impl Dynamic {
     pub fn is_int(&self) -> bool {
         match self.0 {
             Union::Int(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Int(..)))
             }
@@ -2236,8 +1926,6 @@ impl Dynamic {
         }
     }
     /// Return `true` if the [`Dynamic`] holds the system floating-point type [`FLOAT`][crate::FLOAT].
-    ///
-    /// Not available under `no_float`.
     ///
     /// # Shared Value
     ///
@@ -2247,13 +1935,11 @@ impl Dynamic {
     /// Under these circumstances, `false` is returned.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_float"))]
     #[inline]
     #[must_use]
     pub fn is_float(&self) -> bool {
         match self.0 {
             Union::Float(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Float(..)))
             }
@@ -2277,9 +1963,8 @@ impl Dynamic {
     pub fn is_decimal(&self) -> bool {
         match self.0 {
             Union::Decimal(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
-                crate::func::locked_read(cell).map_or(false, |v| matches!(v.0, Union::Decimal(..)))
+                crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Decimal(..)))
             }
             _ => false,
         }
@@ -2299,7 +1984,6 @@ impl Dynamic {
     pub fn is_bool(&self) -> bool {
         match self.0 {
             Union::Bool(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Bool(..)))
             }
@@ -2321,7 +2005,6 @@ impl Dynamic {
     pub fn is_char(&self) -> bool {
         match self.0 {
             Union::Char(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Char(..)))
             }
@@ -2343,7 +2026,6 @@ impl Dynamic {
     pub fn is_string(&self) -> bool {
         match self.0 {
             Union::Str(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Str(..)))
             }
@@ -2352,8 +2034,6 @@ impl Dynamic {
     }
     /// Return `true` if the [`Dynamic`] holds an [`Array`].
     ///
-    /// Not available under `no_index`.
-    ///
     /// # Shared Value
     ///
     /// Under the `sync` feature, a _shared_ value may deadlock.
@@ -2362,13 +2042,11 @@ impl Dynamic {
     /// Under these circumstances, `false` is returned.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_index"))]
     #[inline]
     #[must_use]
     pub fn is_array(&self) -> bool {
         match self.0 {
             Union::Array(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Array(..)))
             }
@@ -2377,8 +2055,6 @@ impl Dynamic {
     }
     /// Return `true` if the [`Dynamic`] holds a [`Blob`].
     ///
-    /// Not available under `no_index`.
-    ///
     /// # Shared Value
     ///
     /// Under the `sync` feature, a _shared_ value may deadlock.
@@ -2387,13 +2063,11 @@ impl Dynamic {
     /// Under these circumstances, `false` is returned.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_index"))]
     #[inline]
     #[must_use]
     pub fn is_blob(&self) -> bool {
         match self.0 {
             Union::Blob(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Blob(..)))
             }
@@ -2402,8 +2076,6 @@ impl Dynamic {
     }
     /// Return `true` if the [`Dynamic`] holds a [`Map`].
     ///
-    /// Not available under `no_object`.
-    ///
     /// # Shared Value
     ///
     /// Under the `sync` feature, a _shared_ value may deadlock.
@@ -2412,13 +2084,11 @@ impl Dynamic {
     /// Under these circumstances, `false` is returned.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_object"))]
     #[inline]
     #[must_use]
     pub fn is_map(&self) -> bool {
         match self.0 {
             Union::Map(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::Map(..)))
             }
@@ -2442,7 +2112,6 @@ impl Dynamic {
     pub fn is_fnptr(&self) -> bool {
         match self.0 {
             Union::FnPtr(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::FnPtr(..)))
             }
@@ -2450,8 +2119,6 @@ impl Dynamic {
         }
     }
     /// Return `true` if the [`Dynamic`] holds a [timestamp][Instant].
-    ///
-    /// Not available under `no_time`.
     ///
     /// # Shared Value
     ///
@@ -2461,13 +2128,11 @@ impl Dynamic {
     /// Under these circumstances, `false` is returned.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_time"))]
     #[inline]
     #[must_use]
     pub fn is_timestamp(&self) -> bool {
         match self.0 {
             Union::TimeStamp(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => {
                 crate::func::locked_read(cell).is_some_and(|v| matches!(v.0, Union::TimeStamp(..)))
             }
@@ -2493,7 +2158,6 @@ impl Dynamic {
     pub fn as_unit(&self) -> Result<(), &'static str> {
         match self.0 {
             Union::Unit(..) => Ok(()),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                 .and_then(|guard| match guard.0 {
                     Union::Unit(..) => Some(()),
@@ -2521,7 +2185,6 @@ impl Dynamic {
     pub fn as_int(&self) -> Result<INT, &'static str> {
         match self.0 {
             Union::Int(n, ..) => Ok(n),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                 .and_then(|guard| match guard.0 {
                     Union::Int(n, ..) => Some(n),
@@ -2532,8 +2195,6 @@ impl Dynamic {
         }
     }
     /// Cast the [`Dynamic`] as the system floating-point type [`FLOAT`][crate::FLOAT].
-    ///
-    /// Not available under `no_float`.
     ///
     /// # Errors
     ///
@@ -2547,12 +2208,10 @@ impl Dynamic {
     /// Under these circumstances, the cast also fails.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_float"))]
     #[inline]
     pub fn as_float(&self) -> Result<crate::FLOAT, &'static str> {
         match self.0 {
             Union::Float(n, ..) => Ok(*n),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                 .and_then(|guard| match guard.0 {
                     Union::Float(n, ..) => Some(*n),
@@ -2582,7 +2241,6 @@ impl Dynamic {
     pub fn as_decimal(&self) -> Result<rust_decimal::Decimal, &'static str> {
         match self.0 {
             Union::Decimal(ref n, ..) => Ok(**n),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                 .and_then(|guard| match guard.0 {
                     Union::Decimal(ref n, ..) => Some(**n),
@@ -2610,7 +2268,6 @@ impl Dynamic {
     pub fn as_bool(&self) -> Result<bool, &'static str> {
         match self.0 {
             Union::Bool(b, ..) => Ok(b),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                 .and_then(|guard| match guard.0 {
                     Union::Bool(b, ..) => Some(b),
@@ -2638,7 +2295,6 @@ impl Dynamic {
     pub fn as_char(&self) -> Result<char, &'static str> {
         match self.0 {
             Union::Char(c, ..) => Ok(c),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                 .and_then(|guard| match guard.0 {
                     Union::Char(c, ..) => Some(c),
@@ -2692,8 +2348,6 @@ impl Dynamic {
     }
     /// Cast the [`Dynamic`] as an [`Array`].
     ///
-    /// Not available under `no_index`.
-    ///
     /// # Errors
     ///
     /// Returns the name of the actual type as an error if the cast fails.
@@ -2706,15 +2360,12 @@ impl Dynamic {
     /// Under these circumstances, the cast also fails.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_index"))]
     #[inline(always)]
     pub fn as_array_ref(&self) -> Result<impl Deref<Target = Array> + '_, &'static str> {
         self.read_lock::<Array>().ok_or_else(|| self.type_name())
     }
     /// Cast the [`Dynamic`] as a mutable reference to an [`Array`].
     ///
-    /// Not available under `no_index`.
-    ///
     /// # Errors
     ///
     /// Returns the name of the actual type as an error if the cast fails.
@@ -2727,7 +2378,6 @@ impl Dynamic {
     /// Under these circumstances, the cast also fails.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_index"))]
     #[inline(always)]
     pub fn as_array_mut(&mut self) -> Result<impl DerefMut<Target = Array> + '_, &'static str> {
         let type_name = self.type_name();
@@ -2735,8 +2385,6 @@ impl Dynamic {
     }
     /// Cast the [`Dynamic`] as a [`Blob`].
     ///
-    /// Not available under `no_index`.
-    ///
     /// # Errors
     ///
     /// Returns the name of the actual type as an error if the cast fails.
@@ -2749,15 +2397,12 @@ impl Dynamic {
     /// Under these circumstances, the cast also fails.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_index"))]
     #[inline(always)]
     pub fn as_blob_ref(&self) -> Result<impl Deref<Target = Blob> + '_, &'static str> {
         self.read_lock::<Blob>().ok_or_else(|| self.type_name())
     }
     /// Cast the [`Dynamic`] as a mutable reference to a [`Blob`].
     ///
-    /// Not available under `no_index`.
-    ///
     /// # Errors
     ///
     /// Returns the name of the actual type as an error if the cast fails.
@@ -2770,7 +2415,6 @@ impl Dynamic {
     /// Under these circumstances, the cast also fails.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_index"))]
     #[inline(always)]
     pub fn as_blob_mut(&mut self) -> Result<impl DerefMut<Target = Blob> + '_, &'static str> {
         let type_name = self.type_name();
@@ -2778,8 +2422,6 @@ impl Dynamic {
     }
     /// Cast the [`Dynamic`] as a [`Map`].
     ///
-    /// Not available under `no_object`.
-    ///
     /// # Errors
     ///
     /// Returns the name of the actual type as an error if the cast fails.
@@ -2792,15 +2434,12 @@ impl Dynamic {
     /// Under these circumstances, the cast also fails.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn as_map_ref(&self) -> Result<impl Deref<Target = Map> + '_, &'static str> {
         self.read_lock::<Map>().ok_or_else(|| self.type_name())
     }
     /// Cast the [`Dynamic`] as a mutable reference to a [`Map`].
     ///
-    /// Not available under `no_object`.
-    ///
     /// # Errors
     ///
     /// Returns the name of the actual type as an error if the cast fails.
@@ -2813,7 +2452,6 @@ impl Dynamic {
     /// Under these circumstances, the cast also fails.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn as_map_mut(&mut self) -> Result<impl DerefMut<Target = Map> + '_, &'static str> {
         let type_name = self.type_name();
@@ -2858,7 +2496,6 @@ impl Dynamic {
     pub fn into_immutable_string(self) -> Result<ImmutableString, &'static str> {
         match self.0 {
             Union::Str(s, ..) => Ok(s),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                 .and_then(|guard| match guard.0 {
                     Union::Str(ref s, ..) => Some(s.clone()),
@@ -2870,8 +2507,6 @@ impl Dynamic {
     }
     /// Convert the [`Dynamic`] into an [`Array`].
     ///
-    /// Not available under `no_index`.
-    ///
     /// # Errors
     ///
     /// Returns the name of the actual type as an error if the cast fails.
@@ -2884,12 +2519,10 @@ impl Dynamic {
     /// Under these circumstances, the cast also fails.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_index"))]
     #[inline(always)]
     pub fn into_array(self) -> Result<Array, &'static str> {
         match self.0 {
             Union::Array(a, ..) => Ok(*a),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                 .and_then(|guard| match guard.0 {
                     Union::Array(ref a, ..) => Some(a.as_ref().clone()),
@@ -2901,8 +2534,6 @@ impl Dynamic {
     }
     /// Convert the [`Dynamic`] into a [`Vec`].
     ///
-    /// Not available under `no_index`.
-    ///
     /// # Errors
     ///
     /// Returns the name of the actual type as an error if the cast fails.
@@ -2915,22 +2546,18 @@ impl Dynamic {
     /// Under these circumstances, the cast also fails.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_index"))]
     #[inline(always)]
     pub fn into_typed_array<T: Variant + Clone>(self) -> Result<Vec<T>, &'static str> {
         match self.0 {
             Union::Array(a, ..) => a
                 .into_iter()
                 .map(|v| {
-                    #[cfg(not(feature = "no_closure"))]
                     let typ = if v.is_shared() {
                         // Avoid panics/deadlocks with shared values
                         "<shared>"
                     } else {
                         v.type_name()
                     };
-                    #[cfg(feature = "no_closure")]
-                    let typ = v.type_name();
 
                     v.try_cast::<T>().ok_or(typ)
                 })
@@ -2938,7 +2565,6 @@ impl Dynamic {
             Union::Blob(b, ..) if TypeId::of::<T>() == TypeId::of::<u8>() => {
                 Ok(reify! { *b => !!! Vec<T> })
             }
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                 .and_then(|guard| match guard.0 {
                     Union::Array(ref a, ..) => a
@@ -2956,8 +2582,6 @@ impl Dynamic {
     }
     /// Convert the [`Dynamic`] into a [`Blob`].
     ///
-    /// Not available under `no_index`.
-    ///
     /// # Errors
     ///
     /// Returns the name of the actual type as an error if the cast fails.
@@ -2970,12 +2594,10 @@ impl Dynamic {
     /// Under these circumstances, the cast also fails.
     ///
     /// These normally shouldn't occur since most operations in Rawr are single-threaded.
-    #[cfg(not(feature = "no_index"))]
     #[inline(always)]
     pub fn into_blob(self) -> Result<Blob, &'static str> {
         match self.0 {
             Union::Blob(b, ..) => Ok(*b),
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(ref cell, ..) => crate::func::locked_read(cell)
                 .and_then(|guard| match guard.0 {
                     Union::Blob(ref b, ..) => Some(b.as_ref().clone()),
@@ -2999,9 +2621,7 @@ impl Dynamic {
             filter(value);
 
             match &mut value.0 {
-                #[cfg(not(feature = "no_index"))]
                 Union::Array(a, ..) => a.iter_mut().for_each(|v| scan_inner(v, filter)),
-                #[cfg(not(feature = "no_object"))]
                 Union::Map(m, ..) => m.values_mut().for_each(|v| scan_inner(v, filter)),
                 Union::FnPtr(f, ..) => f.iter_curry_mut().for_each(|v| scan_inner(v, filter)),
                 Union::Struct(value, ..) => value
@@ -3050,14 +2670,12 @@ impl From<INT> for Dynamic {
         Self(Union::Int(value, DEFAULT_TAG_VALUE, ReadWrite))
     }
 }
-#[cfg(not(feature = "no_float"))]
 impl From<crate::FLOAT> for Dynamic {
     #[inline(always)]
     fn from(value: crate::FLOAT) -> Self {
         Self(Union::Float(value.into(), DEFAULT_TAG_VALUE, ReadWrite))
     }
 }
-#[cfg(not(feature = "no_float"))]
 impl From<super::FloatWrapper<crate::FLOAT>> for Dynamic {
     #[inline(always)]
     fn from(value: super::FloatWrapper<crate::FLOAT>) -> Self {
@@ -3090,7 +2708,6 @@ impl FromStr for Dynamic {
         Ok(Self(Union::Str(value.into(), DEFAULT_TAG_VALUE, ReadWrite)))
     }
 }
-#[cfg(not(feature = "no_index"))]
 impl<T: Variant + Clone> From<Vec<T>> for Dynamic {
     #[inline]
     fn from(value: Vec<T>) -> Self {
@@ -3101,7 +2718,6 @@ impl<T: Variant + Clone> From<Vec<T>> for Dynamic {
         ))
     }
 }
-#[cfg(not(feature = "no_index"))]
 impl<T: Variant + Clone> From<&[T]> for Dynamic {
     #[inline]
     fn from(value: &[T]) -> Self {
@@ -3112,7 +2728,6 @@ impl<T: Variant + Clone> From<&[T]> for Dynamic {
         ))
     }
 }
-#[cfg(not(feature = "no_index"))]
 impl<T: Variant + Clone> std::iter::FromIterator<T> for Dynamic {
     #[inline]
     fn from_iter<X: IntoIterator<Item = T>>(iter: X) -> Self {
@@ -3123,8 +2738,6 @@ impl<T: Variant + Clone> std::iter::FromIterator<T> for Dynamic {
         ))
     }
 }
-#[cfg(not(feature = "no_object"))]
-#[cfg(not(feature = "no_std"))]
 impl<K: Into<crate::Identifier>, T: Variant + Clone> From<std::collections::HashMap<K, T>>
     for Dynamic
 {
@@ -3142,8 +2755,6 @@ impl<K: Into<crate::Identifier>, T: Variant + Clone> From<std::collections::Hash
         ))
     }
 }
-#[cfg(not(feature = "no_object"))]
-#[cfg(not(feature = "no_std"))]
 impl<K: Into<crate::Identifier>> From<std::collections::HashSet<K>> for Dynamic {
     #[inline]
     fn from(value: std::collections::HashSet<K>) -> Self {
@@ -3154,7 +2765,6 @@ impl<K: Into<crate::Identifier>> From<std::collections::HashSet<K>> for Dynamic 
         ))
     }
 }
-#[cfg(not(feature = "no_object"))]
 impl<K: Into<crate::Identifier>, T: Variant + Clone> From<std::collections::BTreeMap<K, T>>
     for Dynamic
 {
@@ -3172,7 +2782,6 @@ impl<K: Into<crate::Identifier>, T: Variant + Clone> From<std::collections::BTre
         ))
     }
 }
-#[cfg(not(feature = "no_object"))]
 impl<K: Into<crate::Identifier>> From<std::collections::BTreeSet<K>> for Dynamic {
     #[inline]
     fn from(value: std::collections::BTreeSet<K>) -> Self {
@@ -3189,14 +2798,12 @@ impl From<FnPtr> for Dynamic {
         Self(Union::FnPtr(value.into(), DEFAULT_TAG_VALUE, ReadWrite))
     }
 }
-#[cfg(not(feature = "no_time"))]
 impl From<Instant> for Dynamic {
     #[inline(always)]
     fn from(value: Instant) -> Self {
         Self(Union::TimeStamp(value.into(), DEFAULT_TAG_VALUE, ReadWrite))
     }
 }
-#[cfg(not(feature = "no_closure"))]
 impl From<crate::Shared<crate::Locked<Self>>> for Dynamic {
     #[inline(always)]
     fn from(value: crate::Shared<crate::Locked<Self>>) -> Self {

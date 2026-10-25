@@ -1,8 +1,6 @@
 //! Typed callable signatures in static host facades.
 
 use crate::{capability, host, ImmutableString};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A validated callable signature before facade path resolution.
 #[derive(Clone, Debug, Eq, PartialEq)]

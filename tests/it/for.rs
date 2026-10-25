@@ -4,7 +4,6 @@ use rawr::{Engine, INT};
 fn test_for_loop() {
     let engine = Engine::new();
 
-    #[cfg(not(feature = "no_index"))]
     assert_eq!(
         engine
             .eval::<INT>(
@@ -32,7 +31,6 @@ fn test_for_loop() {
         35
     );
 
-    #[cfg(not(feature = "no_index"))]
     assert_eq!(
         engine
             .eval::<INT>(
@@ -140,8 +138,6 @@ fn test_for_loop() {
 
 // Stepping past the end of the integer range stops the loop rather than
 // overflowing.
-#[cfg(not(feature = "unchecked"))]
-#[cfg(not(feature = "only_i32"))]
 #[test]
 fn test_for_overflow() {
     let engine = Engine::new();
@@ -200,8 +196,6 @@ fn test_for_string() {
     );
 }
 
-#[cfg(not(feature = "no_object"))]
-#[cfg(not(feature = "no_index"))]
 #[test]
 fn test_for_object() {
     let engine = Engine::new();
@@ -227,8 +221,6 @@ fn test_for_object() {
 }
 
 #[test]
-#[cfg(not(feature = "no_index"))]
-#[cfg(not(feature = "no_closure"))]
 fn test_for_capture() {
     let engine = Engine::new();
 

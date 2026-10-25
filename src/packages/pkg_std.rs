@@ -1,6 +1,3 @@
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
-
 use super::*;
 use crate::def_package;
 
@@ -23,10 +20,10 @@ def_package! {
             BitFieldPackage,
             LogicPackage,
             BasicMathPackage,
-            #[cfg(not(feature = "no_index"))] BasicArrayPackage,
-            #[cfg(not(feature = "no_index"))] BasicBlobPackage,
-            #[cfg(not(feature = "no_object"))] BasicMapPackage,
-            #[cfg(not(feature = "no_time"))] BasicTimePackage,
+            BasicArrayPackage,
+            BasicBlobPackage,
+            BasicMapPackage,
+            BasicTimePackage,
             MoreStringPackage
     {
         lib.set_standard_lib(true);

@@ -2,8 +2,6 @@
 
 use crate::func::SendSync;
 use std::any::{type_name, Any, TypeId};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 mod private {
     use crate::func::SendSync;

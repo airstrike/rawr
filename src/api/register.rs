@@ -9,10 +9,7 @@ use crate::{
     Dynamic, Engine, Identifier, Module, NativeCallContext, RawrResultOf, Shared, SharedModule,
 };
 use std::any::{type_name, TypeId};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
-#[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
 use crate::func::register::Mut;
 
 impl Engine {
@@ -120,9 +117,7 @@ impl Engine {
         let arg_types = arg_types.as_ref();
         let is_pure = true;
 
-        #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
         let is_pure = is_pure && (arg_types.len() != 3 || name != crate::engine::FN_IDX_SET);
-        #[cfg(not(feature = "no_object"))]
         let is_pure = is_pure && (arg_types.len() != 2 || !name.starts_with(crate::engine::FN_SET));
 
         FuncRegistration::new(name)
@@ -355,8 +350,6 @@ impl Engine {
     ///
     /// Typed scripts can't read properties of registered types yet.
     ///
-    /// Not available under `no_object`.
-    ///
     /// # Example
     ///
     /// ```
@@ -389,7 +382,6 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn register_get<T: Variant + Clone, const X: bool, R: Variant + Clone, const F: bool>(
         &mut self,
@@ -402,8 +394,6 @@ impl Engine {
     /// Register a setter function for a member of a registered type with the [`Engine`].
     ///
     /// Typed scripts can't write properties of registered types yet.
-    ///
-    /// Not available under `no_object`.
     ///
     /// # Example
     ///
@@ -436,7 +426,6 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn register_set<T: Variant + Clone, const X: bool, R: Variant + Clone, const F: bool>(
         &mut self,
@@ -451,8 +440,6 @@ impl Engine {
     /// All function signatures must start with `&mut self` and not `&self`.
     ///
     /// Typed scripts can't read or write properties of registered types yet.
-    ///
-    /// Not available under `no_object`.
     ///
     /// # Example
     ///
@@ -490,7 +477,6 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(not(feature = "no_object"))]
     #[inline(always)]
     pub fn register_get_set<
         T: Variant + Clone,
@@ -513,8 +499,6 @@ impl Engine {
     ///
     /// Typed scripts can't index registered types yet.
     ///
-    /// Not available under both `no_index` and `no_object`.
-    ///
     /// # Panics
     ///
     /// Panics if the type is [`Array`][crate::Array], [`Map`][crate::Map], [`String`],
@@ -545,7 +529,6 @@ impl Engine {
     /// let mut engine = Engine::new();
     ///
     /// // Register API for the custom type.
-    /// # #[cfg(not(feature = "no_object"))]
     /// engine.register_type::<TestStruct>();
     ///
     /// engine
@@ -555,7 +538,6 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline(always)]
     pub fn register_indexer_get<
         T: Variant + Clone,
@@ -573,8 +555,6 @@ impl Engine {
     ///
     /// Typed scripts can't index registered types yet.
     ///
-    /// Not available under both `no_index` and `no_object`.
-    ///
     /// # Panics
     ///
     /// Panics if the type is [`Array`][crate::Array], [`Map`][crate::Map], [`String`],
@@ -604,7 +584,6 @@ impl Engine {
     /// let mut engine = Engine::new();
     ///
     /// // Register API for the custom type.
-    /// # #[cfg(not(feature = "no_object"))]
     /// engine.register_type::<TestStruct>();
     ///
     /// engine
@@ -614,7 +593,6 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline(always)]
     pub fn register_indexer_set<
         T: Variant + Clone,
@@ -631,8 +609,6 @@ impl Engine {
     /// Short-hand for registering both index getter and setter functions for a custom type with the [`Engine`].
     ///
     /// Typed scripts can't index registered types yet.
-    ///
-    /// Not available under both `no_index` and `no_object`.
     ///
     /// # Panics
     ///
@@ -667,7 +643,6 @@ impl Engine {
     /// let mut engine = Engine::new();
     ///
     /// // Register API for the custom type.
-    /// # #[cfg(not(feature = "no_object"))]
     /// engine.register_type::<TestStruct>();
     ///
     /// engine
@@ -677,7 +652,6 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
     #[inline(always)]
     pub fn register_indexer_get_set<
         T: Variant + Clone,
@@ -721,8 +695,6 @@ impl Engine {
     /// Functions marked [`FnNamespace::Global`][`crate::FnNamespace::Global`] and type iterators are exposed to scripts without
     /// namespace qualifications.
     ///
-    /// Not available under `no_module`.
-    ///
     /// # Example
     ///
     /// ```
@@ -746,7 +718,6 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(not(feature = "no_module"))]
     pub fn register_static_module(
         &mut self,
         name: impl AsRef<str>,
@@ -820,7 +791,6 @@ impl Engine {
             );
         }
 
-        #[cfg(not(feature = "no_module"))]
         for (name, m) in &self.global_sub_modules {
             signatures.extend(
                 m.gen_fn_signatures_with_mapper(|s| self.format_param_type(s))
@@ -884,14 +854,12 @@ impl Engine {
     ) -> Vec<T> {
         let mut list = Vec::new();
 
-        #[cfg(not(feature = "no_function"))]
         if let Some(ctx) = _ctx {
             ctx.iter_namespaces()
                 .flat_map(Module::iter_fn)
                 .filter_map(|(func, f)| {
                     mapper(crate::module::FuncInfo {
                         metadata: f,
-                        #[cfg(not(feature = "no_module"))]
                         namespace: Identifier::new_const(),
                         script: func.get_script_fn_def().map(|f| (&**f).into()),
                     })
@@ -906,15 +874,12 @@ impl Engine {
             .filter_map(|(_func, f)| {
                 mapper(crate::module::FuncInfo {
                     metadata: f,
-                    #[cfg(not(feature = "no_module"))]
                     namespace: Identifier::new_const(),
-                    #[cfg(not(feature = "no_function"))]
                     script: _func.get_script_fn_def().map(|f| (&**f).into()),
                 })
             })
             .for_each(|v| list.push(v));
 
-        #[cfg(not(feature = "no_module"))]
         {
             // Recursively scan modules for script-defined functions.
             fn scan_module_recursive<T>(
@@ -932,7 +897,6 @@ impl Engine {
                         mapper(crate::module::FuncInfo {
                             metadata: f,
                             namespace: namespace.into(),
-                            #[cfg(not(feature = "no_function"))]
                             script: _func.get_script_fn_def().map(|f| (&**f).into()),
                         })
                     })

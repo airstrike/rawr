@@ -1,16 +1,10 @@
 //! An advanced example showing how to pause/resume/stop an `Engine` via an MPSC channel.
 
-#[cfg(feature = "unchecked")]
-fn main() {
-    panic!("This example does not run under 'unchecked'.");
-}
-
 use rawr::{Dynamic, Engine};
 
 #[cfg(feature = "sync")]
 use std::sync::Mutex;
 
-#[cfg(not(feature = "unchecked"))]
 fn main() {
     let (tx, rx) = std::sync::mpsc::channel::<String>();
 

@@ -67,6 +67,5 @@ fn test_result() {
         123
     );
 
-    #[cfg(not(feature = "unchecked"))]
     assert!(matches!(*engine.run("let x = 42; let y = 0; let z = x / y;").expect_err("expects error"), EvalAltResult::ErrorArithmetic(..)));
 }

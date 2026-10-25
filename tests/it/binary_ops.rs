@@ -34,7 +34,6 @@ fn test_binary_ops() {
     assert_eq!(engine.eval::<INT>("let mut x = 10; x |= 4; x").unwrap(), 14);
     assert_eq!(engine.eval::<INT>("let mut x = 10; x ^= 4; x").unwrap(), 14);
 
-    #[cfg(not(feature = "no_float"))]
     {
         use rawr::FLOAT;
 

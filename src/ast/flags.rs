@@ -1,8 +1,6 @@
 //! Module defining script options.
 
 use bitflags::bitflags;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A type representing the access mode of a function.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]

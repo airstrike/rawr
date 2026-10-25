@@ -1,8 +1,4 @@
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
-
 use crate::ast::{ASTFlags, ASTNode};
-#[cfg(not(feature = "no_module"))]
 use crate::module_resolvers::StaticModuleResolver;
 use crate::{ast::Expr, ast::Stmt, tokenizer::Token, Dynamic, ImmutableString, Module, Shared};
 
@@ -153,7 +149,6 @@ pub struct Program<'a> {
 
     /// Reinstated on the runtime state at each run, mirroring
     /// `Engine::eval_ast_with_scope_raw`, so `import` resolves as it would have.
-    #[cfg(not(feature = "no_module"))]
     resolver: Option<Shared<StaticModuleResolver>>,
 
     /// Names the script in error messages and `NativeCallContext::call_source`.
@@ -193,18 +188,14 @@ fn unsupported_kind(node: &ASTNode) -> Option<&'static str> {
             Stmt::Switch(..) => "switch",
             Stmt::For(..) => "for",
             Stmt::TryCatch(..) => "try/catch",
-            #[cfg(not(feature = "no_module"))]
             Stmt::Import(..) => "import",
-            #[cfg(not(feature = "no_module"))]
             Stmt::Export(..) => "export",
-            #[cfg(not(feature = "no_closure"))]
             Stmt::Share(..) => "a closure capture",
             Stmt::Return(_, flags, ..) if flags.intersects(ASTFlags::BREAK) => "throw",
             _ => return None,
         },
         ASTNode::Expr(expr) => match expr {
             Expr::InterpolatedString(..) => "string interpolation",
-            #[cfg(not(feature = "no_custom_syntax"))]
             Expr::Custom(..) => "custom syntax",
             Expr::Map(..) => "a non-constant map literal",
             _ => return None,
@@ -289,7 +280,6 @@ pub(crate) struct Parts<'a> {
     pub switches: Vec<Switch>,
     pub lib: Option<SharedModule>,
     pub has_compiler_support: bool,
-    #[cfg(not(feature = "no_module"))]
     pub resolver: Option<Shared<StaticModuleResolver>>,
     pub source: Option<ImmutableString>,
 }
@@ -328,7 +318,6 @@ impl<'a> Program<'a> {
             chains: parts.chains,
             switches: parts.switches,
             lib: parts.lib,
-            #[cfg(not(feature = "no_module"))]
             resolver: parts.resolver,
             source: parts.source,
         };
@@ -359,7 +348,6 @@ impl<'a> Program<'a> {
             chains: self.chains,
             switches: self.switches,
             lib: self.lib,
-            #[cfg(not(feature = "no_module"))]
             resolver: self.resolver,
             source: self.source,
         }
@@ -708,7 +696,6 @@ impl<'a> Program<'a> {
         self.has_compiler_support
     }
 
-    #[cfg(not(feature = "no_module"))]
     pub(crate) fn resolver(&self) -> Option<&Shared<StaticModuleResolver>> {
         self.resolver.as_ref()
     }
@@ -755,7 +742,6 @@ mod tests {
                 switches: Vec::new(),
                 lib: None,
                 has_compiler_support: false,
-                #[cfg(not(feature = "no_module"))]
                 resolver: None,
                 source: None,
             },

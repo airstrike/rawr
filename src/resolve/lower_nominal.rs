@@ -1,7 +1,5 @@
 //! Lower validated nominal operations onto the retained evaluator.
 
-#![cfg_attr(feature = "no_function", allow(dead_code, unused_imports))]
-
 pub(crate) mod cell;
 mod iterator;
 mod keyed;
@@ -10,12 +8,12 @@ mod origin;
 mod places;
 mod reverse;
 
-#[cfg(all(test, not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(all(test, feature = "rust-import"))]
 mod collected_tests;
 mod compare;
-#[cfg(all(test, not(feature = "no_function")))]
+#[cfg(test)]
 mod language_tests;
-#[cfg(all(test, not(feature = "no_function")))]
+#[cfg(test)]
 mod rust_meaning_tests;
 
 use super::{intrinsic, item, type_ref, Error, LoweringFailure, Program};
@@ -35,8 +33,6 @@ use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::iter::Peekable;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::rc::Rc;
 use std::vec::IntoIter;
 
@@ -145,26 +141,7 @@ type OperationSelector = (
     Span,
 );
 
-#[cfg(feature = "no_function")]
-pub(super) fn lower(
-    _engine: &Engine,
-    program: &Program,
-    _runtime_model: &crate::program::model::Model,
-    _scope: Option<&Scope>,
-    #[cfg(not(feature = "no_optimize"))] _optimization_level: crate::OptimizationLevel,
-) -> Result<Output, LoweringFailure> {
-    // Every script is checked as Rust, which needs functions.
-    Err(LoweringFailure::original(
-        program.source.entry(),
-        Error::LoweringUnavailable {
-            item: "<nominal script requires functions>".into(),
-            body: Span::NONE,
-        }
-        .into(),
-    ))
-}
-
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 pub(super) fn imported<A: crate::host::ImportAllocation>(
     engine: &Engine,
     program: &Program,
@@ -305,13 +282,13 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     })
 }
 
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 pub(crate) struct ImportedOutput {
     pub(crate) uses: Box<[ImportedUse]>,
     pub(crate) dependencies: Box<[crate::host::facade::Dependency]>,
 }
 
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 fn imported_result<T>(
     result: Result<T, Error>,
     allocation_failure: &mut Option<rawr_import::surface::Error>,
@@ -331,7 +308,7 @@ fn imported_result<T>(
     }
 }
 
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ImportedUse {
     pub(crate) source: crate::program::source::Id,
@@ -346,7 +323,7 @@ pub(crate) struct ImportedUse {
     pub(crate) span: Span,
 }
 
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ImportedFunctionUse {
     pub(crate) position: u32,
@@ -355,7 +332,7 @@ pub(crate) struct ImportedFunctionUse {
     pub(crate) span: Span,
 }
 
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ImportedMapperUse {
     pub(crate) position: u32,
@@ -371,7 +348,7 @@ struct ImportedFunctionProof {
     span: Span,
 }
 
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 pub(crate) fn imported_range(source: &str, span: Span) -> Option<(u32, u32)> {
     let start = u32::try_from(location::byte_at(source, span.start())?).ok()?;
     let end = u32::try_from(location::byte_at(source, span.end())?).ok()?;
@@ -531,13 +508,12 @@ fn instance_surface_type(
     })
 }
 
-#[cfg(not(feature = "no_function"))]
 pub(super) fn lower(
     engine: &Engine,
     program: &Program,
     runtime_model: &crate::program::model::Model,
     scope: Option<&Scope>,
-    #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+    optimization_level: crate::OptimizationLevel,
 ) -> Result<Output, LoweringFailure> {
     let models = Models::new(program, runtime_model.clone(), engine.host_registry.clone());
     lower_with_context(
@@ -545,7 +521,6 @@ pub(super) fn lower(
         program,
         models,
         scope,
-        #[cfg(not(feature = "no_optimize"))]
         optimization_level,
         #[cfg(feature = "rust-import")]
         None,
@@ -553,14 +528,14 @@ pub(super) fn lower(
 }
 
 /// Lower executable support and retain its exact imported uses in the same pass.
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     engine: &Engine,
     program: &Program,
     runtime_model: &crate::program::model::Model,
     allocation: &mut A,
     scope: Option<&Scope>,
-    #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+    optimization_level: crate::OptimizationLevel,
 ) -> Result<(Output, ImportedOutput), super::ImportedFailure> {
     let compiler_host = engine
         .host_registry
@@ -576,7 +551,6 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
         program,
         models,
         scope,
-        #[cfg(not(feature = "no_optimize"))]
         optimization_level,
         Some(ImportedContext {
             native: program.native.as_deref(),
@@ -602,13 +576,12 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     ))
 }
 
-#[cfg(not(feature = "no_function"))]
 fn lower_with_context(
     engine: &Engine,
     program: &Program,
     models: Models,
     scope: Option<&Scope>,
-    #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+    optimization_level: crate::OptimizationLevel,
     #[cfg(feature = "rust-import")] mut imported: Option<ImportedContext<'_>>,
 ) -> Result<Output, LoweringFailure> {
     let mut symbol_rewrites: BTreeMap<ImmutableString, ImmutableString> = program
@@ -759,18 +732,6 @@ fn lower_with_context(
     }
 
     for definition in program.methods.iter().chain(&program.builtin_methods) {
-        #[cfg(feature = "no_object")]
-        if definition.receiver().is_some() {
-            return Err(LoweringFailure::original(
-                definition.source(),
-                Error::UnsupportedNominalSyntax {
-                    construct: "inherent receivers require Rawr object support".into(),
-                    source: definition.body(),
-                }
-                .into(),
-            ));
-        }
-
         let body_source = source_span(
             definition
                 .body_text()
@@ -854,7 +815,6 @@ fn lower_with_context(
     let mut ast = match engine.compile_legacy_script_with_scope_raw(
         scope,
         generated.as_str(),
-        #[cfg(not(feature = "no_optimize"))]
         optimization_level,
     ) {
         Ok(ast) => ast,
@@ -3502,7 +3462,6 @@ impl PreludeOp {
             Self::IntFromBool => {
                 return Ok(crate::INT::from(args[0].as_bool().unwrap_or(false)).into())
             }
-            #[cfg(not(feature = "no_float"))]
             Self::FloatFromBool => {
                 let value = if args[0].as_bool().unwrap_or(false) {
                     1.0
@@ -3511,13 +3470,10 @@ impl PreludeOp {
                 };
                 return Ok(Dynamic::from_float(value));
             }
-            #[cfg(feature = "no_float")]
-            Self::FloatFromBool => return Err(invariant("`f64` needs float support")),
             Self::StringFromChar => {
                 let value = args[0].as_char().unwrap_or_default();
                 return Ok(Dynamic::from(ImmutableString::from(value.to_string())));
             }
-            #[cfg(not(feature = "no_float"))]
             Self::FormatFloat => {
                 let value = args[0].as_float().unwrap_or_default();
                 let mode = args[2].as_int().unwrap_or_default();
@@ -3532,8 +3488,6 @@ impl PreludeOp {
                 };
                 return Ok(Dynamic::from(ImmutableString::from(text)));
             }
-            #[cfg(feature = "no_float")]
-            Self::FormatFloat => return Err(invariant("`f64` needs float support")),
             Self::FormatRadix => {
                 let value = args[0].as_int().unwrap_or_default();
                 let text = match args[1].as_int().unwrap_or(16) {
@@ -3585,7 +3539,6 @@ impl PreludeOp {
                         exp!(value)
                     }
                 } else {
-                    #[cfg(not(feature = "no_float"))]
                     {
                         let value = args[0].as_float().unwrap_or_default();
                         if mode & 2 == 2 {
@@ -3594,8 +3547,6 @@ impl PreludeOp {
                             exp!(value)
                         }
                     }
-                    #[cfg(feature = "no_float")]
-                    return Err(invariant("`f64` needs float support"));
                 };
                 return Ok(Dynamic::from(ImmutableString::from(text)));
             }
@@ -3610,7 +3561,6 @@ impl PreludeOp {
                         _ => Dynamic::from(range.is_empty()),
                     });
                 }
-                #[cfg(not(feature = "no_float"))]
                 if let Some(range) = args[0].read_lock::<std::ops::RangeInclusive<crate::FLOAT>>() {
                     let value = args[2].as_float().unwrap_or_default();
                     return Ok(match code {
@@ -4383,12 +4333,10 @@ fn builtin_code(ty: &Ty) -> Option<crate::INT> {
 fn builtin_type_key(value: &Dynamic) -> Option<crate::INT> {
     Some(match &value.0 {
         Union::Int(..) => -2,
-        #[cfg(not(feature = "no_float"))]
         Union::Float(..) => -3,
         Union::Str(..) => -4,
         Union::Bool(..) => -5,
         Union::Char(..) => -6,
-        #[cfg(not(feature = "no_index"))]
         Union::Array(..) => -8,
         Union::Unit(..) => -9,
         Union::Variant(..) if crate::option::is(value) => -7,
@@ -4714,7 +4662,6 @@ impl WitnessedOp {
 fn witness_type(models: &Models, code: crate::INT) -> Option<intrinsic::Type> {
     Some(match code {
         -2 => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
-        #[cfg(not(feature = "no_float"))]
         -3 => intrinsic::Type::builtin("f64", TypeId::of::<crate::FLOAT>()),
         -4 => intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>()),
         -5 => intrinsic::Type::builtin("bool", TypeId::of::<bool>()),
@@ -6554,16 +6501,10 @@ impl Ty {
             Self::Bool => Some(TypeId::of::<bool>()),
             Self::Char => Some(TypeId::of::<char>()),
             Self::Int(_) => Some(TypeId::of::<INT>()),
-            #[cfg(not(feature = "no_float"))]
             Self::Float(_) => Some(TypeId::of::<crate::FLOAT>()),
-            #[cfg(feature = "no_float")]
-            Self::Float(_) => Some(TypeId::of::<Dynamic>()),
             Self::String | Self::Str => Some(TypeId::of::<ImmutableString>()),
             Self::InclusiveRange => Some(TypeId::of::<std::ops::RangeInclusive<INT>>()),
-            #[cfg(not(feature = "no_float"))]
             Self::FloatRange => Some(TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>()),
-            #[cfg(feature = "no_float")]
-            Self::FloatRange => Some(TypeId::of::<Dynamic>()),
             Self::Ordering => Some(TypeId::of::<INT>()),
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
             Self::Time(Time::Instant) => Some(TypeId::of::<std::time::Instant>()),
@@ -7822,7 +7763,6 @@ fn reject_empty_range(
     let ordering = match (low, high) {
         (ast::NominalLiteral::Int(low), ast::NominalLiteral::Int(high)) => low.cmp(high),
         (ast::NominalLiteral::Char(low), ast::NominalLiteral::Char(high)) => low.cmp(high),
-        #[cfg(not(feature = "no_float"))]
         (ast::NominalLiteral::Float(low), ast::NominalLiteral::Float(high)) => {
             low.partial_cmp(high).unwrap_or(std::cmp::Ordering::Greater)
         }
@@ -7842,7 +7782,6 @@ fn reject_empty_range(
 fn scalar_text(literal: &ast::NominalLiteral) -> String {
     match literal {
         ast::NominalLiteral::Int(value) if *value < 0 => format!("({value})"),
-        #[cfg(not(feature = "no_float"))]
         ast::NominalLiteral::Float(value) if **value < 0.0 => format!("({:?})", **value),
         literal => render_literal(literal),
     }
@@ -7873,7 +7812,6 @@ fn render_literal(literal: &ast::NominalLiteral) -> String {
         ast::NominalLiteral::Bool(value) => value.to_string(),
         ast::NominalLiteral::Char(value) => format!("{value:?}"),
         ast::NominalLiteral::Str(value) => format!("{:?}", value.as_str()),
-        #[cfg(not(feature = "no_float"))]
         ast::NominalLiteral::Float(value) => format!("{:?}", **value),
     }
 }
@@ -13672,20 +13610,12 @@ impl<'a> Parser<'a> {
             Ty::Bool => intrinsic::Type::builtin("bool", TypeId::of::<bool>()),
             Ty::Char => intrinsic::Type::builtin("char", TypeId::of::<char>()),
             Ty::Int(_) => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
-            #[cfg(not(feature = "no_float"))]
             Ty::Float(_) => intrinsic::Type::builtin("f64", TypeId::of::<crate::FLOAT>()),
-            #[cfg(feature = "no_float")]
-            Ty::Float(_) => intrinsic::Type::builtin("f64", TypeId::of::<Dynamic>()),
             Ty::String | Ty::Str => {
                 intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>())
             }
             Ty::InclusiveRange => intrinsic::Type::i64_range_inclusive(),
-            #[cfg(not(feature = "no_float"))]
             Ty::FloatRange => intrinsic::Type::f64_range_inclusive(),
-            #[cfg(feature = "no_float")]
-            Ty::FloatRange => {
-                intrinsic::Type::builtin("RangeInclusive<f64>", TypeId::of::<Dynamic>())
-            }
             Ty::Ordering => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
             Ty::Time(Time::Duration) => {
                 intrinsic::Type::builtin("Duration", TypeId::of::<std::time::Duration>())
@@ -18140,7 +18070,6 @@ impl<'a> Parser<'a> {
     fn attribute_ahead(&mut self) -> bool {
         match self.peek() {
             Token::Hash => true,
-            #[cfg(not(feature = "no_custom_syntax"))]
             Token::Custom(symbol) => symbol.as_str() == "#",
             _ => false,
         }
@@ -19687,14 +19616,11 @@ impl<'a> Parser<'a> {
                     | Token::False
             )
         {
-            #[cfg(not(feature = "no_float"))]
             if matches!(self.peek(), Token::FloatConstant(_)) {
                 // Handled below.
             } else {
                 return Ok(None);
             }
-            #[cfg(feature = "no_float")]
-            return Ok(None);
         }
         let start = if negative { Some(self.next().1) } else { None };
         let (token, position) = self.next();
@@ -19705,7 +19631,6 @@ impl<'a> Parser<'a> {
                 self.literal_kind(value, true, point_span(position))?.0,
                 value.to_string(),
             ),
-            #[cfg(not(feature = "no_float"))]
             Token::FloatConstant(value) => (
                 ast::NominalLiteral::Float(if negative {
                     crate::types::FloatWrapper::new(-*value.0)
@@ -23895,13 +23820,8 @@ impl<'a> Parser<'a> {
                 | Token::For
                 | Token::Return
         ) || {
-            #[cfg(not(feature = "no_float"))]
             {
                 matches!(token, Token::FloatConstant(_))
-            }
-            #[cfg(feature = "no_float")]
-            {
-                false
             }
         };
         if !stops || self.split_angle.is_some() {
@@ -28593,7 +28513,6 @@ impl<'a> Parser<'a> {
             Token::ByteConstant(byte) => {
                 Ok(self.literal(byte.to_string(), Ty::Int(Int::U8), token_span))
             }
-            #[cfg(not(feature = "no_float"))]
             Token::FloatConstant(value) => {
                 let ty = self.literal_kind(0, false, token_span)?.0;
                 let number = *value.0;
@@ -35249,7 +35168,6 @@ impl<'a> Parser<'a> {
         Ok(match self.next() {
             (Token::StringConstant(text), _) if !negative => text.to_string(),
             (Token::IntegerConstant(value), _) => format!("{sign}{value}"),
-            #[cfg(not(feature = "no_float"))]
             (Token::FloatConstant(value), _) => format!("{sign}{}", value.1),
             (Token::CharConstant(value), _) if !negative => value.to_string(),
             (Token::True, _) if !negative => "true".into(),
@@ -35276,7 +35194,6 @@ impl<'a> Parser<'a> {
     }
 
     /// The file this code is in, when it is a file on disk.
-    #[cfg(not(feature = "no_std"))]
     fn source_file(&self) -> Option<std::path::PathBuf> {
         let key = self.models.sources.key(self.models.context.index());
         let source = self.models.sources.resolve(key).ok()?;
@@ -35288,7 +35205,6 @@ impl<'a> Parser<'a> {
     /// directory of the project the file is in; any other is the
     /// environment's.
     fn environment_variable(&self, name: &str) -> Option<String> {
-        #[cfg(not(feature = "no_std"))]
         {
             if name == "CARGO_MANIFEST_DIR" {
                 let file = self.source_file()?;
@@ -35309,11 +35225,6 @@ impl<'a> Parser<'a> {
             }
             std::env::var(name).ok()
         }
-        #[cfg(feature = "no_std")]
-        {
-            let _ = name;
-            None
-        }
     }
 
     /// The bytes of the file `path` names, relative to this code's file.
@@ -35326,7 +35237,6 @@ impl<'a> Parser<'a> {
         if let Some(reason) = crate::resolve::files_denied() {
             return Err(error(reason.into()));
         }
-        #[cfg(not(feature = "no_std"))]
         {
             let Some(file) = self.source_file() else {
                 return Err(error(format!(
@@ -35340,10 +35250,6 @@ impl<'a> Parser<'a> {
             std::fs::read(&target)
                 .map_err(|failure| error(format!("cannot read `{}`: {failure}", target.display())))
         }
-        #[cfg(feature = "no_std")]
-        Err(error(format!(
-            "`{path}` cannot be read without a file system"
-        )))
     }
 
     fn float_constant(&mut self, value: f64, single: bool, at: Span) -> ParsedExpr {
@@ -39974,7 +39880,6 @@ impl<'a> Parser<'a> {
                 Ok((index.to_string().into(), point_span(position)))
             }
             // `t.0.1`: the number `0.1` is two tuple fields.
-            #[cfg(not(feature = "no_float"))]
             Token::FloatConstant(ref number)
                 if let Some((first, second)) = number.1.split_once('.')
                     && !first.is_empty()
@@ -40763,9 +40668,7 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
         }
         (Union::Int(lhs, ..), Union::Int(rhs, ..)) => Some(lhs.cmp(rhs)),
         (Union::Str(lhs, ..), Union::Str(rhs, ..)) => Some(lhs.as_str().cmp(rhs.as_str())),
-        #[cfg(not(feature = "no_float"))]
         (Union::Float(lhs, ..), Union::Float(rhs, ..)) => (**lhs).partial_cmp(&**rhs),
-        #[cfg(not(feature = "no_index"))]
         (Union::Array(lhs, ..), Union::Array(rhs, ..)) => lexicographic(lhs, rhs),
         // An imported value keying a hashed collection.
         (Union::Variant(..), Union::Variant(..)) => crate::host::value::host_compare(lhs, rhs),
@@ -40890,9 +40793,7 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
         (Union::Char(lhs, ..), Union::Char(rhs, ..)) => lhs == rhs,
         (Union::Int(lhs, ..), Union::Int(rhs, ..)) => lhs == rhs,
         (Union::Str(lhs, ..), Union::Str(rhs, ..)) => lhs == rhs,
-        #[cfg(not(feature = "no_float"))]
         (Union::Float(lhs, ..), Union::Float(rhs, ..)) if same => lhs.to_bits() == rhs.to_bits(),
-        #[cfg(not(feature = "no_float"))]
         (Union::Float(lhs, ..), Union::Float(rhs, ..)) => lhs == rhs,
         (Union::Struct(lhs, ..), Union::Struct(rhs, ..)) => {
             lhs.identity() == rhs.identity()
@@ -40916,7 +40817,6 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
                     .all(|(lhs, rhs)| value_matches(lhs, rhs, same))
         }
         // Vectors, arrays and tuples compare element by element.
-        #[cfg(not(feature = "no_index"))]
         (Union::Array(lhs, ..), Union::Array(rhs, ..)) => {
             lhs.len() == rhs.len()
                 && lhs
@@ -40930,7 +40830,6 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
                 None => same && lhs.type_id() == rhs.type_id(),
             }
         }
-        #[cfg(not(feature = "no_closure"))]
         (Union::Shared(..), _) | (_, Union::Shared(..)) if same => {
             value_matches(&lhs.flatten_clone(), &rhs.flatten_clone(), same)
         }
@@ -40942,7 +40841,6 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
 /// from the lowered program to the script's text.
 pub(crate) fn relocate(ast: &mut AST, locate: &mut dyn FnMut(Position) -> Position) {
     relocate_statements(ast.statements_mut(), locate);
-    #[cfg(not(feature = "no_function"))]
     ast.for_each_fn_def_mut(|function| {
         relocate_statements(function.body.statements_mut(), locate);
     });
@@ -41000,7 +40898,6 @@ fn relocate_statement(statement: &mut Stmt, locate: &mut dyn FnMut(Position) -> 
                 relocate_expr(expr, locate);
             }
         }
-        #[cfg(not(feature = "no_module"))]
         Stmt::Import(value, ..) => relocate_expr(&mut value.0, locate),
         _ => {}
     }
@@ -41043,20 +40940,17 @@ fn relocate_expr(expr: &mut ast::Expr, locate: &mut dyn FnMut(Position) -> Posit
             relocate_expr(&mut binary.lhs, locate);
             relocate_expr(&mut binary.rhs, locate);
         }
-        #[cfg(not(feature = "no_custom_syntax"))]
         ast::Expr::Custom(custom, ..) => {
             for input in &mut custom.inputs {
                 relocate_expr(input, locate);
             }
         }
-        #[cfg(not(feature = "no_function"))]
         ast::Expr::DynamicConstant(value, ..) => relocate_constant(value, locate),
         _ => {}
     }
 }
 
 /// A folded closure's body, or those of the closures an array holds.
-#[cfg(not(feature = "no_function"))]
 fn relocate_constant(value: &mut Dynamic, locate: &mut dyn FnMut(Position) -> Position) {
     if let Some(pointer) = value.downcast_mut::<crate::FnPtr>() {
         if let crate::types::fn_ptr::FnPtrType::Script(definition) = &mut pointer.typ {
@@ -41068,7 +40962,6 @@ fn relocate_constant(value: &mut Dynamic, locate: &mut dyn FnMut(Position) -> Po
         }
         return;
     }
-    #[cfg(not(feature = "no_index"))]
     if let Some(array) = value.downcast_mut::<crate::Array>() {
         for element in array.iter_mut() {
             relocate_constant(element, locate);
@@ -41159,11 +41052,8 @@ fn rewrite_statement(
             }
         }
         Stmt::Noop(..) => {}
-        #[cfg(not(feature = "no_module"))]
         Stmt::Import(value, ..) => rewrite_expr(&mut value.0, rewrites, patterns),
-        #[cfg(not(feature = "no_module"))]
         Stmt::Export(..) => {}
-        #[cfg(not(feature = "no_closure"))]
         Stmt::Share(..) => {}
     }
 }
@@ -41207,7 +41097,6 @@ fn rewrite_expr(
         ast::Expr::Dot(binary, ..) | ast::Expr::Index(binary, ..) => {
             rewrite_binary(binary, rewrites, patterns);
         }
-        #[cfg(not(feature = "no_custom_syntax"))]
         ast::Expr::Custom(custom, ..) => {
             for input in &mut custom.inputs {
                 rewrite_expr(input, rewrites, patterns);
@@ -41217,10 +41106,7 @@ fn rewrite_expr(
             rewrite_variable(&mut variable.1, rewrites);
         }
         // A closure carries its own function definition.
-        #[cfg(not(feature = "no_function"))]
         ast::Expr::DynamicConstant(value, ..) => rewrite_constant(value, rewrites, patterns),
-        #[cfg(feature = "no_function")]
-        ast::Expr::DynamicConstant(..) => {}
         ast::Expr::BoolConstant(..)
         | ast::Expr::IntegerConstant(..)
         | ast::Expr::CharConstant(..)
@@ -41228,14 +41114,12 @@ fn rewrite_expr(
         | ast::Expr::Unit(..)
         | ast::Expr::ThisPtr(..)
         | ast::Expr::Property(..) => {}
-        #[cfg(not(feature = "no_float"))]
         ast::Expr::FloatConstant(..) => {}
     }
 }
 
 /// A constant the optimizer folded: a closure, or an array holding one
 /// (a `fn` pointer choice is `[index, closure]`).
-#[cfg(not(feature = "no_function"))]
 fn rewrite_constant(
     value: &mut Dynamic,
     rewrites: &BTreeMap<ImmutableString, ImmutableString>,
@@ -41245,7 +41129,6 @@ fn rewrite_constant(
         rewrite_pointer(pointer, rewrites, patterns);
         return;
     }
-    #[cfg(not(feature = "no_index"))]
     if let Some(array) = value.downcast_mut::<crate::Array>() {
         for element in array.iter_mut() {
             rewrite_constant(element, rewrites, patterns);
@@ -41255,7 +41138,6 @@ fn rewrite_constant(
 
 /// A closure's definition, and those of the closures it captured, which
 /// the optimizer folds into its curried values.
-#[cfg(not(feature = "no_function"))]
 fn rewrite_pointer(
     pointer: &mut crate::FnPtr,
     rewrites: &BTreeMap<ImmutableString, ImmutableString>,
@@ -41314,16 +41196,11 @@ fn rewrite_call(
     } else if let Some(name) = rewrites.get(&call.name) {
         call.name = name.clone();
         call.hashes = if is_method {
-            #[cfg(not(feature = "no_function"))]
             {
                 FnCallHashes::from_script_and_native(
                     calc_fn_hash(None, name, call.args.len()),
                     calc_fn_hash(None, name, call.args.len() + 1),
                 )
-            }
-            #[cfg(feature = "no_function")]
-            {
-                FnCallHashes::from_native_only(calc_fn_hash(None, name, call.args.len() + 1))
             }
         } else {
             FnCallHashes::from_hash(calc_fn_hash(None, name, call.args.len()))
@@ -42566,7 +42443,6 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
     let fail = |message: &str| -> RawrResult {
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
     };
-    #[cfg(not(feature = "no_float"))]
     if let Ok(float) = value.as_float() {
         return Ok(match code {
             10 => Dynamic::from_float(float as f32 as crate::FLOAT),
@@ -42596,15 +42472,11 @@ fn cast_value(value: &Dynamic, code: INT) -> RawrResult {
         _ => return fail("an `as` operand is not a number at runtime"),
     };
     Ok(match code {
-        #[cfg(not(feature = "no_float"))]
         10 => Dynamic::from_float(integer as f32 as crate::FLOAT),
-        #[cfg(not(feature = "no_float"))]
         11 => Dynamic::from_float(integer as crate::FLOAT),
         12 => Dynamic::from(char::from(integer as u8)),
         // A `u64`'s or a `usize`'s bits as an `f32` or an `f64`.
-        #[cfg(not(feature = "no_float"))]
         13 => Dynamic::from_float(integer as u64 as f32 as crate::FLOAT),
-        #[cfg(not(feature = "no_float"))]
         14 => Dynamic::from_float(integer as u64 as crate::FLOAT),
         _ => {
             let kind = Int::KINDS[code as usize].1;
@@ -42844,7 +42716,6 @@ fn ends_operand(token: &Token) -> bool {
         | Token::RightBracket
         | Token::RightBrace
         | Token::SelfValue => true,
-        #[cfg(not(feature = "no_float"))]
         Token::FloatConstant(_) => true,
         Token::Reserved(word) => word.as_str() == "?",
         _ => false,
@@ -42860,7 +42731,6 @@ fn point_span(position: Position) -> Span {
 }
 
 /// Whether the evaluator's standard library has a function `name`.
-#[cfg(not(feature = "no_std"))]
 fn standard_function(name: &str) -> bool {
     use crate::packages::Package as _;
     static NAMES: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
@@ -42875,11 +42745,6 @@ fn standard_function(name: &str) -> bool {
         .contains(name)
 }
 
-#[cfg(feature = "no_std")]
-fn standard_function(_: &str) -> bool {
-    true
-}
-
 fn text_end(mut position: Position, text: &str) -> Position {
     for _ in text.chars() {
         position.advance();
@@ -42891,7 +42756,7 @@ fn span(start: Position, end: Position) -> Span {
     Span::new(start, end)
 }
 
-#[cfg(all(test, not(feature = "no_function")))]
+#[cfg(test)]
 mod tests {
     use super::{
         default_value, inference_metrics, matches_runtime_model, model_clones,
@@ -43169,7 +43034,6 @@ pub fn run() {
             program,
             &mut host::TestImportAllocation::default(),
             None,
-            #[cfg(not(feature = "no_optimize"))]
             OptimizationLevel::None,
         )
         .unwrap_or_else(|failure| panic!("qualified owner executable: {}", failure.into_error()));

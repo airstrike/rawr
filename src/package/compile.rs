@@ -1,6 +1,6 @@
 //! One aggregate package compiler shared by the library, the CLI and hosts.
 
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 pub(crate) mod captured;
 
 use crate::{program, project, resolve, timing, Engine, Scope};
@@ -64,12 +64,9 @@ pub(crate) fn inline_modules(
             })
             .map(|item| resolve::lower_nominal::private_function_name(item.key()));
         let (mut ast, positions) = executable.into_ast_with_every_position();
-        #[cfg(not(feature = "no_function"))]
         if let Some(main) = main {
             ast.alias_script_function(&main, "main");
         }
-        #[cfg(feature = "no_function")]
-        drop(main);
         (ast, positions)
     }))
 }
@@ -268,7 +265,6 @@ fn snapshot_executable(
     // Initial, neutral and ordinary checked outputs overlap resident candidates
     // too. Their executable and captured support share this one contribution;
     // converting a neutral executable into its AST must retain live support.
-    #[cfg(not(feature = "no_function"))]
     if let Some(native) = &engine.imported_native {
         let resource = |error| Error::import(super::import::Error::Surface(error));
         let mut attempt = super::import::runner::account::support::Pending::transform(
@@ -280,7 +276,6 @@ fn snapshot_executable(
             program,
             &mut attempt,
             Some(&Scope::new()),
-            #[cfg(not(feature = "no_optimize"))]
             engine.optimization_level,
         )
         .map_err(|failure| match failure {
@@ -297,7 +292,6 @@ fn snapshot_executable(
         engine,
         program,
         Some(&Scope::new()),
-        #[cfg(not(feature = "no_optimize"))]
         engine.optimization_level,
     )
     .map_err(|failure| {
@@ -350,7 +344,6 @@ pub(crate) fn executable_from_graph(
             engine,
             program,
             Some(&Scope::new()),
-            #[cfg(not(feature = "no_optimize"))]
             engine.optimization_level,
         )
         .map_err(|failure| {

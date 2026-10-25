@@ -3,8 +3,6 @@
 use crate::resolve::{item, type_ref, Error, LocatedError};
 use crate::{program, type_def, ImmutableString, Span};
 use std::collections::BTreeMap;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// A capability that can be derived by a Rawr nominal type.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

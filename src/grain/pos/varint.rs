@@ -65,7 +65,7 @@ pub fn u32(bytes: &[u8], at: &mut usize) -> Result<u32, Error> {
 }
 
 /// Append an unsigned varint.
-pub fn put_u64(out: &mut alloc::vec::Vec<u8>, mut value: u64) {
+pub fn put_u64(out: &mut std::vec::Vec<u8>, mut value: u64) {
     loop {
         let byte = (value & 0x7f) as u8;
         value >>= 7;
@@ -78,14 +78,14 @@ pub fn put_u64(out: &mut alloc::vec::Vec<u8>, mut value: u64) {
 }
 
 /// Append a zigzagged signed varint.
-pub fn put_i64(out: &mut alloc::vec::Vec<u8>, value: i64) {
+pub fn put_i64(out: &mut std::vec::Vec<u8>, value: i64) {
     put_u64(out, ((value << 1) ^ (value >> 63)) as u64);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec::Vec;
+    use std::vec::Vec;
 
     #[test]
     fn unsigned_values_round_trip_at_the_edges() {

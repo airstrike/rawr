@@ -5,8 +5,6 @@ use crate::types::dynamic::Union;
 use crate::{Dynamic, ImmutableString, LexError, Position, RawrError, RawrResultOf, ERR};
 use serde::de::{Error, IntoDeserializer, Visitor};
 use serde::{Deserialize, Deserializer};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{any::type_name, fmt};
 
 /// Deserializer for [`Dynamic`][crate::Dynamic].
@@ -46,10 +44,7 @@ impl<'de> DynamicDeserializer<'de> {
     }
     #[inline(always)]
     fn deserialize_int<V: Visitor<'de>>(v: crate::INT, visitor: V) -> RawrResultOf<V::Value> {
-        #[cfg(not(feature = "only_i32"))]
-        return visitor.visit_i64(v);
-        #[cfg(feature = "only_i32")]
-        return visitor.visit_i32(v);
+        visitor.visit_i64(v)
     }
 }
 
@@ -59,8 +54,6 @@ impl<'de> DynamicDeserializer<'de> {
 ///
 /// ```
 /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-/// # #[cfg(not(feature = "no_index"))]
-/// # #[cfg(not(feature = "no_object"))]
 /// # {
 /// use rawr::{Dynamic, Array, Map, INT};
 /// use rawr::serde::from_dynamic;
@@ -132,33 +125,17 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
             Union::Str(..) => self.deserialize_str(visitor),
             Union::Char(..) => self.deserialize_char(visitor),
 
-            #[cfg(not(feature = "only_i32"))]
             Union::Int(..) => self.deserialize_i64(visitor),
-            #[cfg(feature = "only_i32")]
-            Union::Int(..) => self.deserialize_i32(visitor),
 
-            #[cfg(not(feature = "no_float"))]
-            #[cfg(not(feature = "f32_float"))]
             Union::Float(..) => self.deserialize_f64(visitor),
-            #[cfg(not(feature = "no_float"))]
-            #[cfg(feature = "f32_float")]
-            Union::Float(..) => self.deserialize_f32(visitor),
 
             #[cfg(feature = "decimal")]
-            #[cfg(not(feature = "f32_float"))]
             Union::Decimal(..) => self.deserialize_f64(visitor),
-            #[cfg(feature = "decimal")]
-            #[cfg(feature = "f32_float")]
-            Union::Decimal(..) => self.deserialize_f32(visitor),
 
-            #[cfg(not(feature = "no_index"))]
             Union::Array(..) => self.deserialize_seq(visitor),
-            #[cfg(not(feature = "no_index"))]
             Union::Blob(..) => self.deserialize_bytes(visitor),
-            #[cfg(not(feature = "no_object"))]
             Union::Map(..) => self.deserialize_map(visitor),
             Union::FnPtr(..) => self.type_error(),
-            #[cfg(not(feature = "no_time"))]
             Union::TimeStamp(..) => self.type_error(),
 
             Union::Variant(ref value, ..) if value.is::<i8>() => self.deserialize_i8(visitor),
@@ -176,7 +153,6 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
 
             Union::Struct(..) | Union::Enum(..) => self.type_error(),
 
-            #[cfg(not(feature = "no_closure"))]
             Union::Shared(..) => self.type_error(),
         }
     }
@@ -208,7 +184,6 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
     fn deserialize_i32<V: Visitor<'de>>(self, visitor: V) -> RawrResultOf<V::Value> {
         match self.0.as_int() {
             Ok(v) => Self::deserialize_int(v, visitor),
-            _ if cfg!(feature = "only_i32") => self.type_error(),
             _ => self
                 .0
                 .downcast_ref::<i32>()
@@ -219,22 +194,14 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
     fn deserialize_i64<V: Visitor<'de>>(self, visitor: V) -> RawrResultOf<V::Value> {
         match self.0.as_int() {
             Ok(v) => Self::deserialize_int(v, visitor),
-            _ if cfg!(not(feature = "only_i32")) => self.type_error(),
-            _ => self
-                .0
-                .downcast_ref::<i64>()
-                .map_or_else(|| self.type_error(), |&x| visitor.visit_i64(x)),
+            _ => self.type_error(),
         }
     }
 
     fn deserialize_i128<V: Visitor<'de>>(self, visitor: V) -> RawrResultOf<V::Value> {
         match self.0.as_int() {
             Ok(v) => Self::deserialize_int(v, visitor),
-            _ if cfg!(not(feature = "only_i32")) => self.type_error(),
-            _ => self
-                .0
-                .downcast_ref::<i128>()
-                .map_or_else(|| self.type_error(), |&x| visitor.visit_i128(x)),
+            _ => self.type_error(),
         }
     }
 
@@ -289,7 +256,6 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
     }
 
     fn deserialize_f32<V: Visitor<'de>>(self, _visitor: V) -> RawrResultOf<V::Value> {
-        #[cfg(not(feature = "no_float"))]
         return self
             .0
             .downcast_ref::<f32>()
@@ -313,7 +279,6 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
     }
 
     fn deserialize_f64<V: Visitor<'de>>(self, _visitor: V) -> RawrResultOf<V::Value> {
-        #[cfg(not(feature = "no_float"))]
         return self
             .0
             .downcast_ref::<f64>()
@@ -353,14 +318,9 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
     }
 
     fn deserialize_bytes<V: Visitor<'de>>(self, _visitor: V) -> RawrResultOf<V::Value> {
-        #[cfg(not(feature = "no_index"))]
-        return self
-            .0
+        self.0
             .downcast_ref::<crate::Blob>()
-            .map_or_else(|| self.type_error(), |x| _visitor.visit_bytes(x));
-
-        #[cfg(feature = "no_index")]
-        return self.type_error();
+            .map_or_else(|| self.type_error(), |x| _visitor.visit_bytes(x))
     }
 
     fn deserialize_byte_buf<V: Visitor<'de>>(self, visitor: V) -> RawrResultOf<V::Value> {
@@ -398,14 +358,10 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, _visitor: V) -> RawrResultOf<V::Value> {
-        #[cfg(not(feature = "no_index"))]
-        return self.0.downcast_ref::<crate::Array>().map_or_else(
+        self.0.downcast_ref::<crate::Array>().map_or_else(
             || self.type_error(),
             |arr| _visitor.visit_seq(IterateDynamicArray::new(arr.iter())),
-        );
-
-        #[cfg(feature = "no_index")]
-        return self.type_error();
+        )
     }
 
     fn deserialize_tuple<V: Visitor<'de>>(self, _len: usize, visitor: V) -> RawrResultOf<V::Value> {
@@ -422,8 +378,7 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, _visitor: V) -> RawrResultOf<V::Value> {
-        #[cfg(not(feature = "no_object"))]
-        return self.0.downcast_ref::<crate::Map>().map_or_else(
+        self.0.downcast_ref::<crate::Map>().map_or_else(
             || self.type_error(),
             |map| {
                 _visitor.visit_map(IterateMap::new(
@@ -431,10 +386,7 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
                     map.values(),
                 ))
             },
-        );
-
-        #[cfg(feature = "no_object")]
-        return self.type_error();
+        )
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -443,8 +395,7 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
         _fields: &'static [&'static str],
         _visitor: V,
     ) -> RawrResultOf<V::Value> {
-        #[cfg(not(feature = "no_object"))]
-        return self.0.downcast_ref::<crate::Map>().map_or_else(
+        self.0.downcast_ref::<crate::Map>().map_or_else(
             || {
                 Err(ERR::ErrorMismatchOutputType(
                     map_std_type_name(type_name::<crate::Map>(), false).into(),
@@ -459,10 +410,7 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
                     map.values(),
                 ))
             },
-        );
-
-        #[cfg(feature = "no_object")]
-        return self.type_error();
+        )
     }
 
     fn deserialize_enum<V: Visitor<'de>>(
@@ -473,26 +421,21 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
     ) -> RawrResultOf<V::Value> {
         match self.0.as_immutable_string_ref() {
             Ok(s) => visitor.visit_enum(s.into_deserializer()),
-            Err(_) => {
-                #[cfg(not(feature = "no_object"))]
-                return self.0.downcast_ref::<crate::Map>().map_or_else(
-                    || self.type_error(),
-                    |map| {
-                        let mut iter = map.iter();
-                        let first = iter.next();
-                        let second = iter.next();
-                        match (first, second) {
-                            (Some((key, value)), None) => visitor.visit_enum(EnumDeserializer {
-                                tag: key,
-                                content: DynamicDeserializer::new(value),
-                            }),
-                            _ => self.type_error(),
-                        }
-                    },
-                );
-                #[cfg(feature = "no_object")]
-                return self.type_error();
-            }
+            Err(_) => self.0.downcast_ref::<crate::Map>().map_or_else(
+                || self.type_error(),
+                |map| {
+                    let mut iter = map.iter();
+                    let first = iter.next();
+                    let second = iter.next();
+                    match (first, second) {
+                        (Some((key, value)), None) => visitor.visit_enum(EnumDeserializer {
+                            tag: key,
+                            content: DynamicDeserializer::new(value),
+                        }),
+                        _ => self.type_error(),
+                    }
+                },
+            ),
         }
     }
 
@@ -508,13 +451,11 @@ impl<'de> Deserializer<'de> for DynamicDeserializer<'de> {
 }
 
 /// `SeqAccess` implementation for arrays.
-#[cfg(not(feature = "no_index"))]
 struct IterateDynamicArray<'de, ITER: Iterator<Item = &'de Dynamic>> {
     /// Iterator for a stream of [`Dynamic`][crate::Dynamic] values.
     iter: ITER,
 }
 
-#[cfg(not(feature = "no_index"))]
 impl<'de, ITER: Iterator<Item = &'de Dynamic>> IterateDynamicArray<'de, ITER> {
     #[inline(always)]
     #[must_use]
@@ -523,7 +464,6 @@ impl<'de, ITER: Iterator<Item = &'de Dynamic>> IterateDynamicArray<'de, ITER> {
     }
 }
 
-#[cfg(not(feature = "no_index"))]
 impl<'de, ITER: Iterator<Item = &'de Dynamic>> serde::de::SeqAccess<'de>
     for IterateDynamicArray<'de, ITER>
 {
@@ -541,7 +481,6 @@ impl<'de, ITER: Iterator<Item = &'de Dynamic>> serde::de::SeqAccess<'de>
 }
 
 /// `MapAccess` implementation for maps.
-#[cfg(not(feature = "no_object"))]
 struct IterateMap<'de, K: Iterator<Item = &'de str>, V: Iterator<Item = &'de Dynamic>> {
     // Iterator for a stream of [`Dynamic`][crate::Dynamic] keys.
     keys: K,
@@ -549,7 +488,6 @@ struct IterateMap<'de, K: Iterator<Item = &'de str>, V: Iterator<Item = &'de Dyn
     values: V,
 }
 
-#[cfg(not(feature = "no_object"))]
 impl<'de, K: Iterator<Item = &'de str>, V: Iterator<Item = &'de Dynamic>> IterateMap<'de, K, V> {
     #[inline(always)]
     #[must_use]
@@ -558,7 +496,6 @@ impl<'de, K: Iterator<Item = &'de str>, V: Iterator<Item = &'de Dynamic>> Iterat
     }
 }
 
-#[cfg(not(feature = "no_object"))]
 impl<'de, K: Iterator<Item = &'de str>, V: Iterator<Item = &'de Dynamic>> serde::de::MapAccess<'de>
     for IterateMap<'de, K, V>
 {
@@ -584,13 +521,11 @@ impl<'de, K: Iterator<Item = &'de str>, V: Iterator<Item = &'de Dynamic>> serde:
     }
 }
 
-#[cfg(not(feature = "no_object"))]
 struct EnumDeserializer<'de> {
     tag: &'de str,
     content: DynamicDeserializer<'de>,
 }
 
-#[cfg(not(feature = "no_object"))]
 impl<'de> serde::de::EnumAccess<'de> for EnumDeserializer<'de> {
     type Error = RawrError;
     type Variant = Self;
@@ -604,7 +539,6 @@ impl<'de> serde::de::EnumAccess<'de> for EnumDeserializer<'de> {
     }
 }
 
-#[cfg(not(feature = "no_object"))]
 impl<'de> serde::de::VariantAccess<'de> for EnumDeserializer<'de> {
     type Error = RawrError;
 

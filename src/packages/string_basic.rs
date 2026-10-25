@@ -3,13 +3,9 @@ use crate::plugin::*;
 use crate::{def_package, Dynamic, FnPtr, ImmutableString, NativeCallContext, SmartString, INT};
 use std::any::TypeId;
 use std::fmt::{Binary, LowerHex, Octal, Write};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
-#[cfg(not(feature = "no_index"))]
 use crate::Array;
 
-#[cfg(not(feature = "no_object"))]
 use crate::Map;
 
 /// Standard pretty-print function.
@@ -159,7 +155,6 @@ mod print_debug_functions {
     }
 
     /// Convert the value of `number` into a string.
-    #[cfg(not(feature = "no_float"))]
     #[rawr_fn(name = "print", name = "to_string")]
     pub fn print_f64(number: f64) -> ImmutableString {
         let mut buf = SmartString::new_const();
@@ -167,7 +162,6 @@ mod print_debug_functions {
         buf.into()
     }
     /// Convert the value of `number` into a string.
-    #[cfg(not(feature = "no_float"))]
     #[rawr_fn(name = "print", name = "to_string")]
     pub fn print_f32(number: f32) -> ImmutableString {
         let mut buf = SmartString::new_const();
@@ -175,7 +169,6 @@ mod print_debug_functions {
         buf.into()
     }
     /// Convert the value of `number` into a string.
-    #[cfg(not(feature = "no_float"))]
     #[rawr_fn(name = "debug", name = "to_debug")]
     pub fn debug_f64(number: f64) -> ImmutableString {
         let mut buf = SmartString::new_const();
@@ -183,7 +176,6 @@ mod print_debug_functions {
         buf.into()
     }
     /// Convert the value of `number` into a string.
-    #[cfg(not(feature = "no_float"))]
     #[rawr_fn(name = "debug", name = "to_debug")]
     pub fn debug_f32(number: f32) -> ImmutableString {
         let mut buf = SmartString::new_const();
@@ -192,7 +184,6 @@ mod print_debug_functions {
     }
 
     /// Convert the array into a string.
-    #[cfg(not(feature = "no_index"))]
     #[rawr_fn(
         name = "print",
         name = "to_string",
@@ -217,7 +208,6 @@ mod print_debug_functions {
     }
 
     /// Convert the object map into a string.
-    #[cfg(not(feature = "no_object"))]
     #[rawr_fn(
         name = "print",
         name = "to_string",
@@ -280,8 +270,6 @@ mod number_formatting {
         to_binary(value)
     }
 
-    #[cfg(not(feature = "only_i32"))]
-    #[cfg(not(feature = "only_i64"))]
     pub mod numbers {
         /// Convert the `value` into a string in hex format.
         #[rawr_fn(name = "to_hex")]

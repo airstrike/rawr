@@ -13,8 +13,6 @@ use super::{Model, Shape};
 use crate::types::dynamic::Union;
 use crate::types::nominal;
 use crate::{type_def, Dynamic, ImmutableString};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 const UNIT: u8 = 0;
 const FALSE: u8 = 1;
@@ -72,7 +70,6 @@ fn write(value: &Dynamic, out: &mut Vec<u8>, depth: usize) -> Option<()> {
             out.push(INT);
             out.extend_from_slice(&value.to_le_bytes());
         }
-        #[cfg(not(feature = "no_float"))]
         Union::Float(value, ..) => {
             out.push(FLOAT);
             out.extend_from_slice(&(**value).to_le_bytes());
@@ -85,7 +82,6 @@ fn write(value: &Dynamic, out: &mut Vec<u8>, depth: usize) -> Option<()> {
             out.push(STR);
             text(value, out);
         }
-        #[cfg(not(feature = "no_index"))]
         Union::Array(items, ..) => {
             out.push(ARRAY);
             count(items.len(), out);
@@ -93,13 +89,11 @@ fn write(value: &Dynamic, out: &mut Vec<u8>, depth: usize) -> Option<()> {
                 write(item, out, depth)?;
             }
         }
-        #[cfg(not(feature = "no_index"))]
         Union::Blob(bytes, ..) => {
             out.push(BLOB);
             count(bytes.len(), out);
             out.extend_from_slice(bytes);
         }
-        #[cfg(not(feature = "no_object"))]
         Union::Map(map, ..) => {
             out.push(MAP);
             count(map.len(), out);
@@ -127,7 +121,6 @@ fn write(value: &Dynamic, out: &mut Vec<u8>, depth: usize) -> Option<()> {
                 write(item, out, depth)?;
             }
         }
-        #[cfg(not(feature = "no_closure"))]
         Union::Shared(..) => write(&value.flatten_clone(), out, depth)?,
         Union::Variant(..) => {
             if let Some(option) = value.read_lock::<crate::option::Value>() {
@@ -277,11 +270,9 @@ impl Model {
             FALSE => false.into(),
             TRUE => true.into(),
             INT => crate::INT::from_le_bytes(reader.array()?).into(),
-            #[cfg(not(feature = "no_float"))]
             FLOAT => crate::FLOAT::from_le_bytes(reader.array()?).into(),
             CHAR => char::from_u32(u32::from_le_bytes(reader.array()?))?.into(),
             STR => ImmutableString::from(reader.text()?).into(),
-            #[cfg(not(feature = "no_index"))]
             ARRAY => {
                 let length = reader.items()?;
                 let mut items = crate::Array::with_capacity(length);
@@ -290,12 +281,10 @@ impl Model {
                 }
                 Dynamic::from_array(items)
             }
-            #[cfg(not(feature = "no_index"))]
             BLOB => {
                 let length = reader.count()?;
                 Dynamic::from_blob(reader.take(length)?.to_vec())
             }
-            #[cfg(not(feature = "no_object"))]
             MAP => {
                 let length = reader.items()?;
                 let mut map = crate::Map::new();

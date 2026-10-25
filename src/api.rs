@@ -36,12 +36,8 @@ use crate::func::{locked_read, locked_write, Locked};
 use crate::types::StringsInterner;
 use crate::{Dynamic, Engine, Identifier};
 
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
-
 /// Default limits.
 pub mod default_limits {
-    #[cfg(not(feature = "unchecked"))]
     #[cfg(feature = "internals")]
     pub use super::limits::default_limits::*;
 
@@ -76,9 +72,6 @@ impl Engine {
     }
 
     /// The module resolution service used by the [`Engine`].
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline(always)]
     #[must_use]
     pub fn module_resolver(&self) -> &dyn crate::ModuleResolver {
@@ -89,9 +82,6 @@ impl Engine {
     }
 
     /// Set the module resolution service used by the [`Engine`].
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     #[inline(always)]
     pub fn set_module_resolver(
         &mut self,
@@ -164,8 +154,6 @@ impl Engine {
 
     /// Register a custom operator with a precedence into the language.
     ///
-    /// Not available under `no_custom_syntax`.
-    ///
     /// The operator can be a valid identifier, a reserved symbol, a disabled operator or a disabled keyword.
     ///
     /// The precedence cannot be zero.
@@ -189,7 +177,6 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(not(feature = "no_custom_syntax"))]
     pub fn register_custom_operator(
         &mut self,
         keyword: impl AsRef<str>,
@@ -219,7 +206,6 @@ impl Engine {
                 | Token::Mut,
             ) => (),
             // custom keywords are OK
-            #[cfg(not(feature = "no_custom_syntax"))]
             Some(Token::Custom(..)) => (),
             // Active standard keywords cannot be made custom
             // Disabled keywords are OK

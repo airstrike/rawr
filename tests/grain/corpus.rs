@@ -28,9 +28,6 @@ pub struct Case {
 /// A script has no syntax for the type itself, so every use goes through a
 /// registered function called by name. A `&mut` first parameter takes the
 /// script's variable by reference, so the mutation has to land in it.
-/// Held as `INT` rather than `i64` throughout: `only_i32` narrows the script
-/// integer, and a host type registered against the wider one would take a type
-/// no script under that build can produce.
 #[derive(Debug, Clone, Default)]
 pub struct Widget {
     pub level: INT,
@@ -64,38 +61,6 @@ pub fn engine() -> rawr::Engine {
 
 const fn case(name: &'static str, source: &'static str) -> Case {
     Case { name, source }
-}
-
-/// Whether a corpus case exercises anything on this build.
-///
-/// A restriction feature removes the syntax outright — rawr will not parse a
-/// closure under `no_closure`, or a float literal under `no_float` — so the
-/// case tests nothing here, and both sides agreeing on the parse failure would
-/// be an empty agreement rather than a passing one.
-///
-/// Lives here rather than in one harness because every harness that walks
-/// [`CASES`] needs the same answer.
-#[must_use]
-pub fn applies_to_this_build(name: &str) -> bool {
-    #[cfg(feature = "no_closure")]
-    if name.starts_with("closure_") {
-        return false;
-    }
-    // `unchecked` removes the arithmetic guards, so `1 / 0` panics inside
-    // rawr's own built-in rather than raising — there is no behaviour left for
-    // the two sides to agree on, and the case would take the process with it.
-    #[cfg(feature = "unchecked")]
-    if matches!(name, "error_divide_by_zero" | "error_overflow" | "error_temp_root_index_runs_first") {
-        return false;
-    }
-    // No shared prefix to key on: a float literal is incidental to most of
-    // these.
-    #[cfg(feature = "no_float")]
-    if matches!(name, "float_arithmetic" | "format_of_every_type" | "casts") {
-        return false;
-    }
-    let _ = name;
-    true
 }
 
 pub const CASES: &[Case] = &[

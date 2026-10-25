@@ -1,8 +1,6 @@
 //! Collection of custom types.
 
 use crate::Identifier;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{any::type_name, collections::BTreeMap};
 
 /// _(internals)_ Information for a registered custom type.

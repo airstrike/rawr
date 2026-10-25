@@ -11,7 +11,6 @@ pub(crate) mod model;
 pub(crate) mod origin;
 mod path;
 pub mod schema;
-#[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
 pub(crate) mod signatures;
 pub(crate) mod source;
 

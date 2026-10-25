@@ -11,8 +11,6 @@ use crate::{
     calc_fn_hash, program, type_def, Dynamic, FnArgsVec, Identifier, ImmutableString, Position,
     StaticVec, INT,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     any::TypeId,
     borrow::Borrow,
@@ -259,7 +257,6 @@ impl RangeCase {
     pub fn contains(&self, value: &Dynamic) -> bool {
         match value {
             Dynamic(Union::Int(v, ..)) => self.contains_int(*v),
-            #[cfg(not(feature = "no_float"))]
             Dynamic(Union::Float(v, ..)) => self.contains_float(**v),
             #[cfg(feature = "decimal")]
             Dynamic(Union::Decimal(v, ..)) => self.contains_decimal(**v),
@@ -276,7 +273,6 @@ impl RangeCase {
         }
     }
     /// Is the specified floating-point number within this range?
-    #[cfg(not(feature = "no_float"))]
     #[inline]
     #[must_use]
     pub fn contains_float(&self, n: crate::FLOAT) -> bool {
@@ -414,7 +410,6 @@ pub(crate) enum NominalLiteral {
     Bool(bool),
     Char(char),
     Str(ImmutableString),
-    #[cfg(not(feature = "no_float"))]
     Float(crate::types::FloatWrapper<crate::FLOAT>),
 }
 
@@ -472,7 +467,6 @@ impl Hash for SwitchCasesCollection {
 }
 
 /// Number of items to keep inline for [`StmtBlockContainer`].
-#[cfg(not(feature = "no_std"))]
 const STMT_BLOCK_INLINE_SIZE: usize = 8;
 
 /// _(internals)_ The underlying container type for [`StmtBlock`].
@@ -481,13 +475,7 @@ const STMT_BLOCK_INLINE_SIZE: usize = 8;
 /// A [`SmallVec`](https://crates.io/crates/smallvec) containing up to 8 items inline is used to
 /// hold a statements block, with the assumption that most program blocks would container fewer than
 /// 8 statements, and those that do have a lot more statements.
-#[cfg(not(feature = "no_std"))]
 pub type StmtBlockContainer = smallvec::SmallVec<[Stmt; STMT_BLOCK_INLINE_SIZE]>;
-
-/// _(internals)_ The underlying container type for [`StmtBlock`].
-/// Exported under the `internals` feature only.
-#[cfg(feature = "no_std")]
-pub type StmtBlockContainer = crate::StaticVec<Stmt>;
 
 /// _(internals)_ A scoped block of statements.
 /// Exported under the `internals` feature only.
@@ -652,10 +640,7 @@ impl From<Stmt> for StmtBlock {
 
 impl IntoIterator for StmtBlock {
     type Item = Stmt;
-    #[cfg(not(feature = "no_std"))]
     type IntoIter = smallvec::IntoIter<[Stmt; STMT_BLOCK_INLINE_SIZE]>;
-    #[cfg(feature = "no_std")]
-    type IntoIter = smallvec::IntoIter<[Stmt; crate::STATIC_VEC_INLINE_SIZE]>;
 
     #[inline(always)]
     fn into_iter(self) -> Self::IntoIter {
@@ -762,24 +747,15 @@ pub enum Stmt {
     /// * [`BREAK`][ASTFlags::BREAK] = `throw`
     Return(Option<Box<Expr>>, ASTFlags, Position),
     /// `import` expr `as` alias
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     Import(Box<(Expr, Ident)>, Position),
     /// `export` var `as` alias
-    ///
-    /// Not available under `no_module`.
-    #[cfg(not(feature = "no_module"))]
     Export(Box<(Ident, Ident)>, Position),
     /// Convert a list of variables to shared.
-    ///
-    /// Not available under `no_closure`.
     ///
     /// # Notes
     ///
     /// This variant does not map to any language structure.  It is currently only used only to
     /// convert normal variables into shared variables when they are _captured_ by a closure.
-    #[cfg(not(feature = "no_closure"))]
     Share(Box<crate::FnArgsVec<(Ident, Option<NonZeroUsize>)>>),
 }
 
@@ -818,10 +794,8 @@ impl Stmt {
             | Self::TryCatch(..)
             | Self::Assignment(..) => ASTFlags::empty(),
 
-            #[cfg(not(feature = "no_module"))]
             Self::Import(..) | Self::Export(..) => ASTFlags::empty(),
 
-            #[cfg(not(feature = "no_closure"))]
             Self::Share(..) => ASTFlags::empty(),
         }
     }
@@ -847,12 +821,9 @@ impl Stmt {
 
             Self::Expr(x) => x.start_position(),
 
-            #[cfg(not(feature = "no_module"))]
             Self::Import(.., pos) => *pos,
-            #[cfg(not(feature = "no_module"))]
             Self::Export(.., pos) => *pos,
 
-            #[cfg(not(feature = "no_closure"))]
             Self::Share(x) => x[0].0.pos,
         }
     }
@@ -879,12 +850,9 @@ impl Stmt {
                 x.set_position(new_pos);
             }
 
-            #[cfg(not(feature = "no_module"))]
             Self::Import(.., pos) => *pos = new_pos,
-            #[cfg(not(feature = "no_module"))]
             Self::Export(.., pos) => *pos = new_pos,
 
-            #[cfg(not(feature = "no_closure"))]
             Self::Share(x) => x.iter_mut().for_each(|(x, _)| x.pos = new_pos),
         }
 
@@ -908,10 +876,8 @@ impl Stmt {
 
             Self::Var(..) | Self::Assignment(..) | Self::BreakLoop(..) | Self::Return(..) => false,
 
-            #[cfg(not(feature = "no_module"))]
             Self::Import(..) | Self::Export(..) => false,
 
-            #[cfg(not(feature = "no_closure"))]
             Self::Share(..) => false,
         }
     }
@@ -929,11 +895,7 @@ impl Stmt {
             // A No-op requires a semicolon in order to know it is an empty statement!
             Self::Noop(..) => false,
 
-            Self::Expr(e) => match &**e {
-                #[cfg(not(feature = "no_custom_syntax"))]
-                Expr::Custom(x, ..) if x.is_self_terminated() => true,
-                _ => false,
-            },
+            Self::Expr(e) => matches!(&**e, Expr::Custom(x, ..) if x.is_self_terminated()),
 
             Self::Var(..)
             | Self::Assignment(..)
@@ -942,10 +904,8 @@ impl Stmt {
             | Self::BreakLoop(..)
             | Self::Return(..) => false,
 
-            #[cfg(not(feature = "no_module"))]
             Self::Import(..) | Self::Export(..) => false,
 
-            #[cfg(not(feature = "no_closure"))]
             Self::Share(..) => false,
         }
     }
@@ -1006,12 +966,9 @@ impl Stmt {
                     && x.branch.iter().all(Self::is_pure)
             }
 
-            #[cfg(not(feature = "no_module"))]
             Self::Import(..) => false,
-            #[cfg(not(feature = "no_module"))]
             Self::Export(..) => false,
 
-            #[cfg(not(feature = "no_closure"))]
             Self::Share(..) => false,
         }
     }
@@ -1030,18 +987,15 @@ impl Stmt {
 
             Self::Expr(e) => match &**e {
                 Expr::Stmt(s) => s.iter().all(Self::is_block_dependent),
-                #[cfg(not(feature = "no_module"))]
                 Expr::FnCall(x, ..) if x.is_qualified() => false,
                 Expr::FnCall(x, ..) => x.name == KEYWORD_EVAL,
                 _ => false,
             },
 
-            #[cfg(not(feature = "no_module"))]
             Self::FnCall(x, ..) if x.is_qualified() => false,
 
             Self::FnCall(x, ..) => x.name == KEYWORD_EVAL,
 
-            #[cfg(not(feature = "no_module"))]
             Self::Import(..) | Self::Export(..) => true,
 
             _ => false,
@@ -1064,9 +1018,7 @@ impl Stmt {
                 _ => self.is_pure(),
             },
 
-            #[cfg(not(feature = "no_module"))]
             Self::Import(x, ..) => x.0.is_pure(),
-            #[cfg(not(feature = "no_module"))]
             Self::Export(..) => true,
 
             _ => self.is_pure(),
@@ -1235,7 +1187,6 @@ impl Stmt {
                     return false;
                 }
             }
-            #[cfg(not(feature = "no_module"))]
             Self::Import(x, ..) if !x.0.walk(path, on_node) => {
                 return false;
             }

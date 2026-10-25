@@ -1,5 +1,4 @@
 //! Types to support chaining operations (i.e. indexing and dotting).
-#![cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
 
 use super::{Caches, GlobalRuntimeState, Target};
 use crate::ast::{ASTFlags, BinaryExpr, Expr, OpAssignment};
@@ -9,8 +8,6 @@ use crate::{
     calc_fn_hash, Dynamic, Engine, FnArgsVec, OnceCell, Position, RawrResult, RawrResultOf, Scope,
     ERR,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     convert::{TryFrom, TryInto},
     hash::Hash,
@@ -37,10 +34,8 @@ fn hash_idx() -> (u64, u64) {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum ChainType {
     /// Indexing.
-    #[cfg(not(feature = "no_index"))]
     Indexing,
     /// Dotting.
-    #[cfg(not(feature = "no_object"))]
     Dotting,
 }
 
@@ -48,9 +43,7 @@ impl From<&Expr> for ChainType {
     #[inline(always)]
     fn from(expr: &Expr) -> Self {
         match expr {
-            #[cfg(not(feature = "no_index"))]
             Expr::Index(..) => Self::Indexing,
-            #[cfg(not(feature = "no_object"))]
             Expr::Dot(..) => Self::Dotting,
             expr => unreachable!("Expr::Index or Expr::Dot expected but gets {:?}", expr),
         }
@@ -124,7 +117,6 @@ impl Engine {
         self.track_operation(global, Position::NONE)?;
 
         match target {
-            #[cfg(not(feature = "no_index"))]
             Dynamic(Union::Array(arr, ..)) => {
                 // val_array[idx]
                 let index = idx
@@ -137,7 +129,6 @@ impl Engine {
                 }) {
                     Ok(idx) => idx,
                     Err(err) => {
-                        #[cfg(not(feature = "no_index"))]
                         #[cfg(feature = "internals")]
                         if let Some(ref cb) = self.invalid_array_index {
                             let context =
@@ -152,7 +143,6 @@ impl Engine {
                 arr.get_mut(arr_idx).unwrap().try_into()
             }
 
-            #[cfg(not(feature = "no_index"))]
             Dynamic(Union::Blob(arr, ..)) => {
                 // val_blob[idx]
                 let index = idx
@@ -172,22 +162,19 @@ impl Engine {
                 })
             }
 
-            #[cfg(not(feature = "no_object"))]
             Dynamic(Union::Map(map, ..)) => {
                 // val_map[idx]
                 let index = idx.read_lock::<crate::ImmutableString>().ok_or_else(|| {
                     self.make_type_mismatch_err::<crate::ImmutableString>(idx.type_name(), idx_pos)
                 })?;
 
-                #[cfg(not(feature = "no_object"))]
                 #[cfg(feature = "internals")]
-                if let Some(ref cb) = self.missing_map_property {
-                    if !map.contains_key(index.as_str()) {
-                        let context =
-                            super::EvalContext::new(self, global, caches, _scope, _this_ptr);
-                        return cb(map, index.as_str(), context)
-                            .map_err(|err| err.fill_position(idx_pos));
-                    }
+                if let Some(ref cb) = self.missing_map_property
+                    && !map.contains_key(index.as_str())
+                {
+                    let context = super::EvalContext::new(self, global, caches, _scope, _this_ptr);
+                    return cb(map, index.as_str(), context)
+                        .map_err(|err| err.fill_position(idx_pos));
                 }
 
                 if _add_if_not_found && (map.is_empty() || !map.contains_key(index.as_str())) {
@@ -203,7 +190,6 @@ impl Engine {
                 }
             }
 
-            #[cfg(not(feature = "no_index"))]
             Dynamic(Union::Int(value, ..))
                 if idx.is::<crate::ExclusiveRange>() || idx.is::<crate::InclusiveRange>() =>
             {
@@ -284,7 +270,6 @@ impl Engine {
                 })
             }
 
-            #[cfg(not(feature = "no_index"))]
             Dynamic(Union::Int(value, ..)) => {
                 // val_int[idx]
                 let index = idx
@@ -305,7 +290,6 @@ impl Engine {
                 })
             }
 
-            #[cfg(not(feature = "no_index"))]
             Dynamic(Union::Str(s, ..)) => {
                 // Numeric index - character
                 match idx.as_int() {
@@ -447,7 +431,6 @@ impl Engine {
                 }
             }
 
-            #[cfg(not(feature = "no_closure"))]
             Dynamic(Union::Shared(..)) => {
                 unreachable!("`get_indexed_mut` cannot handle shared values")
             }
@@ -479,9 +462,7 @@ impl Engine {
         new_val: Option<(Dynamic, &OpAssignment)>,
     ) -> RawrResult {
         let BinaryExpr { lhs, rhs } = match expr {
-            #[cfg(not(feature = "no_index"))]
             Expr::Index(x, ..) => &**x,
-            #[cfg(not(feature = "no_object"))]
             Expr::Dot(x, ..) => &**x,
             expr => unreachable!("Expr::Index or Expr::Dot expected but gets {:?}", expr),
         };
@@ -490,20 +471,15 @@ impl Engine {
 
         match (rhs, ChainType::from(expr)) {
             // Short-circuit for simple property access: {expr}.prop
-            #[cfg(not(feature = "no_object"))]
             (Expr::Property(..), ChainType::Dotting) => (),
-            #[cfg(not(feature = "no_object"))]
-            #[cfg(not(feature = "no_index"))]
             (Expr::Property(..), ChainType::Indexing) => {
                 unreachable!("unexpected Expr::Property for indexing")
             }
             // Short-circuit for indexing with literal: {expr}[1]
-            #[cfg(not(feature = "no_index"))]
             (_, ChainType::Indexing) if rhs.get_literal_value(Some(global)).is_some() => {
                 idx_values.push(rhs.get_literal_value(Some(global)).unwrap())
             }
             // Short-circuit for simple method call: {expr}.func()
-            #[cfg(not(feature = "no_object"))]
             (Expr::MethodCall(x, ..), ChainType::Dotting) if x.args.is_empty() => (),
             // All other patterns - evaluate the arguments chain
             _ => {
@@ -578,9 +554,7 @@ impl Engine {
         self.track_operation(global, expr.position())?;
 
         match (expr, ChainType::from(parent)) {
-            #[cfg(not(feature = "no_object"))]
             (Expr::MethodCall(x, ..), ChainType::Dotting) => {
-                #[cfg(not(feature = "no_module"))]
                 debug_assert!(
                     !x.is_qualified(),
                     "method call in dot chain should not be namespace-qualified"
@@ -593,7 +567,6 @@ impl Engine {
                 }
             }
 
-            #[cfg(not(feature = "no_object"))]
             (Expr::Property(..), ChainType::Dotting) => (),
 
             (Expr::Index(x, ..) | Expr::Dot(x, ..), chain_type)
@@ -605,12 +578,9 @@ impl Engine {
 
                 // Evaluate in left-to-right order
                 match (lhs, chain_type) {
-                    #[cfg(not(feature = "no_object"))]
                     (Expr::Property(..), ChainType::Dotting) => (),
 
-                    #[cfg(not(feature = "no_object"))]
                     (Expr::MethodCall(x, ..), ChainType::Dotting) => {
-                        #[cfg(not(feature = "no_module"))]
                         debug_assert!(
                             !x.is_qualified(),
                             "method call in dot chain should not be namespace-qualified"
@@ -622,7 +592,6 @@ impl Engine {
                             _arg_values.push(arg_value.0.flatten());
                         }
                     }
-                    #[cfg(not(feature = "no_index"))]
                     (_, ChainType::Indexing) => {
                         _arg_values.push(
                             self.eval_expr(global, caches, scope, this_ptr.as_deref_mut(), lhs)?
@@ -643,7 +612,6 @@ impl Engine {
                 idx_values.extend(_arg_values);
             }
 
-            #[cfg(not(feature = "no_index"))]
             (_, ChainType::Indexing) => idx_values.push(
                 self.eval_expr(global, caches, scope, this_ptr, expr)?
                     .flatten(),
@@ -686,7 +654,6 @@ impl Engine {
         let op_pos = parent.position();
 
         match ChainType::from(parent) {
-            #[cfg(not(feature = "no_index"))]
             ChainType::Indexing => {
                 // Check for existence with the null conditional operator
                 if parent.options().intersects(ASTFlags::NEGATED) && target.as_ref().is_unit() {
@@ -710,9 +677,7 @@ impl Engine {
                         let (try_setter, result) = {
                             let obj = target.as_mut();
 
-                            #[cfg(not(feature = "no_closure"))]
                             let mut target_guard;
-                            #[cfg(not(feature = "no_closure"))]
                             let obj = if obj.is_shared() {
                                 target_guard = obj.write_lock::<Dynamic>().unwrap();
                                 &mut *target_guard
@@ -766,9 +731,7 @@ impl Engine {
 
                         let obj = target.as_mut();
 
-                        #[cfg(not(feature = "no_closure"))]
                         let mut target_guard;
-                        #[cfg(not(feature = "no_closure"))]
                         let obj = if obj.is_shared() {
                             target_guard = obj.write_lock::<Dynamic>().unwrap();
                             &mut *target_guard
@@ -791,7 +754,6 @@ impl Engine {
                                 None
                             }
                             // Indexed value cannot be referenced - use indexer
-                            #[cfg(not(feature = "no_index"))]
                             Err(err) if matches!(*err, ERR::ErrorIndexingType(..)) => Some(new_val),
                             // Any other error
                             Err(err) => return Err(err),
@@ -834,9 +796,7 @@ impl Engine {
 
                         let obj = target.as_mut();
 
-                        #[cfg(not(feature = "no_closure"))]
                         let mut target_guard;
-                        #[cfg(not(feature = "no_closure"))]
                         let obj = if obj.is_shared() {
                             target_guard = obj.write_lock::<Dynamic>().unwrap();
                             &mut *target_guard
@@ -856,7 +816,6 @@ impl Engine {
                 }
             }
 
-            #[cfg(not(feature = "no_object"))]
             ChainType::Dotting => {
                 // Check for existence with the Elvis operator
                 if parent.options().intersects(ASTFlags::NEGATED) && target.as_ref().is_unit() {
@@ -870,7 +829,6 @@ impl Engine {
                     }
                     // xxx.fn_name(arg_expr_list)
                     (Expr::MethodCall(x, pos), None, ..) => {
-                        #[cfg(not(feature = "no_module"))]
                         debug_assert!(
                             !x.is_qualified(),
                             "method call in dot chain should not be namespace-qualified"
@@ -904,9 +862,7 @@ impl Engine {
                         {
                             let obj = target.as_mut();
 
-                            #[cfg(not(feature = "no_closure"))]
                             let mut target_guard;
-                            #[cfg(not(feature = "no_closure"))]
                             let obj = if obj.is_shared() {
                                 target_guard = obj.write_lock::<Dynamic>().unwrap();
                                 &mut *target_guard
@@ -932,9 +888,7 @@ impl Engine {
 
                         let obj = target.as_mut();
 
-                        #[cfg(not(feature = "no_closure"))]
                         let mut target_guard;
-                        #[cfg(not(feature = "no_closure"))]
                         let obj = if obj.is_shared() {
                             target_guard = obj.write_lock::<Dynamic>().unwrap();
                             &mut *target_guard
@@ -1052,7 +1006,6 @@ impl Engine {
                     (Expr::Index(x, ..) | Expr::Dot(x, ..), new_val, true) => {
                         let _node = &x.lhs;
                         let mut _tp = this_ptr.as_deref_mut();
-                        #[cfg(not(feature = "no_closure"))]
                         let mut target_guard;
 
                         let item = &mut match x.lhs {
@@ -1062,7 +1015,6 @@ impl Engine {
 
                                 let obj = target.as_mut();
 
-                                #[cfg(not(feature = "no_closure"))]
                                 let obj = if obj.is_shared() {
                                     target_guard = obj.write_lock::<Dynamic>().unwrap();
                                     &mut *target_guard
@@ -1080,7 +1032,6 @@ impl Engine {
                             }
                             // {xxx:map}.fn_name(arg_expr_list)[expr] | {xxx:map}.fn_name(arg_expr_list).expr
                             Expr::MethodCall(ref x, pos) => {
-                                #[cfg(not(feature = "no_module"))]
                                 debug_assert!(
                                     !x.is_qualified(),
                                     "method call in dot chain should not be namespace-qualified"
@@ -1201,7 +1152,6 @@ impl Engine {
                             }
                             // xxx.fn_name(arg_expr_list)[expr] | xxx.fn_name(arg_expr_list).expr
                             Expr::MethodCall(ref f, pos) => {
-                                #[cfg(not(feature = "no_module"))]
                                 debug_assert!(
                                     !f.is_qualified(),
                                     "method call in dot chain should not be namespace-qualified"

@@ -12,8 +12,6 @@ use crate::{
     Dynamic, Engine, ImmutableString, RawrResult, RawrResultOf, Scope, VarDefInfo, ERR, INT,
 };
 use std::hash::{Hash, Hasher};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 fn matches_nominal_payload_type(value: &Dynamic, expected: &NominalPayloadType) -> bool {
     match expected {
@@ -268,7 +266,6 @@ fn compare_literal(value: &Dynamic, literal: &NominalLiteral) -> Option<std::cmp
             .as_immutable_string_ref()
             .ok()
             .map(|actual| actual.as_str().cmp(expected.as_str())),
-        #[cfg(not(feature = "no_float"))]
         NominalLiteral::Float(expected) => value
             .as_float()
             .ok()
@@ -486,7 +483,6 @@ impl Engine {
 
         // Restore global state at end of block if necessary
         let orig_always_search_scope = global.always_search_scope;
-        #[cfg(not(feature = "no_module"))]
         let orig_imports_len = global.num_imports();
 
         if restore_orig_state {
@@ -496,7 +492,6 @@ impl Engine {
         defer! { global if restore_orig_state => move |g| {
             g.scope_level -= 1;
 
-            #[cfg(not(feature = "no_module"))]
             g.truncate_imports(orig_imports_len);
 
             // The impact of new local variables goes away at the end of a block
@@ -514,13 +509,11 @@ impl Engine {
         statements.iter().try_fold(Dynamic::UNIT, |_, stmt| {
             let this_ptr = this_ptr.as_deref_mut();
 
-            #[cfg(not(feature = "no_module"))]
             let orig_imports_len = global.num_imports();
 
             let result =
                 self.eval_stmt(global, caches, scope, this_ptr, stmt, restore_orig_state)?;
 
-            #[cfg(not(feature = "no_module"))]
             if matches!(stmt, Stmt::Import(..)) {
                 // Get the extra modules - see if any functions are marked global.
                 // Without global functions, the extra modules never affect function resolution.
@@ -589,11 +582,9 @@ impl Engine {
                         _ => done = false,
                     },
                     (Union::Int(n1, ..), Union::Int(n2, ..)) => {
-                        #[cfg(not(feature = "unchecked"))]
                         #[allow(clippy::wildcard_imports)]
                         use crate::packages::arithmetic::arith_basic::INT::functions::*;
 
-                        #[cfg(not(feature = "unchecked"))]
                         match op_x {
                             PlusAssign => {
                                 *n1 = add(*n1, *n2).map_err(|err| err.fill_position(pos))?
@@ -612,17 +603,7 @@ impl Engine {
                             }
                             _ => done = false,
                         }
-                        #[cfg(feature = "unchecked")]
-                        match op_x {
-                            PlusAssign => *n1 += *n2,
-                            MinusAssign => *n1 -= *n2,
-                            MultiplyAssign => *n1 *= *n2,
-                            DivideAssign => *n1 /= *n2,
-                            ModuloAssign => *n1 %= *n2,
-                            _ => done = false,
-                        }
                     }
-                    #[cfg(not(feature = "no_float"))]
                     (Union::Float(f1, ..), Union::Float(f2, ..)) => match op_x {
                         PlusAssign => **f1 += **f2,
                         MinusAssign => **f1 -= **f2,
@@ -631,7 +612,6 @@ impl Engine {
                         ModuloAssign => **f1 %= **f2,
                         _ => done = false,
                     },
-                    #[cfg(not(feature = "no_float"))]
                     (Union::Float(f1, ..), Union::Int(n2, ..)) => match op_x {
                         PlusAssign => **f1 += *n2 as crate::FLOAT,
                         MinusAssign => **f1 -= *n2 as crate::FLOAT,
@@ -746,7 +726,6 @@ impl Engine {
                         return Err(ERR::ErrorUnboundThis(lhs.position()).into());
                     }
 
-                    #[cfg(not(feature = "no_function"))]
                     {
                         use std::convert::TryInto;
 
@@ -760,8 +739,6 @@ impl Engine {
 
                         self.eval_op_assignment(global, caches, op_info, lhs, target, rhs_val)?;
                     }
-                    #[cfg(feature = "no_function")]
-                    unreachable!();
                 } else if let Expr::Variable(x, ..) = lhs {
                     let rhs_val = self
                         .eval_expr(global, caches, scope, this_ptr.as_deref_mut(), rhs)?
@@ -773,7 +750,6 @@ impl Engine {
 
                     let is_temp_result = !target.is_ref();
 
-                    #[cfg(not(feature = "no_closure"))]
                     // Also handle case where target is a `Dynamic` shared value
                     // (returned by a variable resolver, for example)
                     let is_temp_result = is_temp_result && !target.is_shared();
@@ -789,7 +765,6 @@ impl Engine {
 
                     self.eval_op_assignment(global, caches, op_info, lhs, &mut target, rhs_val)?;
                 } else {
-                    #[cfg(any(not(feature = "no_index"), not(feature = "no_object")))]
                     {
                         let rhs_val = self
                             .eval_expr(global, caches, scope, this_ptr.as_deref_mut(), rhs)?
@@ -808,12 +783,10 @@ impl Engine {
                                 unreachable!("Expr::Variable case is already handled")
                             }
                             // idx_lhs[idx_expr] op= rhs
-                            #[cfg(not(feature = "no_index"))]
                             Expr::Index(..) => self.eval_dot_index_chain(
                                 global, caches, scope, this_ptr, lhs, _new_val,
                             ),
                             // dot_lhs.dot_rhs op= rhs
-                            #[cfg(not(feature = "no_object"))]
                             Expr::Dot(..) => self.eval_dot_index_chain(
                                 global, caches, scope, this_ptr, lhs, _new_val,
                             ),
@@ -871,7 +844,6 @@ impl Engine {
                 }
 
                 // Guard against too many variables
-                #[cfg(not(feature = "unchecked"))]
                 if index.is_none() && scope.len() >= self.max_variables() {
                     return Err(ERR::ErrorTooManyVariables(*pos).into());
                 }
@@ -884,8 +856,6 @@ impl Engine {
 
                 let _alias = if !rewind_scope {
                     // Put global constants into global module
-                    #[cfg(not(feature = "no_function"))]
-                    #[cfg(not(feature = "no_module"))]
                     if global.scope_level == 0
                         && access == AccessMode::ReadOnly
                         && global.lib.iter().any(|m| !m.is_empty())
@@ -916,7 +886,6 @@ impl Engine {
                     }
                 }
 
-                #[cfg(not(feature = "no_module"))]
                 if let Some(alias) = _alias {
                     scope.add_alias_by_index(scope.len() - 1, alias.as_str().into());
                 }
@@ -1139,7 +1108,6 @@ impl Engine {
                             defer! { scope => rewind; let original_scope_len = scope.len(); }
 
                             for (name, value) in bindings {
-                                #[cfg(not(feature = "unchecked"))]
                                 if scope.len() >= self.max_variables() {
                                     return Err(ERR::ErrorTooManyVariables(expr.position()).into());
                                 }
@@ -1287,7 +1255,6 @@ impl Engine {
                 let (var_name, counter, FlowControl { expr, body, .. }) = &**x;
 
                 // Guard against too many variables
-                #[cfg(not(feature = "unchecked"))]
                 if scope.len() >= self.max_variables() - usize::from(counter.is_some()) {
                     return Err(ERR::ErrorTooManyVariables(var_name.pos).into());
                 }
@@ -1310,7 +1277,6 @@ impl Engine {
                     .iter()
                     .find_map(|m| m.get_iter(iter_type));
 
-                #[cfg(not(feature = "no_module"))]
                 let iter_func = iter_func
                     .or_else(|| global.get_iter(iter_type))
                     .or_else(|| {
@@ -1343,7 +1309,6 @@ impl Engine {
                     let mut index_value: INT = -1;
 
                     for iter_value in iter_func(iter_obj) {
-                        #[cfg(not(feature = "unchecked"))]
                         {
                             index_value = index_value.checked_add(1).ok_or_else(|| {
                                 ERR::ErrorArithmetic(
@@ -1351,10 +1316,6 @@ impl Engine {
                                     var_name.pos,
                                 )
                             })?;
-                        }
-                        #[cfg(feature = "unchecked")]
-                        {
-                            index_value += 1;
                         }
 
                         // Increment counter
@@ -1431,12 +1392,6 @@ impl Engine {
 
                             ERR::ErrorRuntime(x, ..) => x.clone(),
 
-                            #[cfg(feature = "no_object")]
-                            _ => {
-                                let _ = err.take_position();
-                                err.to_string().into()
-                            }
-                            #[cfg(not(feature = "no_object"))]
                             _ => {
                                 let mut err_map = crate::Map::new();
                                 let err_pos = err.take_position();
@@ -1468,7 +1423,6 @@ impl Engine {
 
                         if let Expr::Variable(x, ..) = catch_var {
                             // Guard against too many variables
-                            #[cfg(not(feature = "unchecked"))]
                             if scope.len() >= self.max_variables() {
                                 return Err(ERR::ErrorTooManyVariables(catch_var.position()).into());
                             }
@@ -1511,14 +1465,12 @@ impl Engine {
             Stmt::Return(None, .., pos) => Err(ERR::Return(Dynamic::UNIT, *pos).into()),
 
             // Import statement
-            #[cfg(not(feature = "no_module"))]
             Stmt::Import(x, _pos) => {
                 use crate::ModuleResolver;
 
                 let (expr, export) = &**x;
 
                 // Guard against too many modules
-                #[cfg(not(feature = "unchecked"))]
                 if global.num_modules_loaded >= self.max_modules() {
                     return Err(ERR::ErrorTooManyModules(*_pos).into());
                 }
@@ -1578,7 +1530,6 @@ impl Engine {
             }
 
             // Export statement
-            #[cfg(not(feature = "no_module"))]
             Stmt::Export(x, ..) => {
                 use crate::ast::Ident;
                 let (Ident { name, pos, .. }, Ident { name: alias, .. }) = &**x;
@@ -1594,7 +1545,6 @@ impl Engine {
             }
 
             // Share statement
-            #[cfg(not(feature = "no_closure"))]
             Stmt::Share(x) => {
                 for (var, index) in &**x {
                     // Check the variable resolver, if any

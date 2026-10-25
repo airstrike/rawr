@@ -4,14 +4,11 @@ use super::ParseResult;
 use crate::item::type_ref;
 use crate::tokenizer::{Token, TokenStream, TokenizerControl};
 use crate::{Engine, Position, Span, PERR};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// The items of a file, and the spans of its inner attributes (`#![..]`),
 /// which the legacy script does not see.
 pub(super) type ParsedFile = (Box<[crate::item::Parsed]>, Vec<Span>);
 
-#[cfg(not(feature = "no_std"))]
 std::thread_local! {
     /// The `fn` items and `use` imports declared inside function bodies of
     /// the file being parsed. They join the file's items, as Rawr hoists them.
@@ -23,19 +20,13 @@ std::thread_local! {
 }
 
 pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
-    #[cfg(not(feature = "no_std"))]
     let outer = NESTED.take();
-    #[cfg(not(feature = "no_std"))]
     let outer_skipped = SKIPPED.take();
     let parsed = parse_items(engine, source);
-    #[cfg(not(feature = "no_std"))]
     let nested = NESTED.replace(outer);
-    #[cfg(not(feature = "no_std"))]
     let skipped = SKIPPED.replace(outer_skipped);
     let (mut items, mut inner) = parsed?;
-    #[cfg(not(feature = "no_std"))]
     inner.extend(skipped);
-    #[cfg(not(feature = "no_std"))]
     if !nested.is_empty() {
         let mut all = items.into_vec();
         for item in nested {
@@ -77,7 +68,6 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
         inner.extend(dropped.iter().map(crate::item::Parsed::span));
         items = kept.into_boxed_slice();
     }
-    #[cfg(not(feature = "no_function"))]
     if let Some(dropped) = inline_application_builder(&mut items) {
         inner.push(dropped);
     }
@@ -96,7 +86,6 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
 /// the application entry, and the function leaves the file's items. It
 /// applies only when `main` is the function's one caller. The span of the
 /// function that left, which the legacy script does not see either.
-#[cfg(not(feature = "no_function"))]
 fn inline_application_builder(items: &mut Box<[crate::item::Parsed]>) -> Option<Span> {
     use crate::item::{BodyToken, BodyTokenKind as Kind, Parsed};
     let identifier = |token: &BodyToken, name: &str| matches!(token.kind(), Kind::Identifier(text) if text.as_str() == name);
@@ -271,7 +260,6 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                 }
             }
             // `private fn f()`: a name before `fn` is rustc's syntax error.
-            #[cfg(not(feature = "no_function"))]
             (Token::Fn, position) if scan.delimiter_depth == 0 && after_name => {
                 return Err(unexpected(
                     "expected one of `!`, `.`, `::`, `;`, `?`, `{`, `}`, or an operator, \
@@ -283,13 +271,11 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                     *position,
                 ));
             }
-            #[cfg(not(feature = "no_function"))]
             (Token::Fn, _) if scan.delimiter_depth == 0 => {
                 if let Some(item) = parse_private_function(input, &tokenizer_control)? {
                     items.push(item);
                 }
             }
-            #[cfg(not(feature = "no_function"))]
             (Token::Const, _) if scan.delimiter_depth == 0 => {
                 // `const NAME: T = value;` is an item; untyped `const` stays
                 // a legacy script statement.
@@ -540,7 +526,6 @@ struct ScanState {
 }
 
 impl ScanState {
-    #[cfg_attr(feature = "no_function", allow(dead_code))]
     fn inside_body() -> Self {
         Self {
             delimiter_depth: 1,
@@ -602,7 +587,6 @@ fn begins_body_item(token: &Token) -> bool {
 }
 
 /// Whether `token` starts an item that may follow a statement in a body.
-#[cfg_attr(feature = "no_function", allow(dead_code))]
 fn begins_statement_item(token: &Token) -> bool {
     match token {
         Token::Fn
@@ -620,7 +604,6 @@ fn begins_statement_item(token: &Token) -> bool {
 fn is_attribute_marker(token: &Token) -> bool {
     match token {
         Token::Hash => true,
-        #[cfg(not(feature = "no_custom_syntax"))]
         Token::Custom(symbol) => symbol.as_str() == "#",
         _ => false,
     }
@@ -668,7 +651,6 @@ fn parse_item_with_leading(
 ) -> ParseResult<Option<crate::item::Parsed>> {
     if cfg_disabled(&attributes) {
         let end = skip_item(input)?;
-        #[cfg(not(feature = "no_std"))]
         SKIPPED.with_borrow_mut(|skipped| skipped.push(Span::new(start, end)));
         return Ok(None);
     }
@@ -771,7 +753,6 @@ fn marker_impl(
                     associated.span.start(),
                 );
             }
-            #[cfg(not(feature = "no_std"))]
             SKIPPED.with_borrow_mut(|skipped| skipped.push(item.span));
             Ok(None)
         }
@@ -808,7 +789,6 @@ fn parse_enabled_item(
             parse_type_alias(input, attributes, visibility, start)
                 .map(crate::item::Parsed::TypeAlias)
         }
-        #[cfg(not(feature = "no_function"))]
         (Token::Fn, _) => parse_function(
             input,
             tokenizer_control,
@@ -818,12 +798,10 @@ fn parse_enabled_item(
             false,
         )
         .map(crate::item::Parsed::Function),
-        #[cfg(not(feature = "no_function"))]
         (Token::Reserved(text), _) if text.as_str() == "async" => {
             parse_async_function(input, tokenizer_control, attributes, visibility, start)
                 .map(crate::item::Parsed::Function)
         }
-        #[cfg(not(feature = "no_function"))]
         (Token::Const, _) => {
             input.next();
             let name = parse_name(input, "after 'const'")?;
@@ -896,7 +874,6 @@ fn parse_static(
         ))
         .into_err(*position));
     }
-    #[cfg(not(feature = "no_function"))]
     {
         let name = parse_name(input, "after 'static'")?;
         parse_const_rest(
@@ -911,11 +888,6 @@ fn parse_static(
             name,
         )
         .map(crate::item::Parsed::Function)
-    }
-    #[cfg(feature = "no_function")]
-    {
-        let _ = (tokenizer_control, attributes, visibility);
-        Err(PERR::MissingToken("item".into(), "after 'static'".into()).into_err(start))
     }
 }
 
@@ -1378,7 +1350,6 @@ fn bind_previews(
     item: crate::item::Parsed,
     items: &mut Vec<crate::item::Parsed>,
 ) -> ParseResult<()> {
-    #[cfg(not(feature = "no_function"))]
     if let crate::item::Parsed::Function(mut function) = item {
         let mut constants = Vec::new();
         for (index, attribute) in function.header.attributes.iter_mut().enumerate() {
@@ -1650,7 +1621,6 @@ fn parse_use(
         visibility,
         span: Span::new(start, end),
     };
-    #[cfg(not(feature = "no_std"))]
     for tree in extra_uses {
         let used = crate::item::Use {
             header: header.clone(),
@@ -1658,13 +1628,6 @@ fn parse_use(
             span: Span::new(start, end),
         };
         NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Use(used)));
-    }
-    #[cfg(feature = "no_std")]
-    if !extra_uses.is_empty() {
-        return Err(
-            PERR::MissingToken(Token::Comma.into(), "between grouped imports".into())
-                .into_err(start),
-        );
     }
 
     Ok(crate::item::Use {
@@ -1953,7 +1916,6 @@ fn parse_enum(
     })
 }
 
-#[cfg_attr(feature = "no_function", allow(unused_variables))]
 fn parse_impl(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
@@ -1993,14 +1955,10 @@ fn parse_impl(
     parse_where_clause(input, &mut generics, None)?;
     let open = expect(input, Token::LeftBrace, "after an impl owner")?;
     let header_end = after(open, 1);
-    #[cfg(not(feature = "no_function"))]
     let mut functions = Vec::new();
-    #[cfg(feature = "no_function")]
-    let functions = Vec::<crate::item::Function>::new();
     let mut associated = Vec::new();
 
     while !matches!(input.peek(), Some((Token::RightBrace, _))) {
-        #[cfg(not(feature = "no_function"))]
         {
             let (attributes, visibility, function_start) = parse_leading(input)?;
             if cfg_disabled(&attributes) {
@@ -2069,7 +2027,6 @@ fn parse_impl(
     for (_, ty) in &mut associated {
         replace_self(ty, &owner);
     }
-    #[cfg(not(feature = "no_function"))]
     for function in &mut functions {
         for parameter in function.parameters.iter_mut() {
             replace_associated(&mut parameter.ty, &associated, &owner);
@@ -2114,7 +2071,6 @@ fn is_associated_type(input: &mut TokenStream) -> bool {
 
 /// Replace each `Self::Name` in `ty` with the impl's associated type
 /// `Name`, or with `Owner::Name` when this impl does not declare it.
-#[cfg(not(feature = "no_function"))]
 fn replace_associated(
     ty: &mut type_ref::Type,
     associated: &[(crate::item::Name, type_ref::Type)],
@@ -2195,16 +2151,12 @@ fn parse_trait(
     parse_where_clause(input, &mut generics, Some(&mut supertraits))?;
     let open = expect(input, Token::LeftBrace, "after a trait name")?;
     let header_end = after(open, 1);
-    #[cfg(not(feature = "no_function"))]
     let mut functions = Vec::new();
-    #[cfg(feature = "no_function")]
-    let functions = Vec::<crate::item::Function>::new();
     let mut provided = Vec::new();
     let mut associated = Vec::new();
     let mut associated_bounds = Vec::new();
 
     while !matches!(input.peek(), Some((Token::RightBrace, _))) {
-        #[cfg(not(feature = "no_function"))]
         {
             let (attributes, visibility, function_start) = parse_leading(input)?;
             if cfg_disabled(&attributes) {
@@ -2296,7 +2248,6 @@ fn parse_trait(
     })
 }
 
-#[cfg(not(feature = "no_function"))]
 fn parse_function(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
@@ -2333,7 +2284,6 @@ fn parse_function(
 
 /// `async fn`: a function that returns `impl Future<Output = T>` of its
 /// declared output `T`, and whose body runs as an `async move` block.
-#[cfg(not(feature = "no_function"))]
 fn parse_async_function(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
@@ -2361,7 +2311,6 @@ fn parse_async_function(
 }
 
 /// `impl Future<Output = output>`, as `parse_impl_bounds` reads it.
-#[cfg(not(feature = "no_function"))]
 fn future_type(output: type_ref::Type, at: Span) -> type_ref::Type {
     let path = |text: String, arguments: Vec<type_ref::Argument>| type_ref::Path {
         segments: Box::new([type_ref::Segment {
@@ -2391,7 +2340,6 @@ fn future_type(output: type_ref::Type, at: Span) -> type_ref::Type {
 
 /// Parse a function after its name and `(` (`parameters` is `Some`, holding
 /// a first parameter name already consumed), or after `()` (`None`).
-#[cfg(not(feature = "no_function"))]
 fn parse_function_rest(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
@@ -2789,7 +2737,6 @@ fn parse_where_clause(
 }
 
 /// Replace each `Self` in `ty` with `owner`.
-#[cfg(not(feature = "no_function"))]
 fn replace_self(ty: &mut type_ref::Type, owner: &type_ref::Type) {
     match ty {
         type_ref::Type::Path(path)
@@ -2820,7 +2767,6 @@ fn replace_self(ty: &mut type_ref::Type, owner: &type_ref::Type) {
 
 /// `: T` after a pattern parameter: the parameter takes a compiler-private
 /// name and the pattern is bound at the top of the body.
-#[cfg(not(feature = "no_function"))]
 fn parse_pattern_parameter(
     input: &mut TokenStream,
     pattern: crate::item::ParameterPattern,
@@ -2842,7 +2788,6 @@ fn parse_pattern_parameter(
 
 /// An irrefutable parameter pattern: `name`, `mut name`, `_`, `(p, ..)`,
 /// `&p`, `&mut p`.
-#[cfg(not(feature = "no_function"))]
 fn parse_parameter_pattern(input: &mut TokenStream) -> ParseResult<crate::item::ParameterPattern> {
     let (token, start) = input.peek().expect("token streams always end with EOF");
     let start = *start;
@@ -2914,7 +2859,6 @@ fn parse_parameter_pattern(input: &mut TokenStream) -> ParseResult<crate::item::
 
 /// After a parameter pattern's first name: `W(a, ..)` or `module::W(..)`
 /// of a tuple struct, else the binding `name`.
-#[cfg(not(feature = "no_function"))]
 fn parse_tuple_struct_parameter(
     input: &mut TokenStream,
     name: crate::item::Name,
@@ -2959,7 +2903,6 @@ fn parse_tuple_struct_parameter(
 /// `const NAME: T = value;` in an impl or trait (`const NAME: T;` when
 /// required): a constant function without `self` whose body is the value,
 /// which `Type::NAME` and `T::NAME` call.
-#[cfg(not(feature = "no_function"))]
 fn parse_associated_const(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
@@ -3012,7 +2955,6 @@ fn parse_associated_const(
 
 /// The value of an associated const after its `=`, its body as a
 /// top-level const's is.
-#[cfg(not(feature = "no_function"))]
 fn finish_associated_const(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
@@ -3062,7 +3004,6 @@ fn finish_associated_const(
 }
 
 /// Parse `: T = value;` after `const NAME`.
-#[cfg(not(feature = "no_function"))]
 fn parse_const_rest(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
@@ -3112,7 +3053,6 @@ fn parse_const_rest(
     })
 }
 
-#[cfg(not(feature = "no_function"))]
 fn malformed_receiver<T>(input: &mut TokenStream) -> ParseResult<T> {
     match input.next().expect("token streams always end with EOF") {
         (Token::LexError(error), position) => Err(error.into_err(position)),
@@ -3798,7 +3738,6 @@ fn parse_fn_signature(input: &mut TokenStream, start: Position) -> ParseResult<t
 /// A generic parameter bounded by `Fn(A) -> B` is that function type, as
 /// Rawr has one function type: each use of the parameter in the signature
 /// is replaced by it, and the parameter is dropped.
-#[cfg(not(feature = "no_function"))]
 fn erase_fn_bounds(
     generics: &mut Vec<crate::item::GenericParam>,
     parameters: &mut [crate::item::Parameter],
@@ -3852,7 +3791,6 @@ fn erase_fn_bounds(
 }
 
 /// Replace each path `name::Item` in `ty` with `item`.
-#[cfg(not(feature = "no_function"))]
 fn replace_item_projection(ty: &mut type_ref::Type, name: &str, item: &type_ref::Type) {
     match ty {
         type_ref::Type::Path(path)
@@ -3884,7 +3822,6 @@ fn replace_item_projection(ty: &mut type_ref::Type, name: &str, item: &type_ref:
 }
 
 /// Replace each bare path `name` in `ty` with `replacement`.
-#[cfg(not(feature = "no_function"))]
 fn replace_named(ty: &mut type_ref::Type, name: &str, replacement: &type_ref::Type) {
     match ty {
         type_ref::Type::Path(path)
@@ -4051,7 +3988,6 @@ fn parse_lifetime(input: &mut TokenStream) -> ParseResult<type_ref::Lifetime> {
     })
 }
 
-#[cfg(not(feature = "no_function"))]
 fn parse_body_syntax(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
@@ -4083,7 +4019,6 @@ fn parse_body_syntax(
     let mut calls: Vec<Option<(&'static [&'static str], usize)>> = Vec::new();
 
     loop {
-        #[cfg(not(feature = "no_std"))]
         if let Some((Token::Pipe, _)) = input.peek()
             && let Some(Some((roles, index))) = calls.last()
             && let Some(role) = roles.get(*index)
@@ -4102,7 +4037,6 @@ fn parse_body_syntax(
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(function)));
             continue;
         }
-        #[cfg(not(feature = "no_std"))]
         if boundary && let Some((Token::Fn, position)) = input.peek() {
             let position = *position;
             let function = parse_function(
@@ -4118,7 +4052,6 @@ fn parse_body_syntax(
         }
         // `struct`, `enum`, `impl`, `trait` and `type` items inside a body,
         // with their attributes, join the file's items as `fn` items do.
-        #[cfg(not(feature = "no_std"))]
         if boundary
             && let Some((token, position)) = input.peek()
             && (is_attribute_marker(token) || begins_body_item(token))
@@ -4153,7 +4086,6 @@ fn parse_body_syntax(
             }
         }
         // `unsafe impl Send for T {}` is an item; `unsafe { .. }` is a block.
-        #[cfg(not(feature = "no_std"))]
         if boundary
             && let Some((Token::Identifier(text), position)) = input.peek()
             && text.as_str() == "unsafe"
@@ -4177,7 +4109,6 @@ fn parse_body_syntax(
             after_extern = false;
             continue;
         }
-        #[cfg(not(feature = "no_std"))]
         if boundary && let Some((Token::Use, position)) = input.peek() {
             let position = *position;
             let used = parse_use(input, Box::default(), None, position)?;
@@ -4217,7 +4148,6 @@ fn parse_body_syntax(
                         "unsafe" | "safe" | "extern" | "default" | "auto" | "raw"
                     ),
                     Token::StringConstant(_) => !after_extern,
-                    #[cfg(not(feature = "no_float"))]
                     Token::FloatConstant(_) => true,
                     Token::IntegerConstant(_)
                     | Token::ByteConstant(_)
@@ -4348,7 +4278,6 @@ fn parse_body_syntax(
 /// parameters, which the application entry names in its place. Its output
 /// is the closure's `-> T`, or the unit for an `update`; a `view`'s is
 /// `impl Widget<Message>` of the update's Message, which the entry sets.
-#[cfg(not(feature = "no_std"))]
 fn parse_callback_closure(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
@@ -4477,7 +4406,6 @@ fn parse_callback_closure(
 /// The name prefix of a function read from an application callback closure.
 pub(crate) const CALLBACK_CLOSURE_PREFIX: &str = "__rawr_closure_";
 
-#[cfg(not(feature = "no_function"))]
 /// A private top-level `fn`: a typed item, as in Rust.
 fn parse_private_function(
     input: &mut TokenStream,
@@ -4517,7 +4445,6 @@ fn parse_private_function(
     )?)))
 }
 
-#[cfg(not(feature = "no_function"))]
 fn body_token(token: Token, position: Position) -> crate::item::BodyToken {
     use crate::item::BodyTokenKind as Kind;
 

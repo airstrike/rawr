@@ -2,8 +2,6 @@
 
 use super::{ASTFlags, Expr, FnAccess, Stmt};
 use crate::{expose_under_internals, Dynamic, FnNamespace, ImmutableString, Position, ThinVec};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     borrow::Borrow,
     fmt,
@@ -24,18 +22,15 @@ pub struct AST {
     /// Global statements.
     body: ThinVec<Stmt>,
     /// Script-defined functions.
-    #[cfg(not(feature = "no_function"))]
     lib: crate::SharedModule,
     /// Compiler-owned native dependencies required by retained statements and
     /// function bodies. Kept separate so public script-function transforms
     /// cannot discard their proof-carrying operations.
-    #[cfg(not(feature = "no_function"))]
     support: crate::SharedModule,
     /// The exported host items this program calls, bound to its engine's
     /// registry on first evaluation.
     host: Option<crate::Shared<crate::program::hosted::Hosted>>,
     /// Embedded module resolver, if any.
-    #[cfg(not(feature = "no_module"))]
     pub(crate) resolver: Option<crate::Shared<crate::module::resolvers::StaticModuleResolver>>,
     /// [`AST`] documentation.
     #[cfg(feature = "metadata")]
@@ -58,12 +53,10 @@ impl fmt::Debug for AST {
         fp.field("source", &self.source);
         #[cfg(feature = "metadata")]
         fp.field("doc", &self.doc);
-        #[cfg(not(feature = "no_module"))]
         fp.field("resolver", &self.resolver);
 
         fp.field("body", &self.body);
 
-        #[cfg(not(feature = "no_function"))]
         for (.., fn_def) in self.lib.iter_script_fn() {
             let sig = fn_def.to_string();
             fp.field(&sig, &fn_def.body.statements());
@@ -81,19 +74,16 @@ impl AST {
     #[must_use]
     fn new(
         statements: impl IntoIterator<Item = Stmt>,
-        #[cfg(not(feature = "no_function"))] functions: impl Into<crate::SharedModule>,
+        functions: impl Into<crate::SharedModule>,
     ) -> Self {
         Self {
             source: None,
             #[cfg(feature = "metadata")]
             doc: crate::SmartString::new_const(),
             body: statements.into_iter().collect(),
-            #[cfg(not(feature = "no_function"))]
             lib: functions.into(),
-            #[cfg(not(feature = "no_function"))]
             support: crate::Module::new().into(),
             host: None,
-            #[cfg(not(feature = "no_module"))]
             resolver: None,
         }
     }
@@ -104,19 +94,14 @@ impl AST {
     #[must_use]
     fn new_with_source(
         statements: impl IntoIterator<Item = Stmt>,
-        #[cfg(not(feature = "no_function"))] functions: impl Into<crate::SharedModule>,
+        functions: impl Into<crate::SharedModule>,
         source: impl Into<ImmutableString>,
     ) -> Self {
-        let mut ast = Self::new(
-            statements,
-            #[cfg(not(feature = "no_function"))]
-            functions,
-        );
+        let mut ast = Self::new(statements, functions);
         ast.set_source(source);
         ast
     }
     /// Create a new [`AST`] from a shared [`Module`][crate::Module].
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     #[must_use]
     pub fn new_from_module(module: impl Into<crate::SharedModule>) -> Self {
@@ -138,12 +123,9 @@ impl AST {
             #[cfg(feature = "metadata")]
             doc: crate::SmartString::new_const(),
             body: <_>::default(),
-            #[cfg(not(feature = "no_function"))]
             lib: crate::Module::new().into(),
-            #[cfg(not(feature = "no_function"))]
             support: crate::Module::new().into(),
             host: None,
-            #[cfg(not(feature = "no_module"))]
             resolver: None,
         }
     }
@@ -164,7 +146,6 @@ impl AST {
     pub fn set_source(&mut self, source: impl Into<ImmutableString>) -> &mut Self {
         let source = source.into();
 
-        #[cfg(not(feature = "no_function"))]
         crate::Shared::get_mut(&mut self.lib)
             .as_mut()
             .map(|m| m.set_id(source.clone()));
@@ -207,9 +188,6 @@ impl AST {
         &mut self.body
     }
     /// Does this [`AST`] contain script-defined functions?
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     #[must_use]
     pub fn has_functions(&self) -> bool {
@@ -217,17 +195,13 @@ impl AST {
     }
     /// _(internals)_ Get the internal shared [`Module`][crate::Module] containing all script-defined functions.
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_function`.
     #[expose_under_internals]
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     #[must_use]
     const fn shared_lib(&self) -> &crate::SharedModule {
         &self.lib
     }
     /// Get compiler-owned runtime support carried by this AST.
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     pub(crate) const fn shared_support(&self) -> &crate::SharedModule {
         &self.support
@@ -241,7 +215,6 @@ impl AST {
         self.host = Some(crate::Shared::new(host));
     }
     /// Merge compiler-owned runtime support into this AST.
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn add_support(&mut self, support: impl Into<crate::SharedModule>) {
         let support = support.into();
         if !support.is_empty() {
@@ -250,10 +223,7 @@ impl AST {
     }
     /// _(internals)_ Get the embedded [module resolver][crate::ModuleResolver].
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_module`.
     #[cfg(feature = "internals")]
-    #[cfg(not(feature = "no_module"))]
     #[inline(always)]
     #[must_use]
     pub const fn resolver(
@@ -264,10 +234,7 @@ impl AST {
     /// Clone the [`AST`]'s functions into a new [`AST`].
     /// No statements are cloned.
     ///
-    /// Not available under `no_function`.
-    ///
     /// This operation is cheap because functions are shared.
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     #[must_use]
     pub fn clone_functions_only(&self) -> Self {
@@ -276,10 +243,7 @@ impl AST {
     /// Clone the [`AST`]'s functions into a new [`AST`] based on a filter predicate.
     /// No statements are cloned.
     ///
-    /// Not available under `no_function`.
-    ///
     /// This operation is cheap because functions are shared.
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     #[must_use]
     pub fn clone_functions_only_filtered(
@@ -296,7 +260,6 @@ impl AST {
             lib: lib.into(),
             support: self.support.clone(),
             host: self.host.clone(),
-            #[cfg(not(feature = "no_module"))]
             resolver: self.resolver.clone(),
         }
     }
@@ -310,12 +273,9 @@ impl AST {
             #[cfg(feature = "metadata")]
             doc: self.doc.clone(),
             body: self.body.clone(),
-            #[cfg(not(feature = "no_function"))]
             lib: crate::Module::new().into(),
-            #[cfg(not(feature = "no_function"))]
             support: self.support.clone(),
             host: self.host.clone(),
-            #[cfg(not(feature = "no_module"))]
             resolver: self.resolver.clone(),
         }
     }
@@ -334,7 +294,6 @@ impl AST {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// # #[cfg(not(feature = "no_function"))]
     /// # {
     /// use rawr::Engine;
     ///
@@ -387,7 +346,6 @@ impl AST {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// # #[cfg(not(feature = "no_function"))]
     /// # {
     /// use rawr::Engine;
     ///
@@ -427,8 +385,6 @@ impl AST {
     }
     /// Merge two [`AST`] into one.  Both [`AST`]'s are untouched and a new, merged, version
     /// is returned.
-    ///
-    /// Not available under `no_function`.
     ///
     /// Statements in the second [`AST`] are simply appended to the end of the first _without any processing_.
     /// Thus, the return value of the first [`AST`] (if using expression-statement syntax) is buried.
@@ -476,7 +432,6 @@ impl AST {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     #[must_use]
     pub fn merge_filtered(
@@ -506,14 +461,12 @@ impl AST {
             }
         };
 
-        #[cfg(not(feature = "no_function"))]
         let lib = {
             let mut lib = self.lib.as_ref().clone();
             lib.merge_filtered(&other.lib, &_filter);
             lib
         };
 
-        #[cfg(not(feature = "no_function"))]
         let support = {
             let mut support = self.support.as_ref().clone();
             support.merge(&other.support);
@@ -521,26 +474,15 @@ impl AST {
         };
 
         let mut _ast = match other.source {
-            Some(ref source) => Self::new_with_source(
-                merged,
-                #[cfg(not(feature = "no_function"))]
-                lib,
-                source.clone(),
-            ),
-            None => Self::new(
-                merged,
-                #[cfg(not(feature = "no_function"))]
-                lib,
-            ),
+            Some(ref source) => Self::new_with_source(merged, lib, source.clone()),
+            None => Self::new(merged, lib),
         };
 
-        #[cfg(not(feature = "no_function"))]
         {
             _ast.support = support.into();
         }
         _ast.host = self.host.clone().or_else(|| other.host.clone());
 
-        #[cfg(not(feature = "no_module"))]
         match (
             self.resolver.as_deref().is_none_or(|r| r.is_empty()),
             other.resolver.as_deref().is_none_or(|r| r.is_empty()),
@@ -570,8 +512,6 @@ impl AST {
         _ast
     }
     /// Combine one [`AST`] with another.  The second [`AST`] is consumed.
-    ///
-    /// Not available under `no_function`.
     ///
     /// Statements in the second [`AST`] are simply appended to the end of the first _without any processing_.
     /// Thus, the return value of the first [`AST`] (if using expression-statement syntax) is buried.
@@ -619,7 +559,6 @@ impl AST {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     pub fn combine_filtered(
         &mut self,
@@ -634,7 +573,6 @@ impl AST {
         other: Self,
         _filter: impl Fn(FnNamespace, FnAccess, bool, &str, usize) -> bool,
     ) -> &mut Self {
-        #[cfg(not(feature = "no_module"))]
         match (
             self.resolver.as_deref().is_none_or(|r| r.is_empty()),
             other.resolver.as_deref().is_none_or(|r| r.is_empty()),
@@ -660,12 +598,10 @@ impl AST {
             (_, _) => self.body.extend(other.body),
         }
 
-        #[cfg(not(feature = "no_function"))]
         if !other.lib.is_empty() {
             crate::func::shared_make_mut(&mut self.lib).merge_filtered(&other.lib, &_filter);
         }
 
-        #[cfg(not(feature = "no_function"))]
         if !other.support.is_empty() {
             crate::func::shared_make_mut(&mut self.support).merge(&other.support);
         }
@@ -684,13 +620,10 @@ impl AST {
     }
     /// Filter out the functions, retaining only some based on a filter predicate.
     ///
-    /// Not available under `no_function`.
-    ///
     /// # Example
     ///
     /// ```
     /// # fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    /// # #[cfg(not(feature = "no_function"))]
     /// # {
     /// use rawr::Engine;
     ///
@@ -709,7 +642,6 @@ impl AST {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     pub fn retain_functions(
         &mut self,
@@ -722,23 +654,18 @@ impl AST {
     }
     /// _(internals)_ Iterate through all function definitions.
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_function`.
     #[expose_under_internals]
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     fn iter_fn_def(&self) -> impl Iterator<Item = &crate::Shared<super::ScriptFuncDef>> {
         self.lib.iter_script_fn().map(|(.., fn_def)| fn_def)
     }
 
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn for_each_fn_def_mut(&mut self, callback: impl FnMut(&mut super::ScriptFuncDef)) {
         crate::func::shared_make_mut(&mut self.lib).for_each_script_fn_mut(callback);
     }
 
     /// Make the script function `name` also callable as `alias`, keeping it
     /// under `name` for the calls that already name it.
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn alias_script_function(&mut self, name: &str, alias: &str) {
         let Some(definition) = self
             .lib
@@ -754,7 +681,6 @@ impl AST {
     }
 
     /// Rebuild the script-function index after compiler-owned definitions are renamed.
-    #[cfg(not(feature = "no_function"))]
     pub(crate) fn reindex_script_functions(&mut self) {
         let definitions: Vec<_> = self
             .lib
@@ -770,9 +696,6 @@ impl AST {
         self.lib = module.into();
     }
     /// Iterate through all function definitions.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     pub fn iter_functions(&self) -> impl Iterator<Item = super::ScriptFnMetadata<'_>> {
         self.lib
@@ -780,9 +703,6 @@ impl AST {
             .map(|(.., fn_def)| fn_def.as_ref().into())
     }
     /// Clear all function definitions in the [`AST`].
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     pub fn clear_functions(&mut self) -> &mut Self {
         self.lib = crate::Module::new().into();
@@ -886,7 +806,6 @@ impl AST {
                 return false;
             }
         }
-        #[cfg(not(feature = "no_function"))]
         for stmt in self.iter_fn_def().flat_map(|f| f.body.iter()) {
             if !stmt.walk(path, on_node) {
                 return false;
@@ -927,7 +846,6 @@ impl AsRef<[Stmt]> for AST {
     }
 }
 
-#[cfg(not(feature = "no_function"))]
 impl Borrow<crate::Module> for AST {
     #[inline(always)]
     fn borrow(&self) -> &crate::Module {
@@ -935,7 +853,6 @@ impl Borrow<crate::Module> for AST {
     }
 }
 
-#[cfg(not(feature = "no_function"))]
 impl AsRef<crate::Module> for AST {
     #[inline(always)]
     fn as_ref(&self) -> &crate::Module {
@@ -943,7 +860,6 @@ impl AsRef<crate::Module> for AST {
     }
 }
 
-#[cfg(not(feature = "no_function"))]
 impl Borrow<crate::SharedModule> for AST {
     #[inline(always)]
     fn borrow(&self) -> &crate::SharedModule {
@@ -951,7 +867,6 @@ impl Borrow<crate::SharedModule> for AST {
     }
 }
 
-#[cfg(not(feature = "no_function"))]
 impl AsRef<crate::SharedModule> for AST {
     #[inline(always)]
     fn as_ref(&self) -> &crate::SharedModule {
@@ -1030,28 +945,21 @@ impl ASTNode<'_> {
 #[derive(Debug, Clone)]
 pub struct EncapsulatedEnviron {
     /// Stack of loaded [modules][crate::Module] containing script-defined functions.
-    #[cfg(not(feature = "no_function"))]
     pub lib: crate::StaticVec<crate::SharedModule>,
     /// Imported [modules][crate::Module].
-    #[cfg(not(feature = "no_module"))]
     pub imports: crate::ThinVec<(ImmutableString, crate::SharedModule)>,
     /// Globally-defined constants.
-    #[cfg(not(feature = "no_module"))]
-    #[cfg(not(feature = "no_function"))]
     pub constants: Option<crate::eval::SharedGlobalConstants>,
 }
 
-#[cfg(not(feature = "no_function"))]
 impl From<&crate::eval::GlobalRuntimeState> for EncapsulatedEnviron {
     fn from(value: &crate::eval::GlobalRuntimeState) -> Self {
         Self {
             lib: value.lib.clone(),
-            #[cfg(not(feature = "no_module"))]
             imports: value
                 .iter_imports_raw()
                 .map(|(n, m)| (n.clone(), m.clone()))
                 .collect(),
-            #[cfg(not(feature = "no_module"))]
             constants: value.constants.clone(),
         }
     }

@@ -9,8 +9,6 @@ use crate::{
     calc_fn_hash, Dynamic, FnArgsVec, FnPtr, Identifier, ImmutableString, Position, SmartString,
     StaticVec, ThinVec, INT,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     collections::BTreeMap,
     fmt,
@@ -33,9 +31,6 @@ pub struct BinaryExpr {
 
 /// _(internals)_ A custom syntax expression.
 /// Exported under the `internals` feature only.
-///
-/// Not available under `no_custom_syntax`.
-#[cfg(not(feature = "no_custom_syntax"))]
 #[derive(Debug, Clone, Hash)]
 pub struct CustomExpr {
     /// List of keywords.
@@ -51,7 +46,6 @@ pub struct CustomExpr {
     pub self_terminated: bool,
 }
 
-#[cfg(not(feature = "no_custom_syntax"))]
 impl CustomExpr {
     /// Is this custom syntax self-terminated (i.e. no need for a semicolon terminator)?
     ///
@@ -93,7 +87,6 @@ impl CustomExpr {
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct FnCallHashes {
     /// Pre-calculated hash for a script-defined function ([`None`] if native functions only).
-    #[cfg(not(feature = "no_function"))]
     script: Option<u64>,
     /// Pre-calculated hash for a native Rust function with no parameter types.
     native: u64,
@@ -103,15 +96,11 @@ impl fmt::Debug for FnCallHashes {
     #[cold]
     #[inline(never)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        #[cfg(not(feature = "no_function"))]
-        return match self.script {
+        match self.script {
             Some(script) if script == self.native => fmt::Debug::fmt(&self.native, f),
             Some(script) => write!(f, "({script}, {})", self.native),
             None => write!(f, "{} (native only)", self.native),
-        };
-
-        #[cfg(feature = "no_function")]
-        return write!(f, "{}", self.native);
+        }
     }
 }
 
@@ -121,7 +110,6 @@ impl FnCallHashes {
     #[must_use]
     pub const fn from_hash(hash: u64) -> Self {
         Self {
-            #[cfg(not(feature = "no_function"))]
             script: Some(hash),
             native: hash,
         }
@@ -131,15 +119,11 @@ impl FnCallHashes {
     #[must_use]
     pub const fn from_native_only(hash: u64) -> Self {
         Self {
-            #[cfg(not(feature = "no_function"))]
             script: None,
             native: hash,
         }
     }
     /// Create a [`FnCallHashes`] with both script function and native Rust hashes.
-    ///
-    /// Not available under `no_function`.
-    #[cfg(not(feature = "no_function"))]
     #[inline]
     #[must_use]
     pub const fn from_script_and_native(script: u64, native: u64) -> Self {
@@ -152,10 +136,7 @@ impl FnCallHashes {
     #[inline(always)]
     #[must_use]
     pub const fn is_native_only(&self) -> bool {
-        #[cfg(not(feature = "no_function"))]
-        return self.script.is_none();
-        #[cfg(feature = "no_function")]
-        return true;
+        self.script.is_none()
     }
     /// Get the native hash.
     ///
@@ -172,7 +153,6 @@ impl FnCallHashes {
     /// # Panics
     ///
     /// Panics if this [`FnCallHashes`] is native-only.
-    #[cfg(not(feature = "no_function"))]
     #[inline(always)]
     #[must_use]
     pub fn script(&self) -> u64 {
@@ -185,7 +165,6 @@ impl FnCallHashes {
 #[derive(Clone, Hash)]
 pub struct FnCallExpr {
     /// Namespace of the function, if any.
-    #[cfg(not(feature = "no_module"))]
     pub namespace: super::Namespace,
     /// Function name.
     pub name: ImmutableString,
@@ -204,7 +183,6 @@ impl fmt::Debug for FnCallExpr {
     #[inline(never)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut ff = f.debug_struct("FnCallExpr");
-        #[cfg(not(feature = "no_module"))]
         if !self.namespace.is_empty() {
             ff.field("namespace", &self.namespace);
         }
@@ -223,9 +201,6 @@ impl fmt::Debug for FnCallExpr {
 
 impl FnCallExpr {
     /// Does this function call contain a qualified namespace?
-    ///
-    /// Not available under `no_module`
-    #[cfg(not(feature = "no_module"))]
     #[inline(always)]
     #[must_use]
     pub fn is_qualified(&self) -> bool {
@@ -269,7 +244,6 @@ pub enum Expr {
     /// Integer constant.
     IntegerConstant(INT, Position),
     /// Floating-point constant.
-    #[cfg(not(feature = "no_float"))]
     FloatConstant(crate::types::FloatWrapper<crate::FLOAT>, Position),
     /// Character constant.
     CharConstant(char, Position),
@@ -292,9 +266,7 @@ pub enum Expr {
     /// the vast majority of cases (unless there are more than 255 variables defined!).
     /// This is to avoid reading a pointer redirection during each variable access.
     Variable(
-        #[cfg(not(feature = "no_module"))]
         Box<(Option<NonZeroUsize>, ImmutableString, super::Namespace, u64)>,
-        #[cfg(feature = "no_module")] Box<(Option<NonZeroUsize>, ImmutableString)>,
         Option<NonZeroU8>,
         Position,
     ),
@@ -336,7 +308,6 @@ pub enum Expr {
     /// lhs `??` rhs
     Coalesce(Box<StaticVec<Self>>, Position),
     /// Custom syntax
-    #[cfg(not(feature = "no_custom_syntax"))]
     Custom(Box<CustomExpr>, Position),
 }
 
@@ -357,7 +328,6 @@ impl fmt::Debug for Expr {
             Self::DynamicConstant(value, ..) => write!(f, "{value:?}"),
             Self::BoolConstant(value, ..) => write!(f, "{value:?}"),
             Self::IntegerConstant(value, ..) => write!(f, "{value:?}"),
-            #[cfg(not(feature = "no_float"))]
             Self::FloatConstant(value, ..) => write!(f, "{value:?}"),
             Self::CharConstant(value, ..) => write!(f, "{value:?}"),
             Self::StringConstant(value, ..) => write!(f, "{value:?}"),
@@ -381,7 +351,6 @@ impl fmt::Debug for Expr {
             Self::Variable(x, i, ..) => {
                 f.write_str("Variable(")?;
 
-                #[cfg(not(feature = "no_module"))]
                 if !x.2.is_empty() {
                     write!(f, "{}{}", x.1, crate::engine::NAMESPACE_SEPARATOR)?;
                     let pos = x.2.position();
@@ -390,7 +359,6 @@ impl fmt::Debug for Expr {
                     }
                 }
                 f.write_str(&x.1)?;
-                #[cfg(not(feature = "no_module"))]
                 if let Some(n) = x.2.index {
                     write!(f, " #{n}")?;
                 }
@@ -454,7 +422,6 @@ impl fmt::Debug for Expr {
                 });
                 f.finish()
             }
-            #[cfg(not(feature = "no_custom_syntax"))]
             Self::Custom(x, ..) => f.debug_tuple("Custom").field(x).finish(),
         }?;
 
@@ -473,7 +440,6 @@ impl Expr {
             Self::DynamicConstant(x, ..) => {
                 let mut _value = x.as_ref().clone();
 
-                #[cfg(not(feature = "no_function"))]
                 if let Some(global) = global
                     && let Some(mut fn_ptr) = _value.write_lock::<FnPtr>()
                 {
@@ -485,21 +451,18 @@ impl Expr {
             }
 
             Self::IntegerConstant(x, ..) => (*x).into(),
-            #[cfg(not(feature = "no_float"))]
             Self::FloatConstant(x, ..) => (*x).into(),
             Self::CharConstant(x, ..) => (*x).into(),
             Self::StringConstant(x, ..) => x.clone().into(),
             Self::BoolConstant(x, ..) => (*x).into(),
             Self::Unit(..) => Dynamic::UNIT,
 
-            #[cfg(not(feature = "no_index"))]
             Self::Array(x, ..) if self.is_constant() => {
                 let mut arr = crate::Array::with_capacity(x.len());
                 arr.extend(x.iter().map(|v| v.get_literal_value(global).unwrap()));
                 Dynamic::from_array(arr)
             }
 
-            #[cfg(not(feature = "no_object"))]
             Self::Map(x, ..) if self.is_constant() => {
                 let mut map = x.1.clone();
 
@@ -521,7 +484,6 @@ impl Expr {
             }
 
             // Qualified function call
-            #[cfg(not(feature = "no_module"))]
             Self::FnCall(x, ..) if x.is_qualified() => return None,
 
             // Function call
@@ -581,13 +543,10 @@ impl Expr {
             #[cfg(feature = "decimal")]
             Union::Decimal(value, ..) => Self::DynamicConstant(Box::new((*value).into()), pos),
 
-            #[cfg(not(feature = "no_float"))]
             Union::Float(f, ..) => Self::FloatConstant(f, pos),
 
-            #[cfg(not(feature = "no_index"))]
             Union::Array(a, ..) => Self::DynamicConstant(Box::new((*a).into()), pos),
 
-            #[cfg(not(feature = "no_object"))]
             Union::Map(m, ..) => Self::DynamicConstant(Box::new((*m).into()), pos),
 
             // A closure's pointer carries its definition, which `Fn(name)`
@@ -597,7 +556,6 @@ impl Expr {
             {
                 Self::FnCall(
                     FnCallExpr {
-                        #[cfg(not(feature = "no_module"))]
                         namespace: super::Namespace::NONE,
                         name: KEYWORD_FN_PTR.into(),
                         hashes: FnCallHashes::from_hash(calc_fn_hash(None, f.fn_name(), 1)),
@@ -614,13 +572,10 @@ impl Expr {
         }
     }
     /// Return the variable name if the expression a simple variable access.
-    ///
-    /// `non_qualified` is ignored under `no_module`.
     #[inline]
     #[must_use]
     pub(crate) fn get_variable_name(&self, _non_qualified: bool) -> Option<&str> {
         match self {
-            #[cfg(not(feature = "no_module"))]
             Self::Variable(x, ..) if _non_qualified && !x.2.is_empty() => None,
             Self::Variable(x, ..) => Some(&x.1),
             _ => None,
@@ -633,7 +588,6 @@ impl Expr {
         match self {
             Self::Index(_, options, _) | Self::Dot(_, options, _) => *options,
 
-            #[cfg(not(feature = "no_float"))]
             Self::FloatConstant(..) => ASTFlags::empty(),
 
             Self::DynamicConstant(..)
@@ -655,7 +609,6 @@ impl Expr {
             | Self::Property(..)
             | Self::Stmt(..) => ASTFlags::empty(),
 
-            #[cfg(not(feature = "no_custom_syntax"))]
             Self::Custom(..) => ASTFlags::empty(),
         }
     }
@@ -664,7 +617,6 @@ impl Expr {
     #[must_use]
     pub const fn position(&self) -> Position {
         match self {
-            #[cfg(not(feature = "no_float"))]
             Self::FloatConstant(.., pos) => *pos,
 
             Self::DynamicConstant(.., pos)
@@ -687,7 +639,6 @@ impl Expr {
             | Self::InterpolatedString(.., pos)
             | Self::Property(.., pos) => *pos,
 
-            #[cfg(not(feature = "no_custom_syntax"))]
             Self::Custom(.., pos) => *pos,
 
             Self::Stmt(x) => x.position(),
@@ -699,7 +650,6 @@ impl Expr {
     #[must_use]
     pub fn start_position(&self) -> Position {
         match self {
-            #[cfg(not(feature = "no_module"))]
             Self::Variable(x, ..) => {
                 if x.2.is_empty() {
                     self.position()
@@ -721,7 +671,6 @@ impl Expr {
     #[inline]
     pub fn set_position(&mut self, new_pos: Position) -> &mut Self {
         match self {
-            #[cfg(not(feature = "no_float"))]
             Self::FloatConstant(.., pos) => *pos = new_pos,
 
             Self::DynamicConstant(.., pos)
@@ -744,7 +693,6 @@ impl Expr {
             | Self::InterpolatedString(.., pos)
             | Self::Property(.., pos) => *pos = new_pos,
 
-            #[cfg(not(feature = "no_custom_syntax"))]
             Self::Custom(.., pos) => *pos = new_pos,
 
             Self::Stmt(x) => x.set_position(new_pos, Position::NONE),
@@ -785,7 +733,6 @@ impl Expr {
     #[must_use]
     pub fn is_constant(&self) -> bool {
         match self {
-            #[cfg(not(feature = "no_float"))]
             Self::FloatConstant(..) => true,
 
             Self::DynamicConstant(..)
@@ -807,15 +754,12 @@ impl Expr {
     #[must_use]
     pub const fn is_valid_postfix(&self, token: &Token) -> bool {
         match token {
-            #[cfg(not(feature = "no_object"))]
             Token::Period | Token::Elvis => return true,
-            #[cfg(not(feature = "no_index"))]
             Token::LeftBracket | Token::QuestionBracket => return true,
             _ => (),
         }
 
         match self {
-            #[cfg(not(feature = "no_float"))]
             Self::FloatConstant(..) => false,
 
             Self::DynamicConstant(..)
@@ -838,7 +782,6 @@ impl Expr {
             | Self::Array(..)
             | Self::Map(..) => false,
 
-            #[cfg(not(feature = "no_custom_syntax"))]
             Self::Custom(..) => false,
 
             Self::Variable(..) => matches!(
@@ -913,7 +856,6 @@ impl Expr {
                     }
                 }
             }
-            #[cfg(not(feature = "no_custom_syntax"))]
             Self::Custom(x, ..) => {
                 for e in &*x.inputs {
                     if !e.walk(path, on_node) {

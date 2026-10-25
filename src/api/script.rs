@@ -6,8 +6,6 @@
 //! function up once and checks its signature against the handle's types.
 //! [`Script::reload`] rereads the file and swaps every handle to the new
 //! program together, or keeps the old one when the new one fails.
-#![cfg(not(feature = "no_function"))]
-#![cfg(not(feature = "no_std"))]
 
 use crate::ast::ScriptFuncDef;
 use crate::diagnostic::{self, code, Report};

@@ -2,8 +2,6 @@
 
 use crate::func::SendSync;
 use crate::{Dynamic, Engine, EvalContext, Position, RawrResultOf, VarDefInfo};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Where `print!`/`println!` (standard output) and `eprint!`/`eprintln!`
 /// (standard error) send their text.
@@ -211,8 +209,6 @@ impl Engine {
     }
     /// Register a callback for script evaluation progress.
     ///
-    /// Not available under `unchecked`.
-    ///
     /// # Callback Function Signature
     ///
     /// `Fn(counter: u64) -> Option<Dynamic>`
@@ -255,7 +251,6 @@ impl Engine {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(not(feature = "unchecked"))]
     #[inline(always)]
     pub fn on_progress(
         &mut self,
@@ -366,8 +361,6 @@ impl Engine {
     /// _(internals)_ Register a callback for access to [`Map`][crate::Map] properties that do not exist.
     /// Exported under the `internals` feature only.
     ///
-    /// Not available under `no_index`.
-    ///
     /// # WARNING - Unstable API
     ///
     /// This API is volatile and may change in the future.
@@ -426,7 +419,6 @@ impl Engine {
     /// assert_eq!(r, 143);
     /// # Ok(()) }
     /// ```
-    #[cfg(not(feature = "no_index"))]
     #[cfg(feature = "internals")]
     #[inline(always)]
     pub fn on_invalid_array_index(
@@ -444,8 +436,6 @@ impl Engine {
     }
     /// _(internals)_ Register a callback for access to [`Map`][crate::Map] properties that do not exist.
     /// Exported under the `internals` feature only.
-    ///
-    /// Not available under `no_object`.
     ///
     /// # WARNING - Unstable API
     ///
@@ -498,7 +488,6 @@ impl Engine {
     /// });
     /// # Ok(()) }
     /// ```
-    #[cfg(not(feature = "no_object"))]
     #[cfg(feature = "internals")]
     #[inline(always)]
     pub fn on_map_missing_property(

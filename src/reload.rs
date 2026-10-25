@@ -3,7 +3,6 @@
 pub mod callback;
 pub mod compatibility;
 pub mod installation;
-#[cfg(not(feature = "no_std"))]
 pub mod scheduler;
 pub mod source;
 

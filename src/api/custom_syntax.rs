@@ -1,5 +1,4 @@
 //! Module implementing custom syntax for [`Engine`].
-#![cfg(not(feature = "no_custom_syntax"))]
 
 use crate::ast::Expr;
 use crate::func::SendSync;
@@ -9,8 +8,6 @@ use crate::types::dynamic::Variant;
 use crate::{
     Dynamic, Engine, EvalContext, Identifier, ImmutableString, LexError, Position, RawrResult,
 };
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{borrow::Borrow, ops::Deref};
 
 /// Collection of special markers for custom syntax definition.
@@ -22,7 +19,6 @@ pub mod markers {
     /// Special marker for matching a statements block after the starting `{`.
     pub const CUSTOM_SYNTAX_MARKER_INNER: &str = "$inner$";
     /// Special marker for matching a function body.
-    #[cfg(not(feature = "no_function"))]
     pub const CUSTOM_SYNTAX_MARKER_FUNC: &str = "$func$";
     /// Special marker for matching a single character from the input stream.
     pub const CUSTOM_SYNTAX_MARKER_RAW: &str = "$raw$";
@@ -37,7 +33,6 @@ pub mod markers {
     /// Special marker for matching an integer number.
     pub const CUSTOM_SYNTAX_MARKER_INT: &str = "$int$";
     /// Special marker for matching a floating-point number.
-    #[cfg(not(feature = "no_float"))]
     pub const CUSTOM_SYNTAX_MARKER_FLOAT: &str = "$float$";
     /// Special marker for matching a boolean value.
     pub const CUSTOM_SYNTAX_MARKER_BOOL: &str = "$bool$";
@@ -114,10 +109,8 @@ impl Expression<'_> {
     #[must_use]
     pub fn get_string_value(&self) -> Option<&str> {
         match self.0 {
-            #[cfg(not(feature = "no_module"))]
             Expr::Variable(x, ..) if !x.2.is_empty() => None,
             Expr::Variable(x, ..) => Some(&x.1),
-            #[cfg(not(feature = "no_function"))]
             Expr::ThisPtr(..) => Some(crate::engine::KEYWORD_THIS),
             Expr::StringConstant(x, ..) => Some(x),
             _ => None,
@@ -143,7 +136,6 @@ impl Expression<'_> {
             Expr::DynamicConstant(x, ..) => x.clone().try_cast::<T>(),
             Expr::IntegerConstant(x, ..) => reify! { *x => Option<T> },
 
-            #[cfg(not(feature = "no_float"))]
             Expr::FloatConstant(x, ..) => reify! { *x => Option<T> },
 
             Expr::CharConstant(x, ..) => reify! { *x => Option<T> },
@@ -195,8 +187,6 @@ pub struct CustomSyntax {
 
 impl Engine {
     /// Register a custom syntax with the [`Engine`].
-    ///
-    /// Not available under `no_custom_syntax`.
     ///
     /// * `symbols` holds a slice of strings that define the custom syntax.
     /// * `scope_may_be_changed` specifies variables _may_ be added/removed by this custom syntax.
@@ -271,11 +261,9 @@ impl Engine {
                 }
 
                 // Markers not in first position
-                #[cfg(not(feature = "no_function"))]
                 CUSTOM_SYNTAX_MARKER_FUNC if !segments.is_empty() => s.into(),
 
                 // Markers not in first position
-                #[cfg(not(feature = "no_float"))]
                 CUSTOM_SYNTAX_MARKER_FLOAT if !segments.is_empty() => s.into(),
 
                 // Identifier not in first position
@@ -358,8 +346,6 @@ impl Engine {
     }
     /// Register a custom syntax with the [`Engine`] with custom user-defined state.
     ///
-    /// Not available under `no_custom_syntax`.
-    ///
     /// # WARNING - Low Level API
     ///
     /// This function is very low level.
@@ -412,8 +398,6 @@ impl Engine {
     /// Register a custom syntax with the [`Engine`] with custom user-defined state,
     /// but with no look-ahead.  This enables the usage of `$raw$` to process raw script
     /// text character-by-character, by-passing the tokenizer.
-    ///
-    /// Not available under `no_custom_syntax`.
     ///
     /// # WARNING - Low Level API
     ///

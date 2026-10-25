@@ -1,8 +1,6 @@
 //! Type to hold a mutable reference to the target of an evaluation.
 
 use crate::{Dynamic, Position, RawrError, RawrResultOf};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 use std::{
     borrow::{Borrow, BorrowMut},
     convert::TryFrom,
@@ -13,7 +11,6 @@ use std::{
 /// Negative starting positions count from the end.
 ///
 /// Values going over bounds are limited to the actual length.
-#[cfg(not(feature = "no_index"))]
 #[inline]
 pub fn calc_offset_len(length: usize, start: crate::INT, len: crate::INT) -> (usize, usize) {
     let start = if start < 0 {
@@ -96,7 +93,6 @@ pub enum Target<'a> {
     /// The target is a mutable reference to a [`Dynamic`].
     RefMut(&'a mut Dynamic),
     /// The target is a mutable reference to a _shared_ [`Dynamic`].
-    #[cfg(not(feature = "no_closure"))]
     SharedValue {
         /// Lock guard to the shared [`Dynamic`].
         guard: crate::types::dynamic::DynamicWriteLock<'a, Dynamic>,
@@ -107,7 +103,6 @@ pub enum Target<'a> {
     TempValue(Dynamic),
     /// The target is a bit inside an [`INT`][crate::INT].
     /// This is necessary because directly pointing to a bit inside an [`INT`][crate::INT] is impossible.
-    #[cfg(not(feature = "no_index"))]
     Bit {
         /// Mutable reference to the source [`Dynamic`].
         source: &'a mut Dynamic,
@@ -118,7 +113,6 @@ pub enum Target<'a> {
     },
     /// The target is a range of bits inside an [`INT`][crate::INT].
     /// This is necessary because directly pointing to a range of bits inside an [`INT`][crate::INT] is impossible.
-    #[cfg(not(feature = "no_index"))]
     BitField {
         /// Mutable reference to the source [`Dynamic`].
         source: &'a mut Dynamic,
@@ -131,7 +125,6 @@ pub enum Target<'a> {
     },
     /// The target is a byte inside a [`Blob`][crate::Blob].
     /// This is necessary because directly pointing to a [byte][u8] inside a BLOB is impossible.
-    #[cfg(not(feature = "no_index"))]
     BlobByte {
         /// Mutable reference to the source [`Dynamic`].
         source: &'a mut Dynamic,
@@ -142,7 +135,6 @@ pub enum Target<'a> {
     },
     /// The target is a character inside a string.
     /// This is necessary because directly pointing to a [`char`] inside a [`String`] is impossible.
-    #[cfg(not(feature = "no_index"))]
     StringChar {
         /// Mutable reference to the source [`Dynamic`].
         source: &'a mut Dynamic,
@@ -153,7 +145,6 @@ pub enum Target<'a> {
     },
     /// The target is a slice of a string.
     /// This is necessary because directly pointing to a [`char`] inside a [`String`] is impossible.
-    #[cfg(not(feature = "no_index"))]
     StringSlice {
         /// Mutable reference to the source [`Dynamic`].
         source: &'a mut Dynamic,
@@ -176,10 +167,8 @@ impl<'a> Target<'a> {
     pub const fn is_ref(&self) -> bool {
         match self {
             Self::RefMut(..) => true,
-            #[cfg(not(feature = "no_closure"))]
             Self::SharedValue { .. } => true,
             Self::TempValue(..) => false,
-            #[cfg(not(feature = "no_index"))]
             Self::Bit { .. }
             | Self::BitField { .. }
             | Self::BlobByte { .. }
@@ -193,10 +182,8 @@ impl<'a> Target<'a> {
     pub const fn is_temp_value(&self) -> bool {
         match self {
             Self::RefMut(..) => false,
-            #[cfg(not(feature = "no_closure"))]
             Self::SharedValue { .. } => false,
             Self::TempValue(..) => true,
-            #[cfg(not(feature = "no_index"))]
             Self::Bit { .. }
             | Self::BitField { .. }
             | Self::BlobByte { .. }
@@ -208,30 +195,24 @@ impl<'a> Target<'a> {
     #[inline]
     #[must_use]
     pub fn is_shared(&self) -> bool {
-        #[cfg(not(feature = "no_closure"))]
-        return match self {
+        match self {
             Self::RefMut(r) => r.is_shared(),
             Self::SharedValue { .. } => true,
             Self::TempValue(value) => value.is_shared(),
-            #[cfg(not(feature = "no_index"))]
             Self::Bit { .. }
             | Self::BitField { .. }
             | Self::BlobByte { .. }
             | Self::StringChar { .. }
             | Self::StringSlice { .. } => false,
-        };
-        #[cfg(feature = "no_closure")]
-        return false;
+        }
     }
     /// Get the value of the [`Target`] as a [`Dynamic`], cloning a referenced value if necessary.
     #[inline]
     pub fn take_or_clone(self) -> Dynamic {
         match self {
             Self::RefMut(r) => r.clone(), // Referenced value is cloned
-            #[cfg(not(feature = "no_closure"))]
             Self::SharedValue { shared_value, .. } => shared_value, // Original shared value is simply taken
-            Self::TempValue(value) => value, // Owned value is simply taken
-            #[cfg(not(feature = "no_index"))]
+            Self::TempValue(value) => value,                        // Owned value is simply taken
             Self::Bit { value, .. }
             | Self::BitField { value, .. }
             | Self::BlobByte { value, .. }
@@ -253,7 +234,6 @@ impl<'a> Target<'a> {
     pub fn into_owned(self) -> Self {
         match self {
             Self::RefMut(r) => Self::TempValue(r.clone()),
-            #[cfg(not(feature = "no_closure"))]
             Self::SharedValue { shared_value, .. } => Self::TempValue(shared_value),
             _ => self,
         }
@@ -264,10 +244,8 @@ impl<'a> Target<'a> {
     pub fn source(&self) -> &Dynamic {
         match self {
             Self::RefMut(r) => r,
-            #[cfg(not(feature = "no_closure"))]
             Self::SharedValue { guard, .. } => guard,
             Self::TempValue(value) => value,
-            #[cfg(not(feature = "no_index"))]
             Self::Bit { source, .. }
             | Self::BitField { source, .. }
             | Self::BlobByte { source, .. }
@@ -281,9 +259,7 @@ impl<'a> Target<'a> {
     pub fn propagate_changed_value(&mut self, _pos: Position) -> RawrResultOf<()> {
         match self {
             Self::RefMut(..) | Self::TempValue(..) => (),
-            #[cfg(not(feature = "no_closure"))]
             Self::SharedValue { .. } => (),
-            #[cfg(not(feature = "no_index"))]
             Self::Bit { source, value, bit } => {
                 // Replace the bit at the specified index position
                 let new_bit = value.as_bool().map_err(|err| {
@@ -305,7 +281,6 @@ impl<'a> Target<'a> {
                     *value &= !mask;
                 }
             }
-            #[cfg(not(feature = "no_index"))]
             Self::BitField {
                 source,
                 value,
@@ -330,7 +305,6 @@ impl<'a> Target<'a> {
                 *value &= !mask;
                 *value |= new_value;
             }
-            #[cfg(not(feature = "no_index"))]
             Self::BlobByte {
                 source,
                 value,
@@ -349,7 +323,6 @@ impl<'a> Target<'a> {
 
                 value[*index] = u8::try_from(new_byte & 0x00ff).unwrap();
             }
-            #[cfg(not(feature = "no_index"))]
             Self::StringChar {
                 source,
                 value,
@@ -372,7 +345,6 @@ impl<'a> Target<'a> {
                     .map(|(i, ch)| if i == *index { new_ch } else { ch })
                     .collect();
             }
-            #[cfg(not(feature = "no_index"))]
             Self::StringSlice {
                 source,
                 start,
@@ -406,7 +378,6 @@ impl<'a> TryFrom<&'a mut Dynamic> for Target<'a> {
 
     #[inline]
     fn try_from(value: &'a mut Dynamic) -> Result<Self, Self::Error> {
-        #[cfg(not(feature = "no_closure"))]
         if value.is_shared() {
             // Cloning is cheap for a shared value
             let shared_value = value.clone();
@@ -430,12 +401,9 @@ impl AsRef<Dynamic> for Target<'_> {
     fn as_ref(&self) -> &Dynamic {
         match self {
             Self::RefMut(r) => r,
-            #[cfg(not(feature = "no_closure"))]
             Self::SharedValue { guard, .. } => guard,
             Self::TempValue(value) => value,
-            #[cfg(not(feature = "no_index"))]
             Self::StringSlice { value, .. } => value,
-            #[cfg(not(feature = "no_index"))]
             Self::Bit { value, .. }
             | Self::BitField { value, .. }
             | Self::BlobByte { value, .. }
@@ -456,12 +424,9 @@ impl AsMut<Dynamic> for Target<'_> {
     fn as_mut(&mut self) -> &mut Dynamic {
         match self {
             Self::RefMut(r) => r,
-            #[cfg(not(feature = "no_closure"))]
             Self::SharedValue { guard, .. } => &mut *guard,
             Self::TempValue(value) => value,
-            #[cfg(not(feature = "no_index"))]
             Self::StringSlice { value, .. } => value,
-            #[cfg(not(feature = "no_index"))]
             Self::Bit { value, .. }
             | Self::BitField { value, .. }
             | Self::BlobByte { value, .. }

@@ -1,8 +1,6 @@
 //! Lossless transformations from existing error families.
 
 use crate::{application, program, resolve, EvalAltResult, ParseError, ParseErrorType, Span};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 use super::{code, Builder, Error, Report, Source};
 
@@ -81,7 +79,6 @@ impl Report {
     }
 
     /// Transform a source-qualified aggregate resolution failure.
-    #[cfg(not(feature = "no_std"))]
     pub(crate) fn from_resolution(
         primary: Source,
         secondary: Option<Source>,

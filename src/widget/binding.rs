@@ -99,7 +99,6 @@ impl Binding {
     }
 
     /// Execute the exact optional Tree-local state initializer.
-    #[cfg(not(feature = "no_function"))]
     pub fn state(&self) -> Result<Option<Dynamic>, program::Error> {
         let Some(hook) = self.promotion.definition().hook(widget::hook::Kind::State) else {
             return Ok(None);
@@ -109,7 +108,6 @@ impl Binding {
     }
 
     /// Execute the exact optional direct-children transformation.
-    #[cfg(not(feature = "no_function"))]
     pub fn children(&self) -> Result<Option<Dynamic>, program::Error> {
         let Some(hook) = self
             .promotion
@@ -123,7 +121,6 @@ impl Binding {
     }
 
     /// Execute the exact optional state reconciliation hook.
-    #[cfg(not(feature = "no_function"))]
     pub fn diff(&mut self, state: Option<&mut Dynamic>) -> Result<Option<()>, program::Error> {
         let Some(hook) = self
             .promotion
@@ -157,7 +154,6 @@ impl Binding {
     }
 
     /// Execute the exact optional requested-size hook.
-    #[cfg(not(feature = "no_function"))]
     pub fn size(&self) -> Result<Option<Dynamic>, program::Error> {
         let Some(hook) = self.promotion.definition().hook(widget::hook::Kind::Size) else {
             return Ok(None);
@@ -167,7 +163,6 @@ impl Binding {
     }
 
     /// Evaluate the exact optional layout transformation without committing it.
-    #[cfg(not(feature = "no_function"))]
     pub fn layout(
         &self,
         state: Option<&Dynamic>,
@@ -221,7 +216,6 @@ impl Binding {
     }
 
     /// Execute the exact optional event transformation.
-    #[cfg(not(feature = "no_function"))]
     pub fn update(
         &mut self,
         state: Option<&mut Dynamic>,
@@ -265,7 +259,6 @@ impl Binding {
     /// are all revalidated against the retained hook before exact unit success
     /// is returned. An omitted hook returns `None` for its inert protocol
     /// default.
-    #[cfg(not(feature = "no_function"))]
     pub fn draw<T: crate::func::SendSync + 'static>(
         &self,
         state: Option<Dynamic>,
@@ -286,7 +279,6 @@ impl Binding {
     }
 
     /// Execute the exact optional pointer-interaction hook.
-    #[cfg(not(feature = "no_function"))]
     pub fn mouse_interaction(
         &self,
         state: Option<Dynamic>,
@@ -307,7 +299,6 @@ impl Binding {
     }
 
     /// Execute the exact optional bounded operation hook.
-    #[cfg(not(feature = "no_function"))]
     pub fn operate(
         &mut self,
         state: Option<&mut Dynamic>,
@@ -345,7 +336,6 @@ impl Binding {
     }
 
     /// Execute the exact optional visual-overlay hook.
-    #[cfg(not(feature = "no_function"))]
     pub fn overlay(
         &mut self,
         state: Option<&mut Dynamic>,
@@ -382,7 +372,6 @@ impl Binding {
         .map(Some)
     }
 
-    #[cfg(not(feature = "no_function"))]
     fn dispatch(
         &self,
         item: &crate::item::Value,
@@ -398,7 +387,6 @@ impl Binding {
         }
     }
 
-    #[cfg(not(feature = "no_function"))]
     fn dispatch_with<T: crate::func::SendSync + 'static>(
         &self,
         item: &crate::item::Value,
@@ -649,11 +637,7 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 impl std::error::Error for Error {}
-
-#[cfg(feature = "no_std")]
-impl core_error::Error for Error {}
 
 impl fmt::Debug for Pending {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -686,7 +670,7 @@ impl fmt::Debug for Binding {
     }
 }
 
-#[cfg(all(test, not(feature = "no_function")))]
+#[cfg(test)]
 mod tests {
     use super::Binding;
     use crate::types::nominal;

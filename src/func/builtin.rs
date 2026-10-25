@@ -12,21 +12,11 @@ use crate::{
     SmartString, INT,
 };
 use std::any::TypeId;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
-#[cfg(not(feature = "no_float"))]
 use crate::FLOAT;
-
-#[cfg(not(feature = "no_float"))]
-#[cfg(feature = "no_std")]
-use num_traits::Float;
 
 #[cfg(feature = "decimal")]
 use rust_decimal::Decimal;
-
-/// The `unchecked` feature is not active.
-const CHECKED_BUILD: bool = cfg!(not(feature = "unchecked"));
 
 /// A function that returns `true`.
 #[inline(always)]
@@ -47,7 +37,6 @@ fn is_numeric(typ: TypeId) -> bool {
         return true;
     }
 
-    #[cfg(not(feature = "no_float"))]
     if typ == TypeId::of::<f32>() || typ == TypeId::of::<f64>() {
         return true;
     }
@@ -57,8 +46,6 @@ fn is_numeric(typ: TypeId) -> bool {
         return true;
     }
 
-    #[cfg(not(feature = "only_i32"))]
-    #[cfg(not(feature = "only_i64"))]
     if typ == TypeId::of::<u8>()
         || typ == TypeId::of::<u16>()
         || typ == TypeId::of::<u32>()
@@ -71,8 +58,6 @@ fn is_numeric(typ: TypeId) -> bool {
         return true;
     }
 
-    #[cfg(not(feature = "only_i32"))]
-    #[cfg(not(feature = "only_i64"))]
     #[cfg(not(target_family = "wasm"))]
     if typ == TypeId::of::<u128>() || typ == TypeId::of::<i128>() {
         return true;
@@ -148,7 +133,6 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
         }, false)) };
     }
 
-    #[cfg(not(feature = "no_float"))]
     macro_rules! impl_float {
         ($xx:ident, $yy:ident) => {
             return match op {
@@ -183,11 +167,9 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
     macro_rules! impl_decimal {
         ($xx:ident, $yy:ident) => {
             {
-                #[cfg(not(feature = "unchecked"))]
                 #[allow(clippy::wildcard_imports)]
                 use crate::packages::arithmetic::decimal_functions::builtin::*;
 
-                #[cfg(not(feature = "unchecked"))]
                 match op {
                     Plus     => return impl_op!(from Decimal => add($xx, $yy)),
                     Minus    => return impl_op!(from Decimal => subtract($xx, $yy)),
@@ -195,20 +177,6 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                     Divide   => return impl_op!(from Decimal => divide($xx, $yy)),
                     Modulo   => return impl_op!(from Decimal => modulo($xx, $yy)),
                     PowerOf  => return impl_op!(from Decimal => power($xx, $yy)),
-                    _        => ()
-                }
-
-                #[cfg(feature = "unchecked")]
-                use rust_decimal::MathematicalOps;
-
-                #[cfg(feature = "unchecked")]
-                match op {
-                    Plus     => return impl_op!(from Decimal => $xx + $yy),
-                    Minus    => return impl_op!(from Decimal => $xx - $yy),
-                    Multiply => return impl_op!(from Decimal => $xx * $yy),
-                    Divide   => return impl_op!(from Decimal => $xx / $yy),
-                    Modulo   => return impl_op!(from Decimal => $xx % $yy),
-                    PowerOf  => return impl_op!(from Decimal => $xx.powd($yy)),
                     _        => ()
                 }
 
@@ -228,11 +196,9 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
     // Check for common patterns
     match (&x.0, &y.0, op) {
         (Union::Int(..), Union::Int(..), _) => {
-            #[cfg(not(feature = "unchecked"))]
             #[allow(clippy::wildcard_imports)]
             use crate::packages::arithmetic::arith_basic::INT::functions::*;
 
-            #[cfg(not(feature = "unchecked"))]
             match op {
                 Plus => return impl_op!(INT => add(as_int, as_int)),
                 Minus => return impl_op!(INT => subtract(as_int, as_int)),
@@ -245,40 +211,6 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                 Ampersand => return impl_op!(INT => Ok(binary_and(as_int, as_int))),
                 Pipe => return impl_op!(INT => Ok(binary_or(as_int, as_int))),
                 XOr => return impl_op!(INT => Ok(binary_xor(as_int, as_int))),
-                _ => (),
-            }
-
-            #[cfg(feature = "unchecked")]
-            match op {
-                Plus => return impl_op!(INT => as_int + as_int),
-                Minus => return impl_op!(INT => as_int - as_int),
-                Multiply => return impl_op!(INT => as_int * as_int),
-                Divide => return impl_op!(INT => as_int / as_int),
-                Modulo => return impl_op!(INT => as_int % as_int),
-                PowerOf => return impl_op!(INT => as_int.pow(as_int as u32)),
-                RightShift => {
-                    return Some((
-                        |_, args| {
-                            let x = args[0].as_int().unwrap();
-                            let y = args[1].as_int().unwrap();
-                            Ok((if y < 0 { x << -y } else { x >> y }).into())
-                        },
-                        false,
-                    ))
-                }
-                LeftShift => {
-                    return Some((
-                        |_, args| {
-                            let x = args[0].as_int().unwrap();
-                            let y = args[1].as_int().unwrap();
-                            Ok((if y < 0 { x >> -y } else { x << y }).into())
-                        },
-                        false,
-                    ))
-                }
-                Ampersand => return impl_op!(INT => as_int & as_int),
-                Pipe => return impl_op!(INT => as_int | as_int),
-                XOr => return impl_op!(INT => as_int ^ as_int),
                 _ => (),
             }
 
@@ -320,14 +252,13 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                         let s1 = &*args[0].as_immutable_string_ref().unwrap();
                         let s2 = &*args[1].as_immutable_string_ref().unwrap();
 
-                        #[cfg(not(feature = "unchecked"))]
                         _ctx.unwrap()
                             .engine()
                             .throw_on_size((0, 0, s1.len() + s2.len()))?;
 
                         Ok((s1 + s2).into())
                     },
-                    CHECKED_BUILD,
+                    true,
                 )),
                 Minus => impl_op!(ImmutableString - ImmutableString),
                 EqualsTo => impl_op!(ImmutableString == ImmutableString),
@@ -351,12 +282,11 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                         result.push(x);
                         result.push(y);
 
-                        #[cfg(not(feature = "unchecked"))]
                         _ctx.unwrap().engine().throw_on_size((0, 0, result.len()))?;
 
                         Ok(result.into())
                     },
-                    CHECKED_BUILD,
+                    true,
                 )),
                 EqualsTo => impl_op!(char => as_char == as_char),
                 NotEqualsTo => impl_op!(char => as_char != as_char),
@@ -368,7 +298,6 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
             };
         }
 
-        #[cfg(not(feature = "no_index"))]
         (Union::Blob(..), Union::Blob(..), _) => {
             use crate::Blob;
 
@@ -384,7 +313,6 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                             return Ok(args[1].flatten_clone());
                         }
 
-                        #[cfg(not(feature = "unchecked"))]
                         _ctx.unwrap()
                             .engine()
                             .throw_on_size((b1.len() + b2.len(), 0, 0))?;
@@ -393,7 +321,7 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                         blob.extend(b2);
                         Ok(Dynamic::from_blob(blob))
                     },
-                    CHECKED_BUILD,
+                    true,
                 )),
                 EqualsTo => impl_op!(Blob == Blob),
                 NotEqualsTo => impl_op!(Blob != Blob),
@@ -411,17 +339,14 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
             };
         }
 
-        #[cfg(not(feature = "no_float"))]
         (Union::Float(..), Union::Float(..), _) => {
             impl_float!(as_float, as_float)
         }
 
-        #[cfg(not(feature = "no_float"))]
         (Union::Float(..), Union::Int(..), _) => {
             impl_float!(as_float, as_int)
         }
 
-        #[cfg(not(feature = "no_float"))]
         (Union::Int(..), Union::Float(..), _) => {
             impl_float!(as_int, as_float)
         }
@@ -486,12 +411,11 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                         result.push(x);
                         result.push_str(y);
 
-                        #[cfg(not(feature = "unchecked"))]
                         _ctx.unwrap().engine().throw_on_size((0, 0, result.len()))?;
 
                         Ok(result.into())
                     },
-                    CHECKED_BUILD,
+                    true,
                 )),
                 EqualsTo => impl_op!(get_s1s2(==)),
                 NotEqualsTo => impl_op!(get_s1s2(!=)),
@@ -520,12 +444,11 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                         let y = args[1].as_char().unwrap();
                         let result = x + y;
 
-                        #[cfg(not(feature = "unchecked"))]
                         _ctx.unwrap().engine().throw_on_size((0, 0, result.len()))?;
 
                         Ok(result.into())
                     },
-                    CHECKED_BUILD,
+                    true,
                 )),
                 Minus => Some((
                     |_, args| {
@@ -568,7 +491,6 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
         }
 
         // blob
-        #[cfg(not(feature = "no_index"))]
         (Union::Blob(..), Union::Char(..), _) => {
             return match op {
                 Plus => Some((
@@ -577,7 +499,6 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                         let mut buf = [0_u8; 4];
                         let x = args[1].as_char().unwrap().encode_utf8(&mut buf);
 
-                        #[cfg(not(feature = "unchecked"))]
                         _ctx.unwrap()
                             .engine()
                             .throw_on_size((blob.len() + x.len(), 0, 0))?;
@@ -585,7 +506,7 @@ pub fn get_builtin_binary_op_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Option<
                         blob.extend(x.as_bytes());
                         Ok(Dynamic::from_blob(blob))
                     },
-                    CHECKED_BUILD,
+                    true,
                 )),
                 _ => None,
             }
@@ -698,7 +619,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
         }, false)) };
     }
 
-    #[cfg(not(feature = "no_float"))]
     macro_rules! impl_float {
         ($x:ident, $xx:ident, $yy:ident) => {
             return match op {
@@ -717,11 +637,9 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
     macro_rules! impl_decimal {
         ($x:ident, $xx:ident, $yy:ident) => {
             {
-                #[cfg(not(feature = "unchecked"))]
                 #[allow(clippy::wildcard_imports)]
                 use crate::packages::arithmetic::decimal_functions::builtin::*;
 
-                #[cfg(not(feature = "unchecked"))]
                 return match op {
                     PlusAssign      => impl_op!(from $x => add($xx, $yy)),
                     MinusAssign     => impl_op!(from $x => subtract($xx, $yy)),
@@ -731,20 +649,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
                     PowerOfAssign   => impl_op!(from $x => power($xx, $yy)),
                     _               => None,
                 };
-
-                #[cfg(feature = "unchecked")]
-                use rust_decimal::MathematicalOps;
-
-                #[cfg(feature = "unchecked")]
-                return match op {
-                    PlusAssign      => impl_op!(from $x += $yy),
-                    MinusAssign     => impl_op!(from $x -= $yy),
-                    MultiplyAssign  => impl_op!(from $x *= $yy),
-                    DivideAssign    => impl_op!(from $x /= $yy),
-                    ModuloAssign    => impl_op!(from $x %= $yy),
-                    PowerOfAssign   => impl_op!(from $x => $xx.powd($yy)),
-                    _               => None,
-                };
             }
         };
     }
@@ -752,11 +656,9 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
     // Check for common patterns
     match (&x.0, &y.0, op) {
         (Union::Int(..), Union::Int(..), _) => {
-            #[cfg(not(feature = "unchecked"))]
             #[allow(clippy::wildcard_imports)]
             use crate::packages::arithmetic::arith_basic::INT::functions::*;
 
-            #[cfg(not(feature = "unchecked"))]
             match op {
                 PlusAssign => return impl_op!(INT => add(as_int, as_int)),
                 MinusAssign => return impl_op!(INT => subtract(as_int, as_int)),
@@ -769,44 +671,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
                 AndAssign => return impl_op!(INT => Ok(binary_and(as_int, as_int))),
                 OrAssign => return impl_op!(INT => Ok(binary_or(as_int, as_int))),
                 XOrAssign => return impl_op!(INT => Ok(binary_xor(as_int, as_int))),
-                _ => (),
-            }
-
-            #[cfg(feature = "unchecked")]
-            match op {
-                PlusAssign => return impl_op!(INT += as_int),
-                MinusAssign => return impl_op!(INT -= as_int),
-                MultiplyAssign => return impl_op!(INT *= as_int),
-                DivideAssign => return impl_op!(INT /= as_int),
-                ModuloAssign => return impl_op!(INT %= as_int),
-                PowerOfAssign => return impl_op!(INT => as_int.pow(as_int as u32)),
-                RightShiftAssign => {
-                    return Some((
-                        |_, args| {
-                            let x = args[0].as_int().unwrap();
-                            let y = args[1].as_int().unwrap();
-                            let v = if y < 0 { x << -y } else { x >> y };
-                            *args[0].write_lock::<Dynamic>().unwrap() = v.into();
-                            Ok(Dynamic::UNIT)
-                        },
-                        false,
-                    ))
-                }
-                LeftShiftAssign => {
-                    return Some((
-                        |_, args| {
-                            let x = args[0].as_int().unwrap();
-                            let y = args[1].as_int().unwrap();
-                            let v = if y < 0 { x >> -y } else { x << y };
-                            *args[0].write_lock::<Dynamic>().unwrap() = v.into();
-                            Ok(Dynamic::UNIT)
-                        },
-                        false,
-                    ))
-                }
-                AndAssign => return impl_op!(INT &= as_int),
-                OrAssign => return impl_op!(INT |= as_int),
-                XOrAssign => return impl_op!(INT ^= as_int),
                 _ => (),
             }
 
@@ -849,7 +713,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
                     let x = &mut *first.as_immutable_string_mut().unwrap();
                     let y = &*second[0].as_immutable_string_ref().unwrap();
 
-                    #[cfg(not(feature = "unchecked"))]
                     if !x.is_empty() && !y.is_empty() {
                         let total_len = x.len() + y.len();
                         _ctx.unwrap().engine().throw_on_size((0, 0, total_len))?;
@@ -859,7 +722,7 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
 
                     Ok(Dynamic::UNIT)
                 },
-                CHECKED_BUILD,
+                true,
             )),
             MinusAssign => Some((
                 |_, args| {
@@ -875,7 +738,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
         },
 
         // array += array
-        #[cfg(not(feature = "no_index"))]
         (Union::Array(..), Union::Array(..), PlusAssign) => {
             #[allow(clippy::wildcard_imports)]
             use crate::packages::array_basic::array_functions::*;
@@ -888,7 +750,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
                         return Ok(Dynamic::UNIT);
                     }
 
-                    #[cfg(not(feature = "unchecked"))]
                     if !args[0].as_array_ref().unwrap().is_empty() {
                         _ctx.unwrap().engine().check_data_size(
                             &*args[0].read_lock().unwrap(),
@@ -902,12 +763,11 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
 
                     Ok(Dynamic::UNIT)
                 },
-                CHECKED_BUILD,
+                true,
             ))
         }
 
         // blob += blob
-        #[cfg(not(feature = "no_index"))]
         (Union::Blob(..), Union::Blob(..), PlusAssign) => {
             #[allow(clippy::wildcard_imports)]
             use crate::packages::blob_basic::blob_functions::*;
@@ -917,7 +777,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
                     let blob2 = args[1].take().into_blob().unwrap();
                     let blob1 = &mut *args[0].as_blob_mut().unwrap();
 
-                    #[cfg(not(feature = "unchecked"))]
                     _ctx.unwrap()
                         .engine()
                         .throw_on_size((blob1.len() + blob2.len(), 0, 0))?;
@@ -926,16 +785,14 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
 
                     Ok(Dynamic::UNIT)
                 },
-                CHECKED_BUILD,
+                true,
             ))
         }
 
-        #[cfg(not(feature = "no_float"))]
         (Union::Float(..), Union::Float(..), _) => {
             impl_float!(FLOAT, as_float, as_float)
         }
 
-        #[cfg(not(feature = "no_float"))]
         (Union::Float(..), Union::Int(..), _) => {
             impl_float!(FLOAT, as_float, as_int)
         }
@@ -958,7 +815,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
                     let ch = &*args[1].as_char().unwrap().encode_utf8(&mut buf);
                     let mut x = args[0].as_immutable_string_mut().unwrap();
 
-                    #[cfg(not(feature = "unchecked"))]
                     _ctx.unwrap()
                         .engine()
                         .throw_on_size((0, 0, x.len() + ch.len()))?;
@@ -967,7 +823,7 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
 
                     Ok(Dynamic::UNIT)
                 },
-                CHECKED_BUILD,
+                true,
             )),
             MinusAssign => impl_op!(ImmutableString -= as_char as char),
             _ => None,
@@ -984,7 +840,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
 
                     let mut ch = args[0].as_char().unwrap().to_string();
 
-                    #[cfg(not(feature = "unchecked"))]
                     _ctx.unwrap()
                         .engine()
                         .throw_on_size((0, 0, ch.len() + s.len()))?;
@@ -997,11 +852,10 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
 
                 Ok(Dynamic::UNIT)
             },
-            CHECKED_BUILD,
+            true,
         )),
 
         // array += any
-        #[cfg(not(feature = "no_index"))]
         (Union::Array(..), _, PlusAssign) => {
             #[allow(clippy::wildcard_imports)]
             use crate::packages::array_basic::array_functions::*;
@@ -1014,19 +868,17 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
                         push(array, x);
                     }
 
-                    #[cfg(not(feature = "unchecked"))]
                     _ctx.unwrap()
                         .engine()
                         .check_data_size(&*args[0].read_lock().unwrap(), crate::Position::NONE)?;
 
                     Ok(Dynamic::UNIT)
                 },
-                CHECKED_BUILD,
+                true,
             ))
         }
 
         // blob += int
-        #[cfg(not(feature = "no_index"))]
         (Union::Blob(..), Union::Int(..), PlusAssign) => {
             #[allow(clippy::wildcard_imports)]
             use crate::packages::blob_basic::blob_functions::*;
@@ -1036,7 +888,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
                     let x = args[1].as_int().unwrap();
                     let blob = &mut *args[0].as_blob_mut().unwrap();
 
-                    #[cfg(not(feature = "unchecked"))]
                     _ctx.unwrap()
                         .engine()
                         .throw_on_size((blob.len() + 1, 0, 0))?;
@@ -1045,12 +896,11 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
 
                     Ok(Dynamic::UNIT)
                 },
-                CHECKED_BUILD,
+                true,
             ))
         }
 
         // blob += char
-        #[cfg(not(feature = "no_index"))]
         (Union::Blob(..), Union::Char(..), PlusAssign) => {
             #[allow(clippy::wildcard_imports)]
             use crate::packages::blob_basic::blob_functions::*;
@@ -1060,7 +910,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
                     let x = args[1].as_char().unwrap();
                     let blob = &mut *args[0].as_blob_mut().unwrap();
 
-                    #[cfg(not(feature = "unchecked"))]
                     _ctx.unwrap()
                         .engine()
                         .throw_on_size((blob.len() + 1, 0, 0))?;
@@ -1069,12 +918,11 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
 
                     Ok(Dynamic::UNIT)
                 },
-                CHECKED_BUILD,
+                true,
             ))
         }
 
         // blob += string
-        #[cfg(not(feature = "no_index"))]
         (Union::Blob(..), Union::Str(..), PlusAssign) => {
             #[allow(clippy::wildcard_imports)]
             use crate::packages::blob_basic::blob_functions::*;
@@ -1089,7 +937,6 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
                         return Ok(Dynamic::UNIT);
                     }
 
-                    #[cfg(not(feature = "unchecked"))]
                     _ctx.unwrap()
                         .engine()
                         .throw_on_size((blob.len() + s.len(), 0, 0))?;
@@ -1098,7 +945,7 @@ pub fn get_builtin_op_assignment_fn(op: &Token, x: &Dynamic, y: &Dynamic) -> Opt
 
                     Ok(Dynamic::UNIT)
                 },
-                CHECKED_BUILD,
+                true,
             ))
         }
 

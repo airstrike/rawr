@@ -1,8 +1,6 @@
 //! Module defining macros for developing _plugins_.
 
 use super::FnCallArgs;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// Result of a Rawr function.
 pub type RawrResult = crate::RawrResult;

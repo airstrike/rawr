@@ -20,7 +20,6 @@ fn test_match_literals() {
     assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match x { 424242 => 123, _ => 42 }").unwrap(), 42);
     assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match x { 1 => 123, 42 => { x / 2 }, _ => 999 }").unwrap(), 21);
     assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "match x { 1 => 123, other => other + 100 }").unwrap(), 142);
-    #[cfg(not(feature = "no_index"))]
     assert_eq!(
         engine
             .eval_with_scope::<INT>(
@@ -153,7 +152,6 @@ fn test_match_ranges() {
             .unwrap(),
         'a'
     );
-    #[cfg(not(feature = "no_float"))]
     assert!(matches!(
         engine.compile_with_scope(&scope, "match x { 10..20 => 'q', 42.0 => 'x', _ => '-' }").unwrap_err().err_type(),
         ParseErrorType::Resolution(rawr::resolve::Error::TypeMismatch { .. })

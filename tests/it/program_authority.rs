@@ -1,5 +1,3 @@
-#![cfg(not(feature = "no_function"))]
-
 use rawr::program::{Aspect, Error};
 use rawr::{Dynamic, Engine, Shared, item};
 

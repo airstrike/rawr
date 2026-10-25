@@ -37,7 +37,6 @@
 //!     // Register external function as 'compute'
 //!     engine.register_fn("compute", compute_something);
 //!
-//! #   #[cfg(not(feature = "no_std"))]
 //! #   #[cfg(not(target_family = "wasm"))]
 //! #
 //!     // Evaluate the script, expecting a 'bool' result
@@ -60,8 +59,6 @@
 //! Project documentation lives in the
 //! [Rawr repository](https://github.com/airstrike/rawr).
 
-// Map `no_std` feature.
-#![cfg_attr(feature = "no_std", no_std)]
 //
 // Clippy lints.
 //
@@ -76,7 +73,6 @@
 #![allow(clippy::used_underscore_binding)]
 #![allow(clippy::inline_always)]
 #![allow(clippy::module_name_repetitions)]
-#![allow(clippy::negative_feature_names)]
 #![allow(clippy::box_collection)]
 #![allow(clippy::upper_case_acronyms)]
 #![allow(clippy::match_same_arms)]
@@ -90,24 +86,10 @@
 #![allow(clippy::cognitive_complexity)] // Hey, this is a scripting engine with a compiler...
 #![allow(clippy::too_many_lines)] // Same...
 #![allow(clippy::too_many_arguments)] // Same...
-#![allow(clippy::absurd_extreme_comparisons)] // On `only_i32`
 #![allow(clippy::wildcard_imports)] // Wildcard imports are used to import the plugins prelude
 #![allow(clippy::enum_glob_use)] // Sometimes useful to import all `Tokens` etc.
 #![allow(clippy::no_effect_underscore_binding)] // Underscored variables may be used by code within feature guards
 #![allow(clippy::semicolon_if_nothing_returned)] // One-liner `match` cases are sometimes formatted as multi-line blocks
-
-// TODO: Further audit no_std compatibility
-// When building with no_std + sync features, explicit imports from alloc
-// are needed despite using no_std_compat. This fixed compilation errors
-// in `native.rs` around missing trait implementations for some users.
-//#[cfg(feature = "no_std")]
-extern crate alloc;
-
-#[cfg(feature = "no_std")]
-extern crate no_std_compat as std;
-
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 // The code emitted by codegen relies on this
 extern crate self as rawr;
@@ -135,14 +117,13 @@ mod eval;
 mod func;
 /// Async code: what async bodies return, how they resume, and how a
 /// runtime polls them.
-#[cfg(not(feature = "no_function"))]
 pub mod future;
 #[cfg(feature = "grain")]
 pub mod grain;
 /// Host type metadata visible during Rawr resolution.
 pub mod host;
 /// Source-level Rawr items.
-#[cfg(all(feature = "rust-import", not(feature = "no_function")))]
+#[cfg(feature = "rust-import")]
 #[doc(hidden)]
 pub mod island;
 pub mod item;
@@ -184,8 +165,7 @@ pub mod signature;
 /// Source text retained by parsed compilation units.
 pub mod source;
 mod tests;
-/// Host-requested timing observations, omitted from `no_std` builds.
-#[cfg(not(feature = "no_std"))]
+/// Host-requested timing observations.
 pub mod timing;
 mod tokenizer;
 /// Generation-local nominal type definitions.
@@ -207,68 +187,22 @@ type RawrResultOf<T> = Result<T, RawrError>;
 type RawrResult = RawrResultOf<Dynamic>;
 
 /// The system integer type. It is defined as [`i64`].
-///
-/// If the `only_i32` feature is enabled, this will be [`i32`] instead.
-#[cfg(not(feature = "only_i32"))]
 pub type INT = i64;
 
-/// The system integer type.
-/// It is defined as [`i32`] since the `only_i32` feature is used.
-///
-/// If the `only_i32` feature is not used, this will be `i64` instead.
-#[cfg(feature = "only_i32")]
-pub type INT = i32;
-
 /// The unsigned system base integer type. It is defined as [`u64`].
-///
-/// If the `only_i32` feature is enabled, this will be [`u32`] instead.
-#[cfg(not(feature = "only_i32"))]
 #[allow(non_camel_case_types)]
 type UNSIGNED_INT = u64;
 
-/// The unsigned system integer base type.
-/// It is defined as [`u32`] since the `only_i32` feature is used.
-///
-/// If the `only_i32` feature is not used, this will be `u64` instead.
-#[cfg(feature = "only_i32")]
-#[allow(non_camel_case_types)]
-type UNSIGNED_INT = u32;
-
 /// Number of bits in [`INT`].
-///
-/// It is 64 unless the `only_i32` feature is enabled when it will be 32.
 const INT_BITS: usize = std::mem::size_of::<INT>() * 8;
 
 /// Number of bytes that make up an [`INT`].
-///
-/// It is 8 unless the `only_i32` feature is enabled when it will be 4.
-#[cfg(not(feature = "no_index"))]
 const INT_BYTES: usize = std::mem::size_of::<INT>();
 
 /// The system floating-point type. It is defined as [`f64`].
-///
-/// Not available under `no_float`.
-///
-/// If the `f32_float` feature is enabled, this will be [`f32`] instead.
-#[cfg(not(feature = "no_float"))]
-#[cfg(not(feature = "f32_float"))]
 pub type FLOAT = f64;
 
-/// The system floating-point type.
-/// It is defined as [`f32`] since the `f32_float` feature is used.
-///
-/// Not available under `no_float`.
-///
-/// If the `f32_float` feature is not used, this will be `f64` instead.
-#[cfg(not(feature = "no_float"))]
-#[cfg(feature = "f32_float")]
-pub type FLOAT = f32;
-
 /// Number of bytes that make up a [`FLOAT`].
-///
-/// It is 8 unless the `f32_float` feature is enabled when it will be 4.
-#[cfg(not(feature = "no_float"))]
-#[cfg(not(feature = "no_index"))]
 const FLOAT_BYTES: usize = std::mem::size_of::<FLOAT>();
 
 /// An exclusive integer range.
@@ -284,10 +218,8 @@ use once_cell::sync::OnceCell;
 use once_cell::race::OnceBox as OnceCell;
 
 pub use api::build_type::{CustomType, TypeBuilder};
-#[cfg(not(feature = "no_custom_syntax"))]
 pub use api::custom_syntax::Expression;
 pub use api::events::Output;
-#[cfg(not(feature = "no_std"))]
 #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 pub use api::files::{eval_file, run_file};
 pub use api::{eval::eval, run::run};
@@ -295,17 +227,13 @@ pub use ast::{FnAccess, AST};
 use defer::Deferred;
 pub use engine::{Engine, OP_CONTAINS, OP_EQUALS};
 pub use eval::{EvalContext, EvalContextFrameGuard};
-#[cfg(not(feature = "no_function"))]
-#[cfg(not(feature = "no_object"))]
 use func::calc_typed_method_hash;
 use func::{calc_fn_hash, calc_fn_hash_full, calc_var_hash};
 pub use func::{plugin, FuncArgs, NativeCallContext, RawrNativeFunc};
-#[cfg(not(feature = "no_std"))]
 pub use host::export::{Export, Exports};
 pub use module::{FnNamespace, FuncRegistration, Module};
 pub use packages::string_basic::{FUNC_TO_DEBUG, FUNC_TO_STRING};
 pub use rawr_codegen::*;
-#[cfg(not(feature = "no_time"))]
 pub use types::Instant;
 pub use types::{
     Dynamic, EvalAltResult, FnPtr, ImmutableString, LexError, ParseError, ParseErrorType, Position,
@@ -317,7 +245,6 @@ pub use value::Value;
 /// Exported under the `debugging` feature only.
 #[cfg(feature = "debugging")]
 pub mod debugger {
-    #[cfg(not(feature = "no_function"))]
     pub use super::eval::CallStackFrame;
     pub use super::eval::{BreakPoint, Debugger, DebuggerCommand, DebuggerEvent};
 }
@@ -341,48 +268,31 @@ pub use func::Locked;
 /// A shared [`Module`].
 type SharedModule = Shared<Module>;
 
-#[cfg(not(feature = "no_function"))]
-#[cfg(not(feature = "no_std"))]
 pub use api::script::{Func, Parameters, Script};
 
-#[cfg(not(feature = "no_function"))]
 pub use ast::ScriptFnMetadata;
 
-#[cfg(not(feature = "no_function"))]
 pub use api::call_fn::CallFnOptions;
 
 /// Variable-sized array of [`Dynamic`] values.
-///
-/// Not available under `no_index`.
-#[cfg(not(feature = "no_index"))]
 pub type Array = Vec<Dynamic>;
 
 /// Variable-sized array of [`u8`] values (byte array).
-///
-/// Not available under `no_index`.
-#[cfg(not(feature = "no_index"))]
 pub type Blob = Vec<u8>;
 
 /// A dictionary of [`Dynamic`] values with string keys.
 ///
-/// Not available under `no_object`.
-///
 /// [`SmartString`](https://crates.io/crates/smartstring) is used as the key type because most
 /// property names are ASCII and short, fewer than 23 characters, so they can be stored inline.
-#[cfg(not(feature = "no_object"))]
 pub type Map = std::collections::BTreeMap<Identifier, Dynamic>;
 
-#[cfg(not(feature = "no_object"))]
 pub use api::json::format_map_as_json;
 
-#[cfg(not(feature = "no_module"))]
 pub use module::ModuleResolver;
 
 /// Module containing all built-in _module resolvers_ available to Rawr.
-#[cfg(not(feature = "no_module"))]
 pub use module::resolvers as module_resolvers;
 
-#[cfg(not(feature = "no_optimize"))]
 pub use optimizer::OptimizationLevel;
 
 // Expose internal data structures.
@@ -394,7 +304,6 @@ pub use types::dynamic::{AccessMode, DynamicReadLock, DynamicWriteLock, Variant}
 pub use module::{FuncInfo, FuncMetadata};
 
 #[cfg(feature = "internals")]
-#[cfg(not(feature = "no_float"))]
 pub use types::FloatWrapper;
 
 #[cfg(feature = "internals")]
@@ -421,11 +330,9 @@ pub use ast::{
 };
 
 #[cfg(feature = "internals")]
-#[cfg(not(feature = "no_custom_syntax"))]
 pub use ast::CustomExpr;
 
 #[cfg(feature = "internals")]
-#[cfg(not(feature = "no_module"))]
 pub use ast::Namespace;
 
 #[cfg(feature = "internals")]
@@ -487,13 +394,10 @@ type StaticVec<T> = smallvec::SmallVec<[T; STATIC_VEC_INLINE_SIZE]>;
 type ThinVec<T> = thin_vec::ThinVec<T>;
 
 /// Number of items to keep inline for [`FnArgsVec`].
-#[cfg(not(feature = "no_closure"))]
 const FN_ARGS_VEC_INLINE_SIZE: usize = 5;
 
 /// _(internals)_ Inline arguments storage for function calls.
 /// Exported under the `internals` feature only.
-///
-/// Not available under `no_closure`.
 ///
 /// # Notes
 ///
@@ -503,37 +407,12 @@ const FN_ARGS_VEC_INLINE_SIZE: usize = 5;
 /// Most functions have few parameters, but closures with a lot of captured variables can
 /// potentially have many.  Having a larger inline storage for arguments reduces allocations in
 /// scripts with heavy closure usage.
-///
-/// Under `no_closure`, this type aliases to [`StaticVec`] instead.
 #[expose_under_internals]
-#[cfg(not(feature = "no_closure"))]
 type FnArgsVec<T> = smallvec::SmallVec<[T; FN_ARGS_VEC_INLINE_SIZE]>;
-
-/// Inline arguments storage for function calls.
-/// This type aliases to [`StaticVec`][crate::StaticVec].
-#[expose_under_internals]
-#[cfg(feature = "no_closure")]
-type FnArgsVec<T> = crate::StaticVec<T>;
 
 type SmartString = smartstring::SmartString<smartstring::LazyCompact>;
 
 // Compiler guards against mutually-exclusive feature flags
-
-#[cfg(feature = "no_float")]
-#[cfg(feature = "f32_float")]
-compile_error!("`f32_float` cannot be used with `no_float`");
-
-#[cfg(feature = "only_i32")]
-#[cfg(feature = "only_i64")]
-compile_error!("`only_i32` and `only_i64` cannot be used together");
-
-#[cfg(feature = "no_std")]
-#[cfg(feature = "wasm-bindgen")]
-compile_error!("`wasm-bindgen` cannot be used with `no-std`");
-
-#[cfg(target_family = "wasm")]
-#[cfg(feature = "no_std")]
-compile_error!("`no_std` cannot be used for WASM target");
 
 #[cfg(not(target_family = "wasm"))]
 #[cfg(feature = "wasm-bindgen")]

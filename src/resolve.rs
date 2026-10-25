@@ -14,10 +14,7 @@ pub(crate) mod type_ref;
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub use error::{Category, Error};
 use std::collections::BTreeMap;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
-#[cfg_attr(feature = "no_std", allow(dead_code))]
 pub(crate) struct LocatedError {
     primary: program::source::Id,
     secondary: Option<program::source::Id>,
@@ -97,7 +94,6 @@ pub(crate) struct Script {
     source: program::source::Id,
     /// The statements outside the items, the body of `fn main` to the
     /// checker.
-    #[cfg(not(feature = "no_function"))]
     text: String,
 }
 
@@ -220,13 +216,13 @@ impl Program {
     }
 }
 
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 pub(crate) enum ImportedFailure {
     Lowering(LoweringFailure),
     Surface(rawr_import::surface::Error),
 }
 
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 impl ImportedFailure {
     #[cfg(test)]
     pub(crate) fn into_error(self) -> crate::ParseError {
@@ -239,7 +235,7 @@ impl ImportedFailure {
     }
 }
 
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 pub(crate) fn lower_imported(
     engine: &crate::Engine,
     program: &Program,
@@ -298,8 +294,6 @@ fn resolve_with_evidence_and_namespace(
     evidence: crate::diagnostic::Source,
 ) -> Result<Program, Error> {
     let (source, parsed_items, _, statement_source) = unit.into_parts();
-    #[cfg(feature = "no_function")]
-    drop(statement_source);
     if let Some(module) = parsed_items.iter().find_map(|item| match item {
         crate::item::Parsed::Module(module) => Some(module),
         crate::item::Parsed::Use(_)
@@ -363,7 +357,6 @@ fn resolve_with_evidence_and_namespace(
         aliases,
         scripts: vec![Script {
             source: program::source::Id::ROOT,
-            #[cfg(not(feature = "no_function"))]
             text: statement_source,
         }]
         .into_boxed_slice(),
@@ -515,7 +508,7 @@ pub(crate) fn lower_with_engine(
     engine: &crate::Engine,
     program: Program,
     scope: Option<&crate::Scope>,
-    #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+    optimization_level: crate::OptimizationLevel,
 ) -> crate::parser::ParseResult<program::Executable> {
     for shell in &program.items {
         match &shell.kind {
@@ -525,46 +518,32 @@ pub(crate) fn lower_with_engine(
         }
     }
 
-    program::Executable::from_resolved(
-        engine,
-        program,
-        scope,
-        #[cfg(not(feature = "no_optimize"))]
-        optimization_level,
-    )
+    program::Executable::from_resolved(engine, program, scope, optimization_level)
 }
 
-#[cfg(not(feature = "no_std"))]
 pub(crate) fn lower_package_with_engine(
     engine: &crate::Engine,
     program: Program,
     scope: Option<&crate::Scope>,
-    #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+    optimization_level: crate::OptimizationLevel,
 ) -> Result<program::Executable, LoweringFailure> {
-    program::Executable::from_package_resolved(
-        engine,
-        program,
-        scope,
-        #[cfg(not(feature = "no_optimize"))]
-        optimization_level,
-    )
+    program::Executable::from_package_resolved(engine, program, scope, optimization_level)
 }
 
 /// Consume a resolved package into its executable and same-pass imported-use evidence.
-#[cfg(all(not(feature = "no_function"), feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 pub(crate) fn lower_package_with_uses<A: host::ImportAllocation>(
     engine: &crate::Engine,
     program: Program,
     allocation: &mut A,
     scope: Option<&crate::Scope>,
-    #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+    optimization_level: crate::OptimizationLevel,
 ) -> Result<(program::Executable, lower_nominal::ImportedOutput), ImportedFailure> {
     program::Executable::from_package_with_uses(
         engine,
         program,
         allocation,
         scope,
-        #[cfg(not(feature = "no_optimize"))]
         optimization_level,
     )
 }
@@ -574,16 +553,9 @@ pub(crate) fn lower_resolved(
     program: &Program,
     model: &program::model::Model,
     scope: Option<&crate::Scope>,
-    #[cfg(not(feature = "no_optimize"))] optimization_level: crate::OptimizationLevel,
+    optimization_level: crate::OptimizationLevel,
 ) -> Result<lower_nominal::Output, LoweringFailure> {
-    lower_nominal::lower(
-        engine,
-        program,
-        model,
-        scope,
-        #[cfg(not(feature = "no_optimize"))]
-        optimization_level,
-    )
+    lower_nominal::lower(engine, program, model, scope, optimization_level)
 }
 
 fn reject_unavailable(function: &item::Function) -> Result<(), Error> {
@@ -1261,10 +1233,10 @@ pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static 
 /// `rawr::future::Future`: its facade is installed and no host's own type,
 /// such as iced's `Task`, runs futures.
 pub(crate) fn core_futures(host: &host::Registry) -> bool {
-    #[cfg(all(feature = "std", not(feature = "no_function")))]
+    #[cfg(feature = "std")]
     return host.type_(crate::future::facade::FUTURE).is_some()
         && host.type_("iced::Task").is_none();
-    #[cfg(not(all(feature = "std", not(feature = "no_function"))))]
+    #[cfg(not(feature = "std"))]
     return false;
 }
 
@@ -2937,7 +2909,6 @@ fn declare_facade_traits(
     items: &mut Vec<item::Shell>,
     host: &host::Registry,
 ) -> Result<(), LocatedError> {
-    #[cfg(not(feature = "no_function"))]
     {
         let declared = items
             .iter()
@@ -2976,8 +2947,6 @@ fn declare_facade_traits(
             items.push(shell);
         }
     }
-    #[cfg(feature = "no_function")]
-    let _ = (items, host);
     Ok(())
 }
 
@@ -5349,7 +5318,6 @@ mod tests {
             &engine,
             source_order,
             None,
-            #[cfg(not(feature = "no_optimize"))]
             engine.optimization_level,
         )
         .unwrap();
@@ -5357,7 +5325,6 @@ mod tests {
             &engine,
             reverse_order,
             None,
-            #[cfg(not(feature = "no_optimize"))]
             engine.optimization_level,
         )
         .unwrap();
@@ -5482,7 +5449,6 @@ mod tests {
                     "char" => '\0'.into(),
                     "i64" => 0_i64.into(),
                     "String" => crate::ImmutableString::new().into(),
-                    #[cfg(not(feature = "no_float"))]
                     "f64" => 0.0_f64.into(),
                     _ => panic!("unexpected builtin in test schema"),
                 },

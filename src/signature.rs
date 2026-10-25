@@ -7,8 +7,6 @@ use crate::{receiver, type_def, ImmutableString};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// An exact canonical callable-signature fingerprint.
 ///

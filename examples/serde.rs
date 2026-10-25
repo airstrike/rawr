@@ -1,11 +1,5 @@
 //! An example to serialize and deserialize Rust types.
 
-#[cfg(feature = "no_object")]
-fn main() {
-    panic!("This example does not run under 'no_object'.")
-}
-
-#[cfg(not(feature = "no_object"))]
 fn main() {
     use rawr::serde::{from_dynamic, to_dynamic};
     use rawr::{Dynamic, Engine, Map};

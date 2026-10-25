@@ -7,8 +7,6 @@
 
 use crate::types::dynamic::Variant;
 use crate::Dynamic;
-#[cfg(feature = "no_std")]
-use std::prelude::v1::*;
 
 /// The runtime representation of a Rawr `Option<T>`.
 pub type Value = Option<Dynamic>;

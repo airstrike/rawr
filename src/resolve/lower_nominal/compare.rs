@@ -161,13 +161,11 @@ impl Comparison<'_, '_> {
                     };
                 }
             }
-            #[cfg(not(feature = "no_index"))]
             Shape::Each(inner) => {
                 if let (Ok(lhs), Ok(rhs)) = (lhs.as_array_ref(), rhs.as_array_ref()) {
                     return self.lexicographic(&lhs, &rhs, |_| inner);
                 }
             }
-            #[cfg(not(feature = "no_index"))]
             Shape::Tuple(members) => {
                 if let (Ok(lhs), Ok(rhs)) = (lhs.as_array_ref(), rhs.as_array_ref()) {
                     return self.lexicographic(&lhs, &rhs, |index| {
@@ -299,7 +297,6 @@ impl Comparison<'_, '_> {
         ) {
             return self.compare_plain(&rhs.0, &lhs.0);
         }
-        #[cfg(not(feature = "no_index"))]
         if let (Ok(lhs), Ok(rhs)) = (lhs.as_array_ref(), rhs.as_array_ref()) {
             return self.lexicographic(&lhs, &rhs, |_| &Shape::Plain);
         }
@@ -327,7 +324,6 @@ impl Comparison<'_, '_> {
             return self.equal(&lhs.0, &rhs.0);
         }
         match (&lhs.0, &rhs.0) {
-            #[cfg(not(feature = "no_index"))]
             (Union::Array(left, ..), Union::Array(right, ..)) => {
                 if left.len() != right.len() {
                     return Ok(false);
@@ -420,7 +416,6 @@ pub(super) fn tag_unsigned(mut value: Dynamic, shape: &Shape) -> Dynamic {
             Some(Err(element)) => return crate::result::err(tag_unsigned(element, err)),
             None => {}
         },
-        #[cfg(not(feature = "no_index"))]
         Shape::Each(_) | Shape::Tuple(_) => {
             if let Ok(mut array) = value.as_array_mut() {
                 for (index, element) in array.iter_mut().enumerate() {
@@ -433,8 +428,6 @@ pub(super) fn tag_unsigned(mut value: Dynamic, shape: &Shape) -> Dynamic {
                 }
             }
         }
-        #[cfg(feature = "no_index")]
-        Shape::Each(_) | Shape::Tuple(_) => {}
     }
     value
 }
