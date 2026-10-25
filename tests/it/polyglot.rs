@@ -63,7 +63,7 @@ fn a_native_module_declaring_a_marked_module_is_an_error() {
     let target = rawr::project::Target::discover(project.path()).unwrap();
     let error = Graph::load(&Engine::new(), &target).unwrap_err();
     let message = error.to_string();
-    assert!(message.contains("native module `crate::model` declares `mod view;`") && message.contains("Native Rust cannot depend on a marked module."), "{message}");
+    assert!(message.contains("native module `crate::model` declares `mod view;`") && message.contains("not yet from a native module."), "{message}");
     let report = error.report().unwrap();
     assert!(report.labels()[0].source().identity().ends_with("src/model.rs"));
 }
