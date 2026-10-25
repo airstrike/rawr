@@ -18,6 +18,13 @@
 | [`strings`](strings.rs)                                   | shows different ways to register Rust functions taking string arguments                                                                             |
 | [`threading`](threading.rs)                               | shows how to communicate in duplex with an `Engine` running in a separate thread via a pair of MPSC channels                                        |
 
+## An App That Embeds rawr
+
+[`rules`](rules) is an app with its own Cargo workspace. It totals bank
+transactions by category, and its users write the categories in Rust. Run it
+with `cargo run --manifest-path examples/rules/Cargo.toml`.
+`scripts/embed-check.sh` checks what it prints.
+
 ## Running Examples
 
 Examples can be run with the following command:

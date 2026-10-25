@@ -82,6 +82,9 @@ pub(crate) struct Callable {
     this: Option<usize>,
     dispatch: Dispatch,
     application: Option<crate::application::descriptor::Signature>,
+    /// A free function's signature as written, for typed handles.
+    #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
+    signature: Option<super::signatures::Signature>,
     locations: Option<Locations>,
 }
 
@@ -295,6 +298,8 @@ impl Executable {
                     this: None,
                     dispatch: Dispatch::Function(closure.dispatch),
                     application: None,
+                    #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
+                    signature: None,
                     locations: None,
                 },
             );
@@ -534,6 +539,23 @@ impl Executable {
         ast
     }
 
+    /// This program's hosted [`AST`] and the typed signatures of its entry
+    /// source's free functions, which typed handles check against (D514).
+    #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
+    pub(crate) fn into_hosted_parts(mut self) -> (AST, super::signatures::Signatures) {
+        let mut signatures = super::signatures::Signatures::default();
+        let entry = self.source;
+        for callable in std::mem::take(&mut self.callables).into_values() {
+            if callable.source == entry
+                && let Dispatch::Function(_) = callable.dispatch
+                && let Some(signature) = callable.signature
+            {
+                signatures.insert(signature);
+            }
+        }
+        (self.into_hosted_ast(), signatures)
+    }
+
     /// This program's [`AST`] and the [`Positions`] of its entry source.
     pub(crate) fn into_ast_with_positions(self) -> (AST, Positions) {
         let positions = self.positions();
@@ -715,6 +737,8 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                             &definitions,
                             &application_runtime,
                         )),
+                        #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
+                        signature: Some(super::signatures::Signature::from_resolved(function)),
                         locations: None,
                     },
                 );
@@ -754,6 +778,8 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                                 ),
                             },
                             application: None,
+                            #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
+                            signature: None,
                             locations: None,
                         },
                     );
@@ -799,6 +825,8 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                     &definitions,
                     &application_runtime,
                 )),
+                #[cfg(all(not(feature = "no_function"), not(feature = "no_std")))]
+                signature: None,
                 locations: None,
             },
         );

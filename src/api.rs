@@ -14,6 +14,8 @@ pub mod register;
 
 pub mod call_fn;
 
+pub mod script;
+
 pub mod options;
 
 pub mod optimize;

@@ -130,57 +130,53 @@ cover them.
 
 ## Can my app run Rust scripts?
 
-Yes. That is embedding, a second use of rawr. Your app adds the crate, exports
-its own types and functions with `#[rawr::export]`, and calls functions that a
-script defines:
+Yes. That is embedding, a second use of rawr. It lets the people who use your
+Rust app change its behaviour in Rust, without rebuilding it. Your app adds
+the crate, exports its own types with `#[rawr::export]`, loads the user's
+script and calls its functions through typed handles:
 
 ```sh
 cargo add --git https://github.com/airstrike/rawr rawr
 ```
 
 ```rust
-use rawr::{Engine, Exports, Scope};
+use rawr::{Engine, Exports};
 
 #[derive(Clone)]
 #[rawr::export]
-pub struct Order {
-    pub customer: String,
-    pub items: i64,
-}
-
-#[rawr::export]
-impl Order {
-    pub fn total(&self, price: f64) -> f64 {
-        price * self.items as f64
-    }
+pub struct Transaction {
+    pub payee: String,
+    pub amount: f64,
 }
 
 fn main() -> Result<(), Box<rawr::EvalAltResult>> {
-    let mut shop = Exports::new("shop");
-    shop.add::<Order>();
+    let mut bank = Exports::new("bank");
+    bank.add::<Transaction>();
     let mut engine = Engine::new();
-    engine.export(shop)?;
+    engine.export(bank)?;
 
-    let ast = engine.compile_file("scripts/label.rs".into())?;
-    let order = Order { customer: "Ada".into(), items: 2 };
-    let label = engine.call_fn::<String>(&mut Scope::new(), &ast, "label", (order,))?;
-    println!("{label}");
+    let script = engine.load("rules.rs")?;
+    let category = script.func::<(Transaction,), Option<String>>("category")?;
+    let tx = Transaction { payee: "Blue Bottle Coffee".into(), amount: -4.5 };
+    println!("{:?}", category.call(tx)?);
     Ok(())
 }
 ```
 
-`scripts/label.rs` is typed Rust:
+The user's `rules.rs` is typed Rust:
 
 ```rust
-use shop::Order;
+use bank::Transaction;
 
-fn label(order: Order) -> String {
-    format!("{} x{}: {:.2}", order.customer, order.items, order.total(9.5))
+fn category(tx: Transaction) -> Option<String> {
+    if tx.payee.contains("Coffee") { Some("coffee".into()) } else { None }
 }
 ```
 
-It prints `Ada x2: 19.00`. Here the interpreter is part of your app, so it
-ships in your release build. `examples/app` is a fuller example, and the
+It prints `Some("coffee")`. A mistake in the rules fails when they load, or
+when the app looks up `category`, with the error rustc would give.
+`script.reload()` picks up an edit. The interpreter is part of your app, so it
+ships in your release build. `examples/rules` is a fuller example, and the
 [embedding docs](https://rawr.airstrike.fyi/docs/embedding) cover the API.
 
 ## Can I try it without installing anything?

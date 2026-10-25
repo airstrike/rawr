@@ -1,6 +1,7 @@
 //! Module that defines the `call_fn` API of [`Engine`].
 #![cfg(not(feature = "no_function"))]
 
+use crate::ast::ScriptFuncDef;
 use crate::eval::{Caches, GlobalRuntimeState};
 use crate::types::dynamic::Variant;
 use crate::{
@@ -218,6 +219,33 @@ impl Engine {
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
     ) -> RawrResult {
+        let function = ast
+            .shared_lib()
+            .get_script_fn(name, arg_values.len())
+            .map(|function| &**function);
+        self.call_fn_in(
+            options, scope, ast, name, function, arg_values, global, caches,
+        )
+    }
+
+    /// Call `function`, which `name` resolved to in `ast`, as
+    /// [`_call_fn`](Self::_call_fn) does. Without a function, `name` is
+    /// looked up in every namespace when `options` says so.
+    ///
+    /// A typed handle passes the function it resolved at lookup and turns
+    /// off `options.eval_ast`, so the call skips the top-level statements.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_fn_in(
+        &self,
+        options: CallFnOptions,
+        scope: &mut Scope,
+        ast: &AST,
+        name: &str,
+        function: Option<&ScriptFuncDef>,
+        arg_values: &mut [Dynamic],
+        global: &mut GlobalRuntimeState,
+        caches: &mut Caches,
+    ) -> RawrResult {
         self.bind_exports(ast, global)?;
         let statements = ast.statements();
 
@@ -266,7 +294,7 @@ impl Engine {
             #[cfg(not(feature = "no_closure"))]
             crate::func::ensure_no_data_race(name, args, false)?;
 
-            if let Some(fn_def) = ast.shared_lib().get_script_fn(name, args.len()) {
+            if let Some(fn_def) = function {
                 self.call_script_fn(
                     global,
                     caches,
