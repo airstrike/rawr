@@ -52,7 +52,7 @@ enum PreparedKind {
     Imported(Imported),
     Discard(Box<Prepared>),
     Sip {
-        sipper: Sip,
+        sipper: Box<Sip>,
         on_progress: item::Value,
         on_output: item::Value,
     },
@@ -126,6 +126,9 @@ impl<T> Project<T> {
 /// An iced `Task` crosses as it is, actions and all.
 #[doc(hidden)]
 pub trait ViaTask<T> {
+    // `&self` is what picks the impl: the bridge calls `(&Project::new(value)).into_task()`,
+    // and autoref tries `ViaTask` on `Project<Task>` before `ViaFuture` on `&Project<F>`.
+    #[allow(clippy::wrong_self_convention)]
     fn into_task(&self) -> iced::Task<T>;
 }
 
@@ -138,6 +141,8 @@ impl<T> ViaTask<T> for Project<iced::Task<T>> {
 /// A Rust future crosses as iced's `Task::future`.
 #[doc(hidden)]
 pub trait ViaFuture<T> {
+    // `&self` for the same autoref choice as `ViaTask::into_task`.
+    #[allow(clippy::wrong_self_convention)]
     fn into_task(&self) -> iced::Task<T>;
 }
 
@@ -230,7 +235,6 @@ impl fmt::Debug for Sip {
 /// Project a Rust sipper into the facade's `task::Sipper`, as iced's
 /// `Task::sip` runs one. The bridge stamps it with the call's witness.
 #[doc(hidden)]
-#[must_use]
 pub fn sipper<S, O, P>(
     sipper: S,
     mut on_progress: impl FnMut(P) -> Materialize + Send + 'static,
@@ -261,7 +265,8 @@ where
 #[derive(Clone)]
 pub struct Handle {
     abort: Arc<Abort>,
-    guard: Option<Arc<Guard>>,
+    /// Held for its `Drop`, which aborts when the last copy goes.
+    _guard: Option<Arc<Guard>>,
 }
 
 /// The native abort handle of one abortable plan, once it is lowered.
@@ -364,7 +369,6 @@ where
 /// Project an iced `Task` from a Rust function into the facade's `Task`.
 /// The bridge stamps it with the call's output witness.
 #[doc(hidden)]
-#[must_use]
 pub fn imported(task: iced::Task<Materialize>) -> Dynamic {
     let task = Imported::new(task);
     Dynamic::from(host::runtime::Unwitnessed::new(move |witness| {
@@ -473,7 +477,7 @@ pub(crate) fn tokio_blocking(
 /// the worker reads the same frozen time and the poll waits for it, so its
 /// output is ready at the instant the task started, on every run.
 enum Blocking {
-    Unstarted(Option<(Authority, item::Value)>),
+    Unstarted(Option<Box<(Authority, item::Value)>>),
     Running(iced::futures::channel::oneshot::Receiver<Result<Dynamic, Error>>),
 }
 
@@ -485,7 +489,7 @@ impl std::future::Future for Blocking {
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         if let Self::Unstarted(work) = &mut *self {
-            let Some((authority, work)) = work.take() else {
+            let Some((authority, work)) = work.take().map(|work| *work) else {
                 return std::task::Poll::Ready(Err(Error::Spent));
             };
             let frozen = crate::snapshot::clock::now();
@@ -624,7 +628,7 @@ enum Kind {
     Discard(Box<Plan>),
     /// iced's `Task::sip`: a Rust sipper's progress and output, each mapped.
     Sip {
-        sipper: Sip,
+        sipper: Box<Sip>,
         on_progress: item::Value,
         on_output: item::Value,
     },
@@ -974,7 +978,10 @@ impl Plan {
 /// slot; once every slot is full, or a `try_join` plan gives an `Err`, the
 /// join gives its one output.
 #[derive(Clone)]
-struct Joined(Arc<Mutex<(Vec<Option<Dynamic>>, Option<Next>)>>, bool);
+struct Joined(Arc<Mutex<Slots>>, bool);
+
+/// Each plan's first output, and the continuation until the join gives.
+type Slots = (Vec<Option<Dynamic>>, Option<Next>);
 
 impl Joined {
     fn new(count: usize, fallible: bool, next: Next) -> Self {
@@ -1333,7 +1340,7 @@ impl Lowering {
     /// under this task's authority, and hand `Ok` of its output to `next`
     /// on the UI thread, after the freshness check (`resume`).
     fn blocking(&self, work: item::Value, next: Next) -> iced::Task<runtime::Message> {
-        let blocking = Blocking::Unstarted(Some((self.authority.clone(), work)));
+        let blocking = Blocking::Unstarted(Some(Box::new((self.authority.clone(), work))));
         self.resume(iced::Task::future(blocking), next)
     }
 
@@ -1942,7 +1949,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             let on_output = take_value::<item::Value>(on_output, "a symbolic function")?;
             Ok(Dynamic::from(Plan {
                 kind: Kind::Sip {
-                    sipper,
+                    sipper: Box::new(sipper),
                     on_progress,
                     on_output,
                 },
@@ -2029,7 +2036,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             let abort = Arc::new(Abort::default());
             let handle = Handle {
                 abort: abort.clone(),
-                guard: None,
+                _guard: None,
             };
             let plan = Plan {
                 kind: Kind::Abortable {
@@ -2053,7 +2060,7 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             let guard = Arc::new(Guard(handle.abort.clone()));
             Ok(Dynamic::from(Handle {
                 abort: handle.abort,
-                guard: Some(guard),
+                _guard: Some(guard),
             }))
         })
         .expect("the iced facade must retain task::Handle::abort_on_drop");
@@ -2216,7 +2223,7 @@ mod tests {
         let abort = Arc::new(Abort::default());
         let handle = Handle {
             abort: abort.clone(),
-            guard: Some(Arc::new(Guard(abort.clone()))),
+            _guard: Some(Arc::new(Guard(abort.clone()))),
         };
         let copy = handle.clone();
         drop(handle);

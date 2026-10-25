@@ -201,7 +201,7 @@ impl Adapter {
     }
 
     /// Open a watcher whose native callbacks are disabled for deterministic tests.
-    #[cfg(feature = "test-support")]
+    #[cfg(feature = "manual")]
     pub fn manual(graph: &rawr::reload::source::Graph, debounce: Duration) -> Result<Self, Error> {
         let inputs = rawr::reload::source::Inputs::from_graph(graph);
         let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
@@ -223,7 +223,7 @@ impl Adapter {
     }
 
     /// Open a direct input filter with deterministic callback delivery for tests.
-    #[cfg(feature = "test-support")]
+    #[cfg(feature = "manual")]
     pub fn manual_inputs(
         inputs: rawr::reload::source::Inputs,
         debounce: Duration,
@@ -251,7 +251,7 @@ impl Adapter {
     }
 
     /// Deliver a deterministic data event through this watcher's real handler.
-    #[cfg(feature = "test-support")]
+    #[cfg(feature = "manual")]
     pub fn inject_modify(&self, path: &Path) {
         Handler {
             history: self.history.clone(),

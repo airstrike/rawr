@@ -285,6 +285,7 @@ pub struct Recording {
 /// time it takes counts against the deadline. Each frame is drawn with the
 /// theme `theme` names, or else the application's theme as its State has
 /// it then, so a message that changes the theme changes the colors.
+#[allow(clippy::too_many_arguments)]
 pub fn record_application(
     adapter: &mut crate::program::Adapter,
     messages: Vec<crate::runtime::Message>,

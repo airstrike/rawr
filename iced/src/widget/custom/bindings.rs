@@ -1,6 +1,6 @@
 //! The native side of the facade in `declare`.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use iced::advanced::layout::{Layout, Limits};
 use iced::advanced::widget::tree;
@@ -316,9 +316,9 @@ fn bind_tree(builder: &mut host::runtime::Builder) {
         .expect("the iced facade must retain Tag::of");
     builder
         .bind("iced::advanced::widget::tree::State::None", |_| {
-            Ok(Dynamic::from(State::Native(Arc::new(Mutex::new(Some(
-                tree::State::None,
-            ))))))
+            Ok(Dynamic::from(State::Native(std::rc::Rc::new(
+                std::cell::RefCell::new(Some(tree::State::None)),
+            ))))
         })
         .expect("the iced facade must retain State::None");
     builder
@@ -755,9 +755,9 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
                 .children()
                 .with(index, |child| child.state())
                 .map_err(child_error)?;
-            Ok(Dynamic::from(State::Native(Arc::new(Mutex::new(Some(
-                state,
-            ))))))
+            Ok(Dynamic::from(State::Native(std::rc::Rc::new(
+                std::cell::RefCell::new(Some(state)),
+            ))))
         })
         .expect("the iced facade must retain Element::state");
     builder

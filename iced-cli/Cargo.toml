@@ -27,7 +27,7 @@ core-foundation = "0.10"
 core-graphics = "0.24"
 
 [dev-dependencies]
-rawr-watch = { path = "../watch", features = ["test-support"] }
+rawr-watch = { path = "../watch", features = ["manual"] }
 rawr-import = { path = "../importer", features = ["rustc-driver", "test-fixtures"] }
 rawr-iced = { path = "../iced", features = ["profile-selection-diagnostic"] }
 serde_json = "1"

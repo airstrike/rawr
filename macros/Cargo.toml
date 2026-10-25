@@ -5,6 +5,7 @@ rust-version = "1.95.0"
 edition = "2024"
 description = "Rawr's attributes for cargo builds: #[rawr::preview] and #[rawr::widget] leave the item as written apart from dead-code warnings"
 repository = "https://github.com/airstrike/rawr"
+readme = "../README.md"
 license = "MIT OR Apache-2.0"
 keywords = ["rawr", "iced", "preview"]
 categories = ["development-tools"]

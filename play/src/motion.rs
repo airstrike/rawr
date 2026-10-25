@@ -591,14 +591,14 @@ fn changed(
             .as_chunks::<4>()
             .0
             .iter()
-            .zip(b.chunks_exact(4))
+            .zip(b.as_chunks::<4>().0)
             .position(|(a, b)| a != b)
             .unwrap_or(0);
         let last = a
             .as_chunks::<4>()
             .0
             .iter()
-            .zip(b.chunks_exact(4))
+            .zip(b.as_chunks::<4>().0)
             .rposition(|(a, b)| a != b)
             .unwrap_or(0);
         left = left.min(first);

@@ -30,7 +30,10 @@ pub(crate) struct Requests(Arc<Mutex<Queue>>);
 
 /// One pending request; the owner answers it once.
 #[derive(Clone)]
-pub(crate) struct Request(Arc<Mutex<Option<mpsc::SyncSender<Option<Vec<u8>>>>>>);
+pub(crate) struct Request(Arc<Mutex<Option<Answer>>>);
+
+/// Where the owner's answer goes: its State's bytes, or `None`.
+type Answer = mpsc::SyncSender<Option<Vec<u8>>>;
 
 impl Exporter {
     pub(crate) fn requests(&self) -> Requests {

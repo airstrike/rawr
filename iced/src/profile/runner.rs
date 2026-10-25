@@ -229,6 +229,9 @@ pub struct BoundGeneration {
     observation: Option<Startup>,
 }
 
+// One per run, built once and moved into the run loop; boxing a variant
+// would add an allocation and save nothing.
+#[allow(clippy::large_enum_variant)]
 enum Generation {
     Application(crate::program::Host),
     /// A plain program: no application, a `main` run once.
@@ -1046,6 +1049,8 @@ impl BoundGeneration {
     }
 }
 
+// As `Generation`: one per run.
+#[allow(clippy::large_enum_variant)]
 enum LiveGeneration {
     Application(crate::program::Host, crate::reload::Service),
     Preview(crate::control::Host, crate::reload::Service),
@@ -1375,6 +1380,7 @@ enum ExpectedFeedback {
 }
 
 /// Install the exact generated iced facade with only genuine semantic anchors replaced.
+#[allow(clippy::too_many_arguments)]
 pub fn install_compiler(
     engine: &mut rawr::Engine,
     bytes: &[u8],
@@ -1402,6 +1408,7 @@ pub fn install_compiler(
 
 /// Reconstruct a generated compiler under its retained native metadata account.
 #[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
 pub fn install_compiler_retained(
     engine: &mut rawr::Engine,
     bytes: &[u8],
@@ -1428,6 +1435,7 @@ pub fn install_compiler_retained(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn install_compiler_accounted(
     engine: &mut rawr::Engine,
     bytes: &[u8],
@@ -2601,6 +2609,7 @@ struct Decoration<'proof> {
 }
 
 impl<'proof> Decoration<'proof> {
+    #[allow(clippy::too_many_arguments)]
     const fn new(
         semantic: host::facade::Definition,
         compatibility: [u8; 32],

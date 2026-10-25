@@ -2,12 +2,15 @@ use super::*;
 use crate::tests::{record, Audit};
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
+/// A fake's id and what happened to it.
+type Event = (u8, &'static str);
+
 thread_local! { static NEXT: RefCell<Option<Rc<RefCell<Script>>>> = const { RefCell::new(None) }; }
 struct Script {
     mount: Result<bool, i32>,
     batches: VecDeque<Result<Vec<u8>, i32>>,
     types: VecDeque<Result<libc::mode_t, i32>>,
-    events: Vec<(u8, &'static str)>,
+    events: Vec<Event>,
     tails: VecDeque<Option<u32>>,
 }
 struct Fake {
@@ -225,7 +228,7 @@ fn every_unrecognized_hint_uses_the_associated_native_fallback_only_when_reached
 fn run_refusal(
     reject_at: Option<usize>,
     union: bool,
-) -> (Result<(), Error<()>>, Vec<Work>, Vec<(u8, &'static str)>) {
+) -> (Result<(), Error<()>>, Vec<Work>, Vec<Event>) {
     let shared = setup(
         Ok(union),
         [Ok(record(b"entry", 1, 0)), Ok(vec![])],

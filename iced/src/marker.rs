@@ -515,12 +515,12 @@ pub(crate) struct Stack {
 #[derive(Clone)]
 pub(crate) struct Native {
     pub(crate) identity: widget::Identity,
-    pub(crate) lower: std::sync::Arc<
-        dyn Fn(&widget::Context<'_>) -> iced::Element<'static, crate::runtime::Message>
-            + Send
-            + Sync,
-    >,
+    pub(crate) lower: std::sync::Arc<Lower>,
 }
+
+/// A [`Native`] widget's lowering to an iced element.
+pub(crate) type Lower =
+    dyn Fn(&widget::Context<'_>) -> iced::Element<'static, crate::runtime::Message> + Send + Sync;
 
 /// iced's `pin(content)`: content at a fixed position.
 #[derive(Clone)]

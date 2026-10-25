@@ -60,6 +60,7 @@ pub(super) enum Attempt {
     Prepare(Option<rawr_watch::StagedInputs>),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn attempt(
     lane: &mut super::Lane,
     adapter: &rawr_watch::Adapter,

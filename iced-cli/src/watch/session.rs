@@ -404,6 +404,7 @@ impl Pool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile(
     target: PathBuf,
     engine: rawr::Shared<rawr::Engine>,

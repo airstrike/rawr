@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 
 [features]
 # Disable native callback delivery only in explicitly selected deterministic tests.
-test-support = []
+manual = []
 
 [dependencies]
 notify = { package = "rawr-notify", path = "notify" }

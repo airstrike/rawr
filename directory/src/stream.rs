@@ -126,6 +126,10 @@ struct Core<D> {
     tail_end: bool,
     refused: Cell<bool>,
 }
+
+/// A retained entry's name, as its range in the buffer, and its type byte.
+type Retained = (Range<usize>, u8);
+
 impl<D: System> Core<D> {
     fn open<A: Admission>(path: &CStr, admission: &mut A) -> Result<Self, Error<A::Error>> {
         admit(
@@ -229,7 +233,7 @@ impl<D: System> Core<D> {
     fn advance<A: Admission>(
         &mut self,
         admission: &mut A,
-    ) -> Result<Option<(Range<usize>, u8)>, Error<A::Error>> {
+    ) -> Result<Option<Retained>, Error<A::Error>> {
         loop {
             if self.position == self.length {
                 if self.tail_end {

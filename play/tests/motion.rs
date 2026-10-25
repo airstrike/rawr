@@ -180,7 +180,7 @@ fn pictures(name: &str, bytes: &[u8]) -> Vec<Vec<u8>> {
     let mut pictures = Vec::new();
     while let Some(frame) = decoder.read_next_frame().unwrap() {
         let (left, top) = (usize::from(frame.left), usize::from(frame.top));
-        for (at, pixel) in frame.buffer.chunks_exact(4).enumerate() {
+        for (at, pixel) in frame.buffer.as_chunks::<4>().0.iter().enumerate() {
             if pixel[3] == 0 {
                 continue;
             }
@@ -212,7 +212,9 @@ fn pictures(name: &str, bytes: &[u8]) -> Vec<Vec<u8>> {
 /// How many pixels of `picture` are `color`.
 fn count(picture: &[u8], color: &[u8]) -> usize {
     picture
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| *pixel == color)
         .count()
 }
@@ -234,8 +236,10 @@ fn motion_a_counters_buttons_stay_enabled_in_every_frame() {
     // the background in its corner.
     let first = &pictures[0];
     let background = &first[..4];
-    let mut colors: Vec<&[u8]> = first
-        .chunks_exact(4)
+    let mut colors: Vec<&[u8; 4]> = first
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| *pixel != background)
         .collect();
     colors.sort_unstable();

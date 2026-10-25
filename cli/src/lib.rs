@@ -6,6 +6,9 @@
 //! them. `rawr` knows extensions only as data.
 
 #![deny(unsafe_code)]
+// Commands return the public diagnostic Report, which carries the structured
+// diagnostics they print. Boxing it would change this crate's public API.
+#![allow(clippy::result_large_err)]
 
 pub mod base;
 pub mod cargo;

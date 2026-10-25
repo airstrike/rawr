@@ -16,7 +16,7 @@
 pub(crate) mod lend;
 
 use std::cell::RefCell;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use iced::advanced::layout::{Layout, Limits};
 use iced::advanced::widget::{tree, Tree as NativeTree};
@@ -111,7 +111,7 @@ pub(crate) enum Tag {
 /// `state` hands to iced once, or a script value (`State::new(value)`).
 #[derive(Clone)]
 pub(crate) enum State {
-    Native(Arc<Mutex<Option<tree::State>>>),
+    Native(std::rc::Rc<std::cell::RefCell<Option<tree::State>>>),
     Script(Dynamic),
 }
 
@@ -338,7 +338,7 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
         };
         match result.map(|state| state.try_cast::<State>()) {
             Ok(Some(State::Native(state))) => state
-                .lock()
+                .try_borrow_mut()
                 .ok()
                 .and_then(|mut state| state.take())
                 .unwrap_or(tree::State::None),

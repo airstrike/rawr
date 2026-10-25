@@ -8,6 +8,10 @@
 //! the runner. The [`plain`] profile adds nothing.
 
 #![deny(unsafe_code)]
+// The owner and profiles return rawr-cli's diagnostic Report and this crate's
+// public Error unboxed, as the other command crates do. Boxing them would
+// change both public APIs.
+#![allow(clippy::result_large_err)]
 
 pub mod command;
 pub mod native;

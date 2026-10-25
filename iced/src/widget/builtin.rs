@@ -434,15 +434,11 @@ impl widget::Descriptor for marker::Container {
 
 /// A container style, pinned or a Rawr function; a failing function is a
 /// diagnostic in place of the widget.
-#[allow(clippy::type_complexity)]
 fn container_style(
     source: &Option<marker::container::Source>,
     context: &widget::Context<'_>,
     widget: &str,
-) -> Result<
-    Option<Box<dyn Fn(&iced::Theme) -> iced::widget::container::Style>>,
-    iced::Element<'static, runtime::Message>,
-> {
+) -> style::Themed<iced::widget::container::Style> {
     let function = match source {
         None => return Ok(None),
         Some(marker::container::Source::Builtin(style)) => {
@@ -474,10 +470,7 @@ fn container_style(
 fn text_style(
     source: &Option<marker::text::Source>,
     context: &widget::Context<'_>,
-) -> Result<
-    Option<Box<dyn Fn(&iced::Theme) -> iced::widget::text::Style>>,
-    iced::Element<'static, runtime::Message>,
-> {
+) -> style::Themed<iced::widget::text::Style> {
     let function = match source {
         None => return Ok(None),
         Some(marker::text::Source::Builtin(style)) => return Ok(Some(Box::new(style.native()))),
@@ -3369,7 +3362,11 @@ fn number_range(
     } else {
         take::<std::ops::RangeInclusive<rawr::FLOAT>>(value, "RangeInclusive<f64>")?
     };
-    if !(range.start() <= range.end()) {
+    // Not `>`: a NaN bound is refused too.
+    if !matches!(
+        range.start().partial_cmp(range.end()),
+        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+    ) {
         return Err(runtime_error(format!(
             "{operation} expects an ascending inclusive range, found {}..={}",
             range.start(),

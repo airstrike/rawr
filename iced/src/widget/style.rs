@@ -65,6 +65,14 @@ impl<S, T> Copy for Builtin<S, T> {}
 
 type Lowered<S, T> = Box<dyn Fn(&iced::Theme, S) -> T>;
 
+/// A pinned iced style function of the theme alone.
+type Pinned<T> = fn(&iced::Theme) -> T;
+
+/// A style function of the theme alone, or the diagnostic that replaces
+/// the widget when a Rawr style function fails.
+pub(crate) type Themed<T> =
+    Result<Option<Box<dyn Fn(&iced::Theme) -> T>>, iced::Element<'static, runtime::Message>>;
+
 /// iced's style function for `style`: the pinned one, or a Rawr function
 /// evaluated for every status. `Ok(None)` without one or an authority.
 pub(crate) fn lower<S, T>(
@@ -127,10 +135,7 @@ where
 pub(crate) fn progress_bar_style(
     source: &Option<crate::marker::progress_bar::Source>,
     context: &widget::Context<'_>,
-) -> Result<
-    Option<Box<dyn Fn(&iced::Theme) -> progress_bar::Style>>,
-    iced::Element<'static, runtime::Message>,
-> {
+) -> Themed<progress_bar::Style> {
     use crate::marker::progress_bar::Source;
 
     let function = match source {
@@ -158,7 +163,7 @@ pub(crate) fn progress_bar_style(
 }
 
 /// iced's pinned progress bar styles.
-const PROGRESS_BAR_BUILTINS: [(&str, fn(&iced::Theme) -> progress_bar::Style); 5] = [
+const PROGRESS_BAR_BUILTINS: [(&str, Pinned<progress_bar::Style>); 5] = [
     ("primary", progress_bar::primary),
     ("secondary", progress_bar::secondary),
     ("success", progress_bar::success),

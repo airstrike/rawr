@@ -1,4 +1,3 @@
-use iced_test::futures::futures::StreamExt;
 use rawr::{application, host, resolve, Dynamic, Engine, ParseErrorType, Shared};
 use rawr_iced::{program, runtime};
 use std::sync::atomic::{AtomicUsize, Ordering};
