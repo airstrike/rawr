@@ -26,6 +26,8 @@ pub(crate) struct Entry {
     theme_type: Option<host::type_def::Contract>,
     subscription_type: Option<host::type_def::Contract>,
     widget: Option<host::type_def::Contract>,
+    /// `iced::time::Instant`, the third parameter of a timed update.
+    instant: Option<host::type_def::Contract>,
     span: Span,
 }
 
@@ -122,6 +124,10 @@ impl Entry {
         self.widget.as_ref()
     }
 
+    pub(crate) const fn instant(&self) -> Option<&host::type_def::Contract> {
+        self.instant.as_ref()
+    }
+
     pub(crate) const fn span(&self) -> Span {
         self.span
     }
@@ -131,6 +137,9 @@ struct Contracts<'a> {
     facade: host::facade::Dependency,
     run: Option<&'a host::item::Definition>,
     application: Option<&'a host::item::Definition>,
+    /// `iced::application::timed`, whose update also takes the message's
+    /// `Instant`.
+    timed: Option<&'a host::item::Definition>,
     application_title: Option<&'a host::item::Definition>,
     application_theme: Option<&'a host::item::Definition>,
     application_subscription: Option<&'a host::item::Definition>,
@@ -140,6 +149,7 @@ struct Contracts<'a> {
     theme: Option<host::type_def::Contract>,
     subscription: Option<host::type_def::Contract>,
     widget: Option<host::type_def::Contract>,
+    instant: Option<host::type_def::Contract>,
     registry: &'a host::Registry,
 }
 
@@ -147,6 +157,8 @@ struct Contracts<'a> {
 enum AttemptKind {
     Run,
     Application,
+    /// `iced::application::timed(boot, update, subscription, view)`.
+    Timed,
 }
 
 struct Attempt<'a> {
@@ -312,6 +324,9 @@ impl<'a> Contracts<'a> {
             facade,
             run,
             application,
+            timed: registry
+                .item("iced::application::timed")
+                .filter(|item| item.kind() == host::item::Kind::IntrinsicFunction),
             application_run: registry.item("iced::Application::run").filter(|item| {
                 item.kind() == host::item::Kind::IntrinsicMethod
                     && item.receiver() == Some(receiver::Mode::Owned)
@@ -355,6 +370,10 @@ impl<'a> Contracts<'a> {
                 .type_("iced::Element")
                 .filter(|definition| definition.parameters().len() == 1)
                 .map(host::type_def::Definition::contract),
+            instant: registry
+                .type_("iced::time::Instant")
+                .filter(|definition| definition.parameters().is_empty())
+                .map(host::type_def::Definition::contract),
         })
     }
 
@@ -368,11 +387,20 @@ impl<'a> Contracts<'a> {
             return None;
         }
 
+        let path = is_kind(
+            tokens.get(index + 3),
+            &crate::item::BodyTokenKind::DoubleColon,
+        );
         if is_identifier(tokens.get(index + 2), "run") && self.run.is_some() {
             Some(AttemptKind::Run)
-        } else if is_identifier(tokens.get(index + 2), "application") && self.application.is_some()
-        {
-            Some(AttemptKind::Application)
+        } else if !is_identifier(tokens.get(index + 2), "application") {
+            None
+        } else if !path {
+            self.application
+                .is_some()
+                .then_some(AttemptKind::Application)
+        } else if is_identifier(tokens.get(index + 4), "timed") && self.timed.is_some() {
+            Some(AttemptKind::Timed)
         } else {
             None
         }
@@ -439,8 +467,12 @@ fn collect_function_attempts<'a>(
         let Some(kind) = contracts.attempt(tokens, index) else {
             continue;
         };
+        let last = match kind {
+            AttemptKind::Timed => index + 4,
+            AttemptKind::Run | AttemptKind::Application => index + 2,
+        };
         let end = tokens
-            .get(index + 2)
+            .get(last)
             .map(crate::item::BodyToken::span)
             .unwrap_or_else(|| tokens[index].span());
         attempts.push(Attempt {
@@ -495,7 +527,7 @@ fn resolve_main(
     }
 
     let mut cursor = Cursor::new(&tokens[attempt.index..], attempt.span);
-    cursor.consume_intrinsic()?;
+    cursor.consume_intrinsic(matches!(attempt.kind, AttemptKind::Timed))?;
     let result = match attempt.kind {
         AttemptKind::Run => {
             let callbacks = cursor.callbacks(&["update", "view"])?;
@@ -561,18 +593,38 @@ fn resolve_main(
                 theme_type: contracts.theme.clone(),
                 subscription_type: contracts.subscription.clone(),
                 widget: contracts.widget.clone(),
+                instant: None,
                 span: Span::new(attempt.span.start(), cursor.last_end()),
             }
         }
-        AttemptKind::Application => {
-            let callbacks = cursor.callbacks(&["boot", "update", "view"])?;
-            let tail = cursor.application_tail(
+        AttemptKind::Application | AttemptKind::Timed => {
+            let timed = matches!(attempt.kind, AttemptKind::Timed);
+            // A timed application takes its subscription as its third
+            // argument, where `.subscription(..)` would set it.
+            let (callbacks, subscription) = if timed {
+                let mut callbacks =
+                    cursor.callbacks(&["boot", "update", "subscription", "view"])?;
+                let subscription = callbacks.remove(2);
+                (callbacks, Some(subscription))
+            } else {
+                (cursor.callbacks(&["boot", "update", "view"])?, None)
+            };
+            let mut tail = cursor.application_tail(
                 contracts.application_title,
                 contracts.application_theme,
                 contracts.application_subscription,
                 contracts.application_centered,
                 contracts.application_run,
             )?;
+            if let Some(subscription) = subscription {
+                if tail.subscription.is_some() {
+                    return Err(application::Error::MalformedEntry {
+                        reason: "`iced::application::timed` takes its subscription as its third argument, not `.subscription(..)`".into(),
+                        entry: attempt.span,
+                    });
+                }
+                tail.subscription = Some(subscription);
+            }
             let update = resolve_callback(&callbacks[1], "update", items, methods, source)?;
             // `State::default` from a derived `Default` has no method item:
             // boot from `Default` as `iced::run` does.
@@ -635,12 +687,22 @@ fn resolve_main(
                 .map(|callback| resolve_callback(callback, "subscription", items, methods, source))
                 .transpose()?;
             Entry {
-                form: application::Form::Application,
+                form: if timed {
+                    application::Form::Timed
+                } else {
+                    application::Form::Application
+                },
                 facade: contracts.facade.clone(),
-                root_intrinsic: contracts
-                    .application
-                    .expect("application attempts retain their intrinsic contract")
-                    .fingerprint(),
+                root_intrinsic: if timed {
+                    contracts
+                        .timed
+                        .expect("timed attempts retain their intrinsic contract")
+                } else {
+                    contracts
+                        .application
+                        .expect("application attempts retain their intrinsic contract")
+                }
+                .fingerprint(),
                 title_intrinsic: tail.title.map(|_| {
                     contracts
                         .application_title
@@ -653,7 +715,8 @@ fn resolve_main(
                         .expect("accepted theme chains retain their intrinsic contract")
                         .fingerprint()
                 }),
-                subscription_intrinsic: tail.subscription.map(|_| {
+                // A timed application's subscription is its root's argument.
+                subscription_intrinsic: tail.subscription.filter(|_| !timed).map(|_| {
                     contracts
                         .application_subscription
                         .expect("accepted subscription chains retain their intrinsic contract")
@@ -683,6 +746,7 @@ fn resolve_main(
                 theme_type: contracts.theme.clone(),
                 subscription_type: contracts.subscription.clone(),
                 widget: contracts.widget.clone(),
+                instant: contracts.instant.clone().filter(|_| timed),
                 span: Span::new(attempt.span.start(), cursor.last_end()),
             }
         }
@@ -1335,10 +1399,12 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    fn consume_intrinsic(&mut self) -> Result<(), application::Error> {
-        self.consume();
-        self.consume();
-        self.consume();
+    /// Consume `iced::run`, `iced::application` or, when `timed`,
+    /// `iced::application::timed`.
+    fn consume_intrinsic(&mut self, timed: bool) -> Result<(), application::Error> {
+        for _ in 0..if timed { 5 } else { 3 } {
+            self.consume();
+        }
         Ok(())
     }
 

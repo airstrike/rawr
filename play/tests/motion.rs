@@ -82,6 +82,26 @@ fn motion_an_easing_plays_once_and_holds_its_last_frame() {
 }
 
 #[test]
+fn motion_a_timed_easing_moves_by_the_frame_times_and_renders_the_same_twice() {
+    // `application::timed`'s update takes each frame's Instant from the
+    // recording's clock.
+    let args = ["--message", "Message::Toggle"];
+    let first = render("timed", "timed.png", &args);
+    let gif = decode(&first.bytes);
+    assert!(!gif.looping, "a settled animation plays once");
+    // The boot's frame before the message, one second of easing at 20
+    // frames a second, then the hold.
+    assert!(gif.delays.len() > 10, "{} frames", gif.delays.len());
+    assert!(gif.delays[1..gif.delays.len() - 1]
+        .iter()
+        .all(|delay| *delay == Duration::from_millis(50)));
+    let total: Duration = gif.delays.iter().sum();
+    assert_eq!(total, Duration::from_millis(5000), "{:?}", gif.delays);
+    let second = render("timed", "timed.png", &args);
+    assert_eq!(first.bytes, second.bytes);
+}
+
+#[test]
 fn motion_a_spinner_loops_once_around() {
     let rendered = render("spinner", "spinner.png", &[]);
     let gif = decode(&rendered.bytes);

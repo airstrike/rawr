@@ -9,6 +9,9 @@ pub enum Form {
     Run,
     /// `iced::application(boot, update, view).run()` with an explicit boot item.
     Application,
+    /// `iced::application::timed(boot, update, subscription, view).run()`,
+    /// whose update also takes the `Instant` of each message.
+    Timed,
 }
 
 /// One compiler-selected application root before callback-contract validation.
@@ -39,6 +42,7 @@ pub struct Entry {
     theme_type: Option<host::type_def::Contract>,
     subscription_type: Option<host::type_def::Contract>,
     widget: Option<host::type_def::Contract>,
+    instant: Option<host::type_def::Contract>,
     span: Span,
 }
 
@@ -64,6 +68,7 @@ impl Entry {
         theme_type: Option<host::type_def::Contract>,
         subscription_type: Option<host::type_def::Contract>,
         widget: Option<host::type_def::Contract>,
+        instant: Option<host::type_def::Contract>,
         span: Span,
     ) -> Self {
         Self {
@@ -87,6 +92,7 @@ impl Entry {
             theme_type,
             subscription_type,
             widget,
+            instant,
             span,
         }
     }
@@ -206,6 +212,11 @@ impl Entry {
 
     pub(crate) const fn widget(&self) -> Option<&host::type_def::Contract> {
         self.widget.as_ref()
+    }
+
+    /// `iced::time::Instant`, which a timed update takes after its message.
+    pub(crate) const fn instant(&self) -> Option<&host::type_def::Contract> {
+        self.instant.as_ref()
     }
 
     /// Return the complete accepted root-expression span.

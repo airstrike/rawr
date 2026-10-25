@@ -188,6 +188,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     register_debug();
     let mut builder = facade::Builder::new("iced", facade::Abi::new(16)?)?;
     builder.module("alignment")?;
+    builder.module("application")?;
     builder.module("animation")?;
     builder.module("border")?;
     builder.module("font")?;
@@ -310,7 +311,9 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.default_value_type::<iced::Color>("Color", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder
         .carried::<theme::CarryColor>()
-        .carried::<theme::CarryTheme>();
+        .carried::<theme::CarryTheme>()
+        .carried::<marker::CarryDuration>()
+        .carried::<marker::CarryInstant>();
     builder.value_type::<iced::Length>("Length", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::Padding>(
         "Padding",
@@ -789,6 +792,12 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.item(item::Definition::intrinsic_function(
         "application",
         application_signature()?,
+    )?)?;
+    // iced's `application::timed(boot, update, subscription, view)`, whose
+    // update also takes the `Instant` of each message.
+    builder.item(item::Definition::intrinsic_function(
+        "application::timed",
+        timed_signature()?,
     )?)?;
     builder.item(
         item::Definition::associated_function("Task::none", task_none_signature()?)?
@@ -1736,6 +1745,25 @@ fn application_signature() -> Result<signature::Definition, host::Error> {
     signature.parameter(type_ref::Type::parameter("Boot")?);
     signature.parameter(type_ref::Type::parameter("Update")?);
     signature.parameter(type_ref::Type::parameter("View")?);
+    signature.output(type_ref::Type::applied(
+        "Application",
+        [
+            type_ref::Type::parameter("State")?,
+            type_ref::Type::parameter("Message")?,
+        ],
+    )?);
+    Ok(signature.finish())
+}
+
+fn timed_signature() -> Result<signature::Definition, host::Error> {
+    let mut signature = signature::Builder::new();
+    state_message_parameters(&mut signature)?;
+    for name in ["Boot", "Update", "Subscription", "View"] {
+        signature.type_parameter(name, &[])?;
+    }
+    for name in ["Boot", "Update", "Subscription", "View"] {
+        signature.parameter(type_ref::Type::parameter(name)?);
+    }
     signature.output(type_ref::Type::applied(
         "Application",
         [
@@ -2744,6 +2772,17 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         receiver::Mode::Shared,
         since.finish(),
     )?)?;
+    // `start.min(now)`: the earlier of two instants, as `Ord` gives it.
+    for name in ["min", "max"] {
+        let mut pick = signature::Builder::new();
+        pick.parameter(instant()?);
+        pick.output(instant()?);
+        builder.item(item::Definition::method(
+            format!("time::Instant::{name}"),
+            receiver::Mode::Owned,
+            pick.finish(),
+        )?)?;
+    }
     // `size.width`, `point.x` and kin, read as fields.
     for (owner, fields) in [
         ("Size", &["width", "height"][..]),

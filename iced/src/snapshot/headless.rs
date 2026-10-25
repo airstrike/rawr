@@ -137,7 +137,7 @@ impl Renderer {
         view: &mut View<'_>,
         size: Size,
     ) -> UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer> {
-        let mut now = time::Instant::now();
+        let mut now = super::clock::now().unwrap_or_else(time::Instant::now);
         let mut cache = user_interface::Cache::default();
         let mut published = Vec::new();
         for frame in 1.. {

@@ -11,6 +11,8 @@ use crate::{diagnostic, effect, runtime, subscription, task, theme, widget};
 mod carry_tests;
 pub mod install;
 mod live;
+#[cfg(test)]
+mod timed_tests;
 
 /// The result of applying one provenance-checked message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1140,8 +1142,17 @@ impl Adapter {
         }
 
         let previous = self.state.clone();
-        let mut args = [self.state.take(), message.into_payload()];
-        let plan = match launch.invoke_update(&mut args) {
+        // `iced::application::timed`'s update also takes the message's
+        // `Instant`: now, on the clock a recording freezes.
+        let timed = launch.update().timed();
+        let now = if timed {
+            Dynamic::from(crate::marker::Instant::now())
+        } else {
+            Dynamic::UNIT
+        };
+        let mut args = [self.state.take(), message.into_payload(), now];
+        let arity = if timed { 3 } else { 2 };
+        let plan = match launch.invoke_update(&mut args[..arity]) {
             Ok(Some(plan)) => match task::Plan::from_dynamic(plan) {
                 Ok(plan) => plan,
                 Err(error) => {

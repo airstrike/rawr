@@ -4245,6 +4245,24 @@ fn parse_body_syntax(
                 match token {
                     Token::LeftParen => {
                         let roles: Option<&'static [&'static str]> = match &tokens[..] {
+                            [.., iced, colons, application, path, name]
+                                if matches!(iced.kind(),
+                                    crate::item::BodyTokenKind::Identifier(text) if text == "iced")
+                                    && matches!(application.kind(),
+                                        crate::item::BodyTokenKind::Identifier(text) if text == "application")
+                                    && matches!(
+                                        colons.kind(),
+                                        crate::item::BodyTokenKind::DoubleColon
+                                    )
+                                    && matches!(
+                                        path.kind(),
+                                        crate::item::BodyTokenKind::DoubleColon
+                                    )
+                                    && matches!(name.kind(),
+                                        crate::item::BodyTokenKind::Identifier(text) if text == "timed") =>
+                            {
+                                Some(&["boot", "update", "subscription", "view"])
+                            }
                             [.., iced, colons, name]
                                 if matches!(iced.kind(),
                                     crate::item::BodyTokenKind::Identifier(text) if text == "iced")
