@@ -82,6 +82,9 @@ pub struct Program {
     /// Qualified expression paths into a `.rs` module, by path span,
     /// spelled through the app's crate name.
     qualified_rust: BTreeMap<(program::source::Id, Span), Box<[ImmutableString]>>,
+    /// The app crate's name, when a marked root's `async fn main` names a
+    /// runtime's entry, which the shadow crate holds (D513.4).
+    entry_crate: Option<ImmutableString>,
     /// The type aliases each source names, declared or imported, which a
     /// body reads as the item headers do.
     aliases: BTreeMap<(program::source::Id, ImmutableString), type_ref::Alias>,
@@ -356,6 +359,7 @@ fn resolve_with_evidence_and_namespace(
         qualified_owners: BTreeMap::new(),
         qualified_pattern_owners: BTreeMap::new(),
         qualified_rust: BTreeMap::new(),
+        entry_crate: None,
         aliases,
         scripts: vec![Script {
             source: program::source::Id::ROOT,

@@ -691,6 +691,12 @@ impl<'a> Resolver<'a> {
             .collect::<Vec<_>>()
             .into_boxed_slice();
 
+        let entry_crate = self
+            .packages
+            .iter()
+            .find(|package| package.name() == self.package.as_str())
+            .and_then(|package| package.entry().and(package.rust_crate()))
+            .map(ImmutableString::from);
         let mut program = Program {
             #[cfg(feature = "rust-import")]
             native: self.native,
@@ -712,6 +718,7 @@ impl<'a> Resolver<'a> {
             qualified_owners: qualified_calls.owners,
             qualified_pattern_owners,
             qualified_rust: qualified_calls.rust,
+            entry_crate,
             aliases,
             scripts,
         };

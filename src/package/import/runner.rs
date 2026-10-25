@@ -450,13 +450,25 @@ impl Profile for Ordinary {
         Ok(())
     }
 
+    /// A Rust future, which no crate's type names, is the core's future
+    /// (D511.3, D513.3), and std's `Duration` is Rawr's own.
     fn semantic_type(
         &self,
         _facade: &facade::Facade,
         _installed: &[host::facade::Definition],
-        _identity: &[u8; 32],
-        _arguments: Box<[host::type_ref::Type]>,
+        identity: &[u8; 32],
+        arguments: Box<[host::type_ref::Type]>,
     ) -> Result<Option<host::type_ref::Type>, host::Error> {
+        use rawr_import::surface::identity::Definition;
+        if identity == Definition::future().as_bytes() {
+            let future = crate::future::facade::definition()?.export_type("future::Future")?;
+            return host::type_ref::Type::external(future, arguments).map(Some);
+        }
+        if identity == Definition::duration().as_bytes() && arguments.is_empty() {
+            return Ok(Some(host::type_ref::Type::builtin(
+                host::type_ref::Builtin::Duration,
+            )));
+        }
         Ok(None)
     }
 

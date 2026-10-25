@@ -762,6 +762,9 @@ fn host_type(
                 .collect::<Option<_>>()?,
             span,
         },
+        Shape::Builtin(crate::host::type_ref::Builtin::Duration) => {
+            path("Duration", Target::Builtin, Box::default())
+        }
         Shape::Builtin(builtin) => path(builtin.name()?, Target::Builtin, Box::default()),
         Shape::Option(element) => path(
             "Option",

@@ -22,6 +22,17 @@ pub fn join_path(count: usize) -> String {
     format!("rawr::future::__join{count}")
 }
 
+/// An engine for a program whose futures are the core's: Rawr's own, with
+/// this facade installed.
+#[must_use]
+pub fn engine() -> crate::Engine {
+    let mut engine = crate::Engine::new();
+    engine
+        .register_host_facade(definition().expect("the core future facade is valid"))
+        .expect("an engine has no other `rawr` facade");
+    engine
+}
+
 /// The facade's compile-time definition.
 pub fn definition() -> Result<facade::Definition, host::Error> {
     use type_ref::Type;

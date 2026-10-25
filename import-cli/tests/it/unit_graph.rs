@@ -194,7 +194,7 @@ fn the_plain_runner_builds_the_projects_own_units() {
     compare(
         "plain",
         "itoa = \"1\"",
-        "\"rust-import\", \"std\"",
+        "\"rust-import\", \"std\", \"sync\"",
         "fn main() {}\n",
     );
 }

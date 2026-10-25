@@ -163,7 +163,9 @@ fn prepare(
                     expected,
                     &limits,
                     |contract, _profile, _facade| {
-                        let demand = rawr::Engine::new()
+                        // Async code compiles against the core's future
+                        // (D513.3), whose facade the runner installs too.
+                        let demand = rawr::future::facade::engine()
                             .compile_imported(contract, snapshot)
                             .map_err(Error::Rawr)?;
                         let checked = Checked(*demand.contract_fingerprint().as_bytes());

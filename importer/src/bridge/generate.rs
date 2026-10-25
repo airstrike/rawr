@@ -978,6 +978,12 @@ fn imported_runtime(
 ) -> Result<__rawr_internal::host::runtime::Registry, __rawr_internal::host::runtime::Error> {
     __rawr_internal::host::value::register_relations::<NativeHandle>(native_equal, native_compare);
     let mut registry = __rawr_internal::host::runtime::Registry::new();
+    // The core's future, which a crate's async functions give in a program
+    // with no host profile (D513.3), before the facades that name it.
+    registry.install(
+        __rawr_internal::future::facade::runtime()
+            .map_err(__rawr_internal::host::runtime::Error::profile)?,
+    )?;
     let mut native = engine.begin_imported_runtime()?;
     native.authenticate_structural(definitions, STRUCTURAL_ROWS)?;
     native.authenticate_events(definitions, EVENT_ROWS)?;
@@ -1350,6 +1356,97 @@ mod native_arena_tests {
 }
 "#;
 const NEUTRAL_PROFILE_SOURCE: &[u8] = br#"
+/// What a host profile gives the adapters of a program without one: a Rust
+/// future crosses as the core's future (D513.3), made on the thread that
+/// first polls it and made a Rawr value on the thread that owns the program.
+mod __rawr_profile_host {
+    pub mod task {
+        use __rawr_internal::{host, Dynamic};
+
+        pub type Materialize =
+            Box<dyn FnOnce(Option<&host::runtime::Witness>) -> Result<Dynamic, String> + Send + 'static>;
+        type Boxed<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
+
+        /// A Rust future, not yet made.
+        pub struct Task<T>(Box<dyn FnOnce() -> Boxed<T> + Send>);
+
+        impl<T: Send + 'static> Task<T> {
+            pub fn map<U: Send + 'static>(self, f: impl FnOnce(T) -> U + Send + 'static) -> Task<U> {
+                Task(Box::new(move || {
+                    let future = (self.0)();
+                    Box::pin(async move { f(future.await) })
+                }))
+            }
+        }
+
+        /// A Rust function that returns a future runs when the future is
+        /// first polled, where its runtime is, as tokio's `sleep` needs.
+        pub fn lazy<F>(make: impl FnOnce() -> F + Send + 'static) -> Task<F::Output>
+        where
+            F: std::future::Future + Send + 'static,
+            F::Output: Send + 'static,
+        {
+            Task(Box::new(move || Box::pin(make())))
+        }
+
+        pub struct Project<T>(std::cell::Cell<Option<T>>);
+
+        impl<T> Project<T> {
+            pub fn new(value: T) -> Self {
+                Self(std::cell::Cell::new(Some(value)))
+            }
+
+            fn take(&self) -> T {
+                self.0.take().expect("a projected Rust output is taken once")
+            }
+        }
+
+        pub trait ViaTask<T> {
+            #[allow(clippy::wrong_self_convention)]
+            fn into_task(&self) -> Task<T>;
+        }
+
+        impl<T> ViaTask<T> for Project<Task<T>> {
+            fn into_task(&self) -> Task<T> {
+                self.take()
+            }
+        }
+
+        pub trait ViaFuture<T> {
+            #[allow(clippy::wrong_self_convention)]
+            fn into_task(&self) -> Task<T>;
+        }
+
+        impl<F> ViaFuture<F::Output> for &Project<F>
+        where
+            F: std::future::Future + Send + 'static,
+            F::Output: Send + 'static,
+        {
+            fn into_task(&self) -> Task<F::Output> {
+                let future = self.take();
+                Task(Box::new(move || Box::pin(future)))
+            }
+        }
+
+        /// The core's future of a Rust future, stamped with the call's
+        /// output witness, whose argument its output takes.
+        pub fn imported(task: Task<Materialize>) -> Dynamic {
+            Dynamic::from(host::runtime::Unwitnessed::new(move |witness| {
+                let element = witness.argument_witness(0);
+                Dynamic::from(__rawr_internal::future::Future::native(move || {
+                    let future = (task.0)();
+                    Box::pin(async move {
+                        let materialize = future.await;
+                        Box::new(move || {
+                            materialize(element.as_ref()).map_err(__rawr_internal::future::error)
+                        }) as __rawr_internal::future::Finish
+                    })
+                }))
+            }))
+        }
+    }
+}
+
 mod __rawr_profile {
     #[derive(Clone)]
     pub struct ApplicationContract;
@@ -1393,7 +1490,23 @@ mod __rawr_profile {
             }
         };
         __rawr_internal::island::publish(bootstrap);
-        let result = __rawr_internal::island::invoke_main();
+        let mut result = __rawr_internal::island::invoke_main();
+        // An async `main` gives its future, which the native entry its
+        // runtime's attribute carries awaits (D513.4); its `main` registered
+        // that entry.
+        if let Some(Ok(value)) = &result
+            && value.is::<__rawr_internal::future::Future>()
+        {
+            let Some(Ok(value)) = result.take() else {
+                unreachable!("the result was just matched");
+            };
+            __rawr_internal::island::await_main(value.cast());
+            if !__rawr_internal::island::start(forward) {
+                eprintln!("error[E0752]: `main` function is not allowed to be `async` without a runtime's entry, such as `#[tokio::main]`");
+                return Some(101);
+            }
+            return None;
+        }
         if __rawr_internal::island::start(forward) {
             return None;
         }
@@ -1437,6 +1550,12 @@ mod __rawr_profile {
         engine: &mut __rawr_internal::Engine,
         native: &mut __rawr_internal::package::import::runner::account::Native,
     ) -> std::io::Result<(Box<[__rawr_internal::host::facade::Definition]>, ApplicationContract)> {
+        // Async code compiles against the core's future (D513.3).
+        engine
+            .register_host_facade(
+                __rawr_internal::future::facade::definition().map_err(std::io::Error::other)?,
+            )
+            .map_err(std::io::Error::other)?;
         if super::IMPORTED_FACADES.is_empty() {
             return Ok((Box::default(), ApplicationContract));
         }

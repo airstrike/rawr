@@ -31,6 +31,9 @@ pub struct Package {
     rust_modules: Vec<RustModule>,
     /// The crate root, when it is native Rust that declares marked modules.
     native_root: Option<RustModule>,
+    /// A marked root's `#[X::main]` above its `async fn main`, as written:
+    /// the shadow crate's native entry carries it (D513.4).
+    entry: Option<Box<str>>,
     cargo: Option<manifest::cargo::Cargo>,
     pub(crate) rust: Option<manifest::rust::Config>,
 }
@@ -127,8 +130,18 @@ impl Package {
     pub fn rust_crate(&self) -> Option<&str> {
         self.cargo
             .as_ref()
-            .filter(|_| !self.rust_modules.is_empty() || self.native_root.is_some())
+            .filter(|_| {
+                !self.rust_modules.is_empty() || self.native_root.is_some() || self.entry.is_some()
+            })
             .map(|cargo| cargo.crate_name.as_str())
+    }
+
+    /// The attribute of a marked root's `async fn main`, as written, such
+    /// as `#[tokio::main]`: its runtime's entry, which the shadow crate's
+    /// native entry carries (D513.4).
+    #[must_use]
+    pub fn entry(&self) -> Option<&str> {
+        self.entry.as_deref()
     }
 
     /// Whether `path`, from the crate root, lands in native code: below a
@@ -148,6 +161,7 @@ impl Package {
             || (self.native_root.is_some()
                 && path.len() > 1
                 && path[0].as_ref() == super::island::MODULE)
+            || (self.entry.is_some() && path.len() > 1 && path[0].as_ref() == super::entry::MODULE)
     }
 
     /// The root `Cargo.toml` path and exact text, when it declares a `[package]`.
@@ -472,6 +486,7 @@ impl<'a> Builder<'a> {
             source: source::Id::from_index(0),
             rust_modules: Vec::new(),
             native_root: None,
+            entry: None,
             cargo: None,
             rust: None,
         });
@@ -503,6 +518,7 @@ impl<'a> Builder<'a> {
             });
             declarations
         } else {
+            self.packages[package.0].entry = super::entry::attribute(&text).map(Box::from);
             text
         };
         let root_source = self.load_module(

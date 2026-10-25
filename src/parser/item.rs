@@ -1201,6 +1201,38 @@ fn parse_attribute_after_marker(
         });
     }
 
+    // A runtime's entry, `#[tokio::main(flavor = "current_thread")]`: its
+    // arguments are the runtime's, which the shadow crate's native entry
+    // passes on as written (D513.4).
+    if path.segments.len() > 1
+        && path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.name.text == "main")
+        && matches!(input.peek(), Some((Token::LeftParen, _)))
+    {
+        let mut depth = 0_usize;
+        loop {
+            match input.next().expect("token streams always end with EOF") {
+                (Token::LeftParen, _) => depth += 1,
+                (Token::RightParen, _) => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                (Token::EOF, position) => {
+                    return Err(PERR::MissingToken(
+                        Token::RightParen.into(),
+                        "to close attribute arguments".into(),
+                    )
+                    .into_err(position));
+                }
+                _ => {}
+            }
+        }
+    }
+
     if matches!(input.peek(), Some((Token::LeftParen, _))) {
         input.next();
 

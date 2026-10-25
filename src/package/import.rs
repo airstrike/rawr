@@ -1838,6 +1838,20 @@ impl Types {
                 for argument in arguments {
                     converted.push(Self::convert_charged(argument, parameters)?);
                 }
+                // A program with no host profile: a Rust future is the
+                // core's future (D513.3), and std's `Duration` Rawr's own.
+                if *definition == rawr_import::surface::identity::Definition::future() {
+                    let future =
+                        crate::future::facade::definition()?.export_type("future::Future")?;
+                    return Ok(host::type_ref::Type::external(future, converted)?);
+                }
+                if *definition == rawr_import::surface::identity::Definition::duration()
+                    && converted.is_empty()
+                {
+                    return Ok(host::type_ref::Type::builtin(
+                        host::type_ref::Builtin::Duration,
+                    ));
+                }
                 host::type_ref::Type::imported_boxed(
                     imported_identity(*definition),
                     converted.into_boxed_slice(),

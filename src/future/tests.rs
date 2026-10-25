@@ -15,7 +15,7 @@ impl super::Host for Program {
     fn invoke(&self, function: &item::Value, arguments: &mut [Dynamic]) -> RawrResultOf<Dynamic> {
         self.authority
             .invoke_bound(function, arguments, self.runtime.clone())
-            .map_err(|error| super::runtime_failure(error.to_string()))
+            .map_err(|error| super::error(error.to_string()))
     }
 }
 

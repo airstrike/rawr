@@ -143,6 +143,11 @@ impl Graph {
                 paths.push((*path).to_owned());
             }
         }
+        // An async `main`'s entry, whose registration the compiler writes
+        // (D513.4).
+        if let (Some(app), Some(_)) = (app, entry.entry()) {
+            paths.push(format!("{app}::{}::start", super::entry::MODULE));
+        }
         paths.sort_unstable();
         paths.dedup();
         let qualifies = |short: &str, long: &str| {
@@ -263,13 +268,19 @@ fn app_crate(graph: &Graph, limits: &Limits) -> rawr_import::Result<Option<Depen
             );
             files
         }
-        None => vec![
-            (
-                directory.join("Cargo.toml"),
-                app_manifest(cargo, Path::new("lib.rs")),
-            ),
-            (directory.join("lib.rs"), app_library(entry, &copies)),
-        ],
+        None => {
+            let mut library = app_library(entry, &copies);
+            if let Some(attribute) = entry.entry() {
+                library.push_str(&super::entry::source(attribute));
+            }
+            vec![
+                (
+                    directory.join("Cargo.toml"),
+                    app_manifest(cargo, Path::new("lib.rs")),
+                ),
+                (directory.join("lib.rs"), library),
+            ]
+        }
     };
     for module in entry.rust_modules() {
         let Ok(relative) = module.path().strip_prefix(&module_root) else {

@@ -154,8 +154,9 @@ pub fn message(error: &EvalAltResult) -> String {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn runtime_failure(message: impl Into<String>) -> Box<EvalAltResult> {
+/// A run-time failure with `message`, as a native future's output gives
+/// one.
+pub fn error(message: impl Into<String>) -> Box<EvalAltResult> {
     failure(message)
 }
 

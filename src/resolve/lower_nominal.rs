@@ -1988,6 +1988,16 @@ fn host_number_accepts(parameter: &crate::host::type_ref::Type, source: &Ty) -> 
     }
 }
 
+/// Whether `path` names a runtime's entry macro: a crate's `main`, as
+/// `#[tokio::main]` and `#[async_std::main]` are.
+fn runtime_entry(path: &crate::item::type_ref::Path) -> bool {
+    path.segments.len() > 1
+        && path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.name.text == "main")
+}
+
 /// A `RefCell` of `value` (`resolve::cell_new`).
 pub(crate) fn cell_new(value: Dynamic) -> Dynamic {
     cell::new(value)
@@ -2079,6 +2089,8 @@ struct Tables {
     qualified_owners: BTreeMap<(crate::program::source::Id, Span), type_def::Identity>,
     qualified_pattern_owners: BTreeMap<(crate::program::source::Id, Span), type_def::Identity>,
     qualified_rust: BTreeMap<(crate::program::source::Id, Span), Box<[ImmutableString]>>,
+    /// The app crate whose shadow holds an async `main`'s entry (D513.4).
+    entry_crate: Option<ImmutableString>,
     /// The type aliases each source names, resolved once with the headers.
     aliases: BTreeMap<(crate::program::source::Id, ImmutableString), type_ref::Alias>,
     methods: BTreeMap<(type_def::Id, ImmutableString), method::Definition>,
@@ -2500,6 +2512,7 @@ impl Models {
             qualified_owners: program.qualified_owners.clone(),
             qualified_pattern_owners: program.qualified_pattern_owners.clone(),
             qualified_rust: program.qualified_rust.clone(),
+            entry_crate: program.entry_crate.clone(),
             aliases: program.aliases.clone(),
             methods,
             conversions,
@@ -9431,6 +9444,32 @@ impl<'a> Parser<'a> {
                 .as_ref()
                 .map_or(Ty::Unit, Ty::from_resolved);
             self.destructure_parameters(&definition.parameters, definition.body.span)?;
+            // `#[tokio::main] async fn main`: the attribute is the runtime's
+            // entry, which the shadow crate carries as written (D513.4).
+            // `main` registers it, as the macro's expansion would build the
+            // runtime, and gives its body's future for the entry to await.
+            if definition.name.text == "main"
+                && let Some(attribute) = definition
+                    .header
+                    .attributes
+                    .iter()
+                    .find(|attribute| runtime_entry(&attribute.path))
+                && let Some(app) = self.models.entry_crate.clone()
+            {
+                // At the attribute, which names the entry this call starts.
+                let at = attribute.span.start();
+                let ident = |text: &str| (Token::Identifier(Box::new(text.into())), at);
+                self.splice_tokens(vec![
+                    ident(&app),
+                    (Token::DoubleColon, at),
+                    ident(crate::package::ENTRY_MODULE),
+                    (Token::DoubleColon, at),
+                    ident("start"),
+                    (Token::Unit, at),
+                    (Token::SemiColon, at),
+                ]);
+                self.parse_statement()?;
+            }
             return self.parse_async_body(&output, definition.body.span);
         }
         self.expect(Token::LeftBrace, "'{' to start a function body")?;
@@ -14496,6 +14535,7 @@ impl<'a> Parser<'a> {
             Shape::Builtin(Builtin::U64) => Ty::Int(Int::U64),
             Shape::Builtin(Builtin::Usize) => Ty::Int(Int::Usize),
             Shape::Builtin(Builtin::F32) => Ty::Float(Float::F32),
+            Shape::Builtin(Builtin::Duration) => Ty::Time(Time::Duration),
             Shape::Builtin(Builtin::String) => Ty::String,
             Shape::Builtin(Builtin::InclusiveRange) => Ty::InclusiveRange,
             Shape::Builtin(Builtin::FloatInclusiveRange) => Ty::FloatRange,

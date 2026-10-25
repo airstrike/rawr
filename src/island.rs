@@ -63,11 +63,11 @@ pub fn __rawr_island_call_v1(path: &str, arguments: &[u8]) -> Vec<u8> {
         return failure(&format!("rawr: no runner serves the call of `{path}`"));
     };
     let (reply, answer) = mpsc::sync_channel(1);
-    forward(Call {
+    forward(Call(Work::Native {
         path: path.into(),
         arguments: arguments.to_vec(),
         reply,
-    });
+    }));
     answer.recv().unwrap_or_else(|_| {
         failure(&format!(
             "rawr: the runner stopped before `{path}` returned"
@@ -75,33 +75,90 @@ pub fn __rawr_island_call_v1(path: &str, arguments: &[u8]) -> Vec<u8> {
     })
 }
 
-/// One call from native code waiting for the thread that serves it.
-pub struct Call {
-    path: Box<str>,
-    arguments: Vec<u8>,
-    reply: mpsc::SyncSender<Vec<u8>>,
+/// Work from another thread waiting for the thread that serves it: a call
+/// from native code, or a step of an async body (`future::Job`).
+pub struct Call(Work);
+
+enum Work {
+    Native {
+        path: Box<str>,
+        arguments: Vec<u8>,
+        reply: mpsc::SyncSender<Vec<u8>>,
+    },
+    Step(crate::future::Job),
 }
 
 impl Call {
     /// Run this call in the generation published on this thread and send
     /// its reply.
     pub fn answer(self) {
-        let reply = match current() {
-            Some(current) => current.answer(&self.path, &self.arguments),
-            None => failure(&format!(
-                "rawr: no generation is published for `{}`",
-                self.path
-            )),
-        };
-        let _ = self.reply.send(reply);
+        match self.0 {
+            Work::Native {
+                path,
+                arguments,
+                reply,
+            } => {
+                let answer = match current() {
+                    Some(current) => current.answer(&path, &arguments),
+                    None => failure(&format!("rawr: no generation is published for `{path}`")),
+                };
+                let _ = reply.send(answer);
+            }
+            Work::Step(job) => job.run(),
+        }
     }
 }
 
 /// Make `bootstrap` the generation native calls run in, on this thread,
-/// which serves them from now on.
+/// which serves them from now on. Async steps run in it too (D513.3).
 pub fn publish(bootstrap: Bootstrap) {
     let current = Rc::new(Current::new(bootstrap));
+    crate::future::serve(current.clone());
     CURRENT.with(|slot| *slot.borrow_mut() = Some(current));
+}
+
+/// The future of the program's async `main`, which its runtime's entry
+/// awaits (`__rawr_island_main_v1`).
+#[cfg(feature = "sync")]
+static MAIN: Mutex<Option<crate::future::Future>> = Mutex::new(None);
+
+/// Hold `future`, the Rawr `main`'s, for the native entry its runtime's
+/// attribute carries (D513.4). The runner then [`start`]s that entry.
+#[cfg(feature = "sync")]
+pub fn await_main(future: crate::future::Future) {
+    if let Ok(mut main) = MAIN.lock() {
+        *main = Some(future);
+    }
+}
+
+/// The Rawr `main`'s future as the native entry awaits it: its status is
+/// the process's, as `main`'s output gives Rust's (0, or 1 for an `Err`),
+/// and 101 when it fails.
+#[cfg(feature = "sync")]
+#[unsafe(no_mangle)]
+pub fn __rawr_island_main_v1() -> std::pin::Pin<Box<dyn std::future::Future<Output = i32> + Send>> {
+    let Some(future) = MAIN.lock().ok().and_then(|mut main| main.take()) else {
+        return Box::pin(async {
+            eprintln!("rawr: the program's async `main` gave no future");
+            101
+        });
+    };
+    let mut script = future.into_script();
+    Box::pin(std::future::poll_fn(move |cx| {
+        script.poll_output(cx).map(|output| match output {
+            Ok(value) => match value.try_cast::<Result<Dynamic, Dynamic>>() {
+                Some(Err(error)) => {
+                    eprintln!("Error: {error:?}");
+                    1
+                }
+                _ => 0,
+            },
+            Err(error) => {
+                eprintln!("error: {}", crate::future::message(&error));
+                101
+            }
+        })
+    }))
 }
 
 /// Call the published generation's Rawr `fn main`. `None` when nothing is
@@ -126,7 +183,10 @@ pub fn start(forward: impl Fn(Call) + Send + Sync + 'static) -> bool {
     let Some(entry) = START.lock().ok().and_then(|mut start| start.take()) else {
         return false;
     };
-    if SERVER.set(Box::new(forward)).is_err() {
+    let forward = std::sync::Arc::new(forward);
+    let steps = forward.clone();
+    crate::future::forward(move |job| steps(Call(Work::Step(job))));
+    if SERVER.set(Box::new(move |call| forward(call))).is_err() {
         return false;
     }
     RUNNING.store(true, Ordering::Release);
@@ -165,6 +225,19 @@ struct Current {
     /// Each function by whether it belongs to a type, and its path.
     items: HashMap<(bool, String), item::Value>,
     types: program::model::island::Types,
+}
+
+impl crate::future::Host for Current {
+    fn invoke(
+        &self,
+        function: &item::Value,
+        arguments: &mut [Dynamic],
+    ) -> crate::RawrResultOf<Dynamic> {
+        self.bootstrap
+            .catalog()
+            .invoke_item(function, arguments)
+            .map_err(|error| crate::future::error(error.to_string()))
+    }
 }
 
 impl Current {

@@ -348,14 +348,21 @@ impl Dependency {
 
     pub(crate) fn rawr(path: &Path, limits: &Limits) -> Result<Self> {
         let mut allocation = RequestAllocation::new(limits);
-        allocation.items(3)?;
+        allocation.items(4)?;
         allocation.string(INTERNAL_ALIAS)?;
         allocation.string("rawr")?;
         allocation.path(path)?;
         allocation.string("rust-import")?;
         allocation.string("std")?;
-        let features: Box<[Box<str>]> =
-            Box::from([Box::<str>::from("rust-import"), Box::<str>::from("std")]);
+        allocation.string("sync")?;
+        // `sync` makes script values `Send`, so a script future is a `Send`
+        // std future any runtime polls (D513.3). It changes no unit the
+        // project builds: only rawr's own proc macro sees it.
+        let features: Box<[Box<str>]> = Box::from([
+            Box::<str>::from("rust-import"),
+            Box::<str>::from("std"),
+            Box::<str>::from("sync"),
+        ]);
         Ok(Self {
             alias: validated_alias(INTERNAL_ALIAS)?,
             package: Some("rawr".into()),
