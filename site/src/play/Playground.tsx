@@ -64,8 +64,9 @@ function browserDeps(liveSlot: () => HTMLElement | null) {
     now: () => performance.now(),
     clipboard: (text: string) => navigator.clipboard.writeText(text),
     turnstile: () => (window as Window & { turnstile?: any }).turnstile,
+    hasContainer: () => document.getElementById("ts") !== null,
     loadTurnstile: () => {
-      if (document.querySelector("script[data-turnstile]")) return;
+      if (document.querySelector(`script[data-turnstile], script[src^="${TURNSTILE_JS.split("?")[0]}"]`)) return;
       const js = document.createElement("script");
       js.src = TURNSTILE_JS;
       js.async = true;
@@ -214,7 +215,8 @@ export default function Playground() {
             value={state.messages}
             onChange={(event) => session?.setMessages(event.target.value)}
           />
-          {session?.data.sitekey && <div id="ts" className="mt-3" />}
+          {/* Always present, so Turnstile finds its container whenever the session mounts it. */}
+          <div id="ts" className="mt-3 empty:hidden" />
         </section>
         <section className="pane flex min-h-0 flex-col border-t border-line px-4 pt-4 pb-6 md:border-t-0 md:border-l md:px-6">
           <p className="playcap mb-2 flex justify-between gap-2">

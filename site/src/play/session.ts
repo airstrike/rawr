@@ -125,6 +125,8 @@ export interface Deps {
   turnstile(): Widget | undefined;
   /** Adds Turnstile's script to the page. */
   loadTurnstile(): void;
+  /** Whether Turnstile's container (#ts) is in the page. */
+  hasContainer(): boolean;
   /** The element that holds the canvas, kept across runs, and whether it is in the output. */
   live: { holder(): { className: string; style: Record<string, string>; classList: { toggle(name: string, on: boolean): void } }; attach(on: boolean): void };
   setTimeout(f: () => void, ms: number): unknown;
@@ -287,6 +289,11 @@ export class Session {
     if (!turnstile) {
       this.deps.loadTurnstile();
       this.deps.setTimeout(this.mount, 200);
+      return;
+    }
+    // The container renders with the island; until it is in the page, try again.
+    if (!this.deps.hasContainer()) {
+      this.deps.setTimeout(this.mount, 50);
       return;
     }
     this.widget = turnstile.render("#ts", {
