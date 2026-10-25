@@ -102,12 +102,16 @@ pub struct Owner {
 
 /// What a program `rawr run` runs gets as `cargo run` gives it (D500.1):
 /// its name as its first argument, the arguments after `--`, and stdin.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Arguments {
     /// The first argument, the path of the binary `cargo run` would run.
     pub name: std::ffi::OsString,
     /// The arguments after `--`.
     pub arguments: Vec<std::ffi::OsString>,
+    /// What the owner adds to each runner's command before it spawns, such
+    /// as clearing a signal mask its own threads keep, which a spawned
+    /// program would otherwise inherit.
+    pub prepare: Option<fn(&mut Command)>,
 }
 
 /// Closed generated-runner product lifecycle fixed before process admission.
@@ -341,6 +345,9 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
                 .arg0(&program.name)
                 .args(&program.arguments)
                 .stdin(Stdio::inherit());
+            if let Some(prepare) = program.prepare {
+                prepare(&mut command);
+            }
         }
         // One preview rendered alone (`rawr mcp`'s `render_preview`).
         if let (Lifecycle::SnapshotCheck | Lifecycle::SnapshotUpdate, Some(selection)) =

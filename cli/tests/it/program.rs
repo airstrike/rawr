@@ -190,3 +190,47 @@ fn a_program_sees_its_name_as_cargo_run_gives_it() {
         .to_string();
     assert_eq!(stdout(&run), format!("{expected}\n"), "{}", stderr(&run));
 }
+
+/// `examples/grep` under `rawr run`, on stdin and on files, prints what its
+/// `cargo build --release` binary prints.
+#[test]
+fn the_grep_example_reads_its_flags_files_and_stdin() {
+    let sandbox = Sandbox::new("program-grep");
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/grep");
+    let root = sandbox.work().join("grep");
+    fs::create_dir_all(root.join("src")).unwrap();
+    for file in ["Cargo.toml", "src/main.rs", "src/search.rs"] {
+        fs::copy(example.join(file), root.join(file)).unwrap();
+    }
+    let menu = "apple\nBanana\ncherry pie\napple pie\n";
+    fs::write(sandbox.work().join("menu.txt"), menu).unwrap();
+    fs::write(sandbox.work().join("veg.txt"), "carrot\npie of potato\n").unwrap();
+
+    let mut run = Running::start(&sandbox, &["run", "grep", "--", "-n", "-i", "PIE"]);
+    let mut stdin = run.child.stdin.take().unwrap();
+    stdin.write_all(menu.as_bytes()).unwrap();
+    drop(stdin);
+    assert!(run.child.wait().unwrap().success());
+    let lines: Vec<_> = run
+        .lines
+        .try_iter()
+        .filter(|line| !line.starts_with("stderr: "))
+        .collect();
+    assert_eq!(lines, ["3:cherry pie", "4:apple pie"]);
+
+    let files = sandbox.rawr(&["run", "grep", "--", "pie", "menu.txt", "veg.txt"]);
+    assert_success(&files);
+    assert_eq!(
+        stdout(&files),
+        "menu.txt:cherry pie\nmenu.txt:apple pie\nveg.txt:pie of potato\n"
+    );
+    let count = sandbox.rawr(&["run", "grep", "--", "-c", "-v", "pie", "menu.txt"]);
+    assert_eq!(stdout(&count), "2\n");
+    let usage = sandbox.rawr(&["run", "grep", "--"]);
+    assert_eq!(usage.status.code(), Some(1));
+    assert!(
+        stderr(&usage).contains("Error: \"usage: grep [-i] [-n] [-c] [-v] PATTERN [FILE...]\""),
+        "{}",
+        stderr(&usage)
+    );
+}

@@ -20,6 +20,7 @@ pub mod plain;
 pub mod project;
 mod release;
 pub mod report;
+mod signals;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

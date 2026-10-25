@@ -108,3 +108,60 @@ fn a_dependency_without_the_importers_files_names_them() {
     assert!(stderr.contains("target = \"host-tuple\""), "{stderr}");
     fs::remove_dir_all(&root).unwrap();
 }
+
+/// A marked `main` gets the arguments after `--` and stdin, as under
+/// `cargo run`, and a save while it waits on stdin restarts it on the same
+/// stdin (D500.1).
+#[test]
+fn a_marked_main_gets_its_arguments_and_stdin_and_restarts_on_a_save() {
+    use std::io::Write as _;
+    use std::time::Duration;
+
+    const ARGUMENTS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/plain-arguments"
+    );
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plain-arguments");
+    let _ = fs::remove_dir_all(root.join("src"));
+    copy(Path::new(ARGUMENTS), &root);
+    let main = root.join("src/main.rs");
+    let mut run = crate::support::start_with(
+        &root,
+        &[],
+        &["one", "two words"],
+        std::process::Stdio::piped(),
+    );
+    let mut stdin = run.child.stdin.take().unwrap();
+
+    let name = run.until(Duration::from_secs(900), |line| line.starts_with("name "));
+    assert!(
+        name.ends_with("/target/debug/plain-arguments"),
+        "{}",
+        run.seen.join("\n")
+    );
+    run.until(Duration::from_secs(30), |line| line == "arg one");
+    run.until(Duration::from_secs(30), |line| line == "arg two words");
+    stdin.write_all(b"1.2.3\n").unwrap();
+    run.until(Duration::from_secs(30), |line| line == "major 1");
+
+    // The program waits on stdin; a save restarts it with the same
+    // arguments, and the next line goes to the new one.
+    std::thread::sleep(Duration::from_secs(2));
+    let text = fs::read_to_string(&main).unwrap();
+    fs::write(&main, text.replace("\"major\"", "\"Major\"")).unwrap();
+    run.until(Duration::from_secs(120), |line| line.starts_with("name "));
+    assert!(
+        run.seen
+            .iter()
+            .any(|line| line.ends_with("rawr: the source changed; restarting the program")),
+        "{}",
+        run.seen.join("\n")
+    );
+    run.until(Duration::from_secs(30), |line| line == "arg two words");
+    stdin.write_all(b"4.5.6\n").unwrap();
+    run.until(Duration::from_secs(30), |line| line == "Major 4");
+    drop(stdin);
+    run.until(Duration::from_secs(30), |line| line == "done");
+    let status = run.child.wait().unwrap();
+    assert!(status.success(), "{}", run.seen.join("\n"));
+}

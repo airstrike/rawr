@@ -36,7 +36,7 @@
   <p class="grp" data-here>Guides</p>
   <ol data-here>
     <li><a href="/docs/start">Start</a></li>
-    <li><a href="/docs/run" aria-current="page">Run</a><ol class="secs"><li><a href="#programs">What rawr runs</a></li><li><a href="#marker">The <code>// rawr</code> marker</a></li><li><a href="#native-main">A native main</a></li><li><a href="#async">An async main</a></li><li><a href="#check">Checking</a></li><li><a href="#who">Who runs a program</a></li><li><a href="#reload">Reload</a></li><li><a href="#release">Release builds</a></li><li><a href="#speed">Speed</a></li></ol></li>
+    <li><a href="/docs/run" aria-current="page">Run</a><ol class="secs"><li><a href="#programs">What rawr runs</a></li><li><a href="#arguments">Arguments and stdin</a></li><li><a href="#marker">The <code>// rawr</code> marker</a></li><li><a href="#native-main">A native main</a></li><li><a href="#async">An async main</a></li><li><a href="#check">Checking</a></li><li><a href="#who">Who runs a program</a></li><li><a href="#reload">Reload</a></li><li><a href="#release">Release builds</a></li><li><a href="#speed">Speed</a></li></ol></li>
     <li><a href="/docs/imports">Imports</a></li>
     <li><a href="/docs/embedding">Embedding</a></li>
     <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
@@ -59,6 +59,15 @@
 <p class="lede">How <code>rawr run</code> splits a crate between interpreted and native code, and how the two share one program.</p>
 <h2 id="programs">What rawr runs</h2>
 <p><code>rawr run</code> takes a Cargo crate or a single <code>.rs</code> file. Without a path, rawr looks in the current directory and its parents for a crate.</p>
+
+<h2 id="arguments">Arguments and stdin</h2>
+<p>Arguments after <code>--</code> go to the program, as under <code>cargo run</code>:</p>
+<div class="block"><pre><code>rawr run examples/grep -- -n pie menu.txt</code></pre></div>
+<p><code>std::env::args()</code> gives the program&rsquo;s name first. The name is the path <code>cargo run</code> would run, <code>target/debug/</code> and the binary&rsquo;s name under the crate. For a single file, it is the file&rsquo;s path without <code>.rs</code>.</p>
+<p>The program reads the stdin of <code>rawr run</code>, a terminal or a pipe:</p>
+<div class="block"><pre><code>cat menu.txt | rawr run examples/grep -- pie</code></pre></div>
+<p>At a terminal the running program gets the keyboard, so Ctrl-C reaches it as it reaches a program <code>cargo run</code> started. Ctrl-C ends <code>rawr run</code> too.</p>
+<p>The <code>examples/grep</code> crate in rawr&rsquo;s repository is a small grep with flags, files and stdin. <code>cargo build --release</code> builds the same crate, and its binary prints the same lines.</p>
 
 <h2 id="marker">The <code>// rawr</code> marker</h2>
 <p>A file whose first line is <code>// rawr</code> is interpreted. Every other file is native Rust.</p>
@@ -86,7 +95,6 @@
   <li>A native module other than the root can&rsquo;t declare a marked module.</li>
   <li>Marked code can&rsquo;t call items written in the native root itself.</li>
   <li>The native <code>main</code> runs on a thread of its own, not on the process&rsquo;s main thread.</li>
-  <li>The program&rsquo;s standard input is closed.</li>
 </ul>
 
 <h2 id="async">An async main</h2>
@@ -154,7 +162,7 @@ sum 5050</span></div>
 
 <h2 id="check">Checking</h2>
 <p><code>rawr check</code> checks a program without running it. Then it runs <code>cargo check</code>, because rawr&rsquo;s check accepts some code that rustc rejects. The <a href="/docs/reference/overview#lenient">Overview</a> lists those cases.</p>
-<p><code>rawr run</code> runs <code>cargo check</code> beside the program. For a program that runs once, its errors are printed after the program ends.</p>
+<p><code>rawr run</code> runs <code>cargo check</code> beside the program. When <code>rawr run</code> ends with the program, cargo&rsquo;s errors are printed after it.</p>
 
 <h2 id="who">Who runs a program</h2>
 <p><code>rawr</code> runs a program itself or hands it to an installed extension.</p>
@@ -167,10 +175,17 @@ sum 5050</span></div>
 <p>If the extension a program needs isn&rsquo;t installed, <code>rawr</code> names it and prints the commands that install it. Set <code>RAWR_VERBOSE=1</code> to see which binary ran a program.</p>
 
 <h2 id="reload">Reload</h2>
-<p>rawr-iced reloads an iced app when you save a marked file. <a href="/docs/iced/reload">Reload</a> says what it keeps.</p>
-<p>A program with an <a href="#async">async main</a> restarts when you save, with one line on stderr:</p>
+<p><code>rawr run</code> watches every program it runs.</p>
+<ul>
+  <li>rawr-iced reloads an iced app when you save a marked file. <a href="/docs/iced/reload">Reload</a> says what it keeps.</li>
+  <li>A <a href="#native-main">native main</a> picks up a body edit at its next call into the marked file, and keeps running.</li>
+  <li>Any other running program restarts when you save, with the same arguments. One line on stderr says so:</li>
+</ul>
 <div class="block"><pre><code>rawr: the source changed; restarting the program</code></pre></div>
-<p>Any other program runs once and exits. With rawr-import, a crate whose native code didn&rsquo;t change reuses its earlier build. Restart on save for these programs is planned.</p>
+<p>A save that doesn&rsquo;t compile prints its error, and the program keeps running.</p>
+<p>A restarted program reads stdin on from where the old one stopped. Input the old program had already read doesn&rsquo;t come back.</p>
+<p>When the program ends and stdin is a terminal, <code>rawr run</code> waits. The next save runs the program again, with the same arguments. Ctrl-C ends the wait. When stdin isn&rsquo;t a terminal, <code>rawr run</code> ends with the program and gives its exit status.</p>
+<p>With rawr-import, a crate whose native code didn&rsquo;t change reuses its earlier build.</p>
 
 <h2 id="release">Release builds</h2>
 <p><code>cargo build --release</code> compiles the marked files natively too. No interpreter ships with the build.</p>

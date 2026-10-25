@@ -91,13 +91,11 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
             ExitCode::FAILURE
         };
     }
-    let code = match owner::run_program(&target, Some(graph), &Plain, arguments) {
+    match owner::run_program(&target, Some(graph), &Plain, arguments, cargo) {
         // The program printed its own error as it ran; its status stands.
         Ok(code) => ExitCode::from(u8::try_from(code & 0xff).unwrap_or(1)),
         Err(report) => failure(&report),
-    };
-    rawr_cli::cargo::after_run(cargo);
-    code
+    }
 }
 
 fn failure(report: &rawr::diagnostic::Report) -> ExitCode {

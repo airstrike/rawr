@@ -325,9 +325,7 @@ pub fn on_base(loaded: base::Loaded, check: bool, arguments: &[OsString]) -> Exi
     // rustc checks a Cargo crate of marked files while Rawr works.
     let cargo = cargo::begin(&loaded.graph);
     if !check {
-        let code = supervise::run(loaded, arguments);
-        cargo::after_run(cargo);
-        return code;
+        return supervise::run(loaded, arguments, cargo);
     }
     let checked = base::check(loaded);
     if cargo::conclude(checked.as_deref(), cargo) {

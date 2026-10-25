@@ -170,7 +170,9 @@ impl<B> super::Manifest<super::Generated, B> {
         command
             .args(["build", "--offline", "--locked", "-j1", "--manifest-path"])
             .arg(entry.join("Cargo.toml"))
-            .env("CARGO_TARGET_DIR", &target);
+            .env("CARGO_TARGET_DIR", &target)
+            // The program's stdin is the program's (D500.1).
+            .stdin(std::process::Stdio::null());
         let mut child = command.spawn().map_err(|source| Error::Io {
             operation: "launch generated runner build",
             path: entry.join("Cargo.toml"),

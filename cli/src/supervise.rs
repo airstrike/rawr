@@ -69,6 +69,19 @@ fn package_name(manifest: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The contents of the files `graph` loaded: the program's sources, its
+/// native modules and its manifests. A save changes them; a build that
+/// touches a file without changing it doesn't.
+#[must_use]
+pub fn contents(graph: &rawr::package::Graph) -> Vec<(PathBuf, Option<Vec<u8>>)> {
+    let source = rawr::reload::source::Graph::from_package(graph);
+    rawr::reload::source::Inputs::from_graph(&source)
+        .paths()
+        .iter()
+        .map(|path| (path.clone(), std::fs::read(path).ok()))
+        .collect()
+}
+
 /// Where the program is, for the process that runs it: the crate's root,
 /// or the single file.
 fn location(target: &rawr::project::Target) -> PathBuf {
@@ -103,12 +116,18 @@ pub fn exit_code(status: ExitStatus) -> ExitCode {
 
 /// Run the loaded program in its own process with `arguments`, restart it
 /// on each save that compiles, and run it again after it ends when
-/// [`interactive`].
+/// [`interactive`]. `cargo`'s errors are printed when the program first
+/// ends.
 #[must_use]
-pub fn run(loaded: base::Loaded, arguments: &[OsString]) -> ExitCode {
+pub fn run(
+    loaded: base::Loaded,
+    arguments: &[OsString],
+    mut cargo: Option<crate::cargo::Pending>,
+) -> ExitCode {
     let location = location(&loaded.target);
     let name = program_name(&loaded.target);
     let mut watcher = Watcher::open(&loaded.graph);
+    let mut started_from = contents(&loaded.graph);
     drop(loaded);
     let mut child = match start(&location, &name, arguments) {
         Ok(child) => Some(child),
@@ -123,6 +142,7 @@ pub fn run(loaded: base::Loaded, arguments: &[OsString]) -> ExitCode {
             match running.try_wait() {
                 Ok(Some(status)) => {
                     child = None;
+                    crate::cargo::after_run(cargo.take());
                     if !interactive || watcher.is_none() {
                         return exit_code(status);
                     }
@@ -152,6 +172,12 @@ pub fn run(loaded: base::Loaded, arguments: &[OsString]) -> ExitCode {
                 continue;
             }
         };
+        let now = contents(&loaded.graph);
+        if now == started_from {
+            continue;
+        }
+        // Each change is acted on, or reported, once.
+        started_from = now;
         if let Some(next) = Watcher::open(&loaded.graph) {
             watcher = Some(next);
         }

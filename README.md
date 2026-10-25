@@ -76,8 +76,9 @@ rawr new hello && cd hello && rawr run
 ```
 
 `rawr-cli` installs `rawr` and `cargo-rawr`. `rawr new hello` writes a crate
-with no dependencies whose `src/main.rs` starts with `// rawr`. A program like
-this runs once and exits. Reload on save for it is planned.
+with no dependencies whose `src/main.rs` starts with `// rawr`. `rawr run`
+restarts it when you save. Arguments after `--` go to the program, as under
+`cargo run`, and it reads the same stdin.
 
 Extensions serve more programs. `rawr` hands a program to the one that serves
 it, and says how to install it when it is missing.
@@ -197,8 +198,7 @@ differ from Rust.
 
 A native crate root may call marked modules, and a save reaches the running
 program at its next call. Planned and not built yet: the same from native
-modules other than the root, reload on save for other programs that aren't
-iced apps, and a second UI host for ratatui.
+modules other than the root, and a second UI host for ratatui.
 
 If rawr gives a different result than Rust, or rejects Rust it says it
 supports, please [report it](https://github.com/airstrike/rawr/issues) with a

@@ -98,9 +98,10 @@ fn main() {
 </div>
 <p>The <code>// rawr</code> line marks the file for rawr to interpret. <code>cargo run</code> compiles the same file and prints the same three lines.</p>
 <p>A crate with no dependencies needs no build, so an edit runs at once.</p>
+<p>In a terminal, <code>rawr run</code> keeps watching after the program ends. Each save runs it again, and Ctrl-C stops it. Arguments after <code>--</code> go to the program, as <a href="/docs/run#arguments">Run</a> describes.</p>
 
 <h2 id="errors">Errors</h2>
-<p>rawr checks the whole program before any of it runs. Change <code>greeting.line(count)</code> to <code>greeting.lines(count)</code> and run it again:</p>
+<p>rawr checks the whole program before any of it runs. Change <code>greeting.line(count)</code> to <code>greeting.lines(count)</code> and save:</p>
 <div class="block diag">
   <div class="file"><b>rawr run</b><span>exit 1</span></div>
   <pre><code><span class="e">error[E0599]</span><span class="h">: no method named `lines` found for `Greeting` in the current scope</span>

@@ -71,11 +71,14 @@ pub fn run(
 /// swaps or restarts it as [`run`] does. Once it ends, a save runs it again
 /// when stdin is a terminal; otherwise, or when Ctrl-C ended it, this
 /// returns its exit status.
+///
+/// `cargo`'s errors are printed when the program first ends.
 pub fn run_program(
     target: &rawr::project::Target,
     graph: Option<rawr::package::Graph>,
     profile: &dyn crate::Profile,
     arguments: &[std::ffi::OsString],
+    mut cargo: Option<rawr_cli::cargo::Pending>,
 ) -> Result<i32, diagnostic::Report> {
     // Ctrl-C at the terminal ends the program with SIGINT, as a shell
     // reports it.
@@ -83,6 +86,7 @@ pub fn run_program(
     let program = rawr_import::process::Arguments {
         name: rawr_cli::supervise::program_name(target),
         arguments: arguments.to_vec(),
+        prepare: Some(crate::signals::unblocked),
     };
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let interactive = rawr_cli::supervise::interactive();
@@ -91,6 +95,7 @@ pub fn run_program(
     loop {
         let restart = matches!(ran, Ok(Ended::Restart));
         if !restart {
+            rawr_cli::cargo::after_run(cargo.take());
             match ran {
                 Ok(Ended::Exit(code)) if !interactive || code == INTERRUPTED => return Ok(code),
                 Ok(_) => eprintln!("rawr: the program ended; a save runs it again"),
@@ -100,7 +105,20 @@ pub fn run_program(
             let Some(waiting) = watcher.as_ref() else {
                 return Ok(0);
             };
-            waiting.wait();
+            // A save that changed the program's files; a build touching
+            // them without changing them is no save.
+            let ended = rawr::project::Target::discover(location(target))
+                .ok()
+                .and_then(|target| contents(&target));
+            loop {
+                waiting.wait();
+                let now = rawr::project::Target::discover(location(target))
+                    .ok()
+                    .and_then(|target| contents(&target));
+                if now.is_none() || now != ended {
+                    break;
+                }
+            }
         }
         let next = match rawr::project::Target::discover(location(target)) {
             Ok(next) => next,
@@ -115,6 +133,13 @@ pub fn run_program(
         }
         ran = session(&next, graph, lifecycle, profile, Some(&program));
     }
+}
+
+/// The contents of the program's files: its sources, its native modules
+/// and its manifests. `None` when it doesn't load.
+fn contents(target: &rawr::project::Target) -> Option<Vec<(PathBuf, Option<Vec<u8>>)>> {
+    let graph = rawr::package::Graph::load(&rawr::Engine::new(), target).ok()?;
+    Some(rawr_cli::supervise::contents(&graph))
 }
 
 /// Where the program is: the crate's root, or its single file.
@@ -141,6 +166,9 @@ fn session(
     program: Option<&rawr_import::process::Arguments>,
 ) -> Result<Ended, diagnostic::Report> {
     same_build(target)?;
+    // What the program starts from, read before it is prepared: a save
+    // restarts it only when this changed.
+    let mut started_from = program.and_then(|_| contents(target));
     let source = fallback(target)?;
     let target_path = project(target)
         .ok_or_else(|| framework("a native owner requires a Rawr crate", source.clone()))?
@@ -199,7 +227,12 @@ fn session(
             // generation can't reach: each save that prepares restarts the
             // program (D500.1), and one that fails leaves it running.
             if program.is_some() && !manifests.has_islands() {
-                let prepared = rawr::project::Target::discover(&target_path)
+                let next = rawr::project::Target::discover(&target_path);
+                let changed = next.as_ref().ok().and_then(contents);
+                if changed.is_some() && changed == started_from {
+                    continue;
+                }
+                let prepared = next
                     .map_err(|error| rawr::diagnostic::Report::from_project(&error))
                     .and_then(|next| {
                         profile
@@ -223,6 +256,8 @@ fn session(
                     Err(_) if adapter.deadline().is_some() => {}
                     Err(report) => eprint!("{}", diagnostic::render(&report)),
                 }
+                // A failed save is reported once.
+                started_from = changed;
                 continue;
             }
             let started = lane
