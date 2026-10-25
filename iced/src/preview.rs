@@ -129,6 +129,34 @@ impl Compiler {
             timing: None,
         })
     }
+
+    /// Check one named in-memory source as the root file of a crate, so its
+    /// inline `mod` items are modules as in a project on disk.
+    pub fn check_named_crate_source(
+        &self,
+        identity: impl Into<rawr::ImmutableString>,
+        source: impl AsRef<str>,
+    ) -> Result<Checked, Error> {
+        let identity = identity.into();
+        let source = diagnostic::Source::new(identity.clone(), source.as_ref())
+            .map_err(Error::Diagnostic)?;
+        let path = std::path::Path::new("/").join(identity.as_str());
+        let snapshot = rawr::package::snapshot::Snapshot::new(
+            path.clone(),
+            vec![(path, source.text().into())],
+        )
+        .expect("one absolute file is a valid snapshot");
+        let catalog = rawr::package::Graph::load_snapshot(&self.engine, &snapshot)
+            .and_then(|graph| self.engine.compile_loaded_package_preview_catalog(graph))
+            .map_err(Error::Package)?;
+        Ok(Checked {
+            engine: self.engine.clone(),
+            catalog,
+            source,
+            root: None,
+            timing: None,
+        })
+    }
 }
 
 impl Checked {

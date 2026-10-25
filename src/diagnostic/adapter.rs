@@ -746,7 +746,10 @@ fn evaluation_leaf<'a>(error: &'a EvalAltResult, notes: &mut Vec<String>) -> &'a
     match error {
         EvalAltResult::ErrorInFunctionCall(function, source, inner, ..) => {
             let leaf = evaluation_leaf(inner, notes);
-            let mut note = format!("in call to function `{function}`");
+            let mut note = format!(
+                "in call to function `{}`",
+                crate::resolve::lower_nominal::function_display_name(function)
+            );
             if !source.is_empty() {
                 note.push_str(&format!(" from `{source}`"));
             }

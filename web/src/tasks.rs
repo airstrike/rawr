@@ -115,9 +115,12 @@ pub async fn run(source: String, output: js_sys::Function) -> String {
     };
     text::stream(Some(output));
     let started = crate::now();
-    let prepared = compiler
-        .check_named_source(SOURCE_NAME, &program)
-        .and_then(rawr_iced::application::Checked::prepare);
+    let checked = if rawr_snippet::has_top_level_mod(&program) {
+        compiler.check_named_crate_source(SOURCE_NAME, &program)
+    } else {
+        compiler.check_named_source(SOURCE_NAME, &program)
+    };
+    let prepared = checked.and_then(rawr_iced::application::Checked::prepare);
     let mut adapter = match prepared {
         Ok(prepared) => prepared.into_adapter(),
         Err(error) => {

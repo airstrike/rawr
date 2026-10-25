@@ -184,7 +184,6 @@ impl Compiler {
 
     /// Check named in-memory source as the root file of a crate, so its
     /// inline `mod` items are modules as in a project on disk.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn check_named_crate_source(
         &self,
         identity: impl Into<rawr::ImmutableString>,

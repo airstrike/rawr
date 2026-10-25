@@ -213,7 +213,11 @@ impl EvalAltResult {
             }
             Self::ErrorInFunctionCall(s, src, err, ..) => {
                 err.display(f, src)?;
-                write!(f, "\nin call to function '{s}'")?;
+                write!(
+                    f,
+                    "\nin call to function '{}'",
+                    crate::resolve::lower_nominal::function_display_name(s)
+                )?;
                 if !src.is_empty() {
                     write!(f, " (from '{src}')")?;
                 }

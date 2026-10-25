@@ -455,15 +455,19 @@ fn still(source: &str, options: &Options) -> Result<Image, PlayError> {
         let sandbox = sandbox(&options.limits, Deadline::new(deadline));
         let compiler = rawr_iced::preview::Compiler::configured(sandbox)
             .map_err(|error| PlayError::Render(error.to_string()))?;
-        let checked = compiler
-            .check_named_source(SOURCE_NAME, &program)
-            .map_err(|error| {
-                PlayError::Compile(report(
-                    &error.report(diagnostic(&program)),
-                    &program,
-                    source,
-                ))
-            })?;
+        // An inline `mod` needs the crate compiler, as in `application`.
+        let checked = if has_top_level_mod(&program) {
+            compiler.check_named_crate_source(SOURCE_NAME, &program)
+        } else {
+            compiler.check_named_source(SOURCE_NAME, &program)
+        };
+        let checked = checked.map_err(|error| {
+            PlayError::Compile(report(
+                &error.report(diagnostic(&program)),
+                &program,
+                source,
+            ))
+        })?;
         checked
             .render_png_with(canvas)
             .map_err(|error| classify(&error.to_string(), &options.limits))
@@ -1832,6 +1836,47 @@ impl State {
         ));
         assert!(is_png(&with_module.bytes));
         assert_eq!(with_module.bytes, inline.bytes);
+    }
+
+    /// A plain program, a preview and an `async fn main` with inline
+    /// modules run as the same program without them does. rustc prints
+    /// `6 2.25` for the plain one.
+    #[test]
+    fn plain_preview_and_async_snippets_take_inline_modules() {
+        let plain = text(
+            "mod geometry {\n    pub(crate) fn area(w: f64, h: f64) -> f64 {\n        w * h\n    }\n\n    \
+             pub mod shapes {\n        pub struct Square(pub f64);\n\n        impl Square {\n            \
+             pub fn area(&self) -> f64 {\n                super::area(self.0, self.0)\n            }\n        \
+             }\n    }\n}\n\nuse geometry::shapes::Square;\n\nfn main() {\n    let a = geometry::area(2.0, 3.0);\n    \
+             println!(\"{a} {}\", Square(1.5).area());\n}\n",
+        );
+        assert_eq!(plain.text(), "6 2.25\n");
+        assert_eq!(plain.status, 0);
+        // A file module is still refused: a snippet has no other file.
+        let refused = super::run("mod util;\nfn main() {}\n", &Options::default()).unwrap_err();
+        assert!(
+            matches!(&refused, PlayError::Compile(text) if text.contains("file modules require")),
+            "{refused:?}"
+        );
+
+        let with_module = image(
+            "use iced::widget::text;\nmod labels {\n    pub fn title() -> String {\n        \
+             String::from(\"hi\")\n    }\n}\n\nfn view() -> impl iced::widget::Widget<()> {\n    \
+             text(labels::title())\n}\n",
+        );
+        let without = image(
+            "use iced::widget::text;\n\nfn view() -> impl iced::widget::Widget<()> {\n    \
+             text(String::from(\"hi\"))\n}\n",
+        );
+        assert!(is_png(&with_module.bytes));
+        assert_eq!(with_module.bytes, without.bytes);
+
+        let tasks = text(
+            "mod clock {\n    pub fn label(n: u64) -> String {\n        format!(\"tick {n}\")\n    }\n}\n\n\
+             #[tokio::main]\nasync fn main() {\n    tokio::time::sleep(std::time::Duration::from_millis(10)).await;\n    \
+             println!(\"{}\", clock::label(3));\n}\n",
+        );
+        assert_eq!(tasks.text(), "tick 3\n");
     }
 
     #[test]

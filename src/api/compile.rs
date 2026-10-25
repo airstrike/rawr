@@ -148,6 +148,16 @@ impl Engine {
         crate::package::compile::descriptor_from_graph(self, graph, session)
     }
 
+    /// Compile one loaded package graph into a preview catalog.
+    #[cfg(feature = "std")]
+    #[doc(hidden)]
+    pub fn compile_loaded_package_preview_catalog(
+        &self,
+        graph: crate::package::Graph,
+    ) -> Result<crate::preview::Catalog, crate::package::Error> {
+        crate::package::compile::catalog_from_graph(self, graph, None)
+    }
+
     /// Compile and fully validate one application from a static package graph.
     #[cfg(feature = "std")]
     pub fn compile_package_application_descriptor(
@@ -247,6 +257,10 @@ impl Engine {
         unit: crate::parse::Unit,
         source: crate::diagnostic::Source,
     ) -> ParseResult<AST> {
+        #[cfg(feature = "std")]
+        if let Some(compiled) = crate::package::compile::inline_modules(self, &unit, &source) {
+            return compiled.map(|(ast, _)| ast);
+        }
         let program = crate::resolve::resolve_with_evidence(unit, &self.host_registry, source)?;
         crate::resolve::lower_with_engine(
             self,
@@ -266,6 +280,10 @@ impl Engine {
         unit: crate::parse::Unit,
         source: crate::diagnostic::Source,
     ) -> ParseResult<(AST, program::Positions)> {
+        #[cfg(feature = "std")]
+        if let Some(compiled) = crate::package::compile::inline_modules(self, &unit, &source) {
+            return compiled;
+        }
         let program = crate::resolve::resolve_with_evidence(unit, &self.host_registry, source)?;
         crate::resolve::lower_with_engine(
             self,

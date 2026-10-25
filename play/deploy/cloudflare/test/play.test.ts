@@ -291,7 +291,7 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   assert.deepEqual(at("docs/start.html"), ["hello.rs", "cart.rs"]);
   assert.deepEqual(at("docs/reference/overview.html"), ["parse.rs"]);
   assert.deepEqual(at("docs/reference/items.html"), [
-    "nested-fn.rs", "structs.rs", "enums.rs", "impl.rs", "traits.rs", "unsafe-impl.rs", "consts.rs", "aliases.rs", "derive.rs",
+    "nested-fn.rs", "structs.rs", "enums.rs", "impl.rs", "traits.rs", "unsafe-impl.rs", "consts.rs", "aliases.rs", "geometry.rs", "derive.rs",
   ]);
   assert.deepEqual(at("docs/reference/types.html"), [
     "integers.rs", "sqrt.rs", "text.rs", "tuples.rs", "option.rs", "rc.rs", "impl-iter.rs", "fn-pointer.rs", "casts.rs",

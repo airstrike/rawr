@@ -1778,7 +1778,15 @@ fn function_name(id: crate::item::Id) -> String {
 }
 
 pub(crate) fn private_function_name(key: &crate::item::Key) -> ImmutableString {
-    format!("\0rawr.function.{key}").into()
+    format!("{PRIVATE_FUNCTION}{key}").into()
+}
+
+const PRIVATE_FUNCTION: &str = "\0rawr.function.";
+
+/// A function's name as a user reads it: a private function's path in its
+/// crate (`main::geometry::area`), and any other name as it is.
+pub(crate) fn function_display_name(name: &str) -> &str {
+    name.strip_prefix(PRIVATE_FUNCTION).unwrap_or(name)
 }
 
 fn private_method_name(definition: &method::Definition) -> String {

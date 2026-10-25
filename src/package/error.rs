@@ -237,6 +237,53 @@ impl Error {
         }
     }
 
+    /// This failure as the error of compiling one in-memory file whose
+    /// inline modules make its graph: every source of that graph keeps the
+    /// file's positions, so the error's position is the file's. A module
+    /// the file can't supply (`mod util;` inside an inline module) is the
+    /// single-file compiler's refusal of a file module.
+    pub(crate) fn into_file_error(self) -> ParseError {
+        let refused = |span: Span| {
+            ParseError::from(crate::resolve::Error::UnsupportedNominalSyntax {
+                construct: "file modules require project/package compilation".into(),
+                source: span,
+            })
+        };
+        match self.kind {
+            Kind::Parse { error, .. } => error,
+            Kind::Resolution { error, .. } => error.into(),
+            Kind::Compilation { evidence, error } => match evidence {
+                crate::resolve::LoweringEvidence::Original(_) => error,
+                crate::resolve::LoweringEvidence::Generated { span, .. } => {
+                    ParseError(error.0, span.start(), error.2)
+                }
+                crate::resolve::LoweringEvidence::Unmapped(_) => {
+                    ParseError(error.0, crate::Position::NONE, error.2)
+                }
+            },
+            Kind::Resource { primary, .. } => {
+                refused(primary.map_or(Span::NONE, |label| label.span))
+            }
+            Kind::Module {
+                message, primary, ..
+            } => ParseError::from(crate::resolve::Error::UnsupportedNominalSyntax {
+                construct: message,
+                source: primary.span,
+            }),
+            Kind::Manifest { message, span, .. } => {
+                ParseError::from(crate::resolve::Error::UnsupportedNominalSyntax {
+                    construct: message,
+                    source: span,
+                })
+            }
+            #[cfg(feature = "rust-import")]
+            Kind::Import(error) => refused_message(error.to_string()),
+            #[cfg(feature = "rust-import")]
+            Kind::ImportDiagnostic(report) => refused_message(report.to_string()),
+            Kind::Diagnostic(error) => refused_message(error.to_string()),
+        }
+    }
+
     /// Transform this semantic failure into the canonical report contract.
     pub fn report(&self) -> Result<diagnostic::Report, diagnostic::Error> {
         match &self.kind {
@@ -312,6 +359,15 @@ impl Error {
             Kind::Diagnostic(error) => Err(error.clone()),
         }
     }
+}
+
+/// A failure with no position in the file, as the single-file compiler
+/// reports it.
+fn refused_message(message: String) -> ParseError {
+    ParseError::from(crate::resolve::Error::UnsupportedNominalSyntax {
+        construct: message.into(),
+        source: Span::NONE,
+    })
 }
 
 fn labels(
