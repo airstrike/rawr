@@ -2,6 +2,11 @@
 // RawrGallery's Ink sheet. A small inline script runs the snippet through
 // POST /play/render and shares it through POST /play/share. A run shows an
 // iced snippet's last frame or its GIF, or a plain program's output as a terminal.
+// "Run in browser" loads rawr-web (WEB_MODULE, from web/build.sh) on first use
+// instead: an iced snippet runs live on a canvas and an edit swaps it in, and a
+// plain program's output shows as the server's would. The server runs a
+// snippet the browser cannot: the module did not load, an iced snippet without
+// WebGL2 or WebGPU, or an `async fn main`.
 
 import { escape } from "./dashboard.ts";
 import { ogTags, type Og, type Snippet } from "./play.ts";
@@ -30,6 +35,9 @@ export interface Page {
   og: Og;
 }
 
+/** rawr-web's module: web/build.sh's output, which the release puts in public/web. */
+export const WEB_MODULE = "/web/rawr_web.js";
+
 const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
 /** JSON safe inside a <script> element. */
@@ -55,6 +63,8 @@ export function render(page: Page): string {
   if (group !== undefined) options += "</optgroup>";
   const theme = (t: string) =>
     `<label><input type="radio" name="theme" value="${t}"${snippet.theme === t ? " checked" : ""}><span>${t}</span></label>`;
+  const where = (value: string, name: string, checked = false) =>
+    `<label><input type="radio" name="where" value="${value}"${checked ? " checked" : ""}><span>${name}</span></label>`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -110,6 +120,10 @@ textarea:focus { border-color: var(--dim); }
 .out pre { place-self: start stretch; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 "Fira Mono", ui-monospace, monospace; }
 .out pre.error { color: var(--text); border-left: 2px solid var(--pink); padding-left: 12px; }
 .out pre.term { color: var(--text); }
+.out:has(> .live) { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.live { flex: 1; min-height: 240px; width: 100%; }
+.live.sized { flex: none; min-height: 0; margin: 16px auto; }
+.out .live + pre.error { flex: none; max-height: 40%; overflow: auto; margin: 0; padding: 12px; border-top: 1px solid var(--line); }
 .term .err { color: #ff8fc4; }
 .term .exit, .term .none, .term .note { color: var(--dim); }
 #messages.unused { opacity: 0.45; }
@@ -136,6 +150,7 @@ footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wr
 <span class="seg">${theme("dark")}${theme("light")}</span>
 <input type="text" id="size" placeholder="size: auto" value="${escape(snippet.size)}" aria-label="Size, WxH" spellcheck="false">
 <span class="grow"></span>
+<span class="seg" role="radiogroup" aria-label="Where it runs">${where("server", "Run on server", true)}${where("browser", "Run in browser")}</span>
 <button id="share" type="button">Share</button>
 <button id="run" class="run" type="button" title="Ctrl/Cmd + Enter">Run</button>
 </div>
@@ -149,7 +164,7 @@ ${sitekey ? '<div id="ts"></div>' : ""}
 </section>
 <section class="pane">
 <p class="cap"><span><span class="pink">//</span> Output</span><span id="status">${shared ? `shared · ${escape(shared)}` : "ready"}</span></p>
-<div class="out" id="out" aria-live="polite"><p class="note">Run (Ctrl/Cmd + Enter). iced code shows its last frame. An app that moves shows a GIF. Other programs show their output.</p></div>
+<div class="out" id="out" aria-live="polite"><p class="note">Run (Ctrl/Cmd + Enter). On the server, iced code shows its last frame, and an app that moves shows a GIF. In the browser, iced code runs live and updates as you type. Other programs show their output.</p></div>
 </section>
 </main>
 <footer><span>MIT or Apache-2.0</span><a href="https://airstrike.fyi">airstrike.fyi</a></footer>
@@ -281,18 +296,66 @@ ${sitekey ? '<div id="ts"></div>' : ""}
     try { await navigator.clipboard.writeText(link); status.textContent = "link copied · " + id; }
     catch { status.textContent = "shared · " + id; }
   }
-  $("run").onclick = run;
+  // "Run in browser": rawr-web, loaded once. The server runs what it cannot.
+  let web = null, live = null, started = false, typing = null;
+  const here = () => document.querySelector("input[name=where]:checked").value === "browser";
+  const load = () => web ??= import(${scriptJson(WEB_MODULE)}).then(async (m) => { await m.default(); return m; })
+    .catch((error) => { web = null; throw error; });
+  const gpu = () => Boolean(navigator.gpu || document.createElement("canvas").getContext("webgl2"));
+  const server = (reason) => run().then(() => { status.textContent += " · on the server: " + reason; });
+  async function browser() {
+    save();
+    if (!web) status.textContent = "loading…";
+    let m;
+    try { m = await load(); } catch (error) {
+      document.querySelector("input[name=where][value=server]").checked = true;
+      return server("rawr-web did not load");
+    }
+    const kind = m.kind(code.value), start = performance.now();
+    const ms = () => Math.round(performance.now() - start) + " ms in the browser";
+    if (kind === "server") return server("an async main needs tokio's timers");
+    if (kind === "iced" && !gpu()) return server("this browser has no WebGL2 or WebGPU");
+    if (kind === "text") {
+      const result = JSON.parse(m.run_text(code.value));
+      // A snippet that doesn't parse reads as plain: a running app stays, with the report under it.
+      if (result.kind === "error") { report(text(result.text, "error")); return; }
+      show(terminal(result)); markMessages(true); status.textContent = ms() + (result.status !== 0 ? " · exit " + result.status : "");
+      return;
+    }
+    // iced replaces #iced with its canvas, so the holder is on the page before the first run.
+    if (!live) { live = document.createElement("div"); live.className = "live"; live.innerHTML = '<div id="iced"></div>'; }
+    const [, w, h] = $("size").value.trim().match(/^(\\d+)\\s*[xX]\\s*(\\d+)$/) || [];
+    live.classList.toggle("sized", Boolean(w));
+    live.style.width = w ? w + "px" : ""; live.style.height = h ? h + "px" : "";
+    out.replaceChildren(live); markMessages(false);
+    try {
+      m.run(code.value, snippet().theme, messages.value.split("\\n").filter((line) => line.trim()));
+      started = true; status.textContent = ms() + " · live";
+    } catch (error) {
+      report(text(String(error), "error"));
+    }
+  }
+  const report = (node) => {
+    if (started && out.contains(live)) out.replaceChildren(live, node); else show(node);
+    status.textContent = "error";
+  };
+  const go = () => here() ? browser() : run();
+  const typed = () => { if (here()) { clearTimeout(typing); typing = setTimeout(browser, 500); } };
+  for (const node of [code, messages, $("size")]) node.addEventListener("input", typed);
+  radios().forEach((r) => r.addEventListener("change", typed));
+  document.querySelectorAll("input[name=where]").forEach((r) => r.addEventListener("change", go));
+  $("run").onclick = go;
   $("share").onclick = share;
   $("examples").onchange = (event) => {
     const example = event.target.value === "reset" ? examples[0] : examples[event.target.value];
     if (example) {
       fill({ code: example.code, messages: example.messages || [], theme: "dark", size: example.size || "" });
-      save(); history.replaceState(null, "", "/play"); run();
+      save(); history.replaceState(null, "", "/play"); go();
     }
     event.target.value = "";
   };
   document.addEventListener("keydown", (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); run(); }
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); go(); }
   });
   code.addEventListener("keydown", (event) => {
     if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey) return;

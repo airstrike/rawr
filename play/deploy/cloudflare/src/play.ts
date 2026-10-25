@@ -363,3 +363,48 @@ export function parseTextResult(json: string): TextResult | null {
 export function firstOutputLine(result: TextResult): string {
   return firstLine(result.output.map((c) => c.text).join(""));
 }
+
+/**
+ * rawr-web's files under /web (web/build.sh): each kind's content type, and
+ * its caching. The module and its glue revalidate by ETag, so a release shows
+ * at once; the fonts are pinned, so a browser keeps them a week. A CJK
+ * collection (.ttc) is served as font/ttf, a type the edge compresses.
+ */
+export function webHeaders(path: string, from: Headers): Headers | null {
+  const types: Record<string, string> = {
+    ".wasm": "application/wasm",
+    ".js": "text/javascript; charset=utf-8",
+    ".ttf": "font/ttf",
+    ".ttc": "font/ttf",
+  };
+  const type = types[path.slice(path.lastIndexOf("."))];
+  if (!type) return null;
+  const headers = new Headers(from);
+  headers.set("content-type", type);
+  if (path.startsWith("/web/fonts/")) headers.set("cache-control", "public, max-age=604800");
+  return headers;
+}
+
+/**
+ * Serve a file under /web. web/build.sh writes a brotli copy (.br, at
+ * quality 11) of the module and the fonts: a browser that takes brotli gets
+ * it as is, about a quarter smaller than the edge's own compression makes
+ * it. Anything else goes out as stored, which the edge compresses by its
+ * content type.
+ */
+export async function webAsset(request: Request, assets: { fetch(request: Request): Promise<Response> }): Promise<Response> {
+  const path = new URL(request.url).pathname;
+  const brotli = /\bbr\b/.test(request.headers.get("accept-encoding") ?? "");
+  if (brotli && !path.endsWith(".js") && webHeaders(path, new Headers())) {
+    const packed = await assets.fetch(new Request(request.url + ".br", request));
+    if (packed.ok || packed.status === 304) {
+      const headers = webHeaders(path, packed.headers)!;
+      headers.set("content-encoding", "br");
+      headers.set("vary", "accept-encoding");
+      return new Response(packed.body, { status: packed.status, headers, encodeBody: "manual" } as ResponseInit);
+    }
+  }
+  const response = await assets.fetch(request);
+  const headers = response.ok ? webHeaders(path, response.headers) : null;
+  return headers ? new Response(response.body, { status: response.status, headers }) : response;
+}

@@ -70,6 +70,7 @@ import {
   parseSnippet,
   same,
   shareId,
+  webAsset,
   type Og,
   type Snippet,
 } from "./play.ts";
@@ -861,6 +862,9 @@ export default {
     }
     if (DOCS_MOVED[path]) {
       return Response.redirect(`${SITE}${DOCS_MOVED[path]}${url.search}`, 301);
+    }
+    if (path.startsWith("/web/")) {
+      return webAsset(request, env.ASSETS);
     }
     if (path !== "/bot/health") {
       return env.ASSETS.fetch(request);

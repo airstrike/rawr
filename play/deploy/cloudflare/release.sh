@@ -8,6 +8,9 @@
 # since `wrangler deploy` ships the working tree. deploy.sh then tests,
 # deploys, waits for the bot and runs the site's snippets. Last, this script
 # commits the image bump and pushes main.
+# The playground's "Run in browser" ships when public/web holds rawr-web:
+# run web/build.sh play/deploy/cloudflare/public/web first. Without it the
+# page runs every snippet on the server.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(git -C "$here" rev-parse --show-toplevel)"
