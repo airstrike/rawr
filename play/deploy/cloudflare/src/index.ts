@@ -29,8 +29,9 @@
 // the pass verifies, /play skips Turnstile.
 //
 // POST /play/run runs the site's own snippets without Turnstile: only
-// sources whose SHA-256 is one of the `<code data-run>` texts in the site's
-// pages. build.mjs collects those hashes into src/runnable.gen.ts, so the
+// snippets whose SHA-256 is one of the `<code data-run>` texts in the site's
+// pages, with the `?play` options of its `data-play`, in canonical form.
+// build.mjs collects those hashes into src/runnable.gen.ts, so the
 // list is the deployed pages'. Results are cached per image version. A
 // snippet edited on the site is the visitor's own code: run.js sends it to
 // POST /play/render with the playground's Turnstile, pass and limits, and
@@ -687,19 +688,18 @@ async function previewImage(request: Request, env: Env, ctx: ExecutionContext, i
   }
 }
 
-/** The SHA-256 of each source the site's Run buttons send. */
+/** The SHA-256 of each snippet, code and options, the site's Run buttons send. */
 const SITE_SOURCES: ReadonlySet<string> = new Set(RUNNABLE);
 
 /**
- * POST /play/run: one of the site's own snippets, by its exact
- * source, without Turnstile. Any other source is refused. Each result is
- * cached for the deployed image; uncached runs are limited per IP.
+ * POST /play/run: one of the site's own snippets, by its exact source and
+ * `?play` options, without Turnstile. Any other pair is refused. Each result
+ * is cached for the deployed image; uncached runs are limited per IP.
  */
 async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const body = (await readJson(request, 48 * 1024)) as Record<string, unknown> | null;
-  const code = body?.code;
-  if (typeof code !== "string") return plain("bad request", 400);
-  const hash = await sha256(code);
+  const snippet = parseSnippet(await readJson(request, 48 * 1024));
+  if (typeof snippet === "string") return plain(snippet, 400);
+  const hash = await sha256(canonical(snippet));
   if (!SITE_SOURCES.has(hash)) {
     return plain("only the site's own snippets run here; use /play for your own code", 403);
   }
@@ -714,7 +714,6 @@ async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Pr
   const bot = getContainer(env.PLAY_BOT);
   const wait = await bot.allow("landing", await ipHash(request, env));
   if (wait > 0) return plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) });
-  const snippet: Snippet = { code, theme: "dark", size: "", messages: [] };
   let response: Response;
   try {
     response = await bot.fetch(renderRequest(canonical(snippet), await ipHash(request, env)));

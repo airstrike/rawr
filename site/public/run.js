@@ -8,7 +8,10 @@
 // The site's own text goes to POST /play/run, which accepts only the exact
 // sources on the site's pages and caches their results. Edited text goes to
 // POST /play/render, the playground's endpoint, with the playground's checks:
-// its pass cookie or a Turnstile token, and its per-IP limits.
+// its pass cookie or a Turnstile token, and its per-IP limits. Both requests
+// carry the snippet's `?play` options from its `data-play` attribute, such
+// as its theme, its size and the messages an app gets. The page shows the
+// same options in a `?play` header above the code.
 //
 // After a run the play icon becomes an ×, which clears the output. A Reset
 // button at the code's top-right shows while the code differs from the
@@ -71,12 +74,12 @@
   };
   // POST an edited source to the playground's endpoint. A refused pass falls
   // back to Turnstile once.
-  const render = async (code, strip) => {
+  const render = async (snippet, strip) => {
     const send = async () =>
       fetch("/play/render", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code, turnstile: await token(strip) }),
+        body: JSON.stringify({ ...snippet, turnstile: await token(strip) }),
       });
     let response = await send();
     const info = await gateInfo();
@@ -102,6 +105,9 @@
     const name = source.dataset.run || "this snippet";
     const label = button.getAttribute("aria-label") || `Run ${name} on rawr's server`;
     const original = source.textContent;
+    // The `?play` options, the same for the original and an edit.
+    const play = source.dataset.play;
+    const snippet = (code) => (play === undefined ? { code } : { code, play });
     const originalHtml = source.innerHTML;
     const staticOut = [...out.childNodes].map((node) => node.cloneNode(true));
     const staticClass = out.className;
@@ -223,11 +229,11 @@
       const code = text();
       try {
         const response = edited()
-          ? await render(code, strip)
+          ? await render(snippet(code), strip)
           : await fetch("/play/run", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ code }),
+              body: JSON.stringify(snippet(code)),
             });
         const type = response.headers.get("content-type") || "";
         if (response.ok && type.startsWith("application/json")) {
