@@ -9255,6 +9255,85 @@ println!("{} {} {} {}", n, takes(r), byte(k), takes(&&s));
     assert!(error.contains("mismatch"), "{error}");
 }
 
+/// A reborrow at an argument: a `&mut T` passed where `&T` is expected
+/// reads the same value, and the caller's later writes still land. rustc
+/// prints `2 3`.
+#[test]
+fn language_arguments_reborrow_a_mutable_reference_as_shared() {
+    assert_eq!(
+        printed(
+            r#"
+struct Game { score: i64 }
+fn score(game: &Game) -> i64 { game.score }
+fn step(game: &mut Game) -> i64 {
+    game.score += 1;
+    let seen = score(game);
+    game.score += 1;
+    seen
+}
+let mut game = Game { score: 1 };
+let seen = step(&mut game);
+println!("{} {}", seen, game.score);
+"#
+        ),
+        "2 3\n"
+    );
+}
+
+/// `self` in a `&mut self` method passed on to a `&mut` parameter: the
+/// function's changes land in the receiver, and so do a `&mut` parameter's
+/// passed on again. rustc prints `12 13`.
+#[test]
+fn language_mutable_self_passes_on_to_a_mutable_parameter() {
+    assert_eq!(
+        printed(
+            r#"
+struct Game { score: i64 }
+fn bump(game: &mut Game, by: i64) { game.score += by; }
+fn twice(game: &mut Game) { bump(game, 1); bump(game, 1); }
+impl Game {
+    fn update(&mut self) -> i64 {
+        bump(self, 10);
+        twice(self);
+        self.score
+    }
+}
+let mut game = Game { score: 0 };
+let seen = game.update();
+game.score += 1;
+println!("{} {}", seen, game.score);
+"#
+        ),
+        "12 13\n"
+    );
+}
+
+/// `Vec::swap_remove` moves the last item into the hole, through a field
+/// too, and panics past the end as Rust does. rustc prints `2 [1, 4, 3] 1
+/// [3, 4]`.
+#[test]
+fn language_vec_swap_remove() {
+    assert_eq!(
+        printed(
+            r#"
+struct Game { shots: Vec<i64> }
+let mut v = vec![1, 2, 3, 4];
+let gone = v.swap_remove(1);
+let mut game = Game { shots: v.clone() };
+let first = game.shots.swap_remove(0);
+println!("{} {:?} {} {:?}", gone, v, first, game.shots);
+"#
+        ),
+        "2 [1, 4, 3] 1 [3, 4]\n"
+    );
+    let error =
+        rejected("pub fn run() -> i64 { let mut v: Vec<i64> = vec![1]; v.swap_remove(1) } run()");
+    assert!(
+        error.contains("swap_remove index (is 1) should be < len (is 1)"),
+        "{error}"
+    );
+}
+
 /// A closure parameter annotated with a nested reference, and the `&&T`
 /// that `min_by_key` and kin pass over `v.iter()`. rustc prints
 /// `[2, 4] -7 -7 2 ["bb"]`.

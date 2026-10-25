@@ -68,7 +68,7 @@ println!("{fields:?} {id}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-strings" data-out="out-strings" aria-label="Run strings.rs" hidden></button><b>rawr run strings.rs</b><span id="out-strings" aria-live="polite">["id=7", "name=rawr"] 7</span></div>
 </div>
 <h2 id="vec"><code>Vec</code> and slices</h2>
-<p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element to change.</p>
+<p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>swap_remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code> and more. <code>get_mut</code> and <code>iter_mut().find(..)</code> lend an element to change.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="find-retain.rs" id="src-find-retain">struct Item {
     id: u32,
