@@ -13,7 +13,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 15;
+const CLASSIFIER_VERSION: u32 = 16;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3494,6 +3494,18 @@ impl<P: api::Phase> Context<'_, P> {
             // as `DelayedFormat<StrftimeItems<'a>>`, is its text.
             Err(error) => self.display_output(signature.output()).ok_or(error)?,
         };
+        // A script future fills `F` as a type Rawr has no name for, so a
+        // signature can name `F` only as the input that takes the future
+        // and through `F::Output`. tokio's `LocalKey::scope` gives back a
+        // `TaskLocalFuture<T, F>`, which no facade signature can declare.
+        if futures.iter().any(|(future, _)| {
+            inputs
+                .iter()
+                .chain([&output])
+                .any(|ty| names_parameter(ty, *future))
+        }) {
+            return Err(representability::reject::Kind::ScriptFutureType.into());
+        }
         let signature_plan = representability::signature::Signature::new(
             parameters,
             inputs.into_boxed_slice(),
@@ -4095,6 +4107,25 @@ fn future_projections(
             ty: Box::new(future_projections(ty, futures, is_future)),
         },
         other => other.clone(),
+    }
+}
+
+/// Whether `ty` names the type parameter at `index` anywhere in it.
+fn names_parameter(ty: &representability::convert::Type, index: u32) -> bool {
+    use representability::convert::Type;
+    match ty {
+        Type::Parameter(parameter) => *parameter == index,
+        Type::Unit | Type::Builtin(_) => false,
+        Type::Nominal { arguments, .. } => arguments
+            .iter()
+            .any(|argument| names_parameter(argument, index)),
+        Type::Option(element) | Type::Sequence { element, .. } => names_parameter(element, index),
+        Type::Result(ok, err) => names_parameter(ok, index) || names_parameter(err, index),
+        Type::Tuple(members) => members.iter().any(|member| names_parameter(member, index)),
+        Type::FunctionItem { input, output } => {
+            names_parameter(input, index) || names_parameter(output, index)
+        }
+        Type::ProfileMessage { payload, .. } => names_parameter(payload, index),
     }
 }
 
@@ -4829,6 +4860,46 @@ mod tests {
         assert_eq!(
             function.signature().output(),
             &option(option(Type::Builtin(Builtin::Bool)))
+        );
+    }
+
+    #[test]
+    fn a_future_parameter_the_output_names_is_rejected_and_its_output_is_kept() {
+        use super::representability::{reject, signature};
+        let contract = crate::test_fixture::future_parameter_functions()
+            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .expect("the future parameter graph classifies");
+        let outcome = |name: &str| {
+            contract
+                .outcomes()
+                .find(|outcome| outcome.name() == name)
+                .unwrap_or_else(|| panic!("`{name}` is classified"))
+                .representability()
+                .clone()
+        };
+        // `run<F: Future>(f: F) -> F::Output` names `F` only through its
+        // output, which the facade declares as `FOutput`.
+        let Representability::FunctionItem(run) = outcome("run") else {
+            panic!("`run` is a function item: {:?}", outcome("run"));
+        };
+        let kinds = run
+            .signature()
+            .parameters()
+            .iter()
+            .map(signature::Parameter::kind)
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, [signature::Kind::Future, signature::Kind::Type]);
+        // `scope<F: Future>(f: F) -> Wrap<F>` names the script future's own
+        // type, which no facade signature can declare, as tokio's
+        // `LocalKey::scope` does.
+        assert!(
+            matches!(
+                outcome("scope"),
+                Representability::Rejected(reason)
+                    if reason.kind() == reject::Kind::ScriptFutureType
+            ),
+            "{:?}",
+            outcome("scope")
         );
     }
 

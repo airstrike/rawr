@@ -46,6 +46,11 @@ pub enum Kind {
     UnevaluatedConstant,
     UnsupportedConstant,
     Extraction,
+    /// A signature names a future parameter `F` other than as the input
+    /// that takes the future or through `F::Output`, as tokio's
+    /// `LocalKey::scope` returns a `TaskLocalFuture<T, F>`. A script
+    /// future fills `F` with a type Rawr has no name for (D527).
+    ScriptFutureType,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -140,8 +145,9 @@ mod tests {
             Kind::UnevaluatedConstant,
             Kind::UnsupportedConstant,
             Kind::Extraction,
+            Kind::ScriptFutureType,
         ];
-        assert_eq!(kinds.len(), 42);
+        assert_eq!(kinds.len(), 43);
         let encoded = kinds
             .iter()
             .map(|kind| serde_json::to_string(kind).expect("rejection kind encodes"))

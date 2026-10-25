@@ -1320,6 +1320,169 @@ pub fn result_function() -> api::Graph<api::Extracted> {
     .expect("freshness proof publishes the result fixture")
 }
 
+/// Two free functions generic over `F: Future`, as tokio's
+/// `LocalKey::scope` is: `fixture::run<F: Future>(f: F) -> F::Output` and
+/// `fixture::scope<F: Future>(f: F) -> Wrap<F>`, whose output names `F`
+/// itself.
+pub fn future_parameter_functions() -> api::Graph<api::Extracted> {
+    let future = sysroot_definition("90", identity::Namespace::Type, "core");
+    let output = sysroot_definition("91", identity::Namespace::Type, "core");
+    let wrap = definition("92", identity::Namespace::Type);
+    let run = definition("93", identity::Namespace::Value);
+    let scope = definition("94", identity::Namespace::Value);
+    let future_generics = |owner: &identity::Definition| {
+        model::Generics::new(
+            Box::from([model::Parameter::new(
+                owner.clone(),
+                0,
+                "F".into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Absent,
+                },
+            )]),
+            Box::from([model::Predicate::Bound {
+                ty: model::Type::Parameter {
+                    owner: owner.clone(),
+                    index: 0,
+                },
+                bound: model::Bound::Trait {
+                    trait_id: future.clone(),
+                    arguments: Box::default(),
+                    polarity: model::Polarity::Positive,
+                    binders: Box::default(),
+                },
+            }]),
+        )
+    };
+    let function = |id: &identity::Definition, name: &str, output: model::Type, at: u32| {
+        model::Definition::new(
+            id.clone(),
+            path(&["fixture", name]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Function {
+                signature: model::Signature::new(
+                    model::Safety::Safe,
+                    false,
+                    false,
+                    "\"Rust\"".into(),
+                    false,
+                    Box::default(),
+                    model::Receiver::None,
+                    Box::from([model::Type::Parameter {
+                        owner: id.clone(),
+                        index: 0,
+                    }]),
+                    output,
+                ),
+                generics: future_generics(id),
+            },
+            span(at, at + 10),
+            model::Origin::Source,
+        )
+    };
+    let sysroot = |id: &identity::Definition, segments: &[&str], kind: &str, at: u32| {
+        model::Definition::new(
+            id.clone(),
+            path(segments),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Sysroot {
+                compiler_kind: kind.into(),
+            },
+            span(at, at + 10),
+            model::Origin::Source,
+        )
+    };
+    let mut definitions = vec![
+        sysroot(&future, &["core", "future", "Future"], "trait", 600),
+        sysroot(
+            &output,
+            &["core", "future", "Future", "Output"],
+            "associated-type",
+            611,
+        ),
+        model::Definition::new(
+            wrap.clone(),
+            path(&["fixture", "Wrap"]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Struct {
+                fields: model::FieldSet::new(
+                    model::FieldForm::Record,
+                    Box::default(),
+                    false,
+                    false,
+                ),
+                generics: type_generics(&wrap, 0),
+            },
+            span(622, 632),
+            model::Origin::Source,
+        ),
+        function(
+            &run,
+            "run",
+            model::Type::Projection {
+                trait_id: future.clone(),
+                associated: output.clone(),
+                arguments: Box::from([model::Argument::Type(model::Type::Parameter {
+                    owner: run.clone(),
+                    index: 0,
+                })]),
+            },
+            633,
+        ),
+        function(
+            &scope,
+            "scope",
+            model::Type::Definition {
+                id: wrap.clone(),
+                arguments: Box::from([model::Argument::Type(model::Type::Parameter {
+                    owner: scope.clone(),
+                    index: 0,
+                })]),
+            },
+            644,
+        ),
+    ];
+    definitions.sort_by(|left, right| left.id().cmp(right.id()));
+    let export = |name: &str, namespace, id: &identity::Definition, at: u32| {
+        ledger::Path::Imported(ledger::Export::new(
+            identity::Export::new(
+                "fixture".into(),
+                Box::from([Box::<str>::from(name)]),
+                namespace,
+            ),
+            id.clone(),
+            Box::default(),
+            Box::default(),
+            span(at, at + 1),
+        ))
+    };
+    let exports = vec![
+        export("Wrap", identity::Namespace::Type, &wrap, 653),
+        export("run", identity::Namespace::Value, &run, 655),
+        export("scope", identity::Namespace::Value, &scope, 657),
+    ];
+    let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
+    api::Graph::seal(
+        &api::Context::fixture(),
+        Vec::new(),
+        definitions,
+        exports,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        usize::MAX,
+        &mut allocation,
+    )
+    .expect("future parameter fixture seals")
+    .publish(crate::input::proof::Proof::fixture())
+    .expect("freshness proof publishes the future parameter fixture")
+}
+
 /// Return the generic free function from the family fixture as an installable
 /// facade, without the classifier-only primitive receiver method.
 pub fn representability_generic() -> api::Graph<api::Extracted> {
