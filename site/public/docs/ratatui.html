@@ -80,7 +80,7 @@ components = ["rust-src", "rustfmt", "clippy"]</code></pre>
   <pre><code data-lang="toml">[build]
 target = "host-tuple"</code></pre>
 </div>
-<p><code>rust-toolchain.toml</code> pins the nightly rawr reads Rust with. <code>.cargo/config.toml</code> puts both builds in <code>target/&lt;host&gt;/debug</code>.</p>
+<p><code>rust-toolchain.toml</code> pins the nightly rawr reads Rust with. <code>.cargo/config.toml</code> puts both builds in <code>target/&lt;host&gt;/debug</code>. A member of a Cargo workspace needs neither file, as <a href="/docs/imports#project">Imports</a> explains.</p>
 <p>Then run it from a terminal:</p>
 <div class="block"><pre><code>rawr run</code></pre></div>
 
@@ -146,7 +146,9 @@ pub fn view(app: &amp;App, width: u16) -&gt; View {
     }
 }</code></pre>
 </div>
-<div class="block"><pre><code>rawr run examples/tui</code></pre></div>
+<p>The example is a package of rawr&rsquo;s Cargo workspace. Run it from the repository&rsquo;s root:</p>
+<div class="block"><pre><code>rawr run -p tui</code></pre></div>
+<p><code>rawr run examples/tui</code> runs it too. <code>cargo run -p tui</code> runs it natively.</p>
 <p>Change the title&rsquo;s text and save. The new title shows within a second or two, with no key pressed. The to-dos you added and the selected row stay as they were.</p>
 
 <h2 id="mark">What to mark</h2>

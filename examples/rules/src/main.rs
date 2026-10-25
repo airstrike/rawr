@@ -2,11 +2,11 @@
 //! exports `Transaction`, reads a CSV, loads the user's `rules.rs` and
 //! prints the total for each category. `scripts/embed-check.sh` runs it.
 //!
-//! - `cargo run` uses `rules.rs`.
-//! - `cargo run -- scripts/typo.rs` fails as the rules load.
-//! - `cargo run -- scripts/wrong.rs` fails as the app looks up `category`.
-//! - `cargo run -- rules.rs scripts/edited.rs` saves an edit and reloads.
-//! - `cargo run -- rules.rs scripts/wrong.rs` keeps the old rules.
+//! - `cargo run -p rules` uses `rules.rs`.
+//! - `cargo run -p rules -- scripts/typo.rs` fails as the rules load.
+//! - `cargo run -p rules -- scripts/wrong.rs` fails as the app looks up `category`.
+//! - `cargo run -p rules -- rules.rs scripts/edited.rs` saves an edit and reloads.
+//! - `cargo run -p rules -- rules.rs scripts/wrong.rs` keeps the old rules.
 
 use rawr::{Engine, Exports, Func};
 use std::collections::BTreeMap;

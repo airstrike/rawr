@@ -81,6 +81,8 @@ target = "host-tuple"</code></pre>
 </div>
 <p><code>rust-toolchain.toml</code> pins the nightly for both. <code>.cargo/config.toml</code> puts both builds in <code>target/&lt;host&gt;/debug</code>.</p>
 <p>Without the files, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-PROJECT-BUILD</code> and prints the files to add. A crate with no dependencies doesn&rsquo;t need them.</p>
+<p>A member of a Cargo workspace doesn&rsquo;t need them either. <code>cargo build</code> takes its toolchain from the workspace&rsquo;s root, and rawr doesn&rsquo;t ask the whole workspace to use the nightly. rawr builds the member with the nightly in the workspace&rsquo;s <code>target/</code>. <code>cargo build</code> then compiles the member&rsquo;s dependencies a second time, with the workspace&rsquo;s toolchain.</p>
+<p>rawr keeps what it makes for a crate in <code>target/rawr</code>. For a workspace member, that is <code>target/rawr/members/&lt;path&gt;</code> in the workspace&rsquo;s <code>target/</code>, where <code>&lt;path&gt;</code> is the member&rsquo;s directory. <code>cargo clean</code> removes it.</p>
 
 <h2 id="use">Use a dependency</h2>
 <p>Declare the dependency in <code>Cargo.toml</code> and import its items with <code>use</code>. You write no bindings.</p>

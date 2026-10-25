@@ -60,16 +60,20 @@
 <p class="lede">How <code>rawr run</code> splits a crate between interpreted and native code, and how the two share one program.</p>
 <h2 id="programs">What rawr runs</h2>
 <p><code>rawr run</code> takes a Cargo crate or a single <code>.rs</code> file. Without a path, rawr looks in the current directory and its parents for a crate.</p>
+<p>In a Cargo workspace, <code>-p</code> names a package, as under <code>cargo run</code>:</p>
+<div class="block"><pre><code>rawr run -p invaders</code></pre></div>
+<p><code>rawr check -p</code> takes a package name too.</p>
 
 <h2 id="arguments">Arguments and stdin</h2>
 <p>Arguments after <code>--</code> go to the program, as under <code>cargo run</code>:</p>
 <div class="block"><pre><code>rawr run examples/grep -- -n pie menu.txt</code></pre></div>
-<p><code>std::env::args()</code> gives the program&rsquo;s name first. The name is the path <code>cargo run</code> would run, <code>target/debug/</code> and the binary&rsquo;s name under the crate. For a single file, it is the file&rsquo;s path without <code>.rs</code>.</p>
+<p><code>std::env::args()</code> gives the program&rsquo;s name first. The name is the path <code>cargo run</code> would run, the binary&rsquo;s name under <code>target/debug/</code>. For a workspace member, that is the workspace&rsquo;s <code>target/</code>. For a single file, it is the file&rsquo;s path without <code>.rs</code>.</p>
 <p>The program reads the stdin of <code>rawr run</code>, a terminal or a pipe:</p>
 <div class="block"><pre><code>cat menu.txt | rawr run examples/grep -- pie</code></pre></div>
 <p>At a terminal the running program gets the keyboard, so Ctrl-C reaches it as it reaches a program <code>cargo run</code> started. Ctrl-C ends <code>rawr run</code> too.</p>
 <p>At a terminal the program also writes to the terminal itself, as under <code>cargo run</code>. rawr saves the terminal&rsquo;s settings before the program starts. After the program ends, rawr puts them back if the program changed them, even when a restart killed it. While the program holds the terminal raw, rawr&rsquo;s own lines wait until then. <a href="/docs/ratatui#terminal">ratatui</a> says more.</p>
 <p>The <code>examples/grep</code> crate in rawr&rsquo;s repository is a small grep with flags, files and stdin. <code>cargo build --release</code> builds the same crate, and its binary prints the same lines.</p>
+<p>rawr&rsquo;s examples are packages of its Cargo workspace, as iced&rsquo;s are. From the repository&rsquo;s root, <code>rawr run -p grep</code> runs one under rawr. <code>cargo run -p grep</code> runs it natively.</p>
 
 <h2 id="marker">The <code>// rawr</code> marker</h2>
 <p>A file whose first line is <code>// rawr</code> is interpreted. Every other file is native Rust.</p>
@@ -83,7 +87,7 @@
 
 <h2 id="native-main">A native main</h2>
 <p>An app can keep its <code>main</code> native and mark only the module you are working on. Under <code>rawr run</code>, each function of that module that native code can call gets a generated stub with the same signature. The stub runs the function in the interpreter.</p>
-<p>The stubs live in rawr&rsquo;s own copy of the crate, under <code>target/rawr/crate</code>. Your crate never depends on rawr.</p>
+<p>The stubs live in rawr&rsquo;s own copy of the crate, under <code>target/rawr/crate</code>. For a workspace member, the copy is under <code>target/rawr/members/&lt;path&gt;/crate</code> in the workspace&rsquo;s <code>target/</code>. Your crate never depends on rawr.</p>
 <p>Native code sees the public items of a marked module: its functions, methods, structs, enums, constants and type aliases. Private items stay in the interpreter.</p>
 <p>Numbers, <code>bool</code>, <code>char</code>, <code>String</code> and <code>&amp;str</code> cross between native code and a marked module. <code>Vec</code> and <code>Option</code> of them cross too. So do the structs and enums of marked modules whose fields cross.</p>
 <p>A parameter may be one of those values or a reference to one. A <code>&amp;mut</code> argument comes back with the changes the function made.</p>
@@ -94,7 +98,8 @@
 <p>The <code>examples/islands</code> crate in rawr&rsquo;s repository is such an app.</p>
 <p>The native <code>main</code> runs on the process&rsquo;s main thread, as under <code>cargo run</code>. The interpreter runs on a thread of its own. So an app whose event loop must own the main thread, such as one built on winit, runs under <code>rawr run</code>.</p>
 <p>The <code>examples/invaders</code> crate is a space-invaders game on winit and softbuffer. Its native <code>main.rs</code> owns the window, the keys and a pixel framebuffer. Four marked modules hold the game: its rules, the invaders&rsquo; march, the hits and what each frame draws. Each frame calls them once to move the game on and once more for the picture.</p>
-<div class="block"><pre><code>rawr run examples/invaders</code></pre></div>
+<div class="block"><pre><code>rawr run -p invaders</code></pre></div>
+<p><code>cargo run -p invaders</code> plays the same game natively.</p>
 <p>A save that changes a colour, a speed or a sprite&rsquo;s shape shows at the next frame. The game keeps its score and its invaders. A new field on the game&rsquo;s state restarts the game.</p>
 <p>The <code>examples/tui</code> crate is a to-do list on ratatui. Its native <code>main.rs</code> owns the terminal, and its marked <code>app.rs</code> says what the keys do and what the screen shows. A save repaints the screen at once, with no key pressed. <a href="/docs/ratatui">ratatui</a> covers terminal apps.</p>
 <p>Limits today:</p>

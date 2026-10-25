@@ -65,18 +65,18 @@
 <div class="block"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre></div>
 
 <h2 id="example">An example</h2>
-<p>This is <code>examples/rules</code> in the repository, an app with its own Cargo workspace. It totals a bank statement by category. Its users decide the categories in <code>rules.rs</code>.</p>
+<p>This is <code>examples/rules</code> in the repository, a package of rawr&rsquo;s Cargo workspace. <code>cargo run -p rules</code> runs it from the repository&rsquo;s root. It totals a bank statement by category. Its users decide the categories in <code>rules.rs</code>.</p>
 <div class="block">
   <div class="file"><b>examples/rules/src/main.rs</b><span>your app</span></div>
   <pre><code data-lang="rust">//! A bank-statement tool whose users write their own rules in Rust. It
 //! exports `Transaction`, reads a CSV, loads the user's `rules.rs` and
 //! prints the total for each category. `scripts/embed-check.sh` runs it.
 //!
-//! - `cargo run` uses `rules.rs`.
-//! - `cargo run -- scripts/typo.rs` fails as the rules load.
-//! - `cargo run -- scripts/wrong.rs` fails as the app looks up `category`.
-//! - `cargo run -- rules.rs scripts/edited.rs` saves an edit and reloads.
-//! - `cargo run -- rules.rs scripts/wrong.rs` keeps the old rules.
+//! - `cargo run -p rules` uses `rules.rs`.
+//! - `cargo run -p rules -- scripts/typo.rs` fails as the rules load.
+//! - `cargo run -p rules -- scripts/wrong.rs` fails as the app looks up `category`.
+//! - `cargo run -p rules -- rules.rs scripts/edited.rs` saves an edit and reloads.
+//! - `cargo run -p rules -- rules.rs scripts/wrong.rs` keeps the old rules.
 
 use rawr::{Engine, Exports, Func};
 use std::collections::BTreeMap;

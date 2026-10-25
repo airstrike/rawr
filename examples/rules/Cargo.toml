@@ -1,10 +1,8 @@
 [package]
-name = "rawr-rules-example"
-version = "0.0.0"
+name = "rules"
+version = "0.1.0"
 edition = "2024"
 publish = false
 
 [dependencies]
-rawr = { path = "../.." }
-
-[workspace]
+rawr.workspace = true

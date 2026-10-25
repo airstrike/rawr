@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Builds examples/rules, an app that adds the rawr crate, as its own
-# workspace and checks what it prints. It catches breakage on the path a
-# Rust app takes when it embeds rawr, which the iced checks don't cover: an
-# exported type, a typed handle, a reload, and errors that read like
+# Builds examples/rules, the workspace's `rules` package, an app that adds
+# the rawr crate, and checks what it prints. It catches breakage on the path
+# a Rust app takes when it embeds rawr, which the iced checks don't cover:
+# an exported type, a typed handle, a reload, and errors that read like
 # rustc's.
 #
 # Usage: scripts/embed-check.sh
 set -euo pipefail
 
 repo="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
-export CARGO_TARGET_DIR="$repo/target/embed-app"
-manifest="$repo/examples/rules/Cargo.toml"
-err="$CARGO_TARGET_DIR/rules.err"
+manifest="$repo/Cargo.toml"
+mkdir -p "$repo/target"
+err="$repo/target/rules.err"
 
 run() {
-    cargo run -q --manifest-path "$manifest" -- "$@"
+    cargo run -q --manifest-path "$manifest" -p rules -- "$@"
 }
 
 same() {
