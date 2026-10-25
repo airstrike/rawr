@@ -704,6 +704,7 @@ pub(in crate::cargo) fn build(
         .run(&command, limits.process)?
         .checked(Program::Cargo)?;
     crate::deps::prune_rawr(&shared, &bytes);
+    super::relocate::unshare(paths.target())?;
     let bytes = super::relocate::relocate(&bytes, &shared, paths.build())?;
     Ok((bytes, command.into_environment()))
 }
