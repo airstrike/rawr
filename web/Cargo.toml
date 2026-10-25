@@ -4,7 +4,7 @@ version = "0.1.0"
 rust-version = "1.95.0"
 edition = "2024"
 publish = false
-description = "Rawr's iced snippets running interactively in a browser, on wasm"
+description = "Rawr's snippets running in a browser, on wasm: plain programs as text, iced ones live"
 repository = "https://github.com/airstrike/rawr"
 license = "MIT OR Apache-2.0"
 
@@ -15,7 +15,14 @@ crate-type = ["cdylib", "rlib"]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"
 # rawr-iced's renderers, and wgpu's WebGL2 backend for browsers without WebGPU.
-iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["webgl"] }
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", default-features = false, features = ["advanced", "webgl"] }
+js-sys = "0.3.105"
+rawr = { path = "..", features = ["sync"] }
+# Reads rawr-iced's manifest (its claims and prelude) as `?play` does.
+rawr-cli = { path = "../cli" }
 rawr-iced = { path = "../iced" }
+# How a snippet becomes a program, shared with rawr-play.
+rawr-snippet = { path = "../play/snippet" }
 wasm-bindgen = "0.2.105"
-web-sys = { version = "0.3.105", features = ["console", "Performance", "Window"] }
+wasm-bindgen-futures = "0.4.78"
+web-sys = { version = "0.3.105", features = ["console", "Performance", "Response", "Url", "Window"] }
