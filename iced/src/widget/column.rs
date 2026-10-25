@@ -12,19 +12,19 @@ use iced::{Event, Length, Rectangle, Size, Vector};
 use crate::{runtime, widget};
 
 /// A built-in Column that owns keyed direct-child Tree relocation.
-pub(crate) struct Keyed {
+pub(crate) struct Keyed<'a> {
     mode: widget::key::Mode,
-    content: iced::Element<'static, runtime::Message>,
+    content: iced::Element<'a, runtime::Message>,
 }
 
 struct State {
     mode: widget::key::Mode,
 }
 
-impl Keyed {
+impl<'a> Keyed<'a> {
     pub(crate) fn bind(
         mode: widget::key::Mode,
-        children: Vec<iced::Element<'static, runtime::Message>>,
+        children: Vec<iced::Element<'a, runtime::Message>>,
         spacing: f32,
         padding: iced::Padding,
         width: iced::Length,
@@ -66,9 +66,9 @@ impl Keyed {
     }
 }
 
-impl Meta for Keyed {}
+impl Meta for Keyed<'_> {}
 
-impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Keyed {
+impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Keyed<'_> {
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<State>()
     }
@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(address(&children[0]), second);
     }
 
-    fn fixture(children: &[(&str, usize)]) -> Keyed {
+    fn fixture(children: &[(&str, usize)]) -> Keyed<'static> {
         Keyed::bind(
             widget::key::Mode::Keyed(
                 children

@@ -83,6 +83,8 @@ struct Preview {
     selected_theme: Option<usize>,
     diagnostics: Vec<diagnostic::Entry>,
     tasks: effect::Tasks,
+    /// The native values the preview's State holds by handle (D546).
+    home: crate::home::Home,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -507,7 +509,16 @@ impl Host {
     }
 
     fn view(&self) -> iced::Element<'_, Message> {
-        self.inspect(|state, catalog| state.view(catalog, self.timing.as_ref()))
+        // The view borrows the State (its native home), so it is not built
+        // inside `inspect`'s callback.
+        let timing = self.timing.as_ref();
+        match &self.storage {
+            Storage::Static { catalog, state } => state.view(catalog, timing),
+            Storage::Reload(slot) => {
+                let catalog = catalog::Authority::reload(slot.context().catalog());
+                slot.state().view(&catalog, timing)
+            }
+        }
     }
 
     fn subscription(&self) -> iced::Subscription<Message> {
@@ -1112,7 +1123,7 @@ impl State {
         &self,
         catalog: &catalog::Authority,
         timing: Option<&timing::Session>,
-    ) -> Option<iced::Element<'static, runtime::Message>> {
+    ) -> Option<iced::Element<'_, runtime::Message>> {
         match &self.selection {
             Selection::Application => self.application.as_ref().and_then(|application| {
                 catalog
@@ -1155,7 +1166,7 @@ impl State {
         &self,
         catalog: &catalog::Authority,
         timing: Option<&timing::Session>,
-    ) -> iced::Element<'static, Message> {
+    ) -> iced::Element<'_, Message> {
         let (picker, selected) = self.picker();
         let selector = iced::widget::container(
             iced::widget::pick_list(selected, picker, Choice::to_string)
@@ -1491,7 +1502,7 @@ impl Preview {
         // Script work a native task left for the UI thread runs here, after
         // the freshness check. A stale request was dropped above.
         if let Some(resume) = message.resumption() {
-            return match resume.run() {
+            return match crate::home::enter(&mut self.home, || resume.run()) {
                 Some(message) => self.update_state(catalog, message),
                 None => (task::Plan::none(), false),
             };
@@ -1522,7 +1533,11 @@ impl Preview {
         }
         let mut plan = task::Plan::none();
         if let Some(state) = &mut self.state {
-            let transition = match catalog.update(&self.key, state, message.into_payload()) {
+            let key = &self.key;
+            let transition = crate::home::enter(&mut self.home, || {
+                catalog.update(key, state, message.into_payload())
+            });
+            let transition = match transition {
                 Ok(transition) => transition,
                 Err(error) => {
                     self.record(
@@ -1565,8 +1580,8 @@ impl Preview {
         let Some(index) = self.selected_theme else {
             return;
         };
-        let result = catalog
-            .theme(&self.key, index, self.state.as_ref())
+        let (key, state) = (&self.key, self.state.as_ref());
+        let result = crate::home::enter(&mut self.home, || catalog.theme(key, index, state))
             .map_err(|error| preview_report(catalog, &self.key, Stage::Theme(index), error))
             .and_then(|value| {
                 crate::theme::Value::from_dynamic(value).map_err(|error| {
@@ -1590,15 +1605,16 @@ impl Preview {
     }
 
     fn refresh_view(&mut self, catalog: &catalog::Authority, timing: Option<&timing::Session>) {
-        let evaluate = || {
-            catalog
-                .subject(&self.key, self.state.as_ref())
-                .map_err(|error| preview_report(catalog, &self.key, Stage::Subject, error))
+        let home = &mut self.home;
+        let (key, state) = (&self.key, self.state.as_ref());
+        let mut evaluate = || {
+            crate::home::enter(home, || catalog.subject(key, state))
+                .map_err(|error| preview_report(catalog, key, Stage::Subject, error))
                 .and_then(|value| {
                     widget::Value::from_dynamic(value).map_err(|error| {
                         positioned_report(
                             catalog,
-                            &self.key,
+                            key,
                             Stage::Subject,
                             rawr::diagnostic::code::FRAMEWORK_VIEW_OUTPUT,
                             error.to_string(),
@@ -1624,7 +1640,7 @@ impl Preview {
         &self,
         catalog: &catalog::Authority,
         timing: Option<&timing::Session>,
-    ) -> iced::Element<'static, runtime::Message> {
+    ) -> iced::Element<'_, runtime::Message> {
         let context = widget::Context::preview(
             catalog,
             &self.key,
@@ -1636,6 +1652,8 @@ impl Preview {
             Some(session) => context.observed(session),
             None => context,
         };
+        // The view borrows the preview's native home (D546).
+        let context = context.with_home(&self.home);
         let content = match timing {
             Some(session) => session.observe(timing::Phase::DescriptorLowering, || {
                 self.display.lower(&context)
@@ -1753,12 +1771,11 @@ fn preview_candidate(
             source,
         ));
     }
-    let state = catalog
-        .seed(key)
+    let mut home = crate::home::Home::default();
+    let state = crate::home::enter(&mut home, || catalog.seed(key))
         .map_err(|error| preview_report(catalog, key, Stage::Seed, error))?;
     let theme = match selected_theme {
-        Some(index) => catalog
-            .theme(key, index, state.as_ref())
+        Some(index) => crate::home::enter(&mut home, || catalog.theme(key, index, state.as_ref()))
             .map_err(|error| preview_report(catalog, key, Stage::Theme(index), error))
             .and_then(|value| {
                 crate::theme::Value::from_dynamic(value).map_err(|error| {
@@ -1773,9 +1790,8 @@ fn preview_candidate(
             })?,
         None => inherited.clone(),
     };
-    let evaluate = || {
-        catalog
-            .subject(key, state.as_ref())
+    let mut evaluate = || {
+        crate::home::enter(&mut home, || catalog.subject(key, state.as_ref()))
             .map_err(|error| preview_report(catalog, key, Stage::Subject, error))
             .and_then(|value| {
                 widget::Value::from_dynamic(value).map_err(|error| {
@@ -1808,6 +1824,7 @@ fn preview_candidate(
         selected_theme,
         diagnostics: Vec::new(),
         tasks: effect::Tasks::default(),
+        home,
     })
 }
 

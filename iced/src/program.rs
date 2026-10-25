@@ -5,8 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use rawr::{application, host, program, timing, Dynamic};
 
-use crate::{diagnostic, effect, runtime, subscription, task, theme, widget};
+use crate::{diagnostic, effect, home, runtime, subscription, task, theme, widget};
 
+#[cfg(test)]
+mod borrowed_tests;
 #[cfg(test)]
 mod carry_tests;
 pub mod install;
@@ -114,6 +116,9 @@ pub struct Adapter {
     /// Tasks [`Adapter::deliver`] left running: a recording polls them
     /// again on each frame, as its clock moves.
     running: Vec<iced_runtime::futures::BoxStream<iced_runtime::Action<runtime::Message>>>,
+    /// The native values the State holds by handle (D546): moved in for
+    /// each transition, lent shared to each view.
+    home: home::Home,
 }
 
 pub(crate) struct Draft {
@@ -133,6 +138,7 @@ pub(crate) struct Draft {
     centered: bool,
     source: Option<rawr::diagnostic::Source>,
     timing: Option<timing::Session>,
+    home: home::Home,
 }
 
 enum Launch {
@@ -310,7 +316,7 @@ impl Host {
 
     /// Lower the current durable view under the exact current authority.
     #[must_use]
-    pub fn view(&self) -> iced::Element<'static, runtime::Message> {
+    pub fn view(&self) -> iced::Element<'_, runtime::Message> {
         let context = self.slot.context();
         let adapter = self.slot.state();
         match adapter.authority(&context) {
@@ -436,7 +442,19 @@ pub(crate) fn prelude_note(launch: &rawr::reload::installation::Application<'_>)
 }
 
 impl Draft {
+    /// Boot a fresh State, with a native home of its own that its boot,
+    /// view, title, theme and subscription reach.
     pub(crate) fn boot(
+        launch: &rawr::reload::installation::Application<'_>,
+        source: Option<rawr::diagnostic::Source>,
+        timing: Option<timing::Session>,
+    ) -> Result<Self, Error> {
+        let mut home = home::Home::default();
+        let draft = home::enter(&mut home, || Self::boot_entered(launch, source, timing));
+        draft.map(|draft| Self { home, ..draft })
+    }
+
+    fn boot_entered(
         launch: &rawr::reload::installation::Application<'_>,
         source: Option<rawr::diagnostic::Source>,
         timing: Option<timing::Session>,
@@ -555,6 +573,7 @@ impl Draft {
             centered: launch.centered(),
             source,
             timing,
+            home: home::Home::default(),
         })
     }
 
@@ -587,6 +606,7 @@ impl Draft {
             centered,
             source,
             timing,
+            home,
         } = self;
         Adapter {
             launch,
@@ -608,6 +628,7 @@ impl Draft {
             timing,
             prepared: None,
             running: Vec::new(),
+            home,
         }
     }
 
@@ -668,7 +689,8 @@ impl Adapter {
                 self.generation(),
                 &self.lifecycle,
                 &self.theme,
-            );
+            )
+            .with_home(&self.home);
         };
         self.context_authority(authority)
     }
@@ -680,17 +702,19 @@ impl Adapter {
         self.context_authority_observed(authority, self.timing.as_ref())
     }
 
-    fn context_authority_observed<'a>(
-        &'a self,
-        authority: &'a rawr::reload::installation::installed::Application,
-        timing: Option<&'a timing::Session>,
-    ) -> widget::Context<'a> {
+    fn context_authority_observed(
+        &self,
+        authority: &rawr::reload::installation::installed::Application,
+        timing: Option<&timing::Session>,
+    ) -> widget::Context<'_> {
         let context =
             widget::Context::application(authority, self.instance, &self.lifecycle, &self.theme);
-        match timing {
+        let context = match timing {
             Some(session) => context.observed(session),
             None => context,
-        }
+        };
+        // The view borrows the native home for iced's view lifetime (D546).
+        context.with_home(&self.home)
     }
 
     /// Return the durable descriptor currently shown by the native host.
@@ -829,7 +853,7 @@ impl Adapter {
     }
 
     pub(crate) fn complete_task(&mut self, completion: &effect::Completion) -> bool {
-        self.tasks.complete(completion)
+        home::enter(&mut self.home, || self.tasks.complete(completion))
     }
 
     #[cfg(test)]
@@ -894,6 +918,16 @@ impl Adapter {
     /// [`Adapter::deliver`], and whether every running task then waits:
     /// `false` when it stopped at [`DELIVERED`] with messages still ready.
     pub(crate) fn settle(&mut self, messages: impl IntoIterator<Item = runtime::Message>) -> bool {
+        // A task polled here may run a script step inline, so the whole
+        // delivery is one transition.
+        home::transition(
+            self,
+            |adapter| &mut adapter.home,
+            |adapter| adapter.settle_entered(messages),
+        )
+    }
+
+    fn settle_entered(&mut self, messages: impl IntoIterator<Item = runtime::Message>) -> bool {
         let startup = self.take_startup_plan();
         let mut queue = self.ready(startup);
         queue.extend(messages);
@@ -1032,8 +1066,10 @@ impl Adapter {
     /// The boot's State and startup tasks give way to it, and view, title,
     /// theme and subscription are evaluated from it. `false` keeps the
     /// boot: the State is not this program's, as when a script type in it
-    /// changed. `previous`'s running tasks do not carry.
-    pub fn carry_state(&mut self, previous: &Self) -> bool {
+    /// changed. `previous`'s running tasks do not carry. The native values
+    /// its State holds by handle move with it (D546): `previous` keeps its
+    /// State, but no longer the values it names.
+    pub fn carry_state(&mut self, previous: &mut Self) -> bool {
         let Launch::Static(launch) = &self.launch else {
             return false;
         };
@@ -1042,11 +1078,18 @@ impl Adapter {
             return false;
         }
         self.state = previous.state.clone();
+        self.home.absorb(std::mem::take(&mut previous.home));
         self.startup = task::Plan::none();
         self.prepared = None;
         let timing = self.timing.clone();
         self.settle_authority_observed(&launch, timing.as_ref());
         true
+    }
+
+    /// Take the native values of `retired`, the adapter this one continues
+    /// with its State kept (an edit in a preview window).
+    pub(crate) fn keep_home(&mut self, retired: &mut Self) {
+        self.home.absorb(std::mem::take(&mut retired.home));
     }
 
     /// The State as bytes a new runner process can seed from; `None`
@@ -1115,7 +1158,7 @@ impl Adapter {
         // the freshness check. A stale request was dropped above, which ends
         // the task that sent it.
         if let Some(resume) = message.resumption() {
-            return match resume.run() {
+            return match home::enter(&mut self.home, || resume.run()) {
                 Some(message) => self.update_state_authority_observed(launch, message),
                 None => Ok(Transition::new(Delivery::Dropped, task::Plan::none())),
             };
@@ -1152,7 +1195,11 @@ impl Adapter {
         };
         let mut args = [self.state.take(), message.into_payload(), now];
         let arity = if timed { 3 } else { 2 };
-        let plan = match launch.invoke_update(&mut args[..arity]) {
+        // `update` reaches the native home mutably (`self.content.perform(a)`);
+        // a failure below restores the State, not a native value changed in
+        // place, as D481.4 accepted of native effects.
+        let invoked = home::enter(&mut self.home, || launch.invoke_update(&mut args[..arity]));
+        let plan = match invoked {
             Ok(Some(plan)) => match task::Plan::from_dynamic(plan) {
                 Ok(plan) => plan,
                 Err(error) => {
@@ -1215,8 +1262,10 @@ impl Adapter {
         timing: Option<&timing::Session>,
     ) -> Result<&widget::Value, Error> {
         let launch = authority.borrow();
+        let home = &mut self.home;
+        let state = &self.state;
         match observe_result(timing, timing::Phase::ViewEvaluation, || {
-            evaluate_view(&launch, &self.state)
+            home::enter(home, || evaluate_view(&launch, state))
         }) {
             Ok(value) => {
                 self.diagnostics
@@ -1258,7 +1307,7 @@ impl Adapter {
         authority: &rawr::reload::installation::installed::Application,
     ) -> Result<&str, Error> {
         let launch = authority.borrow();
-        match evaluate_title(&launch, &self.state) {
+        match home::enter(&mut self.home, || evaluate_title(&launch, &self.state)) {
             Ok(Some(value)) => {
                 self.diagnostics
                     .retain(|entry| entry.stage() != diagnostic::Stage::Title);
@@ -1300,7 +1349,7 @@ impl Adapter {
         authority: &rawr::reload::installation::installed::Application,
     ) -> Result<&theme::Value, Error> {
         let launch = authority.borrow();
-        match evaluate_theme(&launch, &self.state) {
+        match home::enter(&mut self.home, || evaluate_theme(&launch, &self.state)) {
             Ok(Some(value)) => {
                 self.diagnostics
                     .retain(|entry| entry.stage() != diagnostic::Stage::Theme);
@@ -1342,7 +1391,9 @@ impl Adapter {
         authority: &rawr::reload::installation::installed::Application,
     ) -> Result<Option<&host::stream::Plan>, Error> {
         let launch = authority.borrow();
-        match evaluate_subscription(&launch, &self.state) {
+        match home::enter(&mut self.home, || {
+            evaluate_subscription(&launch, &self.state)
+        }) {
             Ok(plan) => {
                 self.diagnostics
                     .retain(|entry| entry.stage() != diagnostic::Stage::Subscription);
@@ -1371,7 +1422,7 @@ impl Adapter {
 
     /// Lower the retained descriptor without invoking Rawr.
     #[must_use]
-    pub fn view(&self) -> iced::Element<'static, runtime::Message> {
+    pub fn view(&self) -> iced::Element<'_, runtime::Message> {
         let Some(authority) = self.launch.static_authority() else {
             let context = self.context();
             return widget::diagnostic("reload host view requires installed slot authority")
@@ -1383,13 +1434,13 @@ impl Adapter {
     pub(crate) fn view_authority(
         &self,
         authority: &rawr::reload::installation::installed::Application,
-    ) -> iced::Element<'static, runtime::Message> {
+    ) -> iced::Element<'_, runtime::Message> {
         self.view_authority_observed(authority, self.timing.as_ref())
     }
 
     /// The view without its diagnostic overlays, which fill the window: what
     /// a fitted render measures.
-    pub(crate) fn content(&self) -> iced::Element<'static, runtime::Message> {
+    pub(crate) fn content(&self) -> iced::Element<'_, runtime::Message> {
         self.display.lower(&self.context())
     }
 
@@ -1397,7 +1448,7 @@ impl Adapter {
         &self,
         authority: &rawr::reload::installation::installed::Application,
         timing: Option<&timing::Session>,
-    ) -> iced::Element<'static, runtime::Message> {
+    ) -> iced::Element<'_, runtime::Message> {
         let context = self.context_authority_observed(authority, timing);
         let content = observe(timing, timing::Phase::DescriptorLowering, || {
             self.display.lower(&context)

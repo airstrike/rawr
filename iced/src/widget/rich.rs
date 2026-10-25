@@ -171,7 +171,7 @@ fn flag(value: &Dynamic, operation: &str) -> Result<bool, Box<EvalAltResult>> {
 }
 
 impl widget::Descriptor for marker::Rich {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let spans = self
             .spans
             .iter()

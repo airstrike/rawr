@@ -97,26 +97,42 @@ pub fn render_application(
                 .cloned()
         })
         .unwrap_or_else(|| adapter.theme().native().clone());
-    let frame = renderer.framing();
     // The size of the settled content, then the view with its diagnostic
     // overlays, which fill the window.
+    let mut surface = Application(adapter);
     let size = renderer.size(
-        &mut |published| {
-            adapter.deliver(published);
-            frame(adapter.content())
-        },
+        &mut surface,
         iced::Size::new(bound.0 as f32, bound.1 as f32),
     );
-    let mut view = |published: Vec<crate::runtime::Message>| {
-        adapter.deliver(published);
-        frame(adapter.view())
-    };
-    let image = renderer.render(&mut view, &theme, size)?;
+    let image = renderer.render(&mut surface, &theme, size)?;
     Ok(Png {
         width: image.width(),
         height: image.height(),
         bytes: image.encode()?,
     })
+}
+
+/// A booted application as a render draws it: messages apply through
+/// [`Adapter::deliver`](crate::program::Adapter::deliver), and its view
+/// borrows it while the frame lives.
+struct Application<'a>(&'a mut crate::program::Adapter);
+
+impl headless::Surface for Application<'_> {
+    fn apply(&mut self, published: Vec<crate::runtime::Message>) {
+        self.0.deliver(published);
+    }
+
+    fn view(
+        &self,
+        content: bool,
+        framing: &headless::Framing,
+    ) -> iced::Element<'_, crate::runtime::Message> {
+        framing.frame(if content {
+            self.0.content()
+        } else {
+            self.0.view()
+        })
+    }
 }
 
 /// Run a booted application's boot Task, and each task it starts, to the
@@ -400,8 +416,8 @@ pub fn record_application(
             .find(|theme| theme.to_string() == name)
             .cloned()
     });
-    let framing = renderer.framing();
     let declared = iced::Size::new(bound.0 as f32, bound.1 as f32);
+    let mut surface = Application(adapter);
     let mut trees = headless::Trees::default();
     let mut scale = None;
     let mut streams = Streams::default();
@@ -422,7 +438,7 @@ pub fn record_application(
     let ending = 'record: {
         for phase in 0..=last {
             if (1..=delivered).contains(&phase) {
-                adapter.deliver(messages.next());
+                surface.0.deliver(messages.next());
             }
             if phase > delivered {
                 let step = phase - delivered;
@@ -431,7 +447,7 @@ pub fn record_application(
                     text,
                 } = &steps[step - 1];
                 let index = *index;
-                let targets = renderer.targets(&mut trees, &stopped);
+                let targets = renderer.targets(&surface, &mut trees, &stopped);
                 let target = targets.get(index).ok_or(Error::Step {
                     step,
                     target: index,
@@ -451,8 +467,8 @@ pub fn record_application(
                     (Some(text), _) => format!("{}: {text:?}", target.label),
                     (None, _) => target.label.clone(),
                 });
-                let published = renderer.act(&mut trees, target, text);
-                adapter.deliver(published);
+                let published = renderer.act(&surface, &mut trees, target, text);
+                surface.0.deliver(published);
             }
             // With steps, only the last one's frames are drawn.
             let quiet = !steps.is_empty() && phase < last;
@@ -471,29 +487,22 @@ pub fn record_application(
                 }
                 let capped = frames.len() >= motion.frames;
                 if capped && phase < last {
-                    adapter.deliver(messages.by_ref());
+                    surface.0.deliver(messages.by_ref());
                 }
                 if phase == last && (capped || now - began >= motion.span) {
                     break 'record Ending::Cap;
                 }
-                streams.sync(adapter);
+                streams.sync(surface.0);
                 clock::set(now);
                 let theme = named
                     .clone()
-                    .unwrap_or_else(|| adapter.theme().native().clone());
+                    .unwrap_or_else(|| surface.0.theme().native().clone());
                 // The content sizes the image; the view, with its
                 // diagnostic overlays, fills it.
-                let mut view = |published: Vec<crate::runtime::Message>, content: bool| {
-                    adapter.deliver(published);
-                    framing(if content {
-                        adapter.content()
-                    } else {
-                        adapter.view()
-                    })
-                };
                 ran += 1;
                 if quiet {
-                    let (request, _) = renderer.settle_frame(&mut view, &mut trees, declared, now);
+                    let (request, _) =
+                        renderer.settle_frame(&mut surface, &mut trees, declared, now);
                     let armed = clock::armed();
                     if !armed && request == RedrawRequest::Wait || ran >= motion.phase {
                         break;
@@ -504,11 +513,11 @@ pub fn record_application(
                     };
                     clock::set(now);
                     let ticks = streams.tick(now);
-                    adapter.deliver(ticks);
+                    surface.0.deliver(ticks);
                     continue;
                 }
                 let (image, request, size) =
-                    renderer.frame(&mut view, &mut trees, declared, now, &theme, &mut scale)?;
+                    renderer.frame(&mut surface, &mut trees, declared, now, &theme, &mut scale)?;
                 drawn = size;
                 if motion.deadline.past() {
                     break 'record Ending::Deadline;
@@ -540,7 +549,7 @@ pub fn record_application(
                         .and_then(|lower| scale.map(|scale| scale.min(lower)));
                     if let Some(lowered) = lowered.filter(|lowered| Some(*lowered) != scale) {
                         scale = Some(lowered);
-                        let image = renderer.redraw(&mut trees, size, &theme, lowered)?;
+                        let image = renderer.redraw(&surface, &mut trees, size, &theme, lowered)?;
                         frame.width = image.width();
                         frame.height = image.height();
                         frame.rgba = image.into_bytes();
@@ -571,9 +580,15 @@ pub fn record_application(
                     RedrawRequest::At(at) if !armed && at > now + motion.step => at,
                     _ => now + motion.step,
                 };
+                // The cap ends the recording before the clock's tick
+                // applies, so the view the last frame drew is still the
+                // application's when a still draws it again.
+                if phase == last && now - began >= motion.span {
+                    break 'record Ending::Cap;
+                }
                 clock::set(now);
                 let ticks = streams.tick(now);
-                adapter.deliver(ticks);
+                surface.0.deliver(ticks);
             }
         }
         unreachable!("the last phase ends the recording")
@@ -586,8 +601,8 @@ pub fn record_application(
     {
         let theme = named
             .clone()
-            .unwrap_or_else(|| adapter.theme().native().clone());
-        let image = renderer.redraw(&mut trees, drawn, &theme, still)?;
+            .unwrap_or_else(|| surface.0.theme().native().clone());
+        let image = renderer.redraw(&surface, &mut trees, drawn, &theme, still)?;
         last.width = image.width();
         last.height = image.height();
         last.rgba = image.into_bytes();
@@ -596,7 +611,7 @@ pub fn record_application(
     let targets = if frames.is_empty() {
         Vec::new()
     } else {
-        renderer.targets(&mut trees, &|| false)
+        renderer.targets(&surface, &mut trees, &|| false)
     };
     Ok(Recording {
         frames,

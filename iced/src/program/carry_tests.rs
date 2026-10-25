@@ -167,13 +167,13 @@ fn a_running_stopwatch_carries_in_process_and_as_bytes() {
     let edited = STOPWATCH.replace("\"Reset\"", "\"Clear\"");
     let mut new = boot(&edited);
     assert!(shows(&new, "Start"));
-    assert!(new.carry_state(&old));
+    assert!(new.carry_state(&mut old));
     assert!(shows(&new, "Stop") && shows(&new, "Clear"));
 
     // A State of another shape boots fresh.
     let reshaped = STOPWATCH.replace("duration: Duration,", "duration: Duration,\n    laps: u32,");
     let mut fresh = boot(&reshaped);
-    assert!(!fresh.carry_state(&old));
+    assert!(!fresh.carry_state(&mut old));
     assert!(shows(&fresh, "Start"));
 }
 
@@ -183,7 +183,7 @@ fn plain_state_carries_in_process() {
     increment(&mut old);
     increment(&mut old);
     let mut new = boot(&source("new", ""));
-    assert!(new.carry_state(&old));
+    assert!(new.carry_state(&mut old));
     assert!(shows(&new, "new 2 n2 Busy(2) Some('x')"));
     increment(&mut new);
     assert!(shows(&new, "new 3 n3 Busy(3) Some('x')"));

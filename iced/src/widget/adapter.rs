@@ -245,7 +245,7 @@ mod surface {
     }
 }
 
-impl script::Bound {
+impl script::Bound<'_> {
     fn reconcile(&mut self, tree: &mut Tree) {
         let key = state::Key::bind(self.binding.promotion());
         let state = tree.state.downcast_mut::<state::State>();
@@ -347,14 +347,11 @@ impl script::Bound {
         values: Vec<widget::Value>,
         mode: widget::key::Mode,
     ) {
-        let context = self
-            .services
-            .context(self.instance, self.binding.generation());
+        let context = &self.context;
         let mut children = values
             .iter()
-            .map(|value| value.lower(&context))
+            .map(|value| value.lower(context))
             .collect::<Vec<_>>();
-        drop(context);
         let previous = tree.state.downcast_ref::<state::State>().mode.clone();
         mode.reconcile(&previous, &mut tree.children);
         tree.diff_children(&mut children);
@@ -370,27 +367,24 @@ impl script::Bound {
             return;
         }
         let values = tree.state.downcast_ref::<state::State>().children.clone();
-        let context = self
-            .services
-            .context(self.instance, self.binding.generation());
+        let context = &self.context;
         let children = values
             .iter()
-            .map(|value| value.lower(&context))
+            .map(|value| value.lower(context))
             .collect::<Vec<_>>();
-        drop(context);
         self.children = children;
         self.children_ready = true;
     }
 
     fn clear(&self, kind: rawr::widget::hook::Kind) {
         if let Some(key) = self.key(kind) {
-            self.services.diagnostics().clear(&key);
+            self.context.diagnostics().clear(&key);
         }
     }
 
     fn record(&self, kind: rawr::widget::hook::Kind, error: &program::Error) {
         if let Some(key) = self.key(kind) {
-            self.services
+            self.context
                 .diagnostics()
                 .record(key, self.binding.report(kind, error));
         }
@@ -398,7 +392,7 @@ impl script::Bound {
 
     fn record_message(&self, kind: rawr::widget::hook::Kind, message: impl Into<String>) {
         if let Some(key) = self.key(kind) {
-            self.services
+            self.context
                 .diagnostics()
                 .record(key, self.binding.report_message(kind, message));
         }
@@ -438,11 +432,21 @@ impl script::Bound {
 
     fn refresh_overlay(&mut self, tree: &mut Tree, content: &widget::Value) {
         let identity = content.identity();
-        let context = self
-            .services
-            .context(self.instance, self.binding.generation());
-        let element = content.lower(&context);
-        drop(context);
+        // The overlay keeps its content in iced's tree past this view, so it
+        // lowers without the native home: a widget that borrows app state
+        // there shows why it can't.
+        let _ = widget::take_refused_borrow();
+        let element = content.lower(&self.context.detached());
+        if let Some(refused) = widget::take_refused_borrow() {
+            self.record_message(
+                rawr::widget::hook::Kind::Overlay,
+                format!(
+                    "`{refused}` borrows the application's State, which lives only for the view, \
+                     but this overlay keeps its content past the view (E0597): \
+                     show it in the view instead"
+                ),
+            );
+        }
         let overlay = &mut tree.state.downcast_mut::<state::State>().overlay;
         match overlay {
             Some(state) => {
@@ -455,9 +459,9 @@ impl script::Bound {
     }
 }
 
-impl Meta for script::Bound {}
+impl Meta for script::Bound<'_> {}
 
-impl Widget<runtime::Message, iced::Theme, iced::Renderer> for script::Bound {
+impl Widget<runtime::Message, iced::Theme, iced::Renderer> for script::Bound<'_> {
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<state::State>()
     }
@@ -1000,6 +1004,8 @@ mod tests {
             panic!("the scripted update must publish exactly one message");
         };
         let message = message.clone();
+        drop(element);
+        drop(context);
         adapter.update(message).unwrap();
 
         assert_eq!(adapter.display().identity(), identity);
@@ -1277,6 +1283,7 @@ mod tests {
         fixture::node(&mut second_element, &mut tree, &renderer);
         // The reload rebound the hooks and kept the Tree-local State.
         assert!(fixture::dial_ready(&tree));
+        drop(second_element);
         assert_eq!(
             host.update(old).unwrap().delivery(),
             crate::program::Delivery::Dropped
@@ -1588,7 +1595,6 @@ mod tests {
             .expect("the state fault must retain positioned source evidence");
         assert!(!source.is_empty());
         drop(element);
-        drop(context);
 
         assert!(matches!(
             fixture::redraw(&diagnostics, &wakes),
@@ -1660,7 +1666,6 @@ mod tests {
                 label.source().identity() == source && label.span().start().line().is_some()
             })));
         drop(element);
-        drop(context);
 
         assert!(matches!(
             fixture::redraw(&diagnostics, &wakes),
@@ -1971,7 +1976,6 @@ mod tests {
             .state
             .downcast_ref::<state::State>() as *const state::State;
         drop(element);
-        drop(context);
 
         let message = adapter.context().message(invalid);
         assert_eq!(
@@ -1996,7 +2000,6 @@ mod tests {
             second
         );
         drop(invalid);
-        drop(context);
 
         let message = adapter.context().message(recover);
         assert_eq!(
@@ -2228,7 +2231,7 @@ mod tests {
         }
 
         pub(super) fn cycle(
-            element: &mut iced::Element<'static, crate::runtime::Message>,
+            element: &mut iced::Element<'_, crate::runtime::Message>,
             tree: &mut Tree,
             renderer: &mut iced::Renderer,
         ) -> Cycle {
@@ -2310,7 +2313,7 @@ mod tests {
         }
 
         pub(super) fn node(
-            element: &mut iced::Element<'static, crate::runtime::Message>,
+            element: &mut iced::Element<'_, crate::runtime::Message>,
             tree: &mut Tree,
             renderer: &iced::Renderer,
         ) -> Node {
@@ -2330,7 +2333,7 @@ mod tests {
         }
 
         pub(super) fn layout(
-            element: &mut iced::Element<'static, crate::runtime::Message>,
+            element: &mut iced::Element<'_, crate::runtime::Message>,
             tree: &mut Tree,
             renderer: &iced::Renderer,
         ) -> f32 {
@@ -2338,7 +2341,7 @@ mod tests {
         }
 
         pub(super) fn update(
-            element: &mut iced::Element<'static, crate::runtime::Message>,
+            element: &mut iced::Element<'_, crate::runtime::Message>,
             tree: &mut Tree,
             node: &Node,
             renderer: &iced::Renderer,
@@ -2362,7 +2365,7 @@ mod tests {
         }
 
         pub(super) fn published(
-            element: &mut iced::Element<'static, crate::runtime::Message>,
+            element: &mut iced::Element<'_, crate::runtime::Message>,
             tree: &mut Tree,
             node: &Node,
             renderer: &iced::Renderer,
@@ -2377,7 +2380,7 @@ mod tests {
         }
 
         pub(super) fn published_event(
-            element: &mut iced::Element<'static, crate::runtime::Message>,
+            element: &mut iced::Element<'_, crate::runtime::Message>,
             tree: &mut Tree,
             node: &Node,
             renderer: &iced::Renderer,

@@ -154,7 +154,7 @@ where
 
 #[cfg(feature = "image")]
 impl widget::Descriptor for marker::Image {
-    fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, _context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut image = iced::widget::image(drawable(&self.handle));
         if let Some(width) = self.width {
             image = image.width(width);
@@ -216,7 +216,7 @@ impl Witnessed for marker::Image {
 
 #[cfg(feature = "svg")]
 impl widget::Descriptor for marker::Svg {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut svg = iced::widget::svg(self.handle.clone());
         if let Some(width) = self.width {
             svg = svg.width(width);
@@ -499,7 +499,7 @@ impl iced::advanced::Widget<runtime::Message, iced::Theme, iced::Renderer> for O
 
 #[cfg(feature = "qr_code")]
 impl widget::Descriptor for marker::QrCode {
-    fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, _context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         // The text was encoded when the data was made, so it encodes again.
         match iced::widget::qr_code::Data::new(self.data.0.as_bytes()) {
             Ok(data) => OwnedQrCode {

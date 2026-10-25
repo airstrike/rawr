@@ -251,6 +251,7 @@ pub fn main() -> iced::Result {
 
     let mut initial = iced_test::simulator(adapter.view());
     initial.find("Horizontal").unwrap();
+    drop(initial);
     for expected in ["Vertical", "Horizontal"] {
         let mut simulator = iced_test::simulator(adapter.view());
         simulator.click("Toggle layout").unwrap();

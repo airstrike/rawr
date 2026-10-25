@@ -54,10 +54,10 @@ impl Entry {
     }
 }
 
-pub(crate) fn overlay(
-    content: iced::Element<'static, runtime::Message>,
+pub(crate) fn overlay<'a>(
+    content: iced::Element<'a, runtime::Message>,
     entries: &[Entry],
-) -> iced::Element<'static, runtime::Message> {
+) -> iced::Element<'a, runtime::Message> {
     if entries.is_empty() {
         return content;
     }
