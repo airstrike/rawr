@@ -645,9 +645,19 @@ fn non_send_future(stderr: &str) -> Option<(Box<str>, Box<str>)> {
         .lines()
         .filter_map(|line| line.trim_start().strip_prefix("::: "))
         .find(|path| !path.contains("/.cargo/") && !path.contains("rawr_adapters"))
-        .map(|path| match path.find("/target/rawr/crate/") {
-            Some(at) => &path[at + "/target/rawr/crate/".len()..],
-            None => path,
+        // rawr's copy of the crate: `target/rawr/crate/`, or
+        // `target/rawr/members/<path>/crate/` for a workspace member.
+        .map(|path| {
+            let Some(at) = path.find("/target/rawr/") else {
+                return path;
+            };
+            let rest = &path[at + "/target/rawr/".len()..];
+            rest.strip_prefix("crate/")
+                .or_else(|| {
+                    rest.strip_prefix("members/")
+                        .and_then(|member| member.find("/crate/").map(|at| &member[at + 7..]))
+                })
+                .unwrap_or(path)
         })
         .unwrap_or("its Rust source");
     Some((function.into(), location.trim().into()))
@@ -1880,6 +1890,13 @@ mod non_send_tests {
         let stderr = "error[E0277]: `Rc<i64>` cannot be sent between threads safely\n   --> src/rawr_adapters_app_f.rs:9:18\n    |\n  9 |     let output = __rawr_profile_host::task::lazy(move || app::download::local());\n    |\n   ::: /p/app/target/rawr/crate/src/download.rs:42:25\n    |\nnote: required by a bound in `rawr_iced::task::lazy`\n   --> /Users/x/.cargo/rawr/hosts/1/iced/src/task.rs:319:30\n";
         let (function, location) = super::non_send_future(stderr).unwrap();
         assert_eq!(&*function, "app::download::local");
+        assert_eq!(&*location, "src/download.rs:42:25");
+        // A workspace member's copy of the crate.
+        let member = stderr.replace(
+            "/target/rawr/crate/",
+            "/target/rawr/members/examples/app/crate/",
+        );
+        let (_, location) = super::non_send_future(&member).unwrap();
         assert_eq!(&*location, "src/download.rs:42:25");
         assert!(super::non_send_future("error[E0308]: mismatched types").is_none());
     }
