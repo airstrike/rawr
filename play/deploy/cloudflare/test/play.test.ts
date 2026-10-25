@@ -288,16 +288,38 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   const at = (page: string) => blocks.filter((block: { page: string }) => block.page === page).map((block: { name: string }) => block.name);
   assert.deepEqual(at("index.html"), ["cart.rs", "main.rs"]);
   assert.deepEqual(at("docs/index.html"), []);
-  assert.deepEqual(at("docs/start.html"), ["cart.rs"]);
+  assert.deepEqual(at("docs/start.html"), ["hello.rs", "cart.rs"]);
   assert.deepEqual(at("docs/reference/overview.html"), ["parse.rs"]);
-  assert.deepEqual(at("docs/reference/generics.html"), ["generics.rs"]);
-  assert.deepEqual(at("docs/reference/closures.html"), ["closures.rs"]);
+  assert.deepEqual(at("docs/reference/items.html"), [
+    "nested-fn.rs", "structs.rs", "enums.rs", "impl.rs", "traits.rs", "unsafe-impl.rs", "consts.rs", "aliases.rs", "derive.rs",
+  ]);
+  assert.deepEqual(at("docs/reference/types.html"), [
+    "integers.rs", "sqrt.rs", "text.rs", "tuples.rs", "option.rs", "rc.rs", "impl-iter.rs", "fn-pointer.rs", "casts.rs",
+  ]);
+  assert.deepEqual(at("docs/reference/generics.html"), ["generics.rs", "shapes.rs", "countdown.rs", "bag.rs"]);
+  assert.deepEqual(at("docs/reference/patterns.html"), [
+    "match.rs", "destructure.rs", "let-else.rs", "irrefutable.rs", "labels.rs", "block-value.rs", "iter-mut.rs",
+  ]);
+  assert.deepEqual(at("docs/reference/closures.html"), ["closures.rs", "capture.rs", "boxed-fn.rs", "copy-closure.rs", "struct-update.rs"]);
+  assert.deepEqual(at("docs/reference/moves.html"), ["partial-move.rs", "clone-out.rs", "rc-refcell.rs"]);
+  assert.deepEqual(at("docs/reference/macros.html"), ["macros.rs", "format.rs"]);
+  assert.deepEqual(at("docs/reference/std.html"), [
+    "strings.rs", "find-retain.rs", "iterators.rs", "array-map.rs", "floats.rs", "time.rs",
+    "hashmap.rs", "refcell.rs", "mem.rs", "ordering.rs", "conversions.rs",
+  ]);
   assert.deepEqual(at("docs/reference/iced.html"), ["sun.rs", "widget.rs"]);
-  assert.deepEqual(at("docs/play/index.html"), [""]);
+  assert.deepEqual(at("docs/iced/index.html"), ["counter.rs"]);
+  assert.deepEqual(at("docs/play/index.html"), ["expression.rs", "view.rs", "increment.rs", ""]);
   assert.deepEqual(at("docs/reference/play.html"), ["fill.rs", "dots.rs", "circle.rs", "channel.rs"]);
-  // The docs' cart.rs is the landing page's, so it is one entry.
+  assert.deepEqual(at("docs/embedding.html"), [], "host code needs the rawr crate");
+  assert.deepEqual(at("docs/imports.html"), [], "a dependency needs a Cargo project");
+  // Every name is one source: the docs' cart.rs is the landing page's block.
+  const names = blocks.filter((block: { name: string }) => block.name !== "").map((block: { name: string }) => block.name);
+  assert.equal(new Set(names).size, names.length - 1);
+  // The docs' cart.rs and the iced page's counter.rs are the landing page's
+  // cart.rs and main.rs, so each pair is one entry.
   assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
-  assert.equal(hashes.length, blocks.length - 1);
+  assert.equal(hashes.length, blocks.length - 2);
   assert.ok(hashes.includes(await sha256("let xs = vec![3, 1, 2];\nxs.iter().sum::<i64>()")));
   assert.ok(!hashes.includes(await sha256("println!(\"hi\");")));
 });

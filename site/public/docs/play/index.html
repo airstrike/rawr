@@ -77,13 +77,19 @@
 
 <h3 id="expression">An expression</h3>
 <p>A bare iced expression renders as a view.</p>
-<div class="block"><pre><code data-lang="rust">column![text("hi"), button("go")]</code></pre></div>
+<div class="block">
+  <pre><code data-lang="rust" data-run="expression.rs" id="src-expression">column![text("hi"), button("go")]</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-expression" data-out="out-expression" data-alt="The word hi above a go button, rendered on rawr's server" aria-label="Render this snippet on rawr's server" hidden></button><span class="quiet" id="out-expression" aria-live="polite">(renders a frame)</span></div>
+</div>
 
 <h3 id="view">A view</h3>
 <p>A function named <code>view</code> with no arguments renders what it returns.</p>
-<div class="block"><pre><code data-lang="rust">fn view() -&gt; impl Widget&lt;()&gt; {
+<div class="block">
+  <pre><code data-lang="rust" data-run="view.rs" id="src-view">fn view() -&gt; impl Widget&lt;()&gt; {
     row![text("left"), text("right")].spacing(20)
-}</code></pre></div>
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-view" data-out="out-view" data-alt="The words left and right side by side, rendered on rawr's server" aria-label="Render this snippet on rawr's server" hidden></button><span class="quiet" id="out-view" aria-live="polite">(renders a frame)</span></div>
+</div>
 <p>Only an app takes messages.</p>
 
 <h3 id="app">An app</h3>
@@ -91,7 +97,7 @@
 <p>Each <code>msg=</code> is applied in order. <a href="/docs/reference/play#output">Output</a> says when the reply is a PNG or a GIF. An app gets no imports for free, so write its <code>use</code> lines as in a file.</p>
 <div class="block">
   <div class="file"><b>?play light msg=Message::Increment msg=Message::Increment</b></div>
-  <pre><code data-lang="rust">use iced::widget::{Widget, button, column, text};
+  <pre><code data-lang="rust" data-run="increment.rs" id="src-increment">use iced::widget::{Widget, button, column, text};
 
 #[derive(Default)]
 struct Counter {
@@ -118,6 +124,7 @@ impl Counter {
         .padding(20)
     }
 }</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-increment" data-out="out-increment" data-alt="The counter at 0 above an Increment button, rendered on rawr's server" aria-label="Render this snippet on rawr's server" hidden></button><span class="quiet" id="out-increment" aria-live="polite">(renders a frame)</span></div>
 </div>
 <figure class="shot">
   <img src="/img/docs-play-counter.png" width="159" height="151" alt="The counter rendered in the light theme after two Increment messages: the number 2 above an Increment button">
