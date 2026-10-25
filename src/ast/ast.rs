@@ -736,6 +736,23 @@ impl AST {
         crate::func::shared_make_mut(&mut self.lib).for_each_script_fn_mut(callback);
     }
 
+    /// Make the script function `name` also callable as `alias`, keeping it
+    /// under `name` for the calls that already name it.
+    #[cfg(not(feature = "no_function"))]
+    pub(crate) fn alias_script_function(&mut self, name: &str, alias: &str) {
+        let Some(definition) = self
+            .lib
+            .iter_script_fn()
+            .find(|(.., definition)| definition.name.as_str() == name)
+            .map(|(.., definition)| definition.as_ref().clone())
+        else {
+            return;
+        };
+        let mut aliased = definition;
+        aliased.name = alias.into();
+        crate::func::shared_make_mut(&mut self.lib).set_script_fn(aliased);
+    }
+
     /// Rebuild the script-function index after compiler-owned definitions are renamed.
     #[cfg(not(feature = "no_function"))]
     pub(crate) fn reindex_script_functions(&mut self) {

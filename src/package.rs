@@ -12,7 +12,6 @@ mod manifest;
 pub(crate) mod polyglot;
 #[cfg(feature = "rust-import")]
 mod rust;
-#[cfg(feature = "rust-import")]
 pub mod snapshot;
 pub mod source;
 

@@ -422,9 +422,14 @@ pub fn run_async(
     // The program boots on the simulated clock, so the times it reads are
     // on it.
     let _clock = rawr_iced::snapshot::clock::freeze();
-    let prepared = compiler
-        .check_named_source(SOURCE_NAME, &program)
-        .and_then(rawr_iced::application::Checked::prepare);
+    // An inline `mod` needs the crate compiler, which reads the one file
+    // as a crate's root.
+    let checked = if rawr_snippet::has_top_level_mod(&program) {
+        compiler.check_named_crate_source(SOURCE_NAME, &program)
+    } else {
+        compiler.check_named_source(SOURCE_NAME, &program)
+    };
+    let prepared = checked.and_then(rawr_iced::application::Checked::prepare);
     // The engine's progress callback ends a boot that runs past the
     // deadline (or the output cap): that is the limit, not an error in the
     // program.

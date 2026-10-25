@@ -56,9 +56,10 @@ PNG. An animated render is always a GIF. A file named `.png`, `.jpg` or
 the last frame as a still image. A note on the image goes to stderr as a
 `note: ` line when the result goes to stdout. `--step N` (repeatable) clicks
 a full app's target `N` after its messages, counting from 0 in reading
-order. A full app's image comes with an `action: <label>` line for each
-target of its last frame and a `click: <label>` line for each step, beside
-the note. A plain program writes JSON where an image would go. The JSON is one
+order. `--step N=TEXT` types `TEXT` over text input `N`'s content and taps
+⏎. A full app's image comes with an `action: <label>` line for each target
+of its last frame (`input: <label>` for a text input) and a
+`click: <label>` line for each step, beside the note. A plain program writes JSON where an image would go. The JSON is one
 object that starts with `{`, and no image does:
 
 ```json
@@ -112,12 +113,33 @@ Options: `size=WxH` (or a bare `WxH`, at most 2048 per side),
 bare `mine`, which lets only the request's author click its reply.
 
 An app's reply has a button for each target of its last frame, up to 20
-(D516). A button's `custom_id` carries the click history (`src/click.rs`),
-so a click replays the request with its messages and those steps and edits
-the reply, with no store. Anyone may click unless the request says `mine`,
-which the click reads from the request as it is now. A click is a run under
-the clicker's per-user and per-channel limits, one click renders per reply
-at a time, and a history stops at 24 clicks.
+(D516). Past 20, a select menu in the fifth row holds up to 25 more. A
+button's `custom_id` carries the click history (`src/click.rs`), and so
+does each menu option's value, so a click or a pick replays the request
+with its messages and those steps and edits the reply, with no store.
+Anyone may click unless the request says `mine`, which the click reads
+from the request as it is now. A click is a run under the clicker's
+per-user and per-channel limits, one click renders per reply at a time,
+and a history stops at 24 clicks.
+
+A target is a text or an icon's container that shows a pointer, or a
+control that reports itself. iced's toggler, radio, slider and label-less
+checkbox report nothing to an `Operation`, so rawr-iced wraps each in
+`widget::reported`, which reports its bounds and its own label. Their
+buttons carry those labels, and one without a label is numbered (`#5`).
+A slider is two targets, `Slider −` and `Slider +`: a step on one moves
+the cursor over the slider and taps ↓ or ↑, which iced's slider reads as
+one step down or up.
+
+A text input reports itself too, labelled by its placeholder and never by
+its value. Its button carries a ✏️ and a `custom_id` ending in `?`, and a
+click opens a modal instead of rendering. The modal's `custom_id` is the
+button's. The submitted text joins the history as a typed step: the
+target's digit, `~`, a base-62 length and the text. So the text rides in
+every later button with no store, and `click::room` caps the modal so each
+ID stays within Discord's 100 characters. A replay clicks the input,
+selects its content with ⌘A (Ctrl+A off macOS), types the text a key at a
+time and taps ⏎. A secure input's text shows as dots in the clicks line.
 
 ### Where it answers
 

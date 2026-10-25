@@ -48,16 +48,20 @@ use rawr_play::click::{self, Decision};
 use rawr_play::message::{self, Done, RateLimit, Reply, Shot};
 use rawr_play::server::ServerKey;
 use rawr_play::stats::{self, Batch, Outcome, Report, Status};
+use rawr_play::Step;
 use serenity::all::{
-    ButtonStyle, Channel, ChannelId, ChannelType, Command, CommandInteraction, CommandOptionType,
-    ComponentInteraction, Context, CreateActionRow, CreateAttachment, CreateButton, CreateCommand,
-    CreateCommandOption, CreateInteractionResponse, CreateInteractionResponseFollowup,
-    CreateInteractionResponseMessage, CreateMessage, EditInteractionResponse, EditMessage,
-    EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId, Interaction,
-    InteractionContext, Message, MessageId, MessageUpdateEvent, Permissions, ReactionType, Ready,
-    ResolvedValue, UnavailableGuild,
+    ActionRowComponent, ButtonKind, ButtonStyle, Channel, ChannelId, ChannelType, Command,
+    CommandInteraction, CommandOptionType, ComponentInteraction, ComponentInteractionDataKind,
+    Context, CreateActionRow, CreateAttachment, CreateButton, CreateCommand, CreateCommandOption,
+    CreateInputText, CreateInteractionResponse, CreateInteractionResponseFollowup,
+    CreateInteractionResponseMessage, CreateMessage, CreateModal, CreateSelectMenu,
+    CreateSelectMenuKind, CreateSelectMenuOption, EditInteractionResponse, EditMessage,
+    EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId, InputTextStyle,
+    Interaction, InteractionContext, InteractionId, Message, MessageId, MessageUpdateEvent,
+    ModalInteraction, Permissions, ReactionType, Ready, ResolvedValue, UnavailableGuild,
 };
 use serenity::async_trait;
+use serenity::builder::Builder as _;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{watch, Semaphore};
 
@@ -615,6 +619,7 @@ impl EventHandler for Handler {
         let command = match interaction {
             Interaction::Command(command) => command,
             Interaction::Component(component) => return self.click(&context, &component).await,
+            Interaction::Modal(modal) => return self.submit(&context, &modal).await,
             _ => return,
         };
         if command.data.name != COMMAND {
@@ -695,18 +700,76 @@ impl Handler {
             .or_else(|| self.channel_rate.lock().unwrap().wait(channel.get(), now))
     }
 
-    /// A click on one of our replies' buttons: checked as
-    /// [`click::decide`] says (refused privately), then acknowledged within
-    /// Discord's 3 s, replayed with the history its button carries, and
-    /// the reply edited with the new image and buttons. A replay that
-    /// fails leaves the reply as it was and tells the clicker privately.
+    /// A click on one of our replies' buttons, or a pick from its menu:
+    /// see [`Self::press`]. A text input's button opens a modal instead,
+    /// whose submission comes to [`Self::submit`].
     async fn click(&self, context: &Context, component: &ComponentInteraction) {
-        let reply = &component.message;
-        let channel = component.channel_id;
+        // A pick from the menu is the click its option's value names.
+        let picked = match &component.data.kind {
+            ComponentInteractionDataKind::StringSelect { values } => values.as_slice(),
+            _ => &[],
+        };
+        let id = click::chosen(&component.data.custom_id, picked);
+        let pressed = Pressed {
+            interaction: component.id,
+            token: &component.token,
+            reply: &component.message,
+            channel: component.channel_id,
+            guild: component.guild_id,
+            user: component.user.id.get(),
+        };
+        self.press(context, &pressed, id).await;
+    }
+
+    /// The text submitted in a text input's modal: the typed step
+    /// [`click::typed`] makes of the modal's `custom_id` (its button's),
+    /// pressed as [`Self::press`] presses a button.
+    async fn submit(&self, context: &Context, modal: &ModalInteraction) {
+        let Some(reply) = modal.message.as_deref() else {
+            return;
+        };
+        let text = modal
+            .data
+            .components
+            .iter()
+            .flat_map(|row| &row.components)
+            .find_map(|component| match component {
+                ActionRowComponent::InputText(input) if input.custom_id == click::TEXT => {
+                    input.value.clone()
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+        // An ID that isn't a text input's stays as it is, so it is stale.
+        let id = click::typed(&modal.data.custom_id, &text)
+            .unwrap_or_else(|| modal.data.custom_id.clone());
+        let pressed = Pressed {
+            interaction: modal.id,
+            token: &modal.token,
+            reply,
+            channel: modal.channel_id,
+            guild: modal.guild_id,
+            user: modal.user.id.get(),
+        };
+        self.press(context, &pressed, &id).await;
+    }
+
+    /// The button `id` pressed on one of our replies: checked as
+    /// [`click::decide`] says (refused privately). A text input's button
+    /// opens its modal. Otherwise the press is acknowledged within
+    /// Discord's 3 s, replayed with the history `id` carries, and the reply
+    /// edited with the new image and buttons. A replay that fails leaves
+    /// the reply as it was and tells the clicker privately.
+    async fn press(&self, context: &Context, pressed: &Pressed<'_>, id: &str) {
+        let respond = |response: CreateInteractionResponse| {
+            response.execute(&context.http, (pressed.interaction, pressed.token))
+        };
+        let channel = pressed.channel;
         // The request this reply answers: in the payload, else fetched.
-        let referenced = match &reply.referenced_message {
+        let referenced = match &pressed.reply.referenced_message {
             Some(request) => Some((**request).clone()),
-            None => match reply
+            None => match pressed
+                .reply
                 .message_reference
                 .as_ref()
                 .and_then(|to| to.message_id)
@@ -720,10 +783,10 @@ impl Handler {
             Some((parsed, sent.author.id.get(), sent.id))
         });
         let hash = request.as_ref().map(|(parsed, ..)| click::hash(parsed));
-        let user = component.user.id.get();
+        let user = pressed.user;
         let mut claimed = None;
         let decision = click::decide(
-            &component.data.custom_id,
+            id,
             hash.as_deref().zip(
                 request
                     .as_ref()
@@ -746,9 +809,14 @@ impl Handler {
         let steps = match decision {
             Decision::Render(steps) => steps,
             Decision::Busy => {
-                let _ = component
-                    .create_response(&context.http, CreateInteractionResponse::Acknowledge)
-                    .await;
+                let _ = respond(CreateInteractionResponse::Acknowledge).await;
+                return;
+            }
+            Decision::Ask(room) => {
+                let label = label_of(pressed.reply, id).unwrap_or_default();
+                if let Err(error) = respond(modal(id, &label, room)).await {
+                    eprintln!("rawr-play-bot: cannot open a text input's modal: {error}");
+                }
                 return;
             }
             refused => {
@@ -758,25 +826,19 @@ impl Handler {
                             .stats
                             .lock()
                             .unwrap()
-                            .rate_limited(component.guild_id.map(GuildId::get));
+                            .rate_limited(pressed.guild.map(GuildId::get));
                         click::wait_text(wait)
                     }
                     Decision::NotYours => click::NOT_YOURS.to_owned(),
                     _ => click::STALE.to_owned(),
                 };
-                if let Err(error) = component
-                    .create_response(&context.http, private(text))
-                    .await
-                {
+                if let Err(error) = respond(private(text)).await {
                     eprintln!("rawr-play-bot: cannot answer a click: {error}");
                 }
                 return;
             }
         };
-        if let Err(error) = component
-            .create_response(&context.http, CreateInteractionResponse::Acknowledge)
-            .await
-        {
+        if let Err(error) = respond(CreateInteractionResponse::Acknowledge).await {
             eprintln!("rawr-play-bot: cannot acknowledge a click: {error}");
             return;
         }
@@ -785,14 +847,14 @@ impl Handler {
         };
         request.options.steps.clone_from(&steps);
         // The claim holds until the reply shows the new buttons.
-        let rendered = self.render(&request, component.guild_id, user).await;
+        let rendered = self.render(&request, pressed.guild, user).await;
         let shot = match rendered {
             Reply::Image(shot) => shot,
             Reply::Text(text) => {
                 let followup = CreateInteractionResponseFollowup::new()
                     .content(text)
                     .ephemeral(true);
-                if let Err(error) = component.create_followup(&context.http, followup).await {
+                if let Err(error) = followup.execute(&context.http, (None, pressed.token)).await {
                     eprintln!("rawr-play-bot: cannot answer a click: {error}");
                 }
                 return;
@@ -804,7 +866,7 @@ impl Handler {
             .clear_attachments()
             .new_attachment(self.attachment(shot.bytes))
             .components(rows);
-        if let Err(error) = component.edit_response(&context.http, edit).await {
+        if let Err(error) = edit.execute(&context.http, pressed.token).await {
             eprintln!("rawr-play-bot: cannot edit a clicked reply: {error}");
         }
     }
@@ -1157,32 +1219,107 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
 }
 
 /// The text and buttons of an image reply to the request hashed `hash`,
-/// rendered after `steps`: its note and the clicks so far as subtext, and
-/// a button for each target, five to a row. No `hash`, no buttons.
-fn dressed(shot: &Shot, hash: Option<&str>, steps: &[usize]) -> (String, Vec<CreateActionRow>) {
+/// rendered after `steps`: its note and the clicks so far as subtext, a
+/// button for each of the first [`click::MAX_BUTTONS`] targets, five to a
+/// row, and a select menu for the rest. No `hash`, no buttons.
+fn dressed(shot: &Shot, hash: Option<&str>, steps: &[Step]) -> (String, Vec<CreateActionRow>) {
+    let mut made = hash.map_or_else(Vec::new, |hash| click::buttons(hash, steps, &shot.actions));
+    let full = hash.is_some() && made.is_empty() && !shot.actions.is_empty();
     let lines: Vec<String> = shot
         .note
         .iter()
         .cloned()
-        .chain(click::quiet(&shot.clicked, &shot.actions))
+        .chain(click::quiet(&shot.clicked, full))
         .collect();
     let content = subtext(&lines.join("\n"));
-    let Some(hash) = hash else {
-        return (content, Vec::new());
-    };
-    let buttons: Vec<CreateButton> = click::buttons(hash, steps, &shot.actions)
+    let more = made.split_off(made.len().min(click::MAX_BUTTONS));
+    let buttons: Vec<CreateButton> = made
         .into_iter()
         .map(|button| {
-            CreateButton::new(button.id)
+            let made = CreateButton::new(button.id)
                 .label(button.label)
-                .style(ButtonStyle::Secondary)
+                .style(ButtonStyle::Secondary);
+            // A text input's button opens a modal to type in.
+            if button.input {
+                made.emoji(pencil())
+            } else {
+                made
+            }
         })
         .collect();
-    let rows = buttons
+    let mut rows: Vec<CreateActionRow> = buttons
         .chunks(5)
         .map(|row| CreateActionRow::Buttons(row.to_vec()))
         .collect();
+    if !more.is_empty() {
+        let placeholder = format!("{} more", more.len());
+        let options = more
+            .into_iter()
+            .map(|option| {
+                let made = CreateSelectMenuOption::new(option.label, option.id);
+                if option.input {
+                    made.emoji(pencil())
+                } else {
+                    made
+                }
+            })
+            .collect();
+        let menu = CreateSelectMenu::new(click::MORE, CreateSelectMenuKind::String { options })
+            .placeholder(placeholder);
+        rows.push(CreateActionRow::SelectMenu(menu));
+    }
     (content, rows)
+}
+
+/// A button pressed, or a modal submitted, on one of our replies: what
+/// [`Handler::press`] answers.
+struct Pressed<'a> {
+    interaction: InteractionId,
+    token: &'a str,
+    /// The reply the button is on.
+    reply: &'a Message,
+    channel: ChannelId,
+    guild: Option<GuildId>,
+    user: u64,
+}
+
+/// The label of the button or menu option `id` names on `reply`.
+fn label_of(reply: &Message, id: &str) -> Option<String> {
+    reply
+        .components
+        .iter()
+        .flat_map(|row| &row.components)
+        .find_map(|component| match component {
+            ActionRowComponent::Button(button) => match &button.data {
+                ButtonKind::NonLink { custom_id, .. } if custom_id == id => button.label.clone(),
+                _ => None,
+            },
+            ActionRowComponent::SelectMenu(menu) => menu
+                .options
+                .iter()
+                .find(|option| option.value == id)
+                .map(|option| option.label.clone()),
+            _ => None,
+        })
+}
+
+/// The modal a text input's button `id`, labelled `label`, opens: one
+/// short text field of at most `room` characters. Its `custom_id` is the
+/// button's, so its submission carries the history.
+fn modal(id: &str, label: &str, room: usize) -> CreateInteractionResponse {
+    let field = CreateInputText::new(InputTextStyle::Short, "Text", click::TEXT)
+        .placeholder(label)
+        .max_length(u16::try_from(room).unwrap_or(u16::MAX))
+        .required(false);
+    CreateInteractionResponse::Modal(
+        CreateModal::new(id, click::title(label))
+            .components(vec![CreateActionRow::InputText(field)]),
+    )
+}
+
+/// The pencil on a text input's button: ✏️.
+fn pencil() -> ReactionType {
+    ReactionType::Unicode("\u{270f}\u{fe0f}".into())
 }
 
 /// `note` as Discord subtext, one `-# ` line per line.

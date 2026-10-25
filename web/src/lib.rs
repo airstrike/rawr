@@ -272,8 +272,14 @@ fn wakes() -> impl iced::futures::Stream<Item = ()> {
 /// A program checked and booted, or its report against the snippet.
 fn compile(program: &str, source: &str) -> Result<Adapter, String> {
     let compiler = rawr_iced::application::Compiler::new().map_err(|error| error.to_string())?;
-    compiler
-        .check_named_source(rawr_snippet::SOURCE_NAME, program)
+    // An inline `mod` needs the crate compiler, which reads the one file
+    // as a crate's root.
+    let checked = if rawr_snippet::has_top_level_mod(program) {
+        compiler.check_named_crate_source(rawr_snippet::SOURCE_NAME, program)
+    } else {
+        compiler.check_named_source(rawr_snippet::SOURCE_NAME, program)
+    };
+    checked
         .and_then(rawr_iced::application::Checked::prepare)
         .map(rawr_iced::application::Prepared::into_adapter)
         .map_err(|error| {

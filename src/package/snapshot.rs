@@ -1,4 +1,5 @@
-//! Immutable in-memory package inputs received by a generated runner.
+//! Immutable in-memory package inputs: a generated runner's, or one file
+//! whose inline modules make a crate.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -77,19 +78,28 @@ pub(crate) fn normalize(path: PathBuf) -> Result<PathBuf, Error> {
     Ok(normalized)
 }
 
-/// Invalid runner-owned snapshot structure.
-#[derive(Debug, thiserror::Error)]
+/// Invalid snapshot structure.
+#[derive(Debug)]
 pub enum Error {
     /// No source or manifest bytes were supplied.
-    #[error("Rawr package snapshot is empty")]
     Empty,
     /// More than one frame supplied the same normalized path.
-    #[error("Rawr package snapshot contains a duplicate path")]
     Duplicate,
     /// The selected target path is absent from the retained file set.
-    #[error("Rawr package snapshot does not contain its entry")]
     MissingEntry,
     /// Lexical normalization encountered a parent outside the captured root.
-    #[error("Rawr package snapshot path escapes its captured root")]
     EscapesRoot,
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Empty => "Rawr package snapshot is empty",
+            Self::Duplicate => "Rawr package snapshot contains a duplicate path",
+            Self::MissingEntry => "Rawr package snapshot does not contain its entry",
+            Self::EscapesRoot => "Rawr package snapshot path escapes its captured root",
+        })
+    }
+}
+
+impl std::error::Error for Error {}

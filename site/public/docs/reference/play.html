@@ -65,6 +65,7 @@
   <tr><td><code>include_str!("notes.txt")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `include_str!` here: ?play has no files</code>.</td></tr>
   <tr><td><code>include_bytes!("cat.png")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `include_bytes!` here: ?play has no files</code>. Inside an app&rsquo;s <code>.fonts(..)</code> setting it is skipped instead, as <a href="#images">Images in memory</a> explains.</td></tr>
   <tr><td><code>image("cat.png")</code> or <code>svg("logo.svg")</code></td><td>The image draws as a missing file. <code>Handle::from_path</code> does the same. The Discord reply adds a <a href="#image-notes">note</a>.</td></tr>
+  <tr><td><code>mod util;</code></td><td>The snippet doesn&rsquo;t compile, because there is no <code>util.rs</code>. The error is <code>file modules require project/package compilation</code>. An inline module, <code>mod util { .. }</code>, works.</td></tr>
   <tr><td><code>env!("HOME")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `env!` here: ?play has no files. It has no environment variable `HOME` either</code>.</td></tr>
   <tr><td><code>std::fs</code>, <code>std::env</code>, <code>std::net</code> or <code>std::thread</code></td><td>The snippet doesn&rsquo;t compile. rawr has none of these modules. The error for <code>std::fs</code> is <code>unknown type `std::fs`</code>.</td></tr>
   <tr><td><code>tokio::fs</code>, <code>tokio::net</code>, <code>tokio::process</code>, <code>tokio::signal</code> or <code>tokio::io</code></td><td>The snippet doesn&rsquo;t compile. <a href="#tokio">?play&rsquo;s tokio</a> has none of these modules. The error for <code>tokio::fs</code> is <code>unknown type `tokio::fs`</code>.</td></tr>
@@ -239,7 +240,7 @@ impl Dots {
   <tr><td>Image upload</td><td>10 MB.</td></tr>
   <tr><td>Discord reply</td><td>2000 characters.</td></tr>
   <tr><td>Runs in Discord</td><td>4 a minute per user. 12 a minute per channel. A click on a reply&rsquo;s <a href="/docs/play/discord#buttons">buttons</a> is a run.</td></tr>
-  <tr><td>Clicks in Discord</td><td>24 per reply, with up to 20 buttons. The app and its clicks share the still budget.</td></tr>
+  <tr><td>Clicks in Discord</td><td>24 per reply, with up to 20 buttons and a menu of up to 25 more. Text typed into a reply&rsquo;s text inputs is about 90 characters in all. The app and its clicks share the still budget.</td></tr>
   <tr><td>Runs in the playground</td><td>6 a minute and 60 an hour per visitor.</td></tr>
   <tr><td>Playground code</td><td>16 KiB. A share can be up to 64 KiB.</td></tr>
   <tr><td>Playground messages</td><td>32 per run. Each can be up to 256 bytes.</td></tr>

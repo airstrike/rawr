@@ -185,9 +185,10 @@ println!("{p:?} {}x{}", g.len(), g[0].len());</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-aliases" data-out="out-aliases" aria-label="Run aliases.rs" hidden></button><b>rawr run aliases.rs</b><span id="out-aliases" aria-live="polite">(1, 2) 2x3</span></div>
 </div>
 <h2 id="mod"><code>mod</code> and visibility</h2>
-<p><code>mod util;</code> loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. Cargo builds a module without it as native Rust. Inline modules work too.</p>
+<p><code>mod util;</code> loads <code>util.rs</code> or <code>util/mod.rs</code> beside the file that declares it. A module whose first line is <code>// rawr</code> is interpreted. Cargo builds a module without it as native Rust. Inline modules work too, also in a single file with no project, as in <code>?play</code> and the playground.</p>
 <p><code>pub</code>, <code>pub(crate)</code>, <code>pub(super)</code> and <code>pub(in path)</code> work. A path through <code>crate::</code> or <code>super::</code> reaches a name that a module brings in with <code>use</code>.</p>
-<div class="block"><pre><code data-lang="rust">mod geometry {
+<div class="block">
+  <pre><code data-lang="rust" data-run="geometry.rs" id="src-geometry">mod geometry {
     pub(crate) fn area(w: f64, h: f64) -&gt; f64 {
         w * h
     }
@@ -195,7 +196,10 @@ println!("{p:?} {}x{}", g.len(), g[0].len());</code></pre>
 
 fn main() {
     let a = geometry::area(2.0, 3.0);
-}</code></pre></div>
+    println!("{a}");
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-geometry" data-out="out-geometry" aria-label="Run geometry.rs" hidden></button><b>rawr run geometry.rs</b><span id="out-geometry" aria-live="polite">6</span></div>
+</div>
 <h2 id="use"><code>use</code></h2>
 <p>Paths, groups, and globs of a standard library module. A path that starts with <code>::</code> names an outside crate, and its first name must be a crate. A glob of an enum&rsquo;s variants, as in <code>use Shape::*;</code>, isn&rsquo;t supported yet.</p>
 <div class="block"><pre><code data-lang="rust">use std::collections::{HashMap, HashSet};

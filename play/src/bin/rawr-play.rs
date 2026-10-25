@@ -1,11 +1,13 @@
 //! `rawr-play <file.rs|-> [--size WxH] [--theme dark|light] [--message M]...
-//! [--step N]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->`
+//! [--step N[=TEXT]]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->`
 //!
 //! `--step N` clicks a full app's target `N` after its messages, counting
-//! from 0 in the targets of the view as it then is. A full app's image
-//! comes with an `action: <label>` line for each target of its last frame,
-//! in that order, and a `click: <label>` line for each step's target; they
-//! go where the note goes.
+//! from 0 in the targets of the view as it then is. `--step N=TEXT` types
+//! `TEXT` over text input `N`'s content and taps ⏎. A full app's image
+//! comes with an `action: <label>` line for each target of its last frame
+//! (`input: <label>` for a text input), in that order, and a
+//! `click: <label>` line for each step's target; they go where the note
+//! goes.
 //!
 //! `--time-ms N` is the wall-clock budget for a render. `--animation-ms N`
 //! is a full app's budget once its view changes (never less than
@@ -41,7 +43,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: rawr-play <file.rs|-> [--size WxH] [--theme dark|light] \
-[--message EXPR]... [--step N]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->";
+[--message EXPR]... [--step N[=TEXT]]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->";
 
 /// Print the guild ID behind each token, or the token for each guild ID.
 fn server_tokens(decrypt: bool, values: &[String]) -> Result<(), String> {
@@ -104,10 +106,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--theme" => options.theme = value("--theme")?.parse()?,
             "--message" => options.messages.push(value("--message")?),
             "--step" => {
-                let step = number(value("--step")?)?;
-                options
-                    .steps
-                    .push(usize::try_from(step).map_err(|_| format!("step {step} is too large"))?);
+                let step = rawr_play::message::parse_step(&value("--step")?)?;
+                options.steps.push(step);
             }
             "--format" => format = Some(value("--format")?.parse()?),
             "--still" => options.still = true,

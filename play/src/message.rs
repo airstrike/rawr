@@ -115,13 +115,36 @@ impl Request {
             args.extend(["--message".to_owned(), message.clone()]);
         }
         for step in &options.steps {
-            args.extend(["--step".to_owned(), step.to_string()]);
+            args.extend(["--step".to_owned(), step_arg(step)]);
         }
         if options.still {
             args.push("--still".to_owned());
         }
         args
     }
+}
+
+/// `step` as `rawr-play --step` takes it: the target's index, then for a
+/// typed step `=` and the text.
+#[must_use]
+pub fn step_arg(step: &crate::Step) -> String {
+    match &step.text {
+        Some(text) => format!("{}={text}", step.target),
+        None => step.target.to_string(),
+    }
+}
+
+/// A step as [`step_arg`] writes it: `N`, or `N=TEXT` to type `TEXT`
+/// into text input `N`.
+pub fn parse_step(arg: &str) -> Result<crate::Step, String> {
+    let (target, text) = match arg.split_once('=') {
+        Some((target, text)) => (target, Some(text.to_owned())),
+        None => (arg, None),
+    };
+    let target = target
+        .parse::<usize>()
+        .map_err(|_| format!("step `{arg}` must be a target's number, or N=TEXT"))?;
+    Ok(crate::Step { target, text })
 }
 
 /// The body of the first fenced code block (multi-line or inline).
@@ -154,8 +177,8 @@ pub struct Shot {
     pub bytes: Vec<u8>,
     /// The note to show beside it.
     pub note: Option<String>,
-    /// A full app's targets in its last frame, by label in reading order.
-    pub actions: Vec<String>,
+    /// A full app's targets in its last frame, in reading order.
+    pub actions: Vec<crate::Action>,
     /// The label of the target each step clicked.
     pub clicked: Vec<String>,
 }
@@ -190,17 +213,45 @@ pub const NOTE: &str = "note: ";
 /// How `rawr-play` starts a line naming a target of the image's last frame.
 pub const ACTION: &str = "action: ";
 
+/// How `rawr-play` starts a line naming a target of the image's last
+/// frame that is a text input, which a step types into.
+pub const INPUT: &str = "input: ";
+
 /// How `rawr-play` starts a line naming the target a step clicked.
 pub const CLICK: &str = "click: ";
 
 /// The lines `rawr-play` writes beside an image: its note, then an
-/// [`ACTION`] line for each target and a [`CLICK`] line for each step.
+/// [`ACTION`] line for each target ([`INPUT`] for a text input) and a
+/// [`CLICK`] line for each step.
 #[must_use]
-pub fn lines(note: Option<&str>, actions: &[String], clicked: &[String]) -> Vec<String> {
+pub fn lines(note: Option<&str>, actions: &[crate::Action], clicked: &[String]) -> Vec<String> {
+    let action = |action: &crate::Action| {
+        let prefix = if action.input { INPUT } else { ACTION };
+        format!("{prefix}{}", action.label)
+    };
     note.map(|note| format!("{NOTE}{note}"))
         .into_iter()
-        .chain(actions.iter().map(|action| format!("{ACTION}{action}")))
+        .chain(actions.iter().map(action))
         .chain(clicked.iter().map(|click| format!("{CLICK}{click}")))
+        .collect()
+}
+
+/// The targets `rawr-play`'s [`ACTION`] and [`INPUT`] lines name, in
+/// order.
+fn actions(stderr: &str) -> Vec<crate::Action> {
+    stderr
+        .lines()
+        .filter_map(|line| {
+            let (label, input) = match line.strip_prefix(INPUT) {
+                Some(label) => (label, true),
+                None => (line.strip_prefix(ACTION)?, false),
+            };
+            let label = label.trim();
+            (!label.is_empty()).then(|| crate::Action {
+                label: label.to_owned(),
+                input,
+            })
+        })
         .collect()
 }
 
@@ -239,7 +290,7 @@ pub fn outcome(success: bool, stdout: Vec<u8>, stderr: &str) -> Result<Done, Str
         return Ok(Done::Image(Shot {
             bytes: stdout,
             note: note(stderr),
-            actions: prefixed(stderr, ACTION).map(str::to_owned).collect(),
+            actions: actions(stderr),
             clicked: prefixed(stderr, CLICK).map(str::to_owned).collect(),
         }));
     }
@@ -490,14 +541,21 @@ mod tests {
     #[test]
     fn message_request_args() {
         let mut request = parsed("?play 320x200 light msg=Message::Increment\n```\nx\n```");
-        request.options.steps = vec![0, 2];
+        request.options.steps = vec![crate::Step::click(0), crate::Step::typed(2, "Ada = 1")];
         let args = request.args(Format::Webp, 512);
         assert_eq!(
             args.join(" "),
             "- --size 320x200 --theme light --format webp --time-ms 2000 --animation-ms 2000 \
              --memory-mb 512 -o - \
-             --message Message::Increment --step 0 --step 2"
+             --message Message::Increment --step 0 --step 2=Ada = 1"
         );
+        assert_eq!(args.last().unwrap(), "2=Ada = 1", "one argument");
+        for step in &request.options.steps {
+            assert_eq!(super::parse_step(&super::step_arg(step)).as_ref(), Ok(step));
+        }
+        assert_eq!(super::parse_step("3="), Ok(crate::Step::typed(3, "")));
+        assert!(super::parse_step("x=1").is_err());
+        assert!(super::parse_step("-1").is_err());
     }
 
     #[test]
@@ -512,16 +570,30 @@ mod tests {
         let noted = reply(
             true,
             b"GIF89a".to_vec(),
-            "note: Animation shown for the first 5 s.\naction: Increment\naction: Decrement\nclick: Increment\n",
+            "note: Animation shown for the first 5 s.\naction: Increment\ninput: Name\naction: Decrement\nclick: Increment\n",
         );
+        let action = |label: &str, input| crate::Action {
+            label: label.into(),
+            input,
+        };
+        let actions = vec![
+            action("Increment", false),
+            action("Name", true),
+            action("Decrement", false),
+        ];
         assert_eq!(
             noted,
             Reply::Image(Shot {
                 bytes: b"GIF89a".to_vec(),
                 note: Some("Animation shown for the first 5 s.".into()),
-                actions: vec!["Increment".into(), "Decrement".into()],
+                actions: actions.clone(),
                 clicked: vec!["Increment".into()],
             })
+        );
+        assert_eq!(
+            super::lines(None, &actions, &[]),
+            ["action: Increment", "input: Name", "action: Decrement"],
+            "the lines rawr-play writes read back"
         );
         assert!(super::is_gif(b"GIF89a") && !super::is_gif(b"\x89PNG"));
         let Reply::Text(text) = reply(false, Vec::new(), "error: ```oops```\n") else {

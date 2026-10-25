@@ -9418,3 +9418,84 @@ main();
          Ok(\"hi\") Err(ParseIntError { kind: InvalidDigit })\n"
     );
 }
+
+/// A file whose `mod` items are inline compiles as a crate root without a
+/// file or a project, as `?play` and rawr-web compile a snippet: nested
+/// modules, `super::`, `use` of a module's type, and `main` callable by
+/// its name. rustc prints `6 2.25`. A runtime error in a module maps to
+/// the file's own position, and a file module stays the single-file
+/// compiler's refusal.
+#[test]
+fn language_inline_modules_compile_from_one_file() {
+    let source = r#"mod geometry {
+    pub(crate) fn area(w: f64, h: f64) -> f64 {
+        w * h
+    }
+
+    pub mod shapes {
+        pub struct Square(pub f64);
+
+        impl Square {
+            pub fn area(&self) -> f64 {
+                super::area(self.0, self.0)
+            }
+        }
+    }
+
+    pub fn first(v: &[i64]) -> i64 {
+        v[3]
+    }
+}
+
+use geometry::shapes::Square;
+
+fn main() {
+    let a = geometry::area(2.0, 3.0);
+    println!("{a} {}", Square(1.5).area());
+}
+
+fn fails() -> i64 {
+    geometry::first(&[1])
+}
+"#;
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    let evidence = crate::diagnostic::Source::new("play.rs", source).unwrap();
+    let unit = engine.parse_unit(source).unwrap();
+    let (ast, positions) = engine
+        .compile_unit_with_positions(unit, evidence.clone())
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = crate::Scope::new();
+    engine
+        .call_fn::<()>(&mut scope, &ast, "main", ())
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(lines.lock().unwrap().as_str(), "6 2.25\n");
+    let failed = ast
+        .iter_functions()
+        .find(|function| function.name.ends_with("::fails"))
+        .map(|function| function.name.to_string())
+        .expect("the root's `fails`");
+    let error = engine
+        .call_fn::<i64>(&mut scope, &ast, &failed, ())
+        .unwrap_err();
+    let span = positions.translate(&error).expect("a position in the file");
+    // `v[3]`, on line 17 of the file.
+    assert_eq!(span.start().line(), Some(17), "{span:?}");
+
+    let file_module = "mod util;\nfn main() {}\n";
+    let unit = engine.parse_unit(file_module).unwrap();
+    let error = engine
+        .compile_unit(
+            unit,
+            crate::diagnostic::Source::new("play.rs", file_module).unwrap(),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("file modules require project/package compilation"),
+        "{error}"
+    );
+}

@@ -32,6 +32,9 @@ pub fn report(text: &str, program: &str, source: &str) -> String {
         let rewritten = if let Some(location) = line
             .strip_prefix(" --> ")
             .or_else(|| line.strip_prefix(" ::: "))
+            // A crate-root check (an inline `mod`) names the file by its
+            // path in the one-file crate, `/play.rs`.
+            .map(|rest| rest.strip_prefix('/').unwrap_or(rest))
             .and_then(|rest| rest.strip_prefix(SOURCE_NAME))
             .and_then(|rest| rest.strip_prefix(':'))
         {

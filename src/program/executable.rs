@@ -562,6 +562,26 @@ impl Executable {
         (self.ast, positions)
     }
 
+    /// This program's [`AST`] and the [`Positions`] of every source, for a
+    /// program of one file whose inline modules are sources that keep the
+    /// file's positions.
+    pub(crate) fn into_ast_with_every_position(self) -> (AST, Positions) {
+        let positions = Positions {
+            callables: self
+                .callables
+                .values()
+                .filter_map(|callable| callable.locations.as_ref())
+                .flat_map(|locations| locations.entries.iter().copied())
+                .collect(),
+            helpers: self
+                .helper_locations
+                .values()
+                .flat_map(|locations| locations.iter().copied())
+                .collect(),
+        };
+        (self.ast, positions)
+    }
+
     /// The [`Positions`] of this program's entry source.
     pub(crate) fn positions(&self) -> Positions {
         let entry = self.sources.key(self.source.index());

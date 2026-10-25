@@ -22,6 +22,58 @@ pub(crate) fn executable(
     executable_with_evidence(engine, target, session, false).map(|(executable, ..)| executable)
 }
 
+/// One in-memory file compiled as the root of a crate, when its `mod`
+/// items are all inline (`mod geometry { .. }`): each module is read from
+/// the file's own text, as `rawr run` reads it, without a file or a
+/// project. `None` when the file declares no module, or a file module
+/// (`mod util;`), which the single-file compiler refuses.
+///
+/// Its [`AST`](crate::AST) is the single-file compiler's: the root's
+/// `fn main` is callable as `main`, and every source's positions are the
+/// file's, since inline modules keep them.
+pub(crate) fn inline_modules(
+    engine: &Engine,
+    unit: &crate::parse::Unit,
+    source: &crate::diagnostic::Source,
+) -> Option<crate::parser::ParseResult<(crate::AST, program::Positions)>> {
+    let mut inline = false;
+    for item in unit.items() {
+        if let crate::item::Parsed::Module(module) = item {
+            module.inline?;
+            inline = true;
+        }
+    }
+    if !inline {
+        return None;
+    }
+    let path = std::path::Path::new("/").join(source.identity());
+    let snapshot =
+        super::snapshot::Snapshot::new(path.clone(), vec![(path, source.text().into())]).ok()?;
+    let compiled = Graph::load_snapshot(engine, &snapshot)
+        .and_then(|graph| executable_from_graph(engine, graph, None, false))
+        .map_err(Error::into_file_error);
+    Some(compiled.map(|(executable, ..)| {
+        let main = executable
+            .items()
+            .find(|item| {
+                let key = item.key();
+                item.kind() == crate::item::Kind::Function
+                    && key.package() == executable.package()
+                    && key.modules().is_empty()
+                    && key.name() == "main"
+            })
+            .map(|item| resolve::lower_nominal::private_function_name(item.key()));
+        let (mut ast, positions) = executable.into_ast_with_every_position();
+        #[cfg(not(feature = "no_function"))]
+        if let Some(main) = main {
+            ast.alias_script_function(&main, "main");
+        }
+        #[cfg(feature = "no_function")]
+        drop(main);
+        (ast, positions)
+    }))
+}
+
 pub(crate) fn descriptor(
     engine: &Engine,
     target: &project::Target,
@@ -60,7 +112,16 @@ pub(crate) fn catalog(
     target: &project::Target,
     session: Option<&timing::Session>,
 ) -> Result<crate::preview::Catalog, Error> {
-    let (executable, sources, _, _) = executable_with_evidence(engine, target, session, false)?;
+    catalog_from_graph(engine, load(engine, target, session)?, session)
+}
+
+/// [`catalog`] of a graph already loaded.
+pub(crate) fn catalog_from_graph(
+    engine: &Engine,
+    graph: Graph,
+    session: Option<&timing::Session>,
+) -> Result<crate::preview::Catalog, Error> {
+    let (executable, sources, _, _) = executable_from_graph(engine, graph, session, false)?;
     timing::observe_optional(session, timing::Phase::ApplicationContract, || {
         crate::preview::Catalog::from_package_executable(executable)
     })

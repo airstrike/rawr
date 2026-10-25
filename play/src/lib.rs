@@ -44,9 +44,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-pub use motion::{Gif, Image, Picture};
+pub use motion::{Action, Gif, Image, Picture};
 pub use plain::Output;
 use rawr_iced::snapshot::Deadline;
+pub use rawr_iced::snapshot::Step;
 
 /// Set to stop an animation's recording before its next frame. The
 /// `rawr-play` binary sets it on `SIGUSR1`, which the bot sends when
@@ -223,7 +224,7 @@ pub struct Options {
     /// Clicks on a full app after its messages, in order: each the index
     /// of a target in the reading order of the view as it then is (see
     /// [`Image::actions`]).
-    pub steps: Vec<usize>,
+    pub steps: Vec<Step>,
     /// Per-render limits.
     pub limits: Limits,
     /// Render the last frame as a still image, never an animation.
@@ -455,15 +456,19 @@ fn still(source: &str, options: &Options) -> Result<Image, PlayError> {
         let sandbox = sandbox(&options.limits, Deadline::new(deadline));
         let compiler = rawr_iced::preview::Compiler::configured(sandbox)
             .map_err(|error| PlayError::Render(error.to_string()))?;
-        let checked = compiler
-            .check_named_source(SOURCE_NAME, &program)
-            .map_err(|error| {
-                PlayError::Compile(report(
-                    &error.report(diagnostic(&program)),
-                    &program,
-                    source,
-                ))
-            })?;
+        // An inline `mod` needs the crate compiler, as in `application`.
+        let checked = if has_top_level_mod(&program) {
+            compiler.check_named_crate_source(SOURCE_NAME, &program)
+        } else {
+            compiler.check_named_source(SOURCE_NAME, &program)
+        };
+        let checked = checked.map_err(|error| {
+            PlayError::Compile(report(
+                &error.report(diagnostic(&program)),
+                &program,
+                source,
+            ))
+        })?;
         checked
             .render_png_with(canvas)
             .map_err(|error| classify(&error.to_string(), &options.limits))
@@ -532,11 +537,7 @@ fn render_application(
     Ok(Image {
         picture: Picture::Still(motion::png(last)?),
         note: None,
-        actions: recording
-            .targets
-            .into_iter()
-            .map(|target| target.label)
-            .collect(),
+        actions: recording.targets.into_iter().map(Action::from).collect(),
         clicked: recording.clicked,
     })
 }
@@ -1612,15 +1613,29 @@ impl App {
         super::animate(source, options).unwrap_or_else(|error| panic!("{error}"))
     }
 
+    /// The labels of `image`'s targets.
+    fn labels(image: &super::Image) -> Vec<&str> {
+        image
+            .actions
+            .iter()
+            .map(|action| action.label.as_str())
+            .collect()
+    }
+
+    /// Clicks on targets `targets`, in order.
+    fn clicks(targets: &[usize]) -> Vec<super::Step> {
+        targets.iter().copied().map(super::Step::click).collect()
+    }
+
     #[test]
     fn clicks_on_the_counter_match_its_messages() {
         let source = include_str!("../tests/fixtures/counter.rs");
         let steps = Options {
-            steps: vec![0, 0, 1],
+            steps: clicks(&[0, 0, 1]),
             ..Options::default()
         };
         let image = clicked(source, &steps);
-        assert_eq!(image.actions, ["Increment", "Decrement"]);
+        assert_eq!(labels(&image), ["Increment", "Decrement"]);
         assert_eq!(image.clicked, ["Increment", "Increment", "Decrement"]);
         // Only the last click's frames are recorded, and it settles at once.
         let super::Picture::Still(png) = image.picture else {
@@ -1680,13 +1695,13 @@ impl State {
 "#;
         let image = clicked(source, &Options::default());
         assert_eq!(
-            image.actions,
+            labels(&image),
             ["+ (1)", "-", "+ (2)", "Reset"],
             "Off is disabled"
         );
         // The second `+` adds 10; the first then adds 1.
         let steps = |steps: Vec<usize>| Options {
-            steps,
+            steps: clicks(&steps),
             still: true,
             ..Options::default()
         };
@@ -1711,6 +1726,242 @@ impl State {
         );
         let plain = render("column![text(\"hi\")]", &steps(vec![0])).unwrap_err();
         assert!(plain.text().contains("need a full app"), "{plain}");
+    }
+
+    #[test]
+    fn togglers_radios_and_checkboxes_are_targets_by_their_labels() {
+        let source = r#"
+use iced::widget::{Widget, checkbox, column, radio, row, toggler};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Size { Small, Large }
+
+#[derive(Default)]
+struct State { dark: bool, size: Option<Size>, done: bool, bare: bool }
+
+#[derive(Debug, Clone, Copy)]
+enum Message { Dark(bool), Size(Size), Done(bool), Bare(bool) }
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Dark(on) => self.dark = on,
+            Message::Size(size) => self.size = Some(size),
+            Message::Done(on) => self.done = on,
+            Message::Bare(on) => self.bare = on,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            toggler(self.dark).label("Dark mode").on_toggle(Message::Dark),
+            toggler(self.dark).label("Locked"),
+            row![
+                radio("Small", Size::Small, self.size, Message::Size),
+                radio("Large", Size::Large, self.size, Message::Size),
+            ]
+            .spacing(20),
+            checkbox(self.done).label("Done").on_toggle(Message::Done),
+            checkbox(self.bare).on_toggle(Message::Bare),
+        ]
+        .spacing(12)
+    }
+}
+"#;
+        let image = clicked(source, &Options::default());
+        assert_eq!(
+            labels(&image),
+            ["Dark mode", "Small", "Large", "Done", "#5"],
+            "a disabled toggler is no target, a bare checkbox is numbered"
+        );
+        let steps = |steps: Vec<usize>| Options {
+            steps: clicks(&steps),
+            still: true,
+            ..Options::default()
+        };
+        let messages = |messages: &[&str]| Options {
+            messages: messages.iter().map(|m| (*m).to_owned()).collect(),
+            still: true,
+            ..Options::default()
+        };
+        let png = |options: &Options| render(source, options).unwrap().bytes;
+        assert!(
+            png(&steps(vec![0, 2, 4]))
+                == png(&messages(&[
+                    "Message::Dark(true)",
+                    "Message::Size(Size::Large)",
+                    "Message::Bare(true)",
+                ])),
+            "a click toggles a toggler, picks a radio and checks a checkbox"
+        );
+        let image = clicked(source, &steps(vec![0, 0, 1]));
+        assert_eq!(image.clicked, ["Dark mode", "Dark mode", "Small"]);
+    }
+
+    #[test]
+    fn a_slider_steps_down_and_up_by_its_keys() {
+        let source = r#"
+use iced::widget::{Widget, column, slider, text};
+
+struct State { value: i64 }
+
+impl Default for State {
+    fn default() -> Self { State { value: 5 } }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message { Changed(i64) }
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Changed(value) => self.value = value,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![text(self.value), slider(0..=10, self.value, Message::Changed)]
+            .spacing(12)
+            .width(200)
+    }
+}
+"#;
+        let image = clicked(source, &Options::default());
+        assert_eq!(labels(&image), ["Slider −", "Slider +"]);
+        let still = |options: Options| Options {
+            still: true,
+            ..options
+        };
+        let png = |options: &Options| render(source, options).unwrap().bytes;
+        assert!(
+            png(&still(Options {
+                steps: clicks(&[1, 1, 0]),
+                ..Options::default()
+            })) == png(&still(Options {
+                messages: vec!["Message::Changed(6)".into()],
+                ..Options::default()
+            })),
+            "up, up and down from 5 is 6"
+        );
+        let image = clicked(
+            source,
+            &Options {
+                steps: clicks(&[0; 6]),
+                ..Options::default()
+            },
+        );
+        assert_eq!(image.clicked.len(), 6);
+        assert!(
+            png(&still(Options {
+                steps: clicks(&[0; 6]),
+                ..Options::default()
+            })) == png(&still(Options {
+                messages: vec!["Message::Changed(0)".into()],
+                ..Options::default()
+            })),
+            "a slider stops at its start"
+        );
+    }
+
+    #[test]
+    fn a_step_types_into_a_text_input_and_submits() {
+        let source = r#"
+use iced::widget::{Widget, button, column, text, text_input};
+
+#[derive(Default)]
+struct State { name: String, sent: Vec<String>, secret: String }
+
+#[derive(Debug, Clone)]
+enum Message { Name(String), Send, Secret(String), Clear }
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Name(name) => self.name = name,
+            Message::Send => self.sent.push(self.name.clone()),
+            Message::Secret(secret) => self.secret = secret,
+            Message::Clear => self.name.clear(),
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            text_input("Name", &self.name)
+                .on_input(Message::Name)
+                .on_submit(Message::Send),
+            text_input("Password", &self.secret)
+                .on_input(Message::Secret)
+                .secure(true),
+            text_input("Locked", ""),
+            button("Clear").on_press(Message::Clear),
+            text(self.sent.join(", ")),
+        ]
+        .spacing(8)
+        .width(240)
+    }
+}
+"#;
+        let image = clicked(source, &Options::default());
+        let inputs: Vec<(&str, bool)> = image
+            .actions
+            .iter()
+            .map(|action| (action.label.as_str(), action.input))
+            .collect();
+        assert_eq!(
+            inputs,
+            [("Name", true), ("Password", true), ("Clear", false)],
+            "a disabled input is no target"
+        );
+        let still = |steps: Vec<super::Step>| Options {
+            steps,
+            still: true,
+            ..Options::default()
+        };
+        // The messages, then a click that focuses the input, as typing
+        // leaves it.
+        let messages = |messages: &[&str]| Options {
+            messages: messages.iter().map(|m| (*m).to_owned()).collect(),
+            steps: clicks(&[0]),
+            still: true,
+            ..Options::default()
+        };
+        let png = |options: &Options| render(source, options).unwrap().bytes;
+        let typed = |target, text: &str| super::Step::typed(target, text);
+        assert!(
+            png(&still(vec![typed(0, "Ada")]))
+                == png(&messages(&[
+                    "Message::Name(\"Ada\".to_string())",
+                    "Message::Send"
+                ])),
+            "the text is typed, then ⏎ submits it"
+        );
+        assert!(
+            png(&still(vec![typed(0, "Ada"), typed(0, "Bo")]))
+                == png(&messages(&[
+                    "Message::Name(\"Ada\".to_string())",
+                    "Message::Send",
+                    "Message::Name(\"Bo\".to_string())",
+                    "Message::Send"
+                ])),
+            "a second text replaces the first"
+        );
+        let image = clicked(source, &still(vec![typed(1, "hunter2"), typed(0, "Ada")]));
+        assert_eq!(
+            image.clicked,
+            ["Password: \"•••••••\"", "Name: \"Ada\""],
+            "a secure input's text is hidden"
+        );
+        assert_eq!(
+            image.actions[1].label, "Password",
+            "a label is the placeholder, never the value"
+        );
+        let error = render(source, &still(vec![typed(2, "x")])).unwrap_err();
+        assert!(
+            error
+                .text()
+                .contains("step 1 types text into target 2, but that target is not a text input"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1832,6 +2083,47 @@ impl State {
         ));
         assert!(is_png(&with_module.bytes));
         assert_eq!(with_module.bytes, inline.bytes);
+    }
+
+    /// A plain program, a preview and an `async fn main` with inline
+    /// modules run as the same program without them does. rustc prints
+    /// `6 2.25` for the plain one.
+    #[test]
+    fn plain_preview_and_async_snippets_take_inline_modules() {
+        let plain = text(
+            "mod geometry {\n    pub(crate) fn area(w: f64, h: f64) -> f64 {\n        w * h\n    }\n\n    \
+             pub mod shapes {\n        pub struct Square(pub f64);\n\n        impl Square {\n            \
+             pub fn area(&self) -> f64 {\n                super::area(self.0, self.0)\n            }\n        \
+             }\n    }\n}\n\nuse geometry::shapes::Square;\n\nfn main() {\n    let a = geometry::area(2.0, 3.0);\n    \
+             println!(\"{a} {}\", Square(1.5).area());\n}\n",
+        );
+        assert_eq!(plain.text(), "6 2.25\n");
+        assert_eq!(plain.status, 0);
+        // A file module is still refused: a snippet has no other file.
+        let refused = super::run("mod util;\nfn main() {}\n", &Options::default()).unwrap_err();
+        assert!(
+            matches!(&refused, PlayError::Compile(text) if text.contains("file modules require")),
+            "{refused:?}"
+        );
+
+        let with_module = image(
+            "use iced::widget::text;\nmod labels {\n    pub fn title() -> String {\n        \
+             String::from(\"hi\")\n    }\n}\n\nfn view() -> impl iced::widget::Widget<()> {\n    \
+             text(labels::title())\n}\n",
+        );
+        let without = image(
+            "use iced::widget::text;\n\nfn view() -> impl iced::widget::Widget<()> {\n    \
+             text(String::from(\"hi\"))\n}\n",
+        );
+        assert!(is_png(&with_module.bytes));
+        assert_eq!(with_module.bytes, without.bytes);
+
+        let tasks = text(
+            "mod clock {\n    pub fn label(n: u64) -> String {\n        format!(\"tick {n}\")\n    }\n}\n\n\
+             #[tokio::main]\nasync fn main() {\n    tokio::time::sleep(std::time::Duration::from_millis(10)).await;\n    \
+             println!(\"{}\", clock::label(3));\n}\n",
+        );
+        assert_eq!(tasks.text(), "tick 3\n");
     }
 
     #[test]

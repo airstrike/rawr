@@ -232,9 +232,9 @@ impl Graph {
         builder.load(target)
     }
 
-    /// Parse one runner-owned immutable snapshot through the package graph loader.
+    /// Parse one immutable in-memory snapshot through the package graph
+    /// loader: a runner's, or one file whose inline modules make a crate.
     #[doc(hidden)]
-    #[cfg(feature = "rust-import")]
     pub fn load_snapshot(
         engine: &Engine,
         snapshot: &super::snapshot::Snapshot,
@@ -378,7 +378,6 @@ fn file_root(source: &Path, exists: impl Fn(&Path) -> bool) -> PathBuf {
 struct Builder<'a> {
     engine: &'a Engine,
     cells: Option<&'a super::Cells>,
-    #[cfg(feature = "rust-import")]
     snapshot: Option<&'a super::snapshot::Snapshot>,
     evidence: Vec<diagnostic::Source>,
     sources: Vec<source::Source>,
@@ -398,7 +397,6 @@ impl<'a> Builder<'a> {
         Self {
             engine,
             cells: None,
-            #[cfg(feature = "rust-import")]
             snapshot: None,
             evidence: Vec::new(),
             sources: Vec::new(),
@@ -409,7 +407,6 @@ impl<'a> Builder<'a> {
         }
     }
 
-    #[cfg(feature = "rust-import")]
     fn from_snapshot(engine: &'a Engine, snapshot: &'a super::snapshot::Snapshot) -> Self {
         let mut builder = Self::new(engine);
         builder.snapshot = Some(snapshot);
@@ -438,7 +435,6 @@ impl<'a> Builder<'a> {
         })
     }
 
-    #[cfg(feature = "rust-import")]
     fn load_snapshot(mut self) -> Result<Graph, Error> {
         let snapshot = self
             .snapshot
@@ -1057,10 +1053,7 @@ impl<'a> Builder<'a> {
         };
         let source = diagnostic::Source::new(path.to_string_lossy().into_owned(), text.clone())
             .map_err(Error::diagnostic)?;
-        #[cfg(feature = "rust-import")]
         let ask_cargo = self.snapshot.is_none();
-        #[cfg(not(feature = "rust-import"))]
-        let ask_cargo = true;
         match manifest::cargo::Cargo::parse(path, text, root, ask_cargo) {
             Ok(cargo) => Ok(cargo.map(|cargo| (cargo, source))),
             Err(error) => {
@@ -1103,7 +1096,6 @@ impl<'a> Builder<'a> {
     }
 
     fn is_file(&self, path: &Path) -> bool {
-        #[cfg(feature = "rust-import")]
         if let Some(snapshot) = self.snapshot {
             return snapshot.read(path).is_some();
         }
@@ -1112,7 +1104,6 @@ impl<'a> Builder<'a> {
 
     fn canonical_directory(&self, path: PathBuf) -> Result<PathBuf, Error> {
         let primary = None;
-        #[cfg(feature = "rust-import")]
         if let Some(snapshot) = self.snapshot {
             let canonical = super::snapshot::normalize(path.clone()).map_err(|_| {
                 self.input_error(
@@ -1167,7 +1158,6 @@ impl<'a> Builder<'a> {
         root: &Path,
         primary: Option<error::Label>,
     ) -> Result<PathBuf, Error> {
-        #[cfg(feature = "rust-import")]
         if let Some(snapshot) = self.snapshot {
             let canonical = super::snapshot::normalize(path.clone()).map_err(|_| {
                 self.input_error(
@@ -1221,7 +1211,6 @@ impl<'a> Builder<'a> {
     }
 
     fn read_to_string(&self, path: &Path) -> io::Result<String> {
-        #[cfg(feature = "rust-import")]
         if let Some(snapshot) = self.snapshot {
             return snapshot
                 .read(path)
@@ -1231,7 +1220,6 @@ impl<'a> Builder<'a> {
         fs::read_to_string(path)
     }
 
-    #[cfg(feature = "rust-import")]
     fn input_error(&self, action: &str, path: PathBuf, kind: io::ErrorKind) -> Error {
         let source = io::Error::new(kind, "path is absent from the immutable Rawr snapshot");
         Error::resource(
