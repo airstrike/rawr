@@ -93,7 +93,7 @@ fn freshness_keeps_its_original_scope_and_rejects_manifest_drift() {
     .unwrap();
     assert!(matches!(
         proof.revalidate(),
-        Err(node::Error::Corrupt { .. })
+        Err(node::Error::SourceChanged(_))
     ));
 }
 
