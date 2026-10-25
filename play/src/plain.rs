@@ -635,7 +635,9 @@ fn has_item(source: &str) -> bool {
     let mut index = 0;
     while index < bytes.len() {
         let byte = bytes[index];
-        if start && !byte.is_ascii_whitespace() {
+        // A comment keeps `start`: the item may follow it.
+        let comment = byte == b'/' && matches!(bytes.get(index + 1), Some(b'/' | b'*'));
+        if start && !byte.is_ascii_whitespace() && !comment {
             start = false;
             let rest = &source[index..];
             item |= ITEMS.iter().any(|word| {
@@ -721,6 +723,8 @@ mod tests {
         assert_eq!(program(items), items);
         let item_later = "let s = \"a;b\";\nfn f() {}";
         assert_eq!(program(item_later), item_later);
+        let commented = "// About it.\n/* More. */ fn main() {}\n";
+        assert_eq!(program(commented), commented);
         assert_eq!(super::quiet_program("1 + 2"), "fn main() { 1 + 2\n; }\n");
     }
 }
