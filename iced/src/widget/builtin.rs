@@ -74,6 +74,9 @@ impl widget::Descriptor for marker::Text {
         if let Some(line_height) = self.line_height {
             text = text.line_height(line_height);
         }
+        if let Some(shaping) = self.shaping {
+            text = text.shaping(shaping);
+        }
         match self.size {
             Some(size) => text.size(size).boxed(),
             None => text.boxed(),
@@ -1162,6 +1165,7 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             color: None,
             font: None,
             line_height: None,
+            shaping: None,
         }))
     }
     builder
@@ -1715,6 +1719,19 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             Ok(Dynamic::from(text))
         })
         .expect("the iced facade must retain the exact Text::font item");
+    builder
+        .bind("iced::widget::Text::shaping", |args| {
+            if args.len() != 2 {
+                return Err(arity("Text::shaping", 2, args.len()));
+            }
+            let mut text = take::<marker::Text>(args[0], "iced::widget::Text")?;
+            text.shaping = Some(take::<iced::widget::text::Shaping>(
+                args[1],
+                "iced::widget::text::Shaping",
+            )?);
+            Ok(Dynamic::from(text))
+        })
+        .expect("the iced facade must retain the exact Text::shaping item");
     builder
         .bind("iced::widget::Text::line_height", |args| {
             if args.len() != 2 {

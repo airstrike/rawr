@@ -209,6 +209,7 @@ pub(crate) struct Text {
     pub(crate) color: Option<iced::Color>,
     pub(crate) font: Option<iced::Font>,
     pub(crate) line_height: Option<f32>,
+    pub(crate) shaping: Option<iced::widget::text::Shaping>,
 }
 
 #[derive(Clone)]

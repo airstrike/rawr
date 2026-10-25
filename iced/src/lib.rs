@@ -1101,6 +1101,10 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             "line_height",
             type_ref::Type::builtin(type_ref::Builtin::F64),
         ),
+        (
+            "shaping",
+            type_ref::Type::registered("widget::text::Shaping")?,
+        ),
     ] {
         builder.item(item::Definition::method(
             format!("widget::Text::{name}"),
@@ -6557,6 +6561,7 @@ mod tests {
                     color: None,
                     font: None,
                     line_height: None,
+                    shaping: None,
                 }))
             })
             .unwrap();
@@ -6854,6 +6859,7 @@ mod tests {
             color: None,
             font: None,
             line_height: None,
+            shaping: None,
         }
     }
 
