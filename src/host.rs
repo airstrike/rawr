@@ -224,6 +224,17 @@ impl Registry {
         self.exported.iter().any(|exported| exported == root)
     }
 
+    /// Where an app exported the Rust type `identity`: its root and path.
+    pub(crate) fn exported_path(&self, identity: std::any::TypeId) -> Option<String> {
+        self.types
+            .iter()
+            .find(|definition| {
+                definition.native_identity() == Some(identity)
+                    && self.is_exported(&definition.path())
+            })
+            .map(type_def::Definition::path)
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn clone_for_import<A: ImportAllocation + ?Sized>(
         &self,

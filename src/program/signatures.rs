@@ -86,9 +86,10 @@ impl Signature {
             && self.output.matches(output, registry)
     }
 
-    /// `fn(f64, i64) -> f64`, as rustc names a function's type.
-    pub(crate) fn display(&self) -> String {
-        let text = function_type(&self.parameters, &self.output);
+    /// `fn(f64, i64) -> f64`, as rustc names a function's type. `full`
+    /// names each exported type by its root and path.
+    pub(crate) fn display(&self, full: bool) -> String {
+        let text = function_type(&self.parameters, &self.output, full);
         match (self.asynchronous, self.generic) {
             (true, _) => format!("async {text}"),
             (false, true) => format!("{text} (generic)"),
@@ -97,16 +98,20 @@ impl Signature {
     }
 }
 
-/// `fn(A, B) -> R`, leaving out `-> ()` as rustc does.
-pub(crate) fn function_type(parameters: &[Ty], output: &Ty) -> String {
-    let parameters = parameters
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
+/// `fn(A, B) -> R`, leaving out `-> ()` as rustc does. `full` names each
+/// exported type by its root and path.
+pub(crate) fn function_type(parameters: &[Ty], output: &Ty, full: bool) -> String {
+    let show = |ty: &Ty| {
+        if full {
+            format!("{ty:#}")
+        } else {
+            ty.to_string()
+        }
+    };
+    let parameters = parameters.iter().map(show).collect::<Vec<_>>().join(", ");
     match output {
         Ty::Unit => format!("fn({parameters})"),
-        output => format!("fn({parameters}) -> {output}"),
+        output => format!("fn({parameters}) -> {}", show(output)),
     }
 }
 
@@ -127,9 +132,12 @@ pub(crate) enum Ty {
     /// `str`, a script's own struct or a generic parameter.
     Named(ImmutableString),
     Option(Box<Ty>),
-    /// An app's exported type, by its path: `bank::Transaction` in a
-    /// script, `Transaction` (relative to its root) in a handle.
-    Host(ImmutableString),
+    /// An app's exported type, by its root and path, `bank::Transaction`,
+    /// and its type arguments.
+    Host {
+        path: ImmutableString,
+        arguments: Box<[Ty]>,
+    },
     Tuple(Box<[Ty]>),
     Reference {
         mutable: bool,
@@ -159,10 +167,13 @@ impl Ty {
                 target: Box::new(Self::from_resolved(target)),
             },
             resolve::type_ref::Type::Path(path) => {
-                let mut arguments = path.arguments.iter().filter_map(|argument| match argument {
-                    resolve::type_ref::Argument::Type(ty) => Some(ty),
-                    resolve::type_ref::Argument::Lifetime(_) => None,
-                });
+                let types = || {
+                    path.arguments.iter().filter_map(|argument| match argument {
+                        resolve::type_ref::Argument::Type(ty) => Some(ty),
+                        resolve::type_ref::Argument::Lifetime(_) => None,
+                    })
+                };
+                let mut arguments = types();
                 match &path.target {
                     resolve::type_ref::Target::Builtin if path.name.as_str() == "Option" => {
                         match (arguments.next(), arguments.next()) {
@@ -172,23 +183,28 @@ impl Ty {
                             _ => Self::Named(path.name.clone()),
                         }
                     }
-                    resolve::type_ref::Target::Host { definition, .. } => {
-                        Self::Host(definition.path().into())
-                    }
+                    resolve::type_ref::Target::Host { definition, .. } => Self::Host {
+                        path: definition.path().into(),
+                        arguments: types().map(Self::from_resolved).collect(),
+                    },
                     _ => Self::Named(path.name.clone()),
                 }
             }
         }
     }
 
-    /// The type a handle declares, from [`Value::ty`](host::export::Value::ty).
+    /// The type a handle declares, from
+    /// [`Value::qualified`](host::export::Value::qualified).
     pub(crate) fn from_host(ty: &host::type_ref::Type) -> Self {
         use host::type_ref::Shape;
         match ty.shape() {
             Shape::Unit => Self::Unit,
             Shape::Option(inner) => Self::Option(Box::new(Self::from_host(inner))),
             Shape::Builtin(builtin) => Self::Named(builtin.name().unwrap_or("range").into()),
-            Shape::Registered { path, .. } => Self::Host(path.to_string().into()),
+            Shape::Registered { path, arguments } => Self::Host {
+                path: path.to_string().into(),
+                arguments: arguments.iter().map(Self::from_host).collect(),
+            },
             Shape::Tuple(members) => Self::Tuple(members.iter().map(Self::from_host).collect()),
             other => Self::Named(format!("{other:?}").into()),
         }
@@ -223,37 +239,75 @@ impl Ty {
                         .zip(expected.iter())
                         .all(|(found, expected)| found.matches(expected, registry))
             }
-            // The handle names an exported type relative to its root.
-            (Self::Host(found), Self::Host(expected)) => {
-                registry.is_exported(found)
-                    && found
-                        .split_once("::")
-                        .is_some_and(|(_, path)| path == expected.as_str())
+            // One export: the same root, path and type arguments.
+            (
+                Self::Host { path, arguments },
+                Self::Host {
+                    path: expected,
+                    arguments: expected_arguments,
+                },
+            ) => {
+                path == expected
+                    && registry.is_exported(path)
+                    && arguments.len() == expected_arguments.len()
+                    && arguments
+                        .iter()
+                        .zip(expected_arguments.iter())
+                        .all(|(found, expected)| found.matches(expected, registry))
             }
             _ => false,
         }
     }
 }
 
-impl fmt::Display for Ty {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Ty {
+    /// Rustc's name for this type. An exported type prints by its last
+    /// segment, as rustc trims a path whose name is unique, unless `full`.
+    fn write(&self, f: &mut fmt::Formatter<'_>, full: bool) -> fmt::Result {
+        let list = |f: &mut fmt::Formatter<'_>, members: &[Self]| {
+            for (index, member) in members.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(", ")?;
+                }
+                member.write(f, full)?;
+            }
+            Ok(())
+        };
         match self {
             Self::Unit => f.write_str("()"),
             Self::Named(name) => f.write_str(name),
-            Self::Option(inner) => write!(f, "Option<{inner}>"),
-            // As rustc trims a path whose name is unique.
-            Self::Host(path) => f.write_str(path.rsplit("::").next().unwrap_or(path)),
-            Self::Tuple(members) => {
-                let members = members.iter().map(ToString::to_string).collect::<Vec<_>>();
-                if members.len() == 1 {
-                    write!(f, "({},)", members[0])
-                } else {
-                    write!(f, "({})", members.join(", "))
+            Self::Option(inner) => {
+                f.write_str("Option<")?;
+                inner.write(f, full)?;
+                f.write_str(">")
+            }
+            Self::Host { path, arguments } => {
+                f.write_str(match path.rsplit_once("::") {
+                    Some((_, name)) if !full => name,
+                    _ => path,
+                })?;
+                if arguments.is_empty() {
+                    return Ok(());
                 }
+                f.write_str("<")?;
+                list(f, arguments)?;
+                f.write_str(">")
+            }
+            Self::Tuple(members) => {
+                f.write_str("(")?;
+                list(f, members)?;
+                f.write_str(if members.len() == 1 { ",)" } else { ")" })
             }
             Self::Reference { mutable, target } => {
-                write!(f, "&{}{target}", if *mutable { "mut " } else { "" })
+                f.write_str(if *mutable { "&mut " } else { "&" })?;
+                target.write(f, full)
             }
         }
+    }
+}
+
+impl fmt::Display for Ty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.write(f, f.alternate())
     }
 }

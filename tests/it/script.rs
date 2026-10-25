@@ -149,3 +149,32 @@ fn a_reload_that_removes_a_handle_s_function_is_e0425() {
     assert!(error.starts_with("error[E0425]: cannot find function `total` in this script"), "{error}");
     assert_eq!(total.call(coffee(), 0.5).unwrap(), -5.0);
 }
+
+mod ledger {
+    #[derive(Clone)]
+    #[rawr::export]
+    pub struct Transaction {
+        pub amount: f64,
+    }
+}
+
+#[test]
+fn two_roots_types_of_one_name_are_different_types() {
+    let mut bank = Exports::new("bank");
+    bank.add::<Transaction>();
+    let mut ledger = Exports::new("ledger");
+    ledger.add::<ledger::Transaction>();
+    let mut engine = Engine::new();
+    engine.export(bank).unwrap().export(ledger).unwrap();
+    let script = engine.script("fn amount(tx: ledger::Transaction) -> f64 { tx.amount }").unwrap();
+
+    assert_eq!(
+        failure(script.func::<(Transaction,), f64>("amount")),
+        "error[E0308]: mismatched types
+ --> <script>:1:1-1:42
+ 1 | fn amount(tx: ledger::Transaction) -> f64 { tx.amount }
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `fn(bank::Transaction) -> f64`, found `fn(ledger::Transaction) -> f64`"
+    );
+    let amount = script.func::<(ledger::Transaction,), f64>("amount").unwrap();
+    assert_eq!(amount.call(ledger::Transaction { amount: 2.5 }).unwrap(), 2.5);
+}

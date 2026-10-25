@@ -105,6 +105,7 @@ impl<A, R> std::fmt::Debug for Func<A, R> {
         f.write_str(&signatures::function_type(
             &self.want.parameters,
             &self.want.output,
+            false,
         ))
     }
 }
@@ -125,7 +126,7 @@ mod sealed {
 /// [`Value`]s.
 pub trait Parameters: sealed::Sealed {
     #[doc(hidden)]
-    fn types() -> Result<Vec<host::type_ref::Type>, host::Error>;
+    fn types(registry: &host::Registry) -> Result<Vec<host::type_ref::Type>, host::Error>;
 }
 
 macro_rules! arity {
@@ -133,8 +134,10 @@ macro_rules! arity {
         impl<$($ty: Value),*> sealed::Sealed for ($($ty,)*) {}
 
         impl<$($ty: Value),*> Parameters for ($($ty,)*) {
-            fn types() -> Result<Vec<host::type_ref::Type>, host::Error> {
-                Ok(vec![$($ty::ty()?),*])
+            // `()` names no types, so it doesn't read the registry.
+            #[allow(unused_variables)]
+            fn types(registry: &host::Registry) -> Result<Vec<host::type_ref::Type>, host::Error> {
+                Ok(vec![$($ty::qualified(registry)?),*])
             }
         }
 
@@ -285,12 +288,13 @@ impl Script {
         let invalid = |error: host::Error| -> Box<EvalAltResult> {
             ERR::ErrorRuntime(error.to_string().into(), Position::NONE).into()
         };
-        let parameters = A::types()
+        let registry = &self.inner.engine.host_registry;
+        let parameters = A::types(registry)
             .map_err(invalid)?
             .iter()
             .map(Ty::from_host)
             .collect();
-        let output = Ty::from_host(&R::ty().map_err(invalid)?);
+        let output = Ty::from_host(&R::qualified(registry).map_err(invalid)?);
 
         let mut wants = locked_write(&self.inner.wants).ok_or_else(busy)?;
         let want = Shared::new(Want {
@@ -392,7 +396,7 @@ fn check(
     program: &Program,
     want: &Want,
 ) -> Result<Shared<ScriptFuncDef>, Box<EvalAltResult>> {
-    let expected = signatures::function_type(&want.parameters, &want.output);
+    let expected = signatures::function_type(&want.parameters, &want.output, false);
     let Some(signature) = program.signatures.get(&want.name) else {
         let report = Report::error(
             code::SCRIPT_NO_FUNCTION,
@@ -412,7 +416,14 @@ fn check(
         ));
     };
     if !signature.accepts(&want.parameters, &want.output, &engine.host_registry) {
-        let found = signature.display();
+        let (expected, found) = match signature.display(false) {
+            // Two exports of one name: name each by its root, as rustc does.
+            found if found == expected => (
+                signatures::function_type(&want.parameters, &want.output, true),
+                signature.display(true),
+            ),
+            found => (expected, found),
+        };
         let label = format!("expected `{expected}`, found `{found}`");
         let report = Report::error(code::SCRIPT_SIGNATURE, "mismatched types").primary(
             program.source.clone(),
@@ -484,7 +495,7 @@ mod tests {
         );
         let current = script.inner.generation().unwrap();
         let table = &current.program.signatures;
-        let shown = |name: &str| table.get(name).map(super::signatures::Signature::display);
+        let shown = |name: &str| table.get(name).map(|signature| signature.display(false));
         assert_eq!(shown("price").as_deref(), Some("fn(f64, i64) -> f64"));
         assert_eq!(shown("greet").as_deref(), Some("fn(&str)"));
         assert_eq!(
