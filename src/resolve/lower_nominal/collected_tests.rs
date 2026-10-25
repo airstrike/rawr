@@ -995,3 +995,72 @@ fn an_imported_type_compares_and_keys_a_map_by_the_traits_its_crate_implements()
         .unwrap_err();
     assert!(error.to_string().contains("Hash + Eq"), "{error}");
 }
+
+#[test]
+fn an_imported_type_s_to_string_is_a_function_value_through_its_display() {
+    let preset = host::type_def::import::Identity::new([0x73; 32]);
+    let mut builder = facade::Builder::new("life", facade::Abi::new(1).unwrap()).unwrap();
+    let mut allocation = host::TestImportAllocation::default();
+    builder
+        .imported_type(
+            "Preset",
+            preset,
+            &[crate::capability::Kind::Copy],
+            Box::default(),
+            Box::default(),
+            Shared::new(host::type_def::Shape::Opaque),
+            &mut allocation,
+        )
+        .unwrap();
+    let mut make = signature::Builder::new();
+    make.output(type_ref::Type::imported(preset, []));
+    builder
+        .item(
+            item::Definition::function("preset", make.finish())
+                .unwrap()
+                .imported(selector(5)),
+        )
+        .unwrap();
+    let mut engine = Engine::new();
+    engine
+        .register_host_facade(builder.finish().unwrap())
+        .unwrap();
+    // As game_of_life hands it to `pick_list`, and by its full path.
+    engine
+        .compile_executable(
+            "use life::{preset, Preset};
+             fn names(f: impl Fn(&Preset) -> String) -> String { f(&preset()) }
+             pub fn run() -> Vec<String> {
+                 vec![names(Preset::to_string), names(life::Preset::to_string)]
+             }",
+        )
+        .unwrap();
+    // Any other member is still the type's own, which it lacks.
+    let error = engine
+        .compile_executable(
+            "use life::Preset;
+             pub fn run() { let f = Preset::to_strin; }",
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("to_strin"), "{error}");
+}
+
+/// A trait the program names becomes a module of the imported crate's
+/// facade, unless a re-export already names that path: iced's
+/// `widget::Component` stays the facade trait it re-exports.
+#[test]
+fn an_imported_trait_module_leaves_a_re_export_its_path() {
+    let mut allocation = host::TestImportAllocation::default();
+    let mut builder =
+        facade::Builder::new_imported("ui", facade::Abi::new(1).unwrap(), &mut allocation).unwrap();
+    builder
+        .alias("widget::Component", "widget::component::Component")
+        .unwrap();
+    let Err(error) = builder.imported_module("widget::Component", &mut allocation) else {
+        panic!("a re-export's path is taken");
+    };
+    assert!(error.to_string().contains("re-export"), "{error}");
+    builder
+        .imported_module("widget::Other", &mut allocation)
+        .unwrap();
+}

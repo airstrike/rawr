@@ -329,6 +329,7 @@ pub(crate) struct PickList {
     pub(crate) width: Option<iced::Length>,
     pub(crate) padding: Option<iced::Padding>,
     pub(crate) text_size: Option<f32>,
+    pub(crate) ellipsis: Option<iced::widget::text::Ellipsis>,
 }
 
 /// iced's `combo_box::State<T>`: the script's options and the `to_string`
@@ -529,6 +530,17 @@ pub(crate) struct Pin {
     pub(crate) identity: widget::Identity,
     pub(crate) child: widget::Value,
     pub(crate) position: iced::Point,
+    pub(crate) width: iced::Length,
+    pub(crate) height: iced::Length,
+}
+
+/// iced's `responsive(view)`: content its view makes from the size it gets.
+#[derive(Clone)]
+pub(crate) struct Responsive {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    /// A Rawr `Fn(Size) -> Element`.
+    pub(crate) view: rawr::item::Value,
     pub(crate) width: iced::Length,
     pub(crate) height: iced::Length,
 }

@@ -2641,3 +2641,266 @@ fn master_container_style_from_a_linear_gradient() {
     find(&adapter, "gradient box");
     find(&adapter, "by degrees");
 }
+
+/// iced's `PartialOrd<f32>` and `PartialEq<f32>` for its angles, and their
+/// derived `PartialOrd`, as clock compares `rotation < 180.0`.
+const ANGLE_COMPARISONS: &str = r#"
+use iced::widget::text;
+use iced::{Degrees, Radians, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+fn rotation(n: u32) -> Degrees {
+    Degrees(360.0 * n as f32 / 60.0)
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let rotation = rotation(15);
+        let factor = if rotation < 180.0 { 1.0 } else { -1.0 };
+        let limit: f32 = 90.0;
+        // `factor` stays a `{float}` through `Degrees(..)`, so it can be
+        // the `f32` it multiplies next, as in clock.
+        let turned = Degrees(-90.0 * factor);
+        let x: f32 = limit * factor;
+        text(format!(
+            "angles {} {} {} {} {} {} {} {} {} {}",
+            factor,
+            turned.0,
+            x,
+            rotation >= limit,
+            rotation > 90.0,
+            rotation <= Degrees(90.0),
+            rotation == 90.0,
+            rotation != 90.0,
+            Radians(1.0) < Radians::PI,
+            Radians::PI > 4.0,
+        ))
+    }
+}
+"#;
+
+/// iced's `step(impl Into<T>)` on a slider over an angle, from a number as
+/// gradient writes it, or from the angle itself.
+const ANGLE_STEP: &str = r#"
+use iced::widget::{column, slider, text};
+use iced::{Degrees, Radians, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+struct State {
+    angle: Radians,
+    degrees: Degrees,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        State { angle: Radians(0.5), degrees: Degrees(90.0) }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    AngleChanged(Radians),
+    DegreesChanged(Degrees),
+}
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::AngleChanged(angle) => self.angle = angle,
+            Message::DegreesChanged(degrees) => self.degrees = degrees,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            slider(Radians::RANGE, self.angle, Message::AngleChanged).step(0.01),
+            slider(Radians::RANGE, self.angle, Message::AngleChanged)
+                .step(Radians(0.1))
+                .default(1.5),
+            slider(Degrees::RANGE, self.degrees, Message::DegreesChanged).shift_step(15.0),
+            slider(0.0..=1.0, 0.5, |_| Message::AngleChanged(Radians(0.0))).step(0.01),
+            text("stepped"),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_angle_sliders_step_by_a_number() {
+    let adapter = boot(ANGLE_STEP);
+    find(&adapter, "stepped");
+    // An integer slider takes no fractional step, as `impl Into<i32>` of an
+    // `f64` does not exist.
+    let error = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check_source(ANGLE_STEP.replace(
+            "slider(0.0..=1.0, 0.5, |_| Message::AngleChanged(Radians(0.0))).step(0.01)",
+            "slider(0..=10, 5, |_: i32| Message::AngleChanged(Radians(0.0))).step(0.5)",
+        ))
+        .err()
+        .expect("an integer slider's step of 0.5 is rejected");
+    assert!(error.to_string().contains("{float}"), "{error}");
+}
+
+/// `responsive(..)` is iced's `Responsive`, with its own `width` and
+/// `height`, as layout writes it.
+const RESPONSIVE: &str = r#"
+use iced::widget::{column, container, responsive, text};
+use iced::{Shrink, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            responsive(|size| container(text(format!("wide {}", size.width > 0.0))).width(size.width / 4.0))
+                .width(Shrink)
+                .height(Shrink),
+            responsive(|_size| text("fills")).height(200),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_responsive_takes_a_width_and_a_height() {
+    let adapter = boot(RESPONSIVE);
+    find(&adapter, "fills");
+}
+
+/// An application's `style`, `transparent` and the `theme::Style` its style
+/// function returns, as gradient writes them.
+const APPLICATION_STYLE: &str = r#"
+use iced::theme;
+use iced::widget::text;
+use iced::{Color, Theme, Widget};
+
+pub fn main() -> iced::Result {
+    iced::application(State::default, State::update, State::view)
+        .style(State::style)
+        .transparent(true)
+        .run()
+}
+
+#[derive(Default)]
+struct State {
+    transparent: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let light = theme::default(&Theme::Light);
+        let style = self.style(&Theme::Dark);
+        text(format!(
+            "styled {} {} {}",
+            light.background_color == Color::WHITE,
+            style.text_color == Theme::Dark.seed().text,
+            style.background_color.a,
+        ))
+    }
+
+    fn style(&self, theme: &Theme) -> theme::Style {
+        if !self.transparent {
+            theme::Style {
+                background_color: Color::TRANSPARENT,
+                text_color: theme.seed().text,
+            }
+        } else {
+            theme::default(theme)
+        }
+    }
+}
+"#;
+
+#[test]
+fn master_application_style_returns_a_theme_style() {
+    let adapter = boot(APPLICATION_STYLE);
+    find(&adapter, "styled true true 0");
+    // iced's `theme::Style` is not `Default`.
+    let error = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check_source(
+            APPLICATION_STYLE.replace("theme::default(theme)\n", "theme::Style::default()\n"),
+        )
+        .err()
+        .expect("`theme::Style::default()` is rejected");
+    assert!(error.to_string().contains("Default"), "{error}");
+}
+
+#[test]
+fn master_angles_compare_with_numbers_and_each_other() {
+    let adapter = boot(ANGLE_COMPARISONS);
+    find(
+        &adapter,
+        "angles 1 -90 90 true false true true false true false",
+    );
+}
+
+/// `PickList::ellipsis` with a `text::Ellipsis` (game_of_life),
+/// `Container::new` (gradient) and `Size::ratio` (layout).
+const ELLIPSIS_CONTAINER_RATIO: &str = r#"
+use iced::widget::{column, pick_list, text};
+use iced::{Size, Widget};
+
+pub fn main() -> iced::Result {
+    iced::run(State::update, State::view)
+}
+
+#[derive(Default)]
+struct State;
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Picked(u32),
+}
+
+impl State {
+    fn update(&mut self, _message: Message) {}
+
+    fn view(&self) -> impl Widget<Message> {
+        let size = Size::new(1600.0, 300.0).ratio(16.0 / 9.0);
+        column![
+            pick_list(Some(1), [1, 2, 3], u32::to_string)
+                .on_select(Message::Picked)
+                .ellipsis(text::Ellipsis::Middle),
+            iced::widget::Container::new(text(format!("{:.0}x{:.0}", size.width, size.height)))
+                .padding(8),
+        ]
+    }
+}
+"#;
+
+#[test]
+fn master_pick_list_ellipsis_container_new_and_size_ratio() {
+    let adapter = boot(ELLIPSIS_CONTAINER_RATIO);
+    find(&adapter, "533x300");
+}

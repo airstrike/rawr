@@ -124,6 +124,7 @@ fn register_debug() {
     register::<iced::widget::checkbox::Icon>();
     register::<iced::widget::text::LineHeight>();
     register::<iced::widget::text::Shaping>();
+    register::<iced::widget::text::Ellipsis>();
     #[cfg(feature = "image")]
     register::<iced::widget::image::FilterMethod>();
     #[cfg(feature = "image")]
@@ -262,6 +263,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         ],
     )?;
     builder.value_type::<iced::theme::Palette>("theme::Palette", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::theme::Style>("theme::Style", &[], OWNED_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::theme::palette::Background>(
         "theme::palette::Background",
         &[],
@@ -605,6 +607,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         &[],
         OWNED_EQ_VALUE_CAPABILITIES,
     )?;
+    builder.value_type::<iced::widget::text::Ellipsis>(
+        "widget::text::Ellipsis",
+        &[],
+        OWNED_EQ_VALUE_CAPABILITIES,
+    )?;
     builder.value_type::<iced::widget::text::LineHeight>(
         "widget::text::LineHeight",
         &[],
@@ -654,6 +661,8 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.project("widget::text::Rich", "Element", &["Message"])?;
     builder.type_::<marker::Pin>("widget::Pin", &["Message"], &[])?;
     builder.project("widget::Pin", "Element", &["Message"])?;
+    builder.type_::<marker::Responsive>("widget::Responsive", &["Message"], &[])?;
+    builder.project("widget::Responsive", "Element", &["Message"])?;
     builder.type_::<marker::Float>("widget::Float", &["Message"], &[])?;
     builder.project("widget::Float", "Element", &["Message"])?;
     builder.type_::<marker::MouseArea>("widget::MouseArea", &["Message"], &[])?;
@@ -912,6 +921,10 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     )?)?;
     builder.item(item::Definition::function(
         "widget::container",
+        container_signature()?,
+    )?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::Container::new",
         container_signature()?,
     )?)?;
     // iced's `center`, `center_x` and `center_y`: a container filling the
@@ -2772,6 +2785,17 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
             }
         }
     }
+    // `size.ratio(16.0 / 9.0)`: the largest size of that aspect ratio
+    // inside it.
+    let mut ratio = signature::Builder::new();
+    ratio
+        .parameter(type_ref::Type::builtin(type_ref::Builtin::F64))
+        .output(type_ref::Type::registered("Size")?);
+    builder.item(item::Definition::method(
+        "Size::ratio",
+        receiver::Mode::Owned,
+        ratio.finish(),
+    )?)?;
     builder.item(item::Definition::intrinsic_macro(
         "color",
         repeated_builtin_signature(type_ref::Builtin::I64, 1, "Color")?,
@@ -2845,11 +2869,15 @@ fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
         type_ref::Type::registered("Size")?,
         element("Message")?,
     ));
-    responsive.output(element("Message")?);
+    responsive.output(type_ref::Type::applied(
+        "widget::Responsive",
+        [type_ref::Type::parameter("Message")?],
+    )?);
     builder.item(item::Definition::function(
         "widget::responsive",
         responsive.finish(),
     )?)?;
+    length_builders(builder, "widget::Responsive", &["width", "height"])?;
 
     builder.item(item::Definition::function(
         "widget::pin",
@@ -4764,11 +4792,41 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
             operator.finish(),
         )?)?;
     }
+    // `angle < 180.0` and `angle == 0.0`: iced's derived `PartialOrd` and
+    // its `PartialEq<f32>` and `PartialOrd<f32>`, the methods `<` and `==`
+    // call on a library type.
+    for (owner, angle) in [("Degrees", degrees()?), ("Radians", radians()?)] {
+        for name in ANGLE_COMPARISONS {
+            let inputs = if name == "eq" {
+                vec![f64()]
+            } else {
+                vec![angle.clone(), f64()]
+            };
+            for input in inputs {
+                let mut comparison = signature::Builder::new();
+                comparison
+                    .parameter(input)
+                    .output(type_ref::Type::builtin(type_ref::Builtin::Bool));
+                builder.item(item::Definition::method(
+                    format!("{owner}::{name}"),
+                    receiver::Mode::Owned,
+                    comparison.finish(),
+                )?)?;
+            }
+        }
+    }
     Ok(())
 }
 
+/// The comparisons of an angle, by `PartialOrd`'s and `PartialEq`'s method
+/// names.
+pub(crate) const ANGLE_COMPARISONS: [&str; 5] = ["lt", "le", "gt", "ge", "eq"];
+
 /// iced's `text::Shaping` variants.
 pub(crate) const TEXT_SHAPINGS: [&str; 3] = ["Auto", "Basic", "Advanced"];
+
+/// iced's `text::Ellipsis` variants, which `PickList::ellipsis` takes.
+pub(crate) const TEXT_ELLIPSES: [&str; 4] = ["None", "Start", "Middle", "End"];
 
 /// The fields of iced's `checkbox::Icon` and their types.
 pub(crate) const CHECKBOX_ICON_FIELDS: [(&str, &str); 5] = [
@@ -4783,6 +4841,12 @@ pub(crate) const CHECKBOX_ICON_FIELDS: [(&str, &str); 5] = [
 /// literal starts from `Icon::default()` and sets each field through its
 /// builder. `Checkbox::icon` takes one.
 fn declare_checkbox_icon(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    for name in TEXT_ELLIPSES {
+        builder.item(item::Definition::associated_value(
+            format!("widget::text::Ellipsis::{name}"),
+            type_ref::Type::registered("widget::text::Ellipsis")?,
+        )?)?;
+    }
     for name in TEXT_SHAPINGS {
         builder.item(item::Definition::associated_value(
             format!("widget::text::Shaping::{name}"),
@@ -5204,6 +5268,10 @@ fn pick_list_builders(builder: &mut facade::Builder) -> Result<(), host::Error> 
         ),
         ("width", type_ref::Type::registered("Length")?),
         ("padding", type_ref::Type::registered("Padding")?),
+        (
+            "ellipsis",
+            type_ref::Type::registered("widget::text::Ellipsis")?,
+        ),
     ];
     for name in ["width", "padding", "text_size"] {
         inputs.extend(PIXELS.map(|pixels| (name, type_ref::Type::builtin(pixels))));
@@ -5427,6 +5495,39 @@ fn declare_palette(builder: &mut facade::Builder) -> Result<(), host::Error> {
             setter.finish(),
         )?)?;
     }
+    // iced's `theme::Style { background_color, text_color }`, which
+    // `Application::style` returns, and `theme::default(theme)`. A literal
+    // starts from `Style::default()`, which source cannot call, as iced's
+    // `Style` is not `Default`.
+    let style = || type_ref::Type::registered("theme::Style");
+    builder.item(item::Definition::associated_function(
+        "theme::Style::default",
+        output_signature("theme::Style")?,
+    )?)?;
+    for field in ["background_color", "text_color"] {
+        let mut setter = signature::Builder::new();
+        setter
+            .parameter(type_ref::Type::registered("Color")?)
+            .output(style()?);
+        builder.item(item::Definition::method(
+            format!("theme::Style::{field}"),
+            receiver::Mode::Owned,
+            setter.finish(),
+        )?)?;
+        builder.item(item::Definition::method(
+            format!("theme::Style::{field}"),
+            receiver::Mode::Shared,
+            output_signature("Color")?,
+        )?)?;
+    }
+    let mut default = signature::Builder::new();
+    default
+        .parameter(type_ref::Type::registered("Theme")?)
+        .output(style()?);
+    builder.item(item::Definition::function(
+        "theme::default",
+        default.finish(),
+    )?)?;
     let mut custom = signature::Builder::new();
     custom
         .parameter(type_ref::Type::builtin(type_ref::Builtin::String))

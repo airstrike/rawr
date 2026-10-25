@@ -1256,6 +1256,16 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Size field");
     }
+    builder
+        .bind("iced::Size::ratio", |args| {
+            let [size, ratio] = args else {
+                return Err(arity("Size::ratio", 2, args.len()));
+            };
+            let size = super::builtin::take::<iced::Size>(size, "iced::Size")?;
+            let ratio = super::builtin::number(ratio, "Size::ratio")? as f32;
+            Ok(Dynamic::from(size.ratio(ratio)))
+        })
+        .expect("the iced facade must retain Size::ratio");
     // `point.x`, read, or set as a place (`offset.x = 2.0`).
     fn coordinate<T: Clone + Send + Sync + 'static>(
         builder: &mut host::runtime::Builder,
@@ -1609,6 +1619,7 @@ fn into_element(view: Dynamic) -> Result<widget::Value, String> {
         ComboBox,
         Stack,
         Pin,
+        Responsive,
         Float,
         MouseArea,
         Rich
@@ -1652,6 +1663,34 @@ impl widget::Descriptor for marker::Pin {
 }
 
 impl Witnessed for marker::Pin {
+    fn witness(&self) -> &host::runtime::Witness {
+        &self.witness
+    }
+}
+
+impl widget::Descriptor for marker::Responsive {
+    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+        let owned = context.owned();
+        let view = self.view.clone();
+        iced::widget::responsive(move |size| {
+            invoke_view(
+                &owned.context(),
+                &view,
+                &mut [Dynamic::from(size)],
+                "responsive",
+            )
+        })
+        .width(self.width)
+        .height(self.height)
+        .boxed()
+    }
+
+    fn identity(&self) -> widget::Identity {
+        self.identity.clone()
+    }
+}
+
+impl Witnessed for marker::Responsive {
     fn witness(&self) -> &host::runtime::Witness {
         &self.witness
     }
@@ -1780,27 +1819,38 @@ fn bind_wrappers(builder: &mut host::runtime::Builder) {
             })
         })
         .expect("the iced facade must retain opaque");
+    bind_widget_type::<marker::Responsive>(builder, "iced::widget::Responsive");
     builder
         .bind_with_context("iced::widget::responsive", |call, args| {
             if args.len() != 1 {
                 return Err(arity("responsive", 1, args.len()));
             }
-            let view = take_function(args[0], "responsive")?;
-            native(call, move |context| {
-                let owned = context.owned();
-                let view = view.clone();
-                iced::widget::responsive(move |size| {
-                    invoke_view(
-                        &owned.context(),
-                        &view,
-                        &mut [Dynamic::from(size)],
-                        "responsive",
-                    )
-                })
-                .boxed()
-            })
+            Ok(Dynamic::from(marker::Responsive {
+                witness: call.output_witness().map_err(witness_error)?,
+                identity: widget::Identity::unique(),
+                view: take_function(args[0], "responsive")?,
+                width: iced::Length::Fill,
+                height: iced::Length::Fill,
+            }))
         })
         .expect("the iced facade must retain responsive");
+    for name in ["width", "height"] {
+        let path = format!("iced::widget::Responsive::{name}");
+        builder
+            .bind(path.clone(), move |args| {
+                if args.len() != 2 {
+                    return Err(arity(&path, 2, args.len()));
+                }
+                let mut responsive =
+                    take::<marker::Responsive>(args[0], "iced::widget::Responsive")?;
+                match name {
+                    "width" => responsive.width = length(args[1])?,
+                    _ => responsive.height = length(args[1])?,
+                }
+                Ok(Dynamic::from(responsive))
+            })
+            .expect("the iced facade must retain every Responsive builder");
+    }
 
     bind_widget_type::<marker::Pin>(builder, "iced::widget::Pin");
     builder

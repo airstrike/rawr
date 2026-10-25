@@ -148,6 +148,44 @@ fn a_canvas_program_draws_and_publishes_its_clicks() {
     );
 }
 
+/// game_of_life's `self.grid.update(message)`: `canvas::Program` is not
+/// imported, so the call is the program's own `update(&mut self, ..)`, not
+/// the trait's `update(&self, ..)` that a probe by `&self` meets first.
+#[test]
+fn a_program_s_own_update_is_called_where_the_trait_is_not_imported() {
+    let source = DOTS
+        .replace(
+            "pub fn main() -> iced::Result {\n    iced::run(Dots::update, Dots::view)\n}",
+            "#[derive(Default)]\nstruct App { dots: Dots }\n\n\
+             impl App {\n    fn update(&mut self, message: Message) { self.dots.update(message); }\n    \
+             fn view(&self) -> Element<'_, Message> { self.dots.view() }\n}\n\n\
+             pub fn main() -> iced::Result {\n    iced::run(App::update, App::view)\n}",
+        );
+    assert!(source.contains("self.dots.update(message)"), "{source}");
+    let mut adapter = boot(&source);
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.point_at((40.0, 120.0));
+    simulator.simulate(iced_test::simulator::click());
+    for message in simulator.into_messages().collect::<Vec<_>>() {
+        adapter.update(message).unwrap();
+    }
+    adapter.refresh_view().unwrap();
+    let mut simulator = iced_test::simulator(adapter.view());
+    simulator.find("1 dots").unwrap();
+    // With the trait imported, `self.dots.update(message)` is the trait's,
+    // which takes four arguments, as rustc reads it.
+    let imported = source.replace(
+        "use iced::widget::{canvas, column, text};",
+        "use iced::widget::{canvas, column, text};\nuse iced::widget::canvas::Program;",
+    );
+    let error = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check_source(imported)
+        .err()
+        .expect("the imported trait's update takes four arguments");
+    assert!(error.to_string().contains("argument"), "{error}");
+}
+
 /// The program as iced's own canvas examples write it: generic over the
 /// Message, with only `draw`, and `canvas(self as &Self)`'s `&self`.
 const SQUARE: &str = r#"

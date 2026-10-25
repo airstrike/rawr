@@ -3105,6 +3105,21 @@ pub(crate) fn is_auto_trait(path: &type_ref::Path) -> bool {
         })
 }
 
+/// `Sized`, bare or by its std path. Every type a Rawr value has is sized,
+/// so a bound by it asks nothing; as a supertrait it makes the trait dyn
+/// incompatible, as in Rust.
+pub(crate) fn is_sized_trait(path: &type_ref::Path) -> bool {
+    let Some((last, prefix)) = path.segments.split_last() else {
+        return false;
+    };
+    last.arguments.is_empty()
+        && last.name.text == "Sized"
+        && prefix.iter().all(|segment| {
+            segment.arguments.is_empty()
+                && matches!(segment.name.text.as_str(), "std" | "core" | "marker")
+        })
+}
+
 /// A type whose last generic list may close with the first `>` of a `>>`;
 /// the second is left in `split` for the enclosing list.
 fn parse_type_split(

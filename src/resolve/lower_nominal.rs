@@ -10095,12 +10095,37 @@ impl<'a> Parser<'a> {
             .and_then(|definitions| {
                 definitions
                     .iter()
+                    .filter(|definition| self.trait_in_scope(definition))
                     .filter_map(|definition| Some((rank(definition)?, definition)))
                     .min_by_key(|(rank, _)| *rank)
             })
             .filter(|(rank, _)| *rank < inherent)
             .map(|(_, definition)| definition.clone())
             .or(found)
+    }
+
+    /// Whether the trait of `definition`, a trait impl's function, is in
+    /// scope where the method is called, as Rust's probe asks of a trait
+    /// method before an inherent one: declared in this module or imported
+    /// into it. A std trait counts as in scope.
+    fn trait_in_scope(&self, definition: &method::Definition) -> bool {
+        let Some(trait_name) = definition.trait_name() else {
+            return true;
+        };
+        if self.models.import(trait_name).is_some()
+            || self.models.std_traits.contains(trait_name.as_str())
+            || crate::resolve::builtin_trait(trait_name).is_some()
+        {
+            return true;
+        }
+        // A facade trait (iced's `canvas::Program`) is declared at the root
+        // for the whole crate; only its import puts it in scope.
+        self.models
+            .traits
+            .get(trait_name.as_str())
+            .is_some_and(|(source, declared)| {
+                declared.declaration.is_none() && *source == self.models.context
+            })
     }
 
     /// The instances of the supertrait `parent` that `dyn sub<..>` has:
@@ -13761,18 +13786,83 @@ impl<'a> Parser<'a> {
     ) -> Result<(crate::host::item::Definition, InstantiatedHostSignature), Error> {
         let (item, signature) =
             self.select_host_signature_form(items, receiver, arguments, repeated, call)?;
+        // A number where the library takes `impl Into<T>` of its own type
+        // `T`, through that type's `from` of it (`step(0.01)` on a slider
+        // over `Radians`).
+        if !repeated && item.imported_identity().is_none() {
+            for (index, (expected, argument)) in signature
+                .inputs
+                .iter()
+                .zip(arguments.iter_mut())
+                .enumerate()
+            {
+                if let Some(path) = self.number_into_parameter(&item, index, expected, &argument.ty)
+                {
+                    let from = self
+                        .models
+                        .host_items(&path)
+                        .map(<[_]>::to_vec)
+                        .unwrap_or_default();
+                    let owner = self.models.item_owner(&path).cloned();
+                    let span = argument.span;
+                    *argument =
+                        self.call_host_function(&from, owner, vec![argument.clone()], span)?;
+                }
+            }
+        }
         // A value that took iced's `f32` for a facade `f64` is passed as its
-        // runtime `f64`.
+        // runtime `f64`. An open `{float}` is passed so too, and stays open
+        // for its later uses, as `-90.0 * factor` leaves `factor` to the
+        // `f32` it is multiplied with next.
         if item.path().starts_with("iced::") && !repeated {
             for (expected, argument) in signature.inputs.iter().zip(arguments.iter_mut()) {
                 if self.inference.resolve(expected) == Ty::Float(Float::F64)
-                    && self.inference.resolve(&argument.ty) == Ty::Float(Float::F32)
+                    && matches!(
+                        self.inference.resolve(&argument.ty),
+                        Ty::Float(Float::F32 | Float::Var(_))
+                    )
                 {
                     argument.ty = Ty::Float(Float::F64);
                 }
             }
         }
         Ok((item, signature))
+    }
+
+    /// `T::from`'s path when the parameter at `index` of the library `item`
+    /// is its type parameter, which takes `expected`, a library type `T`
+    /// whose `from` takes the number `argument`: iced's `impl Into<T>`.
+    fn number_into_parameter(
+        &self,
+        item: &crate::host::item::Definition,
+        index: usize,
+        expected: &Ty,
+        argument: &Ty,
+    ) -> Option<String> {
+        let parameter = item.signature().parameters().get(index)?;
+        if !matches!(
+            parameter.shape(),
+            crate::host::type_ref::Shape::Parameter(_)
+        ) {
+            return None;
+        }
+        let argument = self.inference.resolve(argument);
+        if !matches!(argument, Ty::Int(_) | Ty::Float(_)) {
+            return None;
+        }
+        let Ty::Host { proof, .. } = self.inference.resolve(expected) else {
+            return None;
+        };
+        let path = format!("{}::from", proof.definition.path());
+        self.models
+            .host_items(&path)?
+            .iter()
+            .any(|from| {
+                from.kind() == crate::host::item::Kind::AssociatedFunction
+                    && matches!(from.signature().parameters(), [parameter]
+                        if host_number_accepts(parameter, &argument))
+            })
+            .then_some(path)
     }
 
     /// The closure `move |a, ..| name(a, ..)` over the local function
@@ -13973,19 +14063,32 @@ impl<'a> Parser<'a> {
                 // `f32` closure: a value whose type is not known yet takes it.
                 let iced = item.path().starts_with("iced::");
                 signature.inputs.len() == arguments.len()
-                    && signature
-                        .inputs
-                        .iter()
-                        .zip(arguments)
-                        .all(|(expected, argument)| {
+                    && signature.inputs.iter().zip(arguments).enumerate().all(
+                        |(index, (expected, argument))| {
                             if iced
                                 && matches!(self.inference.resolve(&argument.ty), Ty::Infer(_))
                                 && self.inference.resolve(expected) == Ty::Float(Float::F64)
                             {
                                 return self.unify_type(&Ty::Float(Float::F32), &argument.ty);
                             }
+                            // An open `{float}` stays open: iced's `f32` or a
+                            // generic number, its later uses settle it.
+                            if iced
+                                && matches!(
+                                    self.inference.resolve(&argument.ty),
+                                    Ty::Float(Float::Var(_))
+                                )
+                                && self.inference.resolve(expected) == Ty::Float(Float::F64)
+                            {
+                                return true;
+                            }
                             self.unify_type(expected, &argument.ty)
-                        })
+                                || facade
+                                    && self
+                                        .number_into_parameter(item, index, expected, &argument.ty)
+                                        .is_some()
+                        },
+                    )
             };
             if matches_inputs && self.host_requirements_hold(&signature) {
                 match_count += 1;
@@ -17447,6 +17550,40 @@ impl<'a> Parser<'a> {
             .into(),
             operation: member_span,
         })
+    }
+
+    /// `Preset::to_string` of an imported type that has no `to_string` of
+    /// its own: Rust's blanket `ToString` through its `Display`, as a
+    /// function value `|value: &Preset| value.to_string()`. `None` for any
+    /// other member, or a call.
+    #[cfg(feature = "rust-import")]
+    fn imported_to_string_value(
+        &mut self,
+        definition: &crate::host::type_def::Definition,
+        facade: Option<crate::host::facade::Dependency>,
+        member: &str,
+        owner_span: Span,
+        member_span: Span,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        if member != "to_string"
+            || !definition.parameters().is_empty()
+            || matches!(self.peek(), Token::LeftParen | Token::Unit)
+        {
+            return Ok(None);
+        }
+        let ty = Ty::Host {
+            proof: HostTyProof::new(definition.clone(), Some(definition.clone()), facade),
+            arguments: Box::default(),
+        };
+        if self.imported_member_owner(&ty, member).is_some() {
+            return Ok(None);
+        }
+        let receiver = Ty::Reference {
+            mutable: false,
+            target: Box::new(ty),
+        };
+        self.method_value(member.into(), Box::new([receiver]), owner_span, member_span)
+            .map(Some)
     }
 
     /// The first alias of an imported value's type that has `member`, for a
@@ -25175,6 +25312,15 @@ impl<'a> Parser<'a> {
         lhs: &ParsedExpr,
         rhs: &mut ParsedExpr,
     ) -> Result<Option<ParsedExpr>, Error> {
+        let method = match symbol {
+            "<" => "lt",
+            "<=" => "le",
+            ">" => "gt",
+            _ => "ge",
+        };
+        if let Some(value) = self.host_comparison(method, lhs, rhs)? {
+            return Ok(Some(value));
+        }
         let mut peeled = self.inference.resolve(&lhs.ty);
         while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = peeled {
             peeled = self.inference.resolve(&target);
@@ -25236,6 +25382,50 @@ impl<'a> Parser<'a> {
         )))
     }
 
+    /// A library type's comparison by the facade method named for
+    /// `PartialEq`'s or `PartialOrd`'s (`Degrees::lt`), which iced's
+    /// `impl PartialOrd<f32> for Degrees` and its kin declare. `None` when
+    /// `lhs` is no library type with that method, or when an `eq` would
+    /// compare two values of the same library type, which its `PartialEq`
+    /// capability does.
+    fn host_comparison(
+        &mut self,
+        method: &str,
+        lhs: &ParsedExpr,
+        rhs: &mut ParsedExpr,
+    ) -> Result<Option<ParsedExpr>, Error> {
+        let mut host = self.inference.resolve(&lhs.ty);
+        while let Ty::Reference { target, .. } = host {
+            host = self.inference.resolve(&target);
+        }
+        let Ty::Host { proof, .. } = &host else {
+            return Ok(None);
+        };
+        let path = format!("{}::{method}", proof.definition.path());
+        if !self.models.host_items(&path).is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item.kind() == crate::host::item::Kind::Method)
+        }) {
+            return Ok(None);
+        }
+        if method == "eq" {
+            let mut other = self.inference.resolve(&rhs.ty);
+            while let Ty::Reference { target, .. } = other {
+                other = self.inference.resolve(&target);
+            }
+            if !matches!(other, Ty::Int(_) | Ty::Float(_)) {
+                return Ok(None);
+            }
+        }
+        let expression = span(lhs.span.start(), rhs.span.end());
+        let receiver = self.operator_expr(lhs.rendered_source(), host.clone(), lhs.span);
+        self.pending_arguments = Some((vec![rhs.clone()], expression.end()));
+        let mut value = self.parse_host_method(receiver, method.into(), expression)?;
+        value.span = expression;
+        Ok(Some(value))
+    }
+
     fn equality(
         &mut self,
         operator: Token,
@@ -25245,6 +25435,14 @@ impl<'a> Parser<'a> {
         let negate = matches!(operator, Token::NotEqualsTo);
         self.reject_signature_support(&lhs.ty, lhs.span, "used by an operator")?;
         self.reject_signature_support(&rhs.ty, rhs.span, "used by an operator")?;
+        // `degrees == 90.0` through iced's `impl PartialEq<f32> for Degrees`.
+        if let Some(mut value) = self.host_comparison("eq", &lhs, &mut rhs)? {
+            if negate {
+                value.source = value.rendered_source().surrounded("!(", ")");
+                value.prelude = origin::Fragment::default();
+            }
+            return Ok(value);
+        }
         self.coerce_expr(&lhs.ty, &mut rhs)?;
         // `&T == &T` compares the referents, as Rust's `PartialEq for &A` does,
         // and `Box<T> == Box<T>` their contents.
@@ -36038,6 +36236,18 @@ impl<'a> Parser<'a> {
         if let Some(binding) = imported_owner {
             #[cfg(feature = "rust-import")]
             if let item::Import::Type { definition, owner } = &binding.target
+                && let Some(value) = self.imported_to_string_value(
+                    definition,
+                    owner.clone(),
+                    &member,
+                    owner_span,
+                    member_span,
+                )?
+            {
+                return Ok(value);
+            }
+            #[cfg(feature = "rust-import")]
+            if let item::Import::Type { definition, owner } = &binding.target
                 && matches!(definition.shape(), crate::host::type_def::Shape::Enum(_))
             {
                 return self.parse_imported_variant(
@@ -36214,6 +36424,15 @@ impl<'a> Parser<'a> {
 
         #[cfg(feature = "rust-import")]
         if let Some((definition, facade)) = imported_nominal_owner {
+            if let Some(value) = self.imported_to_string_value(
+                &definition,
+                Some(facade.clone()),
+                &member,
+                owner_span,
+                member_span,
+            )? {
+                return Ok(value);
+            }
             if matches!(definition.shape(), crate::host::type_def::Shape::Enum(_)) {
                 return self.parse_imported_variant(
                     owner,

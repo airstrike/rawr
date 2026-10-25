@@ -261,6 +261,10 @@ impl Builder {
             Some("type")
         } else if self.support_index(&path).is_ok() {
             Some("signature support")
+        } else if self.aliases.iter().any(|(alias, _)| *alias == path) {
+            // A re-export such as iced's `widget::Component` names its
+            // type; the trait of that name stays the facade's.
+            Some("re-export")
         } else {
             None
         };
