@@ -105,7 +105,8 @@ impl Artifact {
             };
             let mut current = current.clone();
             for message in published {
-                if let Ok(update) = catalog.update(definition.key(), &current, message.into_payload())
+                if let Ok(update) =
+                    catalog.update(definition.key(), &current, message.into_payload())
                     && let Ok((next, _)) = update.try_into_parts(Ok::<_, ()>)
                 {
                     current = next;
@@ -125,7 +126,10 @@ impl Artifact {
         );
         let image = renderer.render(
             &mut |published| {
-                widget::diagnostic::overlay(frame(apply(published).lower(&context)), lifecycle.clone())
+                widget::diagnostic::overlay(
+                    frame(apply(published).lower(&context)),
+                    lifecycle.clone(),
+                )
             },
             materialized.native(),
             size,

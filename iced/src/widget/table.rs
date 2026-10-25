@@ -8,7 +8,9 @@ use iced::widget::Widget as _;
 use rawr::host;
 use rawr::Dynamic;
 
-use super::builtin::{alignment, arity, length, pixels, project, runtime_error, take, witness_error, Witnessed};
+use super::builtin::{
+    alignment, arity, length, pixels, project, runtime_error, take, witness_error, Witnessed,
+};
 use crate::{marker, runtime, widget};
 
 pub(super) fn bind(builder: &mut host::runtime::Builder) {
@@ -199,9 +201,6 @@ impl Witnessed for marker::Table {
     }
 }
 
-fn failed(
-    error: &str,
-    context: &widget::Context<'_>,
-) -> iced::Element<'static, runtime::Message> {
+fn failed(error: &str, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
     widget::diagnostic(format!("table cell failed: {error}")).lower(context)
 }

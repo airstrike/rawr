@@ -113,7 +113,9 @@ fn bind_program(builder: &mut host::runtime::Builder) {
                 return Err(arity("Action::and_capture", 1, args.len()));
             };
             let mut action = take::<marker::CanvasAction>(action, "iced::widget::canvas::Action")?;
-            action.witness = call.transform_witness(&action.witness).map_err(witness_error)?;
+            action.witness = call
+                .transform_witness(&action.witness)
+                .map_err(witness_error)?;
             action.capture = true;
             Ok(Dynamic::from(action))
         })
@@ -150,7 +152,10 @@ fn bind_paths(builder: &mut host::runtime::Builder) {
                 return Err(arity("Path::circle", 2, args.len()));
             };
             let path = "Path::circle";
-            Ok(Dynamic::from(canvas::Path::circle(point(center, path)?, pixels(radius, path)?)))
+            Ok(Dynamic::from(canvas::Path::circle(
+                point(center, path)?,
+                pixels(radius, path)?,
+            )))
         })
         .expect("the iced facade must retain Path::circle");
     builder
@@ -159,7 +164,10 @@ fn bind_paths(builder: &mut host::runtime::Builder) {
                 return Err(arity("Path::line", 2, args.len()));
             };
             let path = "Path::line";
-            Ok(Dynamic::from(canvas::Path::line(point(from, path)?, point(to, path)?)))
+            Ok(Dynamic::from(canvas::Path::line(
+                point(from, path)?,
+                point(to, path)?,
+            )))
         })
         .expect("the iced facade must retain Path::line");
     builder
@@ -168,7 +176,10 @@ fn bind_paths(builder: &mut host::runtime::Builder) {
                 return Err(arity("Path::rectangle", 2, args.len()));
             };
             let path = "Path::rectangle";
-            Ok(Dynamic::from(canvas::Path::rectangle(point(top_left, path)?, size(extent, path)?)))
+            Ok(Dynamic::from(canvas::Path::rectangle(
+                point(top_left, path)?,
+                size(extent, path)?,
+            )))
         })
         .expect("the iced facade must retain Path::rectangle");
     builder
@@ -189,9 +200,9 @@ fn bind_paths(builder: &mut host::runtime::Builder) {
             if !args.is_empty() {
                 return Err(arity("path::Builder::new", 0, args.len()));
             }
-            Ok(Dynamic::from(marker::PathBuilder(Arc::new(Mutex::new(Some(
-                canvas::path::Builder::new(),
-            ))))))
+            Ok(Dynamic::from(marker::PathBuilder(Arc::new(Mutex::new(
+                Some(canvas::path::Builder::new()),
+            )))))
         })
         .expect("the iced facade must retain path::Builder::new");
     for name in [
@@ -233,8 +244,12 @@ fn bind_paths(builder: &mut host::runtime::Builder) {
                 match name {
                     "move_to" => builder.move_to(point(operands[0], &path)?),
                     "line_to" => builder.line_to(point(operands[0], &path)?),
-                    "circle" => builder.circle(point(operands[0], &path)?, pixels(operands[1], &path)?),
-                    "rectangle" => builder.rectangle(point(operands[0], &path)?, size(operands[1], &path)?),
+                    "circle" => {
+                        builder.circle(point(operands[0], &path)?, pixels(operands[1], &path)?)
+                    }
+                    "rectangle" => {
+                        builder.rectangle(point(operands[0], &path)?, size(operands[1], &path)?)
+                    }
                     "rounded_rectangle" => builder.rounded_rectangle(
                         point(operands[0], &path)?,
                         size(operands[1], &path)?,
@@ -246,7 +261,10 @@ fn bind_paths(builder: &mut host::runtime::Builder) {
                         pixels(operands[2], &path)?,
                     ),
                     "quadratic_curve_to" => {
-                        builder.quadratic_curve_to(point(operands[0], &path)?, point(operands[1], &path)?);
+                        builder.quadratic_curve_to(
+                            point(operands[0], &path)?,
+                            point(operands[1], &path)?,
+                        );
                     }
                     "bezier_curve_to" => builder.bezier_curve_to(
                         point(operands[0], &path)?,
@@ -268,9 +286,13 @@ fn bind_paths(builder: &mut host::runtime::Builder) {
             let built = handle
                 .0
                 .lock()
-                .map_err(|_| runtime_error("`path::Builder::build` found its builder poisoned".into()))?
+                .map_err(|_| {
+                    runtime_error("`path::Builder::build` found its builder poisoned".into())
+                })?
                 .take()
-                .ok_or_else(|| runtime_error("`path::Builder::build` built its path twice".into()))?;
+                .ok_or_else(|| {
+                    runtime_error("`path::Builder::build` built its path twice".into())
+                })?;
             Ok(Dynamic::from(built.build()))
         })
         .expect("the iced facade must retain path::Builder::build");
@@ -284,7 +306,11 @@ fn fill(value: &Dynamic, path: &str) -> Result<canvas::Fill, Box<EvalAltResult>>
     read::<canvas::Fill>(value, path)
 }
 
-fn record(frame: &marker::Frame, draw: marker::Draw, path: &str) -> Result<Dynamic, Box<EvalAltResult>> {
+fn record(
+    frame: &marker::Frame,
+    draw: marker::Draw,
+    path: &str,
+) -> Result<Dynamic, Box<EvalAltResult>> {
     frame
         .draws
         .lock()
@@ -370,7 +396,9 @@ fn bind_frames(builder: &mut host::runtime::Builder) {
                             None => read::<canvas::Text>(text, &path)?,
                         })
                     }
-                    "translate" => marker::Draw::Translate(read::<iced::Vector>(operand(0)?, &path)?),
+                    "translate" => {
+                        marker::Draw::Translate(read::<iced::Vector>(operand(0)?, &path)?)
+                    }
                     // iced's `rotate(impl Into<Radians>)`: radians as a
                     // number, or an angle.
                     "rotate" => marker::Draw::Rotate(match operand(0)?.as_float() {
@@ -394,12 +422,9 @@ fn bind_frames(builder: &mut host::runtime::Builder) {
                 return Err(arity("Frame::into_geometry", 1, args.len()));
             };
             let frame = read::<marker::Frame>(receiver, "Frame::into_geometry")?;
-            let draws = std::mem::take(
-                &mut *frame
-                    .draws
-                    .lock()
-                    .map_err(|_| runtime_error("`Frame::into_geometry` found its frame poisoned".into()))?,
-            );
+            let draws = std::mem::take(&mut *frame.draws.lock().map_err(|_| {
+                runtime_error("`Frame::into_geometry` found its frame poisoned".into())
+            })?);
             Ok(Dynamic::from(marker::Geometry {
                 size: frame.size,
                 draws: draws.into(),
@@ -428,7 +453,8 @@ fn bind_frames(builder: &mut host::runtime::Builder) {
             *cache
                 .0
                 .lock()
-                .map_err(|_| runtime_error("`Cache::clear` found its cache poisoned".into()))? = None;
+                .map_err(|_| runtime_error("`Cache::clear` found its cache poisoned".into()))? =
+                None;
             Ok(Dynamic::UNIT)
         })
         .expect("the iced facade must retain Cache::clear");
@@ -474,7 +500,10 @@ fn bind_frames(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(geometry))
         })
         .expect("the iced facade must retain Cache::draw's store");
-    for path in ["iced::widget::canvas::Path::new", "iced::widget::canvas::Frame::with_save"] {
+    for path in [
+        "iced::widget::canvas::Path::new",
+        "iced::widget::canvas::Frame::with_save",
+    ] {
         builder
             .bind(path, move |_| {
                 Err(runtime_error(format!(
@@ -495,23 +524,91 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             .bind(path, move |_| Ok(Dynamic::from(value.clone())))
             .expect("the iced facade must retain every canvas value");
     }
-    value(builder, "iced::widget::canvas::Stroke::default", canvas::Stroke::<'static>::default());
-    value(builder, "iced::widget::canvas::Fill::default", canvas::Fill::default());
-    value(builder, "iced::widget::canvas::Text::default", canvas::Text::default());
-    value(builder, "iced::widget::canvas::LineCap::default", canvas::LineCap::default());
-    value(builder, "iced::widget::canvas::LineJoin::default", canvas::LineJoin::default());
-    value(builder, "iced::widget::canvas::LineCap::Butt", canvas::LineCap::Butt);
-    value(builder, "iced::widget::canvas::LineCap::Square", canvas::LineCap::Square);
-    value(builder, "iced::widget::canvas::LineCap::Round", canvas::LineCap::Round);
-    value(builder, "iced::widget::canvas::LineJoin::Miter", canvas::LineJoin::Miter);
-    value(builder, "iced::widget::canvas::LineJoin::Round", canvas::LineJoin::Round);
-    value(builder, "iced::widget::canvas::LineJoin::Bevel", canvas::LineJoin::Bevel);
-    value(builder, "iced::widget::canvas::fill::Rule::NonZero", canvas::fill::Rule::NonZero);
-    value(builder, "iced::widget::canvas::fill::Rule::EvenOdd", canvas::fill::Rule::EvenOdd);
-    value(builder, "iced::widget::text::Alignment::Default", iced::widget::text::Alignment::Default);
-    value(builder, "iced::widget::text::Alignment::Left", iced::widget::text::Alignment::Left);
-    value(builder, "iced::widget::text::Alignment::Center", iced::widget::text::Alignment::Center);
-    value(builder, "iced::widget::text::Alignment::Right", iced::widget::text::Alignment::Right);
+    value(
+        builder,
+        "iced::widget::canvas::Stroke::default",
+        canvas::Stroke::<'static>::default(),
+    );
+    value(
+        builder,
+        "iced::widget::canvas::Fill::default",
+        canvas::Fill::default(),
+    );
+    value(
+        builder,
+        "iced::widget::canvas::Text::default",
+        canvas::Text::default(),
+    );
+    value(
+        builder,
+        "iced::widget::canvas::LineCap::default",
+        canvas::LineCap::default(),
+    );
+    value(
+        builder,
+        "iced::widget::canvas::LineJoin::default",
+        canvas::LineJoin::default(),
+    );
+    value(
+        builder,
+        "iced::widget::canvas::LineCap::Butt",
+        canvas::LineCap::Butt,
+    );
+    value(
+        builder,
+        "iced::widget::canvas::LineCap::Square",
+        canvas::LineCap::Square,
+    );
+    value(
+        builder,
+        "iced::widget::canvas::LineCap::Round",
+        canvas::LineCap::Round,
+    );
+    value(
+        builder,
+        "iced::widget::canvas::LineJoin::Miter",
+        canvas::LineJoin::Miter,
+    );
+    value(
+        builder,
+        "iced::widget::canvas::LineJoin::Round",
+        canvas::LineJoin::Round,
+    );
+    value(
+        builder,
+        "iced::widget::canvas::LineJoin::Bevel",
+        canvas::LineJoin::Bevel,
+    );
+    value(
+        builder,
+        "iced::widget::canvas::fill::Rule::NonZero",
+        canvas::fill::Rule::NonZero,
+    );
+    value(
+        builder,
+        "iced::widget::canvas::fill::Rule::EvenOdd",
+        canvas::fill::Rule::EvenOdd,
+    );
+    value(
+        builder,
+        "iced::widget::text::Alignment::Default",
+        iced::widget::text::Alignment::Default,
+    );
+    value(
+        builder,
+        "iced::widget::text::Alignment::Left",
+        iced::widget::text::Alignment::Left,
+    );
+    value(
+        builder,
+        "iced::widget::text::Alignment::Center",
+        iced::widget::text::Alignment::Center,
+    );
+    value(
+        builder,
+        "iced::widget::text::Alignment::Right",
+        iced::widget::text::Alignment::Right,
+    );
     value(
         builder,
         "iced::widget::text::Alignment::Justified",
@@ -522,7 +619,10 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             let [color] = args else {
                 return Err(arity("Style::Solid", 1, args.len()));
             };
-            Ok(Dynamic::from(canvas::Style::Solid(read::<iced::Color>(color, "Style::Solid")?)))
+            Ok(Dynamic::from(canvas::Style::Solid(read::<iced::Color>(
+                color,
+                "Style::Solid",
+            )?)))
         })
         .expect("the iced facade must retain Style::Solid");
 
@@ -554,7 +654,12 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Stroke field");
     }
-    for name in ["with_width", "with_color", "with_line_cap", "with_line_join"] {
+    for name in [
+        "with_width",
+        "with_color",
+        "with_line_cap",
+        "with_line_join",
+    ] {
         let path = format!("iced::widget::canvas::Stroke::{name}");
         builder
             .bind(path.clone(), move |args| {
@@ -594,7 +699,15 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain every Fill field");
     }
     for name in [
-        "content", "position", "max_width", "color", "size", "font", "align_x", "align_y", "shaping",
+        "content",
+        "position",
+        "max_width",
+        "color",
+        "size",
+        "font",
+        "align_x",
+        "align_y",
+        "shaping",
     ] {
         let path = format!("iced::widget::canvas::Text::{name}");
         builder
@@ -605,7 +718,9 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
                 let mut text = read::<canvas::Text>(receiver, &path)?;
                 let [operand] = operands else {
                     return Ok(match name {
-                        "content" => Dynamic::from(rawr::ImmutableString::from(text.content.as_str())),
+                        "content" => {
+                            Dynamic::from(rawr::ImmutableString::from(text.content.as_str()))
+                        }
                         "position" => Dynamic::from(text.position),
                         "max_width" => Dynamic::from(f64::from(text.max_width)),
                         "color" => Dynamic::from(text.color),
@@ -621,7 +736,9 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
                     });
                 };
                 match name {
-                    "content" => text.content = read::<rawr::ImmutableString>(operand, &path)?.to_string(),
+                    "content" => {
+                        text.content = read::<rawr::ImmutableString>(operand, &path)?.to_string()
+                    }
                     "position" => text.position = point(operand, &path)?,
                     "max_width" => text.max_width = pixels(operand, &path)?,
                     "color" => text.color = read(operand, &path)?,
@@ -654,7 +771,13 @@ fn bind_bounds(builder: &mut host::runtime::Builder) {
             )?)))
         })
         .expect("the iced facade must retain Cursor::Available");
-    for name in ["position", "position_in", "position_over", "position_from", "is_over"] {
+    for name in [
+        "position",
+        "position_in",
+        "position_over",
+        "position_from",
+        "is_over",
+    ] {
         let path = format!("iced::mouse::Cursor::{name}");
         builder
             .bind(path.clone(), move |args| {
@@ -668,9 +791,7 @@ fn bind_bounds(builder: &mut host::runtime::Builder) {
                 };
                 Ok(match (name, &*operands) {
                     ("position", []) => optional(cursor.position()),
-                    ("position_in", [bounds]) => {
-                        optional(cursor.position_in(read(bounds, &path)?))
-                    }
+                    ("position_in", [bounds]) => optional(cursor.position_in(read(bounds, &path)?)),
                     ("position_over", [bounds]) => {
                         optional(cursor.position_over(read(bounds, &path)?))
                     }
@@ -707,11 +828,15 @@ fn bind_bounds(builder: &mut host::runtime::Builder) {
                 return Err(arity("Point::distance", 2, args.len()));
             };
             let path = "Point::distance";
-            Ok(Dynamic::from(f64::from(point(from, path)?.distance(point(to, path)?))))
+            Ok(Dynamic::from(f64::from(
+                point(from, path)?.distance(point(to, path)?),
+            )))
         })
         .expect("the iced facade must retain Point::distance");
     builder
-        .bind("iced::Point::ORIGIN", |_| Ok(Dynamic::from(iced::Point::ORIGIN)))
+        .bind("iced::Point::ORIGIN", |_| {
+            Ok(Dynamic::from(iced::Point::ORIGIN))
+        })
         .expect("the iced facade must retain Point::ORIGIN");
     builder
         .bind("iced::mouse::Interaction::default", |_| {

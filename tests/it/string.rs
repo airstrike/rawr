@@ -140,20 +140,83 @@ fn test_string_substring() {
     let engine = Engine::new();
 
     // Substrings by character position go through `chars`, as in Rust.
-    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(1).take(5).collect::<String>()"#).unwrap(), "❤❤ he");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(1).collect::<String>()"#).unwrap(), "❤❤ hello! ❤❤❤");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(99).collect::<String>()"#).unwrap(), "");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(1).take(999).collect::<String>()"#).unwrap(), "❤❤ hello! ❤❤❤");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(4).take(6).collect::<String>()"#).unwrap(), "hello!");
-    assert_eq!(engine.eval::<String>(r#"let x = "hello! \u{2764}\u{2764}\u{2764}"; x.chars().rev().take(2).collect::<String>()"#).unwrap(), "❤❤");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.replace('l', "")"#).unwrap(), "❤❤❤ heo! ❤❤❤");
-    assert_eq!(engine.eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.replace("\u{2764}\u{2764}", "")"#).unwrap(), "❤ hello! ❤");
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().position(|c| c == '\u{2764}').unwrap()"#).unwrap(), 0);
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(5).position(|c| c == '\u{2764}').unwrap() + 5"#).unwrap(), 11);
-    assert!(engine.eval::<bool>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(999).position(|c| c == '\u{2764}').is_none()"#).unwrap());
-    assert!(engine.eval::<bool>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().position(|c| c == 'x').is_none()"#).unwrap());
+    assert_eq!(
+        engine
+            .eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(1).take(5).collect::<String>()"#)
+            .unwrap(),
+        "❤❤ he"
+    );
+    assert_eq!(
+        engine
+            .eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(1).collect::<String>()"#)
+            .unwrap(),
+        "❤❤ hello! ❤❤❤"
+    );
+    assert_eq!(
+        engine
+            .eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(99).collect::<String>()"#)
+            .unwrap(),
+        ""
+    );
+    assert_eq!(
+        engine
+            .eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(1).take(999).collect::<String>()"#)
+            .unwrap(),
+        "❤❤ hello! ❤❤❤"
+    );
+    assert_eq!(
+        engine
+            .eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(4).take(6).collect::<String>()"#)
+            .unwrap(),
+        "hello!"
+    );
+    assert_eq!(
+        engine
+            .eval::<String>(r#"let x = "hello! \u{2764}\u{2764}\u{2764}"; x.chars().rev().take(2).collect::<String>()"#)
+            .unwrap(),
+        "❤❤"
+    );
+    assert_eq!(
+        engine
+            .eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.replace('l', "")"#)
+            .unwrap(),
+        "❤❤❤ heo! ❤❤❤"
+    );
+    assert_eq!(
+        engine
+            .eval::<String>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.replace("\u{2764}\u{2764}", "")"#)
+            .unwrap(),
+        "❤ hello! ❤"
+    );
+    assert_eq!(
+        engine
+            .eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().position(|c| c == '\u{2764}').unwrap()"#)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        engine
+            .eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(5).position(|c| c == '\u{2764}').unwrap() + 5"#)
+            .unwrap(),
+        11
+    );
+    assert!(
+        engine
+            .eval::<bool>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().skip(999).position(|c| c == '\u{2764}').is_none()"#)
+            .unwrap()
+    );
+    assert!(
+        engine
+            .eval::<bool>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.chars().position(|c| c == 'x').is_none()"#)
+            .unwrap()
+    );
     // `find` gives a byte offset.
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.find('h').unwrap()"#).unwrap(), 10);
+    assert_eq!(
+        engine
+            .eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.find('h').unwrap()"#)
+            .unwrap(),
+        10
+    );
 }
 
 #[test]
@@ -179,8 +242,18 @@ fn test_string_split() {
     let engine = Engine::new();
 
     // `split` is Rust's iterator of the parts.
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.split(' ').count()"#).unwrap(), 3);
-    assert_eq!(engine.eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.split("hello").count()"#).unwrap(), 2);
+    assert_eq!(
+        engine
+            .eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.split(' ').count()"#)
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        engine
+            .eval::<INT>(r#"let x = "\u{2764}\u{2764}\u{2764} hello! \u{2764}\u{2764}\u{2764}"; x.split("hello").count()"#)
+            .unwrap(),
+        2
+    );
 
     // Verify that split works on const strings (regression test for issue #1081).
     assert_eq!(engine.eval::<INT>(r#"const X: &str = "a,b,c"; X.split(",").count()"#).unwrap(), 3);

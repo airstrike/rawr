@@ -92,7 +92,9 @@ fn an_error_inside_a_call_carries_the_program_source() {
 #[test]
 fn a_program_of_handlers_is_writable() {
     let engine = Engine::new();
-    let ast = engine.compile("fn on_open(count: i64, n: i64) -> i64 { count + n } fn on_close(count: i64) -> i64 { count * 0 }").unwrap();
+    let ast = engine
+        .compile("fn on_open(count: i64, n: i64) -> i64 { count + n } fn on_close(count: i64) -> i64 { count * 0 }")
+        .unwrap();
     let program = Compiler::new().compile(&ast);
 
     assert_eq!(program.residual_count(), 0);

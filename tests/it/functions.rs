@@ -28,9 +28,7 @@ fn test_functions() {
         );
         assert_eq!(
             engine
-                .eval::<INT>(
-                    "trait AddIn { fn add_in(&mut self, n: i64); } impl AddIn for i64 { fn add_in(&mut self, n: i64) { *self += n; } } let mut x = 40; x.add_in(2); x"
-                )
+                .eval::<INT>("trait AddIn { fn add_in(&mut self, n: i64); } impl AddIn for i64 { fn add_in(&mut self, n: i64) { *self += n; } } let mut x = 40; x.add_in(2); x")
                 .unwrap(),
             42
         );

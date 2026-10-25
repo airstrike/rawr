@@ -174,11 +174,7 @@ fn worktree() -> Vec<Fact<'static>> {
             Role::LooseReference,
             Ok(b"ref: refs/heads/main\n"),
         ),
-        Fact::Git(
-            "/r/.git/commondir",
-            Role::DiscoveryPath,
-            Err(libc::ENOENT),
-        ),
+        Fact::Git("/r/.git/commondir", Role::DiscoveryPath, Err(libc::ENOENT)),
         directory("/r/.git/objects", 1),
         directory("/r/.git/refs", 1),
         Fact::Absent("/r/.git/index"),
@@ -319,9 +315,7 @@ fn original_errors_and_filesystem_boundary_keep_their_owned_paths() {
 #[test]
 fn initial_cwd_error_occurrence_refusal_and_missing_facts_do_not_become_absence() {
     assert_eq!(
-        run("/r", vec![], &[Err(libc::EACCES)], None)
-            .0
-            .unwrap(),
+        run("/r", vec![], &[Err(libc::EACCES)], None).0.unwrap(),
         Err(Failure::CurrentDir(io::Failure::Native(libc::EACCES)))
     );
     assert!(matches!(

@@ -8,9 +8,10 @@ use rawr::{Dynamic, EvalAltResult};
 use super::builtin::{arity, pixels, runtime_error, take};
 
 pub(super) fn bind(builder: &mut host::runtime::Builder) {
-    for (name, shaping) in crate::TEXT_SHAPINGS
-        .into_iter()
-        .zip([Shaping::Auto, Shaping::Basic, Shaping::Advanced])
+    for (name, shaping) in
+        crate::TEXT_SHAPINGS
+            .into_iter()
+            .zip([Shaping::Auto, Shaping::Basic, Shaping::Advanced])
     {
         builder
             .bind(format!("iced::widget::text::Shaping::{name}"), move |_| {
@@ -53,7 +54,10 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
         let path = format!("iced::widget::checkbox::Icon::{field}");
         builder
             .bind(path.clone(), move |args| match args {
-                [icon] => read(&*icon.read_lock::<Icon>().ok_or_else(|| expected(&path))?, field),
+                [icon] => read(
+                    &*icon.read_lock::<Icon>().ok_or_else(|| expected(&path))?,
+                    field,
+                ),
                 [icon, value] => {
                     let mut icon = take::<Icon>(icon, "iced::widget::checkbox::Icon")?;
                     write(&mut icon, field, value, &path)?;

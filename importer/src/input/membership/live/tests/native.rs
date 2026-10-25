@@ -101,12 +101,7 @@ fn actual_non_utf8_filename_keeps_native_bytes_where_filesystem_allows_it() {
         .join(std::ffi::OsString::from_vec(b"native-\xff.toml".to_vec()));
     match fs::write(&path, b"x=1\n") {
         Ok(()) => {}
-        Err(error)
-            if matches!(
-                error.raw_os_error(),
-                Some(libc::EPERM | libc::EILSEQ)
-            ) =>
-        {
+        Err(error) if matches!(error.raw_os_error(), Some(libc::EPERM | libc::EILSEQ)) => {
             // APFS rejects the invalid native spelling at creation (EILSEQ). Still
             // execute acquisition for that exact path and retain the OS result;
             // deterministic tests establish invalid-UTF8 data-path support.

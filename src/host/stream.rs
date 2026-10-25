@@ -106,15 +106,10 @@ impl Arrival {
     /// that owns the script runtime. `None` means a `filter_map` dropped it.
     pub fn finish(self) -> Result<Option<Dynamic>, Error> {
         // A Rust value becomes a Rawr value here, on the script thread.
-        let value = match self
-            .value
-            .try_cast_result::<host::runtime::Deferred>()
-        {
-            Ok(deferred) => deferred
-                .resolve()
-                .map_err(|message| Error::Native {
-                    message: message.into(),
-                })?,
+        let value = match self.value.try_cast_result::<host::runtime::Deferred>() {
+            Ok(deferred) => deferred.resolve().map_err(|message| Error::Native {
+                message: message.into(),
+            })?,
             Err(value) => value,
         };
         let mut mapper = self
@@ -659,7 +654,10 @@ impl fmt::Display for Error {
                 "stream issuer Message contract `{message}` has no exact runtime representation"
             ),
             Self::Native { message } => {
-                write!(formatter, "a Rust stream's item could not cross into Rawr: {message}")
+                write!(
+                    formatter,
+                    "a Rust stream's item could not cross into Rawr: {message}"
+                )
             }
         }
     }

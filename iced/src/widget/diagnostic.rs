@@ -408,8 +408,24 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Layer {
         let (report, report_tree) = layouts
             .next()
             .expect("diagnostic layer layout must retain its report");
-        self.children[0].draw(content_tree, renderer, theme, style, content, cursor, viewport);
-        self.children[1].draw(report_tree, renderer, theme, style, report, cursor, viewport);
+        self.children[0].draw(
+            content_tree,
+            renderer,
+            theme,
+            style,
+            content,
+            cursor,
+            viewport,
+        );
+        self.children[1].draw(
+            report_tree,
+            renderer,
+            theme,
+            style,
+            report,
+            cursor,
+            viewport,
+        );
     }
 
     fn overlay<'a>(
@@ -502,11 +518,13 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Report {
         self.refresh(tree);
         let size = limits.max;
         let limits = layout::Limits::new(size, size);
-        self.fallback.layout(&mut tree.children[0], renderer, &limits);
-        tree.state
-            .downcast_mut::<report::State>()
-            .full
-            .layout(&mut tree.children[1], renderer, &limits);
+        self.fallback
+            .layout(&mut tree.children[0], renderer, &limits);
+        tree.state.downcast_mut::<report::State>().full.layout(
+            &mut tree.children[1],
+            renderer,
+            &limits,
+        );
         tree.size = size;
         for child in &mut tree.children {
             child.translation = Vector::ZERO;
@@ -541,15 +559,11 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Report {
                 cursor,
                 viewport,
             ),
-            report::Presentation::Full => tree.state.downcast_ref::<report::State>().full.draw(
-                full_tree,
-                renderer,
-                theme,
-                style,
-                full,
-                cursor,
-                viewport,
-            ),
+            report::Presentation::Full => tree
+                .state
+                .downcast_ref::<report::State>()
+                .full
+                .draw(full_tree, renderer, theme, style, full, cursor, viewport),
         }
     }
 }

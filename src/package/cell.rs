@@ -209,9 +209,10 @@ fn digest(text: &str) -> [u8; 32] {
 fn decode(reader: &mut Reader, text: &str) -> Option<parse::Unit> {
     let script_source = reader.text()?.to_owned();
     let items = Box::<[item::Parsed]>::get(reader)?;
-    reader.bytes.is_empty().then(|| {
-        parse::Unit::new(source::Map::new(text), items, None, script_source)
-    })
+    reader
+        .bytes
+        .is_empty()
+        .then(|| parse::Unit::new(source::Map::new(text), items, None, script_source))
 }
 
 struct Writer(Vec<u8>);
@@ -823,7 +824,11 @@ mod tests {
         let main = include_str!("../../iced-cli/assets/counter/src/main.rs");
         let main = main.strip_prefix("// rawr\n").unwrap();
         std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"cells\"\n").unwrap();
-        std::fs::write(root.join("src/main.rs"), format!("// rawr\nmod view;\n{main}")).unwrap();
+        std::fs::write(
+            root.join("src/main.rs"),
+            format!("// rawr\nmod view;\n{main}"),
+        )
+        .unwrap();
         std::fs::write(
             root.join("src/view.rs"),
             "// rawr\n#[preview(name = \"Wide\", size = (400, 200))]\npub fn wide(n: &(i64, Option<String>)) -> i64 { let x = 3; 0 }\n",
@@ -852,13 +857,14 @@ mod tests {
             assert_eq!(left.path(), right.path());
             assert_eq!(a.items(), b.items());
             assert_eq!(a.parts().2, b.parts().2);
-            assert_eq!(
-                format!("{:?}", a.parts().1),
-                format!("{:?}", b.parts().1)
-            );
+            assert_eq!(format!("{:?}", a.parts().1), format!("{:?}", b.parts().1));
         }
         // A program loaded from its cells compiles as the parsed one does.
-        std::fs::write(root.join("cart.rs"), include_str!("../../examples/scripts/cart.rs")).unwrap();
+        std::fs::write(
+            root.join("cart.rs"),
+            include_str!("../../examples/scripts/cart.rs"),
+        )
+        .unwrap();
         let cart = crate::project::Target::discover(root.join("cart.rs")).unwrap();
         let cells = Cells::new(root.join("cart"));
         let parsed = crate::package::Graph::load_with_cells(&engine, &cart, &cells).unwrap();
@@ -869,7 +875,11 @@ mod tests {
         engine.compile_package(kept).unwrap();
 
         // An edit misses its cell; a cell of another build is stale.
-        std::fs::write(root.join("src/view.rs"), "// rawr\npub fn wide() -> i64 { 1 }\n").unwrap();
+        std::fs::write(
+            root.join("src/view.rs"),
+            "// rawr\npub fn wide() -> i64 { 1 }\n",
+        )
+        .unwrap();
         let mut other = Cells::new(root.join("cells"));
         other.stamp.push_str("/other");
         load(&other).unwrap();

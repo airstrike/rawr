@@ -1809,8 +1809,7 @@ mod tests {
             .expect("fixture has a struct")
             .identity()
             .clone();
-        let origin =
-            Origin::checked("/fixture/main.rs", 0, 4, &limits).expect("origin is bounded");
+        let origin = Origin::checked("/fixture/main.rs", 0, 4, &limits).expect("origin is bounded");
         let mut first = contract
             .compiler((), snapshot(b"Pair", &limits), &limits)
             .expect("compiler binds first snapshot");
@@ -1842,8 +1841,7 @@ mod tests {
             .identity()
             .clone();
         let source = snapshot(b"Pair", &limits);
-        let origin =
-            Origin::checked("/fixture/main.rs", 0, 4, &limits).expect("origin is bounded");
+        let origin = Origin::checked("/fixture/main.rs", 0, 4, &limits).expect("origin is bounded");
         let mut compiler = contract
             .compiler((), source, &limits)
             .expect("the fixture compiler starts");
@@ -1911,13 +1909,7 @@ mod tests {
             )
             .unwrap();
         compiler
-            .require_selected(
-                structure.identity(),
-                constructor,
-                "/fixture/main.rs",
-                2,
-                3,
-            )
+            .require_selected(structure.identity(), constructor, "/fixture/main.rs", 2, 3)
             .unwrap();
         compiler
             .require_selected(structure.identity(), field, "/fixture/main.rs", 4, 5)

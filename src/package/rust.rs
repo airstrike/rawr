@@ -715,7 +715,17 @@ fn request(
     app: Option<Dependency>,
     limits: &Limits,
 ) -> rawr_import::Result<Request> {
-    request_with_profile(entry, config, environment, None, None, None, app, &[], limits)
+    request_with_profile(
+        entry,
+        config,
+        environment,
+        None,
+        None,
+        None,
+        app,
+        &[],
+        limits,
+    )
 }
 
 fn request_with_profile(
@@ -729,9 +739,13 @@ fn request_with_profile(
     demand: &[Box<str>],
     limits: &Limits,
 ) -> rawr_import::Result<Request> {
-    let mut builder = Request::builder(entry.root(), &entry.root().join("target/rawr/cache"), limits)?
-        .environment(environment)
-        .profile(&config.profile)?;
+    let mut builder = Request::builder(
+        entry.root(),
+        &entry.root().join("target/rawr/cache"),
+        limits,
+    )?
+    .environment(environment)
+    .profile(&config.profile)?;
     builder = builder.cargo_authority(&config.cargo_authority)?;
     for configured in &config.dependencies {
         let mut dependency = match &configured.source {

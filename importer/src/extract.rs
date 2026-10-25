@@ -4216,7 +4216,12 @@ impl Candidate {
                 let mut admissions = Vec::new();
                 if let Some(indices) = self.implementation_index.get(id) {
                     allocation.reserve(&mut admissions, indices.len())?;
-                    admissions.extend(indices.iter().copied().filter(|index| !owners.contains(index)));
+                    admissions.extend(
+                        indices
+                            .iter()
+                            .copied()
+                            .filter(|index| !owners.contains(index)),
+                    );
                 }
                 allocation.sort_keys(admissions.len());
                 admissions.sort_unstable();
@@ -4224,7 +4229,11 @@ impl Candidate {
                 for (index, kind) in owners
                     .into_iter()
                     .map(|index| (index, FixedEdgeKind::Admission))
-                    .chain(admissions.into_iter().map(|index| (index, FixedEdgeKind::Relevance)))
+                    .chain(
+                        admissions
+                            .into_iter()
+                            .map(|index| (index, FixedEdgeKind::Relevance)),
+                    )
                 {
                     let implementation = &self.implementations[index];
                     push_fixed_edge(

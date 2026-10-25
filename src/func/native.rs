@@ -485,7 +485,11 @@ impl<'a> NativeCallContext<'a> {
     /// Call a script function by its compiler-private name, the first
     /// argument its receiver by reference: a crate type's own method a
     /// native comparison calls.
-    pub(crate) fn call_script_method(&self, fn_name: &str, args: &mut [&mut Dynamic]) -> RawrResult {
+    pub(crate) fn call_script_method(
+        &self,
+        fn_name: &str,
+        args: &mut [&mut Dynamic],
+    ) -> RawrResult {
         self._call_fn_raw(fn_name, args, false, true, true)
     }
     /// Call a registered native Rust function inside the call context.

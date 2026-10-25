@@ -39,7 +39,10 @@ fn bundled_fonts_draw_cjk_symbols_and_emoji() {
         "Rawr kanagawa",
     ] {
         let glyphs = fonts::glyphs(text);
-        assert!(!glyphs.is_empty() && !glyphs.contains(&0), "{text}: {glyphs:?}");
+        assert!(
+            !glyphs.is_empty() && !glyphs.contains(&0),
+            "{text}: {glyphs:?}"
+        );
     }
     let png = rawr_play::render(
         "column![text(\"神奈川 kanagawa\").size(32), text(\"🌊 ★ 한국어\").size(32)]",

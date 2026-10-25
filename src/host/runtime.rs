@@ -7,8 +7,8 @@ pub mod invocation;
 pub mod operation;
 pub mod stream;
 pub(crate) mod type_ref;
-pub(crate) mod widget;
 mod unwitnessed;
+pub(crate) mod widget;
 mod witness;
 
 pub use call::{Call, Equal, Error as WitnessError};

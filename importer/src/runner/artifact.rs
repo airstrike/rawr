@@ -393,8 +393,14 @@ mod tests {
                     .axis("typed store decoded candidate bytes per graph")
                     .unwrap();
                 assert_eq!(axis.target, crate::node::MAX_DECODED_BYTES_PER_GRAPH);
-                assert_eq!(axis.first_requested, crate::node::MAX_DECODED_BYTES_PER_GRAPH + 1);
-                assert_eq!(axis.high_water, crate::node::MAX_DECODED_BYTES_PER_GRAPH + 1);
+                assert_eq!(
+                    axis.first_requested,
+                    crate::node::MAX_DECODED_BYTES_PER_GRAPH + 1
+                );
+                assert_eq!(
+                    axis.high_water,
+                    crate::node::MAX_DECODED_BYTES_PER_GRAPH + 1
+                );
                 assert!(exceeded.axis(crate::node::PATHS_RESOURCE).is_none());
             } else {
                 assert!(!budget.exceedances().is_exceeded());
@@ -412,7 +418,10 @@ mod tests {
                     crate::node::MAX_DECODED_BYTES_PER_GRAPH + 1
                 );
                 assert_eq!(
-                    exceeded.axis(crate::node::PATHS_RESOURCE).unwrap().high_water,
+                    exceeded
+                        .axis(crate::node::PATHS_RESOURCE)
+                        .unwrap()
+                        .high_water,
                     crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
                 );
             }
@@ -473,7 +482,10 @@ mod tests {
             .copied()
             .unwrap();
         assert_eq!(axis.target, crate::node::MAX_HASHED_BYTES_PER_GRAPH);
-        assert_eq!(axis.first_requested, crate::node::MAX_HASHED_BYTES_PER_GRAPH + 2);
+        assert_eq!(
+            axis.first_requested,
+            crate::node::MAX_HASHED_BYTES_PER_GRAPH + 2
+        );
         assert_eq!(axis.high_water, crate::node::MAX_HASHED_BYTES_PER_GRAPH + 2);
         fs::remove_dir_all(root).expect("the artifact budget fixture retires");
     }

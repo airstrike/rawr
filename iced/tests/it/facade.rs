@@ -165,7 +165,10 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
             "iced::Length::Fixed",
             &[host::type_ref::Builtin::F64, host::type_ref::Builtin::I64][..],
         ),
-        ("iced::Length::FillPortion", &[host::type_ref::Builtin::I64][..]),
+        (
+            "iced::Length::FillPortion",
+            &[host::type_ref::Builtin::I64][..],
+        ),
     ] {
         let overloads = second
             .items()
@@ -235,7 +238,10 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
             .map(|item| item.kind())
             .collect::<Vec<_>>();
         kinds.sort();
-        assert_eq!(kinds, [host::item::Kind::Function, host::item::Kind::IntrinsicMacro]);
+        assert_eq!(
+            kinds,
+            [host::item::Kind::Function, host::item::Kind::IntrinsicMacro]
+        );
     }
     assert_eq!(
         registry.item("iced::Application::run").unwrap().kind(),
@@ -308,7 +314,14 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
         ),
         (
             "text",
-            &["base", "primary", "secondary", "success", "warning", "danger"][..],
+            &[
+                "base",
+                "primary",
+                "secondary",
+                "success",
+                "warning",
+                "danger",
+            ][..],
             "iced::widget::text::Builtin",
         ),
         (
@@ -451,8 +464,16 @@ fn iced_facade_is_deterministic_and_declares_static_contracts() {
         .collect::<Vec<_>>();
     assert_eq!(sliders.len(), 4);
     for (slider, range, number) in [
-        (sliders[0], host::type_ref::Builtin::InclusiveRange, host::type_ref::Builtin::I64),
-        (sliders[1], host::type_ref::Builtin::FloatInclusiveRange, host::type_ref::Builtin::F64),
+        (
+            sliders[0],
+            host::type_ref::Builtin::InclusiveRange,
+            host::type_ref::Builtin::I64,
+        ),
+        (
+            sliders[1],
+            host::type_ref::Builtin::FloatInclusiveRange,
+            host::type_ref::Builtin::F64,
+        ),
     ] {
         assert_eq!(slider.kind(), host::item::Kind::Function);
         assert_eq!(
@@ -914,7 +935,9 @@ fn inputs_of(facade: &host::facade::Definition, path: &str) -> Vec<host::type_re
         .items()
         .filter(|item| item.path() == path)
         .inspect(|item| {
-            assert!(item.receiver().is_none_or(|mode| mode == receiver::Mode::Owned));
+            assert!(item
+                .receiver()
+                .is_none_or(|mode| mode == receiver::Mode::Owned));
         })
         .map(|item| item.signature().parameters()[0].clone())
         .collect()
@@ -975,7 +998,9 @@ fn the_snippet_prelude_names_every_widget_helper() {
     let prelude = block.split('"').skip(1).step_by(2).collect::<Vec<_>>();
     let declares = |path: &str| {
         let module = format!("{path}::");
-        facade.types().any(|ty| ty.path() == path || ty.path().starts_with(&module))
+        facade
+            .types()
+            .any(|ty| ty.path() == path || ty.path().starts_with(&module))
             || facade
                 .items()
                 .any(|item| item.path() == path || item.path().starts_with(&module))

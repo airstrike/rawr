@@ -32,7 +32,11 @@ pub enum EvalAltResult {
     ErrorSystem(String, Box<dyn Error + Send + Sync>),
 
     /// Syntax error.
-    ErrorParsing(ParseErrorType, Position, crate::types::parse_error::Rendered),
+    ErrorParsing(
+        ParseErrorType,
+        Position,
+        crate::types::parse_error::Rendered,
+    ),
 
     /// Shadowing of an existing variable disallowed. Wrapped value is the variable name.
     ErrorVariableExists(String, Position),
@@ -152,18 +156,24 @@ impl fmt::Debug for EvalAltResult {
             Self::ErrorIndexNotFound(a0, a1) => tuple!("ErrorIndexNotFound", a0, a1),
             Self::ErrorFunctionNotFound(a0, a1) => tuple!("ErrorFunctionNotFound", a0, a1),
             Self::ErrorModuleNotFound(a0, a1) => tuple!("ErrorModuleNotFound", a0, a1),
-            Self::ErrorInFunctionCall(a0, a1, a2, a3) => tuple!("ErrorInFunctionCall", a0, a1, a2, a3),
+            Self::ErrorInFunctionCall(a0, a1, a2, a3) => {
+                tuple!("ErrorInFunctionCall", a0, a1, a2, a3)
+            }
             Self::ErrorInModule(a0, a1, a2) => tuple!("ErrorInModule", a0, a1, a2),
             Self::ErrorUnboundThis(a0) => tuple!("ErrorUnboundThis", a0),
             Self::ErrorMismatchDataType(a0, a1, a2) => tuple!("ErrorMismatchDataType", a0, a1, a2),
-            Self::ErrorMismatchOutputType(a0, a1, a2) => tuple!("ErrorMismatchOutputType", a0, a1, a2),
+            Self::ErrorMismatchOutputType(a0, a1, a2) => {
+                tuple!("ErrorMismatchOutputType", a0, a1, a2)
+            }
             Self::ErrorIndexingType(a0, a1) => tuple!("ErrorIndexingType", a0, a1),
             Self::ErrorArrayBounds(a0, a1, a2) => tuple!("ErrorArrayBounds", a0, a1, a2),
             Self::ErrorStringBounds(a0, a1, a2) => tuple!("ErrorStringBounds", a0, a1, a2),
             Self::ErrorBitFieldBounds(a0, a1, a2) => tuple!("ErrorBitFieldBounds", a0, a1, a2),
             Self::ErrorFor(a0) => tuple!("ErrorFor", a0),
             Self::ErrorDataRace(a0, a1) => tuple!("ErrorDataRace", a0, a1),
-            Self::ErrorNonPureMethodCallOnConstant(a0, a1) => tuple!("ErrorNonPureMethodCallOnConstant", a0, a1),
+            Self::ErrorNonPureMethodCallOnConstant(a0, a1) => {
+                tuple!("ErrorNonPureMethodCallOnConstant", a0, a1)
+            }
             Self::ErrorAssignmentToConstant(a0, a1) => tuple!("ErrorAssignmentToConstant", a0, a1),
             Self::ErrorDotExpr(a0, a1) => tuple!("ErrorDotExpr", a0, a1),
             Self::ErrorArithmetic(a0, a1) => tuple!("ErrorArithmetic", a0, a1),

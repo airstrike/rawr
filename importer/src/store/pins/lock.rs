@@ -445,7 +445,6 @@ impl Inventory {
 }
 
 impl Snapshot {
-
     fn read_with_recovery(
         _publication: &crate::store::lease::Publication<'_>,
         store: &Path,
@@ -674,13 +673,13 @@ fn open_shared(path: &Path, expected: &[u8]) -> Result<Guard, Error> {
     })?;
     #[cfg(unix)]
     {
-        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockShared).map_err(
-            |source| Error::Io {
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockShared).map_err(|source| {
+            Error::Io {
                 operation: "acquire typed store pin-root lock",
                 path: path.to_path_buf(),
                 source: std::io::Error::from_raw_os_error(source.raw_os_error()),
-            },
-        )?;
+            }
+        })?;
     }
     #[cfg(not(unix))]
     {
@@ -758,19 +757,20 @@ fn open_snapshot_with(
         path: path.to_path_buf(),
         source,
     })?;
-    let state = match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+    let state = match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+    {
         Ok(()) => false,
         Err(source) if source == rustix::io::Errno::WOULDBLOCK => {
             if !retain_active {
                 return Ok(None);
             }
-            rustix::fs::flock(&file, rustix::fs::FlockOperation::LockShared).map_err(
-                |source| Error::Io {
+            rustix::fs::flock(&file, rustix::fs::FlockOperation::LockShared).map_err(|source| {
+                Error::Io {
                     operation: "retain active typed store pin-root snapshot",
                     path: path.to_path_buf(),
                     source: std::io::Error::from_raw_os_error(source.raw_os_error()),
-                },
-            )?;
+                }
+            })?;
             true
         }
         Err(source) => {

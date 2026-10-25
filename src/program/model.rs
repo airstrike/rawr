@@ -292,12 +292,10 @@ impl Model {
                 .map(|_| self.default_for_type(element, active))
                 .collect::<Result<crate::Array, _>>()
                 .map(Dynamic::from_array),
-            type_ref::Type::Reference { .. } => {
-                Err(construction::Error::ValueType {
-                    expected: type_name(ty),
-                    actual: "no executable Default implementation".into(),
-                })
-            }
+            type_ref::Type::Reference { .. } => Err(construction::Error::ValueType {
+                expected: type_name(ty),
+                actual: "no executable Default implementation".into(),
+            }),
             type_ref::Type::Path(_) if let Some(inner) = ty.reverse_element() => self
                 .default_for_type(inner, active)
                 .map(|value| Dynamic::from(std::cmp::Reverse(value))),
@@ -327,13 +325,12 @@ impl Model {
                     })?;
                     self.default_nominal(identity, &nested.schema.clone(), active)
                 }
-                type_ref::Target::Parameter | type_ref::Target::Projection(..) | type_ref::Target::Alias(_) => {
-                    Err(construction::Error::ValueType {
-                        expected: path.name.clone(),
-                        actual: "no executable Default implementation of a generic parameter"
-                            .into(),
-                    })
-                }
+                type_ref::Target::Parameter
+                | type_ref::Target::Projection(..)
+                | type_ref::Target::Alias(_) => Err(construction::Error::ValueType {
+                    expected: path.name.clone(),
+                    actual: "no executable Default implementation of a generic parameter".into(),
+                }),
                 type_ref::Target::Host { definition, .. } => {
                     #[cfg(not(feature = "no_std"))]
                     if let Some(value) = definition

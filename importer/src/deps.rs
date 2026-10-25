@@ -135,7 +135,10 @@ fn unit_key_at(name: &str) -> Option<(&str, &str)> {
     while let Some(offset) = name[search..].find('-') {
         let dash = search + offset;
         let hash = name.get(dash + 1..dash + 17)?;
-        let ends = name[dash + 17..].chars().next().is_none_or(|next| next == '.');
+        let ends = name[dash + 17..]
+            .chars()
+            .next()
+            .is_none_or(|next| next == '.');
         if hash.bytes().all(|byte| byte.is_ascii_hexdigit()) && ends && dash > 0 {
             return Some((&name[..dash], hash));
         }
@@ -149,14 +152,19 @@ fn unit_key_at(name: &str) -> Option<(&str, &str)> {
 fn current_runner(shared: &Path, runner: &str) -> Option<(String, PathBuf)> {
     let mut newest: Option<(std::time::SystemTime, String, PathBuf)> = None;
     for profile in fs::read_dir(shared).into_iter().flatten().flatten() {
-        for deps in [profile.path().join("deps"), profile.path().join("debug/deps")] {
+        for deps in [
+            profile.path().join("deps"),
+            profile.path().join("debug/deps"),
+        ] {
             for entry in fs::read_dir(&deps).into_iter().flatten().flatten() {
                 let file = entry.file_name();
                 let Some(file) = file.to_str() else { continue };
                 let Some(hash) = file
                     .strip_prefix(runner)
                     .and_then(|rest| rest.strip_prefix('-'))
-                    .filter(|hash| hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                    .filter(|hash| {
+                        hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
                 else {
                     continue;
                 };
@@ -177,7 +185,9 @@ fn current_runner(shared: &Path, runner: &str) -> Option<(String, PathBuf)> {
 fn debug_map_objects(binary: &Path) -> Option<std::collections::HashSet<String>> {
     let bytes = fs::read(binary).ok()?;
     let u32_at = |offset: usize| -> Option<u32> {
-        Some(u32::from_le_bytes(bytes.get(offset..offset + 4)?.try_into().ok()?))
+        Some(u32::from_le_bytes(
+            bytes.get(offset..offset + 4)?.try_into().ok()?,
+        ))
     };
     if u32_at(0)? != 0xfeed_facf {
         return None;
@@ -243,9 +253,13 @@ pub(crate) fn prune_superseded(shared: &Path, messages: &[u8], started: std::tim
             continue;
         };
         rebuilt |= message.get("fresh").and_then(serde_json::Value::as_bool) == Some(false)
-            && message.pointer("/target/name").and_then(serde_json::Value::as_str)
+            && message
+                .pointer("/target/name")
+                .and_then(serde_json::Value::as_str)
                 == Some("rawr-generated-runner")
-            && message.pointer("/target/kind/0").and_then(serde_json::Value::as_str)
+            && message
+                .pointer("/target/kind/0")
+                .and_then(serde_json::Value::as_str)
                 == Some("bin");
         for file in message
             .get("filenames")
@@ -375,7 +389,10 @@ mod tests {
         let project_incremental = target.join("incremental/app-old");
         fs::create_dir_all(&project_incremental).unwrap();
         let derive = write(host.join(format!("deps/libserde_derive-{}.dylib", hash('e'))));
-        let harness = write(target.join(format!("deps/librawr_resolution_harness-{}.rlib", hash('f'))));
+        let harness = write(target.join(format!(
+            "deps/librawr_resolution_harness-{}.rlib",
+            hash('f')
+        )));
         let old_objects = write(target.join(format!(
             "deps/rawr_generated_runner-{}.cgu.old.rcgu.o",
             hash('1')
@@ -431,7 +448,10 @@ mod tests {
         // A fresh runner build keeps the runner's outputs it did not rewrite.
         super::prune_superseded(&shared, runner_fresh(true).as_bytes(), started);
         assert!(old_objects.exists() && old_incremental.exists() && other_runner.exists());
-        assert!(!iced_old.exists() && !iced_host.exists(), "superseded rawr_iced units");
+        assert!(
+            !iced_old.exists() && !iced_host.exists(),
+            "superseded rawr_iced units"
+        );
         super::prune_superseded(&shared, runner_fresh(false).as_bytes(), started);
         for kept in [
             &iced,
@@ -446,9 +466,15 @@ mod tests {
         ] {
             assert!(kept.exists(), "{} is kept", kept.display());
         }
-        assert!(!old_objects.exists(), "the runner's earlier codegen objects");
+        assert!(
+            !old_objects.exists(),
+            "the runner's earlier codegen objects"
+        );
         assert!(!other_runner.exists(), "another runner unit hash");
-        assert!(!old_incremental.exists(), "incremental state the build did not touch");
+        assert!(
+            !old_incremental.exists(),
+            "incremental state the build did not touch"
+        );
         assert_eq!(
             super::unit_key("librawr_iced-0123456789abcdef.rlib"),
             Some(("rawr_iced".to_owned(), "0123456789abcdef"))
@@ -457,7 +483,10 @@ mod tests {
             super::unit_key("rawr-generated-runner-0123456789abcdef"),
             Some(("rawr_generated_runner".to_owned(), "0123456789abcdef"))
         );
-        assert_eq!(super::unit_key("libc-0123456789abcdef.d").map(|key| key.0), Some("libc".to_owned()));
+        assert_eq!(
+            super::unit_key("libc-0123456789abcdef.d").map(|key| key.0),
+            Some("libc".to_owned())
+        );
         assert_eq!(
             super::unit_key("liblibc-0123456789abcdef.rlib").map(|key| key.0),
             Some("libc".to_owned())

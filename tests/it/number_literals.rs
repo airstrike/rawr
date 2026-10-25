@@ -42,7 +42,12 @@ fn test_binary_literal() {
     assert_eq!(engine.eval::<INT>("let x = 0b0011_1100_1010_0101; x").unwrap(), 15525);
 
     #[cfg(not(feature = "only_i32"))]
-    assert_eq!(engine.eval::<INT>("let x: u64 = 0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111; x as i64").unwrap(), -1);
+    assert_eq!(
+        engine
+            .eval::<INT>("let x: u64 = 0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111; x as i64")
+            .unwrap(),
+        -1
+    );
     #[cfg(feature = "only_i32")]
     assert_eq!(engine.eval::<INT>("let x: u32 = 0b11111111_11111111_11111111_11111111; x as i32").unwrap(), -1);
 

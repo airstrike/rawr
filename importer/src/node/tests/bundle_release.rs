@@ -3,8 +3,8 @@
 //! measurement seam rather than APFS timing.
 
 use super::*;
-use crate::store::bundle::release_tests::{measured, recorded};
 use crate::store::bundle::geometry::seam;
+use crate::store::bundle::release_tests::{measured, recorded};
 use std::os::unix::fs::{symlink, PermissionsExt as _};
 
 const COMPLETE: &[u8] = b"release completion";
@@ -475,7 +475,9 @@ fn one_released_bundle_among_several_admits_imports_enrollment_and_eviction() {
     // A previously unseen project enrolls and imports.
     let other = project_context(&root, "project-two");
     let other_store = other.open_store().unwrap();
-    let recipe = other.discover::<BundleValue>(b"release-wide-e", 4096).unwrap();
+    let recipe = other
+        .discover::<BundleValue>(b"release-wide-e", 4096)
+        .unwrap();
     let current = other_store.clone();
     Evaluator::new(&other_store, &Counts::default())
         .discover_bundled(&recipe, move |value| validate(value, &current), plain)

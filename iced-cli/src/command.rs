@@ -324,11 +324,7 @@ fn new(arguments: &mut impl Iterator<Item = OsString>) -> Result<Request, Error>
 fn is_implicit_run_path(argument: &OsStr) -> bool {
     // `rawr.toml` and `.rawr` count as paths only so discovery can say how
     // to convert them.
-    if argument == "."
-        || argument == ".."
-        || argument == "Cargo.toml"
-        || argument == "rawr.toml"
-    {
+    if argument == "." || argument == ".." || argument == "Cargo.toml" || argument == "rawr.toml" {
         return true;
     }
     let path = Path::new(argument);
@@ -389,7 +385,14 @@ mod tests {
 
     #[test]
     fn unambiguous_path_tokens_are_implicit_run_targets() {
-        for path in [".", "..", "./counter", "src/main.rs", "Cargo.toml", "rawr.toml"] {
+        for path in [
+            ".",
+            "..",
+            "./counter",
+            "src/main.rs",
+            "Cargo.toml",
+            "rawr.toml",
+        ] {
             assert_eq!(
                 parse(&[path]).unwrap(),
                 Request::Execute(Command::Run {

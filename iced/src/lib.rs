@@ -17,22 +17,22 @@ mod effect;
 pub mod features;
 
 use features::Feature;
+mod io_facade;
 mod marker;
 pub mod native;
+mod path_facade;
 pub mod preview;
 pub mod profile;
 pub mod program;
 pub mod reload;
 mod renderer;
-mod screenshot;
 pub mod runtime;
+mod screenshot;
 pub mod snapshot;
 pub mod subscription;
 pub mod task;
 #[cfg(test)]
 mod task_thread_tests;
-mod io_facade;
-mod path_facade;
 pub mod theme;
 mod tokio_facade;
 pub mod widget;
@@ -151,7 +151,13 @@ fn register_debug() {
     // `HashMap<touch::Finger, Point>`: a finger keys a map by its id.
     rawr::host::value::register_relations::<iced::touch::Finger>(
         |lhs, rhs| Some(*lhs.read_lock::<iced::touch::Finger>()? == *rhs.read_lock()?),
-        |lhs, rhs| Some(lhs.read_lock::<iced::touch::Finger>()?.0.cmp(&rhs.read_lock::<iced::touch::Finger>()?.0)),
+        |lhs, rhs| {
+            Some(
+                lhs.read_lock::<iced::touch::Finger>()?
+                    .0
+                    .cmp(&rhs.read_lock::<iced::touch::Finger>()?.0),
+            )
+        },
     );
     register::<iced::Vector>();
     register::<iced::window::Event>();
@@ -304,13 +310,25 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         .carried::<theme::CarryColor>()
         .carried::<theme::CarryTheme>();
     builder.value_type::<iced::Length>("Length", &[], OWNED_VALUE_CAPABILITIES)?;
-    builder.default_value_type::<iced::Padding>("Padding", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
+    builder.default_value_type::<iced::Padding>(
+        "Padding",
+        &[],
+        OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
     builder.default_value_type::<iced::Font>("Font", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::Point>("Point", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
-    builder.default_value_type::<iced::Rectangle>("Rectangle", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
+    builder.default_value_type::<iced::Rectangle>(
+        "Rectangle",
+        &[],
+        OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
     builder.default_value_type::<iced::Size>("Size", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
     builder.default_value_type::<iced::Vector>("Vector", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
-    builder.default_value_type::<iced::Rotation>("Rotation", &[], OWNED_DEFAULT_VALUE_CAPABILITIES)?;
+    builder.default_value_type::<iced::Rotation>(
+        "Rotation",
+        &[],
+        OWNED_DEFAULT_VALUE_CAPABILITIES,
+    )?;
     builder.value_type::<iced::gradient::Linear>(
         "gradient::Linear",
         &[],
@@ -342,7 +360,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.private_type::<marker::AngleRange>(
         "RangeInclusive",
         &["T"],
-        &[capability::Kind::Clone, capability::Kind::Send, capability::Kind::Static],
+        &[
+            capability::Kind::Clone,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
     )?;
     builder.default_value_type::<iced::mouse::Interaction>(
         "mouse::Interaction",
@@ -388,7 +410,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         &["Message"],
         COMPONENT,
     )?;
-    builder.project("widget::component::Component", "widget::component::Instance", &["Message"])?;
+    builder.project(
+        "widget::component::Component",
+        "widget::component::Instance",
+        &["Message"],
+    )?;
     // iced's `pub use component::Component` in `widget`, and its
     // `iced::Renderer`.
     builder.alias("widget::Component", "widget::component::Component")?;
@@ -398,7 +424,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         &[],
         OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
     )?;
-    builder.value_type::<marker::Horizontal>("alignment::Horizontal", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.value_type::<marker::Horizontal>(
+        "alignment::Horizontal",
+        &[],
+        OWNED_VALUE_CAPABILITIES,
+    )?;
     builder.value_type::<marker::Vertical>("alignment::Vertical", &[], OWNED_VALUE_CAPABILITIES)?;
     #[cfg(feature = "selector")]
     if features::on(Feature::Selector) {
@@ -500,7 +530,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             capability::Kind::Static,
         ],
     )?;
-    builder.value_type::<iced::keyboard::Event>("keyboard::Event", &[], DEBUG_VALUE_CAPABILITIES)?;
+    builder.value_type::<iced::keyboard::Event>(
+        "keyboard::Event",
+        &[],
+        DEBUG_VALUE_CAPABILITIES,
+    )?;
     builder.value_type::<iced::keyboard::Key>("keyboard::Key", &[], DEBUG_EQ_VALUE_CAPABILITIES)?;
     builder.value_type::<iced::keyboard::key::Named>(
         "keyboard::key::Named",
@@ -535,7 +569,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
         )?;
         builder.type_::<marker::Image>("widget::Image", &[], &[])?;
-        builder.project_with("widget::Image", "Element", &[host::type_def::Argument::fresh()])?;
+        builder.project_with(
+            "widget::Image",
+            "Element",
+            &[host::type_def::Argument::fresh()],
+        )?;
     }
     #[cfg(feature = "svg")]
     if features::on(Feature::Svg) {
@@ -551,9 +589,17 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             ],
         )?;
         builder.type_::<marker::Svg>("widget::Svg", &[], &[])?;
-        builder.project_with("widget::Svg", "Element", &[host::type_def::Argument::fresh()])?;
+        builder.project_with(
+            "widget::Svg",
+            "Element",
+            &[host::type_def::Argument::fresh()],
+        )?;
     }
-    builder.default_value_type::<iced::ContentFit>("ContentFit", &[], OWNED_EQ_DEFAULT_VALUE_CAPABILITIES)?;
+    builder.default_value_type::<iced::ContentFit>(
+        "ContentFit",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
     builder.value_type::<iced::widget::text::Shaping>(
         "widget::text::Shaping",
         &[],
@@ -580,7 +626,13 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         builder.value_type::<marker::QrData>(
             "widget::qr_code::Data",
             &[],
-            &[capability::Kind::Debug, capability::Kind::Clone, capability::Kind::PartialEq, capability::Kind::Send, capability::Kind::Static],
+            &[
+                capability::Kind::Debug,
+                capability::Kind::Clone,
+                capability::Kind::PartialEq,
+                capability::Kind::Send,
+                capability::Kind::Static,
+            ],
         )?;
         builder.value_type::<iced::widget::qr_code::Error>(
             "widget::qr_code::Error",
@@ -588,7 +640,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             OWNED_EQ_VALUE_CAPABILITIES,
         )?;
         builder.type_::<marker::QrCode>("widget::QRCode", &[], &[])?;
-        builder.project_with("widget::QRCode", "Element", &[host::type_def::Argument::fresh()])?;
+        builder.project_with(
+            "widget::QRCode",
+            "Element",
+            &[host::type_def::Argument::fresh()],
+        )?;
     }
     builder.type_::<marker::Span>("widget::text::Span", &["Link"], &[])?;
     builder.type_::<marker::Rich>("widget::text::Rich", &["Link", "Message"], &[])?;
@@ -707,7 +763,11 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     // `theme.to_string()`: its name, as iced's `Display`.
     let mut name = signature::Builder::new();
     name.output(type_ref::Type::builtin(type_ref::Builtin::String));
-    builder.item(item::Definition::method("Theme::to_string", receiver::Mode::Shared, name.finish())?)?;
+    builder.item(item::Definition::method(
+        "Theme::to_string",
+        receiver::Mode::Shared,
+        name.finish(),
+    )?)?;
     // iced's `Theme::ALL`, every built-in theme.
     builder.item(item::Definition::associated_value(
         "Theme::ALL",
@@ -893,7 +953,10 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
             builder.item(item::Definition::function(name, slider_signature(number)?)?)?;
         }
         for angle in ["Degrees", "Radians"] {
-            builder.item(item::Definition::function(name, angle_slider_signature(angle)?)?)?;
+            builder.item(item::Definition::function(
+                name,
+                angle_slider_signature(angle)?,
+            )?)?;
         }
     }
     declare_progress(&mut builder)?;
@@ -992,7 +1055,10 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     for (name, input) in [
         ("color", type_ref::Type::registered("Color")?),
         ("font", type_ref::Type::registered("Font")?),
-        ("line_height", type_ref::Type::builtin(type_ref::Builtin::F64)),
+        (
+            "line_height",
+            type_ref::Type::builtin(type_ref::Builtin::F64),
+        ),
     ] {
         builder.item(item::Definition::method(
             format!("widget::Text::{name}"),
@@ -1305,7 +1371,12 @@ fn extension_with_exports(
         script_signature(&exports.task)?,
     )?)?;
     // tokio, for a program without tokio (`resolve::std_reexport`).
-    tokio_facade::declare(&mut builder, &exports.task, &exports.duration, &exports.instant)?;
+    tokio_facade::declare(
+        &mut builder,
+        &exports.task,
+        &exports.duration,
+        &exports.instant,
+    )?;
     // std's `path` and `ffi` types (`resolve::std_reexport`).
     path_facade::declare(&mut builder)?;
     // std's `io` errors (`resolve::std_reexport`).
@@ -1532,9 +1603,7 @@ fn external_batch_signature(
 
 /// The `Task` an async body runs as: its step function, which takes `()`
 /// or the frame it resumes from (`rawr::future`), and the body's output.
-fn script_signature(
-    export: &host::type_def::Export,
-) -> Result<signature::Definition, host::Error> {
+fn script_signature(export: &host::type_def::Export) -> Result<signature::Definition, host::Error> {
     let mut signature = signature::Builder::new();
     signature.type_parameter("Resume", &[])?;
     signature.type_parameter("Output", &[])?;
@@ -1542,7 +1611,10 @@ fn script_signature(
         type_ref::Type::parameter("Resume")?,
         type_ref::Type::parameter("Output")?,
     ));
-    signature.output(external_type(export, [type_ref::Type::parameter("Output")?])?);
+    signature.output(external_type(
+        export,
+        [type_ref::Type::parameter("Output")?],
+    )?);
     Ok(signature.finish())
 }
 
@@ -1779,7 +1851,12 @@ fn task_perform_signature() -> Result<signature::Definition, host::Error> {
 fn declare_sippers(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let parameter = |name: &str| type_ref::Type::parameter(name);
     let task = |message: &str| type_ref::Type::applied("Task", [parameter(message)?]);
-    let sipper = || type_ref::Type::applied("task::Sipper", [parameter("Output")?, parameter("Progress")?]);
+    let sipper = || {
+        type_ref::Type::applied(
+            "task::Sipper",
+            [parameter("Output")?, parameter("Progress")?],
+        )
+    };
     let handle = || type_ref::Type::registered("task::Handle");
 
     // `futures::future::join(a, b)` and `try_join(a, b)`, which iced
@@ -1793,7 +1870,10 @@ fn declare_sippers(builder: &mut facade::Builder) -> Result<(), host::Error> {
         "Task",
         [type_ref::Type::tuple([parameter("A")?, parameter("B")?])?],
     )?);
-    builder.item(item::Definition::function("futures::future::join", join.finish())?)?;
+    builder.item(item::Definition::function(
+        "futures::future::join",
+        join.finish(),
+    )?)?;
     let fallible = |name: &str| -> Result<type_ref::Type, host::Error> {
         type_ref::Type::applied(
             "Task",
@@ -1841,10 +1921,19 @@ fn declare_sippers(builder: &mut facade::Builder) -> Result<(), host::Error> {
     sip.type_parameter("Progress", &[])?;
     sip.type_parameter("Message", &[])?;
     sip.parameter(sipper()?);
-    sip.parameter(type_ref::Type::callable(parameter("Progress")?, parameter("Message")?));
-    sip.parameter(type_ref::Type::callable(parameter("Output")?, parameter("Message")?));
+    sip.parameter(type_ref::Type::callable(
+        parameter("Progress")?,
+        parameter("Message")?,
+    ));
+    sip.parameter(type_ref::Type::callable(
+        parameter("Output")?,
+        parameter("Message")?,
+    ));
     sip.output(task("Message")?);
-    builder.item(item::Definition::associated_function("Task::sip", sip.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "Task::sip",
+        sip.finish(),
+    )?)?;
 
     let mut abortable = signature::Builder::new();
     abortable.type_parameter("Message", &[])?;
@@ -1885,8 +1974,14 @@ fn declare_sippers(builder: &mut facade::Builder) -> Result<(), host::Error> {
     source.type_parameter("Output", &[])?;
     source.type_parameter("Progress", &[])?;
     source.parameter(sipper()?);
-    source.output(type_ref::Type::applied("Subscription", [parameter("Progress")?])?);
-    builder.item(item::Definition::associated_function("Subscription::run", source.finish())?)?;
+    source.output(type_ref::Type::applied(
+        "Subscription",
+        [parameter("Progress")?],
+    )?);
+    builder.item(item::Definition::associated_function(
+        "Subscription::run",
+        source.finish(),
+    )?)?;
     let mut run = signature::Builder::new();
     run.type_parameter("Output", &[])?;
     run.type_parameter("Progress", &[])?;
@@ -2109,11 +2204,13 @@ fn binary_control_signature(output: &str) -> Result<signature::Definition, host:
 fn slider_signature(number: type_ref::Builtin) -> Result<signature::Definition, host::Error> {
     let mut signature = signature::Builder::new();
     signature.type_parameter("Message", &[])?;
-    signature.parameter(type_ref::Type::builtin(if number == type_ref::Builtin::F64 {
-        type_ref::Builtin::FloatInclusiveRange
-    } else {
-        type_ref::Builtin::InclusiveRange
-    }));
+    signature.parameter(type_ref::Type::builtin(
+        if number == type_ref::Builtin::F64 {
+            type_ref::Builtin::FloatInclusiveRange
+        } else {
+            type_ref::Builtin::InclusiveRange
+        },
+    ));
     signature.parameter(type_ref::Type::builtin(number));
     signature.parameter(type_ref::Type::callable(
         type_ref::Type::builtin(number),
@@ -2121,7 +2218,10 @@ fn slider_signature(number: type_ref::Builtin) -> Result<signature::Definition, 
     ));
     signature.output(type_ref::Type::applied(
         "widget::Slider",
-        [type_ref::Type::builtin(number), type_ref::Type::parameter("Message")?],
+        [
+            type_ref::Type::builtin(number),
+            type_ref::Type::parameter("Message")?,
+        ],
     )?);
     Ok(signature.finish())
 }
@@ -2149,10 +2249,15 @@ fn angle_slider_signature(angle: &str) -> Result<signature::Definition, host::Er
 /// transition shows its value settled: `interpolate` is that value.
 fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let mut progress = signature::Builder::new();
-    progress.parameter(type_ref::Type::builtin(type_ref::Builtin::FloatInclusiveRange));
+    progress.parameter(type_ref::Type::builtin(
+        type_ref::Builtin::FloatInclusiveRange,
+    ));
     progress.parameter(type_ref::Type::builtin(type_ref::Builtin::F64));
     progress.output(type_ref::Type::registered("widget::ProgressBar")?);
-    builder.item(item::Definition::function("widget::progress_bar", progress.finish())?)?;
+    builder.item(item::Definition::function(
+        "widget::progress_bar",
+        progress.finish(),
+    )?)?;
     builder.item(item::Definition::method(
         "widget::ProgressBar::vertical",
         receiver::Mode::Owned,
@@ -2190,13 +2295,19 @@ fn declare_progress(builder: &mut facade::Builder) -> Result<(), host::Error> {
         "widget::Transition",
         [type_ref::Type::parameter("Message")?],
     )?);
-    builder.item(item::Definition::function("widget::transition", transition.finish())?)?;
+    builder.item(item::Definition::function(
+        "widget::transition",
+        transition.finish(),
+    )?)?;
     Ok(())
 }
 
 /// iced's `Animation<f32>`, as `transition` takes it.
 fn float_animation() -> Result<type_ref::Type, host::Error> {
-    type_ref::Type::applied("Animation", [type_ref::Type::builtin(type_ref::Builtin::F64)])
+    type_ref::Type::applied(
+        "Animation",
+        [type_ref::Type::builtin(type_ref::Builtin::F64)],
+    )
 }
 
 /// iced's `Animation<T>` of a `bool` or an `f32`: `new`, its builders, `go`
@@ -2231,7 +2342,10 @@ fn declare_animation(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let mut new = signature::Builder::new();
     new.type_parameter("T", &[])?;
     new.parameter(t()?).output(animation()?);
-    builder.item(item::Definition::associated_function("Animation::new", new.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "Animation::new",
+        new.finish(),
+    )?)?;
     for name in [
         "very_quick",
         "quick",
@@ -2240,7 +2354,13 @@ fn declare_animation(builder: &mut facade::Builder) -> Result<(), host::Error> {
         "repeat_forever",
         "auto_reverse",
     ] {
-        method(builder, name, receiver::Mode::Owned, Vec::new(), animation()?)?;
+        method(
+            builder,
+            name,
+            receiver::Mode::Owned,
+            Vec::new(),
+            animation()?,
+        )?;
     }
     method(
         builder,
@@ -2250,7 +2370,13 @@ fn declare_animation(builder: &mut facade::Builder) -> Result<(), host::Error> {
         animation()?,
     )?;
     for name in ["duration", "delay"] {
-        method(builder, name, receiver::Mode::Owned, vec![duration()?], animation()?)?;
+        method(
+            builder,
+            name,
+            receiver::Mode::Owned,
+            vec![duration()?],
+            animation()?,
+        )?;
     }
     method(
         builder,
@@ -2259,7 +2385,13 @@ fn declare_animation(builder: &mut facade::Builder) -> Result<(), host::Error> {
         vec![type_ref::Type::builtin(type_ref::Builtin::I64)],
         animation()?,
     )?;
-    method(builder, "go", receiver::Mode::Owned, vec![t()?, instant()?], animation()?)?;
+    method(
+        builder,
+        "go",
+        receiver::Mode::Owned,
+        vec![t()?, instant()?],
+        animation()?,
+    )?;
     method(
         builder,
         "go_mut",
@@ -2275,8 +2407,20 @@ fn declare_animation(builder: &mut facade::Builder) -> Result<(), host::Error> {
         type_ref::Type::builtin(type_ref::Builtin::Bool),
     )?;
     method(builder, "value", receiver::Mode::Shared, Vec::new(), t()?)?;
-    method(builder, "remaining", receiver::Mode::Shared, vec![instant()?], duration()?)?;
-    method(builder, "interpolate", receiver::Mode::Shared, vec![instant()?], f64())?;
+    method(
+        builder,
+        "remaining",
+        receiver::Mode::Shared,
+        vec![instant()?],
+        duration()?,
+    )?;
+    method(
+        builder,
+        "interpolate",
+        receiver::Mode::Shared,
+        vec![instant()?],
+        f64(),
+    )?;
     method(
         builder,
         "interpolate",
@@ -2325,7 +2469,10 @@ fn declare_tooltip(builder: &mut facade::Builder) -> Result<(), host::Error> {
             "widget::Tooltip",
             [type_ref::Type::parameter("Message")?],
         )?);
-        builder.item(item::Definition::function("widget::tooltip", signature.finish())?)?;
+        builder.item(item::Definition::function(
+            "widget::tooltip",
+            signature.finish(),
+        )?)?;
     }
     pixels_builders(builder, "widget::Tooltip", "gap")?;
     builders(
@@ -2372,13 +2519,19 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         ("Top", "alignment::Vertical"),
         ("Bottom", "alignment::Vertical"),
     ] {
-        builder.item(item::Definition::value(name, type_ref::Type::registered(owner)?)?)?;
+        builder.item(item::Definition::value(
+            name,
+            type_ref::Type::registered(owner)?,
+        )?)?;
     }
     // iced's `impl Into<alignment::Horizontal>` and `Into<Vertical>`.
     builder.item(item::Definition::method(
         "widget::Text::align_x",
         receiver::Mode::Owned,
-        fixed_builder_signature("widget::Text", type_ref::Type::registered("alignment::Horizontal")?)?,
+        fixed_builder_signature(
+            "widget::Text",
+            type_ref::Type::registered("alignment::Horizontal")?,
+        )?,
     )?)?;
     for input in ["alignment::Vertical", "Alignment"] {
         builder.item(item::Definition::method(
@@ -2412,9 +2565,20 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
     length_builders(
         builder,
         "widget::Container",
-        &["center", "align_left", "align_right", "align_top", "align_bottom"],
+        &[
+            "center",
+            "align_left",
+            "align_right",
+            "align_top",
+            "align_bottom",
+        ],
     )?;
-    for name in ["widget::left", "widget::right", "widget::top", "widget::bottom"] {
+    for name in [
+        "widget::left",
+        "widget::right",
+        "widget::top",
+        "widget::bottom",
+    ] {
         builder.item(item::Definition::function(name, container_signature()?)?)?;
     }
     for name in ["widget::rule::horizontal", "widget::rule::vertical"] {
@@ -2500,8 +2664,18 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
     for (owner, name, input, output) in [
         ("time::Duration", "add", duration()?, duration()?),
         ("time::Duration", "sub", duration()?, duration()?),
-        ("time::Duration", "mul", type_ref::Type::builtin(type_ref::Builtin::I64), duration()?),
-        ("time::Duration", "div", type_ref::Type::builtin(type_ref::Builtin::I64), duration()?),
+        (
+            "time::Duration",
+            "mul",
+            type_ref::Type::builtin(type_ref::Builtin::I64),
+            duration()?,
+        ),
+        (
+            "time::Duration",
+            "div",
+            type_ref::Type::builtin(type_ref::Builtin::I64),
+            duration()?,
+        ),
         ("time::Instant", "sub", instant()?, duration()?),
         ("time::Instant", "sub", duration()?, instant()?),
         ("time::Instant", "add", duration()?, instant()?),
@@ -2516,9 +2690,18 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
         )?)?;
     }
     for (name, output) in [
-        ("subsec_millis", type_ref::Type::builtin(type_ref::Builtin::U32)),
-        ("subsec_micros", type_ref::Type::builtin(type_ref::Builtin::U32)),
-        ("subsec_nanos", type_ref::Type::builtin(type_ref::Builtin::U32)),
+        (
+            "subsec_millis",
+            type_ref::Type::builtin(type_ref::Builtin::U32),
+        ),
+        (
+            "subsec_micros",
+            type_ref::Type::builtin(type_ref::Builtin::U32),
+        ),
+        (
+            "subsec_nanos",
+            type_ref::Type::builtin(type_ref::Builtin::U32),
+        ),
         ("is_zero", type_ref::Type::builtin(type_ref::Builtin::Bool)),
     ] {
         let mut reader = signature::Builder::new();
@@ -2529,7 +2712,10 @@ fn declare_master_helpers(builder: &mut facade::Builder) -> Result<(), host::Err
             reader.finish(),
         )?)?;
     }
-    builder.item(item::Definition::associated_value("time::Duration::ZERO", duration()?)?)?;
+    builder.item(item::Definition::associated_value(
+        "time::Duration::ZERO",
+        duration()?,
+    )?)?;
     builder.item(item::Definition::associated_function(
         "time::Instant::now",
         output_signature("time::Instant")?,
@@ -2651,7 +2837,10 @@ fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
     opaque.type_parameter("Message", &[])?;
     opaque.parameter(element("Message")?);
     opaque.output(element("Message")?);
-    builder.item(item::Definition::function("widget::opaque", opaque.finish())?)?;
+    builder.item(item::Definition::function(
+        "widget::opaque",
+        opaque.finish(),
+    )?)?;
     let mut responsive = signature::Builder::new();
     responsive.type_parameter("Message", &[])?;
     responsive.parameter(type_ref::Type::callable(
@@ -2659,7 +2848,10 @@ fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
         element("Message")?,
     ));
     responsive.output(element("Message")?);
-    builder.item(item::Definition::function("widget::responsive", responsive.finish())?)?;
+    builder.item(item::Definition::function(
+        "widget::responsive",
+        responsive.finish(),
+    )?)?;
 
     builder.item(item::Definition::function(
         "widget::pin",
@@ -2693,7 +2885,12 @@ fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
     )?;
     pixels_builders(builder, "widget::Pin", "x")?;
     pixels_builders(builder, "widget::Pin", "y")?;
-    builders(builder, "widget::Pin", "position", [type_ref::Type::registered("Point")?])?;
+    builders(
+        builder,
+        "widget::Pin",
+        "position",
+        [type_ref::Type::registered("Point")?],
+    )?;
     length_builders(builder, "widget::Pin", &["width", "height"])?;
 
     builder.item(item::Definition::function(
@@ -2726,8 +2923,20 @@ fn declare_wrappers(builder: &mut facade::Builder) -> Result<(), host::Error> {
 fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let string = || type_ref::Type::builtin(type_ref::Builtin::String);
     for (feature, module, handle, function, widget) in [
-        (Feature::Image, "widget::image", "widget::image::Handle", "widget::image", "widget::Image"),
-        (Feature::Svg, "widget::svg", "widget::svg::Handle", "widget::svg", "widget::Svg"),
+        (
+            Feature::Image,
+            "widget::image",
+            "widget::image::Handle",
+            "widget::image",
+            "widget::Image",
+        ),
+        (
+            Feature::Svg,
+            "widget::svg",
+            "widget::svg::Handle",
+            "widget::svg",
+            "widget::Svg",
+        ),
     ] {
         if !features::on(feature) {
             continue;
@@ -2743,7 +2952,10 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
                 ("from_rgba", vec![u32_(), u32_(), bytes()]),
             ]
         } else {
-            vec![("from_path", vec![string()]), ("from_memory", vec![bytes()])]
+            vec![
+                ("from_path", vec![string()]),
+                ("from_memory", vec![bytes()]),
+            ]
         };
         for (name, parameters) in constructors {
             let mut signature = signature::Builder::new();
@@ -2765,11 +2977,26 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
         }
         let _ = module;
         length_builders(builder, widget, &["width", "height"])?;
-        builders(builder, widget, "content_fit", [type_ref::Type::registered("ContentFit")?])?;
-        builders(builder, widget, "opacity", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
+        builders(
+            builder,
+            widget,
+            "content_fit",
+            [type_ref::Type::registered("ContentFit")?],
+        )?;
+        builders(
+            builder,
+            widget,
+            "opacity",
+            [type_ref::Type::builtin(type_ref::Builtin::F64)],
+        )?;
     }
     if features::on(Feature::Image) {
-        builders(builder, "widget::Image", "scale", [type_ref::Type::builtin(type_ref::Builtin::F64)])?;
+        builders(
+            builder,
+            "widget::Image",
+            "scale",
+            [type_ref::Type::builtin(type_ref::Builtin::F64)],
+        )?;
         builders(
             builder,
             "widget::Image",
@@ -2799,11 +3026,17 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
         type_ref::Type::registered("widget::qr_code::Data")?,
         type_ref::Type::registered("widget::qr_code::Error")?,
     ));
-    builder.item(item::Definition::associated_function("widget::qr_code::Data::new", data.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::qr_code::Data::new",
+        data.finish(),
+    )?)?;
     let mut qr_code = signature::Builder::new();
     qr_code.parameter(type_ref::Type::registered("widget::qr_code::Data")?);
     qr_code.output(type_ref::Type::registered("widget::QRCode")?);
-    builder.item(item::Definition::function("widget::qr_code", qr_code.finish())?)?;
+    builder.item(item::Definition::function(
+        "widget::qr_code",
+        qr_code.finish(),
+    )?)?;
     pixels_builders(builder, "widget::QRCode", "cell_size")?;
     pixels_builders(builder, "widget::QRCode", "total_size")?;
     Ok(())
@@ -2813,18 +3046,25 @@ fn declare_media(builder: &mut facade::Builder) -> Result<(), host::Error> {
 /// `Link` is any value; `on_link_click` maps a clicked link to a Message.
 fn declare_rich_text(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let link = || type_ref::Type::parameter("Link");
-    let span = || type_ref::Type::applied("widget::text::Span", [type_ref::Type::parameter("Link")?]);
+    let span =
+        || type_ref::Type::applied("widget::text::Span", [type_ref::Type::parameter("Link")?]);
     let rich = || {
         type_ref::Type::applied(
             "widget::text::Rich",
-            [type_ref::Type::parameter("Link")?, type_ref::Type::parameter("Message")?],
+            [
+                type_ref::Type::parameter("Link")?,
+                type_ref::Type::parameter("Message")?,
+            ],
         )
     };
     let mut function = signature::Builder::new();
     function.type_parameter("Link", &[])?;
     function.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
     function.output(span()?);
-    builder.item(item::Definition::function("widget::span", function.finish())?)?;
+    builder.item(item::Definition::function(
+        "widget::span",
+        function.finish(),
+    )?)?;
     let span_builder = |input: type_ref::Type| -> Result<signature::Definition, host::Error> {
         let mut signature = signature::Builder::new();
         signature.type_parameter("Link", &[])?;
@@ -2854,16 +3094,17 @@ fn declare_rich_text(builder: &mut facade::Builder) -> Result<(), host::Error> {
         )?)?;
     }
 
-    let rich_signature = |input: Option<type_ref::Type>| -> Result<signature::Definition, host::Error> {
-        let mut signature = signature::Builder::new();
-        signature.type_parameter("Link", &[])?;
-        signature.type_parameter("Message", &[])?;
-        if let Some(input) = input {
-            signature.parameter(input);
-        }
-        signature.output(rich()?);
-        Ok(signature.finish())
-    };
+    let rich_signature =
+        |input: Option<type_ref::Type>| -> Result<signature::Definition, host::Error> {
+            let mut signature = signature::Builder::new();
+            signature.type_parameter("Link", &[])?;
+            signature.type_parameter("Message", &[])?;
+            if let Some(input) = input {
+                signature.parameter(input);
+            }
+            signature.output(rich()?);
+            Ok(signature.finish())
+        };
     builder.item(item::Definition::function(
         "widget::rich_text",
         rich_signature(Some(type_ref::Type::slice(span()?)))?,
@@ -2949,13 +3190,21 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         &["Message"],
         CANVAS_PROGRAM,
     )?;
-    builder.project("widget::canvas::Program", "widget::canvas::Instance", &["Message"])?;
+    builder.project(
+        "widget::canvas::Program",
+        "widget::canvas::Instance",
+        &["Message"],
+    )?;
     builder.type_::<marker::Canvas>("widget::Canvas", &["Message"], &[])?;
     builder.project("widget::Canvas", "Element", &["Message"])?;
     builder.alias("widget::canvas::Canvas", "widget::Canvas")?;
     builder.type_::<marker::CanvasAction>("widget::canvas::Action", &["Message"], &[])?;
     builder.alias("widget::canvas::Event", "Event")?;
-    let cloned = &[capability::Kind::Clone, capability::Kind::Send, capability::Kind::Static];
+    let cloned = &[
+        capability::Kind::Clone,
+        capability::Kind::Send,
+        capability::Kind::Static,
+    ];
     let debug = &[
         capability::Kind::Debug,
         capability::Kind::Clone,
@@ -2990,16 +3239,36 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
             capability::Kind::Static,
         ],
     )?;
-    builder.default_type::<iced::widget::canvas::Stroke<'static>>("widget::canvas::Stroke", &[], copied_default)?;
-    builder.default_type::<iced::widget::canvas::Fill>("widget::canvas::Fill", &[], copied_default)?;
-    builder.value_type::<iced::widget::canvas::Style>("widget::canvas::Style", &[], OWNED_VALUE_CAPABILITIES)?;
+    builder.default_type::<iced::widget::canvas::Stroke<'static>>(
+        "widget::canvas::Stroke",
+        &[],
+        copied_default,
+    )?;
+    builder.default_type::<iced::widget::canvas::Fill>(
+        "widget::canvas::Fill",
+        &[],
+        copied_default,
+    )?;
+    builder.value_type::<iced::widget::canvas::Style>(
+        "widget::canvas::Style",
+        &[],
+        OWNED_VALUE_CAPABILITIES,
+    )?;
     builder.value_type::<iced::widget::canvas::fill::Rule>(
         "widget::canvas::fill::Rule",
         &[],
         OWNED_EQ_VALUE_CAPABILITIES,
     )?;
-    builder.default_type::<iced::widget::canvas::LineCap>("widget::canvas::LineCap", &[], copied_default)?;
-    builder.default_type::<iced::widget::canvas::LineJoin>("widget::canvas::LineJoin", &[], copied_default)?;
+    builder.default_type::<iced::widget::canvas::LineCap>(
+        "widget::canvas::LineCap",
+        &[],
+        copied_default,
+    )?;
+    builder.default_type::<iced::widget::canvas::LineJoin>(
+        "widget::canvas::LineJoin",
+        &[],
+        copied_default,
+    )?;
     builder.default_type::<iced::widget::canvas::Text>(
         "widget::canvas::Text",
         &[],
@@ -3021,7 +3290,9 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     builder.alias("widget::canvas::stroke::Stroke", "widget::canvas::Stroke")?;
     builder.alias("widget::canvas::fill::Fill", "widget::canvas::Fill")?;
     builder.alias("widget::canvas::path::Path", "widget::canvas::Path")?;
-    for name in ["Path", "Frame", "Cache", "Stroke", "Fill", "Style", "Text", "LineCap", "LineJoin"] {
+    for name in [
+        "Path", "Frame", "Cache", "Stroke", "Fill", "Style", "Text", "LineCap", "LineJoin",
+    ] {
         builder.alias(
             format!("advanced::graphics::geometry::{name}"),
             format!("widget::canvas::{name}"),
@@ -3031,9 +3302,18 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     for module in ["path", "stroke", "fill"] {
         builder.module(format!("advanced::graphics::geometry::{module}"))?;
     }
-    builder.alias("advanced::graphics::geometry::path::Builder", "widget::canvas::path::Builder")?;
-    builder.alias("advanced::graphics::geometry::stroke::Style", "widget::canvas::Style")?;
-    builder.alias("advanced::graphics::geometry::fill::Rule", "widget::canvas::fill::Rule")?;
+    builder.alias(
+        "advanced::graphics::geometry::path::Builder",
+        "widget::canvas::path::Builder",
+    )?;
+    builder.alias(
+        "advanced::graphics::geometry::stroke::Style",
+        "widget::canvas::Style",
+    )?;
+    builder.alias(
+        "advanced::graphics::geometry::fill::Rule",
+        "widget::canvas::fill::Rule",
+    )?;
 
     // `canvas(program)` and `Canvas::new(program)`, with its size.
     let instance = || type_ref::Type::applied("widget::canvas::Instance", [message()?]);
@@ -3063,7 +3343,10 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
             ty("Rectangle")?,
             ty("mouse::Cursor")?,
         ])?,
-        type_ref::Type::option(type_ref::Type::applied("widget::canvas::Action", [message()?])?),
+        type_ref::Type::option(type_ref::Type::applied(
+            "widget::canvas::Action",
+            [message()?],
+        )?),
     ));
     new.parameter(type_ref::Type::callable(
         type_ref::Type::tuple([
@@ -3115,7 +3398,10 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let builder_ty = || ty("widget::canvas::path::Builder");
     builder.item(item::Definition::associated_function(
         "widget::canvas::Path::new",
-        signature(vec![type_ref::Type::callable(builder_ty()?, unit()?)], path()?),
+        signature(
+            vec![type_ref::Type::callable(builder_ty()?, unit()?)],
+            path()?,
+        ),
     )?)?;
     for (name, inputs) in [
         ("circle", vec![ty("Point")?, f64_()]),
@@ -3140,7 +3426,10 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         ("rounded_rectangle", vec![ty("Point")?, ty("Size")?, f64_()]),
         ("arc_to", vec![ty("Point")?, ty("Point")?, f64_()]),
         ("quadratic_curve_to", vec![ty("Point")?, ty("Point")?]),
-        ("bezier_curve_to", vec![ty("Point")?, ty("Point")?, ty("Point")?]),
+        (
+            "bezier_curve_to",
+            vec![ty("Point")?, ty("Point")?, ty("Point")?],
+        ),
         ("close", Vec::new()),
     ] {
         builder.item(item::Definition::method(
@@ -3170,9 +3459,17 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         ("size", Vec::new(), ty("Size")?),
         ("center", Vec::new(), ty("Point")?),
         ("stroke", vec![path()?, stroke()?], unit()?),
-        ("stroke_rectangle", vec![ty("Point")?, ty("Size")?, stroke()?], unit()?),
+        (
+            "stroke_rectangle",
+            vec![ty("Point")?, ty("Size")?, stroke()?],
+            unit()?,
+        ),
         ("fill_text", vec![ty("widget::canvas::Text")?], unit()?),
-        ("fill_text", vec![type_ref::Type::builtin(type_ref::Builtin::String)], unit()?),
+        (
+            "fill_text",
+            vec![type_ref::Type::builtin(type_ref::Builtin::String)],
+            unit()?,
+        ),
         ("translate", vec![ty("Vector")?], unit()?),
         ("rotate", vec![f64_()], unit()?),
         ("rotate", vec![ty("Degrees")?], unit()?),
@@ -3185,7 +3482,11 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     // `impl Into<Fill>`: a `Fill`, or a `Color` filled solid.
     for paint in [fill()?, ty("Color")?] {
         frame_methods.push(("fill", vec![path()?, paint.clone()], unit()?));
-        frame_methods.push(("fill_rectangle", vec![ty("Point")?, ty("Size")?, paint], unit()?));
+        frame_methods.push((
+            "fill_rectangle",
+            vec![ty("Point")?, ty("Size")?, paint],
+            unit()?,
+        ));
     }
     for (name, inputs, output) in frame_methods {
         builder.item(item::Definition::method(
@@ -3196,7 +3497,10 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     }
     let mut with_save = signature::Builder::new();
     with_save.type_parameter("R", &[])?;
-    with_save.parameter(type_ref::Type::callable(frame()?, type_ref::Type::parameter("R")?));
+    with_save.parameter(type_ref::Type::callable(
+        frame()?,
+        type_ref::Type::parameter("R")?,
+    ));
     with_save.output(type_ref::Type::parameter("R")?);
     builder.item(item::Definition::method(
         "widget::canvas::Frame::with_save",
@@ -3347,7 +3651,10 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         signature(Vec::new(), text()?),
     )?)?;
     for (name, field) in [
-        ("content", type_ref::Type::builtin(type_ref::Builtin::String)),
+        (
+            "content",
+            type_ref::Type::builtin(type_ref::Builtin::String),
+        ),
         ("position", ty("Point")?),
         ("max_width", f64_()),
         ("color", ty("Color")?),
@@ -3386,10 +3693,26 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
     )?)?;
     for (name, inputs, output) in [
         ("position", Vec::new(), type_ref::Type::option(ty("Point")?)),
-        ("position_in", vec![ty("Rectangle")?], type_ref::Type::option(ty("Point")?)),
-        ("position_over", vec![ty("Rectangle")?], type_ref::Type::option(ty("Point")?)),
-        ("position_from", vec![ty("Point")?], type_ref::Type::option(ty("Point")?)),
-        ("is_over", vec![ty("Rectangle")?], type_ref::Type::builtin(type_ref::Builtin::Bool)),
+        (
+            "position_in",
+            vec![ty("Rectangle")?],
+            type_ref::Type::option(ty("Point")?),
+        ),
+        (
+            "position_over",
+            vec![ty("Rectangle")?],
+            type_ref::Type::option(ty("Point")?),
+        ),
+        (
+            "position_from",
+            vec![ty("Point")?],
+            type_ref::Type::option(ty("Point")?),
+        ),
+        (
+            "is_over",
+            vec![ty("Rectangle")?],
+            type_ref::Type::builtin(type_ref::Builtin::Bool),
+        ),
     ] {
         builder.item(item::Definition::method(
             format!("mouse::Cursor::{name}"),
@@ -3404,7 +3727,11 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         ("size", Vec::new(), ty("Size")?),
         ("center", Vec::new(), ty("Point")?),
         ("position", Vec::new(), ty("Point")?),
-        ("contains", vec![ty("Point")?], type_ref::Type::builtin(type_ref::Builtin::Bool)),
+        (
+            "contains",
+            vec![ty("Point")?],
+            type_ref::Type::builtin(type_ref::Builtin::Bool),
+        ),
     ] {
         builder.item(item::Definition::method(
             format!("Rectangle::{name}"),
@@ -3417,7 +3744,10 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
         receiver::Mode::Shared,
         signature(vec![ty("Point")?], f64_()),
     )?)?;
-    builder.item(item::Definition::associated_value("Point::ORIGIN", ty("Point")?)?)?;
+    builder.item(item::Definition::associated_value(
+        "Point::ORIGIN",
+        ty("Point")?,
+    )?)?;
     builder.item(item::Definition::associated_function(
         "mouse::Interaction::default",
         signature(Vec::new(), ty("mouse::Interaction")?),
@@ -3442,7 +3772,11 @@ fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
         signature.output(output);
         item::Definition::stream_operation(path, signature.finish(), host::stream::Version::new(1))
     };
-    builder.item(stream("event::listen", &[], type_ref::Type::registered("Event")?)?)?;
+    builder.item(stream(
+        "event::listen",
+        &[],
+        type_ref::Type::registered("Event")?,
+    )?)?;
     // iced's `event::listen_with(f)`: every runtime event but redraws,
     // with its status and window, filtered through `f`.
     builder.item(stream(
@@ -3471,7 +3805,11 @@ fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
         &[],
         type_ref::Type::registered("keyboard::Event")?,
     )?)?;
-    builder.item(stream("window::frames", &[], type_ref::Type::registered("time::Instant")?)?)?;
+    builder.item(stream(
+        "window::frames",
+        &[],
+        type_ref::Type::registered("time::Instant")?,
+    )?)?;
     builder.item(stream(
         "time::every",
         &[type_ref::Type::registered("time::Duration")?],
@@ -3524,7 +3862,10 @@ fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
     for (field, output) in [
         ("key", type_ref::Type::registered("keyboard::Key")?),
         ("modified_key", type_ref::Type::registered("keyboard::Key")?),
-        ("modifiers", type_ref::Type::registered("keyboard::Modifiers")?),
+        (
+            "modifiers",
+            type_ref::Type::registered("keyboard::Modifiers")?,
+        ),
         ("repeat", type_ref::Type::builtin(type_ref::Builtin::Bool)),
     ] {
         let mut reader = signature::Builder::new();
@@ -3538,7 +3879,10 @@ fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let mut named = signature::Builder::new();
     named.parameter(type_ref::Type::registered("keyboard::key::Named")?);
     named.output(type_ref::Type::registered("keyboard::Key")?);
-    builder.item(item::Definition::associated_function("keyboard::Key::Named", named.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "keyboard::Key::Named",
+        named.finish(),
+    )?)?;
     let mut character = signature::Builder::new();
     character.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
     character.output(type_ref::Type::registered("keyboard::Key")?);
@@ -3562,7 +3906,15 @@ fn declare_events(builder: &mut facade::Builder) -> Result<(), host::Error> {
             type_ref::Type::registered("keyboard::key::Named")?,
         )?)?;
     }
-    for name in ["shift", "control", "alt", "logo", "command", "macos_command", "jump"] {
+    for name in [
+        "shift",
+        "control",
+        "alt",
+        "logo",
+        "command",
+        "macos_command",
+        "jump",
+    ] {
         builder.item(item::Definition::method(
             format!("keyboard::Modifiers::{name}"),
             receiver::Mode::Shared,
@@ -3586,7 +3938,11 @@ fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Err
     ) -> Result<(), host::Error> {
         let mut signature = signature::Builder::new();
         signature.output(output);
-        builder.item(item::Definition::method(path, receiver::Mode::Shared, signature.finish())?)?;
+        builder.item(item::Definition::method(
+            path,
+            receiver::Mode::Shared,
+            signature.finish(),
+        )?)?;
         Ok(())
     }
     let bool_ = || type_ref::Type::builtin(type_ref::Builtin::Bool);
@@ -3615,7 +3971,12 @@ fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Err
         ("Closed", None),
         ("Moved", Some(some("Point")?)),
         ("Resized", Some(some("Size")?)),
-        ("Rescaled", Some(type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::F32)))),
+        (
+            "Rescaled",
+            Some(type_ref::Type::option(type_ref::Type::builtin(
+                type_ref::Builtin::F32,
+            ))),
+        ),
         ("RedrawRequested", Some(some("time::Instant")?)),
         ("CloseRequested", None),
         ("Focused", None),
@@ -3624,14 +3985,22 @@ fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Err
         ("FileDropped", None),
         ("FilesHoveredLeft", None),
     ] {
-        reader(builder, format!("window::Event::{variant}"), payload.unwrap_or_else(bool_))?;
+        reader(
+            builder,
+            format!("window::Event::{variant}"),
+            payload.unwrap_or_else(bool_),
+        )?;
     }
     reader(
         builder,
         "window::Event::position".into(),
         type_ref::Type::option(type_ref::Type::registered("Point")?),
     )?;
-    reader(builder, "window::Event::size".into(), type_ref::Type::registered("Size")?)?;
+    reader(
+        builder,
+        "window::Event::size".into(),
+        type_ref::Type::registered("Size")?,
+    )?;
     reader(
         builder,
         "window::Event::scale_factor".into(),
@@ -3645,9 +4014,17 @@ fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Err
         ("ButtonReleased", Some(some("mouse::Button")?)),
         ("WheelScrolled", None),
     ] {
-        reader(builder, format!("mouse::Event::{variant}"), payload.unwrap_or_else(bool_))?;
+        reader(
+            builder,
+            format!("mouse::Event::{variant}"),
+            payload.unwrap_or_else(bool_),
+        )?;
     }
-    reader(builder, "mouse::Event::position".into(), type_ref::Type::registered("Point")?)?;
+    reader(
+        builder,
+        "mouse::Event::position".into(),
+        type_ref::Type::registered("Point")?,
+    )?;
     for name in ["Left", "Right", "Middle", "Back", "Forward"] {
         builder.item(item::Definition::associated_value(
             format!("mouse::Button::{name}"),
@@ -3657,13 +4034,29 @@ fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Err
     for variant in ["FingerPressed", "FingerMoved", "FingerLifted", "FingerLost"] {
         reader(builder, format!("touch::Event::{variant}"), bool_())?;
     }
-    reader(builder, "touch::Event::position".into(), type_ref::Type::registered("Point")?)?;
-    reader(builder, "touch::Event::id".into(), type_ref::Type::registered("touch::Finger")?)?;
+    reader(
+        builder,
+        "touch::Event::position".into(),
+        type_ref::Type::registered("Point")?,
+    )?;
+    reader(
+        builder,
+        "touch::Event::id".into(),
+        type_ref::Type::registered("touch::Finger")?,
+    )?;
     // `finger.0`, its `u64` id.
-    reader(builder, "touch::Finger::0".into(), type_ref::Type::builtin(type_ref::Builtin::U64))?;
+    reader(
+        builder,
+        "touch::Finger::0".into(),
+        type_ref::Type::builtin(type_ref::Builtin::U64),
+    )?;
     // `Key::Named(named)` and `Key::Character(c)` in a pattern: beside
     // their constructors, the readers of their fields.
-    reader(builder, "keyboard::Key::Named".into(), some("keyboard::key::Named")?)?;
+    reader(
+        builder,
+        "keyboard::Key::Named".into(),
+        some("keyboard::key::Named")?,
+    )?;
     reader(
         builder,
         "keyboard::Key::Character".into(),
@@ -3674,10 +4067,46 @@ fn declare_event_variants(builder: &mut facade::Builder) -> Result<(), host::Err
 
 /// The `keyboard::key::Named` keys the facade names.
 pub(crate) const KEY_NAMES: [&str; 40] = [
-    "Alt", "Control", "Shift", "Super", "Meta", "Enter", "Tab", "Space", "ArrowDown", "ArrowLeft",
-    "ArrowRight", "ArrowUp", "End", "Home", "PageDown", "PageUp", "Backspace", "Delete", "Insert",
-    "Escape", "CapsLock", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
-    "Copy", "Cut", "Paste", "Undo", "Redo", "ContextMenu", "PrintScreen",
+    "Alt",
+    "Control",
+    "Shift",
+    "Super",
+    "Meta",
+    "Enter",
+    "Tab",
+    "Space",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "End",
+    "Home",
+    "PageDown",
+    "PageUp",
+    "Backspace",
+    "Delete",
+    "Insert",
+    "Escape",
+    "CapsLock",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+    "Copy",
+    "Cut",
+    "Paste",
+    "Undo",
+    "Redo",
+    "ContextMenu",
+    "PrintScreen",
 ];
 
 /// iced's `image::FilterMethod` variants.
@@ -3720,9 +4149,14 @@ fn declare_native_tasks(builder: &mut facade::Builder) -> Result<(), host::Error
     let mut latest = signature::Builder::new();
     latest.output(type_ref::Type::applied(
         "Task",
-        [type_ref::Type::option(type_ref::Type::registered("window::Id")?)],
+        [type_ref::Type::option(type_ref::Type::registered(
+            "window::Id",
+        )?)],
     )?);
-    builder.item(item::Definition::function("window::latest", latest.finish())?)?;
+    builder.item(item::Definition::function(
+        "window::latest",
+        latest.finish(),
+    )?)?;
     // `font::list()`: the system's font families.
     let mut list = signature::Builder::new();
     list.output(type_ref::Type::applied(
@@ -3775,7 +4209,10 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
     let mut new = signature::Builder::new();
     new.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
     new.output(id()?);
-    builder.item(item::Definition::associated_function("widget::Id::new", new.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "widget::Id::new",
+        new.finish(),
+    )?)?;
     builder.item(item::Definition::associated_function(
         "widget::Id::unique",
         output_signature("widget::Id")?,
@@ -3784,7 +4221,11 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
     let ids = || -> Result<[type_ref::Type; 2], host::Error> {
         Ok([id()?, type_ref::Type::builtin(type_ref::Builtin::String)])
     };
-    for owner in ["widget::Container", "widget::Scrollable", "widget::TextInput"] {
+    for owner in [
+        "widget::Container",
+        "widget::Scrollable",
+        "widget::TextInput",
+    ] {
         builders(builder, owner, "id", ids()?)?;
     }
     for name in OPERATION_ANIMATIONS {
@@ -3832,7 +4273,10 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
         focus.type_parameter("Message", &[])?;
         focus.parameter(input);
         focus.output(task()?);
-        builder.item(item::Definition::function("widget::operation::focus", focus.finish())?)?;
+        builder.item(item::Definition::function(
+            "widget::operation::focus",
+            focus.finish(),
+        )?)?;
     }
     // `selector::find(id)`: the widget with that id, once iced lays it out.
     if features::on(Feature::Selector) {
@@ -3840,12 +4284,21 @@ fn declare_operations(builder: &mut facade::Builder) -> Result<(), host::Error> 
         for input in ids()? {
             let mut find = signature::Builder::new();
             find.parameter(input);
-            find.output(type_ref::Type::applied("Task", [type_ref::Type::option(target()?)])?);
-            builder.item(item::Definition::function("widget::selector::find", find.finish())?)?;
+            find.output(type_ref::Type::applied(
+                "Task",
+                [type_ref::Type::option(target()?)],
+            )?);
+            builder.item(item::Definition::function(
+                "widget::selector::find",
+                find.finish(),
+            )?)?;
         }
         for (name, output) in [
             ("bounds", type_ref::Type::registered("Rectangle")?),
-            ("visible_bounds", type_ref::Type::option(type_ref::Type::registered("Rectangle")?)),
+            (
+                "visible_bounds",
+                type_ref::Type::option(type_ref::Type::registered("Rectangle")?),
+            ),
         ] {
             let mut reader = signature::Builder::new();
             reader.output(output);
@@ -3908,15 +4361,24 @@ fn declare_font(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let mut name = signature::Builder::new();
     name.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
     name.output(type_ref::Type::registered("font::Family")?);
-    builder.item(item::Definition::associated_function("font::Family::name", name.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "font::Family::name",
+        name.finish(),
+    )?)?;
     let mut new = signature::Builder::new();
     new.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
     new.output(type_ref::Type::registered("Font")?);
-    builder.item(item::Definition::associated_function("Font::new", new.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "Font::new",
+        new.finish(),
+    )?)?;
     let mut family = signature::Builder::new();
     family.parameter(type_ref::Type::registered("font::Family")?);
     family.output(type_ref::Type::registered("Font")?);
-    builder.item(item::Definition::associated_function("Font::with_family", family.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "Font::with_family",
+        family.finish(),
+    )?)?;
     for (name, input) in [
         ("weight", "font::Weight"),
         ("stretch", "font::Stretch"),
@@ -4037,10 +4499,26 @@ fn declare_scrollable(builder: &mut facade::Builder) -> Result<(), host::Error> 
         message_mapper_signature("widget::Scrollable", ty("widget::scrollable::Scroll")?)?,
     )?)?;
     for (owner, field, output) in [
-        ("widget::scrollable::Scroll", "viewport", "widget::scrollable::Viewport"),
-        ("widget::scrollable::Scroll", "source", "widget::scrollable::Source"),
-        ("widget::scrollable::Viewport", "relative_offset", "widget::scrollable::RelativeOffset"),
-        ("widget::scrollable::Viewport", "absolute_offset", "widget::scrollable::AbsoluteOffset"),
+        (
+            "widget::scrollable::Scroll",
+            "viewport",
+            "widget::scrollable::Viewport",
+        ),
+        (
+            "widget::scrollable::Scroll",
+            "source",
+            "widget::scrollable::Source",
+        ),
+        (
+            "widget::scrollable::Viewport",
+            "relative_offset",
+            "widget::scrollable::RelativeOffset",
+        ),
+        (
+            "widget::scrollable::Viewport",
+            "absolute_offset",
+            "widget::scrollable::AbsoluteOffset",
+        ),
     ] {
         builder.item(item::Definition::method(
             format!("{owner}::{field}"),
@@ -4057,7 +4535,10 @@ fn declare_table(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let parameter = |name: &str| type_ref::Type::parameter(name);
     let element = || type_ref::Type::applied("Element", [parameter("Message")?]);
     let column = || {
-        type_ref::Type::applied("widget::table::Column", [parameter("T")?, parameter("Message")?])
+        type_ref::Type::applied(
+            "widget::table::Column",
+            [parameter("T")?, parameter("Message")?],
+        )
     };
     let table = || type_ref::Type::applied("widget::Table", [parameter("Message")?]);
     let mut new = signature::Builder::new();
@@ -4066,7 +4547,10 @@ fn declare_table(builder: &mut facade::Builder) -> Result<(), host::Error> {
     new.parameter(element()?);
     new.parameter(type_ref::Type::callable(parameter("T")?, element()?));
     new.output(column()?);
-    builder.item(item::Definition::function("widget::table::column", new.finish())?)?;
+    builder.item(item::Definition::function(
+        "widget::table::column",
+        new.finish(),
+    )?)?;
     let mut new = signature::Builder::new();
     new.type_parameter("T", &[])?;
     new.type_parameter("Message", &[])?;
@@ -4094,7 +4578,14 @@ fn declare_table(builder: &mut facade::Builder) -> Result<(), host::Error> {
         )?)?;
     }
     length_builders(builder, "widget::Table", &["width"])?;
-    for name in ["padding", "padding_x", "padding_y", "separator", "separator_x", "separator_y"] {
+    for name in [
+        "padding",
+        "padding_x",
+        "padding_y",
+        "separator",
+        "separator_x",
+        "separator_y",
+    ] {
         pixels_builders(builder, "widget::Table", name)?;
     }
     Ok(())
@@ -4117,8 +4608,15 @@ pub(crate) const SCROLLABLE_SOURCES: [&str; 8] = [
 
 /// The facade's `Default` types whose `T::default()` is iced's own,
 /// bound in `widget::helpers`.
-pub(crate) const DEFAULTED: [&str; 7] =
-    ["Color", "ContentFit", "Font", "Padding", "Point", "Rectangle", "Vector"];
+pub(crate) const DEFAULTED: [&str; 7] = [
+    "Color",
+    "ContentFit",
+    "Font",
+    "Padding",
+    "Point",
+    "Rectangle",
+    "Vector",
+];
 
 /// iced's `Degrees` and `Radians`: `Degrees(90.0)`, `Radians::PI`,
 /// `Radians::from(degrees)` and their operators, the methods named for `std::ops`' traits.
@@ -4138,7 +4636,10 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
     }
     let mut from = signature::Builder::new();
     from.parameter(degrees()?).output(radians()?);
-    builder.item(item::Definition::associated_function("Radians::from", from.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "Radians::from",
+        from.finish(),
+    )?)?;
     // `gradient::Linear::new(angle)`, iced's `impl Into<Radians>`, its
     // stops, and the container style it is the background of.
     let linear = || type_ref::Type::registered("gradient::Linear");
@@ -4228,7 +4729,10 @@ fn declare_angles(builder: &mut facade::Builder) -> Result<(), host::Error> {
             builders(builder, "widget::Image", "rotation", [input])?;
         }
     }
-    builder.item(item::Definition::associated_value("Radians::PI", radians()?)?)?;
+    builder.item(item::Definition::associated_value(
+        "Radians::PI",
+        radians()?,
+    )?)?;
     for (path, angle) in [("Degrees", degrees()?), ("Radians", radians()?)] {
         builder.item(item::Definition::associated_value(
             format!("{path}::RANGE"),
@@ -4306,7 +4810,9 @@ fn declare_checkbox_icon(builder: &mut facade::Builder) -> Result<(), host::Erro
     for (field, ty) in CHECKBOX_ICON_FIELDS {
         let ty = match ty {
             "char" => type_ref::Type::builtin(type_ref::Builtin::Char),
-            "Option<f64>" => type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::F64)),
+            "Option<f64>" => {
+                type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::F64))
+            }
             "Option<widget::text::LineHeight>" => {
                 type_ref::Type::option(type_ref::Type::registered("widget::text::LineHeight")?)
             }
@@ -4332,7 +4838,15 @@ fn declare_checkbox_icon(builder: &mut facade::Builder) -> Result<(), host::Erro
 }
 
 pub(crate) const FONT_WEIGHTS: [&str; 9] = [
-    "Thin", "ExtraLight", "Light", "Normal", "Medium", "Semibold", "Bold", "ExtraBold", "Black",
+    "Thin",
+    "ExtraLight",
+    "Light",
+    "Normal",
+    "Medium",
+    "Semibold",
+    "Bold",
+    "ExtraBold",
+    "Black",
 ];
 pub(crate) const FONT_STRETCHES: [&str; 9] = [
     "UltraCondensed",
@@ -4346,7 +4860,8 @@ pub(crate) const FONT_STRETCHES: [&str; 9] = [
     "UltraExpanded",
 ];
 pub(crate) const FONT_STYLES: [&str; 3] = ["Normal", "Italic", "Oblique"];
-pub(crate) const FONT_FAMILIES: [&str; 5] = ["Serif", "SansSerif", "Cursive", "Fantasy", "Monospace"];
+pub(crate) const FONT_FAMILIES: [&str; 5] =
+    ["Serif", "SansSerif", "Cursive", "Fantasy", "Monospace"];
 
 /// iced's `tooltip::Position` variants.
 pub(crate) const TOOLTIP_POSITIONS: [&str; 5] = ["Top", "Bottom", "Left", "Right", "FollowCursor"];
@@ -4550,7 +5065,15 @@ fn fixed_builder_signature(
 
 /// The pixel inputs of iced's `impl Into<Pixels>`.
 const PIXELS: [type_ref::Builtin; 2] = [type_ref::Builtin::I64, type_ref::Builtin::F64];
-const PADDING_SIDES: [&str; 7] = ["all", "top", "bottom", "left", "right", "horizontal", "vertical"];
+const PADDING_SIDES: [&str; 7] = [
+    "all",
+    "top",
+    "bottom",
+    "left",
+    "right",
+    "horizontal",
+    "vertical",
+];
 
 /// One owned builder method of `owner` taking `input`.
 fn builder_signature(
@@ -4610,7 +5133,12 @@ fn length_builders(
     names: &[&str],
 ) -> Result<(), host::Error> {
     for name in names {
-        builders(builder, owner, name, [type_ref::Type::registered("Length")?])?;
+        builders(
+            builder,
+            owner,
+            name,
+            [type_ref::Type::registered("Length")?],
+        )?;
         pixels_builders(builder, owner, name)?;
     }
     Ok(())
@@ -4619,7 +5147,12 @@ fn length_builders(
 /// `impl Into<Padding>`: a `Padding`, uniform pixels, or
 /// `[vertical, horizontal]` pixels, as iced's `From` impls.
 fn padding_builders(builder: &mut facade::Builder, owner: &str) -> Result<(), host::Error> {
-    builders(builder, owner, "padding", [type_ref::Type::registered("Padding")?])?;
+    builders(
+        builder,
+        owner,
+        "padding",
+        [type_ref::Type::registered("Padding")?],
+    )?;
     pixels_builders(builder, owner, "padding")?;
     builders(
         builder,
@@ -4726,9 +5259,15 @@ fn declare_combo_box(builder: &mut facade::Builder) -> Result<(), host::Error> {
     signature.parameter(state()?);
     signature.parameter(type_ref::Type::builtin(type_ref::Builtin::String));
     signature.parameter(type_ref::Type::option(t()?));
-    signature.parameter(type_ref::Type::callable(t()?, type_ref::Type::parameter("Message")?));
+    signature.parameter(type_ref::Type::callable(
+        t()?,
+        type_ref::Type::parameter("Message")?,
+    ));
     signature.output(output()?);
-    builder.item(item::Definition::function("widget::combo_box", signature.finish())?)?;
+    builder.item(item::Definition::function(
+        "widget::combo_box",
+        signature.finish(),
+    )?)?;
 
     let mut inputs = vec![
         (
@@ -4848,7 +5387,10 @@ fn element_boxed_signature() -> Result<signature::Definition, host::Error> {
 
 /// `Theme::palette()` and `Theme::seed()`, with the palette's public fields.
 fn declare_palette(builder: &mut facade::Builder) -> Result<(), host::Error> {
-    for (name, output) in [("palette", "theme::Palette"), ("seed", "theme::palette::Seed")] {
+    for (name, output) in [
+        ("palette", "theme::Palette"),
+        ("seed", "theme::palette::Seed"),
+    ] {
         let mut method = signature::Builder::new();
         method.output(type_ref::Type::registered(output)?);
         builder.item(item::Definition::method(
@@ -4922,13 +5464,37 @@ const PALETTE_FIELDS: &[(&str, &str, &str)] = &[
     ("theme::Palette", "danger", "theme::palette::Swatch"),
     ("theme::Palette", "is_dark", "bool"),
     ("theme::palette::Background", "base", "theme::palette::Pair"),
-    ("theme::palette::Background", "weakest", "theme::palette::Pair"),
-    ("theme::palette::Background", "weaker", "theme::palette::Pair"),
+    (
+        "theme::palette::Background",
+        "weakest",
+        "theme::palette::Pair",
+    ),
+    (
+        "theme::palette::Background",
+        "weaker",
+        "theme::palette::Pair",
+    ),
     ("theme::palette::Background", "weak", "theme::palette::Pair"),
-    ("theme::palette::Background", "neutral", "theme::palette::Pair"),
-    ("theme::palette::Background", "strong", "theme::palette::Pair"),
-    ("theme::palette::Background", "stronger", "theme::palette::Pair"),
-    ("theme::palette::Background", "strongest", "theme::palette::Pair"),
+    (
+        "theme::palette::Background",
+        "neutral",
+        "theme::palette::Pair",
+    ),
+    (
+        "theme::palette::Background",
+        "strong",
+        "theme::palette::Pair",
+    ),
+    (
+        "theme::palette::Background",
+        "stronger",
+        "theme::palette::Pair",
+    ),
+    (
+        "theme::palette::Background",
+        "strongest",
+        "theme::palette::Pair",
+    ),
     ("theme::palette::Swatch", "base", "theme::palette::Pair"),
     ("theme::palette::Swatch", "weak", "theme::palette::Pair"),
     ("theme::palette::Swatch", "strong", "theme::palette::Pair"),
@@ -4948,7 +5514,10 @@ fn declare_styles(builder: &mut facade::Builder) -> Result<(), host::Error> {
     let border = || type_ref::Type::registered("Border");
     let color = || type_ref::Type::registered("Color");
     let pixels = PIXELS.map(type_ref::Type::builtin);
-    for (owner, output) in [("widget::container::Style", style()?), ("Border", border()?)] {
+    for (owner, output) in [
+        ("widget::container::Style", style()?),
+        ("Border", border()?),
+    ] {
         let mut default = signature::Builder::new();
         default.output(output);
         builder.item(item::Definition::associated_function(
@@ -4977,7 +5546,10 @@ fn declare_styles(builder: &mut facade::Builder) -> Result<(), host::Error> {
     )?)?;
     // `border.width` and `border.color`, read as fields, and
     // `border::radius(r)`.
-    for (name, output) in [("width", type_ref::Type::builtin(type_ref::Builtin::F64)), ("color", color()?)] {
+    for (name, output) in [
+        ("width", type_ref::Type::builtin(type_ref::Builtin::F64)),
+        ("color", color()?),
+    ] {
         let mut reader = signature::Builder::new();
         reader.output(output);
         builder.item(item::Definition::method(
@@ -4991,7 +5563,10 @@ fn declare_styles(builder: &mut facade::Builder) -> Result<(), host::Error> {
         function
             .parameter(input.clone())
             .output(type_ref::Type::registered("border::Radius")?);
-        builder.item(item::Definition::function("border::radius", function.finish())?)?;
+        builder.item(item::Definition::function(
+            "border::radius",
+            function.finish(),
+        )?)?;
     }
     let border_inputs = [
         ("rounded", &pixels[..]),
@@ -5078,7 +5653,10 @@ fn declare_canonical_values(builder: &mut facade::Builder) -> Result<(), host::E
         let mut from = signature::Builder::new();
         from.parameter(type_ref::Type::builtin(input));
         from.output(type_ref::Type::registered("Length")?);
-        builder.item(item::Definition::associated_function("Length::from", from.finish())?)?;
+        builder.item(item::Definition::associated_function(
+            "Length::from",
+            from.finish(),
+        )?)?;
     }
     // A `T: Into<Length>` as the `Length` it converts to: the value, a
     // `Length` or a number, settled when it runs.
@@ -5086,7 +5664,10 @@ fn declare_canonical_values(builder: &mut facade::Builder) -> Result<(), host::E
     into.type_parameter("T", &[])?;
     into.parameter(type_ref::Type::parameter("T")?);
     into.output(type_ref::Type::registered("Length")?);
-    builder.item(item::Definition::associated_function("Length::__into", into.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "Length::__into",
+        into.finish(),
+    )?)?;
     // `Fit.max(600)`: a length with a bound, as iced's `Length::min` and
     // `Length::max`.
     for name in ["min", "max"] {
@@ -5288,8 +5869,15 @@ fn string_constructor_signature(
     Ok(signature.finish())
 }
 
-const BUILT_IN_TEXT_STYLES: [&str; 7] =
-    ["default", "base", "primary", "secondary", "success", "warning", "danger"];
+const BUILT_IN_TEXT_STYLES: [&str; 7] = [
+    "default",
+    "base",
+    "primary",
+    "secondary",
+    "success",
+    "warning",
+    "danger",
+];
 const BUILT_IN_CONTAINER_STYLES: [&str; 9] = [
     "transparent",
     "rounded_box",

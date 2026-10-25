@@ -232,10 +232,11 @@ fn copy_tree(source: &Path, destination: &Path, from: &str, to: &str) -> Result<
                 .and_then(|extension| extension.to_str()),
             Some("d")
         );
-        let digest = if dep_info || matches!(
-            destination.file_name().and_then(|name| name.to_str()),
-            Some("output" | "root-output")
-        ) {
+        let digest = if dep_info
+            || matches!(
+                destination.file_name().and_then(|name| name.to_str()),
+                Some("output" | "root-output")
+            ) {
             let text = fs::read(source).map_err(io("read shared build text", source))?;
             let text = String::from_utf8_lossy(&text);
             let text = if dep_info {
@@ -256,7 +257,8 @@ fn copy_tree(source: &Path, destination: &Path, from: &str, to: &str) -> Result<
                 Some(digest) => digest,
                 None => {
                     let mut digest = Sha256::new();
-                    let mut file = fs::File::open(source).map_err(io("open shared build output", source))?;
+                    let mut file =
+                        fs::File::open(source).map_err(io("open shared build output", source))?;
                     std::io::copy(&mut file, &mut digest)
                         .map_err(io("hash shared build output", source))?;
                     digest.finalize().into()
@@ -300,7 +302,10 @@ mod tests {
             super::replace_build_paths(text, &[("/p/target", "/b")]),
             "/b/debug/deps/a.d /p/target/rawr/store/x.rs /p/target/rawr"
         );
-        assert_eq!(super::replace_build_paths("/p/target/rawrx", &[("/p/target", "/b")]), "/b/rawrx");
+        assert_eq!(
+            super::replace_build_paths("/p/target/rawrx", &[("/p/target", "/b")]),
+            "/b/rawrx"
+        );
     }
 
     use std::fs;
@@ -375,7 +380,10 @@ mod tests {
         let copies = bundle.join("t/debug/deps");
         assert_eq!(fs::read(copies.join("liba-1.rmeta")).unwrap(), b"meta");
         assert!(!copies.join("liba-1.rlib").exists() && !copies.join("liba-1.o").exists());
-        assert_eq!(fs::read_to_string(copies.join("a-1.d")).unwrap(), dep_info(b));
+        assert_eq!(
+            fs::read_to_string(copies.join("a-1.d")).unwrap(),
+            dep_info(b)
+        );
         let copied = bundle.join("t/debug/build/s-1");
         assert_eq!(fs::read(copied.join("out/g.rs")).unwrap(), b"pub fn g() {}");
         assert_eq!(
@@ -398,8 +406,11 @@ mod tests {
         let deps = shared.join("t/debug/deps");
         fs::create_dir_all(&deps).unwrap();
         fs::write(deps.join("liba-1.rmeta"), b"meta").unwrap();
-        fs::write(deps.join("a-1.d"), format!("{}/t/debug/deps/liba-1.rmeta:\n", shared.display()))
-            .unwrap();
+        fs::write(
+            deps.join("a-1.d"),
+            format!("{}/t/debug/deps/liba-1.rmeta:\n", shared.display()),
+        )
+        .unwrap();
         let messages = format!(
             "{{\"reason\":\"compiler-artifact\",\"filenames\":[\"{}/t/debug/deps/liba-1.rmeta\"]}}",
             shared.display()
@@ -413,7 +424,10 @@ mod tests {
             let metadata = fs::symlink_metadata(&path).unwrap();
             assert_eq!(metadata.permissions().mode() & 0o7777, 0o444);
             let digest = get(Identity::of(&metadata), Domain::Sha256).unwrap();
-            assert_eq!(digest, <[u8; 32]>::from(Sha256::digest(fs::read(&path).unwrap())));
+            assert_eq!(
+                digest,
+                <[u8; 32]>::from(Sha256::digest(fs::read(&path).unwrap()))
+            );
             digest
         };
         let first = relocate("one");

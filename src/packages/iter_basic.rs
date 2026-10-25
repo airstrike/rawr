@@ -55,7 +55,13 @@ pub struct StepBy {
 }
 
 impl StepBy {
-    pub(crate) const fn new(low: INT, end: INT, step: u64, inclusive: bool, unsigned: bool) -> Self {
+    pub(crate) const fn new(
+        low: INT,
+        end: INT,
+        step: u64,
+        inclusive: bool,
+        unsigned: bool,
+    ) -> Self {
         Self {
             next: Some(low),
             end,
@@ -81,7 +87,9 @@ impl Iterator for StepBy {
             return None;
         }
         self.next = if self.unsigned {
-            (current as u64).checked_add(self.step).map(|next| next as INT)
+            (current as u64)
+                .checked_add(self.step)
+                .map(|next| next as INT)
         } else {
             INT::try_from(self.step)
                 .ok()

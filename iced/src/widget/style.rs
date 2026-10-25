@@ -776,7 +776,11 @@ fn bind_defaults(iced: &mut host::runtime::Builder) {
         .expect("the iced facade must retain every style default");
     }
     default(iced, "iced::Shadow::default", Shadow::default);
-    default(iced, "iced::widget::svg::Style::default", svg::Style::default);
+    default(
+        iced,
+        "iced::widget::svg::Style::default",
+        svg::Style::default,
+    );
     default(
         iced,
         "iced::widget::text::Style::default",
@@ -891,19 +895,22 @@ fn bind_handle_shapes(iced: &mut host::runtime::Builder) {
         Ok(Dynamic::from(slider::HandleShape::Circle { radius }))
     })
     .expect("the iced facade must retain HandleShape::Circle");
-    iced.bind("iced::widget::slider::HandleShape::Rectangle::into", |args| {
-        let [rectangle] = args else {
-            return Err(arity("HandleShape::Rectangle", 1, args.len()));
-        };
-        let Rectangle {
-            width,
-            border_radius,
-        } = take(rectangle, "iced::widget::slider::HandleShape::Rectangle")?;
-        Ok(Dynamic::from(slider::HandleShape::Rectangle {
-            width: width as u16,
-            border_radius,
-        }))
-    })
+    iced.bind(
+        "iced::widget::slider::HandleShape::Rectangle::into",
+        |args| {
+            let [rectangle] = args else {
+                return Err(arity("HandleShape::Rectangle", 1, args.len()));
+            };
+            let Rectangle {
+                width,
+                border_radius,
+            } = take(rectangle, "iced::widget::slider::HandleShape::Rectangle")?;
+            Ok(Dynamic::from(slider::HandleShape::Rectangle {
+                width: width as u16,
+                border_radius,
+            }))
+        },
+    )
     .expect("the iced facade must retain HandleShape::Rectangle");
 }
 

@@ -376,8 +376,7 @@ mod tests {
 
     fn facts(source: &str) -> Facts {
         let id = std::process::id();
-        let path =
-            std::env::temp_dir().join(format!("rawr-layer-facts-{id}-{}.rs", source.len()));
+        let path = std::env::temp_dir().join(format!("rawr-layer-facts-{id}-{}.rs", source.len()));
         std::fs::write(&path, source).unwrap();
         let target = crate::project::Target::discover(&path).unwrap();
         let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();

@@ -16,7 +16,6 @@ use std::cell::Cell;
 
 use std::os::unix::process::CommandExt as _;
 
-
 use crate::{Error, Result};
 
 /// Physical child stdout capture bound. `read_bounded` retains at most

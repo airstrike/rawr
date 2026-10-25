@@ -21,9 +21,9 @@ use crate::ast::{ASTFlags, BinaryExpr, Expr, FlowControl, Ident, ScriptFuncDef, 
 use crate::eval::{Caches, GlobalRuntimeState};
 use crate::types::dynamic::AccessMode;
 use crate::{Dynamic, Engine, EvalAltResult, ImmutableString, Position, RawrResult, Scope, INT};
+use std::fmt;
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
-use std::fmt;
 
 /// The function an async body's `.await` is rendered as.
 pub(crate) const AWAIT: &str = "__rawr_await";
@@ -235,15 +235,24 @@ impl Builder {
             Stmt::Var(var, flags, position) => {
                 let (name, expr, _) = *var;
                 let expr = self.expr(expr)?;
-                self.push(Op::Run(Stmt::Var((name, expr, None).into(), flags, position)));
+                self.push(Op::Run(Stmt::Var(
+                    (name, expr, None).into(),
+                    flags,
+                    position,
+                )));
             }
             Stmt::Assignment(assignment) => {
                 let (op, BinaryExpr { lhs, rhs }) = *assignment;
                 if expr_awaits(&lhs) {
-                    return Err(Unsupported("`.await` in the place an assignment writes", lhs.position()));
+                    return Err(Unsupported(
+                        "`.await` in the place an assignment writes",
+                        lhs.position(),
+                    ));
                 }
                 let rhs = self.expr(rhs)?;
-                self.push(Op::Run(Stmt::Assignment((op, BinaryExpr { lhs, rhs }).into())));
+                self.push(Op::Run(Stmt::Assignment(
+                    (op, BinaryExpr { lhs, rhs }).into(),
+                )));
             }
             Stmt::Block(block) => self.scoped(block.statements().to_vec(), value)?,
             Stmt::If(flow, _) => {
@@ -355,7 +364,11 @@ impl Builder {
         let index = self.loops.len() - 1;
         self.at(head, depth);
         let forever = matches!(expr, Expr::Unit(..) | Expr::BoolConstant(true, ..));
-        let condition = if forever { None } else { Some(self.expr(expr)?) };
+        let condition = if forever {
+            None
+        } else {
+            Some(self.expr(expr)?)
+        };
         self.within = Some(index);
         let inner = self.block(true);
         self.within = outer;
@@ -433,7 +446,10 @@ impl Builder {
         let mut arms = Vec::with_capacity(cases.expressions.len());
         for (index, expression) in cases.expressions.iter_mut().enumerate() {
             if expr_awaits(&expression.lhs) {
-                return Err(Unsupported("`.await` in a match guard", expression.lhs.position()));
+                return Err(Unsupported(
+                    "`.await` in a match guard",
+                    expression.lhs.position(),
+                ));
             }
             let at = expression.rhs.position();
             let index_expr = Expr::IntegerConstant(index as INT, at);
@@ -559,8 +575,12 @@ impl Builder {
                 self.sequence(map.0.iter_mut().map(|(_, value)| value).collect())?;
                 Ok(Expr::Map(map, position))
             }
-            Expr::And(operands, position) => self.logic(operands.into_iter().collect(), true, position),
-            Expr::Or(operands, position) => self.logic(operands.into_iter().collect(), false, position),
+            Expr::And(operands, position) => {
+                self.logic(operands.into_iter().collect(), true, position)
+            }
+            Expr::Or(operands, position) => {
+                self.logic(operands.into_iter().collect(), false, position)
+            }
             Expr::Stmt(block) => {
                 let output = self.temporary();
                 self.push(Op::Let(output.clone(), unit_stmt()));
@@ -595,7 +615,12 @@ impl Builder {
 
     /// `a && b` and `a || b` whose later operands await: each runs only
     /// when the ones before it leave the answer open.
-    fn logic(&mut self, operands: Vec<Expr>, and: bool, position: Position) -> Result<Expr, Unsupported> {
+    fn logic(
+        &mut self,
+        operands: Vec<Expr>,
+        and: bool,
+        position: Position,
+    ) -> Result<Expr, Unsupported> {
         let output = self.temporary();
         let mut operands = operands.into_iter();
         let first = operands.next().unwrap_or(Expr::BoolConstant(and, position));
@@ -626,7 +651,10 @@ impl Builder {
 
 /// The operands of a method chain after its receiver: each call's
 /// arguments and each index, in the order the evaluator computes them.
-fn chain_operands<'a>(expr: &'a mut Expr, operands: &mut Vec<&'a mut Expr>) -> Result<(), Unsupported> {
+fn chain_operands<'a>(
+    expr: &'a mut Expr,
+    operands: &mut Vec<&'a mut Expr>,
+) -> Result<(), Unsupported> {
     match expr {
         Expr::MethodCall(call, _) => operands.extend(call.args.iter_mut()),
         Expr::Dot(binary, ..) => {
@@ -641,7 +669,10 @@ fn chain_operands<'a>(expr: &'a mut Expr, operands: &mut Vec<&'a mut Expr>) -> R
         }
         Expr::Property(..) | Expr::Variable(..) => {}
         expr if expr_awaits(expr) => {
-            return Err(Unsupported("`.await` in this method chain", expr.position()));
+            return Err(Unsupported(
+                "`.await` in this method chain",
+                expr.position(),
+            ));
         }
         _ => {}
     }
@@ -707,7 +738,9 @@ fn stmt_awaits(stmt: &Stmt) -> bool {
 }
 
 fn flow_awaits(flow: &FlowControl) -> bool {
-    expr_awaits(&flow.expr) || flow.body.iter().any(stmt_awaits) || flow.branch.iter().any(stmt_awaits)
+    expr_awaits(&flow.expr)
+        || flow.body.iter().any(stmt_awaits)
+        || flow.branch.iter().any(stmt_awaits)
 }
 
 fn expr_awaits(expr: &Expr) -> bool {
@@ -765,13 +798,21 @@ fn forget_indices(stmt: &mut Stmt) {
 
 fn forget_flow(flow: &mut FlowControl) {
     forget_expr(&mut flow.expr);
-    flow.body.statements_mut().iter_mut().for_each(forget_indices);
-    flow.branch.statements_mut().iter_mut().for_each(forget_indices);
+    flow.body
+        .statements_mut()
+        .iter_mut()
+        .for_each(forget_indices);
+    flow.branch
+        .statements_mut()
+        .iter_mut()
+        .for_each(forget_indices);
 }
 
 fn forget_expr(expr: &mut Expr) {
     match expr {
-        Expr::FnCall(call, _) | Expr::MethodCall(call, _) => call.args.iter_mut().for_each(forget_expr),
+        Expr::FnCall(call, _) | Expr::MethodCall(call, _) => {
+            call.args.iter_mut().for_each(forget_expr)
+        }
         Expr::Stmt(block) => block.statements_mut().iter_mut().for_each(forget_indices),
         Expr::InterpolatedString(items, _) | Expr::Array(items, _) => {
             items.iter_mut().for_each(forget_expr);
@@ -807,7 +848,9 @@ impl fmt::Debug for Poll {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Ready(value) => f.debug_tuple("Ready").field(value).finish(),
-            Self::Pending { future, .. } => f.debug_struct("Pending").field("future", future).finish(),
+            Self::Pending { future, .. } => {
+                f.debug_struct("Pending").field("future", future).finish()
+            }
         }
     }
 }
@@ -1011,17 +1054,38 @@ impl Engine {
         for op in &block.ops {
             match op {
                 Op::Run(statement) => {
-                    self.eval_stmt(global, caches, scope, this_ptr.as_deref_mut(), statement, true)?;
+                    self.eval_stmt(
+                        global,
+                        caches,
+                        scope,
+                        this_ptr.as_deref_mut(),
+                        statement,
+                        true,
+                    )?;
                 }
                 Op::Let(name, statement) => {
                     let value = self
-                        .eval_stmt(global, caches, scope, this_ptr.as_deref_mut(), statement, true)?
+                        .eval_stmt(
+                            global,
+                            caches,
+                            scope,
+                            this_ptr.as_deref_mut(),
+                            statement,
+                            true,
+                        )?
                         .flatten();
                     scope.push_entry(name.clone(), AccessMode::ReadWrite, value);
                 }
                 Op::Set(name, statement) => {
                     let value = self
-                        .eval_stmt(global, caches, scope, this_ptr.as_deref_mut(), statement, true)?
+                        .eval_stmt(
+                            global,
+                            caches,
+                            scope,
+                            this_ptr.as_deref_mut(),
+                            statement,
+                            true,
+                        )?
                         .flatten();
                     *scope.get_mut(name).ok_or_else(|| missing(name))? = value;
                 }
@@ -1048,12 +1112,15 @@ impl Engine {
                 let value = self
                     .eval_expr(global, caches, scope, this_ptr, condition)?
                     .as_bool()
-                    .map_err(|typ| self.make_type_mismatch_err::<bool>(typ, condition.position()))?;
+                    .map_err(|typ| {
+                        self.make_type_mismatch_err::<bool>(typ, condition.position())
+                    })?;
                 Step::Jump(if value { *then } else { *other })
             }
-            Term::Await(future, ..) => {
-                Step::Suspend(self.eval_expr(global, caches, scope, this_ptr, future)?.flatten())
-            }
+            Term::Await(future, ..) => Step::Suspend(
+                self.eval_expr(global, caches, scope, this_ptr, future)?
+                    .flatten(),
+            ),
             Term::Return(expr) => {
                 let value = self.eval_expr(global, caches, scope, this_ptr, expr)?;
                 return Err(EvalAltResult::Return(value, Position::NONE).into());
@@ -1095,15 +1162,25 @@ impl Engine {
         })
     }
 
-    fn cursor(&self, global: &GlobalRuntimeState, value: Dynamic, position: Position) -> crate::RawrResultOf<Cursor> {
+    fn cursor(
+        &self,
+        global: &GlobalRuntimeState,
+        value: Dynamic,
+        position: Position,
+    ) -> crate::RawrResultOf<Cursor> {
         let iter_type = value.type_id();
-        let iter_func = self.global_modules.iter().find_map(|m| m.get_iter(iter_type));
+        let iter_func = self
+            .global_modules
+            .iter()
+            .find_map(|m| m.get_iter(iter_type));
         #[cfg(not(feature = "no_module"))]
-        let iter_func = iter_func.or_else(|| global.get_iter(iter_type)).or_else(|| {
-            self.global_sub_modules
-                .values()
-                .find_map(|m| m.get_qualified_iter(iter_type))
-        });
+        let iter_func = iter_func
+            .or_else(|| global.get_iter(iter_type))
+            .or_else(|| {
+                self.global_sub_modules
+                    .values()
+                    .find_map(|m| m.get_qualified_iter(iter_type))
+            });
         #[cfg(feature = "no_module")]
         let _ = global;
         let iter_func = iter_func.ok_or_else(|| EvalAltResult::ErrorFor(position))?;
@@ -1183,9 +1260,8 @@ mod tests {
 
     #[test]
     fn awaits_in_order_and_resumes_with_each_output() {
-        let (output, awaited) = drive(
-            "fn body(r) { let a = __rawr_await(1); let b = __rawr_await(a + 1); a + b }",
-        );
+        let (output, awaited) =
+            drive("fn body(r) { let a = __rawr_await(1); let b = __rawr_await(a + 1); a + b }");
         assert_eq!((output, awaited), (120, vec![1, 11]));
     }
 
@@ -1261,10 +1337,20 @@ mod tests {
         };
         let again = frame.clone();
         let _: Poll = engine
-            .call_fn(&mut Scope::new(), &ast, "body", (frame.resume(Dynamic::from(1_i64)),))
+            .call_fn(
+                &mut Scope::new(),
+                &ast,
+                "body",
+                (frame.resume(Dynamic::from(1_i64)),),
+            )
             .unwrap();
         let error = engine
-            .call_fn::<Poll>(&mut Scope::new(), &ast, "body", (again.resume(Dynamic::UNIT),))
+            .call_fn::<Poll>(
+                &mut Scope::new(),
+                &ast,
+                "body",
+                (again.resume(Dynamic::UNIT),),
+            )
             .unwrap_err();
         assert!(error.to_string().contains("already resumed"), "{error}");
     }

@@ -167,7 +167,15 @@ pub struct Generator {
 impl Generator {
     #[must_use]
     pub fn new(seed: u64) -> Self {
-        Self { rng: Rng::new(seed), vars: Vec::new(), functions: Vec::new(), loops: 0, depth: 0, nesting: 0, counter: 0 }
+        Self {
+            rng: Rng::new(seed),
+            vars: Vec::new(),
+            functions: Vec::new(),
+            loops: 0,
+            depth: 0,
+            nesting: 0,
+            counter: 0,
+        }
     }
 
     /// A generator whose choices are made by somebody else's bytes, for
@@ -557,7 +565,12 @@ impl Generator {
     }
 
     fn call(&mut self, ty: Ty) -> String {
-        let candidates: Vec<(String, Vec<Ty>)> = self.functions.iter().filter(|(.., result)| *result == ty).map(|(name, params, _)| (name.clone(), params.clone())).collect();
+        let candidates: Vec<(String, Vec<Ty>)> = self
+            .functions
+            .iter()
+            .filter(|(.., result)| *result == ty)
+            .map(|(name, params, _)| (name.clone(), params.clone()))
+            .collect();
         if candidates.is_empty() {
             return self.atom(ty);
         }

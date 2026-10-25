@@ -23,8 +23,14 @@ fn check_refuses_a_one_file_iced_program_without_a_cargo_project() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("RAWR-ENVIRONMENT-PROJECT-NOT-FOUND"), "{stderr}");
-    assert!(stderr.contains("`rawr new <name> --template iced`"), "{stderr}");
+    assert!(
+        stderr.contains("RAWR-ENVIRONMENT-PROJECT-NOT-FOUND"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("`rawr new <name> --template iced`"),
+        "{stderr}"
+    );
     fs::remove_file(source).unwrap();
 }
 
@@ -317,11 +323,7 @@ fn snapshot_update_check_and_missing_baseline_are_end_to_end() {
 
 #[test]
 fn check_and_run_share_byte_identical_golden_source_diagnostics() {
-    for fixture in [
-        "syntax",
-        "duplicate_item",
-        "unknown_type",
-    ] {
+    for fixture in ["syntax", "duplicate_item", "unknown_type"] {
         let source = fixture_path(fixture, "rs");
         let expected = fs::read_to_string(fixture_path(fixture, "stderr")).unwrap();
         let checked = rawr_command()
@@ -574,8 +576,16 @@ fn write_crate(root: &Path) {
 /// Rawr's runner build the same units.
 fn build_as_rawr_does(root: &Path) {
     fs::create_dir_all(root.join(".cargo")).unwrap();
-    fs::write(root.join(".cargo/config.toml"), rawr_iced_cli::new::cargo_config()).unwrap();
-    fs::write(root.join("rust-toolchain.toml"), rawr_iced_cli::new::toolchain()).unwrap();
+    fs::write(
+        root.join(".cargo/config.toml"),
+        rawr_iced_cli::new::cargo_config(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("rust-toolchain.toml"),
+        rawr_iced_cli::new::toolchain(),
+    )
+    .unwrap();
 }
 
 fn temporary_path(label: &str) -> PathBuf {
@@ -601,8 +611,11 @@ fn an_iced_program_handed_from_rawr_to_rawr_iced_is_parsed_once() {
     build_as_rawr_does(&root);
     fs::write(
         root.join("src/main.rs"),
-        include_str!("../../../iced/examples/scripts/application_counter.rs")
-            .replacen("// rawr\n", "// rawr\nmod parts;\n", 1),
+        include_str!("../../../iced/examples/scripts/application_counter.rs").replacen(
+            "// rawr\n",
+            "// rawr\nmod parts;\n",
+            1,
+        ),
     )
     .unwrap();
     fs::write(
@@ -640,7 +653,8 @@ fn an_iced_program_handed_from_rawr_to_rawr_iced_is_parsed_once() {
 #[test]
 fn a_marked_iced_crate_is_served_by_rawr_iced() {
     let sandbox = Sandbox::new("marked-counter");
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/tests/fixtures/rs-marker-counter");
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/tests/fixtures/rs-marker-counter");
     let root = sandbox.path().join("counter");
     fs::create_dir_all(root.join("src")).unwrap();
     for file in ["Cargo.toml", "src/main.rs", "src/ui.rs"] {

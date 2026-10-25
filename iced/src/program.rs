@@ -189,9 +189,9 @@ impl Host {
             return false;
         };
         if bytes.is_empty() {
-            self.reseeded = launch
-                .uncarried_state_field(&adapter.state)
-                .map(|ty| format!("State reseeded · App: Rust code changed · {ty} does not carry over"));
+            self.reseeded = launch.uncarried_state_field(&adapter.state).map(|ty| {
+                format!("State reseeded · App: Rust code changed · {ty} does not carry over")
+            });
             return false;
         }
         adapter.seed_state_authority(&launch, bytes, timing.as_ref())
@@ -423,9 +423,7 @@ fn run_prelude(launch: &rawr::reload::installation::Application<'_>) -> Result<(
 
 /// The note for `main`'s statements before the entry when they differ from
 /// the ones that ran in this process.
-pub(crate) fn prelude_note(
-    launch: &rawr::reload::installation::Application<'_>,
-) -> Option<String> {
+pub(crate) fn prelude_note(launch: &rawr::reload::installation::Application<'_>) -> Option<String> {
     let package = prelude_package(launch);
     PRELUDES
         .lock()
@@ -790,9 +788,8 @@ impl Adapter {
         }
         let owner = effect::Owner::new(self.instance(), self.generation());
         let authority = self.task_authority_from(authority);
-        let (task, aborts) = task::collect_aborts(|| {
-            plan.lower(owner.instance(), owner.generation(), &authority)
-        });
+        let (task, aborts) =
+            task::collect_aborts(|| plan.lower(owner.instance(), owner.generation(), &authority));
         Ok(self.tasks.track_with(owner, task?, aborts))
     }
 
@@ -2109,7 +2106,9 @@ enum Message { Increment }
         crate::install(&mut engine).unwrap();
         let engine = Shared::new(engine);
         let descriptor = engine
-            .compile_application_descriptor(include_str!("../examples/scripts/application_counter.rs"))
+            .compile_application_descriptor(include_str!(
+                "../examples/scripts/application_counter.rs"
+            ))
             .unwrap();
         let launch = engine.launch_application(descriptor).unwrap();
         bind(launch)
@@ -2120,7 +2119,9 @@ enum Message { Increment }
         crate::install(&mut engine).unwrap();
         let engine = Shared::new(engine);
         let descriptor = engine
-            .compile_application_descriptor(include_str!("../examples/scripts/application_counter.rs"))
+            .compile_application_descriptor(include_str!(
+                "../examples/scripts/application_counter.rs"
+            ))
             .unwrap();
         let launch = engine.launch_application(descriptor).unwrap();
         Adapter::boot_observed(bind(launch)).unwrap()

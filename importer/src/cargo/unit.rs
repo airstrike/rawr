@@ -5343,7 +5343,11 @@ pub(super) fn dependency_order(units: &[Value]) -> Result<Vec<usize>> {
             continue;
         }
         state[root] = OPEN;
-        let mut stack = vec![(root, unit_dependency_indices(&units[root], units.len())?, 0_usize)];
+        let mut stack = vec![(
+            root,
+            unit_dependency_indices(&units[root], units.len())?,
+            0_usize,
+        )];
         while let Some((index, dependencies, next)) = stack.last_mut() {
             if let Some(&dependency) = dependencies.get(*next) {
                 *next += 1;
@@ -5790,7 +5794,13 @@ fn canonical_unit_bytes_clone_reference(
             let hex = dependencies
                 .iter()
                 .map(|digest| {
-                    Value::String(digest.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect())
+                    Value::String(
+                        digest
+                            .as_bytes()
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect(),
+                    )
                 })
                 .collect();
             key.as_object_mut()
@@ -5800,7 +5810,11 @@ fn canonical_unit_bytes_clone_reference(
             let bytes = json_sort_key(&key, allocation, limits)?;
             ordered[index] = Some((key, digest(&bytes)));
         }
-        keys.extend(ordered.into_iter().map(|key| key.expect("every unit is ordered").0));
+        keys.extend(
+            ordered
+                .into_iter()
+                .map(|key| key.expect("every unit is ordered").0),
+        );
         let mut unique = BTreeMap::new();
         allocation.member_nodes("canonical Cargo unit uniqueness nodes", keys.len(), limits)?;
         for key in &keys {
@@ -6979,9 +6993,13 @@ mod allocation_tests {
         }"#;
 
         // The fixture names this workspace: its manifests are read from disk.
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
         let root_text = root.to_str().unwrap();
-        let metadata_bytes = METADATA_TEMPLATE.replace("/work/rawr", root_text).into_bytes();
+        let metadata_bytes = METADATA_TEMPLATE
+            .replace("/work/rawr", root_text)
+            .into_bytes();
         let unit_bytes = UNIT_TEMPLATE.replace("/work/rawr", root_text).into_bytes();
         let target = root.join("target");
         let standard = Limits::standard();
@@ -7068,14 +7086,8 @@ mod allocation_tests {
                 })
                 .transpose()?;
             let mut provisional = epoch.begin_provisional()?;
-            let provisional_metadata = super::Metadata::parse(
-                &metadata_bytes,
-                &[],
-                limits,
-                1,
-                &target,
-                &mut epoch,
-            )?;
+            let provisional_metadata =
+                super::Metadata::parse(&metadata_bytes, &[], limits, 1, &target, &mut epoch)?;
             let provisional_selected = provisional_metadata.selections(&[], &mut epoch)?;
             drop(provisional_selected);
             drop(provisional_metadata);

@@ -301,5 +301,9 @@ pub fn main() -> iced::Result {{
     assert!(dark.diagnostics().is_empty());
     let default = boot_source(&source(false));
     assert_eq!(default.theme().native(), &iced::Theme::Light);
-    assert!(default.diagnostics().is_empty(), "{:?}", default.diagnostics());
+    assert!(
+        default.diagnostics().is_empty(),
+        "{:?}",
+        default.diagnostics()
+    );
 }

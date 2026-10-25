@@ -120,7 +120,13 @@ pub fn channel_generated(
     engine: rawr::Shared<rawr::Engine>,
     runtime: rawr::host::runtime::Registry,
 ) -> (Transport, Service) {
-    channel_with_timing(gate, publication, engine, None, Provider::Generated(runtime))
+    channel_with_timing(
+        gate,
+        publication,
+        engine,
+        None,
+        Provider::Generated(runtime),
+    )
 }
 
 fn channel_with_timing(

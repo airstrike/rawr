@@ -36,10 +36,7 @@ fn engine() -> Engine {
 fn test_method_call() {
     let engine = engine();
 
-    assert_eq!(
-        engine.eval::<TestStruct>("use test::TestStruct; let mut x = TestStruct::new(); x.update(1000); x").unwrap(),
-        TestStruct { x: 1001 }
-    );
+    assert_eq!(engine.eval::<TestStruct>("use test::TestStruct; let mut x = TestStruct::new(); x.update(1000); x").unwrap(), TestStruct { x: 1001 });
 }
 
 #[test]

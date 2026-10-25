@@ -9,7 +9,9 @@ use crate::{host, Dynamic, EvalAltResult, ImmutableString, RawrResult, Span};
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum Kind {
     Constructor,
-    Field { copy: bool },
+    Field {
+        copy: bool,
+    },
     Variant,
     /// A variant's fields when the value is that variant, else `None`.
     Match,

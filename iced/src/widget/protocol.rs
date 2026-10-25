@@ -176,7 +176,10 @@ fn bind_canonical(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::B
     builder
         .bind("iced::Length::from", |args| {
             expect_arity("Length::from", args, 1)?;
-            Ok(Dynamic::from(iced::Length::Fixed(pixels(args[0], "Length::from")?)))
+            Ok(Dynamic::from(iced::Length::Fixed(pixels(
+                args[0],
+                "Length::from",
+            )?)))
         })
         .expect("the iced facade must retain Length::from");
     builder
@@ -185,7 +188,10 @@ fn bind_canonical(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::B
             if let Some(length) = args[0].read_lock::<iced::Length>().map(|length| *length) {
                 return Ok(Dynamic::from(length));
             }
-            Ok(Dynamic::from(iced::Length::Fixed(pixels(args[0], "Length::from")?)))
+            Ok(Dynamic::from(iced::Length::Fixed(pixels(
+                args[0],
+                "Length::from",
+            )?)))
         })
         .expect("the iced facade must retain the conversion into Length");
     for (path, bound) in [
@@ -234,7 +240,10 @@ fn bind_canonical(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::B
         builder
             .bind(format!("iced::padding::{side}"), move |args| {
                 expect_arity(side, args, 1)?;
-                Ok(Dynamic::from(set(iced::Padding::ZERO, pixels(args[0], side)?)))
+                Ok(Dynamic::from(set(
+                    iced::Padding::ZERO,
+                    pixels(args[0], side)?,
+                )))
             })
             .expect("the iced facade must retain every padding function");
         if side != "all" {
@@ -981,14 +990,17 @@ mod tests {
         let error = engine
             .compile_application(key_application("key(value(), true)"))
             .unwrap_err();
-        assert!(matches!(
-            error.err_type(),
-            ParseErrorType::Resolution(resolve::Error::InvalidHostOperation {
-                item,
-                reason,
-                ..
-            }) if item == "rawr_iced::widget::key" && reason.contains("no form of it takes")
-        ), "{error:?}");
+        assert!(
+            matches!(
+                error.err_type(),
+                ParseErrorType::Resolution(resolve::Error::InvalidHostOperation {
+                    item,
+                    reason,
+                    ..
+                }) if item == "rawr_iced::widget::key" && reason.contains("no form of it takes")
+            ),
+            "{error:?}"
+        );
         assert!(!error.primary_span().is_none());
     }
 
@@ -1112,66 +1124,61 @@ mod tests {
         crate::theme::bind(&mut iced, &mut rawr);
         widget::builtin::bind(&mut iced, &mut rawr);
         widget::script::bind(&mut iced);
-        super::bind_with_renderer(
-            &mut iced,
-            &mut rawr,
-            move |call, args| {
-                let lease = args[0]
-                    .read_lock::<crate::renderer::Lease>()
-                    .ok_or_else(|| {
-                        super::runtime_error("expected rawr_iced Renderer lease".into())
-                    })?
-                    .clone();
-                let result = super::fill_quad(call, args)?;
+        super::bind_with_renderer(&mut iced, &mut rawr, move |call, args| {
+            let lease = args[0]
+                .read_lock::<crate::renderer::Lease>()
+                .ok_or_else(|| super::runtime_error("expected rawr_iced Renderer lease".into()))?
+                .clone();
+            let result = super::fill_quad(call, args)?;
 
-                if harness
-                    .phase
-                    .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-                {
-                    let binding = harness.binding.get().ok_or_else(|| {
-                        super::runtime_error("missing nested widget binding".into())
-                    })?;
-                    let invocation = harness.invocation.get().ok_or_else(|| {
-                        super::runtime_error("missing nested renderer invocation".into())
-                    })?;
-                    let cross = binding.draw(
+            if harness
+                .phase
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                let binding = harness
+                    .binding
+                    .get()
+                    .ok_or_else(|| super::runtime_error("missing nested widget binding".into()))?;
+                let invocation = harness.invocation.get().ok_or_else(|| {
+                    super::runtime_error("missing nested renderer invocation".into())
+                })?;
+                let cross = binding.draw(
+                    None,
+                    Dynamic::from(lease),
+                    Dynamic::from(draw_input()),
+                    invocation,
+                );
+                harness
+                    .cross_rejected
+                    .store(cross.is_err(), Ordering::SeqCst);
+
+                let nested = binding
+                    .draw(
                         None,
-                        Dynamic::from(lease),
+                        Dynamic::from(
+                            harness
+                                .lease
+                                .get()
+                                .ok_or_else(|| {
+                                    super::runtime_error("missing nested renderer lease".into())
+                                })?
+                                .clone(),
+                        ),
                         Dynamic::from(draw_input()),
                         invocation,
-                    );
-                    harness
-                        .cross_rejected
-                        .store(cross.is_err(), Ordering::SeqCst);
-
-                    let nested = binding
-                        .draw(
-                            None,
-                            Dynamic::from(
-                                harness
-                                    .lease
-                                    .get()
-                                    .ok_or_else(|| {
-                                        super::runtime_error("missing nested renderer lease".into())
-                                    })?
-                                    .clone(),
-                            ),
-                            Dynamic::from(draw_input()),
-                            invocation,
-                        )
-                        .map_err(|error| super::runtime_error(error.to_string()))?;
-                    if nested != Some(()) {
-                        return Err(super::runtime_error(
-                            "nested widget omitted its retained draw hook".into(),
-                        ));
-                    }
-                    harness.phase.store(2, Ordering::SeqCst);
+                    )
+                    .map_err(|error| super::runtime_error(error.to_string()))?;
+                if nested != Some(()) {
+                    return Err(super::runtime_error(
+                        "nested widget omitted its retained draw hook".into(),
+                    ));
                 }
+                harness.phase.store(2, Ordering::SeqCst);
+            }
 
-                Ok(result)
-            },
-        );
+            Ok(result)
+        });
         [iced.finish(), rawr.finish()]
     }
 

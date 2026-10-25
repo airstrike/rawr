@@ -157,10 +157,7 @@ fn public_type_aliases_are_read_across_modules() {
             }
         "#,
     );
-    project.write(
-        "src/geometry.rs",
-        "pub type Path = Vec<Coord>;\npub type Coord = (i64, i64);\npub fn first(path: &Path) -> i64 { path[0].0 }\n",
-    );
+    project.write("src/geometry.rs", "pub type Path = Vec<Coord>;\npub type Coord = (i64, i64);\npub fn first(path: &Path) -> i64 { path[0].0 }\n");
     let target = rawr::project::Target::discover(project.path()).unwrap();
     let engine = Shared::new(Engine::new());
 
@@ -194,10 +191,7 @@ fn aggregate_compile_rejects_private_import_hops_with_both_sources() {
 #[test]
 fn rust_module_privacy_paths_and_constants() {
     let project = Project::new("rust-modules");
-    project.write(
-        "src/main.rs",
-        "mod signal;\nmod config;\nuse crate::signal::State;\npub fn answer() -> i64 { let s: State = signal::make(); signal::level(s) + config::GAP }\n",
-    );
+    project.write("src/main.rs", "mod signal;\nmod config;\nuse crate::signal::State;\npub fn answer() -> i64 { let s: State = signal::make(); signal::level(s) + config::GAP }\n");
     project.write("src/config.rs", "pub const GAP: i64 = 8;\n");
     project.write(
         "src/signal.rs",
@@ -568,10 +562,7 @@ fn write(path: &Path, text: &str) {
 #[test]
 fn rust_use_forms_and_qualified_types() {
     let project = Project::new("rust-use-forms");
-    project.write(
-        "src/main.rs",
-        "mod signal;\nmod app;\n",
-    );
+    project.write("src/main.rs", "mod signal;\nmod app;\n");
     project.write(
         "src/app.rs",
         "use super::signal::{self, State as Level, make};\nuse crate::signal::double as twice;\npub fn answer() -> i64 { let s: signal::State = make(); let t: Level = signal::make(); signal::level(s) + twice(signal::level(t)) }\n",

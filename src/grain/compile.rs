@@ -187,13 +187,9 @@ impl Compiler {
         let compared = ast.shared_lib().iter_script_fn_info().any(|(.., def)| {
             let name = def.name.as_str();
             name.starts_with("\0rawr.method.")
-                && [
-                    "::PartialEq::eq",
-                    "::PartialOrd::partial_cmp",
-                    "::Ord::cmp",
-                ]
-                .iter()
-                .any(|suffix| name.ends_with(suffix))
+                && ["::PartialEq::eq", "::PartialOrd::partial_cmp", "::Ord::cmp"]
+                    .iter()
+                    .any(|suffix| name.ends_with(suffix))
         });
         let needs_walker =
             skipped > 0 || !lowering.residuals.is_empty() || escapes_as_pointer || compared;

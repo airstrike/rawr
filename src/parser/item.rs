@@ -99,9 +99,7 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
 #[cfg(not(feature = "no_function"))]
 fn inline_application_builder(items: &mut Box<[crate::item::Parsed]>) -> Option<Span> {
     use crate::item::{BodyToken, BodyTokenKind as Kind, Parsed};
-    let identifier = |token: &BodyToken, name: &str| {
-        matches!(token.kind(), Kind::Identifier(text) if text.as_str() == name)
-    };
+    let identifier = |token: &BodyToken, name: &str| matches!(token.kind(), Kind::Identifier(text) if text.as_str() == name);
     let free = |function: &crate::item::Function| {
         function.receiver.is_none()
             && function.parameters.is_empty()
@@ -146,7 +144,9 @@ fn inline_application_builder(items: &mut Box<[crate::item::Parsed]>) -> Option<
         if identifier(iced, "iced")
             && matches!(colons.kind(), Kind::DoubleColon)
             && identifier(application, "application"))
-        || chain.iter().any(|token| matches!(token.kind(), Kind::Semicolon))
+        || chain
+            .iter()
+            .any(|token| matches!(token.kind(), Kind::Semicolon))
     {
         return None;
     }
@@ -182,7 +182,11 @@ fn inline_application_builder(items: &mut Box<[crate::item::Parsed]>) -> Option<
     let mut inlined = tokens[..call].to_vec();
     for (index, token) in chain.iter().enumerate() {
         // The entry starts where `main` calls the function.
-        let span = if index == 0 { name.span() } else { token.span() };
+        let span = if index == 0 {
+            name.span()
+        } else {
+            token.span()
+        };
         inlined.push(BodyToken::new(token.kind().clone(), span));
     }
     inlined.extend_from_slice(&tokens[call + 2..]);
@@ -321,14 +325,20 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
                     start,
                 )?);
             }
-            (Token::Reserved(text), _)
-                if scan.delimiter_depth == 0 && text.as_str() == "async" =>
-            {
+            (Token::Reserved(text), _) if scan.delimiter_depth == 0 && text.as_str() == "async" => {
                 items.extend(parse_item(input, &tokenizer_control)?);
             }
-            (Token::Reserved(text), _) if scan.delimiter_depth == 0 && text.as_str() == "static" => {
+            (Token::Reserved(text), _)
+                if scan.delimiter_depth == 0 && text.as_str() == "static" =>
+            {
                 let start = input.peek().expect("peeked static").1;
-                items.push(parse_static(input, &tokenizer_control, Box::default(), None, start)?);
+                items.push(parse_static(
+                    input,
+                    &tokenizer_control,
+                    Box::default(),
+                    None,
+                    start,
+                )?);
             }
             (token, _) if scan.delimiter_depth == 0 && begins_item(token) => {
                 items.extend(parse_item(input, &tokenizer_control)?);
@@ -361,7 +371,13 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
 fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
     use crate::item::Parsed;
     let value = |function: &crate::item::Function| {
-        usize::try_from(function.body_syntax.integer().filter(|_| function.constant)?).ok()
+        usize::try_from(
+            function
+                .body_syntax
+                .integer()
+                .filter(|_| function.constant)?,
+        )
+        .ok()
     };
     // Crate constants by name, and associated ones as `Type::NAME`.
     let mut lengths = std::collections::BTreeMap::<crate::ImmutableString, usize>::new();
@@ -417,9 +433,9 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
                 Ok(())
             }
             type_ref::Type::Reference { target, .. } => visit(target, lengths),
-            type_ref::Type::Tuple { members, .. } => {
-                members.iter_mut().try_for_each(|member| visit(member, lengths))
-            }
+            type_ref::Type::Tuple { members, .. } => members
+                .iter_mut()
+                .try_for_each(|member| visit(member, lengths)),
             type_ref::Type::Unit(_) => Ok(()),
         }
     }
@@ -449,10 +465,9 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
             Parsed::Impl(item) => {
                 // `Self::N` in an impl is its owner's `N`.
                 let owner = match &item.owner {
-                    type_ref::Type::Path(owner) => owner
-                        .segments
-                        .last()
-                        .map(|last| last.name.text.to_string()),
+                    type_ref::Type::Path(owner) => {
+                        owner.segments.last().map(|last| last.name.text.to_string())
+                    }
                     _ => None,
                 };
                 let mut own = lengths.clone();
@@ -658,10 +673,9 @@ fn parse_item_with_leading(
         SKIPPED.with_borrow_mut(|skipped| skipped.push(Span::new(start, end)));
         return Ok(None);
     }
-    if input
-        .peek()
-        .is_some_and(|(token, _)| matches!(token, Token::Identifier(text) if text.as_str() == "unsafe"))
-    {
+    if input.peek().is_some_and(
+        |(token, _)| matches!(token, Token::Identifier(text) if text.as_str() == "unsafe"),
+    ) {
         return parse_unsafe_item(input, tokenizer_control, attributes, visibility, start);
     }
     match parse_enabled_item(input, tokenizer_control, attributes, visibility, start)? {
@@ -702,11 +716,17 @@ fn marker_impl(
     unsafety: Option<Position>,
 ) -> ParseResult<Option<crate::item::Parsed>> {
     let bad = |message: String, position: Position| {
-        Err(PERR::BadInput(crate::LexError::ImproperSymbol("impl".into(), message)).into_err(position))
+        Err(
+            PERR::BadInput(crate::LexError::ImproperSymbol("impl".into(), message))
+                .into_err(position),
+        )
     };
     let Some(trait_) = item.trait_.as_ref() else {
         return match unsafety {
-            Some(position) => bad("inherent impls cannot be unsafe, as in Rust (E0197)".into(), position),
+            Some(position) => bad(
+                "inherent impls cannot be unsafe, as in Rust (E0197)".into(),
+                position,
+            ),
             None => Ok(Some(crate::item::Parsed::Impl(item))),
         };
     };
@@ -736,13 +756,19 @@ fn marker_impl(
         _ => {
             if let Some(function) = item.functions.first() {
                 return bad(
-                    format!("method `{}` is not a member of trait `{name}`, as in Rust (E0407)", function.name.text),
+                    format!(
+                        "method `{}` is not a member of trait `{name}`, as in Rust (E0407)",
+                        function.name.text
+                    ),
                     function.name.span.start(),
                 );
             }
             if let Some((associated, _)) = item.associated.first() {
                 return bad(
-                    format!("type `{}` is not a member of trait `{name}`, as in Rust (E0437)", associated.text),
+                    format!(
+                        "type `{}` is not a member of trait `{name}`, as in Rust (E0437)",
+                        associated.text
+                    ),
                     associated.span.start(),
                 );
             }
@@ -794,14 +820,10 @@ fn parse_enabled_item(
         )
         .map(crate::item::Parsed::Function),
         #[cfg(not(feature = "no_function"))]
-        (Token::Reserved(text), _) if text.as_str() == "async" => parse_async_function(
-            input,
-            tokenizer_control,
-            attributes,
-            visibility,
-            start,
-        )
-        .map(crate::item::Parsed::Function),
+        (Token::Reserved(text), _) if text.as_str() == "async" => {
+            parse_async_function(input, tokenizer_control, attributes, visibility, start)
+                .map(crate::item::Parsed::Function)
+        }
         #[cfg(not(feature = "no_function"))]
         (Token::Const, _) => {
             input.next();
@@ -1051,11 +1073,10 @@ fn skip_item(input: &mut TokenStream) -> ParseResult<Position> {
             }
             (Token::SemiColon, position) if depth == 0 => return Ok(after(position, 1)),
             (Token::EOF, position) => {
-                return Err(PERR::MissingToken(
-                    Token::SemiColon.into(),
-                    "to end an item".into(),
-                )
-                .into_err(position));
+                return Err(
+                    PERR::MissingToken(Token::SemiColon.into(), "to end an item".into())
+                        .into_err(position),
+                );
             }
             _ => {}
         }
@@ -1579,7 +1600,8 @@ fn parse_use(
             span: Span::new(open, after(close, 1)),
         };
         let mut trees = nested.into_iter();
-        let tree = if matches!(&group, crate::item::UseTree::Group { members, .. } if members.is_empty()) {
+        let tree = if matches!(&group, crate::item::UseTree::Group { members, .. } if members.is_empty())
+        {
             trees.next().unwrap_or(group)
         } else {
             group
@@ -1608,11 +1630,10 @@ fn parse_use(
     }
     #[cfg(feature = "no_std")]
     if !extra_uses.is_empty() {
-        return Err(PERR::MissingToken(
-            Token::Comma.into(),
-            "between grouped imports".into(),
-        )
-        .into_err(start));
+        return Err(
+            PERR::MissingToken(Token::Comma.into(), "between grouped imports".into())
+                .into_err(start),
+        );
     }
 
     Ok(crate::item::Use {
@@ -1977,7 +1998,8 @@ fn parse_impl(
                 )?);
                 continue;
             }
-            if matches!(input.peek(), Some((Token::Reserved(text), _)) if text.as_str() == "async") {
+            if matches!(input.peek(), Some((Token::Reserved(text), _)) if text.as_str() == "async")
+            {
                 functions.push(parse_async_function(
                     input,
                     tokenizer_control,
@@ -2617,8 +2639,9 @@ fn skip_precise_capture(
                 return Ok(Some(end));
             }
             Some((Token::EOF, position)) => {
-                return Err(PERR::MissingToken(">".into(), "to close `use<..>`".into())
-                    .into_err(position));
+                return Err(
+                    PERR::MissingToken(">".into(), "to close `use<..>`".into()).into_err(position)
+                );
             }
             None => unreachable!("token streams always end with EOF"),
             Some(_) => {}
@@ -3168,7 +3191,11 @@ fn parse_type_split(
         } else {
             "Vec".into()
         };
-        let end = expect(input, Token::RightBracket, "to close an array or slice type")?;
+        let end = expect(
+            input,
+            Token::RightBracket,
+            "to close an array or slice type",
+        )?;
         let span = Span::new(start, after(end, 1));
         return Ok(type_ref::Type::Path(type_ref::Path {
             segments: Box::new([type_ref::Segment {
@@ -3464,7 +3491,8 @@ fn parse_impl_bounds(
         type_ref::Path {
             segments: Box::new([type_ref::Segment {
                 name: crate::item::Name {
-                    text: format!("{}{}={}", type_ref::BINDING_PREFIX, owner.text, name.text).into(),
+                    text: format!("{}{}={}", type_ref::BINDING_PREFIX, owner.text, name.text)
+                        .into(),
                     span: owner.span,
                 },
                 arguments: Box::new([type_ref::Argument::Type(ty)]),
@@ -3503,8 +3531,7 @@ fn lift_impl_parameters(
 ) {
     fn lift(ty: &mut type_ref::Type, generics: &mut Vec<crate::item::GenericParam>) {
         match ty {
-            type_ref::Type::Path(path)
-                if matches!(&path.segments[..], [segment] if segment.name.text == type_ref::IMPL_TYPE) =>
+            type_ref::Type::Path(path) if matches!(&path.segments[..], [segment] if segment.name.text == type_ref::IMPL_TYPE) =>
             {
                 let segment = &path.segments[0];
                 let mut projections = Vec::new();
@@ -3534,7 +3561,12 @@ fn lift_impl_parameters(
                     .collect::<Box<[_]>>();
                 let base = bounds
                     .iter()
-                    .map(|bound| bound.segments.last().map_or("", |last| last.name.text.as_str()))
+                    .map(|bound| {
+                        bound
+                            .segments
+                            .last()
+                            .map_or("", |last| last.name.text.as_str())
+                    })
                     .collect::<Vec<_>>()
                     .join("_");
                 let mut text = format!("impl_{base}");
@@ -4043,8 +4075,14 @@ fn parse_body_syntax(
         #[cfg(not(feature = "no_std"))]
         if boundary && let Some((Token::Fn, position)) = input.peek() {
             let position = *position;
-            let function =
-                parse_function(input, tokenizer_control, Box::default(), None, position, false)?;
+            let function = parse_function(
+                input,
+                tokenizer_control,
+                Box::default(),
+                None,
+                position,
+                false,
+            )?;
             NESTED.with_borrow_mut(|nested| nested.push(crate::item::Parsed::Function(function)));
             continue;
         }
@@ -4063,7 +4101,10 @@ fn parse_body_syntax(
             {
                 attributes.push(parse_attribute(input)?);
             }
-            if input.peek().is_some_and(|(token, _)| begins_body_item(token)) {
+            if input
+                .peek()
+                .is_some_and(|(token, _)| begins_body_item(token))
+            {
                 let item = parse_item_with_leading(
                     input,
                     tokenizer_control,
@@ -4127,7 +4168,10 @@ fn parse_body_syntax(
             .into_err(*position));
         }
         if let Some((token, _)) = input.peek() {
-            boundary = matches!(token, Token::LeftBrace | Token::RightBrace | Token::SemiColon);
+            boundary = matches!(
+                token,
+                Token::LeftBrace | Token::RightBrace | Token::SemiColon
+            );
             let closes_visibility =
                 matches!(token, Token::RightParen) && visibility == Some(scan.delimiter_depth);
             if closes_visibility {
@@ -4286,7 +4330,10 @@ fn parse_callback_closure(
         // `_: Message`, `(a, b): (T, U)`, `&x: &T` or `mut n: u32`.
         if matches!(
             input.peek(),
-            Some((Token::LeftParen | Token::Underscore | Token::And | Token::Ampersand | Token::Mut, _))
+            Some((
+                Token::LeftParen | Token::Underscore | Token::And | Token::Ampersand | Token::Mut,
+                _
+            ))
         ) {
             let pattern = parse_parameter_pattern(input)?;
             if !matches!(input.peek(), Some((Token::Colon, _))) {
@@ -4334,46 +4381,45 @@ fn parse_callback_closure(
     } else {
         None
     };
-    let (body_span, body_syntax, constant) =
-        if let Some((Token::LeftBrace, open)) = input.peek() {
-            let open = *open;
-            input.next();
-            let (span, syntax) = parse_body_syntax(input, tokenizer_control, open)?;
-            (span, syntax, false)
-        } else {
-            // An expression body runs to the argument's end, as a `const`
-            // initializer runs to its `;`.
-            let body = input.peek().map_or(start, |(_, position)| *position);
-            let mut scan = ScanState::default();
-            let mut tokens = Vec::new();
-            let end = loop {
-                match input.peek().expect("token streams always end with EOF") {
-                    (Token::Comma | Token::RightParen, position) if scan.delimiter_depth == 0 => {
-                        break *position;
-                    }
-                    (Token::EOF, position) => {
-                        return Err(PERR::MissingToken(
-                            Token::RightParen.into(),
-                            "to end the application call".into(),
-                        )
-                        .into_err(*position));
-                    }
-                    _ => {}
+    let (body_span, body_syntax, constant) = if let Some((Token::LeftBrace, open)) = input.peek() {
+        let open = *open;
+        input.next();
+        let (span, syntax) = parse_body_syntax(input, tokenizer_control, open)?;
+        (span, syntax, false)
+    } else {
+        // An expression body runs to the argument's end, as a `const`
+        // initializer runs to its `;`.
+        let body = input.peek().map_or(start, |(_, position)| *position);
+        let mut scan = ScanState::default();
+        let mut tokens = Vec::new();
+        let end = loop {
+            match input.peek().expect("token streams always end with EOF") {
+                (Token::Comma | Token::RightParen, position) if scan.delimiter_depth == 0 => {
+                    break *position;
                 }
-                match scan
-                    .next(input, tokenizer_control)
-                    .expect("token streams always end with EOF")
-                {
-                    (Token::LexError(error), position) => return Err(error.into_err(position)),
-                    (token, position) => tokens.push(body_token(token, position)),
+                (Token::EOF, position) => {
+                    return Err(PERR::MissingToken(
+                        Token::RightParen.into(),
+                        "to end the application call".into(),
+                    )
+                    .into_err(*position));
                 }
-            };
-            (
-                Span::new(body, end),
-                crate::item::BodySyntax::new(tokens),
-                true,
-            )
+                _ => {}
+            }
+            match scan
+                .next(input, tokenizer_control)
+                .expect("token streams always end with EOF")
+            {
+                (Token::LexError(error), position) => return Err(error.into_err(position)),
+                (token, position) => tokens.push(body_token(token, position)),
+            }
         };
+        (
+            Span::new(body, end),
+            crate::item::BodySyntax::new(tokens),
+            true,
+        )
+    };
     let span = Span::new(start, body_span.end());
     Ok(crate::item::Function {
         header: crate::item::Header {
@@ -4388,9 +4434,8 @@ fn parse_callback_closure(
         generics: Box::default(),
         receiver: None,
         parameters: parameters.into_boxed_slice(),
-        output: output.or_else(|| {
-            (role == "update").then(|| type_ref::Type::Unit(Span::new(start, start)))
-        }),
+        output: output
+            .or_else(|| (role == "update").then(|| type_ref::Type::Unit(Span::new(start, start)))),
         body_span,
         body_syntax,
         constant,
@@ -4563,7 +4608,10 @@ fn parse_use_subtree(
             arguments: Box::default(),
         });
     }
-    trees.push(crate::item::UseTree::Path(path_of(&segments), parse_use_alias(input)?));
+    trees.push(crate::item::UseTree::Path(
+        path_of(&segments),
+        parse_use_alias(input)?,
+    ));
     Ok(())
 }
 
@@ -4722,9 +4770,9 @@ pub(crate) fn found(token: &Token) -> String {
     /// Rust's keywords, which rustc names as keywords.
     const KEYWORDS: [&str; 38] = [
         "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-        "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
-        "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super",
-        "trait", "true", "type", "unsafe", "use", "where", "while",
+        "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
+        "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
+        "true", "type", "unsafe", "use", "where", "while",
     ];
     match token {
         Token::EOF => "`<eof>`".into(),
@@ -4976,7 +5024,11 @@ fn view(state: &Counter) -> iced::widget::Column<'_, Message> { () }
     #[test]
     fn items_after_an_expression_need_a_semicolon_unless_it_is_block_like() {
         for (source, line, column) in [
-            ("fn main() {\n    let v = { 1\n        struct S { x: i64 }\n    };\n}", 3, 9),
+            (
+                "fn main() {\n    let v = { 1\n        struct S { x: i64 }\n    };\n}",
+                3,
+                9,
+            ),
             ("fn main() {\n    let w = { 2 fn f() {} };\n}", 2, 17),
             ("fn main() {\n    let s = S { x: 1 } struct B;\n}", 2, 24),
             ("fn main() {\n    S { x: T { y: 2 } } fn f() {}\n}", 2, 25),

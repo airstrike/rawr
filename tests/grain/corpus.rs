@@ -148,8 +148,14 @@ pub const CASES: &[Case] = &[
     // key, and a `u64` above `i64::MAX` ordered as unsigned.
     case("float_compare_ieee", "let n = 0.0_f64 / 0.0; (0.0 < 1e-16, 0.1 + 0.2 == 0.3, n != n)"),
     case("f32_rounds", "let a = 0.1_f32 + 0.2_f32; a == 0.3_f32"),
-    case("hand_written_eq_in_tuple", "#[derive(Clone, Copy)] struct Ci(i64); impl PartialEq for Ci { fn eq(&self, o: &Self) -> bool { self.0.abs() == o.0.abs() } } ((Ci(3), 1) == (Ci(-3), 1), vec![Ci(3), Ci(4)].contains(&Ci(-4)))"),
-    case("hand_written_ord_sorts", "#[derive(Debug, Clone, Copy, PartialEq, Eq)] struct R(i64); impl PartialOrd for R { fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } } impl Ord for R { fn cmp(&self, o: &Self) -> std::cmp::Ordering { o.0.cmp(&self.0) } } let mut v = vec![(R(1), 'a'), (R(7), 'b')]; v.sort(); v[0].0 .0"),
+    case(
+        "hand_written_eq_in_tuple",
+        "#[derive(Clone, Copy)] struct Ci(i64); impl PartialEq for Ci { fn eq(&self, o: &Self) -> bool { self.0.abs() == o.0.abs() } } ((Ci(3), 1) == (Ci(-3), 1), vec![Ci(3), Ci(4)].contains(&Ci(-4)))",
+    ),
+    case(
+        "hand_written_ord_sorts",
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq)] struct R(i64); impl PartialOrd for R { fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } } impl Ord for R { fn cmp(&self, o: &Self) -> std::cmp::Ordering { o.0.cmp(&self.0) } } let mut v = vec![(R(1), 'a'), (R(7), 'b')]; v.sort(); v[0].0 .0",
+    ),
     case("u64_key_order", "use std::collections::BTreeMap; let mut m = BTreeMap::new(); m.insert(u64::MAX, 1); m.insert(3_u64, 2); m.into_iter().next().unwrap().0 == 3"),
     case("method_beats_free_fn", "fn abs(x: i64) -> i64 { x + 1000 } let a: i64 = -5; a.abs()"),
     case("method_call_beats_free_fn", r#"fn len() -> usize { 99 } fn push(x: i64) {} let s = String::from("hey"); let mut v = vec![1]; v.push(2); (s.len(), v.len())"#),
@@ -209,10 +215,19 @@ pub const CASES: &[Case] = &[
     case("fn_shared_reference", "fn total(xs: &Vec<i64>) -> i64 { let mut s: i64 = 0; for x in xs { s += x; } s } let v = vec![1, 2, 3]; total(&v) + v.len() as i64"),
     case("fn_returning_a_tuple", "fn split(n: i64) -> (i64, i64) { (n / 10, n % 10) } let (a, b) = split(42); a * 100 + b"),
     case("fn_generic", "fn id<T>(x: T) -> T { x } id(4)"),
-    case("method_mutates_its_receiver", "struct C { n: i64 } impl C { fn bump(&mut self) { self.n += 1; } fn get(&self) -> i64 { self.n } } let mut c = C { n: 1 }; c.bump(); c.bump(); c.get()"),
+    case(
+        "method_mutates_its_receiver",
+        "struct C { n: i64 } impl C { fn bump(&mut self) { self.n += 1; } fn get(&self) -> i64 { self.n } } let mut c = C { n: 1 }; c.bump(); c.bump(); c.get()",
+    ),
     case("trait_method", "trait Area { fn area(&self) -> f64; } struct Sq(f64); impl Area for Sq { fn area(&self) -> f64 { self.0 * self.0 } } Sq(3.0).area()"),
-    case("trait_default_method", "trait Twice { fn one(&self) -> i64; fn two(&self) -> i64 { self.one() * 2 } } struct N(i64); impl Twice for N { fn one(&self) -> i64 { self.0 } } N(21).two()"),
-    case("question_mark", "fn half(n: i64) -> Option<i64> { if n % 2 == 0 { Some(n / 2) } else { None } } fn q(n: i64) -> Option<i64> { let h = half(n)?; Some(h + 1) } q(8).unwrap_or(0) + q(7).unwrap_or(100)"),
+    case(
+        "trait_default_method",
+        "trait Twice { fn one(&self) -> i64; fn two(&self) -> i64 { self.one() * 2 } } struct N(i64); impl Twice for N { fn one(&self) -> i64 { self.0 } } N(21).two()",
+    ),
+    case(
+        "question_mark",
+        "fn half(n: i64) -> Option<i64> { if n % 2 == 0 { Some(n / 2) } else { None } } fn q(n: i64) -> Option<i64> { let h = half(n)?; Some(h + 1) } q(8).unwrap_or(0) + q(7).unwrap_or(100)",
+    ),
     // --- functions the host registered -------------------------------------
     // A registered function is called by name, and a `&mut` first parameter
     // mutates the variable handed to it.

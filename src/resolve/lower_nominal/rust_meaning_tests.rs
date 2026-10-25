@@ -33,7 +33,10 @@ fn language_rust_meaning_float_comparison_is_ieee() {
         )
         "#,
     );
-    assert_eq!(value, "true true false false true false false true true None 1 true");
+    assert_eq!(
+        value,
+        "true true false false true false false true true None 1 true"
+    );
 }
 
 #[test]
@@ -60,7 +63,10 @@ fn language_rust_meaning_f32_holds_f32_values() {
         )
         "#,
     );
-    assert_eq!(value, "true true false 0.10000000149011612 true 1.0000001 false");
+    assert_eq!(
+        value,
+        "true true false 0.10000000149011612 true 1.0000001 false"
+    );
 }
 
 #[test]
@@ -134,9 +140,17 @@ fn language_rust_meaning_step_by_steps() {
          9223372036854775806] 4 [18446744073709551611, 18446744073709551613, \
          18446744073709551615] [11, 31, 51] 10 4500000000000 [5, 15, 25]"
     );
-    for source in ["(0..3).step_by(0).count()", "vec![1, 2].iter().step_by(0).count()"] {
-        let error = Engine::new().eval::<usize>(source).expect_err("a zero step panics");
-        assert!(error.to_string().contains("assertion failed: step != 0"), "{error}");
+    for source in [
+        "(0..3).step_by(0).count()",
+        "vec![1, 2].iter().step_by(0).count()",
+    ] {
+        let error = Engine::new()
+            .eval::<usize>(source)
+            .expect_err("a zero step panics");
+        assert!(
+            error.to_string().contains("assertion failed: step != 0"),
+            "{error}"
+        );
     }
 }
 
@@ -145,21 +159,33 @@ fn language_rust_meaning_host_reads_integer_kinds() {
     // A `u64` result is Rust's `u64`, not the `-1` its bits read as.
     let engine = Engine::new();
     assert_eq!(engine.eval::<u64>("-1_i64 as u64").unwrap(), u64::MAX);
-    assert_eq!(engine.eval::<u64>("(1_u64 << 63) + 5").unwrap(), (1 << 63) + 5);
+    assert_eq!(
+        engine.eval::<u64>("(1_u64 << 63) + 5").unwrap(),
+        (1 << 63) + 5
+    );
     assert_eq!(engine.eval::<usize>("vec![1, 2].len()").unwrap(), 2);
     assert_eq!(engine.eval::<u8>("200_u8").unwrap(), 200);
     assert_eq!(engine.eval::<i32>("-7_i32").unwrap(), -7);
     let ast = engine
-        .compile("pub fn big(x: u64) -> u64 { x * 2 } pub fn count(v: Vec<i64>) -> usize { v.len() }")
+        .compile(
+            "pub fn big(x: u64) -> u64 { x * 2 } pub fn count(v: Vec<i64>) -> usize { v.len() }",
+        )
         .unwrap();
     let mut scope = crate::Scope::new();
     assert_eq!(
-        engine.call_fn::<u64>(&mut scope, &ast, "big", (1_i64 << 62,)).unwrap(),
+        engine
+            .call_fn::<u64>(&mut scope, &ast, "big", (1_i64 << 62,))
+            .unwrap(),
         1 << 63
     );
     assert_eq!(
         engine
-            .call_fn::<usize>(&mut scope, &ast, "count", (vec![crate::Dynamic::from(1_i64)],))
+            .call_fn::<usize>(
+                &mut scope,
+                &ast,
+                "count",
+                (vec![crate::Dynamic::from(1_i64)],)
+            )
             .unwrap(),
         1
     );
@@ -210,12 +236,25 @@ fn language_rust_meaning_runtime_errors_point_at_the_script() {
     // Line 4, column 13 is `v[3]` in the script; the lowered program the
     // evaluator runs has other lines and columns.
     let script = "fn main_part() {}\nlet v: Vec<i64> = vec![1, 2, 3];\nlet n = 3;\nlet x = v[n] + 1;\nprintln!(\"{x}\");\n";
-    let error = Engine::new().run(script).expect_err("the index is out of bounds");
-    let position = deepest(&error).position();
-    assert_eq!((position.line(), position.position()), (Some(4), Some(9)), "{error}");
-    let ast = Engine::new().compile("pub fn get(v: Vec<i64>) -> i64 {\n    v[5]\n}").unwrap();
     let error = Engine::new()
-        .call_fn::<i64>(&mut crate::Scope::new(), &ast, "get", (crate::Array::new(),))
+        .run(script)
+        .expect_err("the index is out of bounds");
+    let position = deepest(&error).position();
+    assert_eq!(
+        (position.line(), position.position()),
+        (Some(4), Some(9)),
+        "{error}"
+    );
+    let ast = Engine::new()
+        .compile("pub fn get(v: Vec<i64>) -> i64 {\n    v[5]\n}")
+        .unwrap();
+    let error = Engine::new()
+        .call_fn::<i64>(
+            &mut crate::Scope::new(),
+            &ast,
+            "get",
+            (crate::Array::new(),),
+        )
         .expect_err("the index is out of bounds");
     assert_eq!(deepest(&error).position().line(), Some(2), "{error}");
 }
@@ -350,7 +389,10 @@ fn language_rust_meaning_u64_orders_as_unsigned_everywhere() {
     let error = Engine::new()
         .eval::<u8>("vec![200_u8, 100].iter().sum::<u8>()")
         .expect_err("200 + 100 overflows a u8");
-    assert!(error.to_string().contains("attempt to add with overflow"), "{error}");
+    assert!(
+        error.to_string().contains("attempt to add with overflow"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -389,7 +431,10 @@ fn language_rust_meaning_moved_parts_are_not_observable() {
     // Each of these reads a value Rust moved out, which rustc rejects; a
     // copy would let the old value show.
     let cases = [
-        (r#"let a = vec![String::from("x")]; let b = a[0]; b.len()"#, "cannot move out of index"),
+        (
+            r#"let a = vec![String::from("x")]; let b = a[0]; b.len()"#,
+            "cannot move out of index",
+        ),
         (
             r#"struct S { v: Vec<i64> } fn f(p: &S) -> usize { let x = p.v; x.len() } f(&S { v: vec![1] })"#,
             "behind a shared reference",
@@ -398,8 +443,14 @@ fn language_rust_meaning_moved_parts_are_not_observable() {
             r#"struct S { v: Vec<i64> } let s = S { v: vec![1] }; let S { v } = s; s.v.len() + v.len()"#,
             "moved value 's.v'",
         ),
-        (r#"let t = (String::from("a"), 1); let (x, _) = t; t.0.len() + x.len()"#, "moved value 't.0'"),
-        (r#"let v = vec![String::from("a")]; for s in v { } v.len()"#, "moved value 'v'"),
+        (
+            r#"let t = (String::from("a"), 1); let (x, _) = t; t.0.len() + x.len()"#,
+            "moved value 't.0'",
+        ),
+        (
+            r#"let v = vec![String::from("a")]; for s in v { } v.len()"#,
+            "moved value 'v'",
+        ),
     ];
     for (source, message) in cases {
         let error = Engine::new()

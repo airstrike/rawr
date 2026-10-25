@@ -116,7 +116,9 @@ fn master_keyboard_and_event_subscriptions_deliver_messages() {
     assert_eq!(recipes.len(), 3);
     let events = || {
         Box::pin(iced::futures::stream::iter([
-            press(iced::keyboard::Key::Named(iced::keyboard::key::Named::Space)),
+            press(iced::keyboard::Key::Named(
+                iced::keyboard::key::Named::Space,
+            )),
             press(iced::keyboard::Key::Character("r".into())),
             press(iced::keyboard::Key::Character("x".into())),
         ])) as iced::advanced::subscription::EventStream
@@ -236,7 +238,9 @@ fn master_event_patterns_match_library_enums() {
     let events = || {
         Box::pin(iced::futures::stream::iter([
             press(iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab)),
-            press(iced::keyboard::Key::Named(iced::keyboard::key::Named::Space)),
+            press(iced::keyboard::Key::Named(
+                iced::keyboard::key::Named::Space,
+            )),
             press(iced::keyboard::Key::Character("r".into())),
             press(iced::keyboard::Key::Character("x".into())),
         ])) as iced::advanced::subscription::EventStream
@@ -244,7 +248,9 @@ fn master_event_patterns_match_library_enums() {
     let mut messages: Vec<runtime::Message> = Vec::new();
     for recipe in recipes {
         let stream = recipe.stream(events());
-        messages.extend(iced::futures::executor::block_on(stream.collect::<Vec<_>>()));
+        messages.extend(iced::futures::executor::block_on(
+            stream.collect::<Vec<_>>(),
+        ));
     }
     assert_eq!(messages.len(), 8);
     for message in messages {

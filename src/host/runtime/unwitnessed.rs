@@ -37,7 +37,11 @@ impl Unwitnessed {
     /// Build the final value. `None` when a copy was already finished.
     #[must_use]
     pub fn witness(self, witness: Witness) -> Option<Dynamic> {
-        let finish = self.0.lock().unwrap_or_else(PoisonError::into_inner).take()?;
+        let finish = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()?;
         Some(finish(witness))
     }
 }

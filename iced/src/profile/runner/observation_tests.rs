@@ -17,7 +17,10 @@ impl Fixture {
         ));
         fs::create_dir_all(root.join("src")).unwrap();
         let root = fs::canonicalize(root).unwrap();
-        crate::write_marked(&root, "src/main.rs", r#"
+        crate::write_marked(
+            &root,
+            "src/main.rs",
+            r#"
 use iced::Element;
 use iced::widget::text;
 #[derive(Default)] struct State;
@@ -27,7 +30,8 @@ impl State {
     fn view(&self) -> Element<Message> { text("Observed") }
 }
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
-"#);
+"#,
+        );
         let mut engine = rawr::Engine::new();
         crate::install(&mut engine).unwrap();
         let target = rawr::project::Target::discover(&root).unwrap();
@@ -85,9 +89,7 @@ fn child_startup_rejects_events_or_suspension_during_parent_validation() {
         } else {
             observed.gate.observe(Instant::now()).unwrap();
         }
-        assert!(bound
-            .start(fixture.engine.clone())
-            .is_err());
+        assert!(bound.start(fixture.engine.clone()).is_err());
     }
 }
 
@@ -107,9 +109,7 @@ fn child_startup_revalidates_rawr_bytes_and_requires_exact_coverage() {
         .observe(&inputs.encode_observation().unwrap())
         .is_err());
     crate::write_marked(&fixture.root, "src/main.rs", "changed");
-    assert!(bound
-        .start(fixture.engine.clone())
-        .is_err());
+    assert!(bound.start(fixture.engine.clone()).is_err());
 }
 
 #[test]
@@ -119,9 +119,7 @@ fn running_owner_keeps_child_observation_alive_after_protocol_transport_drops() 
     bound
         .observe(&inputs.encode_observation().unwrap())
         .unwrap();
-    let (running, transport) = bound
-        .start(fixture.engine.clone())
-        .unwrap();
+    let (running, transport) = bound.start(fixture.engine.clone()).unwrap();
     let control = Arc::downgrade(running._observer.as_ref().unwrap());
     assert!(Arc::ptr_eq(
         &transport.gate,
@@ -140,9 +138,7 @@ fn generated_transport_retains_and_drains_healthy_refresh_intent() {
     bound
         .observe(&inputs.encode_observation().unwrap())
         .unwrap();
-    let (running, transport) = bound
-        .start(fixture.engine.clone())
-        .unwrap();
+    let (running, transport) = bound.start(fixture.engine.clone()).unwrap();
     let service = match &running.live {
         LiveGeneration::Application(_, service) | LiveGeneration::Preview(_, service) => service,
         LiveGeneration::Main(_) => unreachable!("the fixture is an application"),
@@ -168,9 +164,7 @@ fn generated_retirement_waits_for_ui_exit_and_transfers_refresh_once() {
     bound
         .observe(&inputs.encode_observation().unwrap())
         .unwrap();
-    let (mut running, transport) = bound
-        .start(fixture.engine.clone())
-        .unwrap();
+    let (mut running, transport) = bound.start(fixture.engine.clone()).unwrap();
     let service = match &mut running.live {
         LiveGeneration::Application(_, service) | LiveGeneration::Preview(_, service) => service,
         LiveGeneration::Main(_) => unreachable!("the fixture is an application"),
@@ -214,9 +208,7 @@ fn resident_current_check_requires_observation_and_never_refreshes_original_work
     bound
         .observe(&inputs.encode_observation().unwrap())
         .unwrap();
-    let (running, transport) = bound
-        .start(fixture.engine.clone())
-        .unwrap();
+    let (running, transport) = bound.start(fixture.engine.clone()).unwrap();
     let mut pending = transport.begin_install().unwrap();
     assert!(transport.request_is_current(&pending).is_err());
     transport
@@ -241,9 +233,7 @@ fn observed_child_requires_hot_inputs_and_native_callbacks_revoke_during_prepara
     bound
         .observe(&inputs.encode_observation().unwrap())
         .unwrap();
-    let (running, transport) = bound
-        .start(fixture.engine.clone())
-        .unwrap();
+    let (running, transport) = bound.start(fixture.engine.clone()).unwrap();
     let pending = transport.begin_install().unwrap();
     assert!(matches!(
         transport.install(pending, fixture.candidate()),

@@ -41,7 +41,11 @@ fn shared_parents_reduce_actual_path_work_and_unchanged_members_reuse_their_dige
     for path in &paths {
         super::super::hash(path, &fs::metadata(path).unwrap(), 1024, &old).unwrap();
     }
-    assert_eq!(old.census_usage().unwrap().2, 32 * 6, "the first consumer reads every member");
+    assert_eq!(
+        old.census_usage().unwrap().2,
+        32 * 6,
+        "the first consumer reads every member"
+    );
     let graph = GraphBudget::new();
     let run = || {
         observe(&graph, |batch| {

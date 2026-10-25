@@ -329,7 +329,10 @@ pub fn record_application(
                 if motion.deadline.past() {
                     break 'record Ending::Deadline;
                 }
-                if motion.cut.is_some_and(|cut| cut.load(std::sync::atomic::Ordering::Relaxed)) {
+                if motion
+                    .cut
+                    .is_some_and(|cut| cut.load(std::sync::atomic::Ordering::Relaxed))
+                {
                     break 'record Ending::Cut;
                 }
                 let capped = frames.len() >= motion.frames;
@@ -341,12 +344,18 @@ pub fn record_application(
                 }
                 streams.sync(adapter);
                 clock::set(now);
-                let theme = named.clone().unwrap_or_else(|| adapter.theme().native().clone());
+                let theme = named
+                    .clone()
+                    .unwrap_or_else(|| adapter.theme().native().clone());
                 // The content sizes the image; the view, with its
                 // diagnostic overlays, fills it.
                 let mut view = |published: Vec<crate::runtime::Message>, content: bool| {
                     adapter.deliver(published);
-                    framing(if content { adapter.content() } else { adapter.view() })
+                    framing(if content {
+                        adapter.content()
+                    } else {
+                        adapter.view()
+                    })
                 };
                 let (image, request, size) =
                     renderer.frame(&mut view, &mut trees, declared, now, &theme, &mut scale)?;
@@ -360,13 +369,19 @@ pub fn record_application(
                     time: now - start,
                     phase: if capped { last } else { phase },
                     scale: scale.unwrap_or(1.0),
-                    background: iced::theme::Base::base(&theme).background_color.into_rgba8(),
+                    background: iced::theme::Base::base(&theme)
+                        .background_color
+                        .into_rgba8(),
                 };
                 // The view changed: an animation gets the longer budget,
                 // and its frames from this one on are drawn at its scale.
                 // This frame is drawn again, so it matches the later frames
                 // that show the same picture.
-                if !changed && frames.first().is_some_and(|first| !first.same_image(&frame)) {
+                if !changed
+                    && frames
+                        .first()
+                        .is_some_and(|first| !first.same_image(&frame))
+                {
                     changed = true;
                     motion.deadline.extend(motion.extended);
                     let lowered = motion
@@ -464,13 +479,14 @@ impl Streams {
         let window = iced::window::Id::unique();
         let mut ready = Vec::new();
         self.running.retain_mut(|running| {
-            let _ = running
-                .input
-                .unbounded_send(iced::advanced::subscription::Event::Interaction {
-                    window,
-                    event: iced::Event::Window(iced::window::Event::RedrawRequested(now)),
-                    status: iced::event::Status::Ignored,
-                });
+            let _ =
+                running
+                    .input
+                    .unbounded_send(iced::advanced::subscription::Event::Interaction {
+                        window,
+                        event: iced::Event::Window(iced::window::Event::RedrawRequested(now)),
+                        status: iced::event::Status::Ignored,
+                    });
             while ready.len() < MOST {
                 match running.output.next().now_or_never() {
                     Some(Some(message)) => ready.push(message),
@@ -805,7 +821,10 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            [("snapshot", "Default", true), ("snapshot", "Ignored", false)]
+            [
+                ("snapshot", "Default", true),
+                ("snapshot", "Ignored", false)
+            ]
         );
         assert_eq!(listed[0].subject, "snapshot_fixture::State::view");
         assert_eq!(listed[0].themes, ["State::dark"]);

@@ -1286,7 +1286,11 @@ impl State {
             );
         }
         let chrome = chrome
-            .push(iced::widget::rule::horizontal(1).style(chrome::divider).boxed())
+            .push(
+                iced::widget::rule::horizontal(1)
+                    .style(chrome::divider)
+                    .boxed(),
+            )
             .push(footer.boxed());
         let chrome = iced::widget::themer(Some(chrome::theme()), chrome);
 
@@ -4854,7 +4858,11 @@ impl State {{
                 std::process::id()
             ));
             fs::create_dir_all(root.join("src")).unwrap();
-            fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
+            fs::write(
+                root.join("Cargo.toml"),
+                "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            )
+            .unwrap();
             Self { root }
         }
 

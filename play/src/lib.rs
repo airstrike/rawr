@@ -44,8 +44,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 pub use motion::{Gif, Image, Picture};
-use rawr_iced::snapshot::Deadline;
 pub use plain::Output;
+use rawr_iced::snapshot::Deadline;
 
 /// Set to stop an animation's recording before its next frame. The
 /// `rawr-play` binary sets it on `SIGUSR1`, which the bot sends when
@@ -88,7 +88,9 @@ impl std::str::FromStr for Format {
             "png" => Ok(Self::Png),
             "jpg" | "jpeg" => Ok(Self::Jpeg),
             "webp" => Ok(Self::Webp),
-            _ => Err(format!("unknown format `{value}`; expected png, jpg or webp")),
+            _ => Err(format!(
+                "unknown format `{value}`; expected png, jpg or webp"
+            )),
         }
     }
 }
@@ -103,7 +105,9 @@ pub fn encode(png: &Png, format: Format) -> Result<Vec<u8>, PlayError> {
         .read_info()
         .map_err(|error| failed(&error))?;
     let mut rgba = vec![0; reader.output_buffer_size().unwrap_or_default()];
-    reader.next_frame(&mut rgba).map_err(|error| failed(&error))?;
+    reader
+        .next_frame(&mut rgba)
+        .map_err(|error| failed(&error))?;
     let (width, height) = (png.width, png.height);
     let mut bytes = Vec::new();
     match format {
@@ -111,7 +115,12 @@ pub fn encode(png: &Png, format: Format) -> Result<Vec<u8>, PlayError> {
         Format::Jpeg => {
             let side = |side: u32| u16::try_from(side).map_err(|error| failed(&error));
             jpeg_encoder::Encoder::new(&mut bytes, 90)
-                .encode(&rgba, side(width)?, side(height)?, jpeg_encoder::ColorType::Rgba)
+                .encode(
+                    &rgba,
+                    side(width)?,
+                    side(height)?,
+                    jpeg_encoder::ColorType::Rgba,
+                )
                 .map_err(|error| failed(&error))?;
         }
         Format::Webp => image_webp::WebPEncoder::new(&mut bytes)
@@ -342,7 +351,11 @@ pub fn run_claimed(
         None => parsed.run(source, &options.limits)?,
     };
     if !options.messages.is_empty() {
-        let note = output.note.take().map(|note| format!("{note}\n")).unwrap_or_default();
+        let note = output
+            .note
+            .take()
+            .map(|note| format!("{note}\n"))
+            .unwrap_or_default();
         output.note = Some(format!("{note}{}", plain::MESSAGES_IGNORED));
     }
     Ok(Outcome::Text(output))
@@ -432,7 +445,11 @@ pub fn render(source: &str, options: &Options) -> Result<Png, PlayError> {
         let checked = compiler
             .check_named_source(SOURCE_NAME, &program)
             .map_err(|error| {
-                PlayError::Compile(report(&error.report(diagnostic(&program)), &program, source))
+                PlayError::Compile(report(
+                    &error.report(diagnostic(&program)),
+                    &program,
+                    source,
+                ))
             })?;
         checked
             .render_png_with(canvas)
@@ -499,7 +516,13 @@ fn application(
     source: &str,
     options: &Options,
     deadline: Deadline,
-) -> Result<(rawr_iced::program::Adapter, Vec<rawr_iced::runtime::Message>), PlayError> {
+) -> Result<
+    (
+        rawr_iced::program::Adapter,
+        Vec<rawr_iced::runtime::Message>,
+    ),
+    PlayError,
+> {
     let compiler = rawr_iced::application::Compiler::configured(sandbox(&options.limits, deadline))
         .map_err(|error| PlayError::Render(error.to_string()))?;
     let compile = |error: rawr_iced::application::Error| {
@@ -548,7 +571,8 @@ fn sandbox(limits: &Limits, deadline: Deadline) -> impl FnOnce(&mut rawr::Engine
         for symbol in ["import", "eval", "print", "debug"] {
             engine.disable_symbol(symbol);
         }
-        let refuse = || Err::<(), Box<rawr::EvalAltResult>>("sleep is not available in ?play".into());
+        let refuse =
+            || Err::<(), Box<rawr::EvalAltResult>>("sleep is not available in ?play".into());
         engine
             .register_fn("sleep", move |_: rawr::INT| refuse())
             .register_fn("sleep", move |_: rawr::FLOAT| refuse());
@@ -602,7 +626,10 @@ fn report(report: &rawr::diagnostic::Report, program: &str, source: &str) -> Str
     let source = without_tests(source);
     let own: Vec<&str> = source.split('\n').collect();
     // The last line with text: a source ending in a newline ends on it.
-    let last = own.iter().rposition(|line| !line.trim().is_empty()).map_or(1, |at| at + 1);
+    let last = own
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .map_or(1, |at| at + 1);
     let end = own[last - 1].chars().count();
     let added = program
         .split('\n')
@@ -631,7 +658,11 @@ fn report(report: &rawr::diagnostic::Report, program: &str, source: &str) -> Str
         } else if let Some((number, rest)) = quoted_line(line) {
             let gutter = &line[..line.len() - rest.len()];
             moved = number > last;
-            quoted = if moved { None } else { added.get(&number).copied() };
+            quoted = if moved {
+                None
+            } else {
+                added.get(&number).copied()
+            };
             if moved {
                 let width = gutter.len() - 3;
                 format!("{last:>width$} | {}", own[last - 1])
@@ -667,7 +698,8 @@ fn without_positions(line: &str) -> String {
     let mut out = line.to_owned();
     while let Some(at) = out.find(" (line ") {
         let rest = &out[at + " (line ".len()..];
-        let digits = |text: &str| text.len() - text.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let digits =
+            |text: &str| text.len() - text.trim_start_matches(|c: char| c.is_ascii_digit()).len();
         let line_digits = digits(rest);
         let Some(after) = rest[line_digits..].strip_prefix(", position ") else {
             break;
@@ -690,11 +722,14 @@ fn in_source(program: &str, source: &str, line: usize, column: usize) -> bool {
     let Some(index) = line.checked_sub(1) else {
         return false;
     };
-    let (Some(wrapped), Some(own)) = (program.split('\n').nth(index), source.split('\n').nth(index))
-    else {
+    let (Some(wrapped), Some(own)) = (
+        program.split('\n').nth(index),
+        source.split('\n').nth(index),
+    ) else {
         return false;
     };
-    added_span(wrapped, own).is_none_or(|(start, length)| column <= start || column > start + length)
+    added_span(wrapped, own)
+        .is_none_or(|(start, length)| column <= start || column > start + length)
 }
 
 /// Where `wrapped` adds text to `own`: the char column it starts at and its
@@ -1167,8 +1202,14 @@ mod tests {
         let by_inches = render(&snippet("Size { inches: 2, name: 'z' }"), &options).unwrap();
         let same = render(&snippet("Size { inches: 2, name: 'b' }"), &options).unwrap();
         let other = render(&snippet("Size { inches: 3, name: 'b' }"), &options).unwrap();
-        assert_eq!(by_inches.bytes, same.bytes, "`z` is equal to `b` by its `eq`");
-        assert_ne!(other.bytes, same.bytes, "a size of other inches selects no radio");
+        assert_eq!(
+            by_inches.bytes, same.bytes,
+            "`z` is equal to `b` by its `eq`"
+        );
+        assert_ne!(
+            other.bytes, same.bytes,
+            "a size of other inches selects no radio"
+        );
     }
 
     #[test]
@@ -1186,7 +1227,8 @@ mod tests {
 
     #[test]
     fn render_view_fn_shape() {
-        let source = "fn view() -> impl Widget<()> {\n    row![\"left\", text(\"right\")].spacing(8)\n}\n";
+        let source =
+            "fn view() -> impl Widget<()> {\n    row![\"left\", text(\"right\")].spacing(8)\n}\n";
         assert_eq!(shape(source), Shape::View);
         let png = render(source, &Options::default()).unwrap();
         assert!(is_png(&png.bytes));
@@ -1288,7 +1330,11 @@ fn view() -> impl Widget<()> {
         let info = reader.next_frame(&mut rgba).unwrap();
         let channels = info.color_type.samples();
         let center = ((50 * info.width + 50) as usize) * channels;
-        assert_eq!(&rgba[center..center + 3], &[0xff, 0x2e, 0x93], "the circle is drawn");
+        assert_eq!(
+            &rgba[center..center + 3],
+            &[0xff, 0x2e, 0x93],
+            "the circle is drawn"
+        );
     }
 
     #[test]
@@ -1315,20 +1361,31 @@ fn view() -> impl Widget<()> {
     fn maps_and_arrays_share_one_size_limit() {
         let limits = super::Limits::default();
         assert_eq!((limits.array_size, limits.map_size), (65_536, 65_536));
-        let PlayError::Limit(reason) = super::classify("Size of object map too large", &limits) else {
+        let PlayError::Limit(reason) = super::classify("Size of object map too large", &limits)
+        else {
             panic!("not a limit");
         };
-        assert!(reason.contains("arrays and maps up to 65536 items"), "{reason}");
+        assert!(
+            reason.contains("arrays and maps up to 65536 items"),
+            "{reason}"
+        );
     }
 
     #[test]
     fn render_size_and_depth_limits() {
         let huge = "fn view() -> impl Widget<()> {\n    let mut s = String::new();\n    for i in 0..10000000 { s.push_str(\"xxxxxxxxxxxxxxxxxxxx\"); }\n    text(s)\n}\n";
         let error = render(huge, &Options::default()).unwrap_err();
-        assert!(matches!(error, PlayError::Limit(_)) && error.text().contains("size limit"), "{error:?}");
-        let deep = "fn f(n: i64) -> i64 { f(n + 1) + 1 }\nfn view() -> impl Widget<()> { text(f(0)) }\n";
+        assert!(
+            matches!(error, PlayError::Limit(_)) && error.text().contains("size limit"),
+            "{error:?}"
+        );
+        let deep =
+            "fn f(n: i64) -> i64 { f(n + 1) + 1 }\nfn view() -> impl Widget<()> { text(f(0)) }\n";
         let error = render(deep, &Options::default()).unwrap_err();
-        assert!(matches!(error, PlayError::Limit(_)) && error.text().contains("call depth"), "{error:?}");
+        assert!(
+            matches!(error, PlayError::Limit(_)) && error.text().contains("call depth"),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -1344,14 +1401,18 @@ fn view() -> impl Widget<()> {
             let source = format!("fn leak(x) {{ {body} }}{view}");
             assert!(render(&source, &Options::default()).is_err(), "{body}");
         }
-        let preview = "#[preview(size = (60000, 60000))]\nfn view() -> impl Widget<()> { text(\"x\") }\n";
+        let preview =
+            "#[preview(size = (60000, 60000))]\nfn view() -> impl Widget<()> { text(\"x\") }\n";
         let error = render(preview, &Options::default()).unwrap_err();
         assert!(matches!(error, PlayError::Options(_)), "{error:?}");
     }
 
     #[test]
     fn render_encodes_jpeg_and_webp() {
-        let options = Options { size: Some((64, 32)), ..Options::default() };
+        let options = Options {
+            size: Some((64, 32)),
+            ..Options::default()
+        };
         let png = render("text(\"hi\")", &options).unwrap();
         let jpeg = super::encode(&png, super::Format::Jpeg).unwrap();
         assert!(jpeg.starts_with(&[0xff, 0xd8]));
@@ -1363,8 +1424,12 @@ fn view() -> impl Widget<()> {
     fn a_use_in_a_function_body_keeps_the_prelude() {
         let source = "fn view() -> impl Widget<()> {\n    use iced::widget::column;\n    column![text(\"hi\")]\n}\n";
         render(source, &Options::default()).unwrap();
-        assert!(super::has_top_level_use("use iced::widget::text;\nfn view() {}"));
-        assert!(!super::has_top_level_use("fn view() {\n    use iced::widget::text;\n}"));
+        assert!(super::has_top_level_use(
+            "use iced::widget::text;\nfn view() {}"
+        ));
+        assert!(!super::has_top_level_use(
+            "fn view() {\n    use iced::widget::text;\n}"
+        ));
     }
 
     /// The prelude has the modules and types iced's examples use most in a
@@ -1426,9 +1491,18 @@ fn view() -> impl Widget<()> {
     #[test]
     fn render_fits_the_content() {
         let small = render("text(\"hi\")", &Options::default()).unwrap();
-        let tall = render("column![text(\"a\"), text(\"b\"), text(\"c\")]", &Options::default()).unwrap();
+        let tall = render(
+            "column![text(\"a\"), text(\"b\"), text(\"c\")]",
+            &Options::default(),
+        )
+        .unwrap();
         // A margin on each side at 2x, plus the text, well under the bound.
-        assert!(small.width > 4 * super::MARGIN && small.width < 200, "{}x{}", small.width, small.height);
+        assert!(
+            small.width > 4 * super::MARGIN && small.width < 200,
+            "{}x{}",
+            small.width,
+            small.height
+        );
         assert!(tall.height > small.height && tall.width < 200);
         // A `Fill` width takes the fallback width.
         let fill = render("text_input(\"name\", \"\")", &Options::default()).unwrap();
@@ -1484,7 +1558,11 @@ fn view() -> impl Widget<()> {
         let output = text("fn main() {\n    println!(\"a\");\n    eprintln!(\"b\");\n    print!(\"c\");\n    println!(\"d\");\n}\n");
         assert_eq!(
             output.chunks,
-            [(Stdout, "a\n".into()), (Stderr, "b\n".into()), (Stdout, "cd\n".into())]
+            [
+                (Stdout, "a\n".into()),
+                (Stderr, "b\n".into()),
+                (Stdout, "cd\n".into())
+            ]
         );
         let json = output.to_json();
         assert!(json.starts_with('{'), "{json}");
@@ -1507,9 +1585,16 @@ fn view() -> impl Widget<()> {
         assert!(!shown.contains("(line "), "{shown}");
         let output = text("let x: u8 = 255; let y = x + 1; y");
         let shown = output.text();
-        assert!(shown.contains("attempt to add with overflow\n --> play.rs:1:26"), "{shown}");
+        assert!(
+            shown.contains("attempt to add with overflow\n --> play.rs:1:26"),
+            "{shown}"
+        );
         let limited = text("let mut s = String::new(); loop { s.push_str(\"xxxxxxxxxxxxxxxx\"); }");
-        assert!(limited.limit && !limited.text().contains("(line "), "{}", limited.text());
+        assert!(
+            limited.limit && !limited.text().contains("(line "),
+            "{}",
+            limited.text()
+        );
         // The wrapping's own text is never a position in the user's.
         let program = super::plain::program("1 + 2");
         assert!(!super::in_source(&program, "1 + 2", 1, 3));
@@ -1536,7 +1621,10 @@ fn view() -> impl Widget<()> {
         assert!(!output.limit);
         let text = output.text();
         assert!(text.starts_with("before\n"), "{text}");
-        assert!(text.contains("assertion `left == right` failed\n  left: 2\n right: 3"), "{text}");
+        assert!(
+            text.contains("assertion `left == right` failed\n  left: 2\n right: 3"),
+            "{text}"
+        );
     }
 
     /// A plain program's output, with a debug build's longer time budget.
@@ -1618,7 +1706,10 @@ fn view() -> impl Widget<()> {
         );
         assert_eq!(panicked.status, 101);
         let text = panicked.text();
-        assert!(text.contains("out of bounds") && text.contains("play.rs:2:5"), "{text}");
+        assert!(
+            text.contains("out of bounds") && text.contains("play.rs:2:5"),
+            "{text}"
+        );
 
         // A failure in the async body's own statements is placed at the
         // statement, before an await and after one.
@@ -1641,9 +1732,15 @@ fn view() -> impl Widget<()> {
         let source = "use std::time::Duration;\n#[tokio::main]\nasync fn main() -> Result<(), String> {\n    Ok(())\n}\n";
         let main = super::plain::async_main(source).unwrap();
         assert_eq!(&source[main.name..main.name + 4], "main");
-        assert_eq!(main.attribute.clone().map(|span| &source[span]), Some("#[tokio::main]"));
+        assert_eq!(
+            main.attribute.clone().map(|span| &source[span]),
+            Some("#[tokio::main]")
+        );
         assert!(main.returns);
-        assert_eq!(super::plain::async_main("fn main() {}\nasync fn helper() {}\n"), None);
+        assert_eq!(
+            super::plain::async_main("fn main() {}\nasync fn helper() {}\n"),
+            None
+        );
     }
 
     #[test]
@@ -1709,7 +1806,11 @@ impl Spin {
 ";
 
     /// How long `animate` ran `source` with these budgets, and its note.
-    fn animate_for(source: &str, time: u64, animation: u64) -> (std::time::Duration, Option<String>) {
+    fn animate_for(
+        source: &str,
+        time: u64,
+        animation: u64,
+    ) -> (std::time::Duration, Option<String>) {
         let options = Options {
             limits: super::Limits {
                 operations: u64::MAX,
@@ -1730,7 +1831,11 @@ impl Spin {
     /// times slower, so it gets a larger budget.
     #[test]
     fn tokio_channel_example_settles_within_the_still_budget() {
-        let budget = if cfg!(debug_assertions) { 15_000 } else { 2_000 };
+        let budget = if cfg!(debug_assertions) {
+            15_000
+        } else {
+            2_000
+        };
         let source = include_str!("../tests/fixtures/channel.rs");
         let (ran, note) = animate_for(source, budget, budget);
         assert_eq!(note, None, "the example ran to its last frame");
@@ -1747,7 +1852,10 @@ impl Spin {
         let (ran, note) = animate_for(TICK_THEN_SPIN, 1_000, 4_000);
         assert!(ran >= std::time::Duration::from_millis(4_000), "{ran:?}");
         let note = note.unwrap();
-        assert!(note.starts_with("Rendering stopped after 4 s, so the animation shows its first "), "{note}");
+        assert!(
+            note.starts_with("Rendering stopped after 4 s, so the animation shows its first "),
+            "{note}"
+        );
         // Without a longer budget, it stops at the still one.
         let (ran, note) = animate_for(TICK_THEN_SPIN, 1_000, 1_000);
         assert!(ran < std::time::Duration::from_millis(3_000), "{ran:?}");
@@ -1768,7 +1876,8 @@ impl Spin {
             },
             ..Options::default()
         };
-        let source = "fn main() {\n    println!(\"start\");\n    let mut n = 0;\n    loop { n += 1; }\n}\n";
+        let source =
+            "fn main() {\n    println!(\"start\");\n    let mut n = 0;\n    loop { n += 1; }\n}\n";
         let super::Outcome::Text(output) = super::run(source, &options).unwrap() else {
             panic!("a plain program runs as text");
         };
@@ -1791,16 +1900,31 @@ impl Spin {
         let super::Outcome::Text(output) = super::run(source, &options).unwrap() else {
             panic!("a plain program runs as text");
         };
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "stopped once full");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "stopped once full"
+        );
         assert!(output.truncated && output.limit && output.status == 1);
         let text = output.text();
-        assert!(text.len() <= super::plain::MAX_OUTPUT + 64, "{}", text.len());
-        assert!(text.ends_with("… output truncated\n"), "{}", &text[text.len() - 40..]);
+        assert!(
+            text.len() <= super::plain::MAX_OUTPUT + 64,
+            "{}",
+            text.len()
+        );
+        assert!(
+            text.ends_with("… output truncated\n"),
+            "{}",
+            &text[text.len() - 40..]
+        );
     }
 
     #[test]
     fn run_plain_compile_error_is_a_diagnostic() {
-        let error = super::run("fn main() {\n    let x: i64 = \"s\";\n}\n", &Options::default()).unwrap_err();
+        let error = super::run(
+            "fn main() {\n    let x: i64 = \"s\";\n}\n",
+            &Options::default(),
+        )
+        .unwrap_err();
         let PlayError::Compile(text) = error else {
             panic!("expected a compile error, got {error:?}");
         };
@@ -1833,7 +1957,10 @@ impl App {
 }
 ";
         let still = |source: &str| {
-            let options = Options { still: true, ..Options::default() };
+            let options = Options {
+                still: true,
+                ..Options::default()
+            };
             match super::animate(source, &options).unwrap().picture {
                 super::Picture::Still(png) => png.bytes,
                 super::Picture::Animated(_) => panic!("a still was animated"),
@@ -1850,8 +1977,12 @@ impl App {
     fn run_iced_snippets_still_render() {
         // Named `iced`, or only names of rawr-iced's prelude.
         assert!(is_png(&image("column![text(\"hi\")]").bytes));
-        assert!(is_png(&image("fn view() -> impl Widget<()> {\n    text(\"x\")\n}\n").bytes));
-        assert!(is_png(&image(include_str!("../tests/fixtures/counter.rs")).bytes));
+        assert!(is_png(
+            &image("fn view() -> impl Widget<()> {\n    text(\"x\")\n}\n").bytes
+        ));
+        assert!(is_png(
+            &image(include_str!("../tests/fixtures/counter.rs")).bytes
+        ));
     }
 
     #[test]
@@ -1873,12 +2004,16 @@ impl App {
             messages: vec!["Message::Increment".into(), "Message::Increment".into()],
             ..Options::default()
         };
-        let super::Outcome::Text(output) = super::run("println!(\"Foo\")", &options).unwrap() else {
+        let super::Outcome::Text(output) = super::run("println!(\"Foo\")", &options).unwrap()
+        else {
             panic!("a plain program runs as text");
         };
         assert_eq!((output.text().as_str(), output.status), ("Foo\n", 0));
         assert_eq!(output.note.as_deref(), Some(super::plain::MESSAGES_IGNORED));
-        assert_eq!(super::Output::from_json(output.to_json().as_bytes()).unwrap(), output);
+        assert_eq!(
+            super::Output::from_json(output.to_json().as_bytes()).unwrap(),
+            output
+        );
     }
 
     #[test]
@@ -1905,7 +2040,10 @@ impl App {
         let claimed = super::run_claimed("label(\"x\")", &options, &claims).unwrap_err();
         assert!(matches!(claimed, PlayError::Compile(_)), "{claimed:?}");
         // The real claims: `text` is rawr-iced's.
-        assert!(super::iced_claims().prelude.iter().any(|path| path.ends_with("::text")));
+        assert!(super::iced_claims()
+            .prelude
+            .iter()
+            .any(|path| path.ends_with("::text")));
     }
 
     #[test]
@@ -1924,7 +2062,12 @@ impl App {
         assert_eq!(shape(&super::without_tests(source)), Shape::App);
         let png = render(source, &Options::default()).unwrap();
         assert!(is_png(&png.bytes));
-        assert!(png.width < 600 && png.height < 600, "{}x{}", png.width, png.height);
+        assert!(
+            png.width < 600 && png.height < 600,
+            "{}x{}",
+            png.width,
+            png.height
+        );
     }
 
     // Discord feedback: snippets as users posted them, with no `fn main`.
@@ -1945,7 +2088,10 @@ impl App {
     #[test]
     fn play_final_value_without_debug_is_not_printed() {
         let output = text("let f = |x: i64| x + 1; f");
-        assert_eq!((output.text().as_str(), output.status, output.note), ("", 0, None));
+        assert_eq!(
+            (output.text().as_str(), output.status, output.note),
+            ("", 0, None)
+        );
     }
 
     #[test]
@@ -1954,20 +2100,29 @@ impl App {
         let output = text(source);
         assert!(output.limit && output.truncated, "{output:?}");
         assert!(output.text().starts_with("Iteration No1\nIteration No2\n"));
-        assert!(output.text().ends_with(&format!("\n{}\n", super::plain::TRUNCATED)));
+        assert!(output
+            .text()
+            .ends_with(&format!("\n{}\n", super::plain::TRUNCATED)));
         assert!(!output.text().contains("Debug"));
     }
 
     #[test]
     fn play_errors_never_show_the_wrapper() {
-        for source in ["let x = 1; x +", "let x = (1 + 2;", "[1, 2].iter().map(|x| x.nope())"] {
+        for source in [
+            "let x = 1; x +",
+            "let x = (1 + 2;",
+            "[1, 2].iter().map(|x| x.nope())",
+        ] {
             let error = super::run(source, &Options::default()).unwrap_err();
             let text = error.to_string();
             for wrapper in ["__v", "__d", "fn main", "play.rawr"] {
                 assert!(!text.contains(wrapper), "{source}: {text}");
             }
             assert!(text.contains(" --> play.rs:1:"), "{source}: {text}");
-            assert!(text.contains(&format!(" 1 | {source}\n")), "{source}: {text}");
+            assert!(
+                text.contains(&format!(" 1 | {source}\n")),
+                "{source}: {text}"
+            );
         }
     }
 
@@ -2014,10 +2169,10 @@ impl App {
             .replace("text(self.value)", "text(label::of(self.value))");
         let source = format!("mod label {{\n    pub fn of(value: i64) -> String {{\n        format!(\"count {{value}}\")\n    }}\n}}\n{source}");
         let with_module = image(&source);
-        let inline = image(
-            &include_str!("../tests/fixtures/counter.rs")
-                .replace("text(self.value)", "text(format!(\"count {}\", self.value))"),
-        );
+        let inline = image(&include_str!("../tests/fixtures/counter.rs").replace(
+            "text(self.value)",
+            "text(format!(\"count {}\", self.value))",
+        ));
         assert!(is_png(&with_module.bytes));
         assert_eq!(with_module.bytes, inline.bytes);
     }

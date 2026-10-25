@@ -2235,7 +2235,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             // `pub type Duration = TimeDelta;` names the type with its
             // members: selecting the alias selects the type.
             let (def_id, kind) = match kind {
-                DefKind::TyAlias => match tcx.type_of(def_id).instantiate_identity().skip_norm_wip().kind() {
+                DefKind::TyAlias => match tcx
+                    .type_of(def_id)
+                    .instantiate_identity()
+                    .skip_norm_wip()
+                    .kind()
+                {
                     ty::Adt(definition, arguments) if arguments.is_empty() => {
                         let target = definition.did();
                         self.ensure_with_demand(target, Namespace::Type, Demand::SelectedRoot)?;
@@ -2275,7 +2280,10 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         let tcx = self.tcx;
         let mut demands = std::mem::take(&mut self.member_demands);
         demands.sort_unstable_by_key(|(adt, member)| {
-            (tcx.def_path_hash(*adt).to_raw_def_path_hash().0, member.clone())
+            (
+                tcx.def_path_hash(*adt).to_raw_def_path_hash().0,
+                member.clone(),
+            )
         });
         demands.dedup();
         for (adt, member) in demands {
@@ -2329,12 +2337,13 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     candidates.push(implementation);
                 });
                 let own = candidates.iter().copied().find(|implementation| {
-                    tcx.impl_opt_trait_ref(*implementation).is_some_and(|reference| {
-                        matches!(
-                            reference.instantiate_identity().skip_norm_wip().self_ty().kind(),
-                            ty::Adt(definition, _) if definition.did() == adt
-                        )
-                    })
+                    tcx.impl_opt_trait_ref(*implementation)
+                        .is_some_and(|reference| {
+                            matches!(
+                                reference.instantiate_identity().skip_norm_wip().self_ty().kind(),
+                                ty::Adt(definition, _) if definition.did() == adt
+                            )
+                        })
                 });
                 let arguments = tcx.mk_args(&[self_ty.into()]);
                 let obligation = AssociatedObligation {
@@ -2352,12 +2361,18 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     .copied()
                     .filter(|implementation| {
                         tcx.generics_of(*implementation).count() == 1
-                            && tcx.impl_opt_trait_ref(*implementation).is_some_and(|reference| {
-                                matches!(
-                                    reference.instantiate_identity().skip_norm_wip().self_ty().kind(),
-                                    ty::Param(_)
-                                )
-                            })
+                            && tcx
+                                .impl_opt_trait_ref(*implementation)
+                                .is_some_and(|reference| {
+                                    matches!(
+                                        reference
+                                            .instantiate_identity()
+                                            .skip_norm_wip()
+                                            .self_ty()
+                                            .kind(),
+                                        ty::Param(_)
+                                    )
+                                })
                     })
                     .collect::<Vec<_>>();
                 // Coherence admits one blanket implementation of a trait
@@ -2401,19 +2416,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             .map(|reference| reference.instantiate_identity().skip_norm_wip());
         match implementation_crate_authority(self.is_sysroot_crate(implementation.krate)?) {
             ImplementationCrateAuthority::Sysroot => self.register_sysroot(implementation.krate)?,
-            ImplementationCrateAuthority::External => self.register_external(implementation.krate)?,
+            ImplementationCrateAuthority::External => {
+                self.register_external(implementation.krate)?
+            }
         }
         let mut id = self.id(implementation, Namespace::Type)?;
         id.def_path_hash = key.clone();
         let mut obligations = BTreeMap::new();
         obligations.insert(self.associated_obligation_order_key(obligation), obligation);
-        let associated = self.expand_associated_obligations(
-            implementation,
-            identity,
-            &obligations,
-            &id,
-            true,
-        )?;
+        let associated =
+            self.expand_associated_obligations(implementation, identity, &obligations, &id, true)?;
         if let Some(existing) = self.applications.get_mut(&key) {
             existing.associated.extend(associated);
             existing.associated.sort_unstable();

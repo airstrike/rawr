@@ -217,7 +217,10 @@ impl Parsed {
             Ok(compiled) => compiled,
             Err(error) => {
                 let report = rawr::diagnostic::Report::from_parse(evidence.clone(), &error);
-                let owner = report.as_ref().ok().and_then(|report| unprintable(report, source));
+                let owner = report
+                    .as_ref()
+                    .ok()
+                    .and_then(|report| unprintable(report, source));
                 let Some(owner) = owner else {
                     return Err(match report {
                         Ok(report) => PlayError::Compile(crate::report(&report, &program, source)),
@@ -249,7 +252,9 @@ impl Parsed {
                 if !main {
                     // A script's final value, as `rawr run` shows it.
                     if !value.is_unit() {
-                        sink.lock().unwrap().push(Stream::Stdout, &format!("{value:?}\n"));
+                        sink.lock()
+                            .unwrap()
+                            .push(Stream::Stdout, &format!("{value:?}\n"));
                     }
                     return Ok(None);
                 }
@@ -295,15 +300,20 @@ impl Parsed {
                             // the wrapping is dropped.
                             let original = positions.translate(&error).filter(|span| {
                                 let start = span.start();
-                                start.line().zip(start.position()).is_some_and(|(line, column)| {
-                                    crate::in_source(&program, source, line, column)
-                                })
+                                start
+                                    .line()
+                                    .zip(start.position())
+                                    .is_some_and(|(line, column)| {
+                                        crate::in_source(&program, source, line, column)
+                                    })
                             });
-                            rawr::diagnostic::Report::from_evaluation_located(evidence, original, &error)
-                                .map_or_else(
-                                    |_| crate::without_positions(&text),
-                                    |report| crate::report(&report, &program, source),
-                                )
+                            rawr::diagnostic::Report::from_evaluation_located(
+                                evidence, original, &error,
+                            )
+                            .map_or_else(
+                                |_| crate::without_positions(&text),
+                                |report| crate::report(&report, &program, source),
+                            )
                         }
                     };
                     output.push(Stream::Stderr, &format!("{}\n", message.trim_end()));
@@ -365,8 +375,18 @@ fn sandbox(engine: &mut Engine, limits: &Limits, deadline: Instant, sink: &Arc<M
         })
         // Untyped `fn f(x) { .. }` bodies reach the base language's
         // `print` and `debug`: their text goes with the rest.
-        .on_print(move |text| print.lock().unwrap().push(Stream::Stdout, &format!("{text}\n")))
-        .on_debug(move |text, _, _| debug.lock().unwrap().push(Stream::Stderr, &format!("{text}\n")))
+        .on_print(move |text| {
+            print
+                .lock()
+                .unwrap()
+                .push(Stream::Stdout, &format!("{text}\n"))
+        })
+        .on_debug(move |text, _, _| {
+            debug
+                .lock()
+                .unwrap()
+                .push(Stream::Stderr, &format!("{text}\n"))
+        })
         .set_module_resolver(rawr::module_resolvers::DummyModuleResolver::new());
     for symbol in ["import", "eval"] {
         engine.disable_symbol(symbol);
@@ -398,7 +418,9 @@ pub fn async_main(source: &str) -> Option<AsyncMain> {
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
         if indent == 0 && trimmed.starts_with("#[tokio::main") {
-            let end = trimmed.find(']').map_or(trimmed.trim_end().len(), |end| end + 1);
+            let end = trimmed
+                .find(']')
+                .map_or(trimmed.trim_end().len(), |end| end + 1);
             attribute = Some(offset..offset + end);
         }
         let rest = trimmed.strip_prefix("pub ").unwrap_or(trimmed);
@@ -479,11 +501,19 @@ pub fn run_async(
         .check_named_source(SOURCE_NAME, &program)
         .and_then(rawr_iced::application::Checked::prepare)
         .map_err(|error| {
-            PlayError::Compile(crate::report(&error.report(diagnostic(&program)), &program, &source))
+            PlayError::Compile(crate::report(
+                &error.report(diagnostic(&program)),
+                &program,
+                &source,
+            ))
         })?
         .into_adapter();
-    let finished = rawr_iced::snapshot::run_tasks(&mut adapter, &rawr_iced::snapshot::Deadline::new(deadline));
-    let status = adapter.refresh_title().ok().and_then(|status| status.parse::<i32>().ok());
+    let finished =
+        rawr_iced::snapshot::run_tasks(&mut adapter, &rawr_iced::snapshot::Deadline::new(deadline));
+    let status = adapter
+        .refresh_title()
+        .ok()
+        .and_then(|status| status.parse::<i32>().ok());
     let failures = adapter
         .diagnostics()
         .iter()
@@ -581,7 +611,9 @@ fn unprintable(report: &rawr::diagnostic::Report, source: &str) -> Option<String
 /// The note on a final value of type `owner` that is not printed, where
 /// rustc would warn.
 fn unused_note(owner: &str) -> Option<&'static str> {
-    owner.starts_with("impl Iterator").then_some(UNUSED_ITERATOR)
+    owner
+        .starts_with("impl Iterator")
+        .then_some(UNUSED_ITERATOR)
 }
 
 /// The note on a final iterator, as rustc's warning on an unused one.
@@ -615,11 +647,15 @@ fn has_item(source: &str) -> bool {
         }
         match byte {
             b'/' if bytes.get(index + 1) == Some(&b'/') => {
-                index = source[index..].find('\n').map_or(bytes.len(), |end| index + end);
+                index = source[index..]
+                    .find('\n')
+                    .map_or(bytes.len(), |end| index + end);
                 continue;
             }
             b'/' if bytes.get(index + 1) == Some(&b'*') => {
-                index = source[index + 2..].find("*/").map_or(bytes.len(), |end| index + end + 4);
+                index = source[index + 2..]
+                    .find("*/")
+                    .map_or(bytes.len(), |end| index + end + 4);
                 continue;
             }
             b'"' => {
@@ -628,8 +664,10 @@ fn has_item(source: &str) -> bool {
                     index += if bytes[index] == b'\\' { 2 } else { 1 };
                 }
             }
-            b'\'' if bytes.get(index + 2) == Some(&b'\'')
-                || (bytes.get(index + 1) == Some(&b'\\') && bytes.get(index + 3) == Some(&b'\'')) =>
+            b'\''
+                if bytes.get(index + 2) == Some(&b'\'')
+                    || (bytes.get(index + 1) == Some(&b'\\')
+                        && bytes.get(index + 3) == Some(&b'\'')) =>
             {
                 index += if bytes[index + 1] == b'\\' { 3 } else { 2 };
             }
@@ -664,8 +702,12 @@ mod tests {
 
     #[test]
     fn plain_snippets_become_programs() {
-        let print = "let __d = format!(\"{:?}\", __v); if __d != \"()\" { println!(\"{}\", __d); } }\n";
-        assert_eq!(program("1 + 2"), format!("fn main() {{ let __v = {{ 1 + 2\n}};\n{print}"));
+        let print =
+            "let __d = format!(\"{:?}\", __v); if __d != \"()\" { println!(\"{}\", __d); } }\n";
+        assert_eq!(
+            program("1 + 2"),
+            format!("fn main() {{ let __v = {{ 1 + 2\n}};\n{print}")
+        );
         assert_eq!(
             program("let a = 1;\na + 1"),
             format!("fn main() {{ let __v = {{ let a = 1;\na + 1\n}};\n{print}")

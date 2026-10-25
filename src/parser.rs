@@ -47,7 +47,11 @@ impl PERR {
     #[cold]
     #[inline(never)]
     fn into_err(self, pos: Position) -> ParseError {
-        ParseError(self.into(), pos, crate::types::parse_error::Rendered::default())
+        ParseError(
+            self.into(),
+            pos,
+            crate::types::parse_error::Rendered::default(),
+        )
     }
 }
 

@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use rawr::layer::{Claims, Facts};
 use rawr::diagnostic;
+use rawr::layer::{Claims, Facts};
 use toml_edit::{DocumentMut, Item, Table};
 
 /// The argument that asks a binary for its manifest.
@@ -134,7 +134,9 @@ impl Manifest {
         self.commands.iter().find(|command| {
             *word == *command.word
                 && command.flag.as_ref().is_none_or(|flag| {
-                    arguments[1..].iter().any(|argument| argument == flag.as_str())
+                    arguments[1..]
+                        .iter()
+                        .any(|argument| argument == flag.as_str())
                 })
         })
     }
@@ -155,9 +157,7 @@ impl Manifest {
 /// The binaries of [`CATALOG`].
 #[must_use]
 pub fn catalog() -> Vec<Known> {
-    let document = CATALOG
-        .parse::<DocumentMut>()
-        .expect("the catalog is TOML");
+    let document = CATALOG.parse::<DocumentMut>().expect("the catalog is TOML");
     document
         .get("binary")
         .and_then(Item::as_array_of_tables)
@@ -294,7 +294,8 @@ pub fn installed() -> Vec<Installed> {
 #[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt as _;
-    fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]
@@ -340,7 +341,12 @@ impl Store {
             .get(&key)
             .and_then(Item::as_table)
             .filter(|entry| entry.get("identity").and_then(Item::as_str) == Some(identity.as_str()))
-            .and_then(|entry| entry.get("manifest").and_then(Item::as_str).map(str::to_owned));
+            .and_then(|entry| {
+                entry
+                    .get("manifest")
+                    .and_then(Item::as_str)
+                    .map(str::to_owned)
+            });
         let text = match kept {
             Some(text) => text,
             None => {
@@ -406,7 +412,9 @@ fn ask_within(binary: &Path, wait: Duration) -> Option<Option<String>> {
             Ok(child) => break child,
             // A binary being written (or held open by a process another
             // thread is starting) cannot run yet.
-            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 20 => {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 20 =>
+            {
                 attempts += 1;
                 std::thread::sleep(Duration::from_millis(10));
             }
@@ -495,7 +503,10 @@ mod tests {
         let plain = facts("fn main() { println!(\"hi\"); }\n");
         assert_eq!(claimed(&both, &plain).unwrap(), None);
         let alpha = facts("fn main() { let x = alpha::thing(); }\n");
-        assert_eq!(claimed(&both, &alpha).unwrap().unwrap().manifest.name, "rawr-one");
+        assert_eq!(
+            claimed(&both, &alpha).unwrap().unwrap().manifest.name,
+            "rawr-one"
+        );
     }
 
     #[test]
@@ -517,9 +528,15 @@ mod tests {
             installed_extending("two", &["alpha", "beta"], &["rawr-one"]),
         ];
         let alpha = facts("fn main() { let extended = alpha::thing(); }\n");
-        assert_eq!(claimed(&both, &alpha).unwrap().unwrap().manifest.name, "rawr-two");
+        assert_eq!(
+            claimed(&both, &alpha).unwrap().unwrap().manifest.name,
+            "rawr-two"
+        );
         let reversed = [both[1].clone(), both[0].clone()];
-        assert_eq!(claimed(&reversed, &alpha).unwrap().unwrap().manifest.name, "rawr-two");
+        assert_eq!(
+            claimed(&reversed, &alpha).unwrap().unwrap().manifest.name,
+            "rawr-two"
+        );
     }
 
     #[test]
@@ -527,7 +544,9 @@ mod tests {
         let binary = installed("one", &[]);
         let arguments = |words: &[&str]| words.iter().map(OsString::from).collect::<Vec<_>>();
         assert!(binary.manifest.provides(&arguments(&["go", "x"])));
-        assert!(binary.manifest.provides(&arguments(&["check", "--deep", "x"])));
+        assert!(binary
+            .manifest
+            .provides(&arguments(&["check", "--deep", "x"])));
         assert!(!binary.manifest.provides(&arguments(&["check", "x"])));
         assert!(!binary.manifest.provides(&arguments(&["stop"])));
         assert_eq!(Manifest::parse("format = 2\nname = \"x\"\n"), None);

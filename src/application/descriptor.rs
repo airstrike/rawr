@@ -1308,7 +1308,10 @@ fn checked_callback<'a>(
     // A free `fn update(state: &mut State, ..)` or `fn view(state: &State)`,
     // as iced master's examples write them, is the method of its State.
     if item.kind() == item::Kind::Function
-        && let Some((mutable, state)) = signature.parameters.first().and_then(application::Type::reference)
+        && let Some((mutable, state)) = signature
+            .parameters
+            .first()
+            .and_then(application::Type::reference)
     {
         return Ok(Selected {
             role,

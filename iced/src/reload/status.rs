@@ -533,7 +533,10 @@ mod tests {
                 std::thread::current().id()
             ));
             std::fs::create_dir_all(root.join("src")).unwrap();
-            crate::write_marked(&root, "src/main.rs", format!(
+            crate::write_marked(
+                &root,
+                "src/main.rs",
+                format!(
                     r#"
 use iced::Element;
 use iced::widget::text;
@@ -546,7 +549,8 @@ impl State {{
 }}
 pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
 "#
-                ));
+                ),
+            );
             let mut engine = rawr::Engine::new();
             crate::install(&mut engine).unwrap();
             let engine = rawr::Shared::new(engine);
@@ -579,10 +583,12 @@ pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
     #[test]
     fn cargo_errors_show_while_ready_and_clear_when_a_check_passes() {
         let mut state = State::new();
-        state.cargo(crate::reload::cargo::Checked(Some(crate::reload::cargo::Report {
-            heading: "cargo check found 1 error".into(),
-            details: "error[E0308]: mismatched types".into(),
-        })));
+        state.cargo(crate::reload::cargo::Checked(Some(
+            crate::reload::cargo::Report {
+                heading: "cargo check found 1 error".into(),
+                details: "error[E0308]: mismatched types".into(),
+            },
+        )));
         {
             let content = iced::widget::Widget::boxed(iced::widget::text("application content"));
             let mut simulator = iced_test::simulator(state.view(content, |_| ()));

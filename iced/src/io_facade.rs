@@ -68,7 +68,11 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
 
     builder.module("io")?;
     builder.type_::<Error>(ERROR, &[], &[Debug, Send, Static])?;
-    builder.value_type::<ErrorKind>(KIND, &[], &[Debug, Clone, Copy, PartialEq, Eq, Hash, Send, Static])?;
+    builder.value_type::<ErrorKind>(
+        KIND,
+        &[],
+        &[Debug, Clone, Copy, PartialEq, Eq, Hash, Send, Static],
+    )?;
     for name in KINDS {
         builder.item(item::Definition::associated_value(
             format!("{KIND}::{name}"),
@@ -162,7 +166,10 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
         Ok(made(std::io::Error::other(text.to_string())))
     });
     bind("io::Error::from", |args| {
-        Ok(made(std::io::Error::from(read::<ErrorKind>(args[0], "ErrorKind")?)))
+        Ok(made(std::io::Error::from(read::<ErrorKind>(
+            args[0],
+            "ErrorKind",
+        )?)))
     });
     bind("io::Error::kind", |args| {
         Ok(Dynamic::from(read::<Error>(args[0], "io::Error")?.0.kind()))

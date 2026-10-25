@@ -119,13 +119,17 @@ mod tests {
     #[test]
     fn each_output_asks_for_its_step_without_waiting_and_keeps_its_order() {
         let owner = owner();
-        let task = each_on_ui(owner, iced::Task::stream(iced::futures::stream::iter([1_i64, 2, 3])), move |value| {
-            iced::Task::done(runtime::Message::new(
-                owner.instance(),
-                owner.generation(),
-                Dynamic::from(value),
-            ))
-        });
+        let task = each_on_ui(
+            owner,
+            iced::Task::stream(iced::futures::stream::iter([1_i64, 2, 3])),
+            move |value| {
+                iced::Task::done(runtime::Message::new(
+                    owner.instance(),
+                    owner.generation(),
+                    Dynamic::from(value),
+                ))
+            },
+        );
         let mut stream = iced_test::runtime::task::into_stream(task).unwrap();
         let mut requests = Vec::new();
         let mut delivered = Vec::new();
@@ -155,7 +159,9 @@ mod tests {
         crate::install(&mut engine).unwrap();
         let engine = rawr::Shared::new(engine);
         let descriptor = engine
-            .compile_application_descriptor(include_str!("../examples/scripts/application_counter.rs"))
+            .compile_application_descriptor(include_str!(
+                "../examples/scripts/application_counter.rs"
+            ))
             .unwrap();
         let launch = engine.launch_application(descriptor).unwrap();
         let mut registry = rawr::host::runtime::Registry::new();

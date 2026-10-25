@@ -31,8 +31,8 @@ use std::sync::{mpsc, Arc, Mutex};
 
 use iced::advanced::widget::{tree, Meta, Tree};
 use iced::advanced::{layout, overlay, renderer, Layout, Shell, Widget};
-use iced::widget::Widget as _;
 use iced::keyboard::{self, key};
+use iced::widget::Widget as _;
 use iced::{mouse, Element, Length, Point, Size, Task, Vector};
 use iced_runtime::core::widget::{self, Operation};
 use iced_runtime::core::{window, Event, Rectangle, SmolStr};
@@ -668,25 +668,26 @@ fn tap(key: Key) -> impl Iterator<Item = Event> {
         modifiers.map(changed),
         modifiers.map(|_| changed(keyboard::Modifiers::empty())),
     );
-    down.into_iter().chain([
-        Event::Keyboard(keyboard::Event::KeyPressed {
-            key: key.key.clone(),
-            modified_key: key.key.clone(),
-            physical_key: physical,
-            location: keyboard::Location::Standard,
-            modifiers: key.modifiers,
-            text: key.text,
-            repeat: false,
-        }),
-        Event::Keyboard(keyboard::Event::KeyReleased {
-            key: key.key.clone(),
-            modified_key: key.key,
-            physical_key: physical,
-            location: keyboard::Location::Standard,
-            modifiers: key.modifiers,
-        }),
-    ])
-    .chain(up)
+    down.into_iter()
+        .chain([
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: key.key.clone(),
+                modified_key: key.key.clone(),
+                physical_key: physical,
+                location: keyboard::Location::Standard,
+                modifiers: key.modifiers,
+                text: key.text,
+                repeat: false,
+            }),
+            Event::Keyboard(keyboard::Event::KeyReleased {
+                key: key.key.clone(),
+                modified_key: key.key,
+                physical_key: physical,
+                location: keyboard::Location::Standard,
+                modifiers: key.modifiers,
+            }),
+        ])
+        .chain(up)
 }
 
 /// The center of the first widget showing a text (a text input's value or

@@ -868,10 +868,7 @@ fn valid_existing(relative: &Path, metadata: &fs::Metadata) -> bool {
         }
         [first, lock]
             if *first == "locks"
-                && matches!(
-                    lock.to_str(),
-                    Some("heavy.lock" | "publication.lock")
-                ) =>
+                && matches!(lock.to_str(), Some("heavy.lock" | "publication.lock")) =>
         {
             file
         }

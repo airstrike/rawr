@@ -129,9 +129,11 @@ fn an_unmarked_crate_is_not_a_rawr_project() {
     let error = Target::discover(temp.path().join("plain")).unwrap_err();
 
     assert!(matches!(error, project::Error::Unmarked { ref entry, .. } if entry == &fs::canonicalize(&main).unwrap()));
-    assert!(error.to_string().ends_with(
-        "is not a Rawr file. Its first line is not `// rawr`, and no module it declares starts with it."
-    ));
+    assert!(
+        error
+            .to_string()
+            .ends_with("is not a Rawr file. Its first line is not `// rawr`, and no module it declares starts with it.")
+    );
 }
 
 #[test]

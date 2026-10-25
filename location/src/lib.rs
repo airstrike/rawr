@@ -136,9 +136,9 @@ pub fn rawr_profile_configs(project: &Path, cargo_home: Option<&Path>) -> Vec<Pa
                             .get("package")
                             .and_then(|packages| packages.as_table_like())
                             .is_some_and(|packages| {
-                                packages.iter().any(|(spec, _)| {
-                                    spec == "rawr" || spec.starts_with("rawr@")
-                                })
+                                packages
+                                    .iter()
+                                    .any(|(spec, _)| spec == "rawr" || spec.starts_with("rawr@"))
                             })
                     })
                 })
@@ -258,9 +258,15 @@ mod tests {
     fn the_build_directory_is_the_target_directory_unless_configured() {
         let root = fixture("build");
         let project = root.join("app");
-        write(&project.join("Cargo.toml"), "[package]\nname = \"app\"\n[workspace]\n");
+        write(
+            &project.join("Cargo.toml"),
+            "[package]\nname = \"app\"\n[workspace]\n",
+        );
         let none = |_: &str| None;
-        assert_eq!(build_directory(&project, none, None), project.join("target"));
+        assert_eq!(
+            build_directory(&project, none, None),
+            project.join("target")
+        );
         write(
             &project.join(".cargo/config.toml"),
             "[build]\nbuild-dir = \"{workspace-root}/intermediate\"\n",

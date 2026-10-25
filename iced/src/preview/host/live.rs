@@ -139,7 +139,9 @@ impl Application {
         reload::agent::view(
             &state.agent,
             state.status.view(
-                Host::view_native(&state.host).map(LiveMessage::Host).boxed(),
+                Host::view_native(&state.host)
+                    .map(LiveMessage::Host)
+                    .boxed(),
                 LiveMessage::ReloadControl,
             ),
             LiveMessage::Agent,
@@ -763,10 +765,11 @@ pub fn main() -> iced::Result {{ iced::run(State::update, State::view) }}
                 match action {
                     iced_test::runtime::Action::Output(super::LiveMessage::Host(
                         super::Message::Script(message),
-                    )) => messages.extend(
-                        crate::dispatch::inline(message)
-                            .map(|message| super::LiveMessage::Host(super::Message::Script(message))),
-                    ),
+                    )) => {
+                        messages.extend(crate::dispatch::inline(message).map(|message| {
+                            super::LiveMessage::Host(super::Message::Script(message))
+                        }))
+                    }
                     iced_test::runtime::Action::Output(message) => messages.push(message),
                     _ => panic!("expected a task output"),
                 }

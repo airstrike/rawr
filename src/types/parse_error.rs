@@ -490,7 +490,11 @@ impl fmt::Debug for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.2.text() {
             Some(text) => f.write_str(text),
-            None => f.debug_tuple("ParseError").field(&self.0).field(&self.1).finish(),
+            None => f
+                .debug_tuple("ParseError")
+                .field(&self.0)
+                .field(&self.1)
+                .finish(),
         }
     }
 }

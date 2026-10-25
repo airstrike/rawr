@@ -146,7 +146,9 @@ impl iced::widget::component::Component<'static, runtime::Message> for Instance 
                 Ok(view) => view.lower(&context.child_mapping()),
                 Err(error) => component_failure(&context, &error),
             },
-            Some(Err(error)) => super::diagnostic(format!("component view failed: {error}")).lower(&context),
+            Some(Err(error)) => {
+                super::diagnostic(format!("component view failed: {error}")).lower(&context)
+            }
         }
     }
 }

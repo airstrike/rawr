@@ -182,16 +182,20 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
     builder
         .bind_with_context("iced::advanced::widget::Instance::new", |call, args| {
             if args.len() != HOOKS + 2 {
-                return Err(arity("advanced::widget::Instance::new", HOOKS + 2, args.len()));
+                return Err(arity(
+                    "advanced::widget::Instance::new",
+                    HOOKS + 2,
+                    args.len(),
+                ));
             }
             let value = args[0].take();
             let hooks = args[1..=HOOKS]
                 .iter_mut()
                 .map(|hook| take::<item::Value>(hook, "advanced::Widget method"))
                 .collect::<Result<Arc<[_]>, _>>()?;
-            let written = args[HOOKS + 1]
-                .as_int()
-                .map_err(|_| runtime_error("`advanced::widget::Instance::new` expects its mask".into()))?;
+            let written = args[HOOKS + 1].as_int().map_err(|_| {
+                runtime_error("`advanced::widget::Instance::new` expects its mask".into())
+            })?;
             Ok(Dynamic::from(Instance {
                 witness: call.output_witness().map_err(witness_error)?,
                 identity: super::Identity::unique(),
@@ -342,7 +346,11 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
                 if self.logical.borrow().is_none() && self.written(TAG) {
                     let _ = self.tag();
                 }
-                let tag = self.logical.borrow().clone().unwrap_or_else(|| Arc::from(""));
+                let tag = self
+                    .logical
+                    .borrow()
+                    .clone()
+                    .unwrap_or_else(|| Arc::from(""));
                 tree::State::new(ScriptState { tag, value })
             }
             Ok(None) => tree::State::None,
@@ -499,7 +507,9 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
                 &self.children,
             );
             arguments[1] = Dynamic::from(Tree::root(loan.nonce()));
-            arguments[6] = Dynamic::from(Shell { nonce: loan.nonce() });
+            arguments[6] = Dynamic::from(Shell {
+                nonce: loan.nonce(),
+            });
             self.call(UPDATE, &mut arguments)
         };
         match result {
@@ -580,7 +590,9 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
         let (result, _) = {
             let loan = Loan::operating(tree, renderer, operation, &self.children);
             arguments[1] = Dynamic::from(Tree::root(loan.nonce()));
-            arguments[5] = Dynamic::from(Operation { nonce: loan.nonce() });
+            arguments[5] = Dynamic::from(Operation {
+                nonce: loan.nonce(),
+            });
             self.call(OPERATE, &mut arguments)
         };
         match result {
@@ -597,7 +609,8 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
         viewport: &Rectangle,
         translation: iced::Vector,
         window: Size,
-    ) -> Vec<iced::advanced::overlay::Element<'a, runtime::Message, iced::Theme, iced::Renderer>> {
+    ) -> Vec<iced::advanced::overlay::Element<'a, runtime::Message, iced::Theme, iced::Renderer>>
+    {
         if !self.written(OVERLAY) {
             return Vec::new();
         }
@@ -611,7 +624,12 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
             Dynamic::from(window),
         ];
         let (result, _) = {
-            let loan = Loan::new(Lent::Mutable(&mut *tree), Some(renderer), None, &self.children);
+            let loan = Loan::new(
+                Lent::Mutable(&mut *tree),
+                Some(renderer),
+                None,
+                &self.children,
+            );
             arguments[1] = Dynamic::from(Tree::root(loan.nonce()));
             self.call(OVERLAY, &mut arguments)
         };
@@ -766,7 +784,11 @@ mod tests {
             simulator.point_at(cursor);
         }
         simulator.draw(&iced::Theme::Dark);
-        assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+        assert!(
+            adapter.diagnostics().is_empty(),
+            "{:?}",
+            adapter.diagnostics()
+        );
         REPLAYED.with(|replayed| std::mem::take(&mut *replayed.borrow_mut()))
     }
 
@@ -820,8 +842,7 @@ mod tests {
             .prepare()
             .unwrap()
             .into_adapter();
-        let messages = ["shift", "corner"]
-            .map(|name| adapter.message_of(name).unwrap().unwrap());
+        let messages = ["shift", "corner"].map(|name| adapter.message_of(name).unwrap().unwrap());
         adapter.deliver(messages);
         REPLAYED.with(|replayed| replayed.borrow_mut().clear());
         let mut simulator = iced_test::simulator(adapter.view());
@@ -854,7 +875,10 @@ mod tests {
         assert_eq!(buffers.vertices.len(), 9);
         assert_eq!(buffers.indices.len(), 24);
         let corner = buffers.vertices[5].position;
-        assert_eq!(buffers.vertices[0].position, [corner[0] / 2.0, corner[1] / 2.0]);
+        assert_eq!(
+            buffers.vertices[0].position,
+            [corner[0] / 2.0, corner[1] / 2.0]
+        );
 
         let cursor = Point::new(origin.x + 30.0, origin.y + 40.0);
         let (_, buffers) = mesh(Some(cursor));
@@ -882,7 +906,11 @@ mod tests {
     /// Loupe drawn with the cursor at the center of its bounds.
     fn drawn_loupe_zoomed() -> Vec<Vec<Command>> {
         let drawn = drawn(LOUPE, Some(Point::new(512.0, 384.0)));
-        if drawn.iter().flatten().any(|command| matches!(command, Command::StartLayer(_))) {
+        if drawn
+            .iter()
+            .flatten()
+            .any(|command| matches!(command, Command::StartLayer(_)))
+        {
             return drawn;
         }
         panic!("the window's center is over loupe's content: {drawn:?}")
@@ -1036,7 +1064,11 @@ pub fn main() -> iced::Result {
         simulator.simulate(iced_test::simulator::click());
         simulator.draw(&iced::Theme::Dark);
         assert_eq!(bar_width(&REPLAYED.with(|replayed| replayed.take())), 20.0);
-        assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+        assert!(
+            adapter.diagnostics().is_empty(),
+            "{:?}",
+            adapter.diagnostics()
+        );
     }
 
     #[test]
@@ -1056,8 +1088,10 @@ pub fn main() -> iced::Result {
             let iced::advanced::widget::tree::State::Some(state) = &mut tree.state else {
                 panic!("a script State");
             };
-            state.downcast_mut::<super::ScriptState>().expect("a script State").value =
-                rawr::Dynamic::from(7_i64);
+            state
+                .downcast_mut::<super::ScriptState>()
+                .expect("a script State")
+                .value = rawr::Dynamic::from(7_i64);
         };
         let kept = |tree: &mut Tree| match &script(tree).expect("a script State").state {
             iced::advanced::widget::tree::State::Some(state) => state
@@ -1079,7 +1113,8 @@ pub fn main() -> iced::Result {
         assert!(kept(&mut tree), "a matching tag and schema keep the State");
 
         // A field more: the schema differs, so the State starts again.
-        let changed = adapter(&TALLY.replace("    count: i64,", "    count: i64,\n    extra: bool,"));
+        let changed =
+            adapter(&TALLY.replace("    count: i64,", "    count: i64,\n    extra: bool,"));
         let mut element = changed.content();
         tree.diff(&mut element);
         assert!(!kept(&mut tree), "a changed schema starts the State again");
@@ -1211,11 +1246,18 @@ pub fn main() -> iced::Result {
         let adapter = adapter(&source);
         let mut simulator = iced_test::simulator(adapter.view());
         assert!(simulator.find("hidden").is_ok());
-        assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+        assert!(
+            adapter.diagnostics().is_empty(),
+            "{:?}",
+            adapter.diagnostics()
+        );
 
         let adapter = self::adapter(&wrap(r#"text("hidden")"#, "self.content.state()", false));
         let mut simulator = iced_test::simulator(adapter.view());
-        assert!(simulator.find("hidden").is_err(), "iced's default operate reaches nothing");
+        assert!(
+            simulator.find("hidden").is_err(),
+            "iced's default operate reaches nothing"
+        );
     }
 
     #[test]
@@ -1228,27 +1270,36 @@ pub fn main() -> iced::Result {
         let adapter = adapter(&source);
         let mut simulator = iced_test::simulator(adapter.view());
         simulator.draw(&iced::Theme::Dark);
-        assert!(simulator.find("the tip").is_err(), "no tip before the hover");
+        assert!(
+            simulator.find("the tip").is_err(),
+            "no tip before the hover"
+        );
         simulator.point_at(Point::new(10.0, 10.0));
         simulator.simulate([iced::Event::Mouse(iced::mouse::Event::CursorMoved {
             position: Point::new(10.0, 10.0),
         })]);
         simulator.draw(&iced::Theme::Dark);
-        assert!(simulator.find("the tip").is_ok(), "the tooltip's overlay shows");
+        assert!(
+            simulator.find("the tip").is_ok(),
+            "the tooltip's overlay shows"
+        );
     }
 
     #[test]
     fn a_panic_in_a_wrapped_element_is_the_call_s_error() {
         // The text input's tree is made without its State, so its `layout`
         // panics; the panic is the wrapping widget's `layout` failure.
-        let source = wrap(r#"iced::widget::text_input("", "")"#, "tree::State::None", false);
+        let source = wrap(
+            r#"iced::widget::text_input("", "")"#,
+            "tree::State::None",
+            false,
+        );
         let adapter = adapter(&source);
         REPLAYED.with(|replayed| replayed.borrow_mut().clear());
         let mut simulator = iced_test::simulator(adapter.view());
         simulator.draw(&iced::Theme::Dark);
         assert!(REPLAYED.with(|replayed| replayed.borrow().is_empty()));
     }
-
 
     #[test]
     fn a_failed_view_says_why() {
@@ -1278,13 +1329,16 @@ pub fn main() -> iced::Result {
         );
         let mut simulator = iced_test::simulator(adapter.content());
         assert!(simulator.find("Rawr view unavailable").is_ok());
-        let reason = simulator.find(|candidate: iced_test::selector::Candidate<'_>| match candidate {
-            iced_test::selector::Candidate::Text { content, .. } if content.contains("out of bounds") => {
-                Some(content.to_owned())
-            }
-            _ => None,
-        });
+        let reason = simulator.find(
+            |candidate: iced_test::selector::Candidate<'_>| match candidate {
+                iced_test::selector::Candidate::Text { content, .. }
+                    if content.contains("out of bounds") =>
+                {
+                    Some(content.to_owned())
+                }
+                _ => None,
+            },
+        );
         assert!(reason.is_ok(), "the reason is shown: {reason:?}");
     }
-
 }

@@ -3,14 +3,20 @@
 use std::vec::Vec;
 type BStr = [u8];
 type BString = Vec<u8>;
-mod name { pub(super) use super::super::name::Failure as Error; }
+mod name {
+    pub(super) use super::super::name::Failure as Error;
+}
 trait ByteSlice {
     fn as_bstr(&self) -> &[u8];
     fn ends_with_str(&self, suffix: &str) -> bool;
 }
 impl ByteSlice for [u8] {
-    fn as_bstr(&self) -> &[u8] { self }
-    fn ends_with_str(&self, suffix: &str) -> bool { self.ends_with(suffix.as_bytes()) }
+    fn as_bstr(&self) -> &[u8] {
+        self
+    }
+    fn ends_with_str(&self, suffix: &str) -> bool {
+        self.ends_with(suffix.as_bytes())
+    }
 }
 #[derive(Eq, PartialEq)]
 pub(crate) enum Mode {

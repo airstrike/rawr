@@ -507,10 +507,7 @@ fn facade_calls_and_owned_methods_check_arity_and_types() {
     compile_probe("column![button(\"ok\").on_press(Message::Tick).padding(20)]").unwrap();
 
     for (body, expected) in [
-        (
-            "button().on_press(Message::Tick)",
-            "no form of it takes ()",
-        ),
+        ("button().on_press(Message::Tick)", "no form of it takes ()"),
         (
             "column![button(\"ok\").on_press(Message::Tick)].padding()",
             "no form of it takes ()",

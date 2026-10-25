@@ -276,7 +276,8 @@ fn actual_directory_ownership_obeys_exact_prior_usage_and_terminal_floors() {
 }
 
 #[test]
-fn file_graph_paths_and_hashing_have_exact_floors_per_new_identity_and_metadata_storage_adds_no_decode() {
+fn file_graph_paths_and_hashing_have_exact_floors_per_new_identity_and_metadata_storage_adds_no_decode(
+) {
     let fixture = Fixture::new();
     let source = fixture.0.join("source");
     fs::write(&source, b"one").expect("source");
@@ -308,8 +309,11 @@ fn file_graph_paths_and_hashing_have_exact_floors_per_new_identity_and_metadata_
             }
             // Each measurement reads a new physical identity; an
             // unchanged one would reuse its digest with no read at all.
-            fs::set_permissions(&source, fs::metadata(&source).expect("source").permissions())
-                .expect("status change");
+            fs::set_permissions(
+                &source,
+                fs::metadata(&source).expect("source").permissions(),
+            )
+            .expect("status change");
             let graph = node::GraphBudget::new();
             match account {
                 0 => graph
@@ -567,7 +571,11 @@ fn an_unchanged_freshness_file_is_hashed_once_and_a_rewrite_is_hashed_again() {
     };
     let (first, hashed) = digest(5);
     assert_eq!(hashed, 5, "the first consumer reads and hashes the file");
-    assert_eq!(digest(5), (first, 0), "a later consumer reuses the same digest");
+    assert_eq!(
+        digest(5),
+        (first, 0),
+        "a later consumer reuses the same digest"
+    );
     fs::write(&source, b"other").expect("same-length rewrite");
     let (changed, hashed) = digest(5);
     assert_eq!(hashed, 5, "a changed identity is read and hashed again");

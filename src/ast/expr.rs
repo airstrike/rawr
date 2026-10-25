@@ -593,22 +593,21 @@ impl Expr {
             // A closure's pointer carries its definition, which `Fn(name)`
             // would lose: it stays the value itself.
             Union::FnPtr(f, ..)
-                if !f.is_curried()
-                    && matches!(f.typ, crate::types::fn_ptr::FnPtrType::Normal) =>
+                if !f.is_curried() && matches!(f.typ, crate::types::fn_ptr::FnPtrType::Normal) =>
             {
                 Self::FnCall(
-                FnCallExpr {
-                    #[cfg(not(feature = "no_module"))]
-                    namespace: super::Namespace::NONE,
-                    name: KEYWORD_FN_PTR.into(),
-                    hashes: FnCallHashes::from_hash(calc_fn_hash(None, f.fn_name(), 1)),
-                    args: once(Self::StringConstant(f.fn_name().into(), pos)).collect(),
-                    capture_parent_scope: false,
-                    op_token: None,
-                }
-                .into(),
-                pos,
-            )
+                    FnCallExpr {
+                        #[cfg(not(feature = "no_module"))]
+                        namespace: super::Namespace::NONE,
+                        name: KEYWORD_FN_PTR.into(),
+                        hashes: FnCallHashes::from_hash(calc_fn_hash(None, f.fn_name(), 1)),
+                        args: once(Self::StringConstant(f.fn_name().into(), pos)).collect(),
+                        capture_parent_scope: false,
+                        op_token: None,
+                    }
+                    .into(),
+                    pos,
+                )
             }
 
             _ => Self::DynamicConstant(value.into(), pos),

@@ -125,10 +125,7 @@ fn a_macro_and_a_function_of_one_name_are_not_overloads() {
     builder.module("widget").unwrap();
     builder.item(item::Definition::intrinsic_macro("widget::thing", list.clone()).unwrap()).unwrap();
     builder.item(item::Definition::function("widget::thing", list.clone()).unwrap()).unwrap();
-    assert!(matches!(
-        builder.item(item::Definition::intrinsic_function("widget::thing", list).unwrap()),
-        Err(host::Error::IncompatibleFacadeOverload { .. })
-    ));
+    assert!(matches!(builder.item(item::Definition::intrinsic_function("widget::thing", list).unwrap()), Err(host::Error::IncompatibleFacadeOverload { .. })));
 }
 
 fn three_namespace_facade() -> facade::Definition {
@@ -136,7 +133,8 @@ fn three_namespace_facade() -> facade::Definition {
     builder.module("widget").unwrap();
     builder.module("widget::thing").unwrap();
     let mut list = signature::Builder::new();
-    list.parameter(type_ref::Type::builtin(type_ref::Builtin::I64)).output(type_ref::Type::builtin(type_ref::Builtin::String));
+    list.parameter(type_ref::Type::builtin(type_ref::Builtin::I64))
+        .output(type_ref::Type::builtin(type_ref::Builtin::String));
     builder.item(item::Definition::intrinsic_macro("widget::thing", list.finish()).unwrap()).unwrap();
     let mut call = signature::Builder::new();
     call.parameter(type_ref::Type::builtin(type_ref::Builtin::I64))

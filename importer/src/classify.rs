@@ -728,9 +728,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 model::ParameterKind::Type { default, .. } => {
                     (representability::signature::Kind::Type, default)
                 }
-                model::ParameterKind::Const { .. } => {
-                    (representability::signature::Kind::Constant, &model::Default::Absent)
-                }
+                model::ParameterKind::Const { .. } => (
+                    representability::signature::Kind::Constant,
+                    &model::Default::Absent,
+                ),
                 model::ParameterKind::Lifetime { .. } => {
                     unreachable!("lifetime parameters are rejected before plan ownership")
                 }
@@ -767,13 +768,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     model::ParameterKind::Type { bounds, .. } => bounds.iter().collect::<Vec<_>>(),
                     _ => return false,
                 };
-                let predicated = generics.predicates().filter_map(|predicate| match predicate {
-                    model::Predicate::Bound {
-                        ty: model::Type::Parameter { index, .. },
-                        bound,
-                    } if *index == parameter.index() => Some(bound),
-                    _ => None,
-                });
+                let predicated = generics
+                    .predicates()
+                    .filter_map(|predicate| match predicate {
+                        model::Predicate::Bound {
+                            ty: model::Type::Parameter { index, .. },
+                            bound,
+                        } if *index == parameter.index() => Some(bound),
+                        _ => None,
+                    });
                 let traits = declared
                     .into_iter()
                     .chain(predicated)
@@ -2216,9 +2219,8 @@ fn drop_unnameable_fields(graph: &api::Graph<impl api::Phase>, plans: &mut [Defi
         .map(|(definition, _)| definition)
         .collect::<std::collections::BTreeSet<_>>();
     for plan in plans {
-        let keep = |field: &representability::structure::Field| {
-            field_type_nameable(field.ty(), &nominal)
-        };
+        let keep =
+            |field: &representability::structure::Field| field_type_nameable(field.ty(), &nominal);
         match &mut plan.representability {
             R::Struct(structure) => structure.retain_fields(keep),
             R::Enum(enumeration) => enumeration.retain_fields(keep),
@@ -2250,7 +2252,9 @@ fn field_type_nameable(
         | Type::Sequence {
             element: payload, ..
         } => field_type_nameable(payload, nominal),
-        Type::Result(ok, err) => field_type_nameable(ok, nominal) && field_type_nameable(err, nominal),
+        Type::Result(ok, err) => {
+            field_type_nameable(ok, nominal) && field_type_nameable(err, nominal)
+        }
         Type::Tuple(members) => members
             .iter()
             .all(|member| field_type_nameable(member, nominal)),
@@ -2667,7 +2671,10 @@ impl<P: api::Phase> Context<'_, P> {
         if !arguments.is_empty() {
             return None;
         }
-        let target = self.graph.definitions().nth(self.graph.definition_index(id)?)?;
+        let target = self
+            .graph
+            .definitions()
+            .nth(self.graph.definition_index(id)?)?;
         matches!(
             target.kind(),
             model::Kind::Struct { .. } | model::Kind::Enum { .. }
@@ -3817,10 +3824,10 @@ fn exact_definition(ty: &model::Type, id: &api::identity::Definition) -> bool {
 /// parameters, as the self type of a blanket `impl<T> Trait for Type<T>`.
 fn any_arguments(ty: &model::Type, id: &api::identity::Definition) -> bool {
     matches!(ty, model::Type::Definition { id: actual, arguments } if actual == id
-        && arguments.iter().all(|argument| match argument {
-            model::Argument::Type(ty) => matches!(ty, model::Type::Parameter { .. }),
-            model::Argument::Lifetime(_) | model::Argument::Const(_) => true,
-        }))
+    && arguments.iter().all(|argument| match argument {
+        model::Argument::Type(ty) => matches!(ty, model::Type::Parameter { .. }),
+        model::Argument::Lifetime(_) | model::Argument::Const(_) => true,
+    }))
 }
 
 fn definition_is_public(definition: &model::Definition) -> Result<(), Failure> {

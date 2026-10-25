@@ -215,7 +215,10 @@ pub fn image_note(code: &str) -> Option<&'static str> {
                     .is_some_and(|rest| name == "from_path" || rest.trim_start().starts_with('"'))
         })
     };
-    ["image", "svg", "from_path"].into_iter().any(path).then_some(NO_FILES)
+    ["image", "svg", "from_path"]
+        .into_iter()
+        .any(path)
+        .then_some(NO_FILES)
 }
 
 /// `text` without the server's file paths: a crash's `thread 'main'
@@ -319,12 +322,9 @@ pub fn output_text(output: &Output) -> String {
     } else {
         text.to_owned()
     };
-    let note = output
-        .note
-        .as_ref()
-        .map_or_else(String::new, |note| {
-            note.lines().map(|line| format!("\n-# {line}")).collect()
-        });
+    let note = output.note.as_ref().map_or_else(String::new, |note| {
+        note.lines().map(|line| format!("\n-# {line}")).collect()
+    });
     format!("{OPEN}{body}{CLOSE}{status}{note}")
 }
 
@@ -369,8 +369,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        channels, error_text, output_text, parse, reply, RateLimit, Reply, Request,
-        MAX_ATTACHMENT, MAX_REPLY,
+        channels, error_text, output_text, parse, reply, RateLimit, Reply, Request, MAX_ATTACHMENT,
+        MAX_REPLY,
     };
     use crate::{Format, Options, Theme};
 
@@ -438,11 +438,21 @@ mod tests {
 
     #[test]
     fn message_reply_decision() {
-        assert_eq!(reply(true, vec![1, 2, 3], ""), Reply::Image(vec![1, 2, 3], None));
-        let noted = reply(true, b"GIF89a".to_vec(), "note: Animation shown for the first 5 s.\n");
+        assert_eq!(
+            reply(true, vec![1, 2, 3], ""),
+            Reply::Image(vec![1, 2, 3], None)
+        );
+        let noted = reply(
+            true,
+            b"GIF89a".to_vec(),
+            "note: Animation shown for the first 5 s.\n",
+        );
         assert_eq!(
             noted,
-            Reply::Image(b"GIF89a".to_vec(), Some("Animation shown for the first 5 s.".into()))
+            Reply::Image(
+                b"GIF89a".to_vec(),
+                Some("Animation shown for the first 5 s.".into())
+            )
         );
         assert!(super::is_gif(b"GIF89a") && !super::is_gif(b"\x89PNG"));
         let Reply::Text(text) = reply(false, Vec::new(), "error: ```oops```\n") else {
@@ -483,7 +493,10 @@ mod tests {
             status: 1,
             ..crate::Output::default()
         };
-        assert_eq!(output_text(&failed), "```text\na\nError: \"no\"\n```\nexit status 1");
+        assert_eq!(
+            output_text(&failed),
+            "```text\na\nError: \"no\"\n```\nexit status 1"
+        );
         let noted = crate::Output {
             note: Some(crate::plain::MESSAGES_IGNORED.into()),
             ..output.clone()
@@ -501,7 +514,10 @@ mod tests {
         };
         let text = output_text(&long);
         assert!(text.len() <= MAX_REPLY, "{}", text.len());
-        assert!(text.ends_with("… cut to fit Discord\n```\nexit status 1"), "{text}");
+        assert!(
+            text.ends_with("… cut to fit Discord\n```\nexit status 1"),
+            "{text}"
+        );
         assert_eq!(text.matches("```").count(), 2, "{text}");
     }
 
@@ -532,9 +548,18 @@ mod tests {
     fn image_note_names_paths() {
         use super::{image_note, NO_FILES};
         assert_eq!(image_note(r#"image("67.png")"#), Some(NO_FILES));
-        assert_eq!(image_note(r#"svg("Ivan the Terrible.svg")"#), Some(NO_FILES));
-        assert_eq!(image_note(r#"image(image::Handle::from_path(p))"#), Some(NO_FILES));
-        assert_eq!(image_note(r#"column![text("an image"), my_image("x")]"#), None);
+        assert_eq!(
+            image_note(r#"svg("Ivan the Terrible.svg")"#),
+            Some(NO_FILES)
+        );
+        assert_eq!(
+            image_note(r#"image(image::Handle::from_path(p))"#),
+            Some(NO_FILES)
+        );
+        assert_eq!(
+            image_note(r#"column![text("an image"), my_image("x")]"#),
+            None
+        );
         assert_eq!(image_note(r#"image(handle)"#), None);
     }
 
@@ -550,7 +575,8 @@ mod tests {
             text,
             "```text\n?play crashed. This is a bug in ?play, not in your code.\nImage should be allocated\n```"
         );
-        let other = super::sanitize("thread 'main' panicked at src/x.rs:1:2:\nopened /srv/app/data.png\n");
+        let other =
+            super::sanitize("thread 'main' panicked at src/x.rs:1:2:\nopened /srv/app/data.png\n");
         assert!(!other.contains("/srv"), "{other}");
         let plain = "error: `/a/b` is not a path\n";
         assert_eq!(super::sanitize(plain), plain, "only a crash is rewritten");
@@ -580,6 +606,10 @@ mod tests {
         assert_eq!(super::own_reply(messages, BOT, 98), None);
         assert_eq!(super::own_reply([], BOT, REQUEST), None);
         let twice = [(110, BOT, Some(REQUEST)), (102, BOT, Some(REQUEST))];
-        assert_eq!(super::own_reply(twice, BOT, REQUEST), Some(102), "oldest wins");
+        assert_eq!(
+            super::own_reply(twice, BOT, REQUEST),
+            Some(102),
+            "oldest wins"
+        );
     }
 }

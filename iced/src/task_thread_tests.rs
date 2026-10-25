@@ -29,13 +29,17 @@ fn operation_and_task_mappers_run_on_the_update_thread() {
     let delivered = drive_elsewhere(task, |message| adapter.update(message).unwrap().delivery());
 
     assert_eq!(starts.load(Ordering::SeqCst), 1);
-    let applied = delivered.iter().filter(|delivery| **delivery == Delivery::Applied);
+    let applied = delivered
+        .iter()
+        .filter(|delivery| **delivery == Delivery::Applied);
     assert_eq!(applied.count(), 1);
     let probes = probes.lock().unwrap();
     // `loaded` and `child` each call the probe once.
     assert_eq!(probes.len(), 2);
     assert!(
-        probes.iter().all(|thread| *thread == thread::current().id()),
+        probes
+            .iter()
+            .all(|thread| *thread == thread::current().id()),
         "a script mapper ran on the thread that polled the task"
     );
 }
@@ -56,7 +60,9 @@ fn a_stale_continuation_never_runs_and_ends_its_task() {
 
     assert_eq!(starts.load(Ordering::SeqCst), 1);
     assert!(!delivered.is_empty());
-    assert!(delivered.iter().all(|delivery| *delivery == Delivery::Dropped));
+    assert!(delivered
+        .iter()
+        .all(|delivery| *delivery == Delivery::Dropped));
     assert!(probes.lock().unwrap().is_empty(), "an old continuation ran");
 }
 

@@ -3,12 +3,11 @@
 #[cfg(not(feature = "no_std"))]
 pub mod debug;
 #[cfg(not(feature = "no_std"))]
-pub mod export;
-#[cfg(not(feature = "no_std"))]
 pub mod display;
 pub(crate) mod endpoint;
-pub mod value;
 mod error;
+#[cfg(not(feature = "no_std"))]
+pub mod export;
 pub mod facade;
 pub mod item;
 pub mod operation;
@@ -22,6 +21,7 @@ pub mod support;
 pub mod type_def;
 pub mod type_ref;
 pub mod usage;
+pub mod value;
 
 pub use error::Error;
 
@@ -341,7 +341,9 @@ impl Registry {
             .try_reserve_exact(self.aliases.len())
             .map_err(|_| rawr_import::surface::Error::Allocation)?;
         for (alias, target) in &self.aliases {
-            clone.aliases.push((alias.try_clone()?, target.try_clone()?));
+            clone
+                .aliases
+                .push((alias.try_clone()?, target.try_clone()?));
         }
         clone.exported.clone_from(&self.exported);
         Ok(clone)
@@ -646,7 +648,10 @@ impl Registry {
 
     /// The paths of the free functions and macros named `name`, in any
     /// module: `iced::widget::center` for `center`.
-    pub(crate) fn functions_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = String> + 'a {
+    pub(crate) fn functions_named<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> impl Iterator<Item = String> + 'a {
         self.items
             .iter()
             .filter(move |item| {

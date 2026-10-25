@@ -189,11 +189,18 @@ fn rustc_spelled_paths_round_trip_through_the_rule_reader() {
             paths.map(|path| escape_path(path).into_owned()).join(" "),
             escape_environment(target),
         );
-        assert_eq!(decoded(&text).expect("rustc's spelling decodes"), paths, "{text:?}");
+        assert_eq!(
+            decoded(&text).expect("rustc's spelling decodes"),
+            paths,
+            "{text:?}"
+        );
     }
     assert_eq!(escape_path("/p/a#b$c:d"), "/p/a#b$c:d");
     assert_eq!(escape_path("/p/My Counter"), "/p/My\\ Counter");
-    assert_eq!(escape_environment("C:\\My Counter\n"), "C:\\\\My Counter\\n");
+    assert_eq!(
+        escape_environment("C:\\My Counter\n"),
+        "C:\\\\My Counter\\n"
+    );
     // A drive's colon is part of the target.
     assert_eq!(decoded("C:/t/a.d: b.rs"), Ok(vec!["b.rs".into()]));
     assert_eq!(decoded("/p/a:b/x.d:"), Ok(vec![]));

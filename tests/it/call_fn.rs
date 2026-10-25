@@ -151,13 +151,10 @@ fn test_anonymous_fn() {
     let calc_func = Func::<(INT, INT, INT), INT>::create_from_script(Engine::new(), "fn calc(x: i64, y: i64, z: i64,) -> i64 { (x + y) * z }", "calc").unwrap();
     assert_eq!(calc_func(42, 123, 9).unwrap(), 1485);
 
-    let calc_func =
-        Func::<(INT, String, INT), INT>::create_from_script(Engine::new(), "fn calc(x: i64, y: String, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc").unwrap();
+    let calc_func = Func::<(INT, String, INT), INT>::create_from_script(Engine::new(), "fn calc(x: i64, y: String, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc").unwrap();
     assert_eq!(calc_func(42, "hello".to_string(), 9).unwrap(), 423);
 
-    let calc_func =
-        Func::<(INT, String, INT), INT>::create_from_script(Engine::new(), "pub fn calc(x: i64, y: String, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc")
-            .unwrap();
+    let calc_func = Func::<(INT, String, INT), INT>::create_from_script(Engine::new(), "pub fn calc(x: i64, y: String, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc").unwrap();
     assert_eq!(calc_func(42, "hello".to_string(), 9).unwrap(), 423);
 
     let calc_func = Func::<(INT, &str, INT), INT>::create_from_script(Engine::new(), "fn calc(x: i64, y: &str, z: i64) -> i64 { (x + y.len() as i64) * z }", "calc").unwrap();

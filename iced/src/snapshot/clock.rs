@@ -61,7 +61,9 @@ pub(crate) fn set(at: Instant) {
         if let Some(paused) = tokio.borrow_mut().as_mut()
             && at > paused.at
         {
-            paused.runtime.block_on(tokio::time::advance(at - paused.at));
+            paused
+                .runtime
+                .block_on(tokio::time::advance(at - paused.at));
             paused.at = at;
         }
     });

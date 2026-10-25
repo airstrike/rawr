@@ -114,7 +114,8 @@ pub(crate) fn native_snapshot(source: &str) -> package::snapshot::Snapshot {
         vec![
             (
                 root.join("Cargo.toml"),
-                "[package]\nname = \"resident\"\n[dependencies]\nnative = { path = \"native\" }\n".into(),
+                "[package]\nname = \"resident\"\n[dependencies]\nnative = { path = \"native\" }\n"
+                    .into(),
             ),
             (entry, source.into()),
         ],

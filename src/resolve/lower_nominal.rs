@@ -2,13 +2,13 @@
 
 #![cfg_attr(feature = "no_function", allow(dead_code, unused_imports))]
 
+pub(crate) mod cell;
 mod iterator;
 mod keyed;
 mod location;
 mod origin;
 mod places;
 mod reverse;
-pub(crate) mod cell;
 
 #[cfg(all(test, not(feature = "no_function"), feature = "rust-import"))]
 mod collected_tests;
@@ -19,7 +19,6 @@ mod language_tests;
 mod rust_meaning_tests;
 
 use super::{intrinsic, item, type_ref, Error, LoweringFailure, Program};
-use compare::{Comparison, Shape};
 use crate::ast::{
     self, BinaryExpr, FlowControl, FnCallExpr, FnCallHashes, NominalEnumPattern, NominalPattern,
     NominalPayloadType, Stmt, NOMINAL_MATCH_SENTINEL,
@@ -31,6 +30,7 @@ use crate::{
     calc_fn_hash, capability, method, receiver, type_def, Dynamic, Engine, EvalAltResult,
     FuncRegistration, ImmutableString, Module, Position, RawrResult, Scope, Shared, Span, AST, INT,
 };
+use compare::{Comparison, Shape};
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -889,10 +889,12 @@ fn lower_with_context(
     });
     if let Some(crate::eval::machine::Unsupported(what, position)) = unsupported {
         let error = crate::ParseError(
-            Box::new(crate::ParseErrorType::BadInput(crate::LexError::ImproperSymbol(
-                "await".into(),
-                format!("{what} is not supported in Rawr yet").into(),
-            ))),
+            Box::new(crate::ParseErrorType::BadInput(
+                crate::LexError::ImproperSymbol(
+                    "await".into(),
+                    format!("{what} is not supported in Rawr yet").into(),
+                ),
+            )),
             position,
             crate::types::parse_error::Rendered::default(),
         );
@@ -2522,8 +2524,10 @@ impl Models {
                     if parameter.pattern.is_some() {
                         return None;
                     }
-                    let text =
-                        source_span(program.source.text_at(definition.source()), definition.body());
+                    let text = source_span(
+                        program.source.text_at(definition.source()),
+                        definition.body(),
+                    );
                     Some((definition.owner(), (parameter.name.text.clone(), text)))
                 })
                 .collect(),
@@ -2670,7 +2674,11 @@ impl Models {
     }
 
     fn import(&self, name: &str) -> Option<&crate::resolve::item::Binding> {
-        if self.global_head.as_ref().is_some_and(|head| head.as_str() == name) {
+        if self
+            .global_head
+            .as_ref()
+            .is_some_and(|head| head.as_str() == name)
+        {
             return None;
         }
         self.imports.get(&(self.context, name.into()))
@@ -3479,7 +3487,11 @@ impl PreludeOp {
             Self::FormatBits => {
                 let value = args[0].as_int().unwrap_or_default() as u64;
                 let bits = args[2].as_int().unwrap_or(64);
-                let value = if bits >= 64 { value } else { value & ((1 << bits) - 1) };
+                let value = if bits >= 64 {
+                    value
+                } else {
+                    value & ((1 << bits) - 1)
+                };
                 let text = match args[1].as_int().unwrap_or(16) {
                     10 => value.to_string(),
                     2 => format!("{value:b}"),
@@ -3505,12 +3517,20 @@ impl PreludeOp {
                 }
                 let text = if mode & 4 == 4 {
                     let value = args[0].as_int().unwrap_or_default();
-                    if mode & 8 == 8 { exp!(value as u64) } else { exp!(value) }
+                    if mode & 8 == 8 {
+                        exp!(value as u64)
+                    } else {
+                        exp!(value)
+                    }
                 } else {
                     #[cfg(not(feature = "no_float"))]
                     {
                         let value = args[0].as_float().unwrap_or_default();
-                        if mode & 2 == 2 { exp!(value as f32) } else { exp!(value) }
+                        if mode & 2 == 2 {
+                            exp!(value as f32)
+                        } else {
+                            exp!(value)
+                        }
                     }
                     #[cfg(feature = "no_float")]
                     return Err(invariant("`f64` needs float support"));
@@ -3594,9 +3614,15 @@ impl PreludeOp {
                     .as_array_ref()
                     .map_err(|_| invariant("a slice is not an array at runtime"))?;
                 let slices: crate::Array = if windows {
-                    array.windows(size).map(|window| Dynamic::from_array(window.to_vec())).collect()
+                    array
+                        .windows(size)
+                        .map(|window| Dynamic::from_array(window.to_vec()))
+                        .collect()
                 } else {
-                    array.chunks(size).map(|chunk| Dynamic::from_array(chunk.to_vec())).collect()
+                    array
+                        .chunks(size)
+                        .map(|chunk| Dynamic::from_array(chunk.to_vec()))
+                        .collect()
                 };
                 return Ok(Dynamic::from_array(slices));
             }
@@ -3707,7 +3733,9 @@ impl PreludeOp {
                 let mut entries = crate::Array::with_capacity(items.len());
                 for item in items {
                     let same = match keys.hashed {
-                        true => entries.iter().position(|entry| keys.same_entries(entry, &item)),
+                        true => entries
+                            .iter()
+                            .position(|entry| keys.same_entries(entry, &item)),
                         false => entries
                             .last()
                             .filter(|last| keys.order_entries(last, &item).is_eq())
@@ -3929,7 +3957,11 @@ fn keyed_operation(op: PreludeOp, args: &mut FnCallArgs, keys: &Keys) -> RawrRes
     // the place its order gives.
     let found = keys
         .hashed
-        .then(|| entries.iter().position(|entry| keys.same(&entry_key(entry), &key)))
+        .then(|| {
+            entries
+                .iter()
+                .position(|entry| keys.same(&entry_key(entry), &key))
+        })
         .flatten();
     let slot = match found {
         Some(at) => Ok(at),
@@ -4573,7 +4605,10 @@ impl WitnessedOp {
         };
         let codes = args[split..]
             .iter()
-            .map(|code| code.as_int().map_err(|_| invariant("a type witness is not a code")))
+            .map(|code| {
+                code.as_int()
+                    .map_err(|_| invariant("a type witness is not a code"))
+            })
             .collect::<Result<Box<[_]>, _>>()?;
         let known = crate::func::locked_read(&self.instances)
             .and_then(|instances| instances.get(&codes).cloned());
@@ -4600,9 +4635,12 @@ impl WitnessedOp {
                 instance
             }
         };
-        instance
-            .op
-            .invoke(context, &mut args[..split], models, instance.requirement.as_ref())
+        instance.op.invoke(
+            context,
+            &mut args[..split],
+            models,
+            instance.requirement.as_ref(),
+        )
     }
 }
 
@@ -4959,7 +4997,13 @@ impl ExecutableOp {
                 op.template
                     .argument_types(models)
                     .into_iter()
-                    .map(|ty| if ty == parameter { TypeId::of::<Dynamic>() } else { ty })
+                    .map(|ty| {
+                        if ty == parameter {
+                            TypeId::of::<Dynamic>()
+                        } else {
+                            ty
+                        }
+                    })
                     .chain(std::iter::repeat_n(TypeId::of::<INT>(), op.witnesses))
                     .collect()
             }
@@ -5461,7 +5505,10 @@ impl ExecutableOp {
             Self::Kinded {
                 op: PreludeOp::Parse,
                 kinds,
-            } => Ok(parse_text(&args[0].clone_cast::<ImmutableString>(), kinds[0])),
+            } => Ok(parse_text(
+                &args[0].clone_cast::<ImmutableString>(),
+                kinds[0],
+            )),
             Self::Kinded { kinds, .. } => int_method(*kinds, args),
         }
     }
@@ -5546,7 +5593,11 @@ fn matches_runtime_type(value: &Dynamic, ty: &type_ref::Type, models: &Models) -
         .is_ok()
 }
 
-fn nominal_payload_type(ty: &Ty, models: &Models, _span: Span) -> Result<NominalPayloadType, Error> {
+fn nominal_payload_type(
+    ty: &Ty,
+    models: &Models,
+    _span: Span,
+) -> Result<NominalPayloadType, Error> {
     Ok(match ty.clone() {
         Ty::Unit => NominalPayloadType::Unit,
         // A generic payload is erased: any value.
@@ -6115,7 +6166,10 @@ impl Ty {
             };
         }
         if let Some((pointer, element)) = ty.pointer_element() {
-            return Self::Boxed(Pointer::named(pointer), Box::new(Self::from_resolved(element)));
+            return Self::Boxed(
+                Pointer::named(pointer),
+                Box::new(Self::from_resolved(element)),
+            );
         }
         if let Some(trait_name) = ty.dyn_trait() {
             // `dyn Convert<i64>`: positional arguments as the bindings
@@ -6432,7 +6486,9 @@ impl Ty {
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
             Self::Time(Time::Instant) => Some(TypeId::of::<std::time::Instant>()),
             Self::ParseError(_) => Some(TypeId::of::<ImmutableString>()),
-            Self::Reference { target, .. } | Self::Boxed(_, target) => target.native_type_id(models),
+            Self::Reference { target, .. } | Self::Boxed(_, target) => {
+                target.native_type_id(models)
+            }
             Self::Host { proof, .. } => proof.definition.native_identity(),
             Self::Support(proof) => Some(proof.contract.representation()),
             Self::Endpoint(_) => None,
@@ -7226,7 +7282,9 @@ enum PlaceStep {
     /// A `RefCell` borrow's value: read from the borrow, stored back into
     /// the cell, and the borrow released after the statement when it was
     /// made in it.
-    Cell { release: bool },
+    Cell {
+        release: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -7440,13 +7498,16 @@ impl PatternSyntax {
     /// the coverage check decides.
     fn has_script_variant(&self) -> bool {
         match self {
-            Self::Enum(pattern) => !pattern.host_struct || pattern.payload.iter().any(Self::has_script_variant),
+            Self::Enum(pattern) => {
+                !pattern.host_struct || pattern.payload.iter().any(Self::has_script_variant)
+            }
             Self::TupleStruct { members, .. } | Self::Tuple { members, .. } => {
                 members.iter().any(Self::has_script_variant)
             }
-            Self::Slice { before, after, .. } => {
-                before.iter().chain(after.iter()).any(Self::has_script_variant)
-            }
+            Self::Slice { before, after, .. } => before
+                .iter()
+                .chain(after.iter())
+                .any(Self::has_script_variant),
             Self::Reference { pattern, .. } | Self::At { pattern, .. } => {
                 pattern.has_script_variant()
             }
@@ -9172,10 +9233,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_method_body(
-        &mut self,
-        definition: &method::Definition,
-    ) -> Result<Lowered, Error> {
+    fn parse_method_body(&mut self, definition: &method::Definition) -> Result<Lowered, Error> {
         // The value of an associated `const NAME: T = value;` is a tail.
         if definition.constant() {
             self.parse_statement()?;
@@ -9293,10 +9351,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_function_body(
-        &mut self,
-        definition: &item::Function,
-    ) -> Result<Lowered, Error> {
+    fn parse_function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
         let mut startup_tail = false;
         if definition.body.constant {
             // The initializer of `const NAME: T = value;` is a tail.
@@ -9337,7 +9392,10 @@ impl<'a> Parser<'a> {
         startup_tail: &mut bool,
     ) -> Result<(), Error> {
         if definition.body.asynchronous {
-            let output = definition.output.as_ref().map_or(Ty::Unit, Ty::from_resolved);
+            let output = definition
+                .output
+                .as_ref()
+                .map_or(Ty::Unit, Ty::from_resolved);
             self.destructure_parameters(&definition.parameters, definition.body.span)?;
             return self.parse_async_body(&output, definition.body.span);
         }
@@ -9623,9 +9681,10 @@ impl<'a> Parser<'a> {
     /// Whether this body's generic parameter `name` has a type witness.
     fn has_witness(&self, name: &str) -> bool {
         self.host_witnesses.iter().any(|host| host.as_str() == name)
-            || self.generics
-            .get(name)
-            .is_some_and(|bounds| bounds.contains(capability::Kind::Default))
+            || self
+                .generics
+                .get(name)
+                .is_some_and(|bounds| bounds.contains(capability::Kind::Default))
             || self
                 .generic_traits
                 .get(name)
@@ -9824,9 +9883,8 @@ impl<'a> Parser<'a> {
                     instance.len() == arguments.len()
                         && instance.iter().zip(&arguments).all(|(instance, argument)| {
                             match (literal(argument), instance) {
-                                (Some((_, true)), Ty::Int(_)) | (Some((_, false)), Ty::Float(_)) => {
-                                    true
-                                }
+                                (Some((_, true)), Ty::Int(_))
+                                | (Some((_, false)), Ty::Float(_)) => true,
                                 (Some(_), _) => false,
                                 (None, instance) => instance == argument,
                             }
@@ -10194,7 +10252,11 @@ impl<'a> Parser<'a> {
             let argument = self.inference.resolve(argument);
             let text = matches!(argument, Ty::Reference { ref target, .. }
                 if self.inference.resolve(target) == Ty::String);
-            return if resolved == Ty::String { text } else { self.unifies(&resolved, &argument) };
+            return if resolved == Ty::String {
+                text
+            } else {
+                self.unifies(&resolved, &argument)
+            };
         }
         let candidates: Vec<Vec<Ty>> = match self.inference.resolve(ty) {
             Ty::Dyn(name, bindings) if name == trait_name => vec![dyn_arguments(&bindings)],
@@ -10355,8 +10417,7 @@ impl<'a> Parser<'a> {
             let rendered = match &ty {
                 Ty::Infer(_) => return Err(mismatch(expected)),
                 Ty::Float(kind) => {
-                    let mode = i64::from(pending.debug)
-                        + if *kind == Float::F32 { 2 } else { 0 };
+                    let mode = i64::from(pending.debug) + if *kind == Float::F32 { 2 } else { 0 };
                     let precision = pending.precision.clone().unwrap_or_else(|| "-1".into());
                     self.prelude_op(
                         PreludeOp::FormatFloat,
@@ -10663,7 +10724,11 @@ impl<'a> Parser<'a> {
         else {
             return Ok(None);
         };
-        if self.models.host_items(&format!("{host}::{member}")).is_none() {
+        if self
+            .models
+            .host_items(&format!("{host}::{member}"))
+            .is_none()
+        {
             return Ok(None);
         }
         let Some(definition) = self.models.host.type_(host).cloned() else {
@@ -10672,10 +10737,19 @@ impl<'a> Parser<'a> {
         let owner = self.models.host.type_owner(host).cloned();
         // The facade type's own arguments (an `Element`'s Message) take no
         // part in these methods: they are erased for the call.
-        let erased = self.models.host.type_(FACADE_TRAIT_ERASED).cloned().map(|erased| Ty::Host {
-            proof: HostTyProof::new(erased, None, self.models.host.type_owner(FACADE_TRAIT_ERASED).cloned()),
-            arguments: Box::default(),
-        });
+        let erased = self
+            .models
+            .host
+            .type_(FACADE_TRAIT_ERASED)
+            .cloned()
+            .map(|erased| Ty::Host {
+                proof: HostTyProof::new(
+                    erased,
+                    None,
+                    self.models.host.type_owner(FACADE_TRAIT_ERASED).cloned(),
+                ),
+                arguments: Box::default(),
+            });
         let host_ty = Ty::Host {
             proof: HostTyProof::new(definition.clone(), None, owner),
             arguments: definition
@@ -10706,7 +10780,10 @@ impl<'a> Parser<'a> {
             .iter()
             .cloned()
             .map(|mut argument| {
-                if let Ty::Reference { mutable: true, target } = self.inference.resolve(&argument.ty)
+                if let Ty::Reference {
+                    mutable: true,
+                    target,
+                } = self.inference.resolve(&argument.ty)
                     && matches!(self.inference.resolve(&target), Ty::Host { .. })
                 {
                     argument.ty = *target;
@@ -10944,7 +11021,10 @@ impl<'a> Parser<'a> {
         if !member.starts_with(|c: char| c.is_ascii_lowercase())
             || matches!(
                 ahead.peek(),
-                Some((Token::LeftParen | Token::Unit | Token::DoubleColon | Token::LessThan, _))
+                Some((
+                    Token::LeftParen | Token::Unit | Token::DoubleColon | Token::LessThan,
+                    _
+                ))
             )
         {
             return None;
@@ -10969,9 +11049,11 @@ impl<'a> Parser<'a> {
         let called = matches!(ahead.peek(), Some((Token::LeftParen | Token::Unit, _)));
         // `From::from` as a value is a closure (`parse_std_trait_call`).
         if !called
-            && !segments.iter().rev().nth(1).is_some_and(|name| {
-                matches!(name.as_str(), "From" | "Into" | "Clone" | "ToString")
-            })
+            && !segments
+                .iter()
+                .rev()
+                .nth(1)
+                .is_some_and(|name| matches!(name.as_str(), "From" | "Into" | "Clone" | "ToString"))
         {
             return None;
         }
@@ -11272,7 +11354,10 @@ impl<'a> Parser<'a> {
         }
         if !matches!(
             (ahead.next(), ahead.next()),
-            (Some((Token::DoubleColon, _)), Some((Token::Identifier(_), _)))
+            (
+                Some((Token::DoubleColon, _)),
+                Some((Token::Identifier(_), _))
+            )
         ) {
             return Ok(None);
         }
@@ -11280,7 +11365,10 @@ impl<'a> Parser<'a> {
         let path = (0..segments * 2).map(|_| self.next()).collect::<Vec<_>>();
         let (_, open) = self.next();
         self.next();
-        let mut written = vec![(Token::Identifier(Box::new(name.as_str().into())), name_span.start())];
+        let mut written = vec![(
+            Token::Identifier(Box::new(name.as_str().into())),
+            name_span.start(),
+        )];
         written.extend(path.iter().cloned());
         written.push((Token::LessThan, open));
         written.extend((0..arguments).map(|_| self.next()));
@@ -11341,7 +11429,10 @@ impl<'a> Parser<'a> {
                                 depth = depth.saturating_sub(1);
                             }
                             Token::EOF => {
-                                return Err(unsupported("`=` after a `select!` pattern".into(), position));
+                                return Err(unsupported(
+                                    "`=` after a `select!` pattern".into(),
+                                    position,
+                                ));
                             }
                             _ => {}
                         }
@@ -11360,7 +11451,10 @@ impl<'a> Parser<'a> {
                                 position,
                             ));
                         }
-                        Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                        Token::LeftParen
+                        | Token::LeftBracket
+                        | Token::LeftBrace
+                        | Token::MapStart => {
                             depth += 1;
                         }
                         Token::RightParen | Token::RightBracket | Token::RightBrace => {
@@ -11392,7 +11486,10 @@ impl<'a> Parser<'a> {
                     }
                     let (token, position) = self.next();
                     match token {
-                        Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                        Token::LeftParen
+                        | Token::LeftBracket
+                        | Token::LeftBrace
+                        | Token::MapStart => {
                             depth += 1;
                         }
                         Token::RightParen | Token::RightBracket | Token::RightBrace => {
@@ -11448,13 +11545,19 @@ impl<'a> Parser<'a> {
         // to `else`, or panics, as the plain select does.
         let filtered = name == "select"
             && count > 1
-            && branches.iter().any(|(pattern, _)| refutable_tokens(pattern));
+            && branches
+                .iter()
+                .any(|(pattern, _)| refutable_tokens(pattern));
         if filtered {
             let selected = || ident("__rawr_selected");
             for (future, (pattern, _)) in futures.iter_mut().zip(&branches) {
                 let awaited = std::iter::once((Token::LeftParen, at))
                     .chain(std::mem::take(future))
-                    .chain([(Token::RightParen, at), (Token::Period, at), reserved("await")]);
+                    .chain([
+                        (Token::RightParen, at),
+                        (Token::Period, at),
+                        reserved("await"),
+                    ]);
                 let mut wrapped = vec![reserved("async"), (Token::LeftBrace, at)];
                 if refutable_tokens(pattern) {
                     // `let v = (future).await; if matches!(&v, pattern)
@@ -11568,7 +11671,11 @@ impl<'a> Parser<'a> {
                     (Token::RightParen, at),
                 ]
             });
-            spliced.extend([(Token::Underscore, at), (Token::DoubleArrow, at), (Token::LeftBrace, at)]);
+            spliced.extend([
+                (Token::Underscore, at),
+                (Token::DoubleArrow, at),
+                (Token::LeftBrace, at),
+            ]);
             spliced.extend(otherwise);
             spliced.extend([(Token::RightBrace, at), (Token::Comma, at)]);
             spliced.push((Token::RightBrace, at));
@@ -11605,12 +11712,7 @@ impl<'a> Parser<'a> {
             && matches!(trait_name, "From" | "Into" | "Clone" | "ToString")
         {
             let at = start;
-            let argument = || {
-                (
-                    Token::Identifier(Box::new("__rawr_trait_value".into())),
-                    at,
-                )
-            };
+            let argument = || (Token::Identifier(Box::new("__rawr_trait_value".into())), at);
             let method = if matches!(trait_name, "From" | "Into") {
                 "into"
             } else {
@@ -12398,7 +12500,8 @@ impl<'a> Parser<'a> {
             .unwrap_or_default()
             .into_iter()
             .filter(|item| {
-                item.kind() == crate::host::item::Kind::Method && item.signature().parameters().is_empty()
+                item.kind() == crate::host::item::Kind::Method
+                    && item.signature().parameters().is_empty()
             })
             .collect();
         let owner = self.models.item_owner(&path).cloned();
@@ -12444,7 +12547,8 @@ impl<'a> Parser<'a> {
                 continue;
             };
             self.inference.commit(checkpoint);
-            let receiver = self.operator_expr(origin::Fragment::default(), source.clone(), host.receiver);
+            let receiver =
+                self.operator_expr(origin::Fragment::default(), source.clone(), host.receiver);
             let output = self.inference.resolve(&signature.output);
             return self
                 .push_intrinsic(
@@ -12466,7 +12570,8 @@ impl<'a> Parser<'a> {
             return Ok(None);
         };
         let owner = self.models.item_owner(&path).cloned();
-        let argument = self.operator_expr(origin::Fragment::default(), source.clone(), host.receiver);
+        let argument =
+            self.operator_expr(origin::Fragment::default(), source.clone(), host.receiver);
         for item in items {
             if item.kind() != crate::host::item::Kind::AssociatedFunction {
                 continue;
@@ -12549,7 +12654,8 @@ impl<'a> Parser<'a> {
                 match self.host_into_helper(host, &source, &target, conversion.span)? {
                     Some(helper) => helper,
                     None => {
-                        let (source, target) = (source.name(&self.models), target.name(&self.models));
+                        let (source, target) =
+                            (source.name(&self.models), target.name(&self.models));
                         return Err(Error::InvalidMethodCall {
                             owner: source.clone(),
                             method: "into".into(),
@@ -12763,7 +12869,10 @@ impl<'a> Parser<'a> {
                     return op;
                 };
                 *self.template_params.borrow_mut() = Box::default();
-                Ok(ExecutableOp::Witnessed(Box::new(WitnessedOp::new(op?, names.len()))))
+                Ok(ExecutableOp::Witnessed(Box::new(WitnessedOp::new(
+                    op?,
+                    names.len(),
+                ))))
             })
             .collect()
     }
@@ -13390,7 +13499,9 @@ impl<'a> Parser<'a> {
             #[cfg(not(feature = "no_float"))]
             Ty::FloatRange => intrinsic::Type::f64_range_inclusive(),
             #[cfg(feature = "no_float")]
-            Ty::FloatRange => intrinsic::Type::builtin("RangeInclusive<f64>", TypeId::of::<Dynamic>()),
+            Ty::FloatRange => {
+                intrinsic::Type::builtin("RangeInclusive<f64>", TypeId::of::<Dynamic>())
+            }
             Ty::Ordering => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
             Ty::Time(Time::Duration) => {
                 intrinsic::Type::builtin("Duration", TypeId::of::<std::time::Duration>())
@@ -13398,7 +13509,9 @@ impl<'a> Parser<'a> {
             Ty::Time(Time::Instant) => {
                 intrinsic::Type::builtin("Instant", TypeId::of::<std::time::Instant>())
             }
-            Ty::ParseError(_) => intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>()),
+            Ty::ParseError(_) => {
+                intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>())
+            }
             Ty::Reference { target, .. } => {
                 return self.proven_type(&target, operation, span);
             }
@@ -13774,7 +13887,9 @@ impl<'a> Parser<'a> {
                         let form = signature
                             .inputs
                             .iter()
-                            .map(|input| self.inference.resolve(input).name(&self.models).to_string())
+                            .map(|input| {
+                                self.inference.resolve(input).name(&self.models).to_string()
+                            })
                             .collect::<Vec<_>>()
                             .join(", ");
                         let form = format!("({form})");
@@ -13861,7 +13976,9 @@ impl<'a> Parser<'a> {
         if items.is_empty() || !items.iter().all(labelled) {
             return Ok(());
         }
-        let first = arguments.first().map(|first| self.inference.resolve(&first.ty));
+        let first = arguments
+            .first()
+            .map(|first| self.inference.resolve(&first.ty));
         let element = match first {
             Some(Ty::Array { element, .. }) => *element,
             Some(Ty::Reference { target, .. }) => match *target {
@@ -13904,7 +14021,10 @@ impl<'a> Parser<'a> {
                 if proof.definition.identity().imported().is_some());
             let text = items.iter().all(|item| item.path().starts_with("iced::"))
                 && items.iter().any(|item| {
-                    item.signature().parameters().get(index).is_some_and(|parameter| {
+                    item.signature()
+                        .parameters()
+                        .get(index)
+                        .is_some_and(|parameter| {
                             matches!(
                                 parameter.shape(),
                                 crate::host::type_ref::Shape::Builtin(
@@ -13930,34 +14050,47 @@ impl<'a> Parser<'a> {
                 let path = item.path();
                 path.starts_with("iced::")
                     && !path.contains("lider")
-                    && item.signature().parameters().get(index).is_some_and(|parameter| {
-                        matches!(
-                            parameter.shape(),
-                            crate::host::type_ref::Shape::Builtin(
-                                crate::host::type_ref::Builtin::I64
-                                    | crate::host::type_ref::Builtin::F64
+                    && item
+                        .signature()
+                        .parameters()
+                        .get(index)
+                        .is_some_and(|parameter| {
+                            matches!(
+                                parameter.shape(),
+                                crate::host::type_ref::Shape::Builtin(
+                                    crate::host::type_ref::Builtin::I64
+                                        | crate::host::type_ref::Builtin::F64
+                                )
                             )
-                        )
-                    })
+                        })
             })
         };
         let slice = |index: usize| {
             items.iter().any(|item| {
-                item.signature().parameters().get(index).is_some_and(|parameter| {
-                    matches!(
-                        parameter.shape(),
-                        crate::host::type_ref::Shape::Array { length: None, .. }
-                    )
-                })
+                item.signature()
+                    .parameters()
+                    .get(index)
+                    .is_some_and(|parameter| {
+                        matches!(
+                            parameter.shape(),
+                            crate::host::type_ref::Shape::Array { length: None, .. }
+                        )
+                    })
             })
         };
         // A number passed as an item's type parameter, as `Task::done`'s,
         // keeps its type, as a function passed to it does.
         let generic = |index: usize| {
             items.iter().any(|item| {
-                item.signature().parameters().get(index).is_some_and(|parameter| {
-                    matches!(parameter.shape(), crate::host::type_ref::Shape::Parameter(_))
-                })
+                item.signature()
+                    .parameters()
+                    .get(index)
+                    .is_some_and(|parameter| {
+                        matches!(
+                            parameter.shape(),
+                            crate::host::type_ref::Shape::Parameter(_)
+                        )
+                    })
             })
         };
         // A facade takes `&str`, slices and borrowed facade values, such as
@@ -13985,7 +14118,10 @@ impl<'a> Parser<'a> {
                 }
                 ty @ (Ty::Int(Int::I64) | Ty::Float(Float::F64)) if narrow(index) => {
                     let (found, expected) = if ty == Ty::Int(Int::I64) {
-                        ("i64", "iced's `u8`/`u16`/`u32` (or `f32`); write a literal or `as u32`")
+                        (
+                            "i64",
+                            "iced's `u8`/`u16`/`u32` (or `f32`); write a literal or `as u32`",
+                        )
                     } else {
                         ("f64", "iced's `f32`; write a literal or `as f32`")
                     };
@@ -14196,9 +14332,13 @@ impl<'a> Parser<'a> {
             let Some(Some(default)) = definition.defaults().get(index) else {
                 return;
             };
-            let Ok(ty) =
-                self.instantiate_host_type(default, &mut parameters, "type", owner, Some(definition))
-            else {
+            let Ok(ty) = self.instantiate_host_type(
+                default,
+                &mut parameters,
+                "type",
+                owner,
+                Some(definition),
+            ) else {
                 return;
             };
             parameters.insert(definition.parameters()[index].clone(), ty.clone());
@@ -14752,7 +14892,6 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-
         let Some(item) = items.first() else {
             return Err(Error::InvalidHostOperation {
                 item: "<host item>".into(),
@@ -14837,7 +14976,10 @@ impl<'a> Parser<'a> {
         arguments: &mut Vec<ParsedExpr>,
         call: Span,
     ) -> Result<Option<ParsedExpr>, Error> {
-        let Some(index) = IMMEDIATE_CALLBACKS.iter().position(|immediate| *immediate == path) else {
+        let Some(index) = IMMEDIATE_CALLBACKS
+            .iter()
+            .position(|immediate| *immediate == path)
+        else {
             return Ok(None);
         };
         let expected = match index {
@@ -14854,14 +14996,19 @@ impl<'a> Parser<'a> {
         }
         let mut closure = arguments.pop().expect("the closure argument is present");
         // A host call through `items` of `path`, with `arguments` parsed.
-        let host = |this: &mut Self, path: &str, arguments: Vec<ParsedExpr>| -> Result<ParsedExpr, Error> {
-            let items = this.models.host_items(path).map(<[_]>::to_vec).ok_or_else(|| {
-                Error::InvalidHostOperation {
+        let host = |this: &mut Self,
+                    path: &str,
+                    arguments: Vec<ParsedExpr>|
+         -> Result<ParsedExpr, Error> {
+            let items = this
+                .models
+                .host_items(path)
+                .map(<[_]>::to_vec)
+                .ok_or_else(|| Error::InvalidHostOperation {
                     item: path.into(),
                     reason: "the facade lacks this item".into(),
                     operation: call,
-                }
-            })?;
+                })?;
             let owner = this.models.item_owner(path).cloned();
             this.call_host_function(&items, owner, arguments, call)
         };
@@ -14883,7 +15030,8 @@ impl<'a> Parser<'a> {
                 source.push_text(format!("let {builder} = "));
                 source.push(created.rendered_source());
                 source.push_text("; ");
-                let invoked = self.immediate_call(&mut closure, &builder_ty, &Ty::Unit, &builder)?;
+                let invoked =
+                    self.immediate_call(&mut closure, &builder_ty, &Ty::Unit, &builder)?;
                 source.push(invoked);
                 source.push_text("; ");
                 let operand = local(self, &builder, builder_ty);
@@ -14938,7 +15086,8 @@ impl<'a> Parser<'a> {
                 source.push(started.rendered_source());
                 let output = self.inference.fresh();
                 let result = self.temporary("drawn");
-                let invoked = self.immediate_call(&mut closure, &renderer_ty, &output, &renderer)?;
+                let invoked =
+                    self.immediate_call(&mut closure, &renderer_ty, &output, &renderer)?;
                 source.push_text(format!("; let {result} = "));
                 source.push(invoked);
                 source.push_text("; ");
@@ -14990,7 +15139,11 @@ impl<'a> Parser<'a> {
                 source.push(self.prelude_op(PreludeOp::Unwrap, [cached.as_str().into()]));
                 source.push_text(" } else { ");
                 let sized = local(self, &size, size_ty);
-                let created = host(self, "iced::widget::canvas::Frame::new", vec![renderer, sized])?;
+                let created = host(
+                    self,
+                    "iced::widget::canvas::Frame::new",
+                    vec![renderer, sized],
+                )?;
                 let frame_ty = created.ty.clone();
                 source.push_text(format!("let {frame} = "));
                 source.push(created.rendered_source());
@@ -15007,7 +15160,11 @@ impl<'a> Parser<'a> {
             }
         };
         source.push_text(" }");
-        Ok(Some(self.operator_expr(source.surrounded("(", ")"), ty, call)))
+        Ok(Some(self.operator_expr(
+            source.surrounded("(", ")"),
+            ty,
+            call,
+        )))
     }
 
     /// `closure(&mut value)` of a closure the library runs where it is
@@ -15037,7 +15194,8 @@ impl<'a> Parser<'a> {
         call: Span,
     ) -> Result<ParsedExpr, Error> {
         if let Some(item) = items.first()
-            && let Some(value) = self.immediate_callback(&item.path(), None, &mut arguments, call)?
+            && let Some(value) =
+                self.immediate_callback(&item.path(), None, &mut arguments, call)?
         {
             return Ok(value);
         }
@@ -15067,13 +15225,15 @@ impl<'a> Parser<'a> {
                 }
                 ty => ty.name(&self.models).to_string(),
             };
-            let items = self.models.host_items(TAG_OF_LOGICAL).map(<[_]>::to_vec).ok_or_else(|| {
-                Error::InvalidHostOperation {
+            let items = self
+                .models
+                .host_items(TAG_OF_LOGICAL)
+                .map(<[_]>::to_vec)
+                .ok_or_else(|| Error::InvalidHostOperation {
                     item: TAG_OF.into(),
                     reason: "the facade lacks the logical tag".into(),
                     operation: call,
-                }
-            })?;
+                })?;
             let owner = self.models.item_owner(TAG_OF_LOGICAL).cloned();
             let literal = self.literal(format!("{logical:?}"), Ty::String, call);
             return self.call_host_function(&items, owner, vec![literal], call);
@@ -15104,9 +15264,16 @@ impl<'a> Parser<'a> {
             // An array where the host takes a slice, as iced's
             // `pick_list(.., options: impl Borrow<[T]>, ..)`: Rust's
             // unsized coercion, or the array's own `Borrow<[T]>`.
-            if let (Ty::Array { length: None, .. }, Ty::Array { element, length: Some(_) }) =
-                (self.inference.resolve(expected), self.inference.resolve(&argument.ty))
-            {
+            if let (
+                Ty::Array { length: None, .. },
+                Ty::Array {
+                    element,
+                    length: Some(_),
+                },
+            ) = (
+                self.inference.resolve(expected),
+                self.inference.resolve(&argument.ty),
+            ) {
                 argument.ty = Ty::Array {
                     element,
                     length: None,
@@ -15400,7 +15567,8 @@ impl<'a> Parser<'a> {
                 tokens.push(Token::Identifier(Box::new(segment.into())));
             }
         };
-        let name = |index: usize| Token::Identifier(Box::new(format!("__rawr_argument_{index}").into()));
+        let name =
+            |index: usize| Token::Identifier(Box::new(format!("__rawr_argument_{index}").into()));
         if arity == 0 {
             tokens.push(Token::Or);
         } else {
@@ -15726,11 +15894,9 @@ impl<'a> Parser<'a> {
                     text.push_str(name.as_str());
                     path.push((Token::Identifier(name), at));
                 }
-                _ => {
-                    return Err(self.unsupported(
-                        "`Subscription::run` takes the path of a Rust function that returns a sipper",
-                    ))
-                }
+                _ => return Err(self.unsupported(
+                    "`Subscription::run` takes the path of a Rust function that returns a sipper",
+                )),
             }
             match ahead.next() {
                 Some((Token::DoubleColon, at)) => {
@@ -15752,11 +15918,9 @@ impl<'a> Parser<'a> {
                     self.splice_tokens(tokens);
                     return Ok(());
                 }
-                _ => {
-                    return Err(self.unsupported(
-                        "`Subscription::run` takes the path of a Rust function that returns a sipper",
-                    ))
-                }
+                _ => return Err(self.unsupported(
+                    "`Subscription::run` takes the path of a Rust function that returns a sipper",
+                )),
             }
         }
     }
@@ -15811,7 +15975,8 @@ impl<'a> Parser<'a> {
         };
         let module = matches!(ahead.peek(), Some((Token::DoubleColon, _)));
         let items = match &binding.target {
-            item::Import::Item { definitions, .. } | item::Import::ModuleItem { definitions, .. }
+            item::Import::Item { definitions, .. }
+            | item::Import::ModuleItem { definitions, .. }
                 if !module =>
             {
                 definitions.to_vec()
@@ -15947,7 +16112,6 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-
         if matches!(
             item.kind(),
             crate::host::item::Kind::Operation | crate::host::item::Kind::StreamOperation
@@ -16015,7 +16179,6 @@ impl<'a> Parser<'a> {
         owner: crate::host::facade::Dependency,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-
         let (mut arguments, end) = self.parse_call_arguments("operation endpoint arguments")?;
         let call = span(name_span.start(), end);
         let [argument] = arguments.as_mut_slice() else {
@@ -16066,7 +16229,6 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-
         let Some(item) = items.first() else {
             return Err(Error::InvalidHostOperation {
                 item: "<host item>".into(),
@@ -16140,8 +16302,11 @@ impl<'a> Parser<'a> {
             _ => {
                 return Err(Error::InvalidHostOperation {
                     item: item.path().into(),
-                    reason: format!("write `{}![..]` with square brackets", item.path_ref().name())
-                        .into(),
+                    reason: format!(
+                        "write `{}![..]` with square brackets",
+                        item.path_ref().name()
+                    )
+                    .into(),
                     operation: span(name_span.start(), self.position()),
                 });
             }
@@ -16160,7 +16325,10 @@ impl<'a> Parser<'a> {
                 });
             }
         }
-        let end = self.expect(close, "the closing delimiter after intrinsic macro elements")?;
+        let end = self.expect(
+            close,
+            "the closing delimiter after intrinsic macro elements",
+        )?;
         let call = span(name_span.start(), end);
         // iced's `color!(0xrrggbb, a)` and `color!(r, g, b, a)`: the color
         // with its alpha set to `a`, any `f32` expression.
@@ -16337,7 +16505,11 @@ impl<'a> Parser<'a> {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            if methods.is_empty() { items.to_vec() } else { methods }
+            if methods.is_empty() {
+                items.to_vec()
+            } else {
+                methods
+            }
         });
         let Some(items) = items else {
             let error = Error::UnknownMember {
@@ -16418,7 +16590,8 @@ impl<'a> Parser<'a> {
                 .as_ref()
                 .is_some_and(|(arguments, _)| arguments.is_empty())
             && items.iter().any(|item| {
-                item.receiver() == Some(receiver::Mode::Shared) && item.signature().parameters().is_empty()
+                item.receiver() == Some(receiver::Mode::Shared)
+                    && item.signature().parameters().is_empty()
             });
         if read {
             self.pending_arguments = None;
@@ -16485,9 +16658,7 @@ impl<'a> Parser<'a> {
         member_span: Span,
     ) -> Result<(ImmutableString, String), Error> {
         use crate::host::EXPORTED_FIELD;
-        if !self.models.host.is_exported(&definition.path())
-            || member.starts_with(EXPORTED_FIELD)
-        {
+        if !self.models.host.is_exported(&definition.path()) || member.starts_with(EXPORTED_FIELD) {
             return Ok((member, path));
         }
         let field = format!("{}::{EXPORTED_FIELD}{member}", definition.path());
@@ -16518,7 +16689,9 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        if !(matches!(self.peek(), Token::DoubleColon) && matches!(self.peek_second(), Token::LessThan)) {
+        if !(matches!(self.peek(), Token::DoubleColon)
+            && matches!(self.peek_second(), Token::LessThan))
+        {
             return Err(Error::InvalidHostOperation {
                 item: format!("{TREE_STATE}::{member}").into(),
                 reason: "names its State's type, as `downcast_ref::<State>()`".into(),
@@ -16546,7 +16719,9 @@ impl<'a> Parser<'a> {
         };
         if member.as_str() == "downcast_ref" || receiver.lvalue.is_none() {
             if member.as_str() == "downcast_mut" {
-                return Err(self.unsupported("`downcast_mut` of a Tree's state that is not a place"));
+                return Err(
+                    self.unsupported("`downcast_mut` of a Tree's state that is not a place")
+                );
             }
             let mut value = read(self, receiver)?;
             value.span = span(at.start(), end);
@@ -16555,7 +16730,11 @@ impl<'a> Parser<'a> {
         let lvalue = receiver.lvalue.clone().expect("checked above");
         let place = self.temporary("place");
         let stored = self.temporary("stored");
-        let local = self.operator_expr(origin::Fragment::plain(place.clone()), receiver.ty.clone(), at);
+        let local = self.operator_expr(
+            origin::Fragment::plain(place.clone()),
+            receiver.ty.clone(),
+            at,
+        );
         let getter = read(self, local.clone())?;
         let operand = self.operator_expr(origin::Fragment::plain(stored.clone()), ty.clone(), at);
         self.pending_arguments = Some((vec![operand], end));
@@ -16620,7 +16799,11 @@ impl<'a> Parser<'a> {
         let stored = self.temporary("stored");
         let receiver_ty = receiver.ty.clone();
         let at = receiver.span;
-        let local = self.operator_expr(origin::Fragment::plain(place.clone()), receiver_ty.clone(), at);
+        let local = self.operator_expr(
+            origin::Fragment::plain(place.clone()),
+            receiver_ty.clone(),
+            at,
+        );
         // The place's local has no lvalue, so this reads the field.
         let getter = self.parse_host_method(local.clone(), field.clone(), member_span)?;
         let ty = self.inference.resolve(&getter.ty);
@@ -16682,7 +16865,11 @@ impl<'a> Parser<'a> {
         let stored = self.temporary("stored");
         let receiver_ty = receiver.ty.clone();
         let at = receiver.span;
-        let local = self.operator_expr(origin::Fragment::plain(place.clone()), receiver_ty.clone(), at);
+        let local = self.operator_expr(
+            origin::Fragment::plain(place.clone()),
+            receiver_ty.clone(),
+            at,
+        );
         let getter = self.parse_host_method(local, base, member_span)?;
         let ty = self.inference.resolve(&getter.ty);
         let owner = self.models.item_owner(path).cloned();
@@ -17014,7 +17201,10 @@ impl<'a> Parser<'a> {
         // implements: demand it through the first alias.
         if method
             && paths.iter().all(|path| {
-                self.models.host.entry(&format!("{path}::{member}")).is_none()
+                self.models
+                    .host
+                    .entry(&format!("{path}::{member}"))
+                    .is_none()
             })
         {
             let error = Error::UnknownMember {
@@ -17184,34 +17374,36 @@ impl<'a> Parser<'a> {
         if !matches!(binding.kind, BindingKind::Local) || !binding.available {
             return;
         }
-        let parts: Vec<(ImmutableString, Ty, &PatternSyntax)> = match (syntax, self.inference.resolve(&value.ty)) {
-            (PatternSyntax::Tuple { members, .. }, Ty::Tuple(types)) => members
-                .iter()
-                .zip(types.iter())
-                .enumerate()
-                .map(|(index, (member, ty))| (index.to_string().into(), ty.clone(), member))
-                .collect(),
-            (
-                PatternSyntax::TupleStruct {
-                    definition,
-                    fields,
-                    members,
-                    ..
-                },
-                _,
-            ) => {
-                let Nominal::Struct { item, .. } = self.models.definition(definition.id()) else {
-                    return;
-                };
-                item.fields
+        let parts: Vec<(ImmutableString, Ty, &PatternSyntax)> =
+            match (syntax, self.inference.resolve(&value.ty)) {
+                (PatternSyntax::Tuple { members, .. }, Ty::Tuple(types)) => members
                     .iter()
-                    .zip(fields.iter())
-                    .zip(members.iter())
-                    .map(|((field, ty), member)| (field.name.text.clone(), ty.clone(), member))
-                    .collect()
-            }
-            _ => return,
-        };
+                    .zip(types.iter())
+                    .enumerate()
+                    .map(|(index, (member, ty))| (index.to_string().into(), ty.clone(), member))
+                    .collect(),
+                (
+                    PatternSyntax::TupleStruct {
+                        definition,
+                        fields,
+                        members,
+                        ..
+                    },
+                    _,
+                ) => {
+                    let Nominal::Struct { item, .. } = self.models.definition(definition.id())
+                    else {
+                        return;
+                    };
+                    item.fields
+                        .iter()
+                        .zip(fields.iter())
+                        .zip(members.iter())
+                        .map(|((field, ty), member)| (field.name.text.clone(), ty.clone(), member))
+                        .collect()
+                }
+                _ => return,
+            };
         let moved: Vec<ImmutableString> = parts
             .into_iter()
             .filter(|(_, ty, member)| binds_by_value(member) && self.moves_by_value(ty))
@@ -17265,21 +17457,27 @@ impl<'a> Parser<'a> {
             let behind = if mutable { "mutable" } else { "shared" };
             return Err(self.move_out_error(
                 value,
-                &format!("of `{}.{}` which is behind a {behind} reference", field.binding, field.member),
+                &format!(
+                    "of `{}.{}` which is behind a {behind} reference",
+                    field.binding, field.member
+                ),
             ));
         }
         if !matches!(binding.kind, BindingKind::Local)
             || !matches!(self.inference.resolve(&binding.ty), Ty::Script(..))
             || !value.prelude.is_empty()
             || !self.moves_by_value(&value.ty)
-            || self.closures.last().is_some_and(|scope| {
-                scope.outer.get(field.binding.as_str()) == Some(&declaration)
-            })
+            || self
+                .closures
+                .last()
+                .is_some_and(|scope| scope.outer.get(field.binding.as_str()) == Some(&declaration))
         {
             return Ok(());
         }
         if let Some(binding) = self.bindings.get_mut(field.binding.as_str()) {
-            binding.moved_fields.insert(field.member.clone(), value.span);
+            binding
+                .moved_fields
+                .insert(field.member.clone(), value.span);
         }
         Ok(())
     }
@@ -17567,7 +17765,9 @@ impl<'a> Parser<'a> {
         // borrow keeps the map and the entry as they are meanwhile.
         if !mutable
             && annotation.is_none()
-            && let Some(tokens) = self.entry_alias_tokens().or_else(|| self.downcast_alias_tokens())
+            && let Some(tokens) = self
+                .entry_alias_tokens()
+                .or_else(|| self.downcast_alias_tokens())
         {
             self.entry_aliases.insert(name.clone(), (name_span, tokens));
         } else {
@@ -17897,7 +18097,9 @@ impl<'a> Parser<'a> {
                 && matches!(&pair[1].0, Token::Identifier(name) if name.as_str() == "entry")
         })?;
         // The last call of the chain is the entry's value.
-        let last = tokens.iter().rposition(|(token, _)| matches!(token, Token::Period))?;
+        let last = tokens
+            .iter()
+            .rposition(|(token, _)| matches!(token, Token::Period))?;
         let ends = matches!(
             tokens.get(last + 1),
             Some((Token::Identifier(name), _))
@@ -17927,7 +18129,9 @@ impl<'a> Parser<'a> {
             }
             tokens.push((token, position));
         }
-        let last = tokens.iter().rposition(|(token, _)| matches!(token, Token::Period))?;
+        let last = tokens
+            .iter()
+            .rposition(|(token, _)| matches!(token, Token::Period))?;
         matches!(
             tokens.get(last + 1),
             Some((Token::Identifier(name), _)) if name.as_str() == "downcast_mut"
@@ -18605,8 +18809,7 @@ impl<'a> Parser<'a> {
             // `let Point { x, .. } = point;` on a facade struct: each field
             // read and bound.
             PatternSyntax::Enum(pattern)
-                if pattern.host_struct
-                    && matches!(self.inference.resolve(ty), Ty::Host { .. }) =>
+                if pattern.host_struct && matches!(self.inference.resolve(ty), Ty::Host { .. }) =>
             {
                 let ty = self.inference.resolve(ty);
                 let mut out = HostPattern::default();
@@ -18738,8 +18941,9 @@ impl<'a> Parser<'a> {
         match self.last_expression {
             Some((tail, endpoint)) if tail >= start => {
                 let value = self.temporary("tail");
-                let mut source =
-                    origin::Fragment::plain(format!("{{ let {SELF_CAPTURE} = this; let {value} = "));
+                let mut source = origin::Fragment::plain(format!(
+                    "{{ let {SELF_CAPTURE} = this; let {value} = "
+                ));
                 source.push(statement);
                 source.push_text(format!("; this = {SELF_CAPTURE}; {value} }}"));
                 let tail = self.write_output(source, endpoint);
@@ -18952,9 +19156,7 @@ impl<'a> Parser<'a> {
         } else {
             hook.push(place.clone());
         }
-        hook.push_text(format!(
-            ", {scrutinee}, [{values}]); if {written}[0] {{ "
-        ));
+        hook.push_text(format!(", {scrutinee}, [{values}]); if {written}[0] {{ "));
         if optional {
             let inner = self.prelude_op(PreludeOp::Unwrap, [format!("{written}[1]").into()]);
             hook.push(place);
@@ -19192,7 +19394,7 @@ impl<'a> Parser<'a> {
                 rendered
             }
             Lvalue::Slice(_) => return Err(self.unsupported("assigning to a slice range")),
-            Lvalue::Nested(nested) => self.store_nested(&nested, replacement.rendered_source())
+            Lvalue::Nested(nested) => self.store_nested(&nested, replacement.rendered_source()),
         };
         Ok((rendered, replacement.span))
     }
@@ -19490,7 +19692,9 @@ impl<'a> Parser<'a> {
                 .models
                 .qualified_rust(Span::new(first_span.start(), last_end))
             {
-                let variant = segments.pop().expect("a qualified pattern keeps its variant");
+                let variant = segments
+                    .pop()
+                    .expect("a qualified pattern keeps its variant");
                 segments = spelled[..spelled.len() - 1]
                     .iter()
                     .map(|name| (name.clone(), first_span))
@@ -19821,7 +20025,11 @@ impl<'a> Parser<'a> {
         match syntax {
             // `ref mut x` binds `&mut` to the part, which the pattern's
             // place takes back after each statement that uses it.
-            PatternSyntax::Ref { name, span, mutable } => {
+            PatternSyntax::Ref {
+                name,
+                span,
+                mutable,
+            } => {
                 let expected = match expected {
                     Ty::Reference { .. } if !*mutable => expected,
                     Ty::Reference { target, .. } => Ty::Reference {
@@ -21329,9 +21537,8 @@ impl<'a> Parser<'a> {
             );
         }
         self.bind_host_pattern(&host);
-        let mut arm = origin::Fragment::plain(
-            self.push_root_pattern(resolved.proof, &resolved.bindings),
-        );
+        let mut arm =
+            origin::Fragment::plain(self.push_root_pattern(resolved.proof, &resolved.bindings));
         if let Some(condition) = host.condition() {
             arm.push_text(" if ");
             arm.push(condition);
@@ -21916,7 +22123,10 @@ impl<'a> Parser<'a> {
                 };
                 // `for x in v` takes `v`: a later use is rustc's E0382.
                 let mut lhs = lhs;
-                if matches!(self.inference.resolve(&lhs.ty), Ty::Array { .. } | Ty::Keyed(..)) {
+                if matches!(
+                    self.inference.resolve(&lhs.ty),
+                    Ty::Array { .. } | Ty::Keyed(..)
+                ) {
                     self.move_local(&mut lhs)?;
                 }
                 let mut source = origin::Fragment::plain(format!("for {name} in "));
@@ -22146,7 +22356,12 @@ impl<'a> Parser<'a> {
         if proof.definition.identity().imported().is_some()
             && let crate::host::type_def::Shape::Enum(variants) = proof.definition.shape()
         {
-            return Some(variants.iter().map(|variant| variant.name().into()).collect());
+            return Some(
+                variants
+                    .iter()
+                    .map(|variant| variant.name().into())
+                    .collect(),
+            );
         }
         let path = proof.definition.path();
         let own = crate::host::type_ref::Type::registered(path.as_str()).ok();
@@ -22230,7 +22445,12 @@ impl<'a> Parser<'a> {
         let checks = std::mem::take(&mut *self.host_checks.borrow_mut());
         let mut pattern = HostPattern::default();
         for (name, syntax, ty) in checks {
-            self.host_pattern(&syntax, origin::Fragment::plain(name.as_str()), &ty, &mut pattern)?;
+            self.host_pattern(
+                &syntax,
+                origin::Fragment::plain(name.as_str()),
+                &ty,
+                &mut pattern,
+            )?;
         }
         Ok(pattern)
     }
@@ -22515,13 +22735,20 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         if !pattern.host_struct
             && proof.definition.identity().imported().is_some()
-            && matches!(proof.definition.shape(), crate::host::type_def::Shape::Enum(_))
+            && matches!(
+                proof.definition.shape(),
+                crate::host::type_def::Shape::Enum(_)
+            )
         {
             return self.imported_variant_pattern(pattern, value, ty, out);
         }
         // A facade struct's fields, each read and matched on its type.
         if pattern.host_struct {
-            let names = pattern.named.as_ref().map(|(names, _)| names.as_ref()).unwrap_or_default();
+            let names = pattern
+                .named
+                .as_ref()
+                .map(|(names, _)| names.as_ref())
+                .unwrap_or_default();
             for ((field, field_span), member) in names.iter().zip(pattern.payload.iter()) {
                 let field_value = self.host_read(value.clone(), ty, field.clone(), *field_span)?;
                 self.host_pattern(member, field_value.rendered_source(), &field_value.ty, out)?;
@@ -22536,7 +22763,11 @@ impl<'a> Parser<'a> {
             reference: at,
         };
         let variant_path = format!("{owner_path}::{variant}");
-        let items = self.models.host_items(&variant_path).ok_or_else(unknown)?.to_vec();
+        let items = self
+            .models
+            .host_items(&variant_path)
+            .ok_or_else(unknown)?
+            .to_vec();
         let bool_ty = crate::host::type_ref::Type::builtin(crate::host::type_ref::Builtin::Bool);
         let reader = items.iter().find(|item| {
             item.kind() == crate::host::item::Kind::Method
@@ -23143,7 +23374,8 @@ impl<'a> Parser<'a> {
         let [consequent, alternative] = branches;
         let span = span(if_span.start(), alternative.syntax.end());
         let (hit, value) = (self.temporary("hit"), self.temporary("chain"));
-        let mut source = origin::Fragment::plain(format!("{{\nlet {hit} = false;\nlet {value} = ();\n"));
+        let mut source =
+            origin::Fragment::plain(format!("{{\nlet {hit} = false;\nlet {value} = ();\n"));
         source.push(open);
         source.push_text(format!("{hit} = true; {value} = "));
         source.push(consequent.value.rendered_block());
@@ -23279,8 +23511,8 @@ impl<'a> Parser<'a> {
                     Token::Let => self.parse_binding(true)?,
                     Token::Const => self.parse_binding(false)?,
                     Token::Fn => self.skip_nested_fn()?,
-                Token::Use => self.skip_nested_use()?,
-                _ if self.nested_item_ahead() => self.skip_nested_item()?,
+                    Token::Use => self.skip_nested_use()?,
+                    _ if self.nested_item_ahead() => self.skip_nested_item()?,
                     _ => self.parse_statement()?,
                 }
             }
@@ -24086,8 +24318,10 @@ impl<'a> Parser<'a> {
             // An `f32` once inference settles is rounded; an `f64` is not.
             Ty::Float(Float::Var(_)) => {
                 let helper = self.push_op(Op::Prelude(PreludeOp::RoundF32));
-                let placeholder =
-                    format!("__rawr_float_rounding_{:016}", self.pending_float_kinds.len());
+                let placeholder = format!(
+                    "__rawr_float_rounding_{:016}",
+                    self.pending_float_kinds.len()
+                );
                 debug_assert!(helper.len() <= placeholder.len());
                 self.pending_float_kinds.push(PendingFloat {
                     placeholder: placeholder.clone(),
@@ -24102,7 +24336,8 @@ impl<'a> Parser<'a> {
             // Its kind is known once inference settles (`finish_witnesses`).
             Ty::Int(Int::Var(_)) => {
                 let placeholder = format!("__rawr_int_kind_{:08}", self.pending_int_kinds.len());
-                self.pending_int_kinds.push((placeholder.clone(), value.ty.clone()));
+                self.pending_int_kinds
+                    .push((placeholder.clone(), value.ty.clone()));
                 placeholder
             }
             _ => return value,
@@ -24306,15 +24541,19 @@ impl<'a> Parser<'a> {
             if self.models.host_items(&path).is_some_and(|items| {
                 items.iter().any(|item| {
                     item.kind() == crate::host::item::Kind::Method
-                        && item.signature().parameters().first().is_some_and(|parameter| {
-                            matches!(
-                                parameter.shape(),
-                                crate::host::type_ref::Shape::Builtin(
-                                    crate::host::type_ref::Builtin::F64
-                                        | crate::host::type_ref::Builtin::F32
+                        && item
+                            .signature()
+                            .parameters()
+                            .first()
+                            .is_some_and(|parameter| {
+                                matches!(
+                                    parameter.shape(),
+                                    crate::host::type_ref::Shape::Builtin(
+                                        crate::host::type_ref::Builtin::F64
+                                            | crate::host::type_ref::Builtin::F32
+                                    )
                                 )
-                            )
-                        })
+                            })
                 })
             }) {
                 let ty = self.inference.resolve(&rhs.ty);
@@ -24393,7 +24632,9 @@ impl<'a> Parser<'a> {
                 }) =>
             {
                 let kinds = match ty {
-                    Ty::Int(Int::Var(_)) => Int::KINDS.iter().map(|(_, kind)| Ty::Int(*kind)).collect(),
+                    Ty::Int(Int::Var(_)) => {
+                        Int::KINDS.iter().map(|(_, kind)| Ty::Int(*kind)).collect()
+                    }
                     Ty::Float(Float::Var(_)) => vec![Ty::Float(Float::F64), Ty::Float(Float::F32)],
                     ty => vec![ty.clone()],
                 };
@@ -24435,7 +24676,8 @@ impl<'a> Parser<'a> {
             let owner_ty = impl_self_ty(&candidate, &probe);
             let checkpoint = self.inference.checkpoint();
             let mut fits = self.unify_type(&owner_ty, &lhs_ty);
-            if let (Some(parameter), Some(operand)) = (candidate.parameters().first(), &operand_ty) {
+            if let (Some(parameter), Some(operand)) = (candidate.parameters().first(), &operand_ty)
+            {
                 let parameter = instantiate(&Ty::from_resolved(&parameter.ty), &probe);
                 fits &= self.unify_type(&parameter, operand);
             }
@@ -24446,22 +24688,25 @@ impl<'a> Parser<'a> {
             }
         }
         let Some(definition) = chosen else {
-            let operation = match (symbol, &operand_ty) {
-                ("neg" | "!", _) => format!(
-                    "cannot apply unary operator `{}` to type `{}` (E0600)",
-                    if symbol == "!" { "!" } else { "-" },
-                    lhs_ty.name(&self.models)
-                ),
-                (_, Some(operand)) => format!(
+            let operation =
+                match (symbol, &operand_ty) {
+                    ("neg" | "!", _) => format!(
+                        "cannot apply unary operator `{}` to type `{}` (E0600)",
+                        if symbol == "!" { "!" } else { "-" },
+                        lhs_ty.name(&self.models)
+                    ),
+                    (_, Some(operand)) => {
+                        format!(
                     "binary operation `{symbol}` cannot be applied to type `{}` with `{}`: \
                      no `{trait_name}<{}>` impl ({})",
                     lhs_ty.name(&self.models),
                     operand.name(&self.models),
                     operand.name(&self.models),
                     if symbol.ends_with('=') { "E0368" } else { "E0369" }
-                ),
-                _ => unreachable!("binary operators have a right operand"),
-            };
+                )
+                    }
+                    _ => unreachable!("binary operators have a right operand"),
+                };
             return Err(Error::UnsupportedNominalSyntax {
                 construct: operation.into(),
                 source: expression,
@@ -24636,7 +24881,11 @@ impl<'a> Parser<'a> {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
             self.coerce_expr(&expected, index)?;
         }
-        let source = Self::std_call(&definition, value.rendered_source(), &[index.rendered_source()]);
+        let source = Self::std_call(
+            &definition,
+            value.rendered_source(),
+            &[index.rendered_source()],
+        );
         let ty = match instantiate(&Ty::from_resolved(definition.output()), &substitution) {
             Ty::Reference { target, .. } => *target,
             ty => ty,
@@ -24811,8 +25060,10 @@ impl<'a> Parser<'a> {
                         operation: expression,
                     });
                 }
-                let equal = self
-                    .prelude_op(PreludeOp::GenericEqual, [lhs.rendered_source(), rhs.rendered_source()]);
+                let equal = self.prelude_op(
+                    PreludeOp::GenericEqual,
+                    [lhs.rendered_source(), rhs.rendered_source()],
+                );
                 let source = if negate {
                     equal.surrounded("!(", ")")
                 } else {
@@ -24964,8 +25215,8 @@ impl<'a> Parser<'a> {
                         *next - 1
                     };
                     let resolve = |this: &mut Self,
-                                       arguments: &mut Vec<(Option<ImmutableString>, ParsedExpr)>,
-                                       reference: &FormatArgument|
+                                   arguments: &mut Vec<(Option<ImmutableString>, ParsedExpr)>,
+                                   reference: &FormatArgument|
                      -> Result<usize, Error> {
                         match reference {
                             FormatArgument::Index(index) => {
@@ -25022,13 +25273,15 @@ impl<'a> Parser<'a> {
                         }
                     };
                     let count = |this: &mut Self,
-                                     arguments: &mut Vec<(Option<ImmutableString>, ParsedExpr)>,
-                                     next: &mut usize,
-                                     count: &Option<FormatCountRef>|
+                                 arguments: &mut Vec<(Option<ImmutableString>, ParsedExpr)>,
+                                 next: &mut usize,
+                                 count: &Option<FormatCountRef>|
                      -> Result<Option<FormatCount>, Error> {
                         Ok(match count {
                             None => None,
-                            Some(FormatCountRef::Literal(value)) => Some(FormatCount::Literal(*value)),
+                            Some(FormatCountRef::Literal(value)) => {
+                                Some(FormatCount::Literal(*value))
+                            }
                             Some(FormatCountRef::Star) => {
                                 let index = take_positional(next);
                                 if index >= positional {
@@ -25043,7 +25296,8 @@ impl<'a> Parser<'a> {
                             }
                         })
                     };
-                    let precision = count(self, &mut arguments, &mut next_positional, &spec.precision)?;
+                    let precision =
+                        count(self, &mut arguments, &mut next_positional, &spec.precision)?;
                     let width = count(self, &mut arguments, &mut next_positional, &spec.width)?;
                     let index = match &spec.argument_of(&key) {
                         None => {
@@ -25073,11 +25327,7 @@ impl<'a> Parser<'a> {
                     pieces.push(Ok(std::mem::take(&mut text)));
                     pieces.push(Err((index, spec.resolved(width, precision))));
                 }
-                '}' => {
-                    return Err(invalid(
-                        "invalid format string: unmatched `}` found".into(),
-                    ))
-                }
+                '}' => return Err(invalid("invalid format string: unmatched `}` found".into())),
                 character => text.push(character),
             }
         }
@@ -25167,7 +25417,11 @@ impl<'a> Parser<'a> {
                 text.push_text(format!(" + {placeholder}"));
                 continue;
             }
-            let f32_mode = if matches!(ty, Ty::Float(Float::F32)) { 2 } else { 0 };
+            let f32_mode = if matches!(ty, Ty::Float(Float::F32)) {
+                2
+            } else {
+                0
+            };
             let value = match spec.kind {
                 FormatKind::Exp { upper } => {
                     if !number {
@@ -25194,7 +25448,11 @@ impl<'a> Parser<'a> {
                     };
                     self.prelude_op(
                         PreludeOp::FormatBits,
-                        [name, radix.to_string().into(), kind.bits().to_string().into()],
+                        [
+                            name,
+                            radix.to_string().into(),
+                            kind.bits().to_string().into(),
+                        ],
                     )
                 }
                 FormatKind::Debug | FormatKind::Display if float => {
@@ -25262,9 +25520,13 @@ impl<'a> Parser<'a> {
     /// `Ord` impl as Rawr compares builtins (`compare_value`).
     fn ordered(&self, ty: &Ty, partial: bool) -> bool {
         match self.inference.resolve(ty) {
-            Ty::Unit | Ty::Bool | Ty::Char | Ty::Int(_) | Ty::String | Ty::Ordering | Ty::Time(_) => {
-                true
-            }
+            Ty::Unit
+            | Ty::Bool
+            | Ty::Char
+            | Ty::Int(_)
+            | Ty::String
+            | Ty::Ordering
+            | Ty::Time(_) => true,
             Ty::Float(_) => partial,
             Ty::Reference { target, .. }
             | Ty::Boxed(_, target)
@@ -25400,9 +25662,11 @@ impl<'a> Parser<'a> {
                         return true;
                     }
                     let types: Vec<Ty> = match this.models.definition(id) {
-                        Nominal::Struct { item, .. } => {
-                            item.fields.iter().map(|field| Ty::from_resolved(&field.ty)).collect()
-                        }
+                        Nominal::Struct { item, .. } => item
+                            .fields
+                            .iter()
+                            .map(|field| Ty::from_resolved(&field.ty))
+                            .collect(),
                         Nominal::Enum { item, .. } => item
                             .variants
                             .iter()
@@ -25555,7 +25819,11 @@ impl<'a> Parser<'a> {
         let [path @ .., member] = &segments[..] else {
             return None;
         };
-        let path = path.iter().map(ImmutableString::as_str).collect::<Vec<_>>().join("::");
+        let path = path
+            .iter()
+            .map(ImmutableString::as_str)
+            .collect::<Vec<_>>()
+            .join("::");
         let time = match crate::resolve::std_time(&path)? {
             "Duration" => Time::Duration,
             _ => Time::Instant,
@@ -25631,7 +25899,11 @@ impl<'a> Parser<'a> {
         };
         let source = self.prelude_op(
             PreludeOp::Time,
-            [origin::Fragment::plain("()"), code.to_string().into(), operand],
+            [
+                origin::Fragment::plain("()"),
+                code.to_string().into(),
+                operand,
+            ],
         );
         Ok(self.operator_expr(source, output, span(path.start(), end)))
     }
@@ -25651,7 +25923,11 @@ impl<'a> Parser<'a> {
             (_, "clone") => {
                 let (_, end) = self.parse_call_arguments("`clone` arguments")?;
                 let source = value.rendered_source();
-                return Ok(self.operator_expr(source, Ty::Time(time), span(value.span.start(), end)));
+                return Ok(self.operator_expr(
+                    source,
+                    Ty::Time(time),
+                    span(value.span.start(), end),
+                ));
             }
             (Time::Duration, "as_secs") => (None, Ty::Int(Int::U64), "as_secs"),
             (Time::Duration, "as_millis" | "as_micros" | "as_nanos") => {
@@ -25757,7 +26033,11 @@ impl<'a> Parser<'a> {
         let expression = span(lhs.span.start(), rhs.span.end());
         let mut source = self.prelude_op(
             PreludeOp::Time,
-            [lhs.rendered_source(), time_code(code).to_string().into(), rhs.rendered_source()],
+            [
+                lhs.rendered_source(),
+                time_code(code).to_string().into(),
+                rhs.rendered_source(),
+            ],
         );
         if code == "compare" {
             source = source.surrounded("(", &format!(" {symbol} 0)"));
@@ -25912,8 +26192,9 @@ impl<'a> Parser<'a> {
         // Rust's sign and rounding methods, through the runtime's math.
         let unary = match (&number, member.as_str()) {
             (Ty::Int(kind), "abs") if kind.signed() => Some(("abs", number.clone())),
-            (Ty::Float(_), member) if let Some((_, function)) =
-                FLOAT_UNARY_METHODS.iter().find(|(name, _)| *name == member) =>
+            (Ty::Float(_), member)
+                if let Some((_, function)) =
+                    FLOAT_UNARY_METHODS.iter().find(|(name, _)| *name == member) =>
             {
                 let ty = if member.starts_with("is_") {
                     Ty::Bool
@@ -25959,7 +26240,9 @@ impl<'a> Parser<'a> {
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }
         if let Ty::Float(_) = number
-            && let Some((_, function)) = FLOAT_BINARY_METHODS.iter().find(|(name, _)| *name == member)
+            && let Some((_, function)) = FLOAT_BINARY_METHODS
+                .iter()
+                .find(|(name, _)| *name == member)
         {
             let (mut arguments, end) = self.parse_call_arguments("number method arguments")?;
             let [argument] = arguments.as_mut_slice() else {
@@ -26061,7 +26344,7 @@ impl<'a> Parser<'a> {
 
     /// `char`'s classification and case methods (`CHAR_METHODS`), through
     /// one native op; `to_digit` and `is_digit` take a radix.
-/// `RangeInclusive`'s `start()`, `end()`, `contains(&x)`, `is_empty()`
+    /// `RangeInclusive`'s `start()`, `end()`, `contains(&x)`, `is_empty()`
     /// and `clone()`; any other method is an iterator's, on the range's items.
     fn parse_range_method(
         &mut self,
@@ -26103,8 +26386,7 @@ impl<'a> Parser<'a> {
             return Err(Error::InvalidMethodCall {
                 owner: range.name(&self.models),
                 method: member,
-                reason: format!("expects {expected} argument(s), found {}", arguments.len())
-                    .into(),
+                reason: format!("expects {expected} argument(s), found {}", arguments.len()).into(),
                 call: span(value.span.start(), end),
             });
         }
@@ -26137,7 +26419,7 @@ impl<'a> Parser<'a> {
         Ok(self.operator_expr(source, ty, call))
     }
 
-        fn parse_char_method(
+    fn parse_char_method(
         &mut self,
         value: ParsedExpr,
         code: usize,
@@ -26223,7 +26505,13 @@ impl<'a> Parser<'a> {
     /// The error type of a `parse` into `target`, once `target` is known;
     /// at the end of the body (`last`), Rust's errors for an unknown or
     /// unparseable target.
-    fn settle_parse(&mut self, target: &Ty, error: &Ty, span: Span, last: bool) -> Result<(), Error> {
+    fn settle_parse(
+        &mut self,
+        target: &Ty,
+        error: &Ty,
+        span: Span,
+        last: bool,
+    ) -> Result<(), Error> {
         let resolved = self.inference.resolve(target);
         if let Some(kind) = ParseError::of(&resolved) {
             return self.require_type(&Ty::ParseError(kind), error, span);
@@ -26233,8 +26521,7 @@ impl<'a> Parser<'a> {
             Ty::Infer(_) => Err(Error::InvalidMethodCall {
                 owner: "str".into(),
                 method: "parse".into(),
-                reason: "type annotations needed: the target of `parse` is unknown (E0284)"
-                    .into(),
+                reason: "type annotations needed: the target of `parse` is unknown (E0284)".into(),
                 call: span,
             }),
             other => Err(Error::MissingCapability {
@@ -26327,7 +26614,9 @@ impl<'a> Parser<'a> {
             }
             ("to_lowercase", []) => (receiver.surrounded("", ".to_lower()"), Ty::String),
             ("to_owned", []) => (receiver, Ty::String),
-            (name, _) if let Some(code) = STR_METHODS.iter().position(|(method, ..)| *method == name) => {
+            (name, _)
+                if let Some(code) = STR_METHODS.iter().position(|(method, ..)| *method == name) =>
+            {
                 let (_, count, output) = STR_METHODS[code];
                 if arguments.len() != count {
                     return Err(Error::InvalidMethodCall {
@@ -26497,10 +26786,8 @@ impl<'a> Parser<'a> {
                 // in a local.
                 // `index_mut`'s `&mut place` is its value; writes reach the
                 // place where it is inlined (`indexed_place`).
-                let index_mut = matches!(
-                    &self.return_ty,
-                    Some(Ty::Reference { mutable: true, .. })
-                );
+                let index_mut =
+                    matches!(&self.return_ty, Some(Ty::Reference { mutable: true, .. }));
                 if !index_mut && self.mutable_borrow != Some(self.expression_stack.len()) {
                     return Err(self.unsupported(
                         "`&mut` borrow expressions other than a function's `&mut` argument",
@@ -26914,8 +27201,7 @@ impl<'a> Parser<'a> {
                     return Err(Error::InvalidMethodCall {
                         owner: "Formatter".into(),
                         method: member,
-                        reason: format!("expects 1 argument(s), found {}", arguments.len())
-                            .into(),
+                        reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
                         call: span(value.span.start(), end),
                     });
                 };
@@ -27273,8 +27559,7 @@ impl<'a> Parser<'a> {
                     return Err(Error::InvalidMethodCall {
                         owner: number.name(&self.models),
                         method: member,
-                        reason: format!("expects 1 argument(s), found {}", arguments.len())
-                            .into(),
+                        reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
                         call,
                     });
                 };
@@ -28295,7 +28580,6 @@ impl<'a> Parser<'a> {
             return Ok(value);
         }
 
-
         if matches!(self.peek(), Token::Bang)
             && name.as_str() == "format"
             && self.models.import(&name).is_none()
@@ -28435,7 +28719,9 @@ impl<'a> Parser<'a> {
                 self.next();
             }
             let mut end = name_span.end();
-            if matches!(self.peek(), Token::DoubleColon) && matches!(self.peek_second(), Token::LessThan) {
+            if matches!(self.peek(), Token::DoubleColon)
+                && matches!(self.peek_second(), Token::LessThan)
+            {
                 self.next();
                 self.parse_phantom_type()?;
                 end = self.position();
@@ -28532,7 +28818,11 @@ impl<'a> Parser<'a> {
                     inputs: Box::new([input]),
                     output: Box::new(output),
                 };
-                return Ok(self.operator_expr(source, ty, span(name_span.start(), member_span.end())));
+                return Ok(self.operator_expr(
+                    source,
+                    ty,
+                    span(name_span.start(), member_span.end()),
+                ));
             }
             let (arguments, end) =
                 self.parse_call_arguments(&format!("`{}` arguments", pointer.name()))?;
@@ -28637,7 +28927,10 @@ impl<'a> Parser<'a> {
             "unreachable" => Some("internal error: entered unreachable code"),
             _ => None,
         };
-        let message = match (self.panic_format(split_arguments(tokens), name_span, end)?, prefix) {
+        let message = match (
+            self.panic_format(split_arguments(tokens), name_span, end)?,
+            prefix,
+        ) {
             (Some(message), None) => message,
             (Some(message), Some(prefix)) => {
                 let mut text = origin::Fragment::plain(format!("{:?} + (", format!("{prefix}: ")));
@@ -28707,28 +29000,51 @@ impl<'a> Parser<'a> {
         let at = name_span.start();
         let left_name = self.temporary("left");
         let right_name = self.temporary("right");
-        let ident = |name: &str, position: Position| {
-            (Token::Identifier(Box::new(name.into())), position)
-        };
-        let mut spliced = vec![(Token::LeftBrace, at), (Token::Let, at), ident(&left_name, at)];
-        spliced.extend([(Token::Equals, at), (Token::Ampersand, at), (Token::LeftParen, at)]);
+        let ident =
+            |name: &str, position: Position| (Token::Identifier(Box::new(name.into())), position);
+        let mut spliced = vec![
+            (Token::LeftBrace, at),
+            (Token::Let, at),
+            ident(&left_name, at),
+        ];
+        spliced.extend([
+            (Token::Equals, at),
+            (Token::Ampersand, at),
+            (Token::LeftParen, at),
+        ]);
         let left_end = left.last().map_or(at, |(_, position)| *position);
         spliced.extend(left);
         spliced.extend([(Token::RightParen, left_end), (Token::SemiColon, left_end)]);
-        spliced.extend([(Token::Let, at), ident(&right_name, at), (Token::Equals, at)]);
+        spliced.extend([
+            (Token::Let, at),
+            ident(&right_name, at),
+            (Token::Equals, at),
+        ]);
         spliced.extend([(Token::Ampersand, at), (Token::LeftParen, at)]);
         let right_end = right.last().map_or(at, |(_, position)| *position);
         spliced.extend(right);
-        spliced.extend([(Token::RightParen, right_end), (Token::SemiColon, right_end)]);
+        spliced.extend([
+            (Token::RightParen, right_end),
+            (Token::SemiColon, right_end),
+        ]);
         spliced.extend([(Token::If, at), (Token::Bang, at), (Token::LeftParen, at)]);
         spliced.extend([(Token::Multiply, at), ident(&left_name, at), (operator, at)]);
-        spliced.extend([(Token::Multiply, at), ident(&right_name, at), (Token::RightParen, at)]);
-        spliced.extend([(Token::LeftBrace, at), ident("panic", at), (Token::Bang, at)]);
+        spliced.extend([
+            (Token::Multiply, at),
+            ident(&right_name, at),
+            (Token::RightParen, at),
+        ]);
+        spliced.extend([
+            (Token::LeftBrace, at),
+            ident("panic", at),
+            (Token::Bang, at),
+        ]);
         spliced.push((Token::LeftParen, at));
         let custom = !rest.iter().all(Vec::is_empty);
         let colon = if custom { ": {}" } else { "" };
-        let template =
-            format!("assertion `left {symbol} right` failed{colon}\n  left: {{:?}}\n right: {{:?}}");
+        let template = format!(
+            "assertion `left {symbol} right` failed{colon}\n  left: {{:?}}\n right: {{:?}}"
+        );
         spliced.push((Token::StringConstant(Box::new(template.into())), at));
         if custom {
             spliced.extend([(Token::Comma, at), ident("format", at), (Token::Bang, at)]);
@@ -28741,7 +29057,11 @@ impl<'a> Parser<'a> {
             }
             spliced.push((Token::RightParen, end));
         }
-        spliced.extend([(Token::Comma, at), ident(&left_name, at), (Token::Comma, at)]);
+        spliced.extend([
+            (Token::Comma, at),
+            ident(&left_name, at),
+            (Token::Comma, at),
+        ]);
         spliced.extend([ident(&right_name, at), (Token::RightParen, at)]);
         spliced.extend([(Token::RightBrace, end), (Token::RightBrace, end)]);
         self.splice_tokens(spliced);
@@ -28776,7 +29096,8 @@ impl<'a> Parser<'a> {
                 })
                 && !this.bindings.contains_key(name)
         };
-        let mem = |token: &Token| matches!(token, Token::Identifier(name) if name.as_str() == "mem");
+        let mem =
+            |token: &Token| matches!(token, Token::Identifier(name) if name.as_str() == "mem");
         let (function, skip) = match name {
             "std" | "core"
                 if tokens[0] == Token::DoubleColon
@@ -28887,7 +29208,10 @@ impl<'a> Parser<'a> {
             let (_, position) = self.next();
             (origin::Fragment::plain("\"\""), position)
         } else {
-            self.expect(Token::LeftParen, "'(' and a format string after the macro name")?;
+            self.expect(
+                Token::LeftParen,
+                "'(' and a format string after the macro name",
+            )?;
             let text = self.parse_format(name_span, true)?;
             let end = text.span.end();
             (text.rendered_source(), end)
@@ -29188,7 +29512,12 @@ impl<'a> Parser<'a> {
             self.next();
             self.next();
             let at = name_span.start();
-            let argument = || (Token::Identifier(Box::new("__rawr_method_value".into())), at);
+            let argument = || {
+                (
+                    Token::Identifier(Box::new("__rawr_method_value".into())),
+                    at,
+                )
+            };
             self.splice_tokens(vec![
                 argument(),
                 (Token::Pipe, at),
@@ -29428,12 +29757,7 @@ impl<'a> Parser<'a> {
             && self.closures.is_empty()
         {
             let at = name_span.start();
-            self.splice_tokens(
-                tokens
-                    .into_iter()
-                    .map(|(token, _)| (token, at))
-                    .collect(),
-            );
+            self.splice_tokens(tokens.into_iter().map(|(token, _)| (token, at)).collect());
             let mut value = self.parse_operand()?;
             value.span = span(name_span.start(), name_span.end());
             return Ok(value);
@@ -29754,7 +30078,8 @@ impl<'a> Parser<'a> {
         let closure = &self.lifted[index];
         // Its captures are read where the closure is written.
         if !closure.captures.is_empty()
-            && !(value.span.start() <= closure.span.start() && closure.span.end() <= value.span.end())
+            && !(value.span.start() <= closure.span.start()
+                && closure.span.end() <= value.span.end())
         {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: "a closure that captures, passed to the host from a variable; write it where the host takes it".into(),
@@ -29815,18 +30140,20 @@ impl<'a> Parser<'a> {
             // a `Sender<P>` whose `P` the body settles.
             let hints = hints
                 .into_iter()
-                .map(|hint: Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>| {
-                    hint.and_then(|(inputs, output)| {
-                        let mut fresh = BTreeMap::new();
-                        let inputs = inputs.and_then(|inputs| {
-                            inputs
-                                .iter()
-                                .map(|input| self.open_host_hint(input, &mut fresh))
-                                .collect::<Option<Box<[Ty]>>>()
-                        });
-                        (inputs.is_some() || output.is_some()).then_some((inputs, output))
-                    })
-                })
+                .map(
+                    |hint: Option<(Option<Box<[Ty]>>, Option<(Rc<HostTyProof>, usize)>)>| {
+                        hint.and_then(|(inputs, output)| {
+                            let mut fresh = BTreeMap::new();
+                            let inputs = inputs.and_then(|inputs| {
+                                inputs
+                                    .iter()
+                                    .map(|input| self.open_host_hint(input, &mut fresh))
+                                    .collect::<Option<Box<[Ty]>>>()
+                            });
+                            (inputs.is_some() || output.is_some()).then_some((inputs, output))
+                        })
+                    },
+                )
                 .collect();
             overloads.push(hints);
         }
@@ -29848,7 +30175,8 @@ impl<'a> Parser<'a> {
             .collect();
         // A closure the library runs where it is written takes its value as
         // `&mut`, as iced's `Path::new(|b: &mut Builder| ..)` does.
-        let immediate = matches!(items, [item] if IMMEDIATE_CALLBACKS.contains(&item.path().as_str()));
+        let immediate =
+            matches!(items, [item] if IMMEDIATE_CALLBACKS.contains(&item.path().as_str()));
         self.closure_hints = hints
             .into_iter()
             .map(|hint| {
@@ -29943,7 +30271,9 @@ impl<'a> Parser<'a> {
             .instantiate_host_signature(item, receiver, None)
             .ok()
             .and_then(|signature| {
-                let Ty::Callable { .. } = self.inference.resolve(signature.inputs.get(arguments.len())?)
+                let Ty::Callable { .. } = self
+                    .inference
+                    .resolve(signature.inputs.get(arguments.len())?)
                 else {
                     return None;
                 };
@@ -30568,7 +30898,8 @@ impl<'a> Parser<'a> {
             (Some(count), _) => {
                 let value = elements.pop().expect("a repeat array has its value");
                 let items = self.temporary("repeat");
-                let mut source = origin::Fragment::plain(format!("{{ let {items} = []; {items}.pad("));
+                let mut source =
+                    origin::Fragment::plain(format!("{{ let {items} = []; {items}.pad("));
                 source.push_text(format!("{count}, "));
                 source.push(value.rendered_source());
                 source.push_text(format!("); {items} }}"));
@@ -30805,7 +31136,10 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let owner = Ty::Option(Box::new(element.clone()));
         let keeps_place = matches!(member.as_str(), "unwrap" | "expect")
-            && matches!(self.inference.resolve(&element), Ty::Reference { mutable: true, .. });
+            && matches!(
+                self.inference.resolve(&element),
+                Ty::Reference { mutable: true, .. }
+            );
         let reference = Ty::Reference {
             mutable: false,
             target: Box::new(element.clone()),
@@ -31189,7 +31523,11 @@ impl<'a> Parser<'a> {
         };
         source.push_text(" }");
         // `v.get_mut(i).unwrap()` is the element's place.
-        let place = if keeps_place { value.lvalue.clone() } else { None };
+        let place = if keeps_place {
+            value.lvalue.clone()
+        } else {
+            None
+        };
         // A block is not an `if` condition in the legacy parser.
         let mut parsed = self.operator_expr(source.surrounded("(", ")"), ty, expression);
         if place.is_some() {
@@ -31620,7 +31958,11 @@ impl<'a> Parser<'a> {
             Ty::Option(_) => self.prelude_op(PreludeOp::None, []),
             Ty::Time(Time::Duration) => self.prelude_op(
                 PreludeOp::Time,
-                ["()".into(), time_code("ZERO").to_string().into(), "()".into()],
+                [
+                    "()".into(),
+                    time_code("ZERO").to_string().into(),
+                    "()".into(),
+                ],
             ),
             Ty::Boxed(_, target) => self.default_source(target, span)?,
             Ty::Reverse(inner) => {
@@ -32150,8 +32492,10 @@ impl<'a> Parser<'a> {
             };
             let output = self.inference.fresh();
             let (item, items) = (self.temporary("map"), self.temporary("map"));
-            let call = self.callable_call(callable, &[element], &output, vec![item.as_str().into()])?;
-            let mut source = origin::Fragment::plain(format!("{{ let {items} = []; for {item} in "));
+            let call =
+                self.callable_call(callable, &[element], &output, vec![item.as_str().into()])?;
+            let mut source =
+                origin::Fragment::plain(format!("{{ let {items} = []; for {item} in "));
             source.push(value.rendered_source().surrounded("(", ")"));
             source.push_text(format!(" {{ {items}.push("));
             source.push(call);
@@ -32160,7 +32504,11 @@ impl<'a> Parser<'a> {
                 element: Box::new(output),
                 length: Some(length),
             };
-            return Ok(self.operator_expr(source.surrounded("(", ")"), ty, span(value.span.start(), end)));
+            return Ok(self.operator_expr(
+                source.surrounded("(", ")"),
+                ty,
+                span(value.span.start(), end),
+            ));
         }
         // A closure argument takes the parameter types Rust infers for it.
         let reference = Ty::Reference {
@@ -33305,8 +33653,10 @@ impl<'a> Parser<'a> {
                 Ty::Host { proof, .. } if proof.definition.path().starts_with("rawr_iced::tokio::")
             );
             if tokio
-                && let Some(items) =
-                    self.models.host_items("rawr_iced::tokio::__drop").map(<[_]>::to_vec)
+                && let Some(items) = self
+                    .models
+                    .host_items("rawr_iced::tokio::__drop")
+                    .map(<[_]>::to_vec)
             {
                 self.move_local(argument)?;
                 let owner = self.models.item_owner("rawr_iced::tokio::__drop").cloned();
@@ -33434,7 +33784,8 @@ impl<'a> Parser<'a> {
             }
             output
         } else {
-            self.native_output(&name, arguments.len()).unwrap_or(Ty::Unknown)
+            self.native_output(&name, arguments.len())
+                .unwrap_or(Ty::Unknown)
         };
         let source = origin::Fragment::call(
             name.as_str(),
@@ -33849,7 +34200,8 @@ impl<'a> Parser<'a> {
                 let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                     return Err(Error::InvalidConstruction {
                         owner: definition.path().into(),
-                        reason: "this struct needs every field, or `..base` from a value of it".into(),
+                        reason: "this struct needs every field, or `..base` from a value of it"
+                            .into(),
                         construction: name_span,
                     });
                 };
@@ -34167,15 +34519,17 @@ impl<'a> Parser<'a> {
             if self.closure_hint.is_none()
                 && let Some((items, receiver)) = &deferred
             {
-                self.closure_hint = self.overload_closure_hint(items, receiver.as_ref(), &arguments);
+                self.closure_hint =
+                    self.overload_closure_hint(items, receiver.as_ref(), &arguments);
             }
             self.closure_output = outputs.next().flatten();
             let expected = expected.next().flatten();
             // A closure where a crate function takes `impl Fn(f32) -> C`
             // has those parameter types, as in Rust.
             if self.closure_hint.is_none()
-                && let Some(Ty::Fn { inputs, .. }) =
-                    expected.as_ref().map(|expected| self.inference.resolve(expected))
+                && let Some(Ty::Fn { inputs, .. }) = expected
+                    .as_ref()
+                    .map(|expected| self.inference.resolve(expected))
                 && !inputs.iter().any(contains_inference)
             {
                 self.closure_hint = Some(inputs);
@@ -34404,11 +34758,15 @@ impl<'a> Parser<'a> {
     /// `Type::member(..)` for a builtin type: `String::new()`, the
     /// prelude's and the crate's `From` conversions (`String::from(x)`,
     /// `i64::from(true)`), and crate trait functions without `self`.
-/// `concat!`, `env!`, `include_str!`, `include_bytes!` and `stringify!`,
+    /// `concat!`, `env!`, `include_str!`, `include_bytes!` and `stringify!`,
     /// which rustc expands while it compiles: their text (or bytes) as a
     /// literal. `env!("CARGO_MANIFEST_DIR")` is the project's directory and
     /// `include_str!`'s path is relative to the file that names it.
-    fn parse_compile_time_macro(&mut self, name: &str, name_span: Span) -> Result<ParsedExpr, Error> {
+    fn parse_compile_time_macro(
+        &mut self,
+        name: &str,
+        name_span: Span,
+    ) -> Result<ParsedExpr, Error> {
         let (text, end) = self.compile_time_text(name, name_span)?;
         let at = span(name_span.start(), end);
         if name == "include_bytes" {
@@ -34422,7 +34780,11 @@ impl<'a> Parser<'a> {
     fn byte_literal(&self, bytes: &[u8], at: Span) -> ParsedExpr {
         let source = format!(
             "[{}]",
-            bytes.iter().map(u8::to_string).collect::<Vec<_>>().join(", ")
+            bytes
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         let ty = Ty::Reference {
             mutable: false,
@@ -34436,7 +34798,11 @@ impl<'a> Parser<'a> {
 
     /// The text of the compile-time macro `name`, after its `!`, and where
     /// it ends.
-    fn compile_time_text(&mut self, name: &str, name_span: Span) -> Result<(String, Position), Error> {
+    fn compile_time_text(
+        &mut self,
+        name: &str,
+        name_span: Span,
+    ) -> Result<(String, Position), Error> {
         let open = match self.next() {
             (Token::LeftParen | Token::LeftBracket | Token::LeftBrace, position) => position,
             (_, position) => {
@@ -34531,10 +34897,15 @@ impl<'a> Parser<'a> {
                     None => {
                         return Err(Error::InvalidHostOperation {
                             item: "env!".into(),
-                            reason: arguments.get(1).cloned().unwrap_or_else(|| {
-                                format!("environment variable `{variable}` not defined at compile time")
-                            })
-                            .into(),
+                            reason: arguments
+                                .get(1)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    format!(
+                                    "environment variable `{variable}` not defined at compile time"
+                                )
+                                })
+                                .into(),
                             operation: at,
                         })
                     }
@@ -34573,7 +34944,10 @@ impl<'a> Parser<'a> {
             (Token::False, _) if !negative => "false".into(),
             (Token::Identifier(name), name_position)
                 if !negative
-                    && matches!(name.as_str(), "concat" | "env" | "include_str" | "stringify")
+                    && matches!(
+                        name.as_str(),
+                        "concat" | "env" | "include_str" | "stringify"
+                    )
                     && matches!(self.peek(), Token::Bang) =>
             {
                 self.next();
@@ -34609,13 +34983,13 @@ impl<'a> Parser<'a> {
                 let manifest = file
                     .ancestors()
                     .skip(1)
-                    .find(|directory| {
-                        directory.join("Cargo.toml").is_file()
-                    })
+                    .find(|directory| directory.join("Cargo.toml").is_file())
                     .or_else(|| {
                         file.ancestors()
                             .skip(1)
-                            .find(|directory| directory.file_name().is_some_and(|name| name == "src"))
+                            .find(|directory| {
+                                directory.file_name().is_some_and(|name| name == "src")
+                            })
                             .and_then(std::path::Path::parent)
                     })
                     .or_else(|| file.parent())?;
@@ -34647,14 +35021,17 @@ impl<'a> Parser<'a> {
                     "`{path}` is read relative to a file on disk; this code is not in one"
                 )));
             };
-            let target = file
-                .parent()
-                .map_or_else(|| std::path::PathBuf::from(path), |directory| directory.join(path));
+            let target = file.parent().map_or_else(
+                || std::path::PathBuf::from(path),
+                |directory| directory.join(path),
+            );
             std::fs::read(&target)
                 .map_err(|failure| error(format!("cannot read `{}`: {failure}", target.display())))
         }
         #[cfg(feature = "no_std")]
-        Err(error(format!("`{path}` cannot be read without a file system")))
+        Err(error(format!(
+            "`{path}` cannot be read without a file system"
+        )))
     }
 
     fn float_constant(&mut self, value: f64, single: bool, at: Span) -> ParsedExpr {
@@ -34662,7 +35039,7 @@ impl<'a> Parser<'a> {
         self.literal(format!("{value:?}"), ty, at)
     }
 
-        fn parse_builtin_path(
+    fn parse_builtin_path(
         &mut self,
         builtin: Ty,
         name: ImmutableString,
@@ -34682,7 +35059,10 @@ impl<'a> Parser<'a> {
                     reference: constant_span,
                 });
             };
-            let at = span(name_span.start(), text_end(constant_span.start(), &constant));
+            let at = span(
+                name_span.start(),
+                text_end(constant_span.start(), &constant),
+            );
             return Ok(self.float_constant(value, single, at));
         }
         // `u8::MAX`, `i64::MIN`, `f64::MAX`: the kind's bounds (`u64::MAX`
@@ -34709,7 +35089,12 @@ impl<'a> Parser<'a> {
                         _ if matches!(member, "to_string" | "clone") => format!("&{name}"),
                         _ => name.to_string(),
                     };
-                    return self.function_value_closure(member, 1, Some(Some(annotation)), name_span);
+                    return self.function_value_closure(
+                        member,
+                        1,
+                        Some(Some(annotation)),
+                        name_span,
+                    );
                 }
                 _ => {
                     return Err(Error::UnknownMember {
@@ -34769,7 +35154,10 @@ impl<'a> Parser<'a> {
         // `f64::sqrt(x)`, `f32::rem_euclid(x, y)`: the number's method on
         // the first argument, as Rust's path call is.
         if matches!(builtin, Ty::Int(_) | Ty::Float(_))
-            && !matches!(member.as_str(), "from" | "try_from" | "default" | "from_str_radix")
+            && !matches!(
+                member.as_str(),
+                "from" | "try_from" | "default" | "from_str_radix"
+            )
             && !arguments.is_empty()
         {
             let mut receiver = arguments.remove(0);
@@ -34806,7 +35194,12 @@ impl<'a> Parser<'a> {
                 .to_string();
             let source = self.prelude_op(
                 PreludeOp::StrPieces,
-                [bytes.rendered_source(), code.into(), "()".into(), "()".into()],
+                [
+                    bytes.rendered_source(),
+                    code.into(),
+                    "()".into(),
+                    "()".into(),
+                ],
             );
             let ty = Ty::Result(
                 Box::new(Ty::String),
@@ -34964,11 +35357,9 @@ impl<'a> Parser<'a> {
                 .collect::<Vec<_>>()
                 .join("::");
             let full = match self.models.import(&segments[0].0) {
-                Some(binding) if segments.len() > 1 => format!(
-                    "{}{}",
-                    binding.qualified,
-                    &written[segments[0].0.len()..]
-                ),
+                Some(binding) if segments.len() > 1 => {
+                    format!("{}{}", binding.qualified, &written[segments[0].0.len()..])
+                }
                 _ => written,
             };
             // `tokio::join!(..)`, `try_join!` and `select!` without tokio.
@@ -35009,8 +35400,7 @@ impl<'a> Parser<'a> {
             }
             // `tokio::time::sleep(d)` without tokio: the facade's own
             // (`resolve::std_reexport`).
-            if full.starts_with("tokio::")
-                && matches!(self.peek(), Token::LeftParen | Token::Unit)
+            if full.starts_with("tokio::") && matches!(self.peek(), Token::LeftParen | Token::Unit)
             {
                 let reexported = crate::resolve::std_reexport(&full, &self.models.host);
                 if let Some(items) = (reexported != full)
@@ -35055,11 +35445,9 @@ impl<'a> Parser<'a> {
                         })
                     }
                 };
-                let values = origin::Fragment::join(
-                    arguments.iter().map(ParsedExpr::rendered_source),
-                    ", ",
-                )
-                .surrounded("[", "]");
+                let values =
+                    origin::Fragment::join(arguments.iter().map(ParsedExpr::rendered_source), ", ")
+                        .surrounded("[", "]");
                 let values = self.operator_expr(
                     values,
                     Ty::Array {
@@ -35169,11 +35557,7 @@ impl<'a> Parser<'a> {
             && matches!(self.peek(), Token::LeftParen)
         {
             let full = match self.models.import(&segments[0].0) {
-                Some(binding) => format!(
-                    "{}{}",
-                    binding.qualified,
-                    &owner[segments[0].0.len()..]
-                ),
+                Some(binding) => format!("{}{}", binding.qualified, &owner[segments[0].0.len()..]),
                 None => owner.to_string(),
             };
             if let Some(definition) = self.models.host.type_(&full).cloned()
@@ -35538,7 +35922,8 @@ impl<'a> Parser<'a> {
                 });
             };
             let source = self.inference.resolve(&argument.ty);
-            let Some((definition, from, owner)) = self.select_conversion(target, None, &source, call)
+            let Some((definition, from, owner)) =
+                self.select_conversion(target, None, &source, call)
             else {
                 return Err(Error::MissingCapability {
                     owner: model.name().into(),
@@ -35617,7 +36002,9 @@ impl<'a> Parser<'a> {
                 (Vec::new(), text_end(member_span.start(), &member))
             } else if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
                 let expression = span(owner_span.start(), member_span.end());
-                if definition.generics().is_empty() && method_copied(&definition, &self.models).is_empty() {
+                if definition.generics().is_empty()
+                    && method_copied(&definition, &self.models).is_empty()
+                {
                     return self.associated_value(&definition, expression);
                 }
                 return self.symbolic_associated(&definition, expression);
@@ -35639,7 +36026,8 @@ impl<'a> Parser<'a> {
                 &substitution,
                 span(owner_span.start(), end),
             );
-            let places = self.mutable_arguments(&arguments, method_copied(&definition, &self.models))?;
+            let places =
+                self.mutable_arguments(&arguments, method_copied(&definition, &self.models))?;
             let source = origin::Fragment::call(
                 method_name(definition.id()),
                 arguments
@@ -36833,17 +37221,18 @@ impl<'a> Parser<'a> {
         if self.unify_type(expected, actual) {
             return Ok(());
         }
-        let (expected, actual) = (self.inference.resolve(expected), self.inference.resolve(actual));
+        let (expected, actual) = (
+            self.inference.resolve(expected),
+            self.inference.resolve(actual),
+        );
         let mut found = actual.name(&self.models).to_string();
         // Arrays of two lengths: rustc's label for them.
         if let (
             Ty::Array {
-                length: Some(want),
-                ..
+                length: Some(want), ..
             },
             Ty::Array {
-                length: Some(have),
-                ..
+                length: Some(have), ..
             },
         ) = (&expected, &actual)
             && want != have
@@ -36892,7 +37281,9 @@ impl<'a> Parser<'a> {
         // `&F` where `F: Fn` is itself `Fn`: a borrowed closure passed as a
         // function, as `.map(self.on_change.as_ref())`.
         if matches!(target, Ty::Fn { .. })
-            && let Ty::Reference { target: function, .. } = &source
+            && let Ty::Reference {
+                target: function, ..
+            } = &source
             && matches!(
                 self.inference.resolve(function),
                 Ty::Fn { .. } | Ty::FnItem { .. }
@@ -36909,10 +37300,8 @@ impl<'a> Parser<'a> {
             && let Some((conversion, ..)) =
                 self.select_conversion(id, Some(&target), &source, value.span)
         {
-            value.source = origin::Fragment::call(
-                method_name(conversion.id()),
-                [value.rendered_source()],
-            );
+            value.source =
+                origin::Fragment::call(method_name(conversion.id()), [value.rendered_source()]);
             value.prelude = origin::Fragment::default();
             value.ty = target.clone();
             value.lvalue = None;
@@ -37009,7 +37398,9 @@ impl<'a> Parser<'a> {
                     target: from,
                 },
             ) if !*to_mutable || *from_mutable => Some((to, from)),
-            (Ty::Boxed(to_pointer, to), Ty::Boxed(from_pointer, from)) if to_pointer == from_pointer => {
+            (Ty::Boxed(to_pointer, to), Ty::Boxed(from_pointer, from))
+                if to_pointer == from_pointer =>
+            {
                 Some((to, from))
             }
             _ => None,
@@ -37250,7 +37641,13 @@ impl<'a> Parser<'a> {
             Ty::Array { element, .. } | Ty::Iter(element) => self.inference.resolve(element),
             _ => return Ok(false),
         };
-        let fixed = matches!(source, Ty::Array { length: Some(_), .. });
+        let fixed = matches!(
+            source,
+            Ty::Array {
+                length: Some(_),
+                ..
+            }
+        );
         let iterator = matches!(source, Ty::Iter(_));
         // iced's `keyed_column(pairs)`: an iterator of `(key, Element)`
         // pairs, a facade slice of tuples that hold a widget.
@@ -37311,8 +37708,11 @@ impl<'a> Parser<'a> {
             return Ok(true);
         }
         let item = self.temporary("child");
-        let mut element =
-            self.operator_expr(origin::Fragment::plain(item.clone()), source_element, value.span);
+        let mut element = self.operator_expr(
+            origin::Fragment::plain(item.clone()),
+            source_element,
+            value.span,
+        );
         self.coerce_expr(&target_element, &mut element)?;
         if iterator {
             self.collect_children(value);
@@ -37589,7 +37989,11 @@ impl<'a> Parser<'a> {
     fn no_widget_conversion(&self, source: &Ty, target: &Ty, method: &str, call: Span) -> Error {
         let (source, target) = (source.name(&self.models), target.name(&self.models));
         Error::InvalidMethodCall {
-            owner: if method == "from" { target.clone() } else { source.clone() },
+            owner: if method == "from" {
+                target.clone()
+            } else {
+                source.clone()
+            },
             method: method.into(),
             reason: format!(
                 "`{source}` has no `From` conversion into `{target}`. iced master has no `From` \
@@ -37704,12 +38108,17 @@ impl<'a> Parser<'a> {
                         }
                     }))
                     .collect();
-                let output = self
-                    .inference
-                    .resolve(&instantiate(&Ty::from_resolved(method.output()), &substitution));
+                let output = self.inference.resolve(&instantiate(
+                    &Ty::from_resolved(method.output()),
+                    &substitution,
+                ));
                 arguments.push(self.symbolic_expr(item, inputs, output, call, Vec::new()));
             }
-            for (name, (bounds, _)) in declared.associated.iter().zip(declared.associated_bounds.iter()) {
+            for (name, (bounds, _)) in declared
+                .associated
+                .iter()
+                .zip(declared.associated_bounds.iter())
+            {
                 if !bounds.contains(capability::Kind::Default) {
                     continue;
                 }
@@ -37724,7 +38133,9 @@ impl<'a> Parser<'a> {
             // A projection that takes one more argument is told which
             // methods the impl writes itself, so it runs the trait's
             // default natively for the rest (bit `n` for function `n`).
-            let takes = items.first().map_or(0, |item| item.signature().parameters().len());
+            let takes = items
+                .first()
+                .map_or(0, |item| item.signature().parameters().len());
             if takes == arguments.len() + 2 {
                 let written = declared
                     .functions
@@ -37809,7 +38220,11 @@ impl<'a> Parser<'a> {
     /// The facade trait script types may implement whose projection is
     /// `target`, when the script type `id` implements it: its name and its
     /// projection's `new`.
-    fn implemented_trait(&self, id: type_def::Id, target: &str) -> Option<(ImmutableString, String)> {
+    fn implemented_trait(
+        &self,
+        id: type_def::Id,
+        target: &str,
+    ) -> Option<(ImmutableString, String)> {
         self.models.host.trait_types().find_map(|(definition, _)| {
             if !matches!(definition.shape(), crate::host::type_def::Shape::Trait(_)) {
                 return None;
@@ -38322,7 +38737,10 @@ impl<'a> Parser<'a> {
                     .zip(actual_arguments.iter())
                     .all(|(expected, actual)| self.unify_type(expected, actual))
             }
-            (Ty::Boxed(expected_pointer, expected_element), Ty::Boxed(actual_pointer, actual_element)) => {
+            (
+                Ty::Boxed(expected_pointer, expected_element),
+                Ty::Boxed(actual_pointer, actual_element),
+            ) => {
                 expected_pointer == actual_pointer
                     && self.unify_type(expected_element, actual_element)
             }
@@ -38927,10 +39345,17 @@ impl<'a> Parser<'a> {
         }
         // The instance's types in the item's declared parameter order.
         let mut types = self.imported_entries(requirements.len())?;
-        let declared = item.signature().declared_type_parameters().collect::<Vec<_>>();
+        let declared = item
+            .signature()
+            .declared_type_parameters()
+            .collect::<Vec<_>>();
         let ordered = declared
             .iter()
-            .filter_map(|name| requirements.iter().find(|(candidate, _, _)| candidate == name))
+            .filter_map(|name| {
+                requirements
+                    .iter()
+                    .find(|(candidate, _, _)| candidate == name)
+            })
             .collect::<Vec<_>>();
         let ordered = if ordered.len() == requirements.len() {
             ordered
@@ -39353,7 +39778,9 @@ enum FormatKind {
     /// `x?`, `X?`: `Debug` with hexadecimal integers.
     HexDebug(i8),
     /// `e`, `E`.
-    Exp { upper: bool },
+    Exp {
+        upper: bool,
+    },
 }
 
 /// std::fmt's `format_spec`, before its arguments are resolved:
@@ -39872,12 +40299,12 @@ fn debug_typed(value: &Dynamic, ty: &type_ref::Type, models: &Models) -> String 
                 .or_else(|| ty.array_element().map(|(element, _)| element)) =>
         {
             format!(
-            "[{}]",
-            values
-                .iter()
-                .map(|value| debug_typed(value, element, models))
-                .collect::<Vec<_>>()
-                .join(", ")
+                "[{}]",
+                values
+                    .iter()
+                    .map(|value| debug_typed(value, element, models))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         }
         _ if let Some(element) = ty.option_element()
@@ -40104,10 +40531,12 @@ fn value_matches(lhs: &Dynamic, rhs: &Dynamic, same: bool) -> bool {
                     .zip(rhs.iter())
                     .all(|(lhs, rhs)| value_matches(lhs, rhs, same))
         }
-        (Union::Variant(..), Union::Variant(..)) => match crate::host::value::host_equal(lhs, rhs) {
-            Some(equal) => equal,
-            None => same && lhs.type_id() == rhs.type_id(),
-        },
+        (Union::Variant(..), Union::Variant(..)) => {
+            match crate::host::value::host_equal(lhs, rhs) {
+                Some(equal) => equal,
+                None => same && lhs.type_id() == rhs.type_id(),
+            }
+        }
         #[cfg(not(feature = "no_closure"))]
         (Union::Shared(..), _) | (_, Union::Shared(..)) if same => {
             value_matches(&lhs.flatten_clone(), &rhs.flatten_clone(), same)
@@ -40196,7 +40625,9 @@ fn relocate_expr(expr: &mut ast::Expr, locate: &mut dyn FnMut(Position) -> Posit
         expr.set_position(position);
     }
     match expr {
-        ast::Expr::FnCall(call, ..) | ast::Expr::MethodCall(call, ..) => relocate_call(call, locate),
+        ast::Expr::FnCall(call, ..) | ast::Expr::MethodCall(call, ..) => {
+            relocate_call(call, locate)
+        }
         ast::Expr::Array(values, ..) | ast::Expr::InterpolatedString(values, ..) => {
             for value in values {
                 relocate_expr(value, locate);
@@ -40575,19 +41006,43 @@ impl ParseError {
     const fn texts(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Self::Int => &[
-                ("cannot parse integer from empty string", "ParseIntError { kind: Empty }"),
-                ("invalid digit found in string", "ParseIntError { kind: InvalidDigit }"),
-                ("number too large to fit in target type", "ParseIntError { kind: PosOverflow }"),
-                ("number too small to fit in target type", "ParseIntError { kind: NegOverflow }"),
+                (
+                    "cannot parse integer from empty string",
+                    "ParseIntError { kind: Empty }",
+                ),
+                (
+                    "invalid digit found in string",
+                    "ParseIntError { kind: InvalidDigit }",
+                ),
+                (
+                    "number too large to fit in target type",
+                    "ParseIntError { kind: PosOverflow }",
+                ),
+                (
+                    "number too small to fit in target type",
+                    "ParseIntError { kind: NegOverflow }",
+                ),
             ],
             Self::Float => &[
-                ("cannot parse float from empty string", "ParseFloatError { kind: Empty }"),
+                (
+                    "cannot parse float from empty string",
+                    "ParseFloatError { kind: Empty }",
+                ),
                 ("invalid float literal", "ParseFloatError { kind: Invalid }"),
             ],
-            Self::Bool => &[("provided string was not `true` or `false`", "ParseBoolError")],
+            Self::Bool => &[(
+                "provided string was not `true` or `false`",
+                "ParseBoolError",
+            )],
             Self::Char => &[
-                ("cannot parse char from empty string", "ParseCharError { kind: EmptyString }"),
-                ("too many characters in string", "ParseCharError { kind: TooManyChars }"),
+                (
+                    "cannot parse char from empty string",
+                    "ParseCharError { kind: EmptyString }",
+                ),
+                (
+                    "too many characters in string",
+                    "ParseCharError { kind: TooManyChars }",
+                ),
             ],
             Self::Infallible | Self::Utf8 => &[],
         }
@@ -40608,12 +41063,17 @@ fn parse_text(text: &str, code: INT) -> Dynamic {
     }
     let int = |value: i128| Dynamic::from(value as INT);
     match code {
-        10 => result(text.parse::<f32>(), |value| Dynamic::from(crate::FLOAT::from(value))),
+        10 => result(text.parse::<f32>(), |value| {
+            Dynamic::from(crate::FLOAT::from(value))
+        }),
         11 => result(text.parse::<crate::FLOAT>(), Dynamic::from),
         12 => result(text.parse::<char>(), Dynamic::from),
         15 => result(text.parse::<bool>(), Dynamic::from),
         16 => crate::result::ok(ImmutableString::from(text).into()),
-        code => match Int::KINDS.get(code as usize).map_or("i64", |(name, _)| *name) {
+        code => match Int::KINDS
+            .get(code as usize)
+            .map_or("i64", |(name, _)| *name)
+        {
             "i8" => result(text.parse::<i8>(), |value| int(value.into())),
             "i16" => result(text.parse::<i16>(), |value| int(value.into())),
             "i32" => result(text.parse::<i32>(), |value| int(value.into())),
@@ -40836,8 +41296,10 @@ fn time_method(args: &mut FnCallArgs) -> RawrResult {
     let instant = |value: &Dynamic| value.read_lock::<Instant>().map(|value| *value);
     let unsigned = |value: &Dynamic| u64::try_from(value.as_int().unwrap_or(0)).unwrap_or(0);
     let number = |value: &Dynamic| value.as_float().unwrap_or(0.0);
-    let int = |value: u128| Dynamic::from_int(crate::INT::try_from(value).unwrap_or(crate::INT::MAX));
-    let optional = |value: Option<Dynamic>| value.map_or_else(crate::option::none, crate::option::some);
+    let int =
+        |value: u128| Dynamic::from_int(crate::INT::try_from(value).unwrap_or(crate::INT::MAX));
+    let optional =
+        |value: Option<Dynamic>| value.map_or_else(crate::option::none, crate::option::some);
     let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
     let name = TIME_METHODS.get(code).copied().unwrap_or("");
     let (value, operand) = (&*args[0], &*args[2]);
@@ -40859,8 +41321,14 @@ fn time_method(args: &mut FnCallArgs) -> RawrResult {
         "ZERO" => Dynamic::from(Duration::ZERO),
         "MAX" => Dynamic::from(Duration::MAX),
         "now" => Dynamic::from(Instant::now()),
-        "elapsed" | "duration_since" | "saturating_duration_since" | "checked_duration_since"
-        | "instant_checked_add" | "instant_checked_sub" | "instant_add" | "instant_sub"
+        "elapsed"
+        | "duration_since"
+        | "saturating_duration_since"
+        | "checked_duration_since"
+        | "instant_checked_add"
+        | "instant_checked_sub"
+        | "instant_add"
+        | "instant_sub"
         | "instant_since" => {
             let Some(at) = instant(value) else {
                 return Err(invariant("an `Instant` is not Rust's at runtime"));
@@ -40903,7 +41371,12 @@ fn time_method(args: &mut FnCallArgs) -> RawrResult {
             }
         }
         "compare" => {
-            let ordering = match (duration(value), duration(operand), instant(value), instant(operand)) {
+            let ordering = match (
+                duration(value),
+                duration(operand),
+                instant(value),
+                instant(operand),
+            ) {
                 (Some(lhs), Some(rhs), ..) => lhs.cmp(&rhs),
                 (.., Some(lhs), Some(rhs)) => lhs.cmp(&rhs),
                 _ => return Err(invariant("a `std::time` value is not Rust's at runtime")),
@@ -40914,7 +41387,9 @@ fn time_method(args: &mut FnCallArgs) -> RawrResult {
             let Some(span) = duration(value) else {
                 return Err(invariant("a `Duration` is not Rust's at runtime"));
             };
-            let other = || duration(operand).ok_or_else(|| invariant("a `Duration` is not Rust's at runtime"));
+            let other = || {
+                duration(operand).ok_or_else(|| invariant("a `Duration` is not Rust's at runtime"))
+            };
             match name {
                 "as_secs" => int(u128::from(span.as_secs())),
                 "as_millis" => int(span.as_millis()),
@@ -40949,7 +41424,9 @@ fn time_method(args: &mut FnCallArgs) -> RawrResult {
                     None => return fail("overflow when multiplying duration by scalar"),
                 },
                 "div" => match u32::try_from(operand.as_int().unwrap_or(-1)).ok() {
-                    Some(0) | None => return fail("divide by zero error when dividing duration by scalar"),
+                    Some(0) | None => {
+                        return fail("divide by zero error when dividing duration by scalar")
+                    }
                     Some(divisor) => Dynamic::from(span / divisor),
                 },
                 _ => return Err(invariant("an unknown `std::time` method")),
@@ -41120,7 +41597,10 @@ fn str_change(args: &mut FnCallArgs) -> RawrResult {
                 ));
             }
             if !text.is_char_boundary(at) {
-                let start = (0..at).rev().find(|index| text.is_char_boundary(*index)).unwrap_or(0);
+                let start = (0..at)
+                    .rev()
+                    .find(|index| text.is_char_boundary(*index))
+                    .unwrap_or(0);
                 let inside = text[start..].chars().next().unwrap_or_default();
                 let end = start + inside.len_utf8();
                 return fail(format!(
@@ -41194,12 +41674,13 @@ fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
     let text = args[0].clone_cast::<ImmutableString>();
     let string = |piece: &str| Dynamic::from(ImmutableString::from(piece));
     let pieces: crate::Array = match name {
-        "bytes" => text.bytes().map(|byte| Dynamic::from(crate::INT::from(byte))).collect(),
+        "bytes" => text
+            .bytes()
+            .map(|byte| Dynamic::from(crate::INT::from(byte)))
+            .collect(),
         "char_indices" => text
             .char_indices()
-            .map(|(index, c)| {
-                Dynamic::from_array(vec![(index as crate::INT).into(), c.into()])
-            })
+            .map(|(index, c)| Dynamic::from_array(vec![(index as crate::INT).into(), c.into()]))
             .collect(),
         "splitn" => {
             let count = usize::try_from(args[2].as_int().unwrap_or_default()).unwrap_or(0);
@@ -41276,12 +41757,14 @@ fn str_method(
             } else {
                 text.rsplit_once(separator.as_str())
             };
-            option(split.map(|(left, right)| Dynamic::from_array(vec![string(left), string(right)])))
+            option(
+                split.map(|(left, right)| Dynamic::from_array(vec![string(left), string(right)])),
+            )
         }
         "eq_ignore_ascii_case" => text.eq_ignore_ascii_case(&pattern(a)).into(),
-        "is_char_boundary" => {
-            text.is_char_boundary(usize::try_from(a.as_int().unwrap_or(0)).unwrap_or(0)).into()
-        }
+        "is_char_boundary" => text
+            .is_char_boundary(usize::try_from(a.as_int().unwrap_or(0)).unwrap_or(0))
+            .into(),
         _ => Dynamic::UNIT,
     })
 }
@@ -41724,24 +42207,27 @@ enum PendingFloatKind {
 /// names, `_`, `mut`, `ref`, `&` and tuples of them. A crate's struct
 /// pattern counts, though it always matches.
 fn refutable_tokens(tokens: &[(Token, Position)]) -> bool {
-    tokens.iter().enumerate().any(|(index, (token, _))| match token {
-        Token::Identifier(name) => {
-            name.starts_with(|first: char| first.is_uppercase())
-                || matches!(
-                    tokens.get(index + 1),
-                    Some((Token::LeftParen | Token::LeftBrace | Token::DoubleColon, _))
-                )
-        }
-        Token::Underscore
-        | Token::Mut
-        | Token::LeftParen
-        | Token::RightParen
-        | Token::Comma
-        | Token::Ampersand
-        | Token::Unit => false,
-        Token::Reserved(word) => word.as_str() != "ref",
-        _ => true,
-    })
+    tokens
+        .iter()
+        .enumerate()
+        .any(|(index, (token, _))| match token {
+            Token::Identifier(name) => {
+                name.starts_with(|first: char| first.is_uppercase())
+                    || matches!(
+                        tokens.get(index + 1),
+                        Some((Token::LeftParen | Token::LeftBrace | Token::DoubleColon, _))
+                    )
+            }
+            Token::Underscore
+            | Token::Mut
+            | Token::LeftParen
+            | Token::RightParen
+            | Token::Comma
+            | Token::Ampersand
+            | Token::Unit => false,
+            Token::Reserved(word) => word.as_str() != "ref",
+            _ => true,
+        })
 }
 
 /// Whether `pattern` binds some part of its value by value: a name, not a
@@ -41755,7 +42241,12 @@ fn binds_by_value(pattern: &PatternSyntax) -> bool {
         }
         PatternSyntax::Or { alternatives, .. } => alternatives.iter().any(binds_by_value),
         PatternSyntax::Prelude { payload, .. } => payload.as_deref().is_some_and(binds_by_value),
-        PatternSyntax::Slice { before, rest, after, .. } => {
+        PatternSyntax::Slice {
+            before,
+            rest,
+            after,
+            ..
+        } => {
             before.iter().chain(after.iter()).any(binds_by_value)
                 || rest.as_deref().is_some_and(binds_by_value)
         }
@@ -41873,7 +42364,7 @@ fn token_text(tokens: &[(Token, Position)]) -> String {
                 | Token::Unit
         ) || matches!(token, Token::Reserved(word) if word.as_str() == "?")
             || matches!(token, Token::LeftParen | Token::LeftBracket | Token::Bang)
-            && operand_before
+                && operand_before
             || matches!(token, Token::LeftParen | Token::LeftBracket)
                 && matches!(previous, Some(Token::Bang));
         let tight_after_previous = unary
@@ -42353,8 +42844,9 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
 "#
             );
             let program = imported_program(&engine, &source);
-            symbolic_imported(&engine, &program)
-                .unwrap_or_else(|failure| panic!("imported payload pattern: {}", failure.into_error()));
+            symbolic_imported(&engine, &program).unwrap_or_else(|failure| {
+                panic!("imported payload pattern: {}", failure.into_error())
+            });
         }
     }
 
@@ -42469,8 +42961,14 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
             let Some(host::Entry::Type(definition)) = engine.host_registry.entry(path) else {
                 panic!("{path} is an imported type");
             };
-            for capability in [crate::capability::Kind::Send, crate::capability::Kind::Static] {
-                assert!(definition.capabilities().contains(capability), "{path} {capability:?}");
+            for capability in [
+                crate::capability::Kind::Send,
+                crate::capability::Kind::Static,
+            ] {
+                assert!(
+                    definition.capabilities().contains(capability),
+                    "{path} {capability:?}"
+                );
             }
         }
     }
@@ -43234,7 +43732,11 @@ pub fn run() -> i64 {
             .imported_type(
                 "CopyPair",
                 copy_identity,
-                &[crate::capability::Kind::Copy, crate::capability::Kind::Debug, crate::capability::Kind::Clone],
+                &[
+                    crate::capability::Kind::Copy,
+                    crate::capability::Kind::Debug,
+                    crate::capability::Kind::Clone,
+                ],
                 Box::default(),
                 Box::default(),
                 host::type_def::Shape::Struct {

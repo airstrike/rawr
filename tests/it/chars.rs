@@ -16,7 +16,12 @@ fn test_chars() {
     #[cfg(not(feature = "no_index"))]
     assert_eq!(engine.eval::<char>(r#"let x = "hello"; x.chars().nth(2).unwrap()"#).unwrap(), 'l');
     #[cfg(not(feature = "no_index"))]
-    assert_eq!(engine.eval::<String>(r#"let mut y: Vec<char> = "hello".chars().collect(); y[2] = '$'; y.iter().collect::<String>()"#).unwrap(), "he$lo");
+    assert_eq!(
+        engine
+            .eval::<String>(r#"let mut y: Vec<char> = "hello".chars().collect(); y[2] = '$'; y.iter().collect::<String>()"#)
+            .unwrap(),
+        "he$lo"
+    );
 
     let _ = engine.eval::<char>(r"'\uhello'").unwrap_err();
     let _ = engine.eval::<char>("''").unwrap_err();

@@ -95,7 +95,10 @@ mod tests {
     fn iced_features_name_the_widgets_they_enable() {
         assert_eq!(Feature::of_iced("canvas"), Some(Feature::Canvas));
         assert_eq!(Feature::of_iced("image"), Some(Feature::Image));
-        assert_eq!(Feature::of_iced("image-without-codecs"), Some(Feature::Image));
+        assert_eq!(
+            Feature::of_iced("image-without-codecs"),
+            Some(Feature::Image)
+        );
         assert_eq!(Feature::of_iced("qr_code"), Some(Feature::QrCode));
         assert_eq!(Feature::of_iced("wgpu"), None);
         assert_eq!(Feature::of_iced("advanced"), None);

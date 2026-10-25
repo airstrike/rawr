@@ -1451,10 +1451,7 @@ mod tests {
         let mut tree = Tree::new(&element);
         element.diff(&mut tree);
         assert!(tree.children.is_empty());
-        assert_eq!(
-            element.size(),
-            Size::new(Length::Shrink, Length::Shrink)
-        );
+        assert_eq!(element.size(), Size::new(Length::Shrink, Length::Shrink));
 
         let limits = layout::Limits::new(Size::ZERO, Size::new(100.0, 100.0));
         element.layout(&mut tree, &renderer, &limits);
@@ -1503,8 +1500,13 @@ mod tests {
         );
 
         let mut operation = Probe::default();
-        element
-            .operate(&mut tree, node.layout(), &viewport, &renderer, &mut operation);
+        element.operate(
+            &mut tree,
+            node.layout(),
+            &viewport,
+            &renderer,
+            &mut operation,
+        );
         assert_eq!(operation.calls, 0);
         assert!(element
             .overlay(
@@ -2267,8 +2269,7 @@ mod tests {
                 renderer,
             );
             let mut operation = Probe::default();
-            element
-                .operate(tree, node.layout(), &viewport, renderer, &mut operation);
+            element.operate(tree, node.layout(), &viewport, renderer, &mut operation);
             let overlay = element
                 .overlay(
                     tree,

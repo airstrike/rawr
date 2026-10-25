@@ -30,7 +30,11 @@ fn render(name: &str, output: &str, args: &[&str]) -> Rendered {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     let written = stdout.split(" (").next().unwrap().trim();
     Rendered {
         bytes: std::fs::read(written).unwrap(),
@@ -67,7 +71,10 @@ fn motion_an_easing_plays_once_and_holds_its_last_frame() {
     let gif = decode(&rendered.bytes);
     assert!(!gif.looping, "a settled animation plays once");
     assert!(gif.delays.len() > 10, "{} frames", gif.delays.len());
-    assert!(*gif.delays.last().unwrap() >= Duration::from_secs(3), "the last frame holds");
+    assert!(
+        *gif.delays.last().unwrap() >= Duration::from_secs(3),
+        "the last frame holds"
+    );
     // One second of easing at 20 frames a second, then the hold.
     let total: Duration = gif.delays.iter().sum();
     assert_eq!(total, Duration::from_millis(4000), "{:?}", gif.delays);
@@ -104,9 +111,16 @@ fn motion_a_stopwatch_plays_once_with_a_note() {
     assert!(*gif.delays.last().unwrap() >= Duration::from_secs(3));
     // 100 frames 50 ms apart, the last one held.
     let total: Duration = gif.delays.iter().sum();
-    assert_eq!(total, Duration::from_millis(4950 + 3000), "{:?}", gif.delays);
+    assert_eq!(
+        total,
+        Duration::from_millis(4950 + 3000),
+        "{:?}",
+        gif.delays
+    );
     assert!(
-        rendered.stdout.contains("note: Animation shown for the first 5 s."),
+        rendered
+            .stdout
+            .contains("note: Animation shown for the first 5 s."),
         "{}",
         rendered.stdout
     );
@@ -116,14 +130,23 @@ fn motion_a_stopwatch_plays_once_with_a_note() {
 fn motion_a_counter_stays_a_png_until_its_messages_change_it() {
     let still = render("counter", "counter.png", &[]);
     assert!(is_png(&still.bytes), "{}", still.stdout);
-    let increments = ["--message", "Message::Increment", "--message", "Message::Increment"];
+    let increments = [
+        "--message",
+        "Message::Increment",
+        "--message",
+        "Message::Increment",
+    ];
     let stepped = render("counter", "counter_steps.png", &increments);
     let gif = decode(&stepped.bytes);
     assert!(!gif.looping);
     // The boot, then each message's view, a second each, and the hold.
     assert_eq!(
         gif.delays,
-        [Duration::from_secs(1), Duration::from_secs(1), Duration::from_secs(3)]
+        [
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(3)
+        ]
     );
     let mut args = increments.to_vec();
     args.push("--still");
@@ -134,7 +157,11 @@ fn motion_a_counter_stays_a_png_until_its_messages_change_it() {
 fn motion_the_playgrounds_animated_iced_examples_are_gifs() {
     // iced's arc and sandpiles move on their own; its stopwatch moves once
     // the playground's `Message::Toggle` starts it.
-    for (name, args) in [("arc", &[][..]), ("sandpiles", &[]), ("stopwatch", &["--message", "Message::Toggle"])] {
+    for (name, args) in [
+        ("arc", &[][..]),
+        ("sandpiles", &[]),
+        ("stopwatch", &["--message", "Message::Toggle"]),
+    ] {
         let rendered = render(name, &format!("example_{name}.png"), args);
         let gif = decode(&rendered.bytes);
         assert!(gif.delays.len() > 10, "{name}: {} frames", gif.delays.len());
@@ -157,7 +184,10 @@ fn pictures(name: &str, bytes: &[u8]) -> Vec<Vec<u8>> {
             if pixel[3] == 0 {
                 continue;
             }
-            let (x, y) = (left + at % usize::from(frame.width), top + at / usize::from(frame.width));
+            let (x, y) = (
+                left + at % usize::from(frame.width),
+                top + at / usize::from(frame.width),
+            );
             let to = (y * width + x) * 4;
             canvas[to..to + 4].copy_from_slice(pixel);
         }
@@ -170,21 +200,33 @@ fn pictures(name: &str, bytes: &[u8]) -> Vec<Vec<u8>> {
         let mut encoder = png::Encoder::new(file, width as u32, height as u32);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
-        encoder.write_header().unwrap().write_image_data(picture).unwrap();
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(picture)
+            .unwrap();
     }
     pictures
 }
 
 /// How many pixels of `picture` are `color`.
 fn count(picture: &[u8], color: &[u8]) -> usize {
-    picture.chunks_exact(4).filter(|pixel| *pixel == color).count()
+    picture
+        .chunks_exact(4)
+        .filter(|pixel| *pixel == color)
+        .count()
 }
 
 #[test]
 fn motion_a_counters_buttons_stay_enabled_in_every_frame() {
     // The frame where the view first changes is drawn again at the GIF's
     // scale. Drawn from a fresh interface, its buttons showed disabled.
-    let increments = ["--message", "Message::Increment", "--message", "Message::Increment"];
+    let increments = [
+        "--message",
+        "Message::Increment",
+        "--message",
+        "Message::Increment",
+    ];
     let rendered = render("counter", "counter_enabled.png", &increments);
     let pictures = pictures("counter", &rendered.bytes);
     assert_eq!(pictures.len(), 3);
@@ -192,7 +234,10 @@ fn motion_a_counters_buttons_stay_enabled_in_every_frame() {
     // the background in its corner.
     let first = &pictures[0];
     let background = &first[..4];
-    let mut colors: Vec<&[u8]> = first.chunks_exact(4).filter(|pixel| *pixel != background).collect();
+    let mut colors: Vec<&[u8]> = first
+        .chunks_exact(4)
+        .filter(|pixel| *pixel != background)
+        .collect();
     colors.sort_unstable();
     let fill = colors
         .chunk_by(|a, b| a == b)
@@ -203,17 +248,28 @@ fn motion_a_counters_buttons_stay_enabled_in_every_frame() {
         // Drawn at another scale, the edges differ a little; disabled
         // buttons lose the fill entirely.
         let shown = count(picture, fill);
-        assert!(shown * 10 >= enabled * 9, "frame {at} shows its buttons disabled: {shown} of {enabled}");
+        assert!(
+            shown * 10 >= enabled * 9,
+            "frame {at} shows its buttons disabled: {shown} of {enabled}"
+        );
     }
 }
 
 #[test]
 fn motion_a_theme_change_changes_the_colors() {
-    let rendered = render("styling", "styling_theme.png", &["--message", "Message::ThemeChanged(Theme::Dracula)"]);
+    let rendered = render(
+        "styling",
+        "styling_theme.png",
+        &["--message", "Message::ThemeChanged(Theme::Dracula)"],
+    );
     let pictures = pictures("styling", &rendered.bytes);
     let corner = |picture: &[u8]| picture[..4].to_vec();
     let (first, last) = (pictures.first().unwrap(), pictures.last().unwrap());
-    assert_ne!(corner(first), corner(last), "the background follows the theme");
+    assert_ne!(
+        corner(first),
+        corner(last),
+        "the background follows the theme"
+    );
     // Dracula's background.
     assert_eq!(corner(last), [0x28, 0x2a, 0x36, 0xff]);
 }

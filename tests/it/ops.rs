@@ -44,10 +44,7 @@ fn test_ops_strings() {
     assert!(engine.eval::<bool>(r#""hello" > "foo""#).unwrap());
 
     // A string and a char don't compare, as in Rust.
-    assert!(matches!(
-        engine.compile(r#""hello" > 'c'"#).unwrap_err().err_type(),
-        ParseErrorType::Resolution(Error::TypeMismatch { .. })
-    ));
+    assert!(matches!(engine.compile(r#""hello" > 'c'"#).unwrap_err().err_type(), ParseErrorType::Resolution(Error::TypeMismatch { .. })));
 }
 
 #[test]

@@ -2845,7 +2845,10 @@ mod tests {
         // A bundle record without its geometry is another format's.
         let mut legacy = current[..RECORD_BYTES].to_vec();
         legacy[8..10].copy_from_slice(&RECORD_SCHEMA.to_le_bytes());
-        assert!(Record::decode(&legacy).is_err(), "schema 4 bundle records reject");
+        assert!(
+            Record::decode(&legacy).is_err(),
+            "schema 4 bundle records reject"
+        );
         // Unknown schemas, length/schema mismatches and typed schema-5 records reject.
         for schema in [3_u16, 6, u16::MAX] {
             let mut unknown = current.to_vec();

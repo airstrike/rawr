@@ -190,8 +190,8 @@ impl Compiler {
         source: impl AsRef<str>,
     ) -> Result<Checked, Error> {
         let identity = identity.into();
-        let source =
-            diagnostic::Source::new(identity.clone(), source.as_ref()).map_err(Error::Diagnostic)?;
+        let source = diagnostic::Source::new(identity.clone(), source.as_ref())
+            .map_err(Error::Diagnostic)?;
         let path = std::path::Path::new("/").join(identity.as_str());
         let snapshot = rawr::package::snapshot::Snapshot::new(
             path.clone(),

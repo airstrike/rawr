@@ -502,7 +502,8 @@ mod badge {
             viewport: &iced::Rectangle,
             translation: iced::Vector,
             window: iced::Size,
-        ) -> Vec<advanced::overlay::Element<'a, runtime::Message, iced::Theme, iced::Renderer>> {
+        ) -> Vec<advanced::overlay::Element<'a, runtime::Message, iced::Theme, iced::Renderer>>
+        {
             let (layout, tree) = layout
                 .iter_mut(&mut tree.children)
                 .next()

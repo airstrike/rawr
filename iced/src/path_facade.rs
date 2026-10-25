@@ -64,17 +64,36 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
         function(format!("{owner}::from"), vec![string()], made)?;
     }
     let mut method = |path: String, mode: receiver::Mode, inputs: Vec<Type>, output: Type| {
-        builder.item(item::Definition::method(path, mode, signature(inputs, output))?)?;
+        builder.item(item::Definition::method(
+            path,
+            mode,
+            signature(inputs, output),
+        )?)?;
         Ok::<_, host::Error>(())
     };
     use receiver::Mode::{Mutable, Shared};
     for input in [string(), path()?] {
-        method(format!("{PATH}::push"), Mutable, vec![input.clone()], Type::unit())?;
+        method(
+            format!("{PATH}::push"),
+            Mutable,
+            vec![input.clone()],
+            Type::unit(),
+        )?;
         method(format!("{PATH}::join"), Shared, vec![input], path()?)?;
     }
-    method(format!("{PATH}::parent"), Shared, vec![], Type::option(path()?))?;
+    method(
+        format!("{PATH}::parent"),
+        Shared,
+        vec![],
+        Type::option(path()?),
+    )?;
     for name in ["file_name", "file_stem", "extension"] {
-        method(format!("{PATH}::{name}"), Shared, vec![], Type::option(os()?))?;
+        method(
+            format!("{PATH}::{name}"),
+            Shared,
+            vec![],
+            Type::option(os()?),
+        )?;
     }
     for name in ["to_path_buf", "to_owned"] {
         method(format!("{PATH}::{name}"), Shared, vec![], path()?)?;
@@ -83,8 +102,18 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
     method(format!("{OS}::to_os_string"), Shared, vec![], os()?)?;
     method(format!("{OS}::to_owned"), Shared, vec![], os()?)?;
     for owner in [PATH, OS] {
-        method(format!("{owner}::to_str"), Shared, vec![], Type::option(string()))?;
-        method(format!("{owner}::to_string_lossy"), Shared, vec![], string())?;
+        method(
+            format!("{owner}::to_str"),
+            Shared,
+            vec![],
+            Type::option(string()),
+        )?;
+        method(
+            format!("{owner}::to_string_lossy"),
+            Shared,
+            vec![],
+            string(),
+        )?;
     }
     // `path.display()` is the text `{}` prints, which `to_string` reads.
     method(format!("{PATH}::display"), Shared, vec![], string())?;
@@ -131,10 +160,16 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
             .unwrap_or_else(|_| panic!("the rawr_iced facade must retain {path}"));
     };
     bind("path::PathBuf::new", |_| Ok(Dynamic::from(PathBuf::new())));
-    bind("path::PathBuf::default", |_| Ok(Dynamic::from(PathBuf::new())));
-    bind("path::PathBuf::from", |args| Ok(Dynamic::from(path_like(args[0])?)));
+    bind("path::PathBuf::default", |_| {
+        Ok(Dynamic::from(PathBuf::new()))
+    });
+    bind("path::PathBuf::from", |args| {
+        Ok(Dynamic::from(path_like(args[0])?))
+    });
     bind("ffi::OsString::new", |_| Ok(Dynamic::from(OsString::new())));
-    bind("ffi::OsString::default", |_| Ok(Dynamic::from(OsString::new())));
+    bind("ffi::OsString::default", |_| {
+        Ok(Dynamic::from(OsString::new()))
+    });
     bind("ffi::OsString::from", |args| {
         let text = read::<ImmutableString>(args[0], "String")?;
         Ok(Dynamic::from(OsString::from(text.as_str())))
@@ -149,11 +184,15 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
     });
     bind("path::PathBuf::join", |args| {
         let joined = path_like(args[1])?;
-        Ok(Dynamic::from(read::<PathBuf>(args[0], "PathBuf")?.join(joined)))
+        Ok(Dynamic::from(
+            read::<PathBuf>(args[0], "PathBuf")?.join(joined),
+        ))
     });
     bind("path::PathBuf::parent", |args| {
         let path = read::<PathBuf>(args[0], "PathBuf")?;
-        Ok(rawr::option::from(path.parent().map(std::path::Path::to_path_buf)))
+        Ok(rawr::option::from(
+            path.parent().map(std::path::Path::to_path_buf),
+        ))
     });
     bind("path::PathBuf::file_name", |args| {
         Ok(os_text(read::<PathBuf>(args[0], "PathBuf")?.file_name()))
@@ -171,17 +210,23 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
         Ok(Dynamic::from(read::<PathBuf>(args[0], "PathBuf")?))
     });
     bind("path::PathBuf::as_os_str", |args| {
-        Ok(Dynamic::from(read::<PathBuf>(args[0], "PathBuf")?.into_os_string()))
+        Ok(Dynamic::from(
+            read::<PathBuf>(args[0], "PathBuf")?.into_os_string(),
+        ))
     });
     bind("path::PathBuf::to_str", |args| {
         let path = read::<PathBuf>(args[0], "PathBuf")?;
         Ok(rawr::option::from(path.to_str().map(ImmutableString::from)))
     });
     bind("path::PathBuf::to_string_lossy", |args| {
-        Ok(text(&read::<PathBuf>(args[0], "PathBuf")?.to_string_lossy()))
+        Ok(text(
+            &read::<PathBuf>(args[0], "PathBuf")?.to_string_lossy(),
+        ))
     });
     bind("path::PathBuf::display", |args| {
-        Ok(text(&read::<PathBuf>(args[0], "PathBuf")?.display().to_string()))
+        Ok(text(
+            &read::<PathBuf>(args[0], "PathBuf")?.display().to_string(),
+        ))
     });
     bind("ffi::OsString::to_os_string", |args| {
         Ok(Dynamic::from(read::<OsString>(args[0], "OsString")?))
@@ -194,6 +239,8 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
         Ok(rawr::option::from(os.to_str().map(ImmutableString::from)))
     });
     bind("ffi::OsString::to_string_lossy", |args| {
-        Ok(text(&read::<OsString>(args[0], "OsString")?.to_string_lossy()))
+        Ok(text(
+            &read::<OsString>(args[0], "OsString")?.to_string_lossy(),
+        ))
     });
 }

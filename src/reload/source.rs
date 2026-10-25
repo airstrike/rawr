@@ -590,7 +590,11 @@ mod tests {
             .join(format!("rawr-source-native-{}", std::process::id()));
         fs::create_dir_all(root.join("src/nested")).unwrap();
         fs::create_dir_all(root.join("crate/src")).unwrap();
-        let rawr = [root.join("src/main.rs"), root.join("src/nested/a.rs"), root.join("Cargo.toml")];
+        let rawr = [
+            root.join("src/main.rs"),
+            root.join("src/nested/a.rs"),
+            root.join("Cargo.toml"),
+        ];
         let native = [
             Watch::Exact(root.join("crate/src/lib.rs")),
             Watch::Exact(root.join("crate/Cargo.toml")),
@@ -633,7 +637,11 @@ mod tests {
         }
         let _cleanup = Cleanup(root.clone());
         fs::write(root.join("Cargo.toml"), "[package]\nname = \"nested\"\n").unwrap();
-        fs::write(root.join("src/main.rs"), "// rawr\nmod theme;\npub fn main() {}\n").unwrap();
+        fs::write(
+            root.join("src/main.rs"),
+            "// rawr\nmod theme;\npub fn main() {}\n",
+        )
+        .unwrap();
         fs::write(root.join("src/theme.rs"), "// rawr\npub mod button;\n").unwrap();
         fs::write(
             root.join("src/theme/button.rs"),

@@ -237,8 +237,11 @@ impl Replay {
 /// child in its place. A layer or transformation left open is closed at the
 /// end, and an end without its start is dropped, so the renderer's own
 /// stacks stay balanced whatever the script did.
-pub(crate) fn replay<R>(commands: Vec<Command>, renderer: &mut R, mut child: impl FnMut(&mut R, usize))
-where
+pub(crate) fn replay<R>(
+    commands: Vec<Command>,
+    renderer: &mut R,
+    mut child: impl FnMut(&mut R, usize),
+) where
     R: iced::advanced::Renderer + iced::advanced::graphics::mesh::Renderer,
 {
     #[derive(PartialEq)]

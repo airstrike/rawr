@@ -2,11 +2,11 @@
 //! linking its own copy of Rawr and iced.
 
 mod application_contract;
-mod async_body;
 mod application_entry;
+mod async_body;
 mod builtin_styles;
-mod canvas;
 mod canonical_values;
+mod canvas;
 mod components;
 mod control;
 mod counter_runtime;

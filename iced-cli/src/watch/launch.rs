@@ -165,10 +165,12 @@ fn background(
                     eprint!("\n{}", outcome.render());
                 }
             }
-            window.send((!outcome.is_clean()).then(|| rawr_iced::reload::cargo::Report {
-                heading: outcome.heading(),
-                details: outcome.details(),
-            }));
+            window.send(
+                (!outcome.is_clean()).then(|| rawr_iced::reload::cargo::Report {
+                    heading: outcome.heading(),
+                    details: outcome.details(),
+                }),
+            );
             shown = Some(outcome);
         }
     })
@@ -227,7 +229,10 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        crate::write_marked(&root, "src/main.rs", r#"
+        crate::write_marked(
+            &root,
+            "src/main.rs",
+            r#"
 use iced::Element;
 use iced::widget::text;
 
@@ -238,7 +243,8 @@ impl State {
     fn view(&self) -> Element<Message> { text("live") }
 }
 pub fn main() -> iced::Result { iced::run(State::update, State::view) }
-"#);
+"#,
+        );
 
         let launch = Launch::open(crate::base::load(Some(&root)).unwrap()).unwrap();
         let (bootstrap, source, service, timing, session) = launch.into_parts();

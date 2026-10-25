@@ -16,7 +16,9 @@ fn bench_eval_scope_single(bench: &mut Bencher) {
     let mut scope = Scope::new();
     scope.push("requests_made", 99 as INT);
 
-    let ast = engine.compile_expression_with_scope(&scope, script).unwrap();
+    let ast = engine
+        .compile_expression_with_scope(&scope, script)
+        .unwrap();
 
     bench.iter(|| engine.run_ast_with_scope(&mut scope, &ast).unwrap());
 }
@@ -32,7 +34,9 @@ fn bench_eval_scope_multiple(bench: &mut Bencher) {
     scope.push("requests_made", 99 as INT);
     scope.push("requests_succeeded", 90 as INT);
 
-    let ast = engine.compile_expression_with_scope(&scope, script).unwrap();
+    let ast = engine
+        .compile_expression_with_scope(&scope, script)
+        .unwrap();
 
     bench.iter(|| engine.run_ast_with_scope(&mut scope, &ast).unwrap());
 }
@@ -48,7 +52,9 @@ fn bench_eval_scope_longer(bench: &mut Bencher) {
     scope.push("requests_made", 99 as INT);
     scope.push("requests_succeeded", 90 as INT);
 
-    let ast = engine.compile_expression_with_scope(&scope, script).unwrap();
+    let ast = engine
+        .compile_expression_with_scope(&scope, script)
+        .unwrap();
 
     bench.iter(|| engine.run_ast_with_scope(&mut scope, &ast).unwrap());
 }
@@ -71,7 +77,9 @@ fn bench_eval_scope_complex(bench: &mut Bencher) {
     scope.push("variable_name", 90 as INT);
     scope.push("modifier_test", 5 as INT);
 
-    let ast = engine.compile_expression_with_scope(&scope, script).unwrap();
+    let ast = engine
+        .compile_expression_with_scope(&scope, script)
+        .unwrap();
 
     bench.iter(|| engine.run_ast_with_scope(&mut scope, &ast).unwrap());
 }

@@ -149,7 +149,10 @@ fn modules_and_imports_resolve_as_rust_across_files() {
             .as_nanos()
     ));
     fs::create_dir_all(root.join("src")).unwrap();
-    crate::write_marked(&root, "src/main.rs", r#"use iced::widget::{button::{self, Status}, column};
+    crate::write_marked(
+        &root,
+        "src/main.rs",
+        r#"use iced::widget::{button::{self, Status}, column};
 use iced::keyboard;
 use std::fmt::Write as _;
 
@@ -186,9 +189,17 @@ fn update(state: &mut State, message: Message) {
         }
     }
 }
-"#);
-    crate::write_marked(&root, "src/circle.rs", "pub fn circle(r: i64) -> i64 {\n    3 * r * r\n}\n");
-    crate::write_marked(&root, "src/shapes.rs", r#"pub trait Area {
+"#,
+    );
+    crate::write_marked(
+        &root,
+        "src/circle.rs",
+        "pub fn circle(r: i64) -> i64 {\n    3 * r * r\n}\n",
+    );
+    crate::write_marked(
+        &root,
+        "src/shapes.rs",
+        r#"pub trait Area {
     fn area(&self) -> i64;
 }
 
@@ -209,8 +220,12 @@ pub mod inner {
         x * 3
     }
 }
-"#);
-    crate::write_marked(&root, "src/view.rs", r#"use iced::widget::{button, column, text};
+"#,
+    );
+    crate::write_marked(
+        &root,
+        "src/view.rs",
+        r#"use iced::widget::{button, column, text};
 use iced::Widget;
 use crate::shapes::Area;
 use crate::{Message, State};
@@ -221,7 +236,8 @@ pub fn view(state: &State) -> impl Widget<Message> {
         button("Add").on_press(Message::Add),
     ]
 }
-"#);
+"#,
+    );
 
     let target = project::Target::discover(&root).unwrap();
     let prepared = rawr_iced::application::Compiler::new()

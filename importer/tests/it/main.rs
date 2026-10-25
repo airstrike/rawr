@@ -58,9 +58,9 @@ mod hot_reload;
 #[cfg(feature = "rustc-driver")]
 mod manifest;
 #[cfg(feature = "rustc-driver")]
-mod on_demand;
-#[cfg(feature = "rustc-driver")]
 mod monomorphic_execution;
+#[cfg(feature = "rustc-driver")]
+mod on_demand;
 #[cfg(feature = "rustc-driver")]
 mod process;
 #[cfg(feature = "rustc-driver")]

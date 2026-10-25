@@ -1,7 +1,7 @@
 #![cfg(not(feature = "no_time"))]
-use rawr::{Engine, INT};
 #[cfg(not(feature = "no_float"))]
 use rawr::FLOAT;
+use rawr::{Engine, INT};
 
 #[test]
 fn test_timestamp() {

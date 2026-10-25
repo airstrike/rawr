@@ -825,7 +825,11 @@ mod tests {
             Ok(reload::Feedback::Failed(_))
         ));
 
-        crate::write_marked(&root, "src/main.rs", failing_source("candidate view failed"));
+        crate::write_marked(
+            &root,
+            "src/main.rs",
+            failing_source("candidate view failed"),
+        );
         let target = rawr::project::Target::discover(&root).unwrap();
         let failing = engine
             .compile_package_generation_observed(&target, &timing)
@@ -1301,7 +1305,8 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
             while let Some(action) = stream.next().await {
                 match action {
                     iced_test::runtime::Action::Output(super::Message::Script(message)) => {
-                        messages.extend(crate::dispatch::inline(message).map(super::Message::Script));
+                        messages
+                            .extend(crate::dispatch::inline(message).map(super::Message::Script));
                     }
                     iced_test::runtime::Action::Output(message) => messages.push(message),
                     _ => panic!("expected a task output"),

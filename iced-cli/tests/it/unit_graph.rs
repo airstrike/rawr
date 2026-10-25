@@ -83,7 +83,11 @@ fn the_runner_builds_the_templates_own_units() {
     let _ = fs::remove_dir_all(&scratch);
     let project = scratch.join("app");
     let runner = scratch.join("runner");
-    for directory in [project.join("src"), project.join(".cargo"), runner.join("src")] {
+    for directory in [
+        project.join("src"),
+        project.join(".cargo"),
+        runner.join("src"),
+    ] {
         fs::create_dir_all(directory).unwrap();
     }
     // The template, as `rawr new` writes it. Its own `[workspace]` keeps it
@@ -93,8 +97,16 @@ fn the_runner_builds_the_templates_own_units() {
         format!("{}\n[workspace]\n", rawr_iced_cli::new::manifest("app")),
     )
     .unwrap();
-    fs::write(project.join(".cargo/config.toml"), rawr_iced_cli::new::cargo_config()).unwrap();
-    fs::write(project.join("rust-toolchain.toml"), rawr_iced_cli::new::toolchain()).unwrap();
+    fs::write(
+        project.join(".cargo/config.toml"),
+        rawr_iced_cli::new::cargo_config(),
+    )
+    .unwrap();
+    fs::write(
+        project.join("rust-toolchain.toml"),
+        rawr_iced_cli::new::toolchain(),
+    )
+    .unwrap();
     fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
     // The runner, as the importer generates it: Rawr's runtime crates, the
     // project's iced, every widget, and the rawr crate's own opt-level.
@@ -124,7 +136,11 @@ fn the_runner_builds_the_templates_own_units() {
     )
     .unwrap();
     fs::write(runner.join("src/main.rs"), "fn main() {}\n").unwrap();
-    fs::write(runner.join("rust-toolchain.toml"), rawr_iced_cli::new::toolchain()).unwrap();
+    fs::write(
+        runner.join("rust-toolchain.toml"),
+        rawr_iced_cli::new::toolchain(),
+    )
+    .unwrap();
 
     cargo(&project, &["generate-lockfile"]);
     // The runner's resolution starts from the project's lock.
@@ -133,8 +149,14 @@ fn the_runner_builds_the_templates_own_units() {
     let built = keys(&unit_graph(&runner, &["--target", host]));
     fs::remove_dir_all(&scratch).unwrap();
 
-    let shared = built.iter().map(|(key, _)| key.as_str()).collect::<BTreeSet<_>>();
-    let runner_local = built.iter().map(|(_, local)| local.as_str()).collect::<BTreeSet<_>>();
+    let shared = built
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect::<BTreeSet<_>>();
+    let runner_local = built
+        .iter()
+        .map(|(_, local)| local.as_str())
+        .collect::<BTreeSet<_>>();
     let missing = template
         .iter()
         .filter(|(key, local)| !shared.contains(key.as_str()) && !local.contains("\"app\""))
@@ -151,6 +173,10 @@ fn the_runner_builds_the_templates_own_units() {
         "{} of the template's units are not the runner's; these differ in their own \
          features or profile:\n{}",
         missing.len(),
-        causes.iter().map(|cause| format!("  {cause}")).collect::<Vec<_>>().join("\n")
+        causes
+            .iter()
+            .map(|cause| format!("  {cause}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }

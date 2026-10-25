@@ -39,18 +39,14 @@ pub(super) fn one(
     // ref_contents has closed File and retired its path before this match.
     let bytes = match contents {
         git_read::Outcome::Bytes(bytes) => bytes,
-        git_read::Outcome::OpenFailed(code)
-            if code == libc::ENOENT || code == libc::ENOTDIR =>
-        {
+        git_read::Outcome::OpenFailed(code) if code == libc::ENOENT || code == libc::ENOTDIR => {
             return Ok(Ok(None))
         }
         git_read::Outcome::ReadFailed {
             directory: Some(Ok(true)),
             ..
         } => return Ok(Ok(None)),
-        git_read::Outcome::ReadFailed { code, .. } if code == libc::ENOTDIR => {
-            return Ok(Ok(None))
-        }
+        git_read::Outcome::ReadFailed { code, .. } if code == libc::ENOTDIR => return Ok(Ok(None)),
         git_read::Outcome::OpenFailed(code) | git_read::Outcome::ReadFailed { code, .. } => {
             let path = super::super::path::file::join(
                 base,

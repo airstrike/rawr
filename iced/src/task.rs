@@ -61,8 +61,14 @@ enum PreparedKind {
         abort: Arc<Abort>,
     },
     Script(item::Value),
-    Send { sender: Sender, value: Dynamic },
-    Join { plans: Box<[Prepared]>, fallible: bool },
+    Send {
+        sender: Sender,
+        value: Dynamic,
+    },
+    Join {
+        plans: Box<[Prepared]>,
+        fallible: bool,
+    },
     Select {
         plans: Box<[Prepared]>,
         filtered: bool,
@@ -165,7 +171,10 @@ pub struct Sip {
 
 impl Sip {
     fn take(&self) -> Option<iced::Task<Step>> {
-        self.task.lock().unwrap_or_else(PoisonError::into_inner).take()
+        self.task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 
     /// The witness of the sipper's `Output` (0) or `Progress` (1).
@@ -177,9 +186,7 @@ impl Sip {
 
     /// The sipper's progress as a stream, for `Subscription::run`. Each
     /// value becomes a Rawr value on the UI thread. Its output ends it.
-    pub(crate) fn progress(
-        &self,
-    ) -> Option<iced::futures::stream::BoxStream<'static, Dynamic>> {
+    pub(crate) fn progress(&self) -> Option<iced::futures::stream::BoxStream<'static, Dynamic>> {
         use iced::futures::StreamExt as _;
         let stream = iced_runtime::task::into_stream(self.take()?)?;
         let witness = self.witness(1);
@@ -285,8 +292,14 @@ pub(crate) fn collect_aborts<R>(lower: impl FnOnce() -> R) -> (R, Vec<Arc<Abort>
 
 impl Abort {
     pub(crate) fn abort(&self) {
-        self.aborted.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Some(handle) = self.native.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        self.aborted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(handle) = self
+            .native
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
             handle.abort();
         }
     }
@@ -296,7 +309,10 @@ impl Abort {
     }
 
     /// Make a lowered task abortable through this handle.
-    fn attach(self: &Arc<Self>, task: iced::Task<runtime::Message>) -> iced::Task<runtime::Message> {
+    fn attach(
+        self: &Arc<Self>,
+        task: iced::Task<runtime::Message>,
+    ) -> iced::Task<runtime::Message> {
         LOWERED.with(|lowered| {
             if let Some(lowered) = lowered.borrow_mut().as_mut() {
                 lowered.push(self.clone());
@@ -481,7 +497,9 @@ impl std::future::Future for Blocking {
                     let _ = sender.send(authority.call(&work).map(rawr::result::ok));
                 });
             match worker {
-                Err(error) => return std::task::Poll::Ready(Err(Error::Blocking(error.to_string()))),
+                Err(error) => {
+                    return std::task::Poll::Ready(Err(Error::Blocking(error.to_string())))
+                }
                 Ok(worker) if frozen.is_some() => {
                     let _ = worker.join();
                 }
@@ -494,7 +512,9 @@ impl std::future::Future for Blocking {
         };
         std::pin::Pin::new(receiver).poll(context).map(|output| {
             output.unwrap_or_else(|_| {
-                Err(Error::Blocking("the worker thread ended without an output".into()))
+                Err(Error::Blocking(
+                    "the worker thread ended without an output".into(),
+                ))
             })
         })
     }
@@ -539,9 +559,7 @@ impl Native {
         match self {
             Self::Tokio(factory) => iced::Task::future((factory.0)()).map(Ok),
             Self::Exit => iced::exit(),
-            Self::LatestWindow => {
-                iced::window::latest().map(|id| Ok(rawr::option::from(id)))
-            }
+            Self::LatestWindow => iced::window::latest().map(|id| Ok(rawr::option::from(id))),
             Self::ScaleFactor(id) => {
                 iced::window::scale_factor(id).map(|factor| Ok(Dynamic::from(f64::from(factor))))
             }
@@ -620,10 +638,16 @@ enum Kind {
     Script(item::Value),
     /// `sender.send(value)`: the value goes to the sipper's progress, and
     /// the task gives `()`.
-    Send { sender: Sender, value: Dynamic },
+    Send {
+        sender: Sender,
+        value: Dynamic,
+    },
     /// `futures::future::join` (or `try_join`, which ends at the first
     /// `Err`): the plans run at once, and the task gives their outputs.
-    Join { plans: Box<[Plan]>, fallible: bool },
+    Join {
+        plans: Box<[Plan]>,
+        fallible: bool,
+    },
     /// tokio's `select!` and `timeout`: the plans run at once, and the
     /// first output ends the others. Plan `i` of `n` gives `Err` `i` times
     /// around its output, and then `Ok` unless it is the last. When
@@ -631,7 +655,10 @@ enum Kind {
     /// branch's pattern did not match) disables that plan while the others
     /// go on, as tokio does; once every plan is disabled, the last `None`
     /// goes on, which the select's `else` takes.
-    Select { plans: Box<[Plan]>, filtered: bool },
+    Select {
+        plans: Box<[Plan]>,
+        filtered: bool,
+    },
     /// tokio's `task::spawn_blocking(f)`: the closure `f` runs on a worker
     /// thread of its own when the task first runs, and the task gives
     /// `Ok` of its output.
@@ -823,7 +850,9 @@ impl Plan {
                 mapper,
             },
             Kind::Imported(task) => PreparedKind::Imported(task),
-            Kind::Discard(plan) => PreparedKind::Discard(Box::new(plan.prepare_application(authority)?)),
+            Kind::Discard(plan) => {
+                PreparedKind::Discard(Box::new(plan.prepare_application(authority)?))
+            }
             Kind::Sip {
                 sipper,
                 on_progress,
@@ -864,9 +893,15 @@ impl Plan {
 
     /// Lower this plan so that each output goes to `next` on the UI thread.
     /// Only native work runs in the returned task's stream.
-    fn lower_with(self, lowering: &Lowering, next: Next) -> Result<iced::Task<runtime::Message>, Error> {
+    fn lower_with(
+        self,
+        lowering: &Lowering,
+        next: Next,
+    ) -> Result<iced::Task<runtime::Message>, Error> {
         let Self { kind, witness } = self;
-        let output = witness.as_ref().and_then(|witness| witness.argument_witness(0));
+        let output = witness
+            .as_ref()
+            .and_then(|witness| witness.argument_witness(0));
         let next = lowering.validated(witness, next);
         Ok(match kind {
             Kind::None => iced::Task::none(),
@@ -890,11 +925,15 @@ impl Plan {
                 let first = first.lower_with(lowering, next.clone())?;
                 first.chain(second.lower_with(lowering, next)?)
             }
-            Kind::Map { plan, mapper } => plan.lower_with(lowering, lowering.mapped(mapper, next))?,
+            Kind::Map { plan, mapper } => {
+                plan.lower_with(lowering, lowering.mapped(mapper, next))?
+            }
             Kind::Native(native) => lowering.resume(native.lower(), next),
             Kind::AndThen { plan, mapper } => {
                 let lowering_inner = lowering.clone();
-                let next = Arc::new(move |payload| lowering_inner.and_then(payload, &mapper, next.clone()));
+                let next = Arc::new(move |payload| {
+                    lowering_inner.and_then(payload, &mapper, next.clone())
+                });
                 plan.lower_with(lowering, next)?
             }
             Kind::Imported(task) => lowering.imported(&task, output, next),
@@ -939,7 +978,10 @@ struct Joined(Arc<Mutex<(Vec<Option<Dynamic>>, Option<Next>)>>, bool);
 
 impl Joined {
     fn new(count: usize, fallible: bool, next: Next) -> Self {
-        Self(Arc::new(Mutex::new((vec![None; count], Some(next)))), fallible)
+        Self(
+            Arc::new(Mutex::new((vec![None; count], Some(next)))),
+            fallible,
+        )
     }
 
     fn slot(&self, index: usize) -> Next {
@@ -969,7 +1011,11 @@ impl Joined {
             let next = next.take().expect("the join has not ended");
             drop(state);
             let outputs = Dynamic::from_array(outputs);
-            next(if joined.1 { rawr::result::ok(outputs) } else { outputs })
+            next(if joined.1 {
+                rawr::result::ok(outputs)
+            } else {
+                outputs
+            })
         })
     }
 }
@@ -1002,7 +1048,11 @@ impl Raced {
     /// Plan `index`'s task, abortable by a win of another plan. A plan
     /// lowered after another won (one whose output was ready) does not
     /// run, and a plan that won as it was lowered goes on.
-    fn run(&self, index: usize, task: iced::Task<runtime::Message>) -> iced::Task<runtime::Message> {
+    fn run(
+        &self,
+        index: usize,
+        task: iced::Task<runtime::Message>,
+    ) -> iced::Task<runtime::Message> {
         let mut race = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         match race.winner {
             Some(winner) if winner == index => task,
@@ -1091,19 +1141,23 @@ impl Lowering {
             return next;
         };
         let lowering = self.clone();
-        Arc::new(move |payload| match lowering.authority.validate_output(&witness, payload) {
-            Ok(payload) => next(payload),
-            Err(error) => lowering.fail(error),
-        })
+        Arc::new(
+            move |payload| match lowering.authority.validate_output(&witness, payload) {
+                Ok(payload) => next(payload),
+                Err(error) => lowering.fail(error),
+            },
+        )
     }
 
     /// Run the script mapper on each output before `next`.
     fn mapped(&self, mapper: item::Value, next: Next) -> Next {
         let lowering = self.clone();
-        Arc::new(move |payload| match lowering.authority.map(payload, &mapper) {
-            Ok(payload) => next(payload),
-            Err(error) => lowering.fail(error),
-        })
+        Arc::new(
+            move |payload| match lowering.authority.map(payload, &mapper) {
+                Ok(payload) => next(payload),
+                Err(error) => lowering.fail(error),
+            },
+        )
     }
 
     /// iced's `Task<Option<T>>::and_then`: each `Some` given to `mapper`,
@@ -1129,7 +1183,11 @@ impl Lowering {
     }
 
     /// Hand each output of a native task to `next` on the UI thread.
-    fn resume(&self, task: iced::Task<Result<Dynamic, Error>>, next: Next) -> iced::Task<runtime::Message> {
+    fn resume(
+        &self,
+        task: iced::Task<Result<Dynamic, Error>>,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
         let lowering = self.clone();
         task.then(move |result| {
             let next = next.clone();
@@ -1155,12 +1213,14 @@ impl Lowering {
         };
         let lowering = self.clone();
         let owner = self.owner;
-        dispatch::each_on_ui(owner, task, move |materialize: Materialize| {
-            match materialize(output.as_ref()) {
+        dispatch::each_on_ui(
+            owner,
+            task,
+            move |materialize: Materialize| match materialize(output.as_ref()) {
                 Ok(payload) => next(payload),
                 Err(error) => lowering.fail(Error::Imported(error)),
-            }
-        })
+            },
+        )
     }
 
     /// iced's `Task::sip`: run a Rust sipper natively. Each progress value and
@@ -1232,7 +1292,12 @@ impl Lowering {
     /// after the freshness check of the step that hands it back. A stale
     /// step is dropped, which ends the whole task: a frame never resumes
     /// against new code. When the body ends, its output goes to `next`.
-    fn script(&self, step: item::Value, resume: Dynamic, next: Next) -> iced::Task<runtime::Message> {
+    fn script(
+        &self,
+        step: item::Value,
+        resume: Dynamic,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
         let poll = match self.authority.map(resume, &step) {
             Ok(poll) => poll,
             Err(error) => return self.fail(error),
@@ -1251,7 +1316,8 @@ impl Lowering {
                 // nothing.
                 let frame = Arc::new(Mutex::new(Some(frame)));
                 let resume: Next = Arc::new(move |output| {
-                    let Some(frame) = frame.lock().unwrap_or_else(PoisonError::into_inner).take() else {
+                    let Some(frame) = frame.lock().unwrap_or_else(PoisonError::into_inner).take()
+                    else {
                         return iced::Task::none();
                     };
                     lowering.script(step.clone(), frame.resume(output), next.clone())
@@ -1273,7 +1339,11 @@ impl Lowering {
 
     /// Await an issued operation natively, then validate its output and run
     /// its mapper on the UI thread.
-    fn operation(&self, pending: host::operation::Pending, next: Next) -> iced::Task<runtime::Message> {
+    fn operation(
+        &self,
+        pending: host::operation::Pending,
+        next: Next,
+    ) -> iced::Task<runtime::Message> {
         let lowering = self.clone();
         iced::Task::future(pending).then(move |completed| {
             let next = next.clone();
@@ -1315,12 +1385,16 @@ impl Prepared {
         next: Next,
     ) -> iced::Task<runtime::Message> {
         let Self { kind, witness } = self;
-        let output = witness.as_ref().and_then(|witness| witness.argument_witness(0));
+        let output = witness
+            .as_ref()
+            .and_then(|witness| witness.argument_witness(0));
         let next = lowering.validated(witness, next);
         match kind {
             PreparedKind::None => iced::Task::none(),
             PreparedKind::Done(payload) => next(payload),
-            PreparedKind::Perform { pending } => lowering.operation(context.operation(pending), next),
+            PreparedKind::Perform { pending } => {
+                lowering.operation(context.operation(pending), next)
+            }
             PreparedKind::Batch(plans) => iced::Task::batch(
                 plans
                     .into_vec()
@@ -1336,7 +1410,9 @@ impl Prepared {
             PreparedKind::Native(native) => lowering.resume(native.lower(), next),
             PreparedKind::AndThen { plan, mapper } => {
                 let lowering_inner = lowering.clone();
-                let next = Arc::new(move |payload| lowering_inner.and_then(payload, &mapper, next.clone()));
+                let next = Arc::new(move |payload| {
+                    lowering_inner.and_then(payload, &mapper, next.clone())
+                });
                 plan.lower_with(context, lowering, next)
             }
             PreparedKind::Imported(task) => lowering.imported(&task, output, next),
@@ -1358,7 +1434,9 @@ impl Prepared {
                         .into_vec()
                         .into_iter()
                         .enumerate()
-                        .map(|(index, plan)| plan.lower_with(context, lowering, joined.slot(index))),
+                        .map(|(index, plan)| {
+                            plan.lower_with(context, lowering, joined.slot(index))
+                        }),
                 )
             }
             PreparedKind::Select { plans, filtered } => {
@@ -1490,9 +1568,14 @@ impl fmt::Display for Error {
                 )
             }
             Self::Imported(error) => {
-                write!(formatter, "a Rust task's output could not cross into Rawr: {error}")
+                write!(
+                    formatter,
+                    "a Rust task's output could not cross into Rawr: {error}"
+                )
             }
-            Self::Spent => formatter.write_str("this task from Rust already ran, and a Task runs once"),
+            Self::Spent => {
+                formatter.write_str("this task from Rust already ran, and a Task runs once")
+            }
             Self::Blocking(error) => write!(formatter, "a `spawn_blocking` worker failed: {error}"),
         }
     }
@@ -1519,7 +1602,10 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
         ("iced::exit", Native::Exit),
         ("iced::window::latest", Native::LatestWindow),
         ("iced::widget::operation::focus_next", Native::FocusNext),
-        ("iced::widget::operation::focus_previous", Native::FocusPrevious),
+        (
+            "iced::widget::operation::focus_previous",
+            Native::FocusPrevious,
+        ),
         ("iced::font::list", Native::FontList),
     ] {
         builder
@@ -1647,8 +1733,11 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
                 .try_cast_result::<iced::window::Id>()
                 .map_err(|value| {
                     EvalAltResult::ErrorRuntime(
-                        format!("window::close received `{}`, expected a `window::Id`", value.type_name())
-                            .into(),
+                        format!(
+                            "window::close received `{}`, expected a `window::Id`",
+                            value.type_name()
+                        )
+                        .into(),
                         Position::NONE,
                     )
                 })?;
@@ -1906,9 +1995,12 @@ pub(crate) fn bind(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::
             let [sender, value] = args else {
                 return Err(arity("task::Sender::send", 2, args.len()));
             };
-            let sender = sender.read_lock::<Sender>().map(|sender| sender.clone()).ok_or_else(|| {
-                EvalAltResult::ErrorRuntime("expected a `task::Sender`".into(), Position::NONE)
-            })?;
+            let sender = sender
+                .read_lock::<Sender>()
+                .map(|sender| sender.clone())
+                .ok_or_else(|| {
+                    EvalAltResult::ErrorRuntime("expected a `task::Sender`".into(), Position::NONE)
+                })?;
             Ok(Dynamic::from(Plan {
                 kind: Kind::Send {
                     sender,

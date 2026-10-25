@@ -61,8 +61,14 @@ fn main() {
         println!("Source Dynamic: {result:#?}");
 
         // Convert the 'Dynamic' array into the fields of 'MyStruct'
-        let (a, b, c, (x, y)): (i64, Vec<String>, bool, (f64, f64)) = from_dynamic(&result).unwrap();
-        let x = MyStruct { a, b, c, d: Point { x, y } };
+        let (a, b, c, (x, y)): (i64, Vec<String>, bool, (f64, f64)) =
+            from_dynamic(&result).unwrap();
+        let x = MyStruct {
+            a,
+            b,
+            c,
+            d: Point { x, y },
+        };
 
         assert_eq!(
             x,

@@ -42,10 +42,13 @@ fn tuple_members_resolve_normally_and_report_inner_failures() {
 fn singleton_tuple_types_are_positioned_unsupported_syntax() {
     // `(i64)` is `i64` in parentheses, as in Rust, so `()` mismatches it.
     let error = Engine::new().compile_executable("pub fn broken() -> (i64) { () }").unwrap_err();
-    assert!(matches!(
-        error.err_type(),
-        ParseErrorType::Resolution(resolve::Error::TypeMismatch { expected, .. }) if expected == "i64"
-    ), "{error:?}");
+    assert!(
+        matches!(
+            error.err_type(),
+            ParseErrorType::Resolution(resolve::Error::TypeMismatch { expected, .. }) if expected == "i64"
+        ),
+        "{error:?}"
+    );
     for source in ["pub fn broken() -> (i64,) { () }"] {
         let error = Engine::new().compile_executable(source).unwrap_err();
         assert!(matches!(error.err_type(), ParseErrorType::MalformedTypeTuple(1, _)), "{error:?}");

@@ -285,7 +285,9 @@ fn bind_events(builder: &mut host::runtime::Builder) {
         ("Captured", iced::event::Status::Captured),
     ] {
         builder
-            .bind(format!("iced::event::Status::{name}"), move |_| Ok(Dynamic::from(status)))
+            .bind(format!("iced::event::Status::{name}"), move |_| {
+                Ok(Dynamic::from(status))
+            })
             .expect("the iced facade must retain every event::Status");
     }
 
@@ -293,7 +295,9 @@ fn bind_events(builder: &mut host::runtime::Builder) {
 
     fn input(filter: fn(Input) -> Option<Dynamic>) -> Native {
         match events() {
-            Some(events) => events.filter_map(move |event| async move { filter(event).map(Ok) }).boxed(),
+            Some(events) => events
+                .filter_map(move |event| async move { filter(event).map(Ok) })
+                .boxed(),
             None => stream::empty().boxed(),
         }
     }
@@ -307,7 +311,9 @@ fn bind_events(builder: &mut host::runtime::Builder) {
             .expect("the iced facade declares every event stream")
     };
     let no_arguments = |_: usize, _: &Dynamic, _: &mut host::stream::identity::Writer| {
-        Err(host::stream::identity::Error::new("the stream takes no arguments"))
+        Err(host::stream::identity::Error::new(
+            "the stream takes no arguments",
+        ))
     };
     let unit = |(): ()| Dynamic::UNIT;
     for (path, filter) in [
@@ -425,9 +431,11 @@ fn bind_events(builder: &mut host::runtime::Builder) {
                 _ => Err(host::stream::identity::Error::new("unexpected argument")),
             },
             |arguments| {
-                let progress = arguments
-                    .get(0)
-                    .and_then(|value| value.read_lock::<crate::task::Sip>().and_then(|sip| sip.progress()));
+                let progress = arguments.get(0).and_then(|value| {
+                    value
+                        .read_lock::<crate::task::Sip>()
+                        .and_then(|sip| sip.progress())
+                });
                 match progress {
                     Some(progress) => progress.map(Ok).boxed(),
                     None => stream::empty().boxed(),
@@ -445,14 +453,12 @@ fn ticks(
     use iced::futures::StreamExt;
 
     let (mut sender, receiver) = iced::futures::channel::mpsc::channel(1);
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(duration);
-            match sender.try_send(()) {
-                Ok(()) => {}
-                Err(error) if error.is_full() => {}
-                Err(_) => break,
-            }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(duration);
+        match sender.try_send(()) {
+            Ok(()) => {}
+            Err(error) if error.is_full() => {}
+            Err(_) => break,
         }
     });
     receiver

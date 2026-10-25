@@ -374,10 +374,14 @@ impl Builder {
         let relative = host::path::Path::parse_imported(path, allocation)?;
         let path = host::path::Path::qualify_imported(&self.root, relative, allocation)?;
         self.ensure_vacant(&path, "type")?;
-        let definition =
-            host::type_def::Definition::imported(
-                path, identity, implemented, parameters, defaults, shape,
-            )?;
+        let definition = host::type_def::Definition::imported(
+            path,
+            identity,
+            implemented,
+            parameters,
+            defaults,
+            shape,
+        )?;
         self.insert_type(definition)?;
         Ok(self)
     }
@@ -956,7 +960,8 @@ impl Builder {
         let relative = host::path::Path::parse(path.clone())?;
         #[cfg(not(feature = "no_function"))]
         if crate::parser::parse_trait(declaration).is_none_or(|declared| {
-            relative.segments().last().map(|name| name.as_str()) != Some(declared.name.text.as_str())
+            relative.segments().last().map(|name| name.as_str())
+                != Some(declared.name.text.as_str())
         }) {
             return Err(host::Error::InvalidTypePath(path));
         }

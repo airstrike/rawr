@@ -1,6 +1,9 @@
 // Copyright the gitoxide contributors. MIT OR Apache-2.0.
 // Unchanged pinned normalize function; keep this file out of rustfmt.
-use std::{borrow::Cow, path::{Path, PathBuf}};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
 pub fn normalize<'a>(path: Cow<'a, Path>, current_dir: &Path) -> Option<Cow<'a, Path>> {
     use std::path::Component::ParentDir;

@@ -47,7 +47,9 @@ fn boot() -> program::Adapter {
     rawr_iced::install(&mut engine).unwrap();
     let engine = Shared::new(engine);
     let descriptor = engine
-        .compile_application_descriptor(include_str!("../../examples/scripts/application_counter.rs"))
+        .compile_application_descriptor(include_str!(
+            "../../examples/scripts/application_counter.rs"
+        ))
         .unwrap();
     let launch = engine.launch_application(descriptor).unwrap();
     let mut registry = host::runtime::Registry::new();

@@ -132,7 +132,11 @@ impl Budgets {
             return still;
         }
         let left = self.left(key, now);
-        let longest = if alone { self.idle.max(self.animation) } else { self.animation };
+        let longest = if alone {
+            self.idle.max(self.animation)
+        } else {
+            self.animation
+        };
         let animation = longest.min(left);
         if animation <= self.still {
             let frees_in = self.frees_in(key, now);
@@ -185,7 +189,10 @@ impl Budgets {
         // Forget users with nothing left in the window, so the map stays small.
         let window = self.window;
         self.used.retain(|_, renders| {
-            while renders.front().is_some_and(|(at, _)| now.duration_since(*at) >= window) {
+            while renders
+                .front()
+                .is_some_and(|(at, _)| now.duration_since(*at) >= window)
+            {
                 renders.pop_front();
             }
             !renders.is_empty()
@@ -194,15 +201,16 @@ impl Budgets {
 
     /// `user`'s animation time left at `now`.
     fn left(&self, user: &str, now: Instant) -> Duration {
-        let spent: Duration = self
-            .renders(user, now)
-            .map(|(_, took)| took)
-            .sum();
+        let spent: Duration = self.renders(user, now).map(|(_, took)| took).sum();
         self.allowance.saturating_sub(spent)
     }
 
     /// `user`'s renders still in the window at `now`, oldest first.
-    fn renders<'a>(&'a self, user: &str, now: Instant) -> impl Iterator<Item = (Instant, Duration)> + 'a {
+    fn renders<'a>(
+        &'a self,
+        user: &str,
+        now: Instant,
+    ) -> impl Iterator<Item = (Instant, Duration)> + 'a {
         let window = self.window;
         self.used
             .get(user)
@@ -272,11 +280,18 @@ pub fn idle_note(idle: Duration) -> String {
 /// A render that ran past `animation` on the idle budget, and was not cut
 /// for someone waiting, says it had the idle budget.
 #[must_use]
-pub fn annotate(note: Option<String>, grant: &Grant, animation: Duration, took: Duration) -> Option<String> {
-    let cut = note.as_deref().is_some_and(|note| {
-        note.lines().any(|line| line.starts_with(motion::STOPPED))
-    });
-    let waited = note.as_deref().is_some_and(|note| note.contains(motion::WAITING));
+pub fn annotate(
+    note: Option<String>,
+    grant: &Grant,
+    animation: Duration,
+    took: Duration,
+) -> Option<String> {
+    let cut = note
+        .as_deref()
+        .is_some_and(|note| note.lines().any(|line| line.starts_with(motion::STOPPED)));
+    let waited = note
+        .as_deref()
+        .is_some_and(|note| note.contains(motion::WAITING));
     let extra = match grant.refused {
         Some(refused) if cut => Some(refused_note(refused, animation)),
         _ if grant.idle && took > animation && !waited => Some(idle_note(grant.animation)),
@@ -314,7 +329,10 @@ mod tests {
     fn budget_no_user_gets_the_still_budget() {
         let mut budgets = budgets();
         let grant = budgets.grant(None, Instant::now(), false);
-        assert_eq!((grant.animation, grant.extended, grant.refused), (STILL, false, None));
+        assert_eq!(
+            (grant.animation, grant.extended, grant.refused),
+            (STILL, false, None)
+        );
     }
 
     #[test]
@@ -327,7 +345,10 @@ mod tests {
         assert_eq!(second.refused, Some(Refused::Busy));
         // A still render frees nothing; the extended one does.
         budgets.finish(&second, secs(1), now);
-        assert_eq!(budgets.grant(Some("web:a"), now, false).refused, Some(Refused::Busy));
+        assert_eq!(
+            budgets.grant(Some("web:a"), now, false).refused,
+            Some(Refused::Busy)
+        );
         budgets.finish(&first, secs(3), now + secs(3));
         let third = budgets.grant(Some("discord:2"), now + secs(3), false);
         assert!(third.extended, "{third:?}");
@@ -369,7 +390,10 @@ mod tests {
             assert!(grant.extended);
             budgets.finish(&grant, STILL, now);
         }
-        assert_eq!(budgets.grant(Some("web:a"), now, false).animation, ANIMATION);
+        assert_eq!(
+            budgets.grant(Some("web:a"), now, false).animation,
+            ANIMATION
+        );
     }
 
     #[test]
@@ -395,7 +419,9 @@ mod tests {
             animation: STILL,
             extended: false,
             idle: false,
-            refused: Some(Refused::Allowance { frees_in: Duration::from_millis(250_500) }),
+            refused: Some(Refused::Allowance {
+                frees_in: Duration::from_millis(250_500),
+            }),
         };
         assert_eq!(
             annotate(Some(cut.clone()), &allowance, ANIMATION, STILL).unwrap(),
@@ -413,7 +439,10 @@ mod tests {
         );
         // A note that is not a clock cut, or none, gets no reason.
         let capped = "Animation shown for the first 5 s.".to_owned();
-        assert_eq!(annotate(Some(capped.clone()), &busy, ANIMATION, STILL), Some(capped));
+        assert_eq!(
+            annotate(Some(capped.clone()), &busy, ANIMATION, STILL),
+            Some(capped)
+        );
         assert_eq!(annotate(None, &busy, ANIMATION, STILL), None);
         assert_eq!(wait(Duration::from_secs(40)), "40 seconds");
         assert_eq!(wait(Duration::from_secs(60)), "1 minute");
@@ -425,7 +454,10 @@ mod tests {
         let mut budgets = Budgets::default();
         let now = Instant::now();
         let grant = budgets.grant(Some("discord:1"), now, true);
-        assert_eq!((grant.animation, grant.extended, grant.idle), (IDLE, true, true));
+        assert_eq!(
+            (grant.animation, grant.extended, grant.idle),
+            (IDLE, true, true)
+        );
         budgets.finish(&grant, secs(1), now + secs(1));
         // With others queued or running, the animation budget.
         let grant = budgets.grant(Some("discord:1"), now + secs(1), false);
@@ -433,7 +465,10 @@ mod tests {
         budgets.finish(&grant, secs(1), now + secs(2));
         // No user: the still budget, idle or not.
         let grant = budgets.grant(None, now + secs(2), true);
-        assert_eq!((grant.animation, grant.extended, grant.idle), (STILL, false, false));
+        assert_eq!(
+            (grant.animation, grant.extended, grant.idle),
+            (STILL, false, false)
+        );
     }
 
     #[test]
@@ -450,11 +485,17 @@ mod tests {
         // 14 s left: less than the animation budget, so not idle.
         let now = now + secs(16);
         let grant = budgets.grant(Some("discord:1"), now, true);
-        assert_eq!((grant.animation, grant.extended, grant.idle), (secs(14), true, false));
+        assert_eq!(
+            (grant.animation, grant.extended, grant.idle),
+            (secs(14), true, false)
+        );
         budgets.finish(&grant, secs(10), now + secs(10));
         // 4 s left: refused.
         let grant = budgets.grant(Some("discord:1"), now + secs(10), true);
-        assert!(matches!(grant.refused, Some(Refused::Allowance { .. })), "{grant:?}");
+        assert!(
+            matches!(grant.refused, Some(Refused::Allowance { .. })),
+            "{grant:?}"
+        );
     }
 
     #[test]
@@ -481,9 +522,15 @@ mod tests {
         let budgets = Budgets::default();
         let started = Instant::now();
         // Arriving at 30 s: cut at once.
-        assert_eq!(budgets.cut_at(started, started + secs(30)), started + secs(30));
+        assert_eq!(
+            budgets.cut_at(started, started + secs(30)),
+            started + secs(30)
+        );
         // Arriving at 4 s: cut when it reaches 15 s.
-        assert_eq!(budgets.cut_at(started, started + secs(4)), started + ANIMATION);
+        assert_eq!(
+            budgets.cut_at(started, started + secs(4)),
+            started + ANIMATION
+        );
     }
 
     #[test]
@@ -496,18 +543,31 @@ mod tests {
             refused: None,
         };
         let said = idle_note(IDLE);
-        assert_eq!(said, "The bot was otherwise idle, so this animation could render for up to 60 s.");
+        assert_eq!(
+            said,
+            "The bot was otherwise idle, so this animation could render for up to 60 s."
+        );
         // Within the animation budget: nothing to say.
         assert_eq!(annotate(None, &idle, ANIMATION, secs(10)), None);
         // Past it: said, after any note from the renderer.
-        assert_eq!(annotate(None, &idle, ANIMATION, secs(40)), Some(said.clone()));
+        assert_eq!(
+            annotate(None, &idle, ANIMATION, secs(40)),
+            Some(said.clone())
+        );
         let stopped = motion::stopped_note(IDLE, Duration::from_millis(2300));
         assert_eq!(
             annotate(Some(stopped.clone()), &idle, ANIMATION, secs(70)),
             Some(format!("{stopped}\n{said}"))
         );
         // Cut for someone waiting: that note is enough.
-        let cut = format!("{} {}", motion::stopped_note(secs(21), secs(1)), motion::WAITING);
-        assert_eq!(annotate(Some(cut.clone()), &idle, ANIMATION, secs(25)), Some(cut));
+        let cut = format!(
+            "{} {}",
+            motion::stopped_note(secs(21), secs(1)),
+            motion::WAITING
+        );
+        assert_eq!(
+            annotate(Some(cut.clone()), &idle, ANIMATION, secs(25)),
+            Some(cut)
+        );
     }
 }

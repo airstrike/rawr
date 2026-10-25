@@ -381,7 +381,9 @@ impl Plan {
             if named_trait {
                 let mut traits = std::mem::take(&mut facade.traits).into_vec();
                 if let Err(position) = traits.binary_search(&relative) {
-                    traits.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                    traits
+                        .try_reserve(1)
+                        .map_err(|_| super::Error::Allocation)?;
                     traits.insert(position, relative);
                 }
                 facade.traits = traits.into_boxed_slice();
@@ -1854,41 +1856,9 @@ fn type_definition(
         .identity()
         .definition()
         .ok_or(super::Error::ForeignIdentity)?;
-    let (parameters, defaults, copyable, default, debug, clone, compare, shape) = match outcome
-        .representability()
-    {
-        Representability::Struct(plan) => (
-            parameters(plan.parameters())?,
-            defaults(plan.parameters())?,
-            plan.copy(),
-            plan.default(),
-            plan.debug(),
-            plan.cloneable(),
-            [plan.partial_eq(), plan.eq(), plan.hash()],
-            Shape::Struct {
-                form: form(plan.form()),
-                constructor: plan
-                    .constructor()
-                    .map(super::identity::Selector::try_clone)
-                    .transpose()?,
-                fields: fields(plan.fields(), plan.parameters())?,
-                constructible: plan.constructible(),
-            },
-        ),
-        Representability::Enum(plan) => {
-            let mut variants = Vec::new();
-            variants
-                .try_reserve_exact(plan.variants().len())
-                .map_err(|_| super::Error::Allocation)?;
-            for variant in plan.variants() {
-                variants.push(Variant {
-                    name: copy(variant.name())?,
-                    fields: fields(variant.fields(), plan.parameters())?,
-                    constructible: variant.constructible(),
-                    selector: variant.selector().try_clone()?,
-                });
-            }
-            (
+    let (parameters, defaults, copyable, default, debug, clone, compare, shape) =
+        match outcome.representability() {
+            Representability::Struct(plan) => (
                 parameters(plan.parameters())?,
                 defaults(plan.parameters())?,
                 plan.copy(),
@@ -1896,20 +1866,51 @@ fn type_definition(
                 plan.debug(),
                 plan.cloneable(),
                 [plan.partial_eq(), plan.eq(), plan.hash()],
-                Shape::Enum {
-                    variants: variants.into_boxed_slice(),
+                Shape::Struct {
+                    form: form(plan.form()),
+                    constructor: plan
+                        .constructor()
+                        .map(super::identity::Selector::try_clone)
+                        .transpose()?,
+                    fields: fields(plan.fields(), plan.parameters())?,
+                    constructible: plan.constructible(),
                 },
-            )
-        }
-        Representability::Value(_)
-        | Representability::Function(_)
-        | Representability::Method(_)
-        | Representability::Constant(_)
-        | Representability::FunctionItem(_)
-        | Representability::Invocation(_)
-        | Representability::Excluded(_)
-        | Representability::Rejected(_) => return Ok(None),
-    };
+            ),
+            Representability::Enum(plan) => {
+                let mut variants = Vec::new();
+                variants
+                    .try_reserve_exact(plan.variants().len())
+                    .map_err(|_| super::Error::Allocation)?;
+                for variant in plan.variants() {
+                    variants.push(Variant {
+                        name: copy(variant.name())?,
+                        fields: fields(variant.fields(), plan.parameters())?,
+                        constructible: variant.constructible(),
+                        selector: variant.selector().try_clone()?,
+                    });
+                }
+                (
+                    parameters(plan.parameters())?,
+                    defaults(plan.parameters())?,
+                    plan.copy(),
+                    plan.default(),
+                    plan.debug(),
+                    plan.cloneable(),
+                    [plan.partial_eq(), plan.eq(), plan.hash()],
+                    Shape::Enum {
+                        variants: variants.into_boxed_slice(),
+                    },
+                )
+            }
+            Representability::Value(_)
+            | Representability::Function(_)
+            | Representability::Method(_)
+            | Representability::Constant(_)
+            | Representability::FunctionItem(_)
+            | Representability::Invocation(_)
+            | Representability::Excluded(_)
+            | Representability::Rejected(_) => return Ok(None),
+        };
     Ok(Some(TypeDefinition {
         path: copy(path)?,
         identity: *definition.as_bytes(),
@@ -1975,9 +1976,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                         }) =>
                 {
                     match plan.receiver() {
-                        Some(representability::ownership::Receiver::Owned) => {
-                            ItemKind::OwnedMethod
-                        }
+                        Some(representability::ownership::Receiver::Owned) => ItemKind::OwnedMethod,
                         Some(representability::ownership::Receiver::Shared) => {
                             ItemKind::SharedMethod
                         }
@@ -1998,9 +1997,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 Selector::Method { .. } => match plan.receiver() {
                     Some(representability::ownership::Receiver::Owned) => ItemKind::OwnedMethod,
                     Some(representability::ownership::Receiver::Shared) => ItemKind::SharedMethod,
-                    Some(representability::ownership::Receiver::Mutable) => {
-                        ItemKind::MutableMethod
-                    }
+                    Some(representability::ownership::Receiver::Mutable) => ItemKind::MutableMethod,
                     None => return Err(super::Error::InstanceMismatch),
                 },
                 _ => return Err(super::Error::ForeignIdentity),

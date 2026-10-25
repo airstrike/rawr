@@ -317,8 +317,15 @@ fn if_unit_branches_and_divergence_boundary_are_explicit() {
 
     // Branches that panic diverge, so they fit any type, as in Rust.
     let engine = Engine::new();
-    engine.compile(r#"pub fn diverges(flag: bool) -> i64 { if flag { panic!("branch") } else { panic!("branch") } }"#).unwrap();
-    assert_eq!(engine.eval::<i64>(r#"fn choose(flag: bool) -> i64 { if flag { panic!("branch") } else { 42 } } choose(false)"#).unwrap(), 42);
+    engine
+        .compile(r#"pub fn diverges(flag: bool) -> i64 { if flag { panic!("branch") } else { panic!("branch") } }"#)
+        .unwrap();
+    assert_eq!(
+        engine
+            .eval::<i64>(r#"fn choose(flag: bool) -> i64 { if flag { panic!("branch") } else { 42 } } choose(false)"#)
+            .unwrap(),
+        42
+    );
 
     // `throw` is not Rust.
     assert_resolution(&engine, "pub fn rejected(flag: bool) -> i64 { if flag { throw \"branch\" } else { 0 } }", Category::Syntax, "found `throw`");

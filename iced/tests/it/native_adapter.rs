@@ -71,7 +71,9 @@ fn launch_binding_rejects_missing_or_mismatched_facades_and_accepts_production_b
     rawr_iced::install(&mut engine).unwrap();
     let engine = Shared::new(engine);
     let descriptor = engine
-        .compile_application_descriptor(include_str!("../../examples/scripts/application_counter.rs"))
+        .compile_application_descriptor(include_str!(
+            "../../examples/scripts/application_counter.rs"
+        ))
         .unwrap();
     let launch = engine.launch_application(descriptor).unwrap();
     launch.bind(registry()).unwrap();

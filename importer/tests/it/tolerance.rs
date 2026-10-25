@@ -97,19 +97,23 @@ fn request(project: &Project, limits: &Limits) -> Request {
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the test environment is sealable");
-    Request::builder(&project.root, &project.root.join("target/rawr/cache"), limits)
-        .expect("the limits-bound request builder seals")
-        .environment(environment)
-        .policy(Policy::manifest(limits).seal())
-        .expect("the manifest policy fits the request")
-        .dependency(
-            Dependency::path("tolerant", &fixture("tolerant-api"), limits)
-                .and_then(|dependency| dependency.package("tolerant-api"))
-                .expect("the tolerant fixture selection is exact"),
-        )
-        .expect("the tolerant dependency fits the request")
-        .build()
-        .expect("the tolerance request seals")
+    Request::builder(
+        &project.root,
+        &project.root.join("target/rawr/cache"),
+        limits,
+    )
+    .expect("the limits-bound request builder seals")
+    .environment(environment)
+    .policy(Policy::manifest(limits).seal())
+    .expect("the manifest policy fits the request")
+    .dependency(
+        Dependency::path("tolerant", &fixture("tolerant-api"), limits)
+            .and_then(|dependency| dependency.package("tolerant-api"))
+            .expect("the tolerant fixture selection is exact"),
+    )
+    .expect("the tolerant dependency fits the request")
+    .build()
+    .expect("the tolerance request seals")
 }
 
 fn fixture(name: &str) -> PathBuf {

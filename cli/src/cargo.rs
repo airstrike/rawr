@@ -164,7 +164,11 @@ pub enum Status {
 /// `cargo check` reports any problem.
 fn settle_lock(program: &OsString, manifest: &Path) {
     let lock = manifest.with_file_name("Cargo.lock");
-    let modified = |path: &Path| fs::metadata(path).and_then(|metadata| metadata.modified()).ok();
+    let modified = |path: &Path| {
+        fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    };
     let current = match (modified(manifest), modified(&lock)) {
         (Some(manifest), Some(lock)) => lock >= manifest,
         (Some(_), None) => false,

@@ -220,10 +220,10 @@ mod in_one_runner {
     }
 
     fn gauge_facade() -> host::facade::Definition {
-        let mut builder =
-            facade::Builder::new("gauge", facade::Abi::new(1).unwrap()).unwrap();
+        let mut builder = facade::Builder::new("gauge", facade::Abi::new(1).unwrap()).unwrap();
         builder.type_::<Gauge>("Gauge", &["T"], &[]).unwrap();
-        let gauge = || type_ref::Type::applied("Gauge", [type_ref::Type::parameter("T").unwrap()]).unwrap();
+        let gauge =
+            || type_ref::Type::applied("Gauge", [type_ref::Type::parameter("T").unwrap()]).unwrap();
         let mut new = signature::Builder::new();
         new.type_parameter("T", &[]).unwrap();
         new.parameter(type_ref::Type::builtin(type_ref::Builtin::I64));
@@ -251,14 +251,20 @@ mod in_one_runner {
         let mut builder = host::runtime::Builder::new(gauge_facade());
         builder
             .bind_with_context("gauge::Gauge::new", |call, args| {
-                let level = args[0].as_int().map_err(|_| error("Gauge::new takes an i64"))?;
-                let witness = call.output_witness().map_err(|_| error("Gauge::new witness"))?;
+                let level = args[0]
+                    .as_int()
+                    .map_err(|_| error("Gauge::new takes an i64"))?;
+                let witness = call
+                    .output_witness()
+                    .map_err(|_| error("Gauge::new witness"))?;
                 Ok(Dynamic::from(Gauge { witness, level }))
             })
             .unwrap();
         builder
             .bind("gauge::Gauge::level", |args| {
-                let gauge = args[0].read_lock::<Gauge>().ok_or_else(|| error("not a Gauge"))?;
+                let gauge = args[0]
+                    .read_lock::<Gauge>()
+                    .ok_or_else(|| error("not a Gauge"))?;
                 Ok(Dynamic::from(gauge.level))
             })
             .unwrap();
@@ -377,7 +383,9 @@ pub fn main() -> iced::Result {
             // package in a process.
             fs::write(
                 root.join("Cargo.toml"),
-                format!("[package]\nname = \"carry-{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"),
+                format!(
+                    "[package]\nname = \"carry-{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
+                ),
             )
             .unwrap();
             crate::write_marked(&root, "src/main.rs", source.replace("TAG", "old"));
@@ -403,13 +411,23 @@ pub fn main() -> iced::Result {
                     return Err(error);
                 }
             };
-            Ok(Self { root, engine, target, registry, publication, host })
+            Ok(Self {
+                root,
+                engine,
+                target,
+                registry,
+                publication,
+                host,
+            })
         }
 
         /// Install `source` as a script edit; whether the edit applied.
         fn edit(&mut self, source: &str) -> bool {
             crate::write_marked(&self.root, "src/main.rs", source);
-            let next = self.engine.compile_package_generation(&self.target).unwrap();
+            let next = self
+                .engine
+                .compile_package_generation(&self.target)
+                .unwrap();
             let now = Instant::now();
             let gate = Gate::new(Duration::ZERO);
             gate.observe(now).unwrap();
@@ -438,7 +456,10 @@ pub fn main() -> iced::Result {
         /// Install `source` as a script edit; whether it cancelled a task.
         fn edit_cancelling(&mut self, source: &str) -> bool {
             crate::write_marked(&self.root, "src/main.rs", source);
-            let next = self.engine.compile_package_generation(&self.target).unwrap();
+            let next = self
+                .engine
+                .compile_package_generation(&self.target)
+                .unwrap();
             let now = Instant::now();
             let gate = Gate::new(Duration::ZERO);
             gate.observe(now).unwrap();

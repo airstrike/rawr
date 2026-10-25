@@ -271,7 +271,9 @@ fn prepare_in(
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if rawr_import_cli::new_demand(&error, &request_demand).is_some() =>
                     {
-                        crate_demand.extend(rawr_import_cli::new_demand(&error, &request_demand).map(Box::from));
+                        crate_demand.extend(
+                            rawr_import_cli::new_demand(&error, &request_demand).map(Box::from),
+                        );
                         crate_demand.sort_unstable();
                         rawr_import::crate_demand::store(&project, &crate_demand);
                         continue;
@@ -451,8 +453,9 @@ mod tests {
         let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target)
             .expect("fixture package graph");
         let environment = Environment::capture().expect("fixture Cargo environment");
-        let dependency = rawr_iced::profile::Definition::cargo_dependency(&super::widgets(&graph), &limits)
-            .expect("fixture profile dependency");
+        let dependency =
+            rawr_iced::profile::Definition::cargo_dependency(&super::widgets(&graph), &limits)
+                .expect("fixture profile dependency");
         let universe = rawr_iced::profile::Definition::new(&limits)
             .expect("fixture profile definition")
             .resolution_universe();
@@ -482,8 +485,9 @@ mod tests {
         let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target)
             .expect("fixture package graph");
         let environment = Environment::capture().expect("fixture Cargo environment");
-        let dependency = rawr_iced::profile::Definition::cargo_dependency(&super::widgets(&graph), &limits)
-            .expect("fixture profile dependency");
+        let dependency =
+            rawr_iced::profile::Definition::cargo_dependency(&super::widgets(&graph), &limits)
+                .expect("fixture profile dependency");
         let universe = rawr_iced::profile::Definition::new(&limits)
             .expect("fixture profile definition")
             .resolution_universe();

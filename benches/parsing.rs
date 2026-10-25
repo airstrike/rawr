@@ -27,7 +27,11 @@ fn bench_parse_simple(bench: &mut Bencher) {
     scope.push("requests_made", 99 as INT);
     scope.push("requests_succeeded", 90 as INT);
 
-    bench.iter(|| engine.compile_expression_with_scope(&scope, script).unwrap());
+    bench.iter(|| {
+        engine
+            .compile_expression_with_scope(&scope, script)
+            .unwrap()
+    });
 }
 
 #[bench]

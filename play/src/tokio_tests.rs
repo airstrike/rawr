@@ -421,7 +421,10 @@ fn tokio_spawn_says_what_to_use_instead() {
     String::new()
 }",
     );
-    assert!(error.contains("`tokio::spawn` in a program without a tokio dependency"), "{error}");
+    assert!(
+        error.contains("`tokio::spawn` in a program without a tokio dependency"),
+        "{error}"
+    );
     assert!(error.contains("tokio::join!"), "{error}");
 }
 
@@ -461,10 +464,23 @@ fn tokio_spawn_blocking_output_reaches_update_through_task_perform() {
         "Task::perform(tokio::task::spawn_blocking(move || work(100)), |result| \
          Message::Shown(result.unwrap()))",
     ));
-    let shown = record(&app(items, "Task::done(Message::Shown(\"sum 5050\".to_string()))"));
+    let shown = record(&app(
+        items,
+        "Task::done(Message::Shown(\"sum 5050\".to_string()))",
+    ));
     let last = frames.last().unwrap();
-    assert!(last.same_image(shown.last().unwrap()), "the app does not show the sum");
-    assert_eq!(frames.iter().find(|frame| frame.same_image(last)).unwrap().time, Duration::ZERO);
+    assert!(
+        last.same_image(shown.last().unwrap()),
+        "the app does not show the sum"
+    );
+    assert_eq!(
+        frames
+            .iter()
+            .find(|frame| frame.same_image(last))
+            .unwrap()
+            .time,
+        Duration::ZERO
+    );
 }
 
 #[test]
@@ -492,7 +508,10 @@ fn tokio_files_sockets_and_processes_are_unknown() {
     String::new()
 }}"
         ));
-        assert!(error.contains("error[RAWR-RESOLVE-UNKNOWN-"), "{path}: {error}");
+        assert!(
+            error.contains("error[RAWR-RESOLVE-UNKNOWN-"),
+            "{path}: {error}"
+        );
     }
 }
 

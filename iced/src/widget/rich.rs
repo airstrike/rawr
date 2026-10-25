@@ -105,7 +105,15 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             new_rich(call, spans)
         })
         .expect("the iced facade must retain the rich_text macro");
-    for name in ["size", "font", "color", "color_maybe", "width", "height", "on_link_click"] {
+    for name in [
+        "size",
+        "font",
+        "color",
+        "color_maybe",
+        "width",
+        "height",
+        "on_link_click",
+    ] {
         let path = format!("iced::widget::text::Rich::{name}");
         builder
             .bind(path.clone(), move |args| {
@@ -180,9 +188,8 @@ impl widget::Descriptor for marker::Rich {
                 native
             })
             .collect::<Vec<_>>();
-        let mut rich =
-            iced::widget::rich_text::<Dynamic, runtime::Message, iced::Theme>(spans)
-                .color_maybe(self.color);
+        let mut rich = iced::widget::rich_text::<Dynamic, runtime::Message, iced::Theme>(spans)
+            .color_maybe(self.color);
         if let Some(size) = self.size {
             rich = rich.size(size);
         }

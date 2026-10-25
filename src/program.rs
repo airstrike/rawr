@@ -17,8 +17,8 @@ pub use authority::Authority;
 pub use error::{Aspect, Error};
 #[cfg(feature = "rust-import")]
 pub(crate) use executable::ContractEvidence;
-pub use executable::{Executable, Positions};
 pub(crate) use executable::{ApplicationEvidence, Evidence};
+pub use executable::{Executable, Positions};
 pub use generation::GenerationId;
 pub(crate) use path::Path;
 pub use source::Source;

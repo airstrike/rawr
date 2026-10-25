@@ -702,8 +702,9 @@ fn unavailable_evidence<'contract>(
         },
         R::FunctionItem(plan) if callable_generic(plan) => return None,
         R::FunctionItem(_) => UnavailableEvidence {
-            reason: "a generic function with a const or closure parameter is not supported in Rawr yet"
-                .into(),
+            reason:
+                "a generic function with a const or closure parameter is not supported in Rawr yet"
+                    .into(),
             source: outcome.origin()?.source(),
             declaration: outcome.origin()?.declaration(),
         },
@@ -1729,7 +1730,10 @@ fn names_declared(
         Representability::Constant(plan) => return ty_ok(plan.ty(), declared),
         _ => return true,
     };
-    signature.inputs().iter().all(|input| ty_ok(input, declared))
+    signature
+        .inputs()
+        .iter()
+        .all(|input| ty_ok(input, declared))
         && ty_ok(signature.output(), declared)
 }
 
@@ -1997,7 +2001,10 @@ fn defaults(
     parameters: &[representability::signature::Parameter],
     allocation: &mut rawr_import::contract::Allocation,
 ) -> Result<Box<[Option<host::type_ref::Type>]>, Error> {
-    if parameters.iter().all(|parameter| parameter.default().is_none()) {
+    if parameters
+        .iter()
+        .all(|parameter| parameter.default().is_none())
+    {
         return Ok(Box::default());
     }
     let mut defaults = Vec::new();

@@ -178,10 +178,13 @@ impl Recorded {
 }
 
 fn recorded_tree(files: &mut Vec<(PathBuf, u64, [u8; 32])>, root: &Path, tree: &[TreeFile]) {
-    files.extend(
-        tree.iter()
-            .map(|file| (root.join(file.path.as_ref()), file.bytes as u64, file.digest)),
-    );
+    files.extend(tree.iter().map(|file| {
+        (
+            root.join(file.path.as_ref()),
+            file.bytes as u64,
+            file.digest,
+        )
+    }));
 }
 
 /// A recorded tree's root, files and their directories: an added or removed
@@ -250,14 +253,20 @@ mod tests {
         let path = root.join("lib.rs");
         let original = b"pub fn dial() -> u32 { 7 }\n";
         std::fs::write(&path, original).unwrap();
-        let recorded = Recorded::of(&[Entry::File {
-            role: Role::Authority,
-            package_id: None,
-            path: path.to_str().unwrap().into(),
-            bytes: original.len(),
-            digest: Sha256::digest(original).into(),
-        }], &root.join("bundle"));
-        assert!(!recorded.changed(), "unchanged bytes are not a proven change");
+        let recorded = Recorded::of(
+            &[Entry::File {
+                role: Role::Authority,
+                package_id: None,
+                path: path.to_str().unwrap().into(),
+                bytes: original.len(),
+                digest: Sha256::digest(original).into(),
+            }],
+            &root.join("bundle"),
+        );
+        assert!(
+            !recorded.changed(),
+            "unchanged bytes are not a proven change"
+        );
         std::fs::write(&path, b"pub fn dial() -> u32 { 8 }\n").unwrap();
         assert!(recorded.changed(), "equal length, different bytes");
         std::fs::write(&path, b"pub fn dial() -> u32 { 7 }\nfn more() {}\n").unwrap();

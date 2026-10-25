@@ -2894,7 +2894,9 @@ impl rawr::package::import::runner::Profile for Decoration<'_> {
     ) -> Result<Option<host::type_ref::Type>, host::Error> {
         // A Rust future or sipper has no Rust type to name, and any crate
         // may return one. The importer names it; iced's facade declares it.
-        let projected = if identity == rawr_import::surface::identity::Definition::future().as_bytes() {
+        let projected = if identity
+            == rawr_import::surface::identity::Definition::future().as_bytes()
+        {
             Some("Task")
         } else if identity == rawr_import::surface::identity::Definition::sipper().as_bytes() {
             Some("task::Sipper")
@@ -3089,8 +3091,8 @@ mod alias_proof_tests {
         alias_site_selector, alias_target_selector, bind_runtime, projection_source_selector,
         projection_source_site_selector, selector, validate_extension_abis,
         validate_operation_endpoints, validate_projections, with_contract_rows, AliasParameter,
-        AliasTarget, Argument, Namespace, ParameterKind, Projection,
-        ProjectionSourceSite, SourceArgument,
+        AliasTarget, Argument, Namespace, ParameterKind, Projection, ProjectionSourceSite,
+        SourceArgument,
     };
     use sha2::{Digest as _, Sha256};
 
@@ -3586,7 +3588,10 @@ pub fn view() -> Element<Message> { label("generated") }
 "#,
             )
             .expect_err("a module without an endpoint remains an unresolved call");
-        assert!(absent.to_string().contains("nknown function 'label'"), "{absent}");
+        assert!(
+            absent.to_string().contains("nknown function 'label'"),
+            "{absent}"
+        );
 
         let wrong_arity =
             engine.compile(r#"use iced::widget::text; pub fn invalid() { text("one", "two") }"#);

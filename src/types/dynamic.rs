@@ -204,7 +204,9 @@ impl Dynamic {
             let converted: Option<Box<dyn Any>> = if id == TypeId::of::<u64>() {
                 Some(Box::new(n as u64))
             } else if id == TypeId::of::<usize>() {
-                usize::try_from(n as u64).ok().map(|n| Box::new(n) as Box<dyn Any>)
+                usize::try_from(n as u64)
+                    .ok()
+                    .map(|n| Box::new(n) as Box<dyn Any>)
             } else if id == TypeId::of::<u32>() {
                 u32::try_from(n).ok().map(|n| Box::new(n) as Box<dyn Any>)
             } else if id == TypeId::of::<u16>() {
@@ -548,9 +550,7 @@ impl fmt::Display for Dynamic {
             Union::Bool(ref v, ..) => fmt::Display::fmt(v, f),
             Union::Str(ref v, ..) => fmt::Display::fmt(v, f),
             Union::Char(ref v, ..) => fmt::Display::fmt(v, f),
-            Union::Int(ref v, tag, ..) if tag == UNSIGNED_TAG => {
-                fmt::Display::fmt(&(*v as u64), f)
-            }
+            Union::Int(ref v, tag, ..) if tag == UNSIGNED_TAG => fmt::Display::fmt(&(*v as u64), f),
             Union::Int(ref v, ..) => fmt::Display::fmt(v, f),
             #[cfg(not(feature = "no_float"))]
             Union::Float(ref v, ..) => fmt::Display::fmt(v, f),

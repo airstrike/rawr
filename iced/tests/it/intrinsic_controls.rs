@@ -282,9 +282,10 @@ fn tab_row_and_long_scroll_surface_layout_at_a_small_window_size() {
     assert_eq!(statuses, [iced::event::Status::Captured]);
     // iced's scrollable smooths wheel scrolling over time; let it settle.
     let now = iced::time::Instant::now();
-    let _ = simulator.simulate([now, now + iced::time::Duration::from_secs(2)].map(|at| {
-        iced::Event::Window(iced::window::Event::RedrawRequested(at))
-    }));
+    let _ = simulator.simulate(
+        [now, now + iced::time::Duration::from_secs(2)]
+            .map(|at| iced::Event::Window(iced::window::Event::RedrawRequested(at))),
+    );
     assert!(simulator
         .find("Scroll target")
         .unwrap()

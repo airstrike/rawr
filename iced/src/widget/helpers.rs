@@ -6,8 +6,8 @@ use rawr::host;
 use rawr::{Dynamic, EvalAltResult};
 
 use super::builtin::{
-    arity, length, positional_row, project, runtime_error, take, take_children,
-    take_container, witness_error, Witnessed,
+    arity, length, positional_row, project, runtime_error, take, take_children, take_container,
+    witness_error, Witnessed,
 };
 use crate::{marker, runtime, widget};
 
@@ -41,7 +41,9 @@ fn bind_defaults(builder: &mut host::runtime::Builder) {
         path: &str,
     ) {
         builder
-            .bind(format!("iced::{path}::default"), |_| Ok(Dynamic::from(T::default())))
+            .bind(format!("iced::{path}::default"), |_| {
+                Ok(Dynamic::from(T::default()))
+            })
             .expect("the iced facade must retain every DEFAULTED type's default");
     }
     for path in crate::DEFAULTED {
@@ -112,64 +114,149 @@ fn bind_events(builder: &mut host::runtime::Builder) {
 
     macro_rules! test {
         ($ty:ty, $path:literal, $pattern:pat) => {
-            read::<$ty>(builder, $path, |event| Dynamic::from(matches!(event, $pattern)));
+            read::<$ty>(builder, $path, |event| {
+                Dynamic::from(matches!(event, $pattern))
+            });
         };
     }
-    test!(window::Event, "iced::window::Event::Opened", window::Event::Opened { .. });
-    test!(window::Event, "iced::window::Event::Closed", window::Event::Closed);
-    test!(window::Event, "iced::window::Event::CloseRequested", window::Event::CloseRequested);
-    test!(window::Event, "iced::window::Event::Focused", window::Event::Focused);
-    test!(window::Event, "iced::window::Event::Unfocused", window::Event::Unfocused);
-    test!(window::Event, "iced::window::Event::FileHovered", window::Event::FileHovered(_));
-    test!(window::Event, "iced::window::Event::FileDropped", window::Event::FileDropped(_));
-    test!(window::Event, "iced::window::Event::FilesHoveredLeft", window::Event::FilesHoveredLeft);
+    test!(
+        window::Event,
+        "iced::window::Event::Opened",
+        window::Event::Opened { .. }
+    );
+    test!(
+        window::Event,
+        "iced::window::Event::Closed",
+        window::Event::Closed
+    );
+    test!(
+        window::Event,
+        "iced::window::Event::CloseRequested",
+        window::Event::CloseRequested
+    );
+    test!(
+        window::Event,
+        "iced::window::Event::Focused",
+        window::Event::Focused
+    );
+    test!(
+        window::Event,
+        "iced::window::Event::Unfocused",
+        window::Event::Unfocused
+    );
+    test!(
+        window::Event,
+        "iced::window::Event::FileHovered",
+        window::Event::FileHovered(_)
+    );
+    test!(
+        window::Event,
+        "iced::window::Event::FileDropped",
+        window::Event::FileDropped(_)
+    );
+    test!(
+        window::Event,
+        "iced::window::Event::FilesHoveredLeft",
+        window::Event::FilesHoveredLeft
+    );
     read::<window::Event>(builder, "iced::window::Event::Moved", |event| match event {
         window::Event::Moved(point) => rawr::option::some(Dynamic::from(*point)),
         _ => rawr::option::none(),
     });
-    read::<window::Event>(builder, "iced::window::Event::Resized", |event| match event {
-        window::Event::Resized(size) => rawr::option::some(Dynamic::from(*size)),
-        _ => rawr::option::none(),
-    });
-    read::<window::Event>(builder, "iced::window::Event::Rescaled", |event| match event {
-        window::Event::Rescaled(scale) => rawr::option::some(Dynamic::from(f64::from(*scale))),
-        _ => rawr::option::none(),
-    });
-    read::<window::Event>(builder, "iced::window::Event::RedrawRequested", |event| match event {
-        window::Event::RedrawRequested(now) => rawr::option::some(Dynamic::from(marker::Instant(*now))),
-        _ => rawr::option::none(),
-    });
-    read::<window::Event>(builder, "iced::window::Event::position", |event| match event {
-        window::Event::Opened { position, .. } => {
-            position.map_or_else(rawr::option::none, |point| rawr::option::some(Dynamic::from(point)))
-        }
-        _ => rawr::option::none(),
-    });
+    read::<window::Event>(
+        builder,
+        "iced::window::Event::Resized",
+        |event| match event {
+            window::Event::Resized(size) => rawr::option::some(Dynamic::from(*size)),
+            _ => rawr::option::none(),
+        },
+    );
+    read::<window::Event>(
+        builder,
+        "iced::window::Event::Rescaled",
+        |event| match event {
+            window::Event::Rescaled(scale) => rawr::option::some(Dynamic::from(f64::from(*scale))),
+            _ => rawr::option::none(),
+        },
+    );
+    read::<window::Event>(
+        builder,
+        "iced::window::Event::RedrawRequested",
+        |event| match event {
+            window::Event::RedrawRequested(now) => {
+                rawr::option::some(Dynamic::from(marker::Instant(*now)))
+            }
+            _ => rawr::option::none(),
+        },
+    );
+    read::<window::Event>(
+        builder,
+        "iced::window::Event::position",
+        |event| match event {
+            window::Event::Opened { position, .. } => position
+                .map_or_else(rawr::option::none, |point| {
+                    rawr::option::some(Dynamic::from(point))
+                }),
+            _ => rawr::option::none(),
+        },
+    );
     read::<window::Event>(builder, "iced::window::Event::size", |event| match event {
         window::Event::Opened { size, .. } => Dynamic::from(*size),
         _ => Dynamic::from(iced::Size::ZERO),
     });
-    read::<window::Event>(builder, "iced::window::Event::scale_factor", |event| match event {
-        window::Event::Opened { scale_factor, .. } => Dynamic::from(f64::from(*scale_factor)),
-        _ => Dynamic::from(1.0_f64),
-    });
+    read::<window::Event>(
+        builder,
+        "iced::window::Event::scale_factor",
+        |event| match event {
+            window::Event::Opened { scale_factor, .. } => Dynamic::from(f64::from(*scale_factor)),
+            _ => Dynamic::from(1.0_f64),
+        },
+    );
 
-    test!(mouse::Event, "iced::mouse::Event::CursorEntered", mouse::Event::CursorEntered);
-    test!(mouse::Event, "iced::mouse::Event::CursorLeft", mouse::Event::CursorLeft);
-    test!(mouse::Event, "iced::mouse::Event::CursorMoved", mouse::Event::CursorMoved { .. });
-    test!(mouse::Event, "iced::mouse::Event::WheelScrolled", mouse::Event::WheelScrolled { .. });
-    read::<mouse::Event>(builder, "iced::mouse::Event::ButtonPressed", |event| match event {
-        mouse::Event::ButtonPressed(button) => rawr::option::some(Dynamic::from(*button)),
-        _ => rawr::option::none(),
-    });
-    read::<mouse::Event>(builder, "iced::mouse::Event::ButtonReleased", |event| match event {
-        mouse::Event::ButtonReleased(button) => rawr::option::some(Dynamic::from(*button)),
-        _ => rawr::option::none(),
-    });
-    read::<mouse::Event>(builder, "iced::mouse::Event::position", |event| match event {
-        mouse::Event::CursorMoved { position } => Dynamic::from(*position),
-        _ => Dynamic::from(iced::Point::ORIGIN),
-    });
+    test!(
+        mouse::Event,
+        "iced::mouse::Event::CursorEntered",
+        mouse::Event::CursorEntered
+    );
+    test!(
+        mouse::Event,
+        "iced::mouse::Event::CursorLeft",
+        mouse::Event::CursorLeft
+    );
+    test!(
+        mouse::Event,
+        "iced::mouse::Event::CursorMoved",
+        mouse::Event::CursorMoved { .. }
+    );
+    test!(
+        mouse::Event,
+        "iced::mouse::Event::WheelScrolled",
+        mouse::Event::WheelScrolled { .. }
+    );
+    read::<mouse::Event>(
+        builder,
+        "iced::mouse::Event::ButtonPressed",
+        |event| match event {
+            mouse::Event::ButtonPressed(button) => rawr::option::some(Dynamic::from(*button)),
+            _ => rawr::option::none(),
+        },
+    );
+    read::<mouse::Event>(
+        builder,
+        "iced::mouse::Event::ButtonReleased",
+        |event| match event {
+            mouse::Event::ButtonReleased(button) => rawr::option::some(Dynamic::from(*button)),
+            _ => rawr::option::none(),
+        },
+    );
+    read::<mouse::Event>(
+        builder,
+        "iced::mouse::Event::position",
+        |event| match event {
+            mouse::Event::CursorMoved { position } => Dynamic::from(*position),
+            _ => Dynamic::from(iced::Point::ORIGIN),
+        },
+    );
     for (name, button) in [
         ("Left", mouse::Button::Left),
         ("Right", mouse::Button::Right),
@@ -178,20 +265,42 @@ fn bind_events(builder: &mut host::runtime::Builder) {
         ("Forward", mouse::Button::Forward),
     ] {
         builder
-            .bind(format!("iced::mouse::Button::{name}"), move |_| Ok(Dynamic::from(button)))
+            .bind(format!("iced::mouse::Button::{name}"), move |_| {
+                Ok(Dynamic::from(button))
+            })
             .expect("the iced facade must retain every mouse::Button");
     }
 
-    test!(touch::Event, "iced::touch::Event::FingerPressed", touch::Event::FingerPressed { .. });
-    test!(touch::Event, "iced::touch::Event::FingerMoved", touch::Event::FingerMoved { .. });
-    test!(touch::Event, "iced::touch::Event::FingerLifted", touch::Event::FingerLifted { .. });
-    test!(touch::Event, "iced::touch::Event::FingerLost", touch::Event::FingerLost { .. });
-    read::<touch::Event>(builder, "iced::touch::Event::position", |event| match event {
-        touch::Event::FingerPressed { position, .. }
-        | touch::Event::FingerMoved { position, .. }
-        | touch::Event::FingerLifted { position, .. }
-        | touch::Event::FingerLost { position, .. } => Dynamic::from(*position),
-    });
+    test!(
+        touch::Event,
+        "iced::touch::Event::FingerPressed",
+        touch::Event::FingerPressed { .. }
+    );
+    test!(
+        touch::Event,
+        "iced::touch::Event::FingerMoved",
+        touch::Event::FingerMoved { .. }
+    );
+    test!(
+        touch::Event,
+        "iced::touch::Event::FingerLifted",
+        touch::Event::FingerLifted { .. }
+    );
+    test!(
+        touch::Event,
+        "iced::touch::Event::FingerLost",
+        touch::Event::FingerLost { .. }
+    );
+    read::<touch::Event>(
+        builder,
+        "iced::touch::Event::position",
+        |event| match event {
+            touch::Event::FingerPressed { position, .. }
+            | touch::Event::FingerMoved { position, .. }
+            | touch::Event::FingerLifted { position, .. }
+            | touch::Event::FingerLost { position, .. } => Dynamic::from(*position),
+        },
+    );
     read::<touch::Event>(builder, "iced::touch::Event::id", |event| match event {
         touch::Event::FingerPressed { id, .. }
         | touch::Event::FingerMoved { id, .. }
@@ -238,9 +347,9 @@ fn bind_keyboard(builder: &mut host::runtime::Builder) {
                 let [value] = args else {
                     return Err(arity(path, 1, args.len()));
                 };
-                let value = value
-                    .read_lock::<T>()
-                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                let value = value.read_lock::<T>().ok_or_else(|| {
+                    runtime_error(format!("`{path}` read a value of another type"))
+                })?;
                 Ok(read(&value))
             })
             .expect("the iced facade must retain every keyboard reader");
@@ -251,28 +360,42 @@ fn bind_keyboard(builder: &mut host::runtime::Builder) {
     read::<Event>(builder, "iced::keyboard::Event::KeyReleased", |event| {
         Dynamic::from(matches!(event, Event::KeyReleased { .. }))
     });
-    read::<Event>(builder, "iced::keyboard::Event::ModifiersChanged", |event| {
-        Dynamic::from(matches!(event, Event::ModifiersChanged(_)))
-    });
+    read::<Event>(
+        builder,
+        "iced::keyboard::Event::ModifiersChanged",
+        |event| Dynamic::from(matches!(event, Event::ModifiersChanged(_))),
+    );
     read::<Event>(builder, "iced::keyboard::Event::key", |event| match event {
-        Event::KeyPressed { key, .. } | Event::KeyReleased { key, .. } => Dynamic::from(key.clone()),
-        Event::ModifiersChanged(_) => Dynamic::from(<Key>::Unidentified),
-    });
-    read::<Event>(builder, "iced::keyboard::Event::modified_key", |event| match event {
-        Event::KeyPressed { modified_key, .. } | Event::KeyReleased { modified_key, .. } => {
-            Dynamic::from(modified_key.clone())
+        Event::KeyPressed { key, .. } | Event::KeyReleased { key, .. } => {
+            Dynamic::from(key.clone())
         }
         Event::ModifiersChanged(_) => Dynamic::from(<Key>::Unidentified),
     });
-    read::<Event>(builder, "iced::keyboard::Event::modifiers", |event| match event {
-        Event::KeyPressed { modifiers, .. }
-        | Event::KeyReleased { modifiers, .. }
-        | Event::ModifiersChanged(modifiers) => Dynamic::from(*modifiers),
-    });
+    read::<Event>(
+        builder,
+        "iced::keyboard::Event::modified_key",
+        |event| match event {
+            Event::KeyPressed { modified_key, .. } | Event::KeyReleased { modified_key, .. } => {
+                Dynamic::from(modified_key.clone())
+            }
+            Event::ModifiersChanged(_) => Dynamic::from(<Key>::Unidentified),
+        },
+    );
+    read::<Event>(
+        builder,
+        "iced::keyboard::Event::modifiers",
+        |event| match event {
+            Event::KeyPressed { modifiers, .. }
+            | Event::KeyReleased { modifiers, .. }
+            | Event::ModifiersChanged(modifiers) => Dynamic::from(*modifiers),
+        },
+    );
     read::<Event>(builder, "iced::keyboard::Event::repeat", |event| {
         Dynamic::from(matches!(event, Event::KeyPressed { repeat: true, .. }))
     });
-    read::<Key>(builder, "iced::keyboard::Key::as_ref", |key| Dynamic::from(key.clone()));
+    read::<Key>(builder, "iced::keyboard::Key::as_ref", |key| {
+        Dynamic::from(key.clone())
+    });
     for (name, read_modifier) in [
         ("shift", Modifiers::shift as fn(Modifiers) -> bool),
         ("control", Modifiers::control),
@@ -291,7 +414,9 @@ fn bind_keyboard(builder: &mut host::runtime::Builder) {
                 let modifiers = value
                     .read_lock::<Modifiers>()
                     .map(|modifiers| *modifiers)
-                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                    .ok_or_else(|| {
+                        runtime_error(format!("`{path}` read a value of another type"))
+                    })?;
                 Ok(Dynamic::from(read_modifier(modifiers)))
             })
             .expect("the iced facade must retain every Modifiers reader");
@@ -315,7 +440,9 @@ fn bind_keyboard(builder: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain Key::Character");
     builder
-        .bind("iced::keyboard::Key::Unidentified", |_| Ok(Dynamic::from(<Key>::Unidentified)))
+        .bind("iced::keyboard::Key::Unidentified", |_| {
+            Ok(Dynamic::from(<Key>::Unidentified))
+        })
         .expect("the iced facade must retain Key::Unidentified");
     for (name, named) in crate::KEY_NAMES.into_iter().zip([
         Named::Alt,
@@ -382,7 +509,9 @@ fn bind_operations(builder: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain Id::new");
     builder
-        .bind("iced::widget::Id::unique", |_| Ok(Dynamic::from(iced::widget::Id::unique())))
+        .bind("iced::widget::Id::unique", |_| {
+            Ok(Dynamic::from(iced::widget::Id::unique()))
+        })
         .expect("the iced facade must retain Id::unique");
     builder
         .bind("iced::widget::Container::id", |args| {
@@ -420,16 +549,21 @@ fn bind_operations(builder: &mut host::runtime::Builder) {
         iced::widget::operation::Animation::Smooth,
     ]) {
         builder
-            .bind(format!("iced::widget::operation::Animation::{name}"), move |_| {
-                Ok(Dynamic::from(animation))
-            })
+            .bind(
+                format!("iced::widget::operation::Animation::{name}"),
+                move |_| Ok(Dynamic::from(animation)),
+            )
             .expect("the iced facade must retain every operation::Animation");
     }
-    for (name, offset) in [("START", RelativeOffset::START), ("END", RelativeOffset::END)] {
+    for (name, offset) in [
+        ("START", RelativeOffset::START),
+        ("END", RelativeOffset::END),
+    ] {
         builder
-            .bind(format!("iced::widget::scrollable::RelativeOffset::{name}"), move |_| {
-                Ok(Dynamic::from(offset))
-            })
+            .bind(
+                format!("iced::widget::scrollable::RelativeOffset::{name}"),
+                move |_| Ok(Dynamic::from(offset)),
+            )
             .expect("the iced facade must retain every RelativeOffset constant");
     }
     builder
@@ -503,14 +637,20 @@ fn bind_alignment(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every alignment::Vertical value");
     }
-    for (name, alignment) in [("Left", iced::Alignment::Start), ("Right", iced::Alignment::End)] {
+    for (name, alignment) in [
+        ("Left", iced::Alignment::Start),
+        ("Right", iced::Alignment::End),
+    ] {
         builder
             .bind(format!("iced::{name}"), move |_| {
                 Ok(Dynamic::from(marker::Horizontal(alignment)))
             })
             .expect("the iced facade must retain every horizontal shorthand");
     }
-    for (name, alignment) in [("Top", iced::Alignment::Start), ("Bottom", iced::Alignment::End)] {
+    for (name, alignment) in [
+        ("Top", iced::Alignment::Start),
+        ("Bottom", iced::Alignment::End),
+    ] {
         builder
             .bind(format!("iced::{name}"), move |_| {
                 Ok(Dynamic::from(marker::Vertical(alignment)))
@@ -648,8 +788,9 @@ fn bind_rule(builder: &mut host::runtime::Builder) {
 impl widget::Descriptor for marker::Stack {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         // Unset, iced's stack takes the size of its first child.
-        let mut stack =
-            iced::widget::Stack::with_children(self.children.iter().map(|child| child.lower(context)));
+        let mut stack = iced::widget::Stack::with_children(
+            self.children.iter().map(|child| child.lower(context)),
+        );
         if let Some(width) = self.width {
             stack = stack.width(width);
         }
@@ -724,7 +865,9 @@ fn bind_stack(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain the exact stack functions");
     }
     builder
-        .bind_with_context("iced::widget::Stack::new", |call, _| new_stack(call, Vec::new()))
+        .bind_with_context("iced::widget::Stack::new", |call, _| {
+            new_stack(call, Vec::new())
+        })
         .expect("the iced facade must retain the exact Stack::new item");
     for (name, height) in [("width", false), ("height", true)] {
         let path = format!("iced::widget::Stack::{name}");
@@ -816,14 +959,19 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                     .and_then(|value| value.as_float().ok())
                     .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
                     .ok_or_else(|| {
-                        runtime_error(format!("Duration::{name} expects a finite, nonnegative float"))
+                        runtime_error(format!(
+                            "Duration::{name} expects a finite, nonnegative float"
+                        ))
                     })?;
                 Ok(Dynamic::from(Duration::from_secs_f64(seconds)))
             })
             .expect("the iced facade must retain every Duration constructor");
     }
     for (name, read) in [
-        ("as_secs", (|d: &Duration| Dynamic::from(d.as_secs() as i64)) as fn(&Duration) -> Dynamic),
+        (
+            "as_secs",
+            (|d: &Duration| Dynamic::from(d.as_secs() as i64)) as fn(&Duration) -> Dynamic,
+        ),
         ("as_millis", |d| Dynamic::from(d.as_millis() as i64)),
         ("as_micros", |d| Dynamic::from(d.as_micros() as i64)),
         ("as_nanos", |d| Dynamic::from(d.as_nanos() as i64)),
@@ -836,9 +984,9 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                 let [value] = args else {
                     return Err(arity(&path, 1, args.len()));
                 };
-                let duration = value
-                    .read_lock::<Duration>()
-                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                let duration = value.read_lock::<Duration>().ok_or_else(|| {
+                    runtime_error(format!("`{path}` read a value of another type"))
+                })?;
                 Ok(read(&duration))
             })
             .expect("the iced facade must retain every Duration reader");
@@ -857,14 +1005,18 @@ fn bind_values(builder: &mut host::runtime::Builder) {
             .zip(rhs.read_lock::<B>().map(|rhs| rhs.clone())))
     }
     for (name, apply) in [
-        ("add", Duration::checked_add as fn(Duration, Duration) -> Option<Duration>),
+        (
+            "add",
+            Duration::checked_add as fn(Duration, Duration) -> Option<Duration>,
+        ),
         ("sub", Duration::checked_sub),
     ] {
         let path = format!("iced::time::Duration::{name}");
         builder
             .bind(path.clone(), move |args| {
-                let (lhs, rhs) = pair::<Duration, Duration>(&path, args)?
-                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                let (lhs, rhs) = pair::<Duration, Duration>(&path, args)?.ok_or_else(|| {
+                    runtime_error(format!("`{path}` read a value of another type"))
+                })?;
                 apply(lhs, rhs).map(Dynamic::from).ok_or_else(|| {
                     runtime_error(format!("overflow when computing `Duration::{name}`"))
                 })
@@ -872,7 +1024,10 @@ fn bind_values(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain every Duration operator");
     }
     for (name, apply) in [
-        ("mul", Duration::checked_mul as fn(Duration, u32) -> Option<Duration>),
+        (
+            "mul",
+            Duration::checked_mul as fn(Duration, u32) -> Option<Duration>,
+        ),
         ("div", Duration::checked_div),
     ] {
         let path = format!("iced::time::Duration::{name}");
@@ -884,22 +1039,34 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                 let duration = lhs
                     .read_lock::<Duration>()
                     .map(|duration| *duration)
-                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                    .ok_or_else(|| {
+                        runtime_error(format!("`{path}` read a value of another type"))
+                    })?;
                 let factor = rhs
                     .as_int()
                     .ok()
                     .and_then(|factor| u32::try_from(factor).ok())
                     .ok_or_else(|| runtime_error(format!("`Duration::{name}` expects a `u32`")))?;
                 apply(duration, factor).map(Dynamic::from).ok_or_else(|| {
-                    runtime_error(format!("overflow or division by zero in `Duration::{name}`"))
+                    runtime_error(format!(
+                        "overflow or division by zero in `Duration::{name}`"
+                    ))
                 })
             })
             .expect("the iced facade must retain every Duration operator");
     }
     for (name, read) in [
-        ("subsec_millis", (|d: &Duration| Dynamic::from(i64::from(d.subsec_millis()))) as fn(&Duration) -> Dynamic),
-        ("subsec_micros", |d| Dynamic::from(i64::from(d.subsec_micros()))),
-        ("subsec_nanos", |d| Dynamic::from(i64::from(d.subsec_nanos()))),
+        (
+            "subsec_millis",
+            (|d: &Duration| Dynamic::from(i64::from(d.subsec_millis())))
+                as fn(&Duration) -> Dynamic,
+        ),
+        ("subsec_micros", |d| {
+            Dynamic::from(i64::from(d.subsec_micros()))
+        }),
+        ("subsec_nanos", |d| {
+            Dynamic::from(i64::from(d.subsec_nanos()))
+        }),
         ("is_zero", |d| Dynamic::from(d.is_zero())),
     ] {
         let path = format!("iced::time::Duration::{name}");
@@ -908,18 +1075,22 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                 let [value] = args else {
                     return Err(arity(&path, 1, args.len()));
                 };
-                let duration = value
-                    .read_lock::<Duration>()
-                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                let duration = value.read_lock::<Duration>().ok_or_else(|| {
+                    runtime_error(format!("`{path}` read a value of another type"))
+                })?;
                 Ok(read(&duration))
             })
             .expect("the iced facade must retain every Duration reader");
     }
     builder
-        .bind("iced::time::Duration::ZERO", |_| Ok(Dynamic::from(Duration::ZERO)))
+        .bind("iced::time::Duration::ZERO", |_| {
+            Ok(Dynamic::from(Duration::ZERO))
+        })
         .expect("the iced facade must retain Duration::ZERO");
     builder
-        .bind("iced::time::Instant::now", |_| Ok(Dynamic::from(marker::Instant::now())))
+        .bind("iced::time::Instant::now", |_| {
+            Ok(Dynamic::from(marker::Instant::now()))
+        })
         .expect("the iced facade must retain Instant::now");
     builder
         .bind("iced::time::Instant::elapsed", |args| {
@@ -929,14 +1100,23 @@ fn bind_values(builder: &mut host::runtime::Builder) {
             let instant = value
                 .read_lock::<marker::Instant>()
                 .map(|instant| instant.0)
-                .ok_or_else(|| runtime_error("`Instant::elapsed` read a value of another type".to_string()))?;
-            Ok(Dynamic::from(marker::Instant::now().0.saturating_duration_since(instant)))
+                .ok_or_else(|| {
+                    runtime_error("`Instant::elapsed` read a value of another type".to_string())
+                })?;
+            Ok(Dynamic::from(
+                marker::Instant::now().0.saturating_duration_since(instant),
+            ))
         })
         .expect("the iced facade must retain Instant::elapsed");
     builder
         .bind("iced::time::Instant::duration_since", |args| {
-            let (lhs, rhs) = pair::<marker::Instant, marker::Instant>("Instant::duration_since", args)?
-                .ok_or_else(|| runtime_error("`Instant::duration_since` read a value of another type".to_string()))?;
+            let (lhs, rhs) =
+                pair::<marker::Instant, marker::Instant>("Instant::duration_since", args)?
+                    .ok_or_else(|| {
+                        runtime_error(
+                            "`Instant::duration_since` read a value of another type".to_string(),
+                        )
+                    })?;
             Ok(Dynamic::from(lhs.0.saturating_duration_since(rhs.0)))
         })
         .expect("the iced facade must retain Instant::duration_since");
@@ -944,25 +1124,37 @@ fn bind_values(builder: &mut host::runtime::Builder) {
     // `Instant`.
     builder
         .bind("iced::time::Instant::sub", |args| {
-            if let Some((lhs, rhs)) = pair::<marker::Instant, marker::Instant>("Instant::sub", args)? {
+            if let Some((lhs, rhs)) =
+                pair::<marker::Instant, marker::Instant>("Instant::sub", args)?
+            {
                 return Ok(Dynamic::from(lhs.0.saturating_duration_since(rhs.0)));
             }
-            let (lhs, rhs) = pair::<marker::Instant, Duration>("Instant::sub", args)?
-                .ok_or_else(|| runtime_error("`Instant::sub` read a value of another type".to_string()))?;
+            let (lhs, rhs) =
+                pair::<marker::Instant, Duration>("Instant::sub", args)?.ok_or_else(|| {
+                    runtime_error("`Instant::sub` read a value of another type".to_string())
+                })?;
             lhs.0
                 .checked_sub(rhs)
                 .map(|instant| Dynamic::from(marker::Instant(instant)))
-                .ok_or_else(|| runtime_error("overflow when subtracting a duration from an instant".to_string()))
+                .ok_or_else(|| {
+                    runtime_error(
+                        "overflow when subtracting a duration from an instant".to_string(),
+                    )
+                })
         })
         .expect("the iced facade must retain Instant::sub");
     builder
         .bind("iced::time::Instant::add", |args| {
-            let (lhs, rhs) = pair::<marker::Instant, Duration>("Instant::add", args)?
-                .ok_or_else(|| runtime_error("`Instant::add` read a value of another type".to_string()))?;
+            let (lhs, rhs) =
+                pair::<marker::Instant, Duration>("Instant::add", args)?.ok_or_else(|| {
+                    runtime_error("`Instant::add` read a value of another type".to_string())
+                })?;
             lhs.0
                 .checked_add(rhs)
                 .map(|instant| Dynamic::from(marker::Instant(instant)))
-                .ok_or_else(|| runtime_error("overflow when adding a duration to an instant".to_string()))
+                .ok_or_else(|| {
+                    runtime_error("overflow when adding a duration to an instant".to_string())
+                })
         })
         .expect("the iced facade must retain Instant::add");
     builder
@@ -980,9 +1172,12 @@ fn bind_values(builder: &mut host::runtime::Builder) {
             };
             match channels.as_slice() {
                 [hex] => {
-                    let hex = u32::try_from(*hex).ok().filter(|hex| *hex <= 0x00ff_ffff).ok_or_else(
-                        || runtime_error(format!("color! expects `0xrrggbb`, found {hex:#x}")),
-                    )?;
+                    let hex = u32::try_from(*hex)
+                        .ok()
+                        .filter(|hex| *hex <= 0x00ff_ffff)
+                        .ok_or_else(|| {
+                            runtime_error(format!("color! expects `0xrrggbb`, found {hex:#x}"))
+                        })?;
                     Ok(Dynamic::from(iced::Color::from_rgb8(
                         (hex >> 16) as u8,
                         (hex >> 8) as u8,
@@ -1014,9 +1209,9 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
                 let [value] = args else {
                     return Err(arity(path, 1, args.len()));
                 };
-                let value = value
-                    .read_lock::<T>()
-                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                let value = value.read_lock::<T>().ok_or_else(|| {
+                    runtime_error(format!("`{path}` read a value of another type"))
+                })?;
                 Ok(Dynamic::from(f64::from(read(&value))))
             })
             .expect("the iced facade must retain every field reader");
@@ -1028,10 +1223,14 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
         builder
             .bind(path.clone(), move |args| match args {
                 [size] => {
-                    let size = size
-                        .read_lock::<iced::Size>()
-                        .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
-                    Ok(Dynamic::from(f64::from(if name == "width" { size.width } else { size.height })))
+                    let size = size.read_lock::<iced::Size>().ok_or_else(|| {
+                        runtime_error(format!("`{path}` read a value of another type"))
+                    })?;
+                    Ok(Dynamic::from(f64::from(if name == "width" {
+                        size.width
+                    } else {
+                        size.height
+                    })))
                 }
                 [size, number] if number.as_float().is_ok() || number.as_int().is_ok() => {
                     let mut size = super::builtin::take::<iced::Size>(size, "iced::Size")?;
@@ -1068,7 +1267,9 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
                 [value] => {
                     let mut value = value
                         .read_lock::<T>()
-                        .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?
+                        .ok_or_else(|| {
+                            runtime_error(format!("`{path}` read a value of another type"))
+                        })?
                         .clone();
                     Ok(Dynamic::from(f64::from(*field(&mut value))))
                 }
@@ -1107,7 +1308,9 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
                 let mut color = args
                     .first()
                     .and_then(|color| color.read_lock::<iced::Color>().map(|color| *color))
-                    .ok_or_else(|| runtime_error(format!("`{path}` read a value of another type")))?;
+                    .ok_or_else(|| {
+                        runtime_error(format!("`{path}` read a value of another type"))
+                    })?;
                 match args {
                     [_] => Ok(Dynamic::from(f64::from(*channel(&mut color, name)))),
                     [_, value] => {
@@ -1130,10 +1333,14 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
             let color = color
                 .read_lock::<iced::Color>()
                 .map(|color| *color)
-                .ok_or_else(|| runtime_error("`Color::scale_alpha` read a value of another type".into()))?;
-            let factor = factor
-                .as_float()
-                .map_err(|actual| runtime_error(format!("`Color::scale_alpha` expects a float, found `{actual}`")))?;
+                .ok_or_else(|| {
+                    runtime_error("`Color::scale_alpha` read a value of another type".into())
+                })?;
+            let factor = factor.as_float().map_err(|actual| {
+                runtime_error(format!(
+                    "`Color::scale_alpha` expects a float, found `{actual}`"
+                ))
+            })?;
             Ok(Dynamic::from(color.scale_alpha(factor as f32)))
         })
         .expect("the iced facade must retain Color::scale_alpha");
@@ -1145,7 +1352,9 @@ fn bind_fields(builder: &mut host::runtime::Builder) {
             let color = color
                 .read_lock::<iced::Color>()
                 .map(|color| *color)
-                .ok_or_else(|| runtime_error("`Color::inverse` read a value of another type".into()))?;
+                .ok_or_else(|| {
+                    runtime_error("`Color::inverse` read a value of another type".into())
+                })?;
             Ok(Dynamic::from(color.inverse()))
         })
         .expect("the iced facade must retain Color::inverse");
@@ -1174,7 +1383,9 @@ fn bind_font(builder: &mut host::runtime::Builder) {
         Weight::Black,
     ]) {
         builder
-            .bind(format!("iced::font::Weight::{name}"), move |_| Ok(Dynamic::from(value)))
+            .bind(format!("iced::font::Weight::{name}"), move |_| {
+                Ok(Dynamic::from(value))
+            })
             .expect("the iced facade must retain every font::Weight");
     }
     for (name, value) in crate::FONT_STRETCHES.into_iter().zip([
@@ -1189,16 +1400,20 @@ fn bind_font(builder: &mut host::runtime::Builder) {
         Stretch::UltraExpanded,
     ]) {
         builder
-            .bind(format!("iced::font::Stretch::{name}"), move |_| Ok(Dynamic::from(value)))
+            .bind(format!("iced::font::Stretch::{name}"), move |_| {
+                Ok(Dynamic::from(value))
+            })
             .expect("the iced facade must retain every font::Stretch");
     }
-    for (name, value) in crate::FONT_STYLES.into_iter().zip([
-        Style::Normal,
-        Style::Italic,
-        Style::Oblique,
-    ]) {
+    for (name, value) in
+        crate::FONT_STYLES
+            .into_iter()
+            .zip([Style::Normal, Style::Italic, Style::Oblique])
+    {
         builder
-            .bind(format!("iced::font::Style::{name}"), move |_| Ok(Dynamic::from(value)))
+            .bind(format!("iced::font::Style::{name}"), move |_| {
+                Ok(Dynamic::from(value))
+            })
             .expect("the iced facade must retain every font::Style");
     }
     for (name, value) in crate::FONT_FAMILIES.into_iter().zip([
@@ -1209,13 +1424,19 @@ fn bind_font(builder: &mut host::runtime::Builder) {
         Family::Monospace,
     ]) {
         builder
-            .bind(format!("iced::font::Family::{name}"), move |_| Ok(Dynamic::from(value)))
+            .bind(format!("iced::font::Family::{name}"), move |_| {
+                Ok(Dynamic::from(value))
+            })
             .expect("the iced facade must retain every font::Family");
     }
     builder
         .bind("iced::font::Family::VARIANTS", |_| {
             Ok(Dynamic::from_array(
-                Family::VARIANTS.iter().copied().map(Dynamic::from).collect(),
+                Family::VARIANTS
+                    .iter()
+                    .copied()
+                    .map(Dynamic::from)
+                    .collect(),
             ))
         })
         .expect("the iced facade must retain font::Family::VARIANTS");
@@ -1240,7 +1461,8 @@ fn bind_font(builder: &mut host::runtime::Builder) {
     builder
         .bind("iced::Font::with_family", |args| {
             let family = take::<Family>(
-                args.first_mut().ok_or_else(|| arity("Font::with_family", 1, 0))?,
+                args.first_mut()
+                    .ok_or_else(|| arity("Font::with_family", 1, 0))?,
                 "iced::font::Family",
             )?;
             Ok(Dynamic::from(iced::Font::with_family(family)))
@@ -1365,9 +1587,31 @@ fn into_element(view: Dynamic) -> Result<widget::Value, String> {
         return Ok(view.cast::<widget::Value>());
     }
     widgets!(
-        Text, TextInput, Checkbox, Toggler, Slider, ProgressBar, Transition, Button, Column, Row, Wrapping,
-        Container, Tooltip, Scrollable, Logo, Sensor, Space, Radio, PickList, ComboBox, Stack,
-        Pin, Float, MouseArea, Rich
+        Text,
+        TextInput,
+        Checkbox,
+        Toggler,
+        Slider,
+        ProgressBar,
+        Transition,
+        Button,
+        Column,
+        Row,
+        Wrapping,
+        Container,
+        Tooltip,
+        Scrollable,
+        Logo,
+        Sensor,
+        Space,
+        Radio,
+        PickList,
+        ComboBox,
+        Stack,
+        Pin,
+        Float,
+        MouseArea,
+        Rich
     );
     #[cfg(feature = "image")]
     widgets!(Image);
@@ -1383,11 +1627,14 @@ fn take_function(
     operation: &str,
 ) -> Result<rawr::item::Value, Box<EvalAltResult>> {
     let actual = value.type_name();
-    value.take().try_cast_result::<rawr::item::Value>().map_err(|_| {
-        runtime_error(format!(
-            "{operation} received `{actual}`, expected an exact symbolic function"
-        ))
-    })
+    value
+        .take()
+        .try_cast_result::<rawr::item::Value>()
+        .map_err(|_| {
+            runtime_error(format!(
+                "{operation} received `{actual}`, expected an exact symbolic function"
+            ))
+        })
 }
 
 impl widget::Descriptor for marker::Pin {
@@ -1421,7 +1668,9 @@ impl widget::Descriptor for marker::Float {
                 let context = owned.context();
                 let arguments = &mut [Dynamic::from(bounds), Dynamic::from(viewport)];
                 match context.invoke(&translate, arguments) {
-                    Some(Ok(vector)) => vector.try_cast::<iced::Vector>().unwrap_or(iced::Vector::ZERO),
+                    Some(Ok(vector)) => vector
+                        .try_cast::<iced::Vector>()
+                        .unwrap_or(iced::Vector::ZERO),
                     _ => iced::Vector::ZERO,
                 }
             });
@@ -1526,7 +1775,9 @@ fn bind_wrappers(builder: &mut host::runtime::Builder) {
                 return Err(arity("opaque", 1, args.len()));
             }
             let content = take::<widget::Value>(args[0], "iced::Element")?;
-            native(call, move |context| iced::widget::opaque(content.lower(context)).boxed())
+            native(call, move |context| {
+                iced::widget::opaque(content.lower(context)).boxed()
+            })
         })
         .expect("the iced facade must retain opaque");
     builder
@@ -1539,7 +1790,12 @@ fn bind_wrappers(builder: &mut host::runtime::Builder) {
                 let owned = context.owned();
                 let view = view.clone();
                 iced::widget::responsive(move |size| {
-                    invoke_view(&owned.context(), &view, &mut [Dynamic::from(size)], "responsive")
+                    invoke_view(
+                        &owned.context(),
+                        &view,
+                        &mut [Dynamic::from(size)],
+                        "responsive",
+                    )
                 })
                 .boxed()
             })

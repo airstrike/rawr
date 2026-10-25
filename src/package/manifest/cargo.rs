@@ -118,11 +118,16 @@ impl Cargo {
             let more = rust::cargo_dependencies(
                 &text,
                 root,
-                target.as_table_like().and_then(|target| target.get("dependencies")),
+                target
+                    .as_table_like()
+                    .and_then(|target| target.get("dependencies")),
                 inherited.as_ref(),
             )?;
             for dependency in more {
-                if !dependencies.iter().any(|known| known.alias == dependency.alias) {
+                if !dependencies
+                    .iter()
+                    .any(|known| known.alias == dependency.alias)
+                {
                     dependencies.push(dependency);
                 }
             }
@@ -178,6 +183,9 @@ console_log = "1.0"
             .map(|dependency| dependency.alias.as_str())
             .collect::<Vec<_>>();
         assert_eq!(aliases, ["iced", "tracing_subscriber", "open"]);
-        assert_eq!(crate::resolve::cfg_text_holds("x86_64-pc-windows-msvc"), None);
+        assert_eq!(
+            crate::resolve::cfg_text_holds("x86_64-pc-windows-msvc"),
+            None
+        );
     }
 }

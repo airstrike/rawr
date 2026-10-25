@@ -440,11 +440,18 @@ fn member_span(error: &resolve::Error) -> Span {
         return primary;
     };
     let start = primary.start();
-    match (start.line(), start.position(), u16::try_from(member.chars().count())) {
+    match (
+        start.line(),
+        start.position(),
+        u16::try_from(member.chars().count()),
+    ) {
         (Some(line), Some(column), Ok(length)) if primary.end() == start && length > 0 => {
             let line = u16::try_from(line).unwrap_or(u16::MAX);
             let column = u16::try_from(column).unwrap_or(u16::MAX);
-            Span::new(start, crate::Position::new(line, column.saturating_add(length)))
+            Span::new(
+                start,
+                crate::Position::new(line, column.saturating_add(length)),
+            )
         }
         _ => primary,
     }
@@ -540,7 +547,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                     short(owner)
                 ),
             )
-            .help(format!("to use the field `{member}`, remove the parentheses"));
+            .help(format!(
+                "to use the field `{member}`, remove the parentheses"
+            ));
         }
         resolve::Error::MemberKind {
             owner,
@@ -601,17 +610,16 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         | resolve::Error::DuplicateMethod { .. } => {
             builder.help("rename or remove one of the duplicate declarations")
         }
-        resolve::Error::UnknownType { name, .. } if name.contains("::") => builder.help(
-            format!("`{name}` isn't available in Rawr yet, or the path is misspelled"),
-        ),
+        resolve::Error::UnknownType { name, .. } if name.contains("::") => builder.help(format!(
+            "`{name}` isn't available in Rawr yet, or the path is misspelled"
+        )),
         resolve::Error::UnknownType { name, .. } => {
             builder.help(format!("declare `{name}`, or import it with `use`"))
         }
-        resolve::Error::UnknownMember { owner, member, .. } if owner.contains("::") => {
-            builder.help(format!(
+        resolve::Error::UnknownMember { owner, member, .. } if owner.contains("::") => builder
+            .help(format!(
                 "`{owner}::{member}` isn't available in Rawr yet, or the name is misspelled"
-            ))
-        }
+            )),
         resolve::Error::UnknownImport { path, .. } => builder.help(format!(
             "`{path}` isn't available in Rawr yet, or the path is misspelled"
         )),
@@ -621,9 +629,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnknownFunction { name, .. } => {
             builder.help(format!("declare `fn {name}`, or import it with `use`"))
         }
-        resolve::Error::UnknownVariable { name, .. } => {
-            builder.help(format!("declare `{name}` with `let`, or import it with `use`"))
-        }
+        resolve::Error::UnknownVariable { name, .. } => builder.help(format!(
+            "declare `{name}` with `let`, or import it with `use`"
+        )),
         resolve::Error::MovedValue { name, .. } => builder.help(format!(
             "`{name}` was moved before this use; clone it before the move to keep a copy"
         )),

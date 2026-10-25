@@ -4,7 +4,10 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     // `rawr` asks what rawr-iced serves before handing it anything.
-    if std::env::args_os().nth(1).is_some_and(|argument| argument == rawr_cli::layer::FLAG) {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|argument| argument == rawr_cli::layer::FLAG)
+    {
         print!("{}", rawr_iced_cli::layer::MANIFEST);
         return ExitCode::SUCCESS;
     }

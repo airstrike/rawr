@@ -39,8 +39,9 @@ impl Inner {
     }
 
     fn set(&self, value: Dynamic) -> Dynamic {
-        crate::func::locked_write(&self.value)
-            .map_or(Dynamic::UNIT, |mut held| std::mem::replace(&mut *held, value))
+        crate::func::locked_write(&self.value).map_or(Dynamic::UNIT, |mut held| {
+            std::mem::replace(&mut *held, value)
+        })
     }
 
     /// Whether a borrow is held, and whether a held one is mutable.
@@ -282,8 +283,10 @@ impl Parser<'_> {
             }
             ("replace", [replacement]) => {
                 self.coerce_expr(&inner, replacement)?;
-                let source =
-                    self.prelude_op(PreludeOp::CellReplace, [cell, replacement.rendered_source()]);
+                let source = self.prelude_op(
+                    PreludeOp::CellReplace,
+                    [cell, replacement.rendered_source()],
+                );
                 Ok(self.operator_expr(source, inner, call))
             }
             ("take", []) => {
@@ -326,8 +329,8 @@ impl Parser<'_> {
             && matches!(self.peek_second(), Token::Reserved(ref keyword) if keyword.as_str() == "await");
         if !awaited || !self.closures.last().is_some_and(|scope| scope.asynchronous) {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a tokio `Mutex` locked other than by `mutex.lock().await` in async code"
-                    .into(),
+                construct:
+                    "a tokio `Mutex` locked other than by `mutex.lock().await` in async code".into(),
                 source: span(mutex.span.start(), member_span.end()),
             });
         }
@@ -396,7 +399,12 @@ impl Parser<'_> {
         let guard = self.temporary("borrow");
         self.cell_guards.insert(
             name.clone(),
-            (name_span, guard.clone(), borrow.mutable, borrow.inner.clone()),
+            (
+                name_span,
+                guard.clone(),
+                borrow.mutable,
+                borrow.inner.clone(),
+            ),
         );
         self.bindings.insert(
             name.clone(),
@@ -420,7 +428,11 @@ impl Parser<'_> {
 
     /// A use of a local bound to a borrow: the cell's value, a place a
     /// change stores back into the cell.
-    pub(super) fn cell_guard_use(&mut self, name: &ImmutableString, at: Span) -> Option<ParsedExpr> {
+    pub(super) fn cell_guard_use(
+        &mut self,
+        name: &ImmutableString,
+        at: Span,
+    ) -> Option<ParsedExpr> {
         let declaration = self.bindings.get(name.as_str())?.declaration;
         let (_, guard, mutable, inner) = self
             .cell_guards

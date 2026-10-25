@@ -282,7 +282,9 @@ impl Parser<'_> {
         let value = value?;
         let (place, owner) = match &value.lvalue {
             Some(Lvalue::Binding { binding, .. }) => (binding.to_string(), binding.clone()),
-            Some(Lvalue::Place { binding, place, .. }) => (place.as_str().to_string(), binding.clone()),
+            Some(Lvalue::Place { binding, place, .. }) => {
+                (place.as_str().to_string(), binding.clone())
+            }
             Some(Lvalue::Field(field)) => {
                 let nested = NestedLvalue {
                     binding: field.binding.clone(),
@@ -293,11 +295,17 @@ impl Parser<'_> {
                     }],
                     ty: field.ty.clone(),
                 };
-                (self.nested_place(&nested).as_str().to_string(), field.binding.clone())
+                (
+                    self.nested_place(&nested).as_str().to_string(),
+                    field.binding.clone(),
+                )
             }
             Some(Lvalue::Nested(nested)) => {
                 let nested = (**nested).clone();
-                (self.nested_place(&nested).as_str().to_string(), nested.binding.clone())
+                (
+                    self.nested_place(&nested).as_str().to_string(),
+                    nested.binding.clone(),
+                )
             }
             _ => {
                 return Err(self.unsupported("a mutable loop over a value that is not a place"));
@@ -534,7 +542,9 @@ impl Parser<'_> {
             _ => None,
         };
         let Some(lvalue) = lvalue else {
-            return Err(self.unsupported("`get_mut` or `iter_mut().find` of a value that is not a place"));
+            return Err(
+                self.unsupported("`get_mut` or `iter_mut().find` of a value that is not a place")
+            );
         };
         let owner = lvalue.binding().clone();
         let mutable = self.bindings.get(&owner).is_some_and(|binding| {
@@ -650,11 +660,17 @@ impl Parser<'_> {
                     }],
                     ty: field.ty.clone(),
                 };
-                (self.nested_place(&nested).as_str().to_string(), field.binding.clone())
+                (
+                    self.nested_place(&nested).as_str().to_string(),
+                    field.binding.clone(),
+                )
             }
             Some(Lvalue::Nested(nested)) => {
                 let nested = (**nested).clone();
-                (self.nested_place(&nested).as_str().to_string(), nested.binding.clone())
+                (
+                    self.nested_place(&nested).as_str().to_string(),
+                    nested.binding.clone(),
+                )
             }
             _ => {
                 return Err(self.unsupported("`iter_mut` on a value that is not a place"));

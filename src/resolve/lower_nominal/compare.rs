@@ -142,7 +142,8 @@ impl Comparison<'_, '_> {
                 }
             }
             Shape::Option(inner) => {
-                if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
+                if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs))
+                {
                     return match (lhs, rhs) {
                         (Some(lhs), Some(rhs)) => self.compare(&lhs, &rhs, inner),
                         (lhs, rhs) => Ok(Some(lhs.is_some().cmp(&rhs.is_some()))),
@@ -150,7 +151,8 @@ impl Comparison<'_, '_> {
                 }
             }
             Shape::Result(ok, err) => {
-                if let (Some(lhs), Some(rhs)) = (crate::result::read(lhs), crate::result::read(rhs)) {
+                if let (Some(lhs), Some(rhs)) = (crate::result::read(lhs), crate::result::read(rhs))
+                {
                     return match (lhs, rhs) {
                         (Ok(lhs), Ok(rhs)) => self.compare(&lhs, &rhs, ok),
                         (Err(lhs), Err(rhs)) => self.compare(&lhs, &rhs, err),
@@ -168,8 +170,9 @@ impl Comparison<'_, '_> {
             #[cfg(not(feature = "no_index"))]
             Shape::Tuple(members) => {
                 if let (Ok(lhs), Ok(rhs)) = (lhs.as_array_ref(), rhs.as_array_ref()) {
-                    return self
-                        .lexicographic(&lhs, &rhs, |index| members.get(index).unwrap_or(&Shape::Plain));
+                    return self.lexicographic(&lhs, &rhs, |index| {
+                        members.get(index).unwrap_or(&Shape::Plain)
+                    });
                 }
             }
             _ => {}
@@ -220,9 +223,13 @@ impl Comparison<'_, '_> {
             [("PartialOrd", "partial_cmp"), ("Ord", "cmp")]
         };
         if let Some(context) = self.context
-            && let Some((function, definition)) = preferred.iter().find_map(|(trait_name, function)| {
-                Some((*function, self.models.std_impl(owner, trait_name, function)?))
-            })
+            && let Some((function, definition)) =
+                preferred.iter().find_map(|(trait_name, function)| {
+                    Some((
+                        *function,
+                        self.models.std_impl(owner, trait_name, function)?,
+                    ))
+                })
         {
             let ordering = call(context, definition, lhs, rhs)?;
             let ordering = if function == "cmp" {
@@ -231,19 +238,29 @@ impl Comparison<'_, '_> {
                 crate::option::read(&ordering)
                     .ok_or_else(|| invariant("`partial_cmp` did not give an `Option`"))?
             };
-            return Ok(ordering.and_then(|ordering| ordering.as_int().ok()).map(|code| code.cmp(&0)));
+            return Ok(ordering
+                .and_then(|ordering| ordering.as_int().ok())
+                .map(|code| code.cmp(&0)));
         }
         // A derive: fields in declaration order; an enum's variants by
         // declaration order, then their payloads.
         match (nominal, &lhs.0, &rhs.0) {
             (Nominal::Struct { item, .. }, Union::Struct(lhs, ..), Union::Struct(rhs, ..)) => {
-                let shapes = item.fields.iter().map(|field| field_shape(&field.ty)).collect::<Vec<_>>();
+                let shapes = item
+                    .fields
+                    .iter()
+                    .map(|field| field_shape(&field.ty))
+                    .collect::<Vec<_>>();
                 self.lexicographic(lhs.fields(), rhs.fields(), |index| {
                     shapes.get(index).unwrap_or(&Shape::Plain)
                 })
             }
             (Nominal::Enum { item, .. }, Union::Enum(lhs, ..), Union::Enum(rhs, ..)) => {
-                let index = |name: &str| item.variants.iter().position(|variant| variant.name.text == name);
+                let index = |name: &str| {
+                    item.variants
+                        .iter()
+                        .position(|variant| variant.name.text == name)
+                };
                 let (Some(variant), Some(other)) =
                     (index(lhs.variant().name()), index(rhs.variant().name()))
                 else {
@@ -252,7 +269,11 @@ impl Comparison<'_, '_> {
                 if variant != other {
                     return Ok(Some(variant.cmp(&other)));
                 }
-                let shapes = item.variants[variant].payload.iter().map(field_shape).collect::<Vec<_>>();
+                let shapes = item.variants[variant]
+                    .payload
+                    .iter()
+                    .map(field_shape)
+                    .collect::<Vec<_>>();
                 self.lexicographic(lhs.payload(), rhs.payload(), |index| {
                     shapes.get(index).unwrap_or(&Shape::Plain)
                 })
@@ -261,7 +282,11 @@ impl Comparison<'_, '_> {
         }
     }
 
-    fn compare_builtin(&self, lhs: &Dynamic, rhs: &Dynamic) -> Compared<Option<std::cmp::Ordering>> {
+    fn compare_builtin(
+        &self,
+        lhs: &Dynamic,
+        rhs: &Dynamic,
+    ) -> Compared<Option<std::cmp::Ordering>> {
         if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
             return match (lhs, rhs) {
                 (Some(lhs), Some(rhs)) => self.compare_plain(&lhs, &rhs),
@@ -440,5 +465,8 @@ fn call(
     rhs: &Dynamic,
 ) -> RawrResult {
     let (mut receiver, mut argument) = (lhs.clone(), rhs.clone());
-    context.call_script_method(definition.symbol().as_str(), &mut [&mut receiver, &mut argument])
+    context.call_script_method(
+        definition.symbol().as_str(),
+        &mut [&mut receiver, &mut argument],
+    )
 }

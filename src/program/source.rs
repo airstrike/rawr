@@ -200,9 +200,8 @@ mod tests {
 
     #[test]
     fn debug_output_never_enumerates_source_identity_or_text() {
-        let table = Table::new(
-            vec![source("secret-identity.rs", "secret source text")].into_boxed_slice(),
-        );
+        let table =
+            Table::new(vec![source("secret-identity.rs", "secret source text")].into_boxed_slice());
         let rendered = format!("{table:?} {:?}", table.key(0));
 
         assert!(!rendered.contains("secret-identity"));

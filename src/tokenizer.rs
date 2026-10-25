@@ -1590,7 +1590,8 @@ pub fn parse_string_literal(
 
                 // Rust's \u{1F600}: one to six hex digits in braces.
                 if ch == 'u' && stream.peek_next() == Some('{') {
-                    let malformed = |seq: &str, pos: Position| (LERR::MalformedEscapeSequence(seq.into()), pos);
+                    let malformed =
+                        |seq: &str, pos: Position| (LERR::MalformedEscapeSequence(seq.into()), pos);
                     for digits in 0.. {
                         let c = stream.get_next().ok_or_else(|| malformed(&seq, *pos))?;
                         pos.advance();
@@ -2541,9 +2542,7 @@ fn get_next_token_inner(
                                     (Token::ByteConstant(byte as u8), start_pos)
                                 }
                                 _ => (
-                                    Token::LexError(
-                                        LERR::MalformedChar(result.to_string()).into(),
-                                    ),
+                                    Token::LexError(LERR::MalformedChar(result.to_string()).into()),
                                     start_pos,
                                 ),
                             }

@@ -8,7 +8,8 @@ use test::Bencher;
 
 #[bench]
 fn bench_eval_map_small_get(bench: &mut Bencher) {
-    let script = r#"use std::collections::HashMap; let mut x = HashMap::new(); x.insert("a", 1); x["a"]"#;
+    let script =
+        r#"use std::collections::HashMap; let mut x = HashMap::new(); x.insert("a", 1); x["a"]"#;
 
     let mut engine = Engine::new();
     engine.set_optimization_level(OptimizationLevel::None);

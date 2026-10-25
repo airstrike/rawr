@@ -201,10 +201,7 @@ fn json_limit_exceedance_is_recorded_before_hash_or_entry_ownership() {
             execution,
             &mut Budget::borrow(&limits, &mut allocation, &graph),
         );
-        assert!(
-            result.is_ok(),
-            "the JSON target is recorded, never refused"
-        );
+        assert!(result.is_ok(), "the JSON target is recorded, never refused");
         // The hash axis is charged exactly the serialized length: filling the
         // remainder meets the target without an exceedance and one more byte
         // records a high water of exactly one over.
@@ -282,10 +279,7 @@ fn original_remaining_account_is_exact_and_refusal_survives_a_new_graph_argument
                 &node::GraphBudget::new(),
             ),
         );
-        assert!(
-            result.is_ok(),
-            "input targets are recorded, never refused"
-        );
+        assert!(result.is_ok(), "input targets are recorded, never refused");
         assert_eq!(
             allocation.usage(),
             Usage {
@@ -372,10 +366,7 @@ fn graph_hash_is_exact_and_retained_entry_storage_adds_no_decode() {
                 execution,
                 &mut Budget::borrow(&cargo::Limits::standard(), &mut allocation, &graph),
             );
-            assert!(
-                result.is_ok(),
-                "graph targets are recorded, never refused"
-            );
+            assert!(result.is_ok(), "graph targets are recorded, never refused");
             // Paths and comparisons sit exactly at their targets: formatting
             // does no filesystem or comparison work, so neither axis records.
             let record = graph.exceedances();

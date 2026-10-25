@@ -3,8 +3,8 @@ use std::fs;
 #[test]
 fn empty_native_lane_shutdown_preserves_an_empty_route() {
     let root = project("restart");
-    let mut lane =
-        rawr_iced_cli::watch::native::Lane::<()>::new(&root).expect("the optional native lane binds");
+    let mut lane = rawr_iced_cli::watch::native::Lane::<()>::new(&root)
+        .expect("the optional native lane binds");
     lane.shutdown().expect("the first empty shutdown succeeds");
     lane.shutdown().expect("the second empty shutdown succeeds");
     assert_eq!(lane.current_key(), None);

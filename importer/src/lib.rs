@@ -25,10 +25,10 @@ pub mod crate_demand;
 pub mod deps;
 mod error;
 pub mod exceedance;
-mod file_digest;
-pub mod host;
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub mod extract;
+mod file_digest;
+pub mod host;
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub mod input;
 pub mod location;

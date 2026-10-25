@@ -48,8 +48,7 @@ impl Fixture {
             FIXTURE.fetch_add(1, Ordering::Relaxed),
         ));
         fs::create_dir(&root).expect("the fixture root creates");
-        let store =
-            super::super::Store::open(&root, [0x38; 32]).expect("the fixture store opens");
+        let store = super::super::Store::open(&root, [0x38; 32]).expect("the fixture store opens");
         for value in 1..EXECUTIONS {
             let execution = ExecutionKey::from_bytes([value; 32]);
             super::super::lease::with_publication(store.root(), |publication| {
@@ -96,9 +95,7 @@ impl Fixture {
         for (relative, bytes) in inflate {
             seam::set(&root.join(relative), *bytes);
         }
-        let pending = attempt
-            .seal(Box::from(SEAL))
-            .expect("the attempt seals");
+        let pending = attempt.seal(Box::from(SEAL)).expect("the attempt seals");
         (root, pending)
     }
 

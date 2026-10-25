@@ -226,7 +226,9 @@ impl Model {
         }
         let value = value.flatten_clone();
         let (identity, schema, variant, members) = match &value.0 {
-            Union::Struct(nominal, ..) => (nominal.identity(), nominal.schema(), None, nominal.fields()),
+            Union::Struct(nominal, ..) => {
+                (nominal.identity(), nominal.schema(), None, nominal.fields())
+            }
             Union::Enum(nominal, ..) => (
                 nominal.identity(),
                 nominal.schema(),
@@ -333,7 +335,10 @@ impl Model {
                 let Shape::Enum(variants) = &self.definitions.get(&identity)?.shape else {
                     return None;
                 };
-                let variant = variants.keys().find(|variant| variant.name() == name)?.clone();
+                let variant = variants
+                    .keys()
+                    .find(|variant| variant.name() == name)?
+                    .clone();
                 let length = reader.items()?;
                 let mut payload = Vec::with_capacity(length);
                 for _ in 0..length {

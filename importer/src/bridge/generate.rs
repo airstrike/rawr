@@ -4114,7 +4114,11 @@ fn render_adapter(
                     .map_err(|_| request::Error::Encoding)?;
                 function_argument_list(signature, substitutions, functions, mappers, None, output)?;
                 output
-                    .write_all(if lazy { b"));\n".as_slice() } else { b");\n".as_slice() })
+                    .write_all(if lazy {
+                        b"));\n".as_slice()
+                    } else {
+                        b");\n".as_slice()
+                    })
                     .map_err(|_| request::Error::Encoding)?;
                 let returned = substitute(signature.output(), signature, substitutions)?;
                 if let Some((sipped, progress)) = sipper_output(returned) {
@@ -4453,7 +4457,9 @@ fn render_builder(
                     .map_err(|_| request::Error::Encoding)?;
                 if final_step && !replay {
                     output
-                        .write_all(b"    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
+                        .write_all(
+                            b"    insert_native!(arguments.arena, output).map(Dynamic::from)\n",
+                        )
                         .map_err(|_| request::Error::Encoding)?;
                 }
             }
@@ -5137,9 +5143,7 @@ fn render_rust_type(
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => output
             .write_all(b"std::ops::RangeInclusive<i64>")
             .map_err(|_| request::Error::Encoding),
-        convert::Type::Builtin(
-            convert::Builtin::String | convert::Builtin::Text,
-        ) => output
+        convert::Type::Builtin(convert::Builtin::String | convert::Builtin::Text) => output
             .write_all(b"String")
             .map_err(|_| request::Error::Encoding),
         convert::Type::Builtin(convert::Builtin::Str) => output
@@ -6158,7 +6162,10 @@ impl TypePaths {
     fn install(facade: Option<&crate::surface::facade::Plan>) -> Self {
         TYPE_PATHS.with_borrow_mut(|paths| {
             paths.clear();
-            for owner in facade.into_iter().flat_map(crate::surface::facade::Plan::facades) {
+            for owner in facade
+                .into_iter()
+                .flat_map(crate::surface::facade::Plan::facades)
+            {
                 for ty in owner.types() {
                     paths
                         .entry(*ty.identity())
@@ -6168,8 +6175,16 @@ impl TypePaths {
         });
         COPY_TYPES.with_borrow_mut(|copy| {
             copy.clear();
-            for owner in facade.into_iter().flat_map(crate::surface::facade::Plan::facades) {
-                copy.extend(owner.types().filter(|ty| ty.copy()).map(|ty| *ty.identity()));
+            for owner in facade
+                .into_iter()
+                .flat_map(crate::surface::facade::Plan::facades)
+            {
+                copy.extend(
+                    owner
+                        .types()
+                        .filter(|ty| ty.copy())
+                        .map(|ty| *ty.identity()),
+                );
             }
         });
         Self
@@ -6214,11 +6229,9 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             text
         }
         convert::Type::Option(element) => format!("Option<{}>", concrete_type(element)?),
-        convert::Type::Result(ok, err) => format!(
-            "Result<{}, {}>",
-            concrete_type(ok)?,
-            concrete_type(err)?
-        ),
+        convert::Type::Result(ok, err) => {
+            format!("Result<{}, {}>", concrete_type(ok)?, concrete_type(err)?)
+        }
         convert::Type::ProfileMessage { payload, .. } => concrete_type(payload)?,
         convert::Type::Sequence { element, .. } => format!("Vec<{}>", concrete_type(element)?),
         convert::Type::Tuple(members) => format!(
@@ -6304,9 +6317,7 @@ fn render_generic_arguments(
                         | convert::Type::Option(_)
                         | convert::Type::Result(..)
                         | convert::Type::Sequence { .. }
-                        | convert::Type::Tuple(_) => {
-                            concrete.as_deref().unwrap_or("_").as_bytes()
-                        }
+                        | convert::Type::Tuple(_) => concrete.as_deref().unwrap_or("_").as_bytes(),
                         convert::Type::FunctionItem { .. } => {
                             return Err(request::Error::Drift {
                                 field: "static function item used as generic substitution",
@@ -6765,8 +6776,14 @@ mod tests {
         let mut take = Vec::new();
         super::render_take(1, 1, &Type::Builtin(Builtin::Str), &mut take).unwrap();
         let take = String::from_utf8(take).unwrap();
-        assert!(take.contains("let argument_1_owned = take_string(arguments, 1)?;"), "{take}");
-        assert!(take.contains("let argument_1 = argument_1_owned.as_str();"), "{take}");
+        assert!(
+            take.contains("let argument_1_owned = take_string(arguments, 1)?;"),
+            "{take}"
+        );
+        assert!(
+            take.contains("let argument_1 = argument_1_owned.as_str();"),
+            "{take}"
+        );
         let mut give = Vec::new();
         super::render_give(&Type::Builtin(Builtin::Text), "output", &mut give).unwrap();
         let give = String::from_utf8(give).unwrap();
@@ -6790,8 +6807,13 @@ mod tests {
     fn an_option_of_a_scalar_is_read_as_a_copy() {
         let usize = || Type::Builtin(Builtin::Usize);
         assert!(super::copy_scalar(&Type::Option(Box::new(usize()))));
-        assert!(super::copy_scalar(&Type::Result(Box::new(usize()), Box::new(Type::Unit))));
-        assert!(!super::copy_scalar(&Type::Option(Box::new(Type::Builtin(Builtin::String)))));
+        assert!(super::copy_scalar(&Type::Result(
+            Box::new(usize()),
+            Box::new(Type::Unit)
+        )));
+        assert!(!super::copy_scalar(&Type::Option(Box::new(Type::Builtin(
+            Builtin::String
+        )))));
     }
 
     #[test]
@@ -6874,7 +6896,9 @@ mod tests {
             neutral.contains("runner::install_retained(engine, super::IMPORTED_FACADES, native)")
         );
         assert!(!neutral.contains("runner::install("));
-        assert!(neutral.contains("engine.compile_package_snapshot_generation_with_top_level(snapshot)"));
+        assert!(
+            neutral.contains("engine.compile_package_snapshot_generation_with_top_level(snapshot)")
+        );
         // A runner with no host profile starts its program by calling `main`
         // bound to the imported runtime.
         assert!(neutral.contains("candidate.bind(&program.engine, runtime)"));

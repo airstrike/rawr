@@ -90,7 +90,9 @@ impl discovery::System for System {
 impl git_read::System for System {
     fn position(&mut self, descriptor: i32) -> std::result::Result<u64, i32> {
         // Pinned File::stream_position is one lseek(SEEK_CUR), without retry.
-        with(descriptor, |owned| rustix::fs::seek(owned, rustix::fs::SeekFrom::Current(0)))
+        with(descriptor, |owned| {
+            rustix::fs::seek(owned, rustix::fs::SeekFrom::Current(0))
+        })
     }
 }
 

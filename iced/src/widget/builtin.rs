@@ -214,7 +214,8 @@ impl widget::Descriptor for marker::Slider {
                         _ => Dynamic::from(value),
                     })
                 };
-                let mut slider = $slider(range, self.value as $number, on_change).step(self.step as $number);
+                let mut slider =
+                    $slider(range, self.value as $number, on_change).step(self.step as $number);
                 if let Some(default) = self.default {
                     slider = slider.default(default as $number);
                 }
@@ -249,7 +250,8 @@ impl widget::Descriptor for marker::Slider {
 
 impl widget::Descriptor for marker::ProgressBar {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
-        let mut bar = iced::widget::progress_bar(self.range.clone(), self.value).vertical(self.vertical);
+        let mut bar =
+            iced::widget::progress_bar(self.range.clone(), self.value).vertical(self.vertical);
         if let Some(length) = self.length {
             bar = bar.length(length);
         }
@@ -272,14 +274,18 @@ impl widget::Descriptor for marker::ProgressBar {
 impl widget::Descriptor for marker::Transition {
     fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
         let mut arguments = [
-            Dynamic::from(marker::Animation::Float(iced::Animation::new(self.value as f32))),
+            Dynamic::from(marker::Animation::Float(iced::Animation::new(
+                self.value as f32,
+            ))),
             Dynamic::from(marker::Instant::now()),
         ];
         match context.invoke(&self.view, &mut arguments) {
             None => iced::widget::space().boxed(),
             Some(Ok(mut view)) => match take::<widget::Value>(&mut view, "iced::Element") {
                 Ok(view) => view.lower(context),
-                Err(error) => widget::diagnostic(format!("transition view failed: {error}")).lower(context),
+                Err(error) => {
+                    widget::diagnostic(format!("transition view failed: {error}")).lower(context)
+                }
             },
             Some(Err(error)) => {
                 widget::diagnostic(format!("transition view failed: {error}")).lower(context)
@@ -439,7 +445,9 @@ fn container_style(
 > {
     let function = match source {
         None => return Ok(None),
-        Some(marker::container::Source::Builtin(style)) => return Ok(Some(Box::new(style.native()))),
+        Some(marker::container::Source::Builtin(style)) => {
+            return Ok(Some(Box::new(style.native())))
+        }
         Some(marker::container::Source::Function(function)) => function,
     };
     let style = style::cached(context, function).map(Ok).or_else(|| {
@@ -501,9 +509,9 @@ impl widget::Descriptor for marker::Tooltip {
             marker::Content::Element(element) => element.lower(context),
         };
         let tooltip = iced::widget::tooltip(self.content.lower(context), tip, self.position)
-        .gap(self.gap)
-        .delay(self.delay)
-        .snap_within_viewport(self.snap_within_viewport);
+            .gap(self.gap)
+            .delay(self.delay)
+            .snap_within_viewport(self.snap_within_viewport);
         match container_style(&self.style, context, "tooltip") {
             Ok(Some(style)) => tooltip.style(style).boxed(),
             Ok(None) => tooltip.boxed(),
@@ -703,10 +711,17 @@ impl widget::Descriptor for marker::PickList {
         let label = |option: &Dynamic| match context.invoke(&self.to_string, &mut [option.clone()])
         {
             None => Ok(String::new()),
-            Some(Ok(label)) => exact_string(&label, "pick_list to_string").map_err(|error| error.to_string()),
+            Some(Ok(label)) => {
+                exact_string(&label, "pick_list to_string").map_err(|error| error.to_string())
+            }
             Some(Err(error)) => Err(error),
         };
-        let labels = match self.options.iter().map(label).collect::<Result<Vec<_>, _>>() {
+        let labels = match self
+            .options
+            .iter()
+            .map(label)
+            .collect::<Result<Vec<_>, _>>()
+        {
             Ok(labels) => labels,
             Err(error) => {
                 return widget::diagnostic(format!("pick_list to_string failed: {error}"))
@@ -721,8 +736,9 @@ impl widget::Descriptor for marker::PickList {
             }
         };
         let indexes = (0..labels.len()).collect::<Vec<_>>();
-        let mut pick_list =
-            iced::widget::pick_list(selected, indexes, move |index: &usize| labels[*index].clone());
+        let mut pick_list = iced::widget::pick_list(selected, indexes, move |index: &usize| {
+            labels[*index].clone()
+        });
         if let Some(mapper) = &self.on_select {
             let mapper = context.message_mapper(mapper.clone());
             let options = self.options.clone();
@@ -1208,10 +1224,14 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             .expect("the iced facade must retain the exact row functions");
     }
     builder
-        .bind_with_context("iced::widget::Column::new", |call, _| new_column(call, Vec::new()))
+        .bind_with_context("iced::widget::Column::new", |call, _| {
+            new_column(call, Vec::new())
+        })
         .expect("the iced facade must retain the exact Column::new item");
     builder
-        .bind_with_context("iced::widget::Row::new", |call, _| new_row(call, Vec::new()))
+        .bind_with_context("iced::widget::Row::new", |call, _| {
+            new_row(call, Vec::new())
+        })
         .expect("the iced facade must retain the exact Row::new item");
     builder
         .bind_with_context("iced::widget::container", |call, args| {
@@ -1241,7 +1261,11 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
         builder
             .bind_with_context(name, move |call, args| {
                 if args.len() != 1 {
-                    return Err(arity(name.rsplit("::").next().unwrap_or(name), 1, args.len()));
+                    return Err(arity(
+                        name.rsplit("::").next().unwrap_or(name),
+                        1,
+                        args.len(),
+                    ));
                 }
                 let (width, align_x) = if x {
                     (iced::Length::Fill, iced::Alignment::Center)
@@ -1395,7 +1419,11 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 } else {
                     let float = args[0].is::<std::ops::RangeInclusive<rawr::FLOAT>>();
                     (
-                        if float { marker::SliderNumber::Float } else { marker::SliderNumber::Integer },
+                        if float {
+                            marker::SliderNumber::Float
+                        } else {
+                            marker::SliderNumber::Integer
+                        },
                         number_range(args[0], "slider")?,
                         number(args[1], "slider value")?,
                     )
@@ -1436,7 +1464,9 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
                 return Err(arity("pick_list", 3, args.len()));
             }
             let selected = optional_message(args[0], "pick_list")?;
-            let options = take::<rawr::Array>(args[1], "&[T]")?.into_iter().collect::<Vec<_>>();
+            let options = take::<rawr::Array>(args[1], "&[T]")?
+                .into_iter()
+                .collect::<Vec<_>>();
             let equal = equal_option(&options, selected.as_ref(), |option, selected| {
                 call.equal(option, selected)
             })?;
@@ -1487,7 +1517,8 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
             (|radio, value| {
                 radio.size = Some(pixels(value, "Radio::size")?);
                 Ok(())
-            }) as fn(&mut marker::Radio, &mut Dynamic) -> Result<(), Box<EvalAltResult>>,
+            })
+                as fn(&mut marker::Radio, &mut Dynamic) -> Result<(), Box<EvalAltResult>>,
         ),
         ("iced::widget::Radio::spacing", |radio, value| {
             radio.spacing = Some(pixels(value, "Radio::spacing")?);
@@ -1517,10 +1548,8 @@ fn bind_items(iced: &mut host::runtime::Builder, rawr: &mut host::runtime::Build
         (
             "iced::widget::PickList::on_select",
             (|pick_list, value| {
-                pick_list.on_select = Some(take::<rawr::item::Value>(
-                    value,
-                    "symbolic message mapper",
-                )?);
+                pick_list.on_select =
+                    Some(take::<rawr::item::Value>(value, "symbolic message mapper")?);
                 Ok(())
             })
                 as fn(&mut marker::PickList, &mut Dynamic) -> Result<(), Box<EvalAltResult>>,
@@ -1864,9 +1893,11 @@ fn bind_projections(builder: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain the exact Tooltip to Element projection");
     builder
-        .bind_projection_with_context("iced::widget::ProgressBar", "iced::Element", |call, args| {
-            project::<marker::ProgressBar>(call, args, "iced::widget::ProgressBar")
-        })
+        .bind_projection_with_context(
+            "iced::widget::ProgressBar",
+            "iced::Element",
+            |call, args| project::<marker::ProgressBar>(call, args, "iced::widget::ProgressBar"),
+        )
         .expect("the iced facade must retain the exact ProgressBar to Element projection");
     builder
         .bind_projection_with_context("iced::widget::Transition", "iced::Element", |call, args| {
@@ -1934,9 +1965,11 @@ fn bind_projections(builder: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain the exact Row to Element projection");
     builder
-        .bind_projection_with_context("iced::widget::row::Wrapping", "iced::Element", |call, args| {
-            project::<marker::Wrapping>(call, args, "iced::widget::row::Wrapping")
-        })
+        .bind_projection_with_context(
+            "iced::widget::row::Wrapping",
+            "iced::Element",
+            |call, args| project::<marker::Wrapping>(call, args, "iced::widget::row::Wrapping"),
+        )
         .expect("the iced facade must retain the exact Wrapping to Element projection");
     builder
         .bind_projection_with_context("iced::widget::Container", "iced::Element", |call, args| {
@@ -2028,7 +2061,9 @@ fn bind_row_builders(builder: &mut host::runtime::Builder) {
                 return Err(arity("Row::wrap", 1, args.len()));
             };
             let mut row = take::<marker::Row>(row, "iced::widget::Row")?;
-            row.witness = call.transform_witness(&row.witness).map_err(witness_error)?;
+            row.witness = call
+                .transform_witness(&row.witness)
+                .map_err(witness_error)?;
             Ok(Dynamic::from(marker::Wrapping {
                 row,
                 vertical_spacing: None,
@@ -2045,7 +2080,8 @@ fn bind_row_builders(builder: &mut host::runtime::Builder) {
                 if args.len() != 2 {
                     return Err(arity(path, 2, args.len()));
                 }
-                let mut wrapping = take::<marker::Wrapping>(args[0], "iced::widget::row::Wrapping")?;
+                let mut wrapping =
+                    take::<marker::Wrapping>(args[0], "iced::widget::row::Wrapping")?;
                 if path.ends_with("align_x") {
                     wrapping.align_x = alignment(args[1])?;
                 } else {
@@ -2231,7 +2267,10 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
             let [radius] = args else {
                 return Err(arity("border::radius", 1, args.len()));
             };
-            Ok(Dynamic::from(iced::border::radius(pixels(radius, "border::radius")?)))
+            Ok(Dynamic::from(iced::border::radius(pixels(
+                radius,
+                "border::radius",
+            )?)))
         })
         .expect("the iced facade must retain border::radius");
 }
@@ -2618,9 +2657,10 @@ fn set_space_height(space: &mut marker::Space, value: iced::Length) {
 /// The children of `column(..)`, `Column::extend(..)` and their kin: an
 /// array of Elements.
 pub(super) fn take_children(value: &mut Dynamic) -> Result<Vec<widget::Value>, Box<EvalAltResult>> {
-    let children = value.take().into_array().map_err(|actual| {
-        runtime_error(format!("expected a list of widgets, found `{actual}`"))
-    })?;
+    let children = value
+        .take()
+        .into_array()
+        .map_err(|actual| runtime_error(format!("expected a list of widgets, found `{actual}`")))?;
     children
         .into_iter()
         .map(|mut child| take::<widget::Value>(&mut child, "iced::Element"))
@@ -2631,7 +2671,9 @@ pub(super) fn take_children(value: &mut Dynamic) -> Result<Vec<widget::Value>, B
 /// each element keyed by its pair's key.
 fn take_keyed_children(value: &mut Dynamic) -> Result<Vec<widget::Value>, Box<EvalAltResult>> {
     let pairs = value.take().into_array().map_err(|actual| {
-        runtime_error(format!("expected a list of keyed widgets, found `{actual}`"))
+        runtime_error(format!(
+            "expected a list of keyed widgets, found `{actual}`"
+        ))
     })?;
     pairs
         .into_iter()
@@ -2687,7 +2729,10 @@ fn new_row(
     call: &host::runtime::Call<'_>,
     children: Vec<widget::Value>,
 ) -> Result<Dynamic, Box<EvalAltResult>> {
-    if !matches!(widget::key::Mode::bind(&children), Ok(widget::key::Mode::Positional)) {
+    if !matches!(
+        widget::key::Mode::bind(&children),
+        Ok(widget::key::Mode::Positional)
+    ) {
         return Err(positional_row());
     }
     Ok(Dynamic::from(marker::Row {
@@ -2872,9 +2917,10 @@ fn bind_tooltip(builder: &mut host::runtime::Builder) {
         iced::widget::tooltip::Position::FollowCursor,
     ]) {
         builder
-            .bind(format!("iced::widget::tooltip::Position::{name}"), move |_| {
-                Ok(Dynamic::from(position))
-            })
+            .bind(
+                format!("iced::widget::tooltip::Position::{name}"),
+                move |_| Ok(Dynamic::from(position)),
+            )
             .expect("the iced facade must retain every tooltip::Position variant");
     }
     for (name, alignment) in [
@@ -2889,7 +2935,10 @@ fn bind_tooltip(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain every alignment::Horizontal value");
     }
     for (name, unit) in [
-        ("seconds", std::time::Duration::from_secs as fn(u64) -> std::time::Duration),
+        (
+            "seconds",
+            std::time::Duration::from_secs as fn(u64) -> std::time::Duration,
+        ),
         ("milliseconds", std::time::Duration::from_millis),
     ] {
         builder
@@ -2946,7 +2995,9 @@ fn bind_progress(builder: &mut host::runtime::Builder) {
             "iced::widget::ProgressBar::length",
             (|bar, value| bar.length = Some(value)) as fn(&mut marker::ProgressBar, iced::Length),
         ),
-        ("iced::widget::ProgressBar::girth", |bar, value| bar.girth = Some(value)),
+        ("iced::widget::ProgressBar::girth", |bar, value| {
+            bar.girth = Some(value)
+        }),
     ] {
         builder
             .bind(path, move |args| {
@@ -3034,7 +3085,9 @@ fn bind_combo_box(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::from(marker::ComboBoxState {
                 witness: call.output_witness().map_err(witness_error)?,
                 id: NEXT_STATE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                options: take::<rawr::Array>(args[0], "Vec<T>")?.into_iter().collect(),
+                options: take::<rawr::Array>(args[0], "Vec<T>")?
+                    .into_iter()
+                    .collect(),
                 to_string: take::<rawr::item::Value>(args[1], "symbolic `to_string`")?,
             }))
         })
@@ -3072,12 +3125,11 @@ fn bind_combo_box(builder: &mut host::runtime::Builder) {
         (
             "iced::widget::ComboBox::on_option_hovered",
             (|combo_box, value| {
-                combo_box.on_option_hovered = Some(take::<rawr::item::Value>(
-                    value,
-                    "symbolic message mapper",
-                )?);
+                combo_box.on_option_hovered =
+                    Some(take::<rawr::item::Value>(value, "symbolic message mapper")?);
                 Ok(())
-            }) as fn(&mut marker::ComboBox, &mut Dynamic) -> Result<(), Box<EvalAltResult>>,
+            })
+                as fn(&mut marker::ComboBox, &mut Dynamic) -> Result<(), Box<EvalAltResult>>,
         ),
         ("iced::widget::ComboBox::on_open", |combo_box, value| {
             combo_box.on_open = Some(value.take());

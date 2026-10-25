@@ -101,7 +101,9 @@ mod tests {
         assert_eq!(plain.options, defaults);
         let still = parse_render(br#"{"code":"x","still":true}"#, &defaults).unwrap();
         assert!(still.options.still);
-        assert!(still.args(crate::Format::Png, 64).contains(&"--still".to_owned()));
+        assert!(still
+            .args(crate::Format::Png, 64)
+            .contains(&"--still".to_owned()));
     }
 
     #[test]

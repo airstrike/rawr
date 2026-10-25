@@ -642,7 +642,10 @@ pub fn main() -> iced::Result { iced::run(State::update, State::view) }
         ),
         "{error}"
     );
-    assert!(error.contains("iced::widget::Column<Message>::into"), "{error}");
+    assert!(
+        error.contains("iced::widget::Column<Message>::into"),
+        "{error}"
+    );
     // A helper's `.into()` and `Element::from(widget)` carry the same fix.
     for body in [
         "fn card(label: &str) -> Element<'static, Message> { container(text(label.to_string())).into() }",
@@ -761,7 +764,11 @@ fn master_component_keeps_its_state_and_consumes_its_events() {
     }
     simulator.find("hi").unwrap();
     assert_eq!(simulator.into_messages().count(), 0);
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
 }
 
 /// iced's re-exports: `iced::widget::Component` and `iced::Renderer`.
@@ -874,7 +881,11 @@ fn master_progress_bars_take_styles() {
         .into_adapter();
     let mut simulator = iced_test::simulator(adapter.view());
     simulator.find("bars").unwrap();
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
 }
 
 /// `text::Style` and a style function that returns it, as todos writes

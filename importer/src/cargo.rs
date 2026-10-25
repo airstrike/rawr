@@ -104,7 +104,6 @@ std::thread_local! {
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Digest([u8; 32]);
 
-
 /// Frozen allocation and subprocess limits required by Cargo resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
@@ -2184,150 +2183,162 @@ impl Request {
         let mut post_unit_parent = None;
         #[cfg(feature = "rustc-driver")]
         let mut post_metadata_parent = None;
-        let (build, build_unit) = self.check_build(
-            &bytes,
-            environment,
-            &metadata,
-            initial,
-            &cargo_allocation,
-            &toolchain,
-            [
-                (&manifest_path, manifest),
-                (&source_path, source),
-                (&lock_path, lock),
-            ],
-            limits,
-            limits,
-            &workspace,
-            node_context.graph_budget(),
-            &mut allocation,
-            Some(|phase,
-             #[cfg_attr(not(feature = "rustc-driver"), allow(unused_variables))] allocation: &mut RequestAllocation| match phase {
-                Postcheck::Units => {
-                    #[cfg(feature = "rustc-driver")]
-                    if let Some((context, request, build)) = dag_build.as_ref() {
-                        let authority = post_build_unit_graph_node_authority(
-                            *request,
-                            &toolchain,
-                            &self,
-                            &manifest_path,
-                            limits,
-                        )?;
-                        let authority = workspace_node_authority(
-                            &authority,
-                            &workspace,
-                            allocation,
-                            node_context.graph_budget(),
-                        )?;
-                        let post_unit = crate::cargo::resolution::cached_post_unit_graph(
-                            context,
-                            build,
-                            &authority,
-                            &crate::metrics::Current,
-                            || {
-                                workspace.require(
-                                    &mut crate::input::workspace::Account::borrow(
-                                        allocation,
-                                        node_context.graph_budget(),
-                                        limits,
-                                    ),
-                                )?;
-                                let bytes = cargo_units(
-                                    native,
+        let (build, build_unit) =
+            self.check_build(
+                &bytes,
+                environment,
+                &metadata,
+                initial,
+                &cargo_allocation,
+                &toolchain,
+                [
+                    (&manifest_path, manifest),
+                    (&source_path, source),
+                    (&lock_path, lock),
+                ],
+                limits,
+                limits,
+                &workspace,
+                node_context.graph_budget(),
+                &mut allocation,
+                Some(
+                    |phase,
+                     #[cfg_attr(not(feature = "rustc-driver"), allow(unused_variables))]
+                     allocation: &mut RequestAllocation| match phase {
+                        Postcheck::Units => {
+                            #[cfg(feature = "rustc-driver")]
+                            if let Some((context, request, build)) = dag_build.as_ref() {
+                                let authority = post_build_unit_graph_node_authority(
+                                    *request,
+                                    &toolchain,
                                     &self,
                                     &manifest_path,
-                                    &command_target,
                                     limits,
                                 )?;
-                                workspace.require(
-                                    &mut crate::input::workspace::Account::borrow(
-                                        allocation,
-                                        node_context.graph_budget(),
-                                        limits,
-                                    ),
+                                let authority = workspace_node_authority(
+                                    &authority,
+                                    &workspace,
+                                    allocation,
+                                    node_context.graph_budget(),
                                 )?;
-                                Ok(bytes)
-                            },
-                        )
-                        .map_err(|source| Error::Node {
-                            operation: "post-build Cargo unit graph",
-                            source: Box::new(source),
-                        })?;
-                        let bytes = post_unit.value().raw().to_vec().into_boxed_slice();
-                        post_unit_parent = Some(post_unit);
-                        return Ok(bytes);
-                    }
-                    uncached(execution::Operation::UnitGraph)
-                        .run(|| cargo_units(native, &self, &manifest_path, &command_target, limits))
-                }
-                Postcheck::Metadata => {
-                    #[cfg(feature = "rustc-driver")]
-                    if let Some((context, request, build)) = dag_build.as_ref() {
-                        let authority = post_build_metadata_node_authority(
-                            *request,
-                            &toolchain,
-                            &self,
-                            &manifest_path,
-                            limits,
-                        )?;
-                        let authority = workspace_node_authority(
-                            &authority,
-                            &workspace,
-                            allocation,
-                            node_context.graph_budget(),
-                        )?;
-                        let post_metadata = crate::cargo::resolution::cached_post_metadata(
-                            context,
-                            build,
-                            &authority,
-                            &manifest_path,
-                            &lock_path,
-                            &command_target,
-                            &crate::metrics::Current,
-                            || {
-                                workspace.require(
-                                    &mut crate::input::workspace::Account::borrow(
-                                        allocation,
-                                        node_context.graph_budget(),
-                                        limits,
-                                    ),
+                                let post_unit = crate::cargo::resolution::cached_post_unit_graph(
+                                    context,
+                                    build,
+                                    &authority,
+                                    &crate::metrics::Current,
+                                    || {
+                                        workspace.require(
+                                            &mut crate::input::workspace::Account::borrow(
+                                                allocation,
+                                                node_context.graph_budget(),
+                                                limits,
+                                            ),
+                                        )?;
+                                        let bytes = cargo_units(
+                                            native,
+                                            &self,
+                                            &manifest_path,
+                                            &command_target,
+                                            limits,
+                                        )?;
+                                        workspace.require(
+                                            &mut crate::input::workspace::Account::borrow(
+                                                allocation,
+                                                node_context.graph_budget(),
+                                                limits,
+                                            ),
+                                        )?;
+                                        Ok(bytes)
+                                    },
+                                )
+                                .map_err(|source| Error::Node {
+                                    operation: "post-build Cargo unit graph",
+                                    source: Box::new(source),
+                                })?;
+                                let bytes = post_unit.value().raw().to_vec().into_boxed_slice();
+                                post_unit_parent = Some(post_unit);
+                                return Ok(bytes);
+                            }
+                            uncached(execution::Operation::UnitGraph).run(|| {
+                                cargo_units(native, &self, &manifest_path, &command_target, limits)
+                            })
+                        }
+                        Postcheck::Metadata => {
+                            #[cfg(feature = "rustc-driver")]
+                            if let Some((context, request, build)) = dag_build.as_ref() {
+                                let authority = post_build_metadata_node_authority(
+                                    *request,
+                                    &toolchain,
+                                    &self,
+                                    &manifest_path,
+                                    limits,
                                 )?;
-                                let bytes = cargo_metadata(
+                                let authority = workspace_node_authority(
+                                    &authority,
+                                    &workspace,
+                                    allocation,
+                                    node_context.graph_budget(),
+                                )?;
+                                let post_metadata = crate::cargo::resolution::cached_post_metadata(
+                                    context,
+                                    build,
+                                    &authority,
+                                    &manifest_path,
+                                    &lock_path,
+                                    &command_target,
+                                    &crate::metrics::Current,
+                                    || {
+                                        workspace.require(
+                                            &mut crate::input::workspace::Account::borrow(
+                                                allocation,
+                                                node_context.graph_budget(),
+                                                limits,
+                                            ),
+                                        )?;
+                                        let bytes = cargo_metadata(
+                                            native,
+                                            &self,
+                                            &manifest_path,
+                                            &command_target,
+                                            true,
+                                            limits,
+                                        )?;
+                                        metadata.require_exact_raw(
+                                            &bytes,
+                                            "workspace-bound post-build metadata",
+                                        )?;
+                                        workspace.require(
+                                            &mut crate::input::workspace::Account::borrow(
+                                                allocation,
+                                                node_context.graph_budget(),
+                                                limits,
+                                            ),
+                                        )?;
+                                        Ok(bytes)
+                                    },
+                                )
+                                .map_err(|source| Error::Node {
+                                    operation: "post-build Cargo metadata",
+                                    source: Box::new(source),
+                                })?;
+                                let bytes = post_metadata.value().raw().to_vec().into_boxed_slice();
+                                post_metadata_parent = Some(post_metadata);
+                                return Ok(bytes);
+                            }
+                            uncached(execution::Operation::Metadata).run(|| {
+                                cargo_metadata(
                                     native,
                                     &self,
                                     &manifest_path,
                                     &command_target,
                                     true,
                                     limits,
-                                )?;
-                                metadata.require_exact_raw(
-                                    &bytes,
-                                    "workspace-bound post-build metadata",
-                                )?;
-                                workspace.require(
-                                    &mut crate::input::workspace::Account::borrow(
-                                        allocation,
-                                        node_context.graph_budget(),
-                                        limits,
-                                    ),
-                                )?;
-                                Ok(bytes)
-                            },
-                        )
-                        .map_err(|source| Error::Node {
-                            operation: "post-build Cargo metadata",
-                            source: Box::new(source),
-                        })?;
-                        let bytes = post_metadata.value().raw().to_vec().into_boxed_slice();
-                        post_metadata_parent = Some(post_metadata);
-                        return Ok(bytes);
-                    }
-                    uncached(execution::Operation::Metadata).run(|| {
-                        cargo_metadata(native, &self, &manifest_path, &command_target, true, limits)
-                    })
-                }
-            }),
-        )?;
+                                )
+                            })
+                        }
+                    },
+                ),
+            )?;
         let package_scope = uncached(execution::Operation::Package);
         #[cfg(feature = "rustc-driver")]
         let probe_scope = uncached(execution::Operation::Probe);

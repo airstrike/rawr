@@ -14,9 +14,10 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
         .zip([Anchor::Start, Anchor::End])
     {
         builder
-            .bind(format!("iced::widget::scrollable::Anchor::{name}"), move |_| {
-                Ok(Dynamic::from(anchor))
-            })
+            .bind(
+                format!("iced::widget::scrollable::Anchor::{name}"),
+                move |_| Ok(Dynamic::from(anchor)),
+            )
             .expect("the iced facade must retain every scrollable::Anchor");
     }
     for (name, source) in crate::SCROLLABLE_SOURCES.into_iter().zip([
@@ -30,9 +31,10 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
         Source::Resize,
     ]) {
         builder
-            .bind(format!("iced::widget::scrollable::Source::{name}"), move |_| {
-                Ok(Dynamic::from(source))
-            })
+            .bind(
+                format!("iced::widget::scrollable::Source::{name}"),
+                move |_| Ok(Dynamic::from(source)),
+            )
             .expect("the iced facade must retain every scrollable::Source");
     }
     for (path, value) in [
@@ -65,14 +67,22 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every scrollable constructor");
     }
-    for name in ["anchor", "width", "margin", "scroller_width", "spacing", "padding"] {
+    for name in [
+        "anchor",
+        "width",
+        "margin",
+        "scroller_width",
+        "spacing",
+        "padding",
+    ] {
         let path = format!("iced::widget::scrollable::Scrollbar::{name}");
         builder
             .bind(path.clone(), move |args| {
                 let [scrollbar, value] = args else {
                     return Err(arity(&path, 2, args.len()));
                 };
-                let scrollbar = take::<Scrollbar>(scrollbar, "iced::widget::scrollable::Scrollbar")?;
+                let scrollbar =
+                    take::<Scrollbar>(scrollbar, "iced::widget::scrollable::Scrollbar")?;
                 Ok(Dynamic::from(match name {
                     "anchor" => scrollbar.anchor(take(value, "iced::widget::scrollable::Anchor")?),
                     "width" => scrollbar.width(pixels(value, &path)?),
@@ -85,7 +95,10 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain every Scrollbar builder");
     }
     for (name, variant) in [
-        ("Vertical", Direction::Vertical as fn(Scrollbar) -> Direction),
+        (
+            "Vertical",
+            Direction::Vertical as fn(Scrollbar) -> Direction,
+        ),
         ("Horizontal", Direction::Horizontal),
     ] {
         let path = format!("iced::widget::scrollable::Direction::{name}");
@@ -109,7 +122,9 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
                     let both = both
                         .read_lock::<marker::ScrollBoth>()
                         .map(|both| *both)
-                        .ok_or_else(|| runtime_error(format!("{path} expects a `Direction::Both`")))?;
+                        .ok_or_else(|| {
+                            runtime_error(format!("{path} expects a `Direction::Both`"))
+                        })?;
                     Ok(Dynamic::from(match field {
                         "horizontal" => both.horizontal,
                         _ => both.vertical,
@@ -136,7 +151,8 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             let [both] = args else {
                 return Err(arity("Direction::Both::into", 1, args.len()));
             };
-            let both = take::<marker::ScrollBoth>(both, "iced::widget::scrollable::Direction::Both")?;
+            let both =
+                take::<marker::ScrollBoth>(both, "iced::widget::scrollable::Direction::Both")?;
             Ok(Dynamic::from(Direction::from(both)))
         })
         .expect("the iced facade must retain Direction::Both::into");
@@ -192,9 +208,10 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             (|viewport: &Viewport| Dynamic::from(viewport.relative_offset()))
                 as fn(&Viewport) -> Dynamic,
         ),
-        ("iced::widget::scrollable::Viewport::absolute_offset", |viewport| {
-            Dynamic::from(viewport.absolute_offset())
-        }),
+        (
+            "iced::widget::scrollable::Viewport::absolute_offset",
+            |viewport| Dynamic::from(viewport.absolute_offset()),
+        ),
     ] {
         builder
             .bind(path, move |args| {

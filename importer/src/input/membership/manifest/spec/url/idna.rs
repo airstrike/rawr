@@ -56,10 +56,9 @@ impl<'input> Ascii<'input> {
         {
             // A project's runner reads no manifest; without UTS46 data only
             // a host that is already lowercase ASCII is one.
-            if input
-                .iter()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-'))
-            {
+            if input.iter().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+            }) {
                 return Ok(Ok(Self {
                     bytes: output::Bytes::Borrowed(input),
                 }));

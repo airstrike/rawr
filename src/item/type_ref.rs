@@ -36,12 +36,17 @@ pub(crate) fn named_array_name(length: &str) -> String {
 /// The constant an array type's builtin path name names as its length.
 pub(crate) fn array_length_name(name: &str) -> Option<&str> {
     let length = name.strip_prefix(ARRAY_PREFIX)?.strip_suffix(']')?;
-    length.starts_with(|c: char| c.is_alphabetic() || c == '_').then_some(length)
+    length
+        .starts_with(|c: char| c.is_alphabetic() || c == '_')
+        .then_some(length)
 }
 
 /// The length of an array type's builtin path name.
 pub(crate) fn array_length(name: &str) -> Option<usize> {
-    name.strip_prefix(ARRAY_PREFIX)?.strip_suffix(']')?.parse().ok()
+    name.strip_prefix(ARRAY_PREFIX)?
+        .strip_suffix(']')?
+        .parse()
+        .ok()
 }
 
 /// The first segment of a trait object type: `dyn Trait` parses to the

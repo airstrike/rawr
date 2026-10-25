@@ -108,8 +108,7 @@ impl Engine {
     #[inline]
     pub fn compile_file_with_scope(&self, scope: &Scope, path: PathBuf) -> RawrResultOf<AST> {
         Self::read_file(&path).and_then(|contents| {
-            let mut ast =
-                self.compile_scripts_named(scope, [contents], &path.to_string_lossy())?;
+            let mut ast = self.compile_scripts_named(scope, [contents], &path.to_string_lossy())?;
             ast.set_source(path.to_string_lossy().as_ref());
             Ok(ast)
         })

@@ -54,8 +54,7 @@ pub(super) fn recover_one(
             .iter()
             .filter(|registered| registered.allocation().class == Class::Bundle)
         {
-            let Some(eviction) = bundle::prepare_eviction(store, registered.allocation())?
-            else {
+            let Some(eviction) = bundle::prepare_eviction(store, registered.allocation())? else {
                 blocked = true;
                 break;
             };
@@ -280,8 +279,7 @@ fn recover_unrooted(store: &Path, budget: &mut recovery::Budget) -> Result<bool,
         .iter()
         .filter(|registered| registered.allocation().class == Class::Bundle)
     {
-        let Some(eviction) = bundle::prepare_eviction(store, registered.allocation())?
-        else {
+        let Some(eviction) = bundle::prepare_eviction(store, registered.allocation())? else {
             return Ok(false);
         };
         evictions.push((eviction, *registered));
@@ -332,8 +330,7 @@ pub(super) fn recover_resolution_excess(
         .iter()
         .filter(|registered| registered.allocation().class == Class::Bundle)
     {
-        let Some(eviction) = bundle::prepare_eviction(store, registered.allocation())?
-        else {
+        let Some(eviction) = bundle::prepare_eviction(store, registered.allocation())? else {
             return Ok(false);
         };
         evictions.push((eviction, *registered));
@@ -521,9 +518,7 @@ fn recover_interrupted(store: &Path, budget: &mut recovery::Budget) -> Result<bo
         .iter()
         .filter(|registered| registered.allocation().class == Class::Bundle)
     {
-        if let Some(eviction) =
-            bundle::prepare_recovery_eviction(store, registered.allocation())?
-        {
+        if let Some(eviction) = bundle::prepare_recovery_eviction(store, registered.allocation())? {
             evictions.push((eviction, *registered));
         }
     }
@@ -577,9 +572,9 @@ pub(super) fn interrupt_oldest(store: &Path, requesting: Digest) -> Result<(), E
         .filter(|registered| registered.allocation().class == Class::Bundle)
     {
         bundles.push(
-            bundle::prepare_eviction(store, registered.allocation())?.ok_or(
-                Error::State("the eviction interruption fixture bundle is pinned"),
-            )?,
+            bundle::prepare_eviction(store, registered.allocation())?.ok_or(Error::State(
+                "the eviction interruption fixture bundle is pinned",
+            ))?,
         );
     }
     lease::with_publication(store, |publication| {

@@ -170,7 +170,11 @@ fn bind_palette(iced: &mut host::runtime::Builder) {
     field::<Pair, _>(iced, "iced::theme::palette::Pair::text", |p| p.text);
     // A `Seed` field is read (`seed.text`) or set by a struct literal's
     // builder (`Seed { text, .. }`), which starts from `Seed::default()`.
-    type SeedField = (&'static str, fn(&Seed) -> iced::Color, fn(&mut Seed, iced::Color));
+    type SeedField = (
+        &'static str,
+        fn(&Seed) -> iced::Color,
+        fn(&mut Seed, iced::Color),
+    );
     let fields: [SeedField; 6] = [
         ("background", |s| s.background, |s, c| s.background = c),
         ("text", |s| s.text, |s, c| s.text = c),
@@ -417,7 +421,8 @@ impl host::value::Carry for CarryTheme {
                 .flatten()
                 .map(Value::built_in);
         }
-        let color = |index: usize| CarryColor::decode(bytes.get(4 + index * 16..4 + index * 16 + 16)?);
+        let color =
+            |index: usize| CarryColor::decode(bytes.get(4 + index * 16..4 + index * 16 + 16)?);
         let seed = iced::theme::palette::Seed {
             background: color(0)?,
             text: color(1)?,

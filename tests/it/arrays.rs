@@ -221,7 +221,12 @@ fn test_arrays_map_reduce() {
         12
     );
     assert_eq!(engine.eval::<INT>("(vec![1].iter().map(|x| x + 41).collect::<Vec<_>>())[0]").unwrap(), 42);
-    assert_eq!(engine.eval::<INT>("let mut x = vec![1, 2, 3]; for (i, v) in x.iter_mut().enumerate() { *v += i as i64; } x[2]").unwrap(), 5);
+    assert_eq!(
+        engine
+            .eval::<INT>("let mut x = vec![1, 2, 3]; for (i, v) in x.iter_mut().enumerate() { *v += i as i64; } x[2]")
+            .unwrap(),
+        5
+    );
 
     assert_eq!(
         engine
@@ -429,7 +434,12 @@ fn test_arrays_index_of() {
     assert_eq!(engine.eval::<INT>("vec![1, 2, 3].iter().position(|v| *v == 2).unwrap()").unwrap(), 1);
     // An array of strings.
     assert_eq!(engine.eval::<INT>(r#"vec!["hi", "hello", "world"].iter().position(|s| *s == "hello").unwrap()"#).unwrap(), 1);
-    assert_eq!(engine.eval::<INT>(r#"vec!["a", "b", "c", "b"].iter().skip(2).position(|s| *s == "b").map(|p| p + 2).unwrap()"#).unwrap(), 3);
+    assert_eq!(
+        engine
+            .eval::<INT>(r#"vec!["a", "b", "c", "b"].iter().skip(2).position(|s| *s == "b").map(|p| p + 2).unwrap()"#)
+            .unwrap(),
+        3
+    );
     assert!(engine.eval::<bool>(r#"vec!["a", "b"].iter().position(|s| *s == "missing").is_none()"#).unwrap());
 }
 

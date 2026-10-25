@@ -33,9 +33,17 @@ mod tests {
                 &known.manifest.templates,
                 &known.manifest.commands
             ),
-            (&manifest.name, &manifest.extends, &manifest.templates, &manifest.commands)
+            (
+                &manifest.name,
+                &manifest.extends,
+                &manifest.templates,
+                &manifest.commands
+            )
         );
         assert!(!manifest.claims.prelude.is_empty());
-        assert!(known.install.iter().any(|line| line.ends_with(" rawr-iced-cli")));
+        assert!(known
+            .install
+            .iter()
+            .any(|line| line.ends_with(" rawr-iced-cli")));
     }
 }

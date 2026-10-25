@@ -12,7 +12,10 @@ static NEXT_PROJECT: AtomicUsize = AtomicUsize::new(0);
 fn candidate_retains_one_exact_generation_proof_bundle() {
     let project = Project::new("proof-bundle");
     project.write("Cargo.toml", "[package]\nname = \"reload-app\"\n");
-    project.write("src/main.rs", &format!("mod palette;\n{}", source("self.value += 1")));
+    project.write(
+        "src/main.rs",
+        &format!("mod palette;\n{}", source("self.value += 1")),
+    );
     project.write("src/palette.rs", "");
     let engine = compiler();
     let first = compile(&engine, &project);
@@ -32,7 +35,10 @@ fn candidate_retains_one_exact_generation_proof_bundle() {
         format!("// rawr\nmod palette;\n{}", source("self.value += 1"))
     );
 
-    project.write("src/main.rs", &format!("mod palette;\n{}", source("self.value += 2")));
+    project.write(
+        "src/main.rs",
+        &format!("mod palette;\n{}", source("self.value += 2")),
+    );
     let second = compile(&engine, &project);
 
     assert_ne!(first.id(), second.id());
@@ -64,7 +70,10 @@ fn compatibility_plan_owns_the_candidate_without_mutating_current() {
 
     assert_eq!(plan.evidence_set()[0].action(), Action::Retain);
     assert!(Arc::ptr_eq(&snapshot, &first));
-    assert_eq!(snapshot.source().entry_source().text(), format!("// rawr\n{first_source}"));
+    assert_eq!(
+        snapshot.source().entry_source().text(),
+        format!("// rawr\n{first_source}")
+    );
     assert_eq!(plan.evidence_set()[0].current(), first.id());
     assert_eq!(plan.evidence_set()[0].candidate(), second_id);
     assert_eq!(second_text, format!("// rawr\n{second_source}"));
@@ -138,7 +147,10 @@ fn reachable_nested_schema_and_callback_drift_reset_state() {
 #[test]
 fn unrelated_package_and_preview_changes_keep_the_selected_owner() {
     let project = Project::new("owner-separation");
-    project.write("src/main.rs", &format!("mod extra;\n{}", preview_source("i64")));
+    project.write(
+        "src/main.rs",
+        &format!("mod extra;\n{}", preview_source("i64")),
+    );
     project.write("src/extra.rs", "pub struct Extra { value: i64 }");
     let engine = compiler();
     let first = compile(&engine, &project).generation().clone();
@@ -158,7 +170,10 @@ fn unrelated_package_and_preview_changes_keep_the_selected_owner() {
         .clone();
 
     project.write("src/extra.rs", "pub struct Extra { value: bool }");
-    project.write("src/main.rs", &format!("mod extra;\n{}", preview_source("bool")));
+    project.write(
+        "src/main.rs",
+        &format!("mod extra;\n{}", preview_source("bool")),
+    );
     let candidate = compile(&engine, &project);
     let application = compare(first.clone(), candidate, Owner::Application);
     assert_eq!(application.evidence_set()[0].action(), Action::Retain);
@@ -987,7 +1002,11 @@ impl Project {
             std::process::id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
         Self { root }
     }
 

@@ -243,8 +243,10 @@ fn resolve_path(
     // generic parameter of this program.
     if parsed.global
         && let Some(first) = parsed.segments.first()
-        && (matches!(first.name.text.as_str(), "crate" | "self" | "super" | "Self")
-            || parsed.segments.len() == 1
+        && (matches!(
+            first.name.text.as_str(),
+            "crate" | "self" | "super" | "Self"
+        ) || parsed.segments.len() == 1
             || matches!(
                 types.get(first.name.text.as_str()),
                 Some(Target::Script { .. } | Target::Parameter | Target::Alias(_))
@@ -297,7 +299,10 @@ fn resolve_path(
             // `widget::Operation` through a module `use`, which a type path
             // does not follow: iced's, when every segment is iced's.
             if rest[..rest.len() - 1].iter().all(|module| {
-                matches!(module.name.text.as_str(), "iced" | "advanced" | "widget" | "core")
+                matches!(
+                    module.name.text.as_str(),
+                    "iced" | "advanced" | "widget" | "core"
+                )
             }) && let Some(definition) = host.type_(OPERATION)
             {
                 return Ok(Path {
@@ -630,7 +635,9 @@ fn resolve_path(
             .filter(|argument| matches!(argument, Argument::Type(_)))
             .count()
             > definition.parameters().len()
-            && let Some(position) = arguments.iter().rposition(|argument| matches!(argument, Argument::Type(_)))
+            && let Some(position) = arguments
+                .iter()
+                .rposition(|argument| matches!(argument, Argument::Type(_)))
             && matches!(
                 &arguments[position],
                 Argument::Type(Type::Path(Path { target: Target::Host { definition, .. }, .. }))
@@ -726,7 +733,17 @@ fn host_type(
         Shape::Tuple(members) => Type::Tuple {
             members: members
                 .iter()
-                .map(|member| host_type(member, parameters, arguments, owner, originating, host, span))
+                .map(|member| {
+                    host_type(
+                        member,
+                        parameters,
+                        arguments,
+                        owner,
+                        originating,
+                        host,
+                        span,
+                    )
+                })
                 .collect::<Option<_>>()?,
             span,
         },
@@ -765,7 +782,11 @@ fn host_type(
             let definition = imported.definition.clone();
             let owner = imported.owner.cloned();
             let inner = convert(inner, owner.as_ref())?;
-            path(&definition.path(), Target::Host { definition, owner }, inner)
+            path(
+                &definition.path(),
+                Target::Host { definition, owner },
+                inner,
+            )
         }
         _ => return None,
     })
@@ -891,10 +912,12 @@ fn resolve_impl(
     let span = parsed.span;
     if let Some(output) = future_output(&parsed) {
         // A future is iced's `Task` of its output, which runs it.
-        let definition = host.type_(TASK).ok_or_else(|| Error::UnsupportedNominalSyntax {
-            construct: "a future in a program without iced, whose `Task` runs it".into(),
-            source: span,
-        })?;
+        let definition = host
+            .type_(TASK)
+            .ok_or_else(|| Error::UnsupportedNominalSyntax {
+                construct: "a future in a program without iced, whose `Task` runs it".into(),
+                source: span,
+            })?;
         let output = match output {
             Some(output) => resolve(
                 output.clone(),
@@ -1009,13 +1032,17 @@ fn future_output(parsed: &item::type_ref::Path) -> Option<Option<&item::type_ref
     }
     let binding = format!("{}Future=Output", item::type_ref::BINDING_PREFIX);
     Some(arguments.iter().find_map(|argument| match argument {
-        item::type_ref::Argument::Type(item::type_ref::Type::Path(path)) => match &path.segments[..] {
-            [segment] if segment.name.text == binding.as_str() => match &segment.arguments[..] {
-                [item::type_ref::Argument::Type(ty)] => Some(ty),
+        item::type_ref::Argument::Type(item::type_ref::Type::Path(path)) => {
+            match &path.segments[..] {
+                [segment] if segment.name.text == binding.as_str() => {
+                    match &segment.arguments[..] {
+                        [item::type_ref::Argument::Type(ty)] => Some(ty),
+                        _ => None,
+                    }
+                }
                 _ => None,
-            },
-            _ => None,
-        },
+            }
+        }
         _ => None,
     }))
 }

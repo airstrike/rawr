@@ -39,10 +39,13 @@ impl Path {
             !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit())
         };
         if path.is_empty()
-            || segments.iter().enumerate().any(|(index, segment): (usize, &ImmutableString)| {
-                !is_valid_identifier(segment)
-                    && !(index + 1 == segments.len() && index > 0 && tuple_field(segment))
-            })
+            || segments
+                .iter()
+                .enumerate()
+                .any(|(index, segment): (usize, &ImmutableString)| {
+                    !is_valid_identifier(segment)
+                        && !(index + 1 == segments.len() && index > 0 && tuple_field(segment))
+                })
         {
             return Err(host::Error::InvalidFacadePath(path));
         }

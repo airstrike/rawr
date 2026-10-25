@@ -35,7 +35,9 @@ fn bench_type_method(bench: &mut Bencher) {
     let mut scope = Scope::new();
     scope.push("foo", Test { x: 42 });
 
-    let ast = engine.compile_expression_with_scope(&scope, script).unwrap();
+    let ast = engine
+        .compile_expression_with_scope(&scope, script)
+        .unwrap();
 
     bench.iter(|| engine.run_ast_with_scope(&mut scope, &ast).unwrap());
 }
@@ -53,7 +55,9 @@ fn bench_type_method_with_params(bench: &mut Bencher) {
     let mut scope = Scope::new();
     scope.push("foo", Test { x: 42 });
 
-    let ast = engine.compile_expression_with_scope(&scope, script).unwrap();
+    let ast = engine
+        .compile_expression_with_scope(&scope, script)
+        .unwrap();
 
     bench.iter(|| engine.run_ast_with_scope(&mut scope, &ast).unwrap());
 }

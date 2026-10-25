@@ -40,7 +40,9 @@ const USAGE: &str = "usage: rawr-play <file.rs|-> [--size WxH] [--theme dark|lig
 /// Print the guild ID behind each token, or the token for each guild ID.
 fn server_tokens(decrypt: bool, values: &[String]) -> Result<(), String> {
     if values.is_empty() {
-        return Err("usage: rawr-play decrypt-server <token>... | encrypt-server <guild id>...".into());
+        return Err(
+            "usage: rawr-play decrypt-server <token>... | encrypt-server <guild id>...".into(),
+        );
     }
     let path = std::env::var_os("PLAY_LOG_KEY_FILE")
         .map(std::path::PathBuf::from)
@@ -51,7 +53,9 @@ fn server_tokens(decrypt: bool, values: &[String]) -> Result<(), String> {
         if decrypt {
             println!("{value} {}", key.decrypt(value)?);
         } else {
-            let id: u64 = value.parse().map_err(|_| format!("not a guild ID: {value}"))?;
+            let id: u64 = value
+                .parse()
+                .map_err(|_| format!("not a guild ID: {value}"))?;
             println!("{id} {}", key.encrypt(id));
         }
     }
@@ -69,7 +73,8 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Vec<String>) -> Result<(), String> {
-    if let Some(command @ ("decrypt-server" | "encrypt-server")) = args.first().map(String::as_str) {
+    if let Some(command @ ("decrypt-server" | "encrypt-server")) = args.first().map(String::as_str)
+    {
         return server_tokens(command == "decrypt-server", &args[1..]);
     }
     stop_on_signal();
@@ -95,7 +100,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--format" => format = Some(value("--format")?.parse()?),
             "--still" => options.still = true,
             "--time-ms" => {
-                options.limits.time = std::time::Duration::from_millis(number(value("--time-ms")?)?);
+                options.limits.time =
+                    std::time::Duration::from_millis(number(value("--time-ms")?)?);
             }
             "--animation-ms" => {
                 options.limits.animation =
@@ -132,12 +138,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
     read.map_err(|error| format!("cannot read {input}: {error}"))?;
     let mut output = output;
     let mut note = None;
-    let (bytes, summary) = match rawr_play::run(&source, &options).map_err(|error| error.to_string())? {
+    let (bytes, summary) = match rawr_play::run(&source, &options)
+        .map_err(|error| error.to_string())?
+    {
         rawr_play::Outcome::Image(image) => {
             note = image.note;
             match image.picture {
                 rawr_play::Picture::Still(png) => {
-                    let bytes = rawr_play::encode(&png, format).map_err(|error| error.to_string())?;
+                    let bytes =
+                        rawr_play::encode(&png, format).map_err(|error| error.to_string())?;
                     let summary = format!("{}x{}, {} bytes", png.width, png.height, bytes.len());
                     (bytes, summary)
                 }
@@ -193,7 +202,10 @@ fn stop_on_signal() {
     // SAFETY: the handler only stores to an atomic, which is
     // async-signal-safe.
     unsafe {
-        libc::signal(libc::SIGUSR1, cut as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        libc::signal(
+            libc::SIGUSR1,
+            cut as extern "C" fn(libc::c_int) as libc::sighandler_t,
+        );
     }
 }
 
@@ -213,7 +225,10 @@ fn limit_memory(megabytes: u64) -> Result<(), String> {
     if unsafe { libc::setrlimit(libc::RLIMIT_AS, &limit) } == 0 {
         Ok(())
     } else {
-        Err(format!("cannot limit memory: {}", std::io::Error::last_os_error()))
+        Err(format!(
+            "cannot limit memory: {}",
+            std::io::Error::last_os_error()
+        ))
     }
 }
 

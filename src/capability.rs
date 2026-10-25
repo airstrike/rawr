@@ -681,7 +681,10 @@ pub(crate) fn type_supports(
         // A function type is `Copy`, `Clone`, `Debug` and the marker `Eq`;
         // Rawr does not compare, hash or default function values.
         type_ref::Type::Path(_) if ty.fn_signature().is_some() => {
-            matches!(capability, Kind::Clone | Kind::Copy | Kind::Debug | Kind::Eq)
+            matches!(
+                capability,
+                Kind::Clone | Kind::Copy | Kind::Debug | Kind::Eq
+            )
         }
         // `Result<T, E>` is never `Default`, and otherwise derives from both.
         type_ref::Type::Path(_) if let Some((ok, err)) = ty.result_elements() => {
@@ -693,7 +696,9 @@ pub(crate) fn type_supports(
             type_ref::Target::Builtin => builtin_supports(&path.name, capability),
             // A generic parameter's capabilities are checked where it is
             // instantiated, as a derive's bounds are.
-            type_ref::Target::Parameter | type_ref::Target::Projection(..) | type_ref::Target::Alias(_) => true,
+            type_ref::Target::Parameter
+            | type_ref::Target::Projection(..)
+            | type_ref::Target::Alias(_) => true,
             type_ref::Target::Host { definition, .. } => {
                 definition.capabilities().contains(capability)
             }

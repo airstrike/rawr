@@ -428,7 +428,9 @@ fn compile(
             Some(cells) => rawr::package::Graph::load_with_cells(
                 &engine,
                 &target,
-                &cells.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+                &cells
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
             ),
             None => rawr::package::Graph::load(&engine, &target),
         };
@@ -944,7 +946,9 @@ mod tests {
         // Taking iced out: the session cannot become a base program.
         let dropped = reload(r#"fn main() { println!("plain"); }"#).unwrap();
         assert!(
-            dropped.message().contains("this program no longer uses `iced`"),
+            dropped
+                .message()
+                .contains("this program no longer uses `iced`"),
             "{dropped:?}"
         );
         // Bringing it back reloads again.

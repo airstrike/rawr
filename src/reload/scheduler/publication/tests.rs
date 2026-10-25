@@ -207,8 +207,8 @@ fn decoded_current_identities_share_the_current_inputs_and_others_derive_their_o
         let inputs = &observed.0.as_ref().unwrap().inputs;
         Arc::ptr_eq(inputs, &read(&slot.state).current)
     };
-    let same = source::observation::decode(&fixture.observed().encode_observation().unwrap())
-        .unwrap();
+    let same =
+        source::observation::decode(&fixture.observed().encode_observation().unwrap()).unwrap();
     let observed = slot.register_decoded(same);
     assert!(shared(&observed));
     assert_eq!(slot.read().staged(), 1);

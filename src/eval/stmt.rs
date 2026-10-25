@@ -343,7 +343,10 @@ pub(crate) fn restore_nominal_root(
     names: &[ImmutableString],
     values: &[Dynamic],
 ) -> bool {
-    if !matches!(collect_nominal_root(value, pattern, &mut Vec::new()), Ok(true)) {
+    if !matches!(
+        collect_nominal_root(value, pattern, &mut Vec::new()),
+        Ok(true)
+    ) {
         return false;
     }
     restore_nominal(value, pattern, names, values);
@@ -437,7 +440,10 @@ fn restore_nominal(
         }
         NominalPattern::Or(alternatives) => {
             let matched = alternatives.iter().find(|alternative| {
-                matches!(collect_nominal_root(value, alternative, &mut Vec::new()), Ok(true))
+                matches!(
+                    collect_nominal_root(value, alternative, &mut Vec::new()),
+                    Ok(true)
+                )
             });
             if let Some(alternative) = matched {
                 restore_nominal(value, alternative, names, values);

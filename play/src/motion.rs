@@ -178,7 +178,9 @@ pub fn picture(
     encoder: Encoder,
 ) -> Result<Image, PlayError> {
     let Recording { frames, ending } = recording;
-    let last = frames.last().ok_or_else(|| PlayError::Limit(crate::TIME_LIMIT.into()))?;
+    let last = frames
+        .last()
+        .ok_or_else(|| PlayError::Limit(crate::TIME_LIMIT.into()))?;
     let still = |note: Option<&str>| {
         Ok(Image {
             picture: Picture::Still(png(last)?),
@@ -192,7 +194,10 @@ pub fn picture(
         return still(None);
     }
     let final_phase = last.phase;
-    let first = frames.iter().position(|frame| frame.phase == final_phase).unwrap_or(0);
+    let first = frames
+        .iter()
+        .position(|frame| frame.phase == final_phase)
+        .unwrap_or(0);
     let (shown, looping, note) = match (ending, loops.found) {
         (Ending::Stopped, Some((j, k))) => {
             // Start the loop where its picture changes, so a frame held
@@ -248,13 +253,16 @@ pub fn picture(
 
 /// A frame as a PNG.
 fn png(frame: &Frame) -> Result<Png, PlayError> {
-    let failed = |error: &dyn std::fmt::Display| PlayError::Render(format!("cannot encode: {error}"));
+    let failed =
+        |error: &dyn std::fmt::Display| PlayError::Render(format!("cannot encode: {error}"));
     let mut bytes = Vec::new();
     let mut encoder = png::Encoder::new(&mut bytes, frame.width, frame.height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().map_err(|error| failed(&error))?;
-    writer.write_image_data(&frame.rgba).map_err(|error| failed(&error))?;
+    writer
+        .write_image_data(&frame.rgba)
+        .map_err(|error| failed(&error))?;
     writer.finish().map_err(|error| failed(&error))?;
     Ok(Png {
         width: frame.width,
@@ -309,18 +317,16 @@ impl Encoder {
         if self.error.is_some() {
             return;
         }
-        if self.size.is_none()
-            && frames
-                .last()
-                .is_none_or(|last| last.same_image(&frames[0]))
-        {
+        if self.size.is_none() && frames.last().is_none_or(|last| last.same_image(&frames[0])) {
             return;
         }
         // A frame larger than the canvas grows it, and starts over.
         let size = frames[self.seen..]
             .iter()
             .map(|frame| self.size_of(frame))
-            .fold(self.size.unwrap_or((0, 0)), |(w, h), (fw, fh)| (w.max(fw), h.max(fh)));
+            .fold(self.size.unwrap_or((0, 0)), |(w, h), (fw, fh)| {
+                (w.max(fw), h.max(fh))
+            });
         if self.size != Some(size) {
             self.size = Some(size);
             self.seen = 0;
@@ -371,19 +377,27 @@ impl Encoder {
         shown: &[(usize, Duration)],
         looping: bool,
     ) -> Result<Gif, PlayError> {
-        let failed = |error: &dyn std::fmt::Display| PlayError::Render(format!("cannot encode: {error}"));
+        let failed =
+            |error: &dyn std::fmt::Display| PlayError::Render(format!("cannot encode: {error}"));
         if let Some(error) = self.error.take() {
             return Err(error);
         }
         let Some((columns, rows)) = self.size else {
-            return Err(PlayError::Render("cannot encode: the view never changed".into()));
+            return Err(PlayError::Render(
+                "cannot encode: the view never changed".into(),
+            ));
         };
         let mut out: Vec<gif::Frame<'static>> = Vec::new();
         for &(at, delay) in shown {
             let frame = if out.is_empty() {
                 // The first frame is whole; a loop's first was stored as
                 // a change from the frame before it.
-                match self.encoded.get_mut(at).and_then(Option::take).filter(|_| at == 0) {
+                match self
+                    .encoded
+                    .get_mut(at)
+                    .and_then(Option::take)
+                    .filter(|_| at == 0)
+                {
                     Some(frame) => Some(frame),
                     None => encode(&self.canvas(&frames[at]), None, (columns, rows))?,
                 }
@@ -406,8 +420,8 @@ impl Encoder {
         let side = |side: usize| u16::try_from(side).map_err(|error| failed(&error));
         let mut bytes = Vec::new();
         {
-            let mut encoder =
-                gif::Encoder::new(&mut bytes, side(columns)?, side(rows)?, &[]).map_err(|error| failed(&error))?;
+            let mut encoder = gif::Encoder::new(&mut bytes, side(columns)?, side(rows)?, &[])
+                .map_err(|error| failed(&error))?;
             if looping {
                 encoder
                     .set_repeat(gif::Repeat::Infinite)
@@ -472,7 +486,8 @@ fn encode(
     previous: Option<&[u8]>,
     (columns, rows): (usize, usize),
 ) -> Result<Option<gif::Frame<'static>>, PlayError> {
-    let failed = |error: &dyn std::fmt::Display| PlayError::Render(format!("cannot encode: {error}"));
+    let failed =
+        |error: &dyn std::fmt::Display| PlayError::Render(format!("cannot encode: {error}"));
     let side = |side: usize| u16::try_from(side).map_err(|error| failed(&error));
     if previous == Some(canvas) {
         return Ok(None);
@@ -557,7 +572,12 @@ fn centiseconds(delay: Duration) -> u16 {
 
 /// The rectangle `(left, top, right, bottom)` where `next` differs from
 /// `previous`; one pixel when nothing does.
-fn changed(previous: &[u8], next: &[u8], columns: usize, rows: usize) -> (usize, usize, usize, usize) {
+fn changed(
+    previous: &[u8],
+    next: &[u8],
+    columns: usize,
+    rows: usize,
+) -> (usize, usize, usize, usize) {
     let (mut left, mut top, mut right, mut bottom) = (columns, rows, 0, 0);
     for row in 0..rows {
         let line = row * columns * 4..(row + 1) * columns * 4;
@@ -567,8 +587,16 @@ fn changed(previous: &[u8], next: &[u8], columns: usize, rows: usize) -> (usize,
         }
         top = top.min(row);
         bottom = row + 1;
-        let first = a.chunks_exact(4).zip(b.chunks_exact(4)).position(|(a, b)| a != b).unwrap_or(0);
-        let last = a.chunks_exact(4).zip(b.chunks_exact(4)).rposition(|(a, b)| a != b).unwrap_or(0);
+        let first = a
+            .chunks_exact(4)
+            .zip(b.chunks_exact(4))
+            .position(|(a, b)| a != b)
+            .unwrap_or(0);
+        let last = a
+            .chunks_exact(4)
+            .zip(b.chunks_exact(4))
+            .rposition(|(a, b)| a != b)
+            .unwrap_or(0);
         left = left.min(first);
         right = right.max(last + 1);
     }
@@ -580,7 +608,7 @@ fn changed(previous: &[u8], next: &[u8], columns: usize, rows: usize) -> (usize,
 
 #[cfg(test)]
 mod tests {
-    use super::{cut_note, cycle, stopped_note, Encoder, resample};
+    use super::{cut_note, cycle, resample, stopped_note, Encoder};
     use rawr_iced::snapshot::{Ending, Frame, Recording};
     use std::time::Duration;
 
@@ -606,7 +634,9 @@ mod tests {
     }
 
     fn times(count: usize) -> Vec<Duration> {
-        (0..count).map(|at| Duration::from_millis(50 * at as u64)).collect()
+        (0..count)
+            .map(|at| Duration::from_millis(50 * at as u64))
+            .collect()
     }
 
     #[test]
@@ -631,8 +661,14 @@ mod tests {
 
     #[test]
     fn notes_round_to_tenths() {
-        assert_eq!(cut_note(Duration::from_secs(5)), "Animation shown for the first 5 s.");
-        assert_eq!(cut_note(Duration::from_millis(1250)), "Animation shown for the first 1.3 s.");
+        assert_eq!(
+            cut_note(Duration::from_secs(5)),
+            "Animation shown for the first 5 s."
+        );
+        assert_eq!(
+            cut_note(Duration::from_millis(1250)),
+            "Animation shown for the first 1.3 s."
+        );
     }
 
     #[test]
@@ -680,20 +716,30 @@ mod tests {
         assert_eq!((first.width, first.height, first.transparent), (8, 8, None));
         let lit = encoder.encoded[1].as_ref().unwrap();
         assert_eq!((lit.left, lit.top, lit.width, lit.height), (2, 3, 1, 1));
-        assert!(encoder.encoded[2].is_none(), "the same picture stores nothing");
+        assert!(
+            encoder.encoded[2].is_none(),
+            "the same picture stores nothing"
+        );
         // The move changes two pixels; the ones between keep the last frame.
         let moved = encoder.encoded[3].as_ref().unwrap();
-        assert_eq!((moved.left, moved.top, moved.width, moved.height), (2, 3, 4, 4));
+        assert_eq!(
+            (moved.left, moved.top, moved.width, moved.height),
+            (2, 3, 4, 4)
+        );
         assert_eq!(moved.transparent, Some(255));
         let recording = Recording {
             frames,
             ending: Ending::Settled,
         };
-        let image = super::picture(recording, &super::Loops::default(), Duration::ZERO, encoder).unwrap();
+        let image =
+            super::picture(recording, &super::Loops::default(), Duration::ZERO, encoder).unwrap();
         let super::Picture::Animated(gif) = image.picture else {
             panic!("an animation gives a GIF");
         };
-        assert_eq!((gif.width, gif.height, gif.frames, gif.looping), (8, 8, 3, false));
+        assert_eq!(
+            (gif.width, gif.height, gif.frames, gif.looping),
+            (8, 8, 3, false)
+        );
         // It decodes: the last frame shows the moved pixel only.
         let mut options = gif::DecodeOptions::new();
         options.set_color_output(gif::ColorOutput::RGBA);

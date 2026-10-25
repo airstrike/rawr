@@ -644,7 +644,8 @@ impl Parser<'_> {
             });
         }
         self.coerce_key(&keyed.arguments[0], &mut index)?;
-        let helper = self.push_op(self.keyed_op(PreludeOp::MapIndex, keyed.kind, &keyed.arguments[0]));
+        let helper =
+            self.push_op(self.keyed_op(PreludeOp::MapIndex, keyed.kind, &keyed.arguments[0]));
         let mut source = value.rendered_source().surrounded("(", ")");
         source.push_text(format!(".{helper}("));
         source.push(index.rendered_source());

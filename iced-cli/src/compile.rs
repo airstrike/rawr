@@ -110,7 +110,11 @@ mod tests {
             std::thread::current().id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        crate::write_marked(&root, "src/main.rs", include_str!("../../iced/examples/scripts/application_counter.rs"));
+        crate::write_marked(
+            &root,
+            "src/main.rs",
+            include_str!("../../iced/examples/scripts/application_counter.rs"),
+        );
         let layered = || match crate::base::layer(Some(&root)) {
             Ok(crate::base::Program::Layered(loaded)) => loaded,
             _ => panic!("the counter brings in rawr-iced"),

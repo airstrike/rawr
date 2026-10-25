@@ -43,16 +43,21 @@ fn test_blobs_write_string() {
 
     let expected = |text: &[u8]| text.iter().map(|&b| b as INT).collect::<Vec<_>>();
 
+    assert_eq!(bytes(engine.eval::<Dynamic>(r#"let mut x = vec![0u8; 16]; x[0..13].copy_from_slice("hello, world!".as_bytes()); x"#).unwrap()), expected(b"hello, world!\0\0\0"));
     assert_eq!(
-        bytes(engine.eval::<Dynamic>(r#"let mut x = vec![0u8; 16]; x[0..13].copy_from_slice("hello, world!".as_bytes()); x"#).unwrap()),
-        expected(b"hello, world!\0\0\0")
-    );
-    assert_eq!(
-        bytes(engine.eval::<Dynamic>(r#"let mut x = vec![0u8; 10]; x[3..8].copy_from_slice(&"hello, world!".as_bytes()[..5]); x"#).unwrap()),
+        bytes(
+            engine
+                .eval::<Dynamic>(r#"let mut x = vec![0u8; 10]; x[3..8].copy_from_slice(&"hello, world!".as_bytes()[..5]); x"#)
+                .unwrap()
+        ),
         expected(b"\0\0\0hello\0\0")
     );
     assert_eq!(
-        bytes(engine.eval::<Dynamic>(r#"let mut x = vec![0u8; 10]; x[3..9].copy_from_slice("\u{2764}\u{2764}".as_bytes()); x"#).unwrap()),
+        bytes(
+            engine
+                .eval::<Dynamic>(r#"let mut x = vec![0u8; 10]; x[3..9].copy_from_slice("\u{2764}\u{2764}".as_bytes()); x"#)
+                .unwrap()
+        ),
         expected("\0\0\0\u{2764}\u{2764}\0".as_bytes())
     );
     assert_eq!(bytes(engine.eval::<Dynamic>(r#""hello".bytes().collect::<Vec<u8>>()"#).unwrap()), expected(b"hello"));

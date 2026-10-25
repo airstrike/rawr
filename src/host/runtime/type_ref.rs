@@ -838,7 +838,10 @@ impl Type {
             return Ok(Self::array(Self::from_resolved(element, model)?, None));
         }
         if let Some((element, length)) = ty.array_element() {
-            return Ok(Self::array(Self::from_resolved(element, model)?, Some(length)));
+            return Ok(Self::array(
+                Self::from_resolved(element, model)?,
+                Some(length),
+            ));
         }
         if let Some(element) = ty.box_element() {
             return Self::from_resolved(element, model);
@@ -871,9 +874,11 @@ impl Type {
                 "f64" => Ok(Self::builtin("f64", TypeId::of::<crate::FLOAT>())),
                 name => Err(Error::Unsupported { ty: name.into() }),
             },
-            Target::Parameter | Target::Projection(..) | Target::Alias(_) => Err(Error::Unsupported {
-                ty: path.name.clone(),
-            }),
+            Target::Parameter | Target::Projection(..) | Target::Alias(_) => {
+                Err(Error::Unsupported {
+                    ty: path.name.clone(),
+                })
+            }
             Target::Script { identity, .. } => {
                 let schema = model.schema(identity).ok_or_else(|| {
                     Error::Nominal(program::construction::Error::UnknownTarget {

@@ -857,13 +857,21 @@ fn defaulted_facade() -> facade::Definition {
                 Some(type_ref::Type::builtin(type_ref::Builtin::F32)),
             ]),
         ),
-        ("Pair", pair, Box::from(["A".into(), "B".into()]), Box::default()),
+        (
+            "Pair",
+            pair,
+            Box::from(["A".into(), "B".into()]),
+            Box::default(),
+        ),
     ] {
         builder
             .imported_type(
                 path,
                 identity,
-                &[crate::capability::Kind::Copy, crate::capability::Kind::Clone],
+                &[
+                    crate::capability::Kind::Copy,
+                    crate::capability::Kind::Clone,
+                ],
                 parameters,
                 defaults,
                 Shared::new(host::type_def::Shape::Opaque),
@@ -916,10 +924,7 @@ fn an_imported_type_written_without_its_defaulted_arguments_takes_them() {
     let error = engine
         .compile_executable("use palette::Pair; struct Holder { pair: Pair }")
         .unwrap_err();
-    assert!(
-        error.to_string().contains("expected 2, found 0"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("expected 2, found 0"), "{error}");
 }
 
 #[test]
@@ -930,7 +935,11 @@ fn an_imported_type_compares_and_keys_a_map_by_the_traits_its_crate_implements()
     let mut builder = facade::Builder::new("touch", facade::Abi::new(1).unwrap()).unwrap();
     let mut allocation = host::TestImportAllocation::default();
     for (path, identity, implemented) in [
-        ("Finger", finger, &[Kind::Copy, Kind::PartialEq, Kind::Eq, Kind::Hash][..]),
+        (
+            "Finger",
+            finger,
+            &[Kind::Copy, Kind::PartialEq, Kind::Eq, Kind::Hash][..],
+        ),
         ("Instant", instant, &[Kind::Clone][..]),
     ] {
         builder
@@ -957,7 +966,9 @@ fn an_imported_type_compares_and_keys_a_map_by_the_traits_its_crate_implements()
             .unwrap();
     }
     let mut engine = Engine::new();
-    engine.register_host_facade(builder.finish().unwrap()).unwrap();
+    engine
+        .register_host_facade(builder.finish().unwrap())
+        .unwrap();
     engine
         .compile_executable(
             "use std::collections::HashMap;

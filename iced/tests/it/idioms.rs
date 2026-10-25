@@ -37,7 +37,11 @@ pub fn main() -> iced::Result {{
 fn find(adapter: &program::Adapter, label: &str) {
     let mut simulator = iced_test::simulator(adapter.view());
     simulator.find(label).unwrap();
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
 }
 
 #[test]
@@ -153,7 +157,11 @@ fn styled(adapter: &program::Adapter, label: &str) {
 fn bounds(adapter: &program::Adapter, label: &str) -> iced::Rectangle {
     let mut simulator = iced_test::simulator(adapter.view());
     let bounds = simulator.find(label).unwrap().bounds();
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
     bounds
 }
 
@@ -315,12 +323,19 @@ fn panel(theme: &Theme) -> Style {
 fn style_functions_pass_by_module_path() {
     let root = std::env::temp_dir().join(format!("rawr-idioms-style-path-{}", std::process::id()));
     std::fs::create_dir_all(root.join("src")).unwrap();
-    crate::write_marked(&root, "src/theme.rs", r#"
+    crate::write_marked(
+        &root,
+        "src/theme.rs",
+        r#"
 use iced::Theme;
 use iced::widget::container::Style;
 pub fn rule(theme: &Theme) -> Style { Style::default().background(theme.palette().primary.base.color) }
-"#);
-    crate::write_marked(&root, "src/main.rs", r#"
+"#,
+    );
+    crate::write_marked(
+        &root,
+        "src/main.rs",
+        r#"
 mod theme;
 use iced::Element;
 use iced::widget::{container, text};
@@ -334,9 +349,12 @@ impl State {
 pub fn main() -> iced::Result {
     iced::application(State::new, State::update, State::view).run()
 }
-"#);
+"#,
+    );
     let target = rawr::project::Target::discover(&root).unwrap();
-    let checked = rawr_iced::application::Compiler::new().unwrap().check(&target);
+    let checked = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check(&target);
     std::fs::remove_dir_all(&root).ok();
     let adapter = checked
         .unwrap_or_else(|error| panic!("{error}"))
@@ -685,7 +703,11 @@ fn maybe_mapper_builders_take_an_optional_closure() {
     assert_eq!(messages("live"), 1);
     assert_eq!(messages("frozen"), 0);
     assert_eq!(messages("flip"), 1);
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
 }
 
 #[test]
@@ -826,7 +848,10 @@ pub fn main() -> iced::Result {{ iced::application(State::new, State::update, St
     let fine = r#"text("x")"#;
     check(&seed(all), fine).unwrap();
     let error = check(&seed("background: c, text: c"), fine).unwrap_err();
-    assert!(error.contains("missing fields") && error.contains("`primary`"), "{error}");
+    assert!(
+        error.contains("missing fields") && error.contains("`primary`"),
+        "{error}"
+    );
     let error = check("fn seed() -> Seed { Seed::default() }", fine).unwrap_err();
     assert!(error.contains("Default"), "{error}");
 
@@ -1148,7 +1173,10 @@ pub fn main() -> iced::Result {
     iced::application(State::new, State::update, State::view).run()
 }
 "#;
-    let Err(error) = rawr_iced::application::Compiler::new().unwrap().check_source(source) else {
+    let Err(error) = rawr_iced::application::Compiler::new()
+        .unwrap()
+        .check_source(source)
+    else {
         panic!("Rust rejects `impl Default for iced::Color` (E0117)");
     };
     assert!(error.to_string().contains("E0117"), "{error}");

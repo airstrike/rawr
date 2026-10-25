@@ -186,7 +186,10 @@ impl Renderer {
         let alone = *self.pending.borrow() == 1;
         let (grant, animation) = {
             let mut budgets = self.budgets.lock().unwrap();
-            (budgets.grant(user.as_deref(), started, alone), budgets.animation)
+            (
+                budgets.grant(user.as_deref(), started, alone),
+                budgets.animation,
+            )
         };
         let mut request = request.clone();
         request.options.limits.animation = grant.animation;
@@ -854,7 +857,12 @@ impl Handler {
 
     async fn render(&self, request: &message::Request, guild: Option<GuildId>, user: u64) -> Reply {
         let user = (user != 0).then(|| format!("discord:{user}"));
-        let Some(rendered) = self.shared.renderer.run(request, self.format, false, user).await else {
+        let Some(rendered) = self
+            .shared
+            .renderer
+            .run(request, self.format, false, user)
+            .await
+        else {
             return Reply::Text(message::error_text("render pool is busy"));
         };
         self.shared.record(rendered.outcome, rendered.millis, guild);
@@ -938,7 +946,8 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                                 Err(error) => return text(StatusCode::BAD_REQUEST, error),
                             };
                             let format = rawr_play::Format::Png;
-                            let Some(rendered) = shared.renderer.run(&render, format, true, user).await
+                            let Some(rendered) =
+                                shared.renderer.run(&render, format, true, user).await
                             else {
                                 return text(
                                     StatusCode::SERVICE_UNAVAILABLE,
@@ -961,7 +970,8 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                                         .status(StatusCode::OK)
                                         .header("content-type", kind);
                                     if let Some(note) = note {
-                                        response = response.header("x-play-note", note.replace('\n', " "));
+                                        response =
+                                            response.header("x-play-note", note.replace('\n', " "));
                                     }
                                     response.body(Full::new(Bytes::from(image)))
                                 }
@@ -1110,10 +1120,7 @@ async fn main() {
                     "PLAY_ANIMATION_ALLOWANCE_S",
                     budget::ALLOWANCE.as_secs(),
                 )),
-                Duration::from_secs(env_u64(
-                    "PLAY_ANIMATION_WINDOW_S",
-                    budget::WINDOW.as_secs(),
-                )),
+                Duration::from_secs(env_u64("PLAY_ANIMATION_WINDOW_S", budget::WINDOW.as_secs())),
             )),
         },
         channels: tokio::sync::Mutex::new(

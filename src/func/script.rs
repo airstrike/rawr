@@ -131,35 +131,34 @@ impl Engine {
                 rewind_scope,
             ),
         };
-        let mut _result: RawrResult = evaluated
-            .or_else(|err| match *err {
-                // Convert return statement to return value
-                ERR::Return(x, ..) => Ok(x),
-                // Exit value is passed straight-through
-                mut err @ ERR::Exit(..) => {
-                    err.set_position(pos);
-                    Err(err.into())
-                }
-                // System errors are passed straight-through
-                mut err if err.is_system_exception() => {
-                    err.set_position(pos);
-                    Err(err.into())
-                }
-                // Other errors are wrapped in `ErrorInFunctionCall`
-                _ => Err(ERR::ErrorInFunctionCall(
-                    fn_def.name.to_string(),
-                    #[cfg(not(feature = "no_module"))]
-                    _env.and_then(|env| env.lib.last())
-                        .and_then(|m| m.id())
-                        .unwrap_or_else(|| global.source().unwrap_or(""))
-                        .to_string(),
-                    #[cfg(feature = "no_module")]
-                    global.source().unwrap_or("").to_string(),
-                    err,
-                    pos,
-                )
-                .into()),
-            });
+        let mut _result: RawrResult = evaluated.or_else(|err| match *err {
+            // Convert return statement to return value
+            ERR::Return(x, ..) => Ok(x),
+            // Exit value is passed straight-through
+            mut err @ ERR::Exit(..) => {
+                err.set_position(pos);
+                Err(err.into())
+            }
+            // System errors are passed straight-through
+            mut err if err.is_system_exception() => {
+                err.set_position(pos);
+                Err(err.into())
+            }
+            // Other errors are wrapped in `ErrorInFunctionCall`
+            _ => Err(ERR::ErrorInFunctionCall(
+                fn_def.name.to_string(),
+                #[cfg(not(feature = "no_module"))]
+                _env.and_then(|env| env.lib.last())
+                    .and_then(|m| m.id())
+                    .unwrap_or_else(|| global.source().unwrap_or(""))
+                    .to_string(),
+                #[cfg(feature = "no_module")]
+                global.source().unwrap_or("").to_string(),
+                err,
+                pos,
+            )
+            .into()),
+        });
 
         #[cfg(feature = "debugging")]
         if self.is_debugger_registered() {

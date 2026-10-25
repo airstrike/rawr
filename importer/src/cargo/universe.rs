@@ -33,7 +33,8 @@ const PLAIN_ENDPOINT_TABLE: u32 = 1;
 const PLAIN_PROFILE: [u8; 32] = [0; 32];
 /// The plain seed names only its root: every other package is the
 /// project's own Cargo resolution.
-const PLAIN_SEED_BYTES: &[u8] = b"version = 4\n\n[[package]]\nname = \"rawr\"\nversion = \"1.0.0\"\n";
+const PLAIN_SEED_BYTES: &[u8] =
+    b"version = 4\n\n[[package]]\nname = \"rawr\"\nversion = \"1.0.0\"\n";
 const RECEIPT_SCHEMA: u32 = 2;
 const ICED_NAME: &str = "rawr.framework.iced/current";
 // Compiler and endpoint proof identity rotate independently of ICED_PROFILE.
@@ -2537,8 +2538,7 @@ fn unit_projection_owned(
         for dependency in dependencies {
             bytes.extend_from_slice(dependency.as_bytes());
         }
-        let digest =
-            projection_digest_bytes(b"rawr.import.cargo.protected-unit-key/v2", &bytes);
+        let digest = projection_digest_bytes(b"rawr.import.cargo.protected-unit-key/v2", &bytes);
         if protected_keys.contains(&digest) {
             return Err(json_schema("Cargo unit identity is ambiguous"));
         }
@@ -5615,11 +5615,7 @@ mod tests {
             .replacen(ICED_COSMIC_TEXT, REGISTRY_COSMIC_TEXT, 1)
             .replacen(CURRENT_MEMCHR, PREVIOUS_MEMCHR, 1)
             .replacen(CURRENT_MEMCHR_EDGE, PREVIOUS_MEMCHR_EDGE, 1)
-            .replacen(
-                CURRENT_RUSTIX_EDGE,
-                " \"rawr-toml\",\n \"semver\",",
-                1,
-            )
+            .replacen(CURRENT_RUSTIX_EDGE, " \"rawr-toml\",\n \"semver\",", 1)
             + "\n[[package]]\nname = \"helper\"\nversion = \"0.1.0\"\n";
         assert_ne!(project.as_bytes(), super::ICED_SEED_BYTES);
         admit(

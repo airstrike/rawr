@@ -1457,7 +1457,9 @@ impl Capture {
             }
             // A JSON string cannot hold an unescaped quote, so the first
             // `,"reachable":` closes the handshake the driver writes first.
-            let start = bytes.windows(BODY.len()).position(|window| window == BODY)?;
+            let start = bytes
+                .windows(BODY.len())
+                .position(|window| window == BODY)?;
             let mut shell = bytes[..start].to_vec();
             shell.push(b'}');
             let handshake = serde_json::from_slice::<Shell>(&shell).ok()?.handshake;
@@ -2862,20 +2864,32 @@ mod tests {
         let first = key(&driver(handshake("n1", "h1", "a"), ""), None).expect("a driver sidecar");
         assert_eq!(first.len(), 1);
         let rerun = key(&driver(handshake("n2", "h2", "a"), ""), None).expect("a later run");
-        assert_eq!(first, rerun, "nonce, paths, artifact bytes and SVH are not semantic");
+        assert_eq!(
+            first, rerun,
+            "nonce, paths, artifact bytes and SVH are not semantic"
+        );
         let body = key(&driver(handshake("n1", "h1", "a"), "1"), None).unwrap();
         assert_eq!(body[0].0, first[0].0);
         assert_ne!(body[0].1, first[0].1, "a body change changes the key");
         let named = key(&driver(handshake("n1", "h1", "b"), ""), None).unwrap();
-        assert_ne!(named[0].0, first[0].0, "a semantic handshake field changes the key");
+        assert_ne!(
+            named[0].0, first[0].0,
+            "a semantic handshake field changes the key"
+        );
         let reordered = serde_json::to_vec(&serde_json::json!({
             "handshake": handshake("n1", "h1", "a"), "reachable": [], "definitions": [],
             "implementations": [], "scalar_predicate_proofs": [], "index": [],
         }))
         .unwrap();
-        assert!(key(&reordered, None).is_none(), "only the driver's layout is keyed");
+        assert!(
+            key(&reordered, None).is_none(),
+            "only the driver's layout is keyed"
+        );
         let bytes = driver(handshake("n1", "h1", "a"), "");
-        assert!(key(&bytes, Some([0; 32])).is_none(), "a drifted sidecar is not keyed");
+        assert!(
+            key(&bytes, Some([0; 32])).is_none(),
+            "a drifted sidecar is not keyed"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

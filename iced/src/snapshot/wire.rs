@@ -198,7 +198,11 @@ mod tests {
             std::thread::current().id()
         ));
         std::fs::create_dir_all(root.join("src")).unwrap();
-        crate::write_marked(&root, "src/main.rs", include_str!("../../examples/package_snapshots/src/main.rs"));
+        crate::write_marked(
+            &root,
+            "src/main.rs",
+            include_str!("../../examples/package_snapshots/src/main.rs"),
+        );
         let compiler = crate::preview::Compiler::new().unwrap();
         let target = rawr::project::Target::discover(&root).unwrap();
         let checked = compiler.check(&target).unwrap();

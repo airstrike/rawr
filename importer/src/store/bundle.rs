@@ -12,10 +12,10 @@ use crate::node::{Digest, Error, ExecutionKey, Kind};
 
 pub(crate) mod buffer;
 mod corruption;
-#[cfg(test)]
-pub(crate) mod release_tests;
 mod directory;
 pub(crate) mod geometry;
+#[cfg(test)]
+pub(crate) mod release_tests;
 pub use corruption::Corruption;
 use geometry::View;
 pub(crate) use geometry::{check, Drift, Measured};
@@ -889,7 +889,7 @@ impl<'store> Completion<'store> {
                     member,
                 )?;
                 let record = Record::read_bundle_budgeted(root, budget)?;
-                            if let Err(drift) = check(record.charge(), record.sealed_geometry(), measured) {
+                if let Err(drift) = check(record.charge(), record.sealed_geometry(), measured) {
                     return Err(Error::from(Corruption::observed(
                         root,
                         store,
@@ -1159,13 +1159,13 @@ fn lock_pinned_with_budget(
 ) -> Result<Guard, Error> {
     #[cfg(unix)]
     {
-        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockShared).map_err(
-            |source| Error::Io {
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockShared).map_err(|source| {
+            Error::Io {
                 operation: "pin immutable runner bundle",
                 path: path.clone(),
                 source: std::io::Error::from_raw_os_error(source.raw_os_error()),
-            },
-        )?;
+            }
+        })?;
     }
     #[cfg(not(unix))]
     {
@@ -1575,8 +1575,7 @@ pub(super) fn recover_dead(
                     if !budget.bundle_fits() || !budget.fits(allocation.charge) {
                         return Ok(());
                     }
-                    let Some(_eviction) = prepare_eviction_at(path.clone(), allocation)?
-                    else {
+                    let Some(_eviction) = prepare_eviction_at(path.clone(), allocation)? else {
                         continue;
                     };
                     budget.bundle()?;
@@ -2781,10 +2780,16 @@ mod tests {
         {
             let guard = pin(store.root(), reference).expect("the published bundle pins");
             let contender = File::open(root.join("lease")).expect("the contender lease opens");
-            assert!(rustix::fs::flock(&contender, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+            assert!(rustix::fs::flock(
+                &contender,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive
+            )
             .is_err());
             drop(guard);
-            rustix::fs::flock(&contender, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+            rustix::fs::flock(
+                &contender,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive,
+            )
             .expect("the bundle becomes exclusively lockable after its pin drops");
         }
 

@@ -287,17 +287,21 @@ fn extract(project: &Project, demand: &[&[&str]]) -> Graph {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/demand-api"),
     )
     .expect("the immutable on-demand fixture exists");
-    let mut request = Request::builder(&project.root, &project.root.join("target/rawr/cache"), &limits)
-        .expect("the limits-bound request builder seals")
-        .environment(environment)
-        .policy(Policy::manifest(&limits).seal())
-        .expect("the manifest policy fits the request")
-        .dependency(
-            Dependency::path("app", &fixture, &limits)
-                .and_then(|dependency| dependency.package("demand-api"))
-                .expect("the fixture selection is exact"),
-        )
-        .expect("the fixture dependency fits the request");
+    let mut request = Request::builder(
+        &project.root,
+        &project.root.join("target/rawr/cache"),
+        &limits,
+    )
+    .expect("the limits-bound request builder seals")
+    .environment(environment)
+    .policy(Policy::manifest(&limits).seal())
+    .expect("the manifest policy fits the request")
+    .dependency(
+        Dependency::path("app", &fixture, &limits)
+            .and_then(|dependency| dependency.package("demand-api"))
+            .expect("the fixture selection is exact"),
+    )
+    .expect("the fixture dependency fits the request");
     for path in demand {
         request = request
             .demand(path.iter().copied())

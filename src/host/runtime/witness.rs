@@ -123,13 +123,19 @@ mod tests {
     fn option_and_result_witnesses_give_their_inner_types() {
         let authority = Authority::issue();
         let option = Witness::issue(authority, Type::option(Type::unit()));
-        assert!(option.argument_witness(0).unwrap().matches(authority, &Type::unit()));
+        assert!(option
+            .argument_witness(0)
+            .unwrap()
+            .matches(authority, &Type::unit()));
         assert!(option.argument_witness(1).is_none());
 
         let ok = Type::option(Type::unit());
         let result = Witness::issue(authority, Type::result(ok.clone(), Type::unit()));
         assert!(result.argument_witness(0).unwrap().matches(authority, &ok));
-        assert!(result.argument_witness(1).unwrap().matches(authority, &Type::unit()));
+        assert!(result
+            .argument_witness(1)
+            .unwrap()
+            .matches(authority, &Type::unit()));
 
         // A slice's elements, as an imported `&[T]` or `Vec<T>` gives them.
         let slice = Type::Array {

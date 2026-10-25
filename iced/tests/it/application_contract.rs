@@ -471,7 +471,9 @@ fn default_source(update_output: &str) -> String {
     let update = if update_output == "()" {
         "fn update(&mut self, message: Message) { () }".to_string()
     } else {
-        format!("fn update(&mut self, message: Message) -> {update_output} {{ panic!(\"phase 4\") }}")
+        format!(
+            "fn update(&mut self, message: Message) -> {update_output} {{ panic!(\"phase 4\") }}"
+        )
     };
     declarations(
         &update,
@@ -514,7 +516,9 @@ fn explicit_source(boot_output: &str, update_output: &str) -> String {
     let update = if update_output == "()" {
         "fn update(&mut self, message: Message) { () }".to_string()
     } else {
-        format!("fn update(&mut self, message: Message) -> {update_output} {{ panic!(\"phase 4\") }}")
+        format!(
+            "fn update(&mut self, message: Message) -> {update_output} {{ panic!(\"phase 4\") }}"
+        )
     };
     format!(
         r#"

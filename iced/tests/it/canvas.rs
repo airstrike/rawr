@@ -141,7 +141,11 @@ fn a_canvas_program_draws_and_publishes_its_clicks() {
     let mut simulator = iced_test::simulator(adapter.view());
     simulator.find("1 dots").unwrap();
     simulator.draw(&iced::Theme::Dark);
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
 }
 
 /// The program as iced's own canvas examples write it: generic over the
@@ -204,9 +208,12 @@ fn a_generic_draw_only_program_and_a_theme_value_check() {
     let adapter = boot(SQUARE);
     let mut simulator = iced_test::simulator(adapter.view());
     simulator.draw(&iced::Theme::Dark);
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
 }
-
 
 /// bezier_tool's shape: the Program borrows the State and a slice of it.
 const BORROWED: &str = r#"
@@ -266,7 +273,11 @@ fn a_program_that_borrows_its_state_draws() {
     let adapter = boot(BORROWED);
     let mut simulator = iced_test::simulator(adapter.view());
     simulator.draw(&iced::Theme::Dark);
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
 }
 
 /// the_matrix's shape: a Program whose State is a `RefCell` of caches,
@@ -327,7 +338,11 @@ fn a_program_state_in_a_ref_cell_draws() {
     simulator.draw(&iced::Theme::Dark);
     let mut simulator = iced_test::simulator(adapter.view());
     simulator.draw(&iced::Theme::Dark);
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
 }
 
 /// multitouch's fingers: `touch::Event`'s `id`, a `touch::Finger` keying a
@@ -433,5 +448,9 @@ fn touch_fingers_key_a_map() {
     adapter.refresh_view().unwrap();
     let mut simulator = iced_test::simulator(adapter.view());
     simulator.find("fingers [3, 7]").unwrap();
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
 }

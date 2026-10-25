@@ -9,22 +9,31 @@ use std::fmt::{self, Formatter};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Clone, Copy, Debug)]
-enum ParseError { InvalidIpv4Address, InvalidIpv6Address }
+enum ParseError {
+    InvalidIpv4Address,
+    InvalidIpv6Address,
+}
 type ParseResult<T> = Result<T, ParseError>;
 
-pub(super) fn candidate(input: &str) -> bool { ends_in_a_number(input) }
+pub(super) fn candidate(input: &str) -> bool {
+    ends_in_a_number(input)
+}
 
 pub(super) fn v4(input: &str) -> Result<([u8; 4], String), super::Invalid> {
-    parse_ipv4addr(input).map(|value| (value.octets(), value.to_string()))
+    parse_ipv4addr(input)
+        .map(|value| (value.octets(), value.to_string()))
         .map_err(|_| super::Invalid::V4)
 }
 
 pub(super) fn v6(input: &str) -> Result<([u16; 8], String), super::Invalid> {
     struct Display(Ipv6Addr);
     impl fmt::Display for Display {
-        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result { write_ipv6(&self.0, f) }
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write_ipv6(&self.0, f)
+        }
     }
-    parse_ipv6addr(input).map(|value| (value.segments(), Display(value).to_string()))
+    parse_ipv6addr(input)
+        .map(|value| (value.segments(), Display(value).to_string()))
         .map_err(|_| super::Invalid::V6)
 }
 

@@ -1,7 +1,7 @@
 #![cfg(not(feature = "no_function"))]
-use rawr::{Engine, FnPtr, INT, Scope};
 #[cfg(not(feature = "sync"))]
 use rawr::{AST, EvalAltResult};
+use rawr::{Engine, FnPtr, INT, Scope};
 use std::any::TypeId;
 #[cfg(not(feature = "sync"))]
 use std::cell::{OnceCell, RefCell};

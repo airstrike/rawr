@@ -68,10 +68,7 @@ impl Project {
             Entry::None => {
                 return Err(Error::MissingSource {
                     root: root.as_path().to_path_buf(),
-                    expected: root
-                        .as_path()
-                        .join(SOURCE_DIRECTORY)
-                        .join(RUST_ROOTS[0]),
+                    expected: root.as_path().join(SOURCE_DIRECTORY).join(RUST_ROOTS[0]),
                 });
             }
         };

@@ -119,7 +119,9 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
         iced::ContentFit::ScaleDown,
     ]) {
         builder
-            .bind(format!("iced::ContentFit::{name}"), move |_| Ok(Dynamic::from(fit)))
+            .bind(format!("iced::ContentFit::{name}"), move |_| {
+                Ok(Dynamic::from(fit))
+            })
             .expect("the iced facade must retain every ContentFit");
     }
     #[cfg(feature = "image")]
@@ -129,9 +131,10 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             iced::widget::image::FilterMethod::Nearest,
         ]) {
             builder
-                .bind(format!("iced::widget::image::FilterMethod::{name}"), move |_| {
-                    Ok(Dynamic::from(method))
-                })
+                .bind(
+                    format!("iced::widget::image::FilterMethod::{name}"),
+                    move |_| Ok(Dynamic::from(method)),
+                )
                 .expect("the iced facade must retain every image::FilterMethod");
         }
     }
@@ -262,7 +265,8 @@ fn bind_image(builder: &mut host::runtime::Builder) {
     builder
         .bind("iced::widget::image::Handle::from_path", |args| {
             let path = exact_string(
-                args.first().ok_or_else(|| arity("image::Handle::from_path", 1, 0))?,
+                args.first()
+                    .ok_or_else(|| arity("image::Handle::from_path", 1, 0))?,
                 "image::Handle::from_path",
             )?;
             Ok(Dynamic::from(image_from_path(&path)))
@@ -273,7 +277,10 @@ fn bind_image(builder: &mut host::runtime::Builder) {
             let [bytes_] = args else {
                 return Err(arity("image::Handle::from_bytes", 1, args.len()));
             };
-            Ok(Dynamic::from(image_from_bytes(bytes(bytes_, "image::Handle::from_bytes")?)))
+            Ok(Dynamic::from(image_from_bytes(bytes(
+                bytes_,
+                "image::Handle::from_bytes",
+            )?)))
         })
         .expect("the iced facade must retain image::Handle::from_bytes");
     builder
@@ -355,7 +362,8 @@ fn bind_svg(builder: &mut host::runtime::Builder) {
     builder
         .bind("iced::widget::svg::Handle::from_path", |args| {
             let path = exact_string(
-                args.first().ok_or_else(|| arity("svg::Handle::from_path", 1, 0))?,
+                args.first()
+                    .ok_or_else(|| arity("svg::Handle::from_path", 1, 0))?,
                 "svg::Handle::from_path",
             )?;
             Ok(Dynamic::from(svg_from_path(&path)))
@@ -366,10 +374,9 @@ fn bind_svg(builder: &mut host::runtime::Builder) {
             let [memory] = args else {
                 return Err(arity("svg::Handle::from_memory", 1, args.len()));
             };
-            Ok(Dynamic::from(iced::widget::svg::Handle::from_memory(bytes(
-                memory,
-                "svg::Handle::from_memory",
-            )?)))
+            Ok(Dynamic::from(iced::widget::svg::Handle::from_memory(
+                bytes(memory, "svg::Handle::from_memory")?,
+            )))
         })
         .expect("the iced facade must retain svg::Handle::from_memory");
     builder
@@ -523,7 +530,8 @@ fn bind_qr_code(builder: &mut host::runtime::Builder) {
     builder
         .bind("iced::widget::qr_code::Data::new", |args| {
             let text = exact_string(
-                args.first().ok_or_else(|| arity("qr_code::Data::new", 1, 0))?,
+                args.first()
+                    .ok_or_else(|| arity("qr_code::Data::new", 1, 0))?,
                 "qr_code::Data::new",
             )?;
             Ok(rawr::result::from(

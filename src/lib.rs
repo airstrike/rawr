@@ -147,14 +147,14 @@ pub mod host;
 #[doc(hidden)]
 pub mod island;
 pub mod item;
+#[cfg(feature = "std")]
+pub mod layer;
 /// Resolved inherent method metadata.
 pub mod method;
 mod module;
 mod optimizer;
 /// Rawr's `Option<T>` at runtime, and its round trip to Rust's `Option<T>`.
 pub mod option;
-#[cfg(feature = "std")]
-pub mod layer;
 /// Static Rawr source and local-package graphs.
 #[cfg(feature = "std")]
 pub mod package;
@@ -286,22 +286,22 @@ use once_cell::race::OnceBox as OnceCell;
 pub use api::build_type::{CustomType, TypeBuilder};
 #[cfg(not(feature = "no_custom_syntax"))]
 pub use api::custom_syntax::Expression;
+pub use api::events::Output;
 #[cfg(not(feature = "no_std"))]
 #[cfg(any(not(target_family = "wasm"), not(target_os = "unknown")))]
 pub use api::files::{eval_file, run_file};
-pub use api::events::Output;
 pub use api::{eval::eval, run::run};
 pub use ast::{FnAccess, AST};
 use defer::Deferred;
 pub use engine::{Engine, OP_CONTAINS, OP_EQUALS};
-#[cfg(not(feature = "no_std"))]
-pub use host::export::{Export, Exports};
 pub use eval::{EvalContext, EvalContextFrameGuard};
 #[cfg(not(feature = "no_function"))]
 #[cfg(not(feature = "no_object"))]
 use func::calc_typed_method_hash;
 use func::{calc_fn_hash, calc_fn_hash_full, calc_var_hash};
 pub use func::{plugin, FuncArgs, NativeCallContext, RawrNativeFunc};
+#[cfg(not(feature = "no_std"))]
+pub use host::export::{Export, Exports};
 pub use module::{FnNamespace, FuncRegistration, Module};
 pub use packages::string_basic::{FUNC_TO_DEBUG, FUNC_TO_STRING};
 pub use rawr_codegen::*;

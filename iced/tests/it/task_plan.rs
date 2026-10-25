@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 #[test]
 fn default_boot_and_unit_update_normalize_to_none() {
-    let mut adapter = boot(include_str!("../../examples/scripts/application_counter.rs"));
+    let mut adapter = boot(include_str!(
+        "../../examples/scripts/application_counter.rs"
+    ));
 
     assert!(adapter.startup_plan().is_none());
     let message = click(&adapter, "Increment");

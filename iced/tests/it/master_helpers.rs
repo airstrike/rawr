@@ -214,8 +214,14 @@ impl State {
 fn master_wrappers_lower_their_content() {
     let mut adapter = boot(WRAPPERS);
     let _ = iced_test::simulator(adapter.view());
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
-    for label in ["Lazy", "Base", "Opaque", "Wide", "Area", "Under", "Pinned", "0"] {
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
+    for label in [
+        "Lazy", "Base", "Opaque", "Wide", "Area", "Under", "Pinned", "0",
+    ] {
         find(&adapter, label);
     }
     let mut simulator = iced_test::simulator(adapter.view());
@@ -340,13 +346,19 @@ fn master_qr_code_draws_its_data() {
     let mut adapter = boot(QR_CODE);
     find(&adapter, "QR Code Generator");
     let mut simulator = iced_test::simulator(adapter.view());
-    simulator.click("Type the data of your QR code here...").unwrap();
+    simulator
+        .click("Type the data of your QR code here...")
+        .unwrap();
     simulator.typewrite("rawr");
     for message in simulator.into_messages() {
         adapter.update(message).unwrap();
     }
     let _ = iced_test::simulator(adapter.view());
-    assert!(adapter.diagnostics().is_empty(), "{:?}", adapter.diagnostics());
+    assert!(
+        adapter.diagnostics().is_empty(),
+        "{:?}",
+        adapter.diagnostics()
+    );
 }
 
 const MEDIA: &str = r#"

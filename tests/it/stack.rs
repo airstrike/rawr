@@ -37,12 +37,7 @@ fn test_stack_overflow_fn_calls() {
 #[test]
 fn test_stack_overflow_parsing() {
     // Deep parses need a main-thread-sized stack, not the 2 MiB test-thread default.
-    std::thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(stack_overflow_parsing)
-        .unwrap()
-        .join()
-        .unwrap();
+    std::thread::Builder::new().stack_size(8 << 20).spawn(stack_overflow_parsing).unwrap().join().unwrap();
 }
 
 fn stack_overflow_parsing() {

@@ -435,7 +435,10 @@ pub(crate) fn declare(
     new.type_parameter("T", &[])?;
     new.parameter(parameter("T")?);
     new.output(generic("tokio::sync::Mutex")?);
-    builder.item(item::Definition::associated_function("tokio::sync::Mutex::new", new.finish())?)?;
+    builder.item(item::Definition::associated_function(
+        "tokio::sync::Mutex::new",
+        new.finish(),
+    )?)?;
     function(
         builder,
         "tokio::__lock",
@@ -603,7 +606,8 @@ fn read<T: std::clone::Clone + 'static>(
 
 /// The output witness of a function's call.
 fn witness(call: &host::runtime::Call<'_>) -> Result<host::runtime::Witness, Box<EvalAltResult>> {
-    call.output_witness().map_err(|witness| error(witness.to_string()))
+    call.output_witness()
+        .map_err(|witness| error(witness.to_string()))
 }
 
 fn ready(value: Dynamic) -> BoxFuture<'static, Dynamic> {
@@ -819,7 +823,9 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
         })
     });
 
-    bind("tokio::sync::Mutex::new", |_call, args| Ok(rawr::resolve::cell_new(args[0].take())));
+    bind("tokio::sync::Mutex::new", |_call, args| {
+        Ok(rawr::resolve::cell_new(args[0].take()))
+    });
     bind("tokio::__lock", |_call, args| {
         // A borrow's end wakes nothing, so a waiting task looks again. On a
         // recording's clock it asks to be polled again at once, and the
@@ -839,7 +845,8 @@ pub(crate) fn bind(rawr: &mut host::runtime::Builder) {
                     context.waker().wake_by_ref();
                     return Poll::Pending;
                 }
-                let waiting = timer.get_or_insert_with(|| sleep(std::time::Duration::from_millis(1)));
+                let waiting =
+                    timer.get_or_insert_with(|| sleep(std::time::Duration::from_millis(1)));
                 if waiting.as_mut().poll(context).is_pending() {
                     return Poll::Pending;
                 }

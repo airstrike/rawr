@@ -145,7 +145,9 @@ impl LoweringFailure {
             LoweringEvidence::Generated { span, .. } => {
                 crate::ParseError(self.error.0, span.start(), self.error.2)
             }
-            LoweringEvidence::Unmapped(_) => crate::ParseError(self.error.0, crate::Position::NONE, self.error.2),
+            LoweringEvidence::Unmapped(_) => {
+                crate::ParseError(self.error.0, crate::Position::NONE, self.error.2)
+            }
         }
     }
 }
@@ -482,7 +484,8 @@ fn invocation_path(ty: &type_ref::Type) -> Option<String> {
                 | type_ref::Target::Host { .. }
                 | type_ref::Target::Script { .. }
                 | type_ref::Target::Parameter
-                | type_ref::Target::Projection(..) | type_ref::Target::Alias(_) => {}
+                | type_ref::Target::Projection(..)
+                | type_ref::Target::Alias(_) => {}
             }
             path.arguments.iter().find_map(|argument| match argument {
                 type_ref::Argument::Type(ty) => invocation_path(ty),
@@ -512,9 +515,7 @@ pub(crate) fn lower_with_engine(
 ) -> crate::parser::ParseResult<program::Executable> {
     for shell in &program.items {
         match &shell.kind {
-            item::Kind::Use(_)
-            | item::Kind::Struct(_)
-            | item::Kind::Enum(_) => {}
+            item::Kind::Use(_) | item::Kind::Struct(_) | item::Kind::Enum(_) => {}
             item::Kind::Impl(_) | item::Kind::Trait(_) => {}
             item::Kind::Function(function) => reject_unavailable(function)?,
         }
@@ -856,8 +857,13 @@ fn resolve_aliases(
             _ => None,
         })
         .filter(|alias| {
-            matches!(types.get(&alias.name.text),
-                Some(type_ref::Target::Alias(type_ref::Alias { target: None, .. })))
+            matches!(
+                types.get(&alias.name.text),
+                Some(type_ref::Target::Alias(type_ref::Alias {
+                    target: None,
+                    ..
+                }))
+            )
         })
         .collect::<Vec<_>>();
     loop {
@@ -877,8 +883,7 @@ fn resolve_aliases(
                 None,
             ) {
                 Ok(target) => {
-                    if let Some(type_ref::Target::Alias(declared)) =
-                        types.get_mut(&alias.name.text)
+                    if let Some(type_ref::Target::Alias(declared)) = types.get_mut(&alias.name.text)
                     {
                         declared.target = Some(Box::new(target));
                     }
@@ -1294,23 +1299,45 @@ pub(crate) fn std_fmt_import(path: &str) -> bool {
             matches!(rest, "f32::consts" | "f64::consts") || float_constant(path).is_some()
         })
         || rest
-        .and_then(|rest| rest.strip_prefix("ops"))
-        .is_some_and(|rest| {
-            rest.is_empty()
-                || rest.strip_prefix("::").is_some_and(|name| {
-                    OPERATOR_TRAITS.iter().any(|(_, trait_name, _)| *trait_name == name)
-                        || matches!(name, "Index" | "IndexMut" | "Range" | "RangeInclusive")
-                })
-        })
+            .and_then(|rest| rest.strip_prefix("ops"))
+            .is_some_and(|rest| {
+                rest.is_empty()
+                    || rest.strip_prefix("::").is_some_and(|name| {
+                        OPERATOR_TRAITS
+                            .iter()
+                            .any(|(_, trait_name, _)| *trait_name == name)
+                            || matches!(name, "Index" | "IndexMut" | "Range" | "RangeInclusive")
+                    })
+            })
 }
 
 /// The names `use std::collections::*;` and its kin bind: each name of
 /// that std module that `std_fmt_import` knows. None for another module.
 pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
     const NAMES: &[&str] = &[
-        "HashMap", "HashSet", "BTreeMap", "BTreeSet", "Debug", "Display", "Formatter", "Write",
-        "Ordering", "PartialOrd", "Ord", "min", "max", "Reverse", "Hash", "TryFrom", "TryInto",
-        "FromStr", "swap", "replace", "take", "Duration", "Instant",
+        "HashMap",
+        "HashSet",
+        "BTreeMap",
+        "BTreeSet",
+        "Debug",
+        "Display",
+        "Formatter",
+        "Write",
+        "Ordering",
+        "PartialOrd",
+        "Ord",
+        "min",
+        "max",
+        "Reverse",
+        "Hash",
+        "TryFrom",
+        "TryInto",
+        "FromStr",
+        "swap",
+        "replace",
+        "take",
+        "Duration",
+        "Instant",
     ];
     NAMES
         .iter()
@@ -1355,8 +1382,24 @@ pub(crate) fn float_constant(path: &str) -> Option<(f64, bool)> {
         };
     }
     constants!(
-        PI, TAU, E, SQRT_2, FRAC_1_SQRT_2, LN_2, LN_10, LOG2_E, LOG10_E, LOG2_10, LOG10_2,
-        FRAC_PI_2, FRAC_PI_3, FRAC_PI_4, FRAC_PI_6, FRAC_PI_8, FRAC_1_PI, FRAC_2_PI,
+        PI,
+        TAU,
+        E,
+        SQRT_2,
+        FRAC_1_SQRT_2,
+        LN_2,
+        LN_10,
+        LOG2_E,
+        LOG10_E,
+        LOG2_10,
+        LOG10_2,
+        FRAC_PI_2,
+        FRAC_PI_3,
+        FRAC_PI_4,
+        FRAC_PI_6,
+        FRAC_PI_8,
+        FRAC_1_PI,
+        FRAC_2_PI,
         FRAC_2_SQRT_PI
     )
 }
@@ -1437,7 +1480,9 @@ pub(crate) fn std_time(path: &str) -> Option<&'static str> {
         .or_else(|| path.strip_prefix("core::time::"))
         .or_else(|| path.strip_prefix("time::"))
         .unwrap_or(path);
-    ["Duration", "Instant"].into_iter().find(|time| *time == name)
+    ["Duration", "Instant"]
+        .into_iter()
+        .find(|time| *time == name)
 }
 
 /// `std::cell::RefCell` as a path is written.
@@ -1911,10 +1956,12 @@ fn facade_traits(
         .iter()
         .flat_map(|generic| generic.bounds.iter())
         .chain(trait_)
-        .filter_map(|path| match type_ref::host_trait(path, types, host)?.shape() {
-            host::type_def::Shape::Trait(declaration) => Some(declaration.clone()),
-            _ => None,
-        })
+        .filter_map(
+            |path| match type_ref::host_trait(path, types, host)?.shape() {
+                host::type_def::Shape::Trait(declaration) => Some(declaration.clone()),
+                _ => None,
+            },
+        )
         .collect()
 }
 
@@ -2429,8 +2476,9 @@ pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString
             match path.name.as_str() {
                 // Every integer is the runtime's one integer, and every
                 // float its one float.
-                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64"
-                | "usize" => -2,
+                "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
+                    -2
+                }
                 "f32" | "f64" => -3,
                 "String" => -4,
                 "bool" => -5,
@@ -3023,7 +3071,15 @@ fn std_trait(segments: &[crate::item::type_ref::Segment]) -> Option<crate::item:
             module.arguments.is_empty()
                 && matches!(
                     module.name.text.as_str(),
-                    "std" | "core" | "fmt" | "clone" | "cmp" | "default" | "marker" | "iter" | "ops"
+                    "std"
+                        | "core"
+                        | "fmt"
+                        | "clone"
+                        | "cmp"
+                        | "default"
+                        | "marker"
+                        | "iter"
+                        | "ops"
                         | "hash"
                 )
         }))
@@ -3150,7 +3206,10 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             let mut index = function(
                 if mutable { "index_mut" } else { "index" },
                 true,
-                vec![("index", path("Idx", type_ref::Target::Parameter, Vec::new()))],
+                vec![(
+                    "index",
+                    path("Idx", type_ref::Target::Parameter, Vec::new()),
+                )],
                 Some(reference(mutable, output)),
             );
             if mutable {
@@ -3221,8 +3280,9 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
         // `trait Add<Rhs = Self> { type Output; fn add(self, rhs: Rhs) ->
         // Self::Output; }` and its kin; `Neg` and `Not` take no `rhs`, and
         // `AddAssign<Rhs = Self>`'s `add_assign(&mut self, rhs: Rhs)` none.
-        name if let Some((_, _, member)) =
-            OPERATOR_TRAITS.iter().find(|(_, trait_name, _)| *trait_name == name) =>
+        name if let Some((_, _, member)) = OPERATOR_TRAITS
+            .iter()
+            .find(|(_, trait_name, _)| *trait_name == name) =>
         {
             let rhs = path("Rhs", type_ref::Target::Parameter, Vec::new());
             let output = type_ref::Type::Path(type_ref::Path {
@@ -3312,12 +3372,16 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
         } else {
             Box::default()
         },
-        associated_bounds: if name == "Iterator" || outputs || matches!(name, "Index" | "IndexMut") {
+        associated_bounds: if name == "Iterator" || outputs || matches!(name, "Index" | "IndexMut")
+        {
             Box::new([(crate::capability::Set::new(), Box::default())])
         } else {
             Box::default()
         },
-        associated_bound_arguments: if name == "Iterator" || outputs || matches!(name, "Index" | "IndexMut") {
+        associated_bound_arguments: if name == "Iterator"
+            || outputs
+            || matches!(name, "Index" | "IndexMut")
+        {
             Box::new([Box::default()])
         } else {
             Box::default()
@@ -4162,10 +4226,9 @@ fn resolve_bounds_with_arguments(
             // strings, `char`, `bool` and numbers, by reference too.
             if let [prefix @ .., last] = &bound.segments[..]
                 && last.name.text == "IntoFragment"
-                && last
-                    .arguments
-                    .iter()
-                    .all(|argument| matches!(argument, crate::item::type_ref::Argument::Lifetime(_)))
+                && last.arguments.iter().all(|argument| {
+                    matches!(argument, crate::item::type_ref::Argument::Lifetime(_))
+                })
                 && prefix.iter().all(|module| {
                     module.arguments.is_empty()
                         && matches!(
@@ -4185,7 +4248,13 @@ fn resolve_bounds_with_arguments(
                     module.arguments.is_empty()
                         && matches!(
                             module.name.text.as_str(),
-                            "iced" | "core" | "advanced" | "widget" | "renderer" | "graphics" | "mesh"
+                            "iced"
+                                | "core"
+                                | "advanced"
+                                | "widget"
+                                | "renderer"
+                                | "graphics"
+                                | "mesh"
                         )
                 })
                 && matches!(last.name.text.as_str(), "Renderer" | "Widget" | "Meta")
@@ -4283,7 +4352,10 @@ fn resolve_trait(
         && !prefix.is_empty()
         && prefix.iter().all(|module| {
             module.arguments.is_empty()
-                && matches!(module.name.text.as_str(), "std" | "core" | "convert" | "iter")
+                && matches!(
+                    module.name.text.as_str(),
+                    "std" | "core" | "convert" | "iter"
+                )
         })
     {
         let arguments = last
@@ -4759,7 +4831,8 @@ fn declared_type(
         type_ref::Target::Builtin
         | type_ref::Target::Host { .. }
         | type_ref::Target::Parameter
-        | type_ref::Target::Projection(..) | type_ref::Target::Alias(_)
+        | type_ref::Target::Projection(..)
+        | type_ref::Target::Alias(_)
         | type_ref::Target::Script {
             identity: type_def::Identity::Host(_),
             ..
@@ -4771,9 +4844,7 @@ fn declared_type(
 mod tests {
     use super::item::Kind;
     use super::type_ref::{Target, Type};
-    use super::{
-        resolve, resolve_with, AllocationOrder, Category, Error, Namespace, Program,
-    };
+    use super::{resolve, resolve_with, AllocationOrder, Category, Error, Namespace, Program};
     use crate::{host, program, type_def, Engine};
     use std::any::TypeId;
 
@@ -5358,10 +5429,7 @@ mod tests {
                 .unwrap()
                 .into()
             }
-            Kind::Use(_)
-            | Kind::Impl(_)
-            | Kind::Trait(_)
-            | Kind::Function(_) => {
+            Kind::Use(_) | Kind::Impl(_) | Kind::Trait(_) | Kind::Function(_) => {
                 panic!("expected nominal item")
             }
         }

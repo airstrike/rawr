@@ -8,10 +8,10 @@
 //! bytes, by the type's name) when used.
 
 use crate::Dynamic;
-#[cfg(not(feature = "no_std"))]
-use std::{any::TypeId, collections::BTreeMap, sync::RwLock};
 #[cfg(feature = "no_std")]
 use std::prelude::v1::*;
+#[cfg(not(feature = "no_std"))]
+use std::{any::TypeId, collections::BTreeMap, sync::RwLock};
 
 /// How a host value type whose values are plain data is carried into the
 /// next runner process: the bytes of a value, and the value they encode.
@@ -201,7 +201,11 @@ mod tests {
             Some(lhs.read_lock::<Handle>()?.0 == rhs.read_lock::<Handle>()?.0)
         }
         fn compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
-            Some(lhs.read_lock::<Handle>()?.0.cmp(&rhs.read_lock::<Handle>()?.0))
+            Some(
+                lhs.read_lock::<Handle>()?
+                    .0
+                    .cmp(&rhs.read_lock::<Handle>()?.0),
+            )
         }
         register_relations::<Handle>(equal, compare);
         let (one, two) = (Dynamic::from(Handle(1)), Dynamic::from(Handle(2)));

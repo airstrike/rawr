@@ -166,7 +166,10 @@ fn a_qualified_type_path_into_a_rust_module_names_the_app_crate() {
     let project = Project::new("qualified-type");
     project.write("Cargo.toml", "[package]\nname = \"poly-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
     project.write("src/main.rs", "// rawr\nmod model;\nmod view;\n\npub fn main() -> i64 {\n    let t: crate::model::Thing = crate::model::make();\n    view::total()\n}\n");
-    project.write("src/view.rs", "// rawr\npub fn keep(t: super::model::Thing) -> super::model::Thing {\n    t\n}\n\npub fn total() -> i64 {\n    let t: super::model::Thing = keep(super::model::make());\n    1\n}\n");
+    project.write(
+        "src/view.rs",
+        "// rawr\npub fn keep(t: super::model::Thing) -> super::model::Thing {\n    t\n}\n\npub fn total() -> i64 {\n    let t: super::model::Thing = keep(super::model::make());\n    1\n}\n",
+    );
     project.write("src/model.rs", "pub struct Thing;\npub fn make() -> Thing { Thing }\n");
 
     let target = rawr::project::Target::discover(project.path()).unwrap();

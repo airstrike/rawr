@@ -67,11 +67,17 @@ fn new(state: &mut Dynamic) -> Result<Animation, Box<EvalAltResult>> {
     if let Ok(state) = state.as_bool() {
         return Ok(Animation::Bool(iced::Animation::new(state)));
     }
-    Ok(Animation::Float(iced::Animation::new(number(state, "Animation::new")? as f32)))
+    Ok(Animation::Float(iced::Animation::new(
+        number(state, "Animation::new")? as f32,
+    )))
 }
 
 /// `animation` moved to `state` at `at`.
-fn go(animation: &mut Animation, state: &mut Dynamic, at: iced::time::Instant) -> Result<(), Box<EvalAltResult>> {
+fn go(
+    animation: &mut Animation,
+    state: &mut Dynamic,
+    at: iced::time::Instant,
+) -> Result<(), Box<EvalAltResult>> {
     match animation {
         Animation::Bool(animation) => {
             let state = state
@@ -136,7 +142,9 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
                     "quick" => build(value, |a| a.quick(), |a| a.quick()),
                     "slow" => build(value, |a| a.slow(), |a| a.slow()),
                     "very_slow" => build(value, |a| a.very_slow(), |a| a.very_slow()),
-                    "repeat_forever" => build(value, |a| a.repeat_forever(), |a| a.repeat_forever()),
+                    "repeat_forever" => {
+                        build(value, |a| a.repeat_forever(), |a| a.repeat_forever())
+                    }
                     _ => build(value, |a| a.auto_reverse(), |a| a.auto_reverse()),
                 }))
             })

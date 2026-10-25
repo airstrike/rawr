@@ -487,7 +487,10 @@ impl Executable {
         let (key, callable) = self.callables.get_key_value(key)?;
         let location = self.sources.key(callable.source.index());
         let source = self.sources.resolve(location).ok()?;
-        let helpers = self.helper_locations.get(&location).map(|entries| &entries[..]);
+        let helpers = self
+            .helper_locations
+            .get(&location)
+            .map(|entries| &entries[..]);
         let locations = std::iter::once(callable)
             .chain(self.callables.values())
             .filter_map(|callable| callable.locations.as_ref())
@@ -877,7 +880,10 @@ impl Evidence<'_> {
         // called.
         self.locations
             .and_then(|locations| innermost(&locations.entries, position))
-            .or_else(|| self.helpers.and_then(|helpers| innermost(helpers, position)))
+            .or_else(|| {
+                self.helpers
+                    .and_then(|helpers| innermost(helpers, position))
+            })
     }
 }
 

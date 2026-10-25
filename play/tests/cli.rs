@@ -51,7 +51,11 @@ fn render_fixture_with(name: &str, output: &str, args: &[&str]) -> Vec<u8> {
         .arg(&output)
         .output()
         .unwrap();
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     let bytes = std::fs::read(&output).unwrap();
     assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
     bytes
@@ -74,7 +78,12 @@ fn cli_renders_iced_progress_bar_example() {
     let vertical = render_fixture_with(
         "progress_bar",
         "progress_bar_vertical",
-        &["--message", "Message::SliderChanged(40.0)", "--message", "Message::ToggleVertical(true)"],
+        &[
+            "--message",
+            "Message::SliderChanged(40.0)",
+            "--message",
+            "Message::ToggleVertical(true)",
+        ],
     );
     assert_ne!(empty, vertical);
 }
@@ -107,7 +116,12 @@ fn cli_renders_iced_counter_example_after_messages() {
     let two = render_fixture_with(
         "counter",
         "counter_two",
-        &["--message", "Message::Increment", "--message", "Message::Increment"],
+        &[
+            "--message",
+            "Message::Increment",
+            "--message",
+            "Message::Increment",
+        ],
     );
     assert_ne!(zero, two);
 }
@@ -117,7 +131,11 @@ fn cli_renders_master_component_after_its_message() {
     // "hi" shows frames after `()`: the component appears, its sensor fires,
     // and its own `update` takes that Event.
     let show = render_fixture("component_sensor");
-    let hi = render_fixture_with("component_sensor", "component_sensor_hi", &["--message", "()"]);
+    let hi = render_fixture_with(
+        "component_sensor",
+        "component_sensor_hi",
+        &["--message", "()"],
+    );
     assert_ne!(show, hi);
 }
 
@@ -132,12 +150,18 @@ fn cli_renders_a_column_built_from_a_vec() {
 
 /// The RGBA pixel at `(x, y)` of a PNG, and its width and height.
 fn pixel(png: &[u8], x: u32, y: u32) -> ([u8; 4], u32, u32) {
-    let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png))
+        .read_info()
+        .unwrap();
     let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut rgba).unwrap();
     assert_eq!(info.color_type, png::ColorType::Rgba);
     let at = ((y * info.width + x) * 4) as usize;
-    (rgba[at..at + 4].try_into().unwrap(), info.width, info.height)
+    (
+        rgba[at..at + 4].try_into().unwrap(),
+        info.width,
+        info.height,
+    )
 }
 
 fn near(actual: [u8; 4], expected: [u8; 4]) -> bool {
@@ -150,7 +174,10 @@ fn cli_renders_an_inline_svg() {
     let png = render_fixture_with("inline_svg", "inline_svg", &["--size", "160x160"]);
     let (_, width, height) = pixel(&png, 0, 0);
     let (center, ..) = pixel(&png, width / 2, height / 2);
-    assert!(near(center, [255, 105, 180, 255]), "hotpink at the center, not {center:?}");
+    assert!(
+        near(center, [255, 105, 180, 255]),
+        "hotpink at the center, not {center:?}"
+    );
     let (corner, ..) = pixel(&png, 2, 2);
     assert!(!near(corner, center), "the background at a corner");
 }
@@ -182,13 +209,22 @@ fn run_stdin(source: &str, args: &[&str]) -> std::process::Output {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(source.as_bytes())
+        .unwrap();
     child.wait_with_output().unwrap()
 }
 
 fn text_result(source: &str, args: &[&str]) -> rawr_play::Output {
     let result = run_stdin(source, args);
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert_eq!(result.stdout.first(), Some(&b'{'), "a text result is JSON");
     rawr_play::Output::from_json(&result.stdout).unwrap()
 }
@@ -200,19 +236,32 @@ fn cli_writes_a_plain_programs_output_as_json() {
     let expression = text_result("vec![1, 2, 3].iter().sum::<i64>()", &[]);
     assert_eq!(expression.text(), "6\n");
     let failed = text_result("fn main() -> Result<(), String> {\n    eprintln!(\"oops\");\n    Err(\"no\".to_string())\n}\n", &[]);
-    assert_eq!((failed.text().as_str(), failed.status), ("oops\nError: \"no\"\n", 1));
+    assert_eq!(
+        (failed.text().as_str(), failed.status),
+        ("oops\nError: \"no\"\n", 1)
+    );
 }
 
 #[test]
 fn cli_stops_an_endless_plain_program_at_the_time_limit() {
-    let looped = text_result("fn main() {\n    let mut n = 0;\n    while n >= 0 { n = n + 1 - 1; }\n}\n", &["--time-ms", "200"]);
+    let looped = text_result(
+        "fn main() {\n    let mut n = 0;\n    while n >= 0 { n = n + 1 - 1; }\n}\n",
+        &["--time-ms", "200"],
+    );
     assert!(looped.limit && looped.status == 1, "{looped:?}");
 }
 
 #[test]
 fn cli_still_writes_an_image_for_a_prelude_only_snippet() {
-    let result = run_stdin("column![text(\"hi\"), button(\"go\")]", &["--format", "png"]);
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let result = run_stdin(
+        "column![text(\"hi\"), button(\"go\")]",
+        &["--format", "png"],
+    );
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert!(result.stdout.starts_with(b"\x89PNG\r\n\x1a\n"));
 }
 
@@ -243,14 +292,19 @@ fn cli_names_an_unknown_function_and_quotes_only_what_was_written() {
         .unwrap_or_else(|| panic!("{stderr}"));
     assert_eq!(quoted, source.trim_end());
     // A facade helper of the name says where it is.
-    let result = run_stdin("use iced::widget::text;\nfn view() -> impl iced::Widget<()> { center(text(\"a\")) }\n", &["--format", "png"]);
+    let result = run_stdin(
+        "use iced::widget::text;\nfn view() -> impl iced::Widget<()> { center(text(\"a\")) }\n",
+        &["--format", "png"],
+    );
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("use iced::widget::center;"), "{stderr}");
 }
 
 /// How many distinct colors a PNG holds.
 fn colors(png: &[u8]) -> usize {
-    let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png))
+        .read_info()
+        .unwrap();
     let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut rgba).unwrap();
     let bytes = info.color_type.samples();
@@ -265,21 +319,77 @@ fn cli_renders_the_playgrounds_iced_examples() {
     // Each is iced's own example, with the size and messages the
     // playground's examples.ts gives it. None draws a blank frame.
     let examples: [(&str, &[&str]); 12] = [
-        ("component", &["--message", "Message::NumericInputChanged(Some(1))", "--message", "Message::NumericInputChanged(Some(2))"]),
-        ("custom_widget", &["--message", "Message::RadiusChanged(70.0)", "--message", "Message::RadiusChanged(90.0)"]),
-        ("modal", &["--message", "Message::ShowModal", "--message", "Message::Email(\"ferris@example.com\".to_string())"]),
-        ("lazy", &["--message", "Message::AddItem(\"Rawr\".to_string())", "--message", "Message::ToggleOrder"]),
-        ("vectorial_text", &["--message", "Message::AngleChanged(20.0)", "--message", "Message::SizeChanged(50.0)"]),
+        (
+            "component",
+            &[
+                "--message",
+                "Message::NumericInputChanged(Some(1))",
+                "--message",
+                "Message::NumericInputChanged(Some(2))",
+            ],
+        ),
+        (
+            "custom_widget",
+            &[
+                "--message",
+                "Message::RadiusChanged(70.0)",
+                "--message",
+                "Message::RadiusChanged(90.0)",
+            ],
+        ),
+        (
+            "modal",
+            &[
+                "--message",
+                "Message::ShowModal",
+                "--message",
+                "Message::Email(\"ferris@example.com\".to_string())",
+            ],
+        ),
+        (
+            "lazy",
+            &[
+                "--message",
+                "Message::AddItem(\"Rawr\".to_string())",
+                "--message",
+                "Message::ToggleOrder",
+            ],
+        ),
+        (
+            "vectorial_text",
+            &[
+                "--message",
+                "Message::AngleChanged(20.0)",
+                "--message",
+                "Message::SizeChanged(50.0)",
+            ],
+        ),
         ("text", &[]),
         ("scrollable", &[]),
         ("table", &[]),
         (
             "qr_code",
-            &["--size", "480x740", "--message", "Message::DataChanged(\"rawr\".to_string())", "--message", "Message::DataChanged(\"https://rawr.airstrike.fyi\".to_string())"],
+            &[
+                "--size",
+                "480x740",
+                "--message",
+                "Message::DataChanged(\"rawr\".to_string())",
+                "--message",
+                "Message::DataChanged(\"https://rawr.airstrike.fyi\".to_string())",
+            ],
         ),
         (
             "styling",
-            &["--size", "480x640", "--message", "Message::SliderChanged(60.0)", "--message", "Message::CheckboxToggled(true)", "--message", "Message::TogglerToggled(true)"],
+            &[
+                "--size",
+                "480x640",
+                "--message",
+                "Message::SliderChanged(60.0)",
+                "--message",
+                "Message::CheckboxToggled(true)",
+                "--message",
+                "Message::TogglerToggled(true)",
+            ],
         ),
         ("custom_quad", &["--size", "480x660"]),
         ("stopwatch", &[]),

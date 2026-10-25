@@ -316,12 +316,7 @@ fn terminal_errors_preserve_errno_and_never_promote_read_enoent_to_absence() {
 
 #[test]
 fn only_open_enoent_is_absence_and_no_descriptor_facts_are_fabricated() {
-    for code in [
-        libc::ENOENT,
-        libc::ENOTDIR,
-        libc::EACCES,
-        107,
-    ] {
+    for code in [libc::ENOENT, libc::ENOTDIR, libc::EACCES, 107] {
         let mut script = Script::new([]);
         script.opens.push_back(Err(code));
         let acquired = run(&mut script, 100).unwrap();

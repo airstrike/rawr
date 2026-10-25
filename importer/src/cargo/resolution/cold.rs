@@ -699,8 +699,7 @@ pub(in crate::cargo) fn build(
     prefix.extend(shared_arguments(&shared));
     let tail = cargo::cargo_build_arguments(paths.manifest(), &request.target, &request.profile);
     let command = cargo::cargo_build_command(request, prefix, tail, environment)?;
-    let _lock =
-        crate::deps::lock(&rawr).map_err(io("lock shared Cargo build directory", &rawr))?;
+    let _lock = crate::deps::lock(&rawr).map_err(io("lock shared Cargo build directory", &rawr))?;
     let bytes = native
         .run(&command, limits.process)?
         .checked(Program::Cargo)?;

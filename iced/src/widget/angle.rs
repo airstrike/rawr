@@ -61,7 +61,9 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain every Rotation variant reader");
     }
     builder
-        .bind("iced::Rotation::default", |_| Ok(Dynamic::from(Rotation::default())))
+        .bind("iced::Rotation::default", |_| {
+            Ok(Dynamic::from(Rotation::default()))
+        })
         .expect("the iced facade must retain Rotation::default");
     builder
         .bind("iced::Rotation::radians_mut", |args| {
@@ -93,7 +95,9 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             let [degrees] = args else {
                 return Err(arity("iced::Degrees::into", 1, args.len()));
             };
-            Ok(Dynamic::from(f64::from(take::<Degrees>(degrees, "iced::Degrees")?.0)))
+            Ok(Dynamic::from(f64::from(
+                take::<Degrees>(degrees, "iced::Degrees")?.0,
+            )))
         })
         .expect("the iced facade must retain Degrees::into");
     builder
@@ -101,7 +105,9 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             let [radians] = args else {
                 return Err(arity("iced::Radians::into", 1, args.len()));
             };
-            Ok(Dynamic::from(f64::from(take::<Radians>(radians, "iced::Radians")?.0)))
+            Ok(Dynamic::from(f64::from(
+                take::<Radians>(radians, "iced::Radians")?.0,
+            )))
         })
         .expect("the iced facade must retain Radians::into");
     builder
@@ -109,12 +115,16 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
         .expect("the iced facade must retain Radians::PI");
     builder
         .bind("iced::Degrees::RANGE", |_| {
-            Ok(Dynamic::from(crate::marker::AngleRange::Degrees(Degrees::RANGE)))
+            Ok(Dynamic::from(crate::marker::AngleRange::Degrees(
+                Degrees::RANGE,
+            )))
         })
         .expect("the iced facade must retain Degrees::RANGE");
     builder
         .bind("iced::Radians::RANGE", |_| {
-            Ok(Dynamic::from(crate::marker::AngleRange::Radians(Radians::RANGE)))
+            Ok(Dynamic::from(crate::marker::AngleRange::Radians(
+                Radians::RANGE,
+            )))
         })
         .expect("the iced facade must retain Radians::RANGE");
     // A range is of the angle it starts with.
@@ -188,7 +198,11 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
                     return Ok(Dynamic::from(left - other));
                 }
                 let by = take::<iced::Vector>(right, "iced::Vector")?;
-                Ok(Dynamic::from(if name == "add" { left + by } else { left - by }))
+                Ok(Dynamic::from(if name == "add" {
+                    left + by
+                } else {
+                    left - by
+                }))
             })
             .expect("the iced facade must retain every Point operator");
     }

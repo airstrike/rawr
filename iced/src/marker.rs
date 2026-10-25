@@ -668,8 +668,15 @@ pub(crate) struct Canvas {
 pub(crate) enum Draw {
     Fill(iced::widget::canvas::Path, iced::widget::canvas::Fill),
     FillRectangle(iced::Point, iced::Size, iced::widget::canvas::Fill),
-    Stroke(iced::widget::canvas::Path, iced::widget::canvas::Stroke<'static>),
-    StrokeRectangle(iced::Point, iced::Size, iced::widget::canvas::Stroke<'static>),
+    Stroke(
+        iced::widget::canvas::Path,
+        iced::widget::canvas::Stroke<'static>,
+    ),
+    StrokeRectangle(
+        iced::Point,
+        iced::Size,
+        iced::widget::canvas::Stroke<'static>,
+    ),
     FillText(iced::widget::canvas::Text),
     PushTransform,
     PopTransform,

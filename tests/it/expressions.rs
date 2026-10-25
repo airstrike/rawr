@@ -13,7 +13,12 @@ fn test_expressions() {
     #[cfg(not(feature = "no_index"))]
     #[cfg(not(feature = "no_function"))]
     {
-        assert_eq!(engine.eval_expression_with_scope::<INT>(&mut scope, "[1, 2, 3, 4].iter().map(|x| x * x).fold(0, |a, v| a + v)").unwrap(), 30);
+        assert_eq!(
+            engine
+                .eval_expression_with_scope::<INT>(&mut scope, "[1, 2, 3, 4].iter().map(|x| x * x).fold(0, |a, v| a + v)")
+                .unwrap(),
+            30
+        );
         // A block with statements is still one Rust expression.
         assert_eq!(
             engine

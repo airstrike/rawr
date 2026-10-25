@@ -53,8 +53,13 @@ enum Request {
     Help,
     Version,
     /// `rawr [run] [path]`, or `rawr check [path]`.
-    Program { check: bool, path: Option<PathBuf> },
-    Doctor { path: Option<PathBuf> },
+    Program {
+        check: bool,
+        path: Option<PathBuf>,
+    },
+    Doctor {
+        path: Option<PathBuf>,
+    },
     /// `rawr new`.
     New(New),
     /// A command another binary may provide.
@@ -95,7 +100,10 @@ fn parse_new(arguments: &[OsString]) -> Result<New, String> {
 }
 
 fn parse(arguments: &[OsString]) -> Result<Request, String> {
-    let words: Vec<_> = arguments.iter().map(|argument| argument.to_string_lossy()).collect();
+    let words: Vec<_> = arguments
+        .iter()
+        .map(|argument| argument.to_string_lossy())
+        .collect();
     let path = |rest: &[OsString]| match rest {
         [] => Ok(None),
         [path] if !path.to_string_lossy().starts_with('-') => Ok(Some(PathBuf::from(path))),
@@ -115,14 +123,20 @@ fn parse(arguments: &[OsString]) -> Result<Request, String> {
         Some("run" | "check" | "doctor") if asks_help => Ok(Request::Help),
         Some("run") => path(&arguments[1..]).map(|path| Request::Program { check: false, path }),
         // `check` with an option `rawr` does not know is another binary's.
-        Some("check") if arguments[1..].iter().any(|argument| argument.to_string_lossy().starts_with('-')) => {
+        Some("check")
+            if arguments[1..]
+                .iter()
+                .any(|argument| argument.to_string_lossy().starts_with('-')) =>
+        {
             Ok(Request::Other)
         }
         Some("check") => path(&arguments[1..]).map(|path| Request::Program { check: true, path }),
         Some("doctor") => path(&arguments[1..]).map(|path| Request::Doctor { path }),
         Some("new") => parse_new(&arguments[1..]).map(Request::New),
         Some(word) if word.starts_with('-') => Err(format!("unknown argument `{word}`")),
-        Some(_) if is_path(&arguments[0]) => path(arguments).map(|path| Request::Program { check: false, path }),
+        Some(_) if is_path(&arguments[0]) => {
+            path(arguments).map(|path| Request::Program { check: false, path })
+        }
         Some(_) => Ok(Request::Other),
     }
 }
@@ -131,11 +145,7 @@ fn parse(arguments: &[OsString]) -> Result<Request, String> {
 fn is_path(argument: &OsStr) -> bool {
     // `rawr.toml` and `.rawr` count as paths only so discovery can say how
     // to convert them.
-    if argument == "."
-        || argument == ".."
-        || argument == "Cargo.toml"
-        || argument == "rawr.toml"
-    {
+    if argument == "." || argument == ".." || argument == "Cargo.toml" || argument == "rawr.toml" {
         return true;
     }
     let extension = Path::new(argument).extension();
@@ -180,7 +190,10 @@ fn help(installed: &[layer::Installed]) -> String {
         }
     }
     for known in layer::catalog() {
-        if !installed.iter().any(|binary| binary.manifest.name == known.manifest.name) {
+        if !installed
+            .iter()
+            .any(|binary| binary.manifest.name == known.manifest.name)
+        {
             help.push_str(&format!(
                 "\n{} is not installed. It serves programs that use {}. Install it with:\n{}\n",
                 known.manifest.name,
@@ -291,7 +304,9 @@ fn new_help(installed: &[layer::Installed]) -> String {
     }
     for known in layer::catalog() {
         if known.manifest.templates.is_empty()
-            || installed.iter().any(|binary| binary.manifest.name == known.manifest.name)
+            || installed
+                .iter()
+                .any(|binary| binary.manifest.name == known.manifest.name)
         {
             continue;
         }
@@ -329,12 +344,16 @@ fn create(path: PathBuf, template: Option<&str>, arguments: &[OsString]) -> Exit
             }
         };
     };
-    let offers = |manifest: &layer::Manifest| manifest.templates.iter().any(|name| name == template);
+    let offers =
+        |manifest: &layer::Manifest| manifest.templates.iter().any(|name| name == template);
     let installed = layer::installed();
     if let Some(binary) = installed.iter().find(|binary| offers(&binary.manifest)) {
         return hand_off(&binary.path, arguments);
     }
-    if let Some(known) = layer::catalog().into_iter().find(|known| offers(&known.manifest)) {
+    if let Some(known) = layer::catalog()
+        .into_iter()
+        .find(|known| offers(&known.manifest))
+    {
         eprintln!(
             "error: the `{template}` template comes with {}, which is not installed. Install it with:\n{}",
             known.manifest.name,
@@ -490,7 +509,10 @@ mod tests {
                 template: Some("shapes".to_owned()),
             }))
         );
-        assert_eq!(request(&["new", "hello", "--help"]), Ok(Request::New(super::New::Help)));
+        assert_eq!(
+            request(&["new", "hello", "--help"]),
+            Ok(Request::New(super::New::Help))
+        );
         assert!(request(&["new"]).is_err());
         assert!(request(&["new", "hello", "--template"]).is_err());
         assert_eq!(request(&["run", "--help"]), Ok(Request::Help));

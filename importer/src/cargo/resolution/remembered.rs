@@ -91,9 +91,9 @@ pub(in crate::cargo) fn remember(base: [u8; 32], root: &Path, roots: &[PathBuf],
 fn plain(root: &Path) -> Option<&str> {
     let text = root.to_str()?;
     (text.len() > 1
-        && text.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-')
-        }))
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-')))
     .then_some(text)
 }
 

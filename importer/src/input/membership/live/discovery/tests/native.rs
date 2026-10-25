@@ -170,12 +170,7 @@ fn native_projection_matches_source_shaped_std_acquisition() {
     let native = fixture.0.join(std::ffi::OsStr::from_bytes(b"native-\xff"));
     match fs::create_dir(&native) {
         Ok(()) => fs::write(native.join("config"), b"native directory").expect("native config"),
-        Err(error)
-            if matches!(
-                error.raw_os_error(),
-                Some(libc::EPERM | libc::EILSEQ)
-            ) =>
-        {
+        Err(error) if matches!(error.raw_os_error(), Some(libc::EPERM | libc::EILSEQ)) => {
             eprintln!("non-UTF8 discovery directory creation was refused; native error path exercised, existing-directory success NOT covered");
         }
         Err(error) => panic!("native directory fixture: {error}"),

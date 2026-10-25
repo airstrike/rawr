@@ -306,14 +306,22 @@ mod tests {
         let key = [7; 32];
         let mut none = key.to_vec();
         none.push(0);
-        assert_eq!(exported_state(&frame(Tag::StateExported, &none), &key).unwrap(), None);
+        assert_eq!(
+            exported_state(&frame(Tag::StateExported, &none), &key).unwrap(),
+            None
+        );
         let mut some = key.to_vec();
         some.extend_from_slice(&[1, 9, 8]);
         assert_eq!(
             exported_state(&frame(Tag::StateExported, &some), &key).unwrap(),
             Some(vec![9, 8])
         );
-        for payload in [&key[..], &[&key[..], &[1]].concat(), &[&key[..], &[0, 5]].concat(), &[&key[..], &[2, 5]].concat()] {
+        for payload in [
+            &key[..],
+            &[&key[..], &[1]].concat(),
+            &[&key[..], &[0, 5]].concat(),
+            &[&key[..], &[2, 5]].concat(),
+        ] {
             assert!(exported_state(&frame(Tag::StateExported, payload), &key).is_err());
         }
         assert!(exported_state(&frame(Tag::StateExported, &some), &[8; 32]).is_err());

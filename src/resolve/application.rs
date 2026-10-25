@@ -76,9 +76,10 @@ impl Entry {
     pub(crate) fn prelude_span(&self, items: &[item::Shell]) -> Option<Span> {
         let key = self.prelude.as_ref()?;
         items.iter().find_map(|shell| match &shell.kind {
-            item::Kind::Function(function) if shell.key.as_ref() == Some(key) => {
-                Some(Span::new(function.body.span.start(), function.body.elide?.start()))
-            }
+            item::Kind::Function(function) if shell.key.as_ref() == Some(key) => Some(Span::new(
+                function.body.span.start(),
+                function.body.elide?.start(),
+            )),
             _ => None,
         })
     }
@@ -502,11 +503,12 @@ fn resolve_main(
             let callbacks = cursor.callbacks(&["update", "view"])?;
             let view = resolve_callback(&callbacks[1], "view", items, methods, source)?;
             let update = if callbacks[0].unit {
-                let shell = unit_update(attempt, callbacks[0].span, &view, items, methods, contracts)
-                    .ok_or(application::Error::NonSymbolicCallback {
-                        role: "update".into(),
-                        callback: callbacks[0].span,
-                    })?;
+                let shell =
+                    unit_update(attempt, callbacks[0].span, &view, items, methods, contracts)
+                        .ok_or(application::Error::NonSymbolicCallback {
+                            role: "update".into(),
+                            callback: callbacks[0].span,
+                        })?;
                 let key = shell.key.clone().expect("an update has its key");
                 boot_closure.push(shell);
                 key
@@ -584,17 +586,17 @@ fn resolve_main(
                     key
                 }
                 None => match resolve_callback(&callbacks[0], "boot", items, methods, source) {
-                Ok(boot) => Some(boot),
-                Err(_) if matches!(callbacks[0].segments.as_ref(), [_, name] if name.as_str() == "default") => {
-                    default_boot(attempt, &update, items, methods, boot_closure.len()).and_then(
-                        |shell| {
-                            let key = shell.key.clone();
-                            boot_closure.push(shell);
-                            key
-                        },
-                    )
-                }
-                Err(error) => return Err(error),
+                    Ok(boot) => Some(boot),
+                    Err(_) if matches!(callbacks[0].segments.as_ref(), [_, name] if name.as_str() == "default") => {
+                        default_boot(attempt, &update, items, methods, boot_closure.len()).and_then(
+                            |shell| {
+                                let key = shell.key.clone();
+                                boot_closure.push(shell);
+                                key
+                            },
+                        )
+                    }
+                    Err(error) => return Err(error),
                 },
             };
             let view = resolve_callback(&callbacks[2], "view", items, methods, source)?;
@@ -695,10 +697,11 @@ fn resolve_main(
     }
     let mut result = result;
     if attempt.index != 0 {
-        let shell = prelude_function(attempt, result.span, items, boot_closure.len())
-            .ok_or(application::Error::NonTailEntry {
+        let shell = prelude_function(attempt, result.span, items, boot_closure.len()).ok_or(
+            application::Error::NonTailEntry {
                 entry: attempt.span,
-            })?;
+            },
+        )?;
         result.prelude = shell.key.clone();
         boot_closure.push(shell);
     }
@@ -779,17 +782,19 @@ fn boot_function(
         .iter()
         .find(|shell| match &shell.kind {
             item::Kind::Function(function) => function.name.span == attempt.name.span,
-                _ => false,
+            _ => false,
         })
         .ok_or_else(non_symbolic)?;
     let state = items
         .iter()
         .filter(|shell| shell.key.as_ref() == Some(update))
         .find_map(function)
-        .and_then(|update| match update.parameters.first().map(|parameter| &parameter.ty) {
-            Some(super::type_ref::Type::Reference { target, .. }) => Some((**target).clone()),
-            _ => None,
-        })
+        .and_then(
+            |update| match update.parameters.first().map(|parameter| &parameter.ty) {
+                Some(super::type_ref::Type::Reference { target, .. }) => Some((**target).clone()),
+                _ => None,
+            },
+        )
         .ok_or_else(non_symbolic)?;
     let name = crate::item::Name {
         text: "__rawr_boot".into(),
@@ -962,7 +967,11 @@ fn default_boot(
         return None;
     };
     // `main` is at the crate root, where a root State is named as it is.
-    let mut body = String::from(if key.modules().is_empty() { "" } else { "crate::" });
+    let mut body = String::from(if key.modules().is_empty() {
+        ""
+    } else {
+        "crate::"
+    });
     for module in key.modules() {
         body.push_str(module);
         body.push_str("::");
@@ -1539,7 +1548,9 @@ impl<'a> Cursor<'a> {
             if WINDOW_SETTINGS.contains(&name.as_str())
                 || (name == "title"
                     && !matches!(
-                        self.tokens.get(self.index + 3).map(crate::item::BodyToken::kind),
+                        self.tokens
+                            .get(self.index + 3)
+                            .map(crate::item::BodyToken::kind),
                         Some(crate::item::BodyTokenKind::Identifier(_))
                     ))
             {
@@ -1547,10 +1558,12 @@ impl<'a> Cursor<'a> {
                     Span::new(self.tokens[self.index].span().start(), method.span().end());
                 self.consume();
                 self.consume();
-                self.skip_argument_list().ok_or_else(|| application::Error::MalformedEntry {
-                    reason: format!("`.{name}(..)` expects its arguments in parentheses").into(),
-                    entry: operation,
-                })?;
+                self.skip_argument_list()
+                    .ok_or_else(|| application::Error::MalformedEntry {
+                        reason: format!("`.{name}(..)` expects its arguments in parentheses")
+                            .into(),
+                        entry: operation,
+                    })?;
                 continue;
             }
             let (role, contract, slot) = match name.as_str() {

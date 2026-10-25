@@ -207,7 +207,10 @@ fn a_script_sipper_sends_its_progress_and_then_its_output() {
         eprintln!("{entry:?}");
     }
     let mut simulator = iced_test::simulator(adapter.view());
-    assert!(simulator.find("done 60").is_ok(), "the sipper sent 0 + 10 + 20 + 30");
+    assert!(
+        simulator.find("done 60").is_ok(),
+        "the sipper sent 0 + 10 + 20 + 30"
+    );
 }
 
 #[test]
@@ -222,7 +225,10 @@ fn tokio_sleep_without_tokio_waits_and_then_goes_on() {
         if simulator.find("done 60").is_ok() {
             break;
         }
-        assert!(start.elapsed() < std::time::Duration::from_secs(5), "the sleeps end");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "the sleeps end"
+        );
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
 }

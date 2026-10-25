@@ -139,7 +139,10 @@ fn title_rebinds_on_retained_state_and_throwing_candidates_preserve_last_good_sh
         iced_test::simulator(host.view()).find("Updated").unwrap();
     }
 
-    project.write("src/main.rs", title_source("\"Off center\".to_string()", false));
+    project.write(
+        "src/main.rs",
+        title_source("\"Off center\".to_string()", false),
+    );
     let outcome = install(&mut host, compile(&engine, &project), &engine, registry()).unwrap();
     assert_eq!(outcome.evidence()[0].action(), Action::Reset);
     assert_ne!(host.adapter().instance(), instance);
@@ -686,7 +689,11 @@ impl Project {
             std::process::id()
         ));
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
         Self { root }
     }
 

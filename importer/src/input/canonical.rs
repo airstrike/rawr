@@ -62,7 +62,8 @@ pub(crate) fn regular_file(normalized: &Path) -> bool {
         return false;
     };
     names.contains(name)
-        && std::fs::symlink_metadata(normalized).is_ok_and(|metadata| metadata.file_type().is_file())
+        && std::fs::symlink_metadata(normalized)
+            .is_ok_and(|metadata| metadata.file_type().is_file())
 }
 
 fn list(directory: &Path) -> Names {
@@ -93,15 +94,27 @@ mod tests {
         std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("real/lib.rs"), root.join("real/alias.rs")).unwrap();
-        assert!(!super::regular_file(&root.join("real/lib.rs")), "outside a pass");
+        assert!(
+            !super::regular_file(&root.join("real/lib.rs")),
+            "outside a pass"
+        );
         super::pass(|| {
             assert!(super::regular_file(&root.join("real/lib.rs")));
-            assert!(!super::regular_file(&root.join("real/LIB.rs")), "case differs");
+            assert!(
+                !super::regular_file(&root.join("real/LIB.rs")),
+                "case differs"
+            );
             assert!(!super::regular_file(&root.join("real/absent.rs")));
             #[cfg(unix)]
-            assert!(!super::regular_file(&root.join("link/lib.rs")), "a symlinked directory");
+            assert!(
+                !super::regular_file(&root.join("link/lib.rs")),
+                "a symlinked directory"
+            );
             #[cfg(unix)]
-            assert!(!super::regular_file(&root.join("real/alias.rs")), "a symlinked file");
+            assert!(
+                !super::regular_file(&root.join("real/alias.rs")),
+                "a symlinked file"
+            );
             assert!(!super::regular_file(&root.join("real")), "a directory");
         });
         std::fs::remove_dir_all(root).unwrap();

@@ -91,10 +91,7 @@ fn unknown_qualified_type_says_it_is_not_available_yet() {
     let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
 
     assert_eq!(report.code(), code::RESOLVE_UNKNOWN_TYPE);
-    assert_eq!(
-        report.help().unwrap(),
-        "`lib::widget::Missing` isn't available in Rawr yet, or the path is misspelled"
-    );
+    assert_eq!(report.help().unwrap(), "`lib::widget::Missing` isn't available in Rawr yet, or the path is misspelled");
 }
 
 #[cfg(feature = "serde")]

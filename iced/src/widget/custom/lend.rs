@@ -125,7 +125,11 @@ impl Children {
     /// Run `f` on the child `index` lowered earlier in this view. A panic
     /// in the child's native code is an error of the call that reached it,
     /// so it never unwinds through the script.
-    pub(crate) fn with<R>(&self, index: usize, f: impl FnOnce(&mut Element) -> R) -> Result<R, Error> {
+    pub(crate) fn with<R>(
+        &self,
+        index: usize,
+        f: impl FnOnce(&mut Element) -> R,
+    ) -> Result<R, Error> {
         let mut lowered = self.lowered.try_borrow_mut().map_err(|_| Error::Busy)?;
         let (_, element) = lowered.get_mut(index).ok_or(Error::Busy)?;
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(element))).map_err(|panic| {
@@ -159,7 +163,13 @@ impl<'a> Loan<'a> {
         operation: &'a mut dyn Operation,
         children: &'a Children,
     ) -> Self {
-        Self::lend(Lent::Mutable(tree), Some(renderer), None, Some(operation), children)
+        Self::lend(
+            Lent::Mutable(tree),
+            Some(renderer),
+            None,
+            Some(operation),
+            children,
+        )
     }
 
     fn lend(
@@ -247,13 +257,20 @@ impl Frame {
         // is in use while the script runs.
         let mut tree = unsafe { self.tree.as_ref() }.ok_or(Error::Missing("Tree"))?;
         for &index in path {
-            tree = tree.children.get(index).ok_or_else(|| Error::Path(path.to_vec()))?;
+            tree = tree
+                .children
+                .get(index)
+                .ok_or_else(|| Error::Path(path.to_vec()))?;
         }
         Ok(f(tree))
     }
 
     /// The subtree at `path` below the lent tree, to change.
-    pub(crate) fn tree_mut<R>(&self, path: &[usize], f: impl FnOnce(&mut Tree) -> R) -> Result<R, Error> {
+    pub(crate) fn tree_mut<R>(
+        &self,
+        path: &[usize],
+        f: impl FnOnce(&mut Tree) -> R,
+    ) -> Result<R, Error> {
         if !self.mutable {
             return Err(Error::ReadOnly);
         }
@@ -325,7 +342,10 @@ mod tests {
             loan.nonce()
         };
         assert_eq!(tree.children[0].size, iced::Size::new(3.0, 4.0));
-        assert_eq!(Frame::find(nonce, "Tree").err(), Some(Error::Expired("Tree")));
+        assert_eq!(
+            Frame::find(nonce, "Tree").err(),
+            Some(Error::Expired("Tree"))
+        );
     }
 
     #[test]

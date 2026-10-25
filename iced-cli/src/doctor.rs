@@ -675,9 +675,7 @@ fn project_failure(error: &project::Error) -> Failure {
             project::Resource::Manifest => Component::Manifest,
             project::Resource::Input | project::Resource::Boundary => Component::General,
         },
-        project::Error::MissingSource { .. } | project::Error::Unmarked { .. } => {
-            Component::Source
-        }
+        project::Error::MissingSource { .. } | project::Error::Unmarked { .. } => Component::Source,
         project::Error::CurrentDirectory(..)
         | project::Error::InputNotFound { .. }
         | project::Error::NotFound { .. }

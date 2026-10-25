@@ -885,10 +885,16 @@ impl Parser<'_> {
             {
                 arity(1, &arguments)?;
                 self.coerce_expr(&Ty::Int(Int::Usize), &mut arguments[0])?;
-                let flags = i32::from(inclusive) | i32::from(!kind.signed() && kind.bits() == 64) << 1;
+                let flags =
+                    i32::from(inclusive) | i32::from(!kind.signed() && kind.bits() == 64) << 1;
                 let step = self.prelude_op(
                     PreludeOp::StepBy,
-                    [low, high, arguments[0].rendered_source(), flags.to_string().into()],
+                    [
+                        low,
+                        high,
+                        arguments[0].rendered_source(),
+                        flags.to_string().into(),
+                    ],
                 );
                 let stepped = self.bind(&mut pipeline, "steps", step);
                 let segment = &mut pipeline.segments[0];
@@ -907,9 +913,9 @@ impl Parser<'_> {
                 arity(1, &arguments)?;
                 self.coerce_expr(&Ty::Int(Int::Usize), &mut arguments[0])?;
                 let step = self.bind(&mut pipeline, "step", arguments[0].rendered_source());
-                pipeline
-                    .setup
-                    .push_text(format!("if {step} == 0 {{ throw \"assertion failed: step != 0\"; }} "));
+                pipeline.setup.push_text(format!(
+                    "if {step} == 0 {{ throw \"assertion failed: step != 0\"; }} "
+                ));
                 match pipeline.source.take() {
                     Some(Source::Values { values, .. }) => {
                         let values = self.bind(&mut pipeline, "values", values);
@@ -927,7 +933,8 @@ impl Parser<'_> {
                         let steps = self.bind(&mut pipeline, "steps", steps);
                         let segment = &mut pipeline.segments[0];
                         segment.header = vec![Part::Text(format!("for {index} in {steps}"))];
-                        let mut entry = origin::Fragment::plain(format!("let {x} = {values}[{index}]; "));
+                        let mut entry =
+                            origin::Fragment::plain(format!("let {x} = {values}[{index}]; "));
                         entry.push(std::mem::take(&mut segment.entry));
                         segment.entry = entry;
                     }
@@ -1208,14 +1215,19 @@ impl Parser<'_> {
                     // A crate type's `impl FromIterator<A>`: its
                     // `from_iter` of the items.
                     Some(target @ Ty::Script(id, _))
-                        if let Some(definition) =
-                            self.models.std_impl(id, "FromIterator", "from_iter").cloned() =>
+                        if let Some(definition) = self
+                            .models
+                            .std_impl(id, "FromIterator", "from_iter")
+                            .cloned() =>
                     {
                         if let Some(argument) = definition.trait_arguments().first() {
                             self.require_type(&Ty::from_resolved(argument), &item, expression)?;
                         }
                         let items = self.materialized(&pipeline);
-                        (origin::Fragment::call(method_name(definition.id()), [items]), target)
+                        (
+                            origin::Fragment::call(method_name(definition.id()), [items]),
+                            target,
+                        )
                     }
                     Some(target @ Ty::Array { .. }) => {
                         let vec = Ty::Array {

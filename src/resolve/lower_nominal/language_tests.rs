@@ -558,7 +558,10 @@ fn language_associated_functions_are_values() {
         }
         run()
     "#);
-    assert_eq!(value, 6 + 14 * 100 + 14 * 10000 + 6 * 1000000 + 5 * 100000000);
+    assert_eq!(
+        value,
+        6 + 14 * 100 + 14 * 10000 + 6 * 1000000 + 5 * 100000000
+    );
 }
 
 #[test]
@@ -1949,7 +1952,10 @@ fn language_fn_types_in_item_headers() {
     rejected("#[derive(PartialEq)] struct S { f: fn() } pub fn run() -> i64 { 0 } run()");
     // `impl Clone` is an anonymous generic parameter, as in Rust; its
     // bound still holds at each call.
-    assert_eq!(run("fn apply(f: impl Clone) -> i64 { 0 } pub fn run() -> i64 { apply(1) } run()"), 0);
+    assert_eq!(
+        run("fn apply(f: impl Clone) -> i64 { 0 } pub fn run() -> i64 { apply(1) } run()"),
+        0
+    );
     rejected(
         "struct S; fn apply(f: impl Clone) -> i64 { 0 } pub fn run() -> i64 { apply(S) } run()",
     );
@@ -5827,9 +5833,8 @@ fn language_impl_trait_parameters() {
          fn show(a: &impl Animal) -> String { a.name() } pub fn run() -> i64 { show(&Rock); 0 } run()",
     );
     assert!(unbounded.contains("Animal"), "{unbounded}");
-    let returned = rejected(
-        "fn f() -> impl std::fmt::Display { 3 } pub fn run() -> i64 { 0 } run()",
-    );
+    let returned =
+        rejected("fn f() -> impl std::fmt::Display { 3 } pub fn run() -> i64 { 0 } run()");
     assert!(returned.contains("return type"), "{returned}");
 }
 
@@ -5855,11 +5860,17 @@ fn language_const_array_lengths() {
         run()
     "#,
     );
-    assert_eq!(value, "2 15 3 2 [7, 7, 7] Grid { cells: [[0, 0, 0], [0, 0, 0]] }");
+    assert_eq!(
+        value,
+        "2 15 3 2 [7, 7, 7] Grid { cells: [[0, 0, 0], [0, 0, 0]] }"
+    );
     let mismatch = rejected(
         "const N: usize = 3; fn f() -> [i64; N] { [1, 2] } pub fn run() -> i64 { 0 } run()",
     );
-    assert!(mismatch.contains("expected an array with a size of 3"), "{mismatch}");
+    assert!(
+        mismatch.contains("expected an array with a size of 3"),
+        "{mismatch}"
+    );
     let unknown = rejected("struct G { c: [i64; M] } pub fn run() -> i64 { 0 } run()");
     assert!(unknown.contains("array length `M`"), "{unknown}");
 }
@@ -5908,8 +5919,14 @@ fn language_operator_traits() {
     );
     // Rust's E0369, E0600 and E0368 without the impl; an unmet bound.
     for (source, expected) in [
-        ("#[derive(Clone, Copy)] struct V(i64); fn f() -> i64 { let v = V(1) + V(2); 0 }", "E0369"),
-        ("#[derive(Clone, Copy)] struct V(i64); fn f() -> i64 { let v = -V(1); 0 }", "E0600"),
+        (
+            "#[derive(Clone, Copy)] struct V(i64); fn f() -> i64 { let v = V(1) + V(2); 0 }",
+            "E0369",
+        ),
+        (
+            "#[derive(Clone, Copy)] struct V(i64); fn f() -> i64 { let v = -V(1); 0 }",
+            "E0600",
+        ),
         (
             "use std::ops::Add; #[derive(Clone, Copy)] struct V(i64); \
              impl Add for V { type Output = V; fn add(self, o: V) -> V { V(self.0 + o.0) } } \
@@ -6101,7 +6118,10 @@ fn language_methods_on_element_and_nested_places() {
         "struct C { v: i64 } impl C { fn set(&mut self) { self.v = 1; } } \
          pub fn run() -> i64 { let v = vec![C { v: 0 }]; v[0].set(); 0 } run()",
     );
-    assert!(immutable.contains("immutable") || immutable.contains("mutable"), "{immutable}");
+    assert!(
+        immutable.contains("immutable") || immutable.contains("mutable"),
+        "{immutable}"
+    );
 }
 
 #[test]
@@ -6210,7 +6230,10 @@ fn language_associated_const_array_lengths() {
         run()
     "#,
     );
-    assert_eq!(value, "Board { cells: [0, 7, 0] } [0, 7, 0] [false, false, false]");
+    assert_eq!(
+        value,
+        "Board { cells: [0, 7, 0] } [0, 7, 0] [false, false, false]"
+    );
 }
 
 #[test]
@@ -6380,7 +6403,10 @@ fn language_block_expressions() {
     );
     assert_eq!(value, "6 1 9 12 0 3 () 2-6");
     let unit_tail = rejected("pub fn run() -> i64 { let n: i64 = { let t = 1; t; }; n } run()");
-    assert!(unit_tail.contains("expected 'i64', found '()'"), "{unit_tail}");
+    assert!(
+        unit_tail.contains("expected 'i64', found '()'"),
+        "{unit_tail}"
+    );
     rejected("pub fn run() -> i64 { { let t = 1; } t } run()");
 }
 
@@ -6413,21 +6439,36 @@ fn language_panic_macros() {
         ("panic!()", "explicit panic"),
         ("panic!(\"boom {}\", x)", "boom 5"),
         ("assert!(x < 1)", "assertion failed: x < 1"),
-        ("assert!(s.len()==9 && !s.is_empty())", "assertion failed: s.len() == 9 && !s.is_empty()"),
+        (
+            "assert!(s.len()==9 && !s.is_empty())",
+            "assertion failed: s.len() == 9 && !s.is_empty()",
+        ),
         ("assert!(x < 1, \"x was {x}\")", "x was 5"),
-        ("assert_eq!(x, 4)", "assertion `left == right` failed\n  left: 5\n right: 4"),
+        (
+            "assert_eq!(x, 4)",
+            "assertion `left == right` failed\n  left: 5\n right: 4",
+        ),
         (
             "assert_eq!(s, \"q\", \"with {} args\", 2)",
             "assertion `left == right` failed: with 2 args\n  left: \"ab\"\n right: \"q\"",
         ),
-        ("assert_ne!(x, 5)", "assertion `left != right` failed\n  left: 5\n right: 5"),
+        (
+            "assert_ne!(x, 5)",
+            "assertion `left != right` failed\n  left: 5\n right: 5",
+        ),
         ("debug_assert!(-x > 0)", "assertion failed: -x > 0"),
         ("todo!()", "not yet implemented"),
         ("todo!(\"later\")", "not yet implemented: later"),
         ("unimplemented!()", "not implemented"),
-        ("unimplemented!(\"not {}\", \"here\")", "not implemented: not here"),
+        (
+            "unimplemented!(\"not {}\", \"here\")",
+            "not implemented: not here",
+        ),
         ("unreachable!()", "internal error: entered unreachable code"),
-        ("unreachable!(\"x is {}\", x)", "internal error: entered unreachable code: x is 5"),
+        (
+            "unreachable!(\"x is {}\", x)",
+            "internal error: entered unreachable code: x is 5",
+        ),
     ] {
         let error = rejected(&format!(
             "pub fn run() -> i64 {{ let x = 5; let s = String::from(\"ab\"); {body}; 0 }} run()"
@@ -6461,7 +6502,10 @@ fn language_to_string_on_references_and_literals() {
         run()
     "#,
     );
-    assert_eq!(value, "3 1.5 c true 1 -2.5 0.1 [\"2\", \"3\"] 4 2 18446744073709551615 z false s");
+    assert_eq!(
+        value,
+        "3 1.5 c true 1 -2.5 0.1 [\"2\", \"3\"] 4 2 18446744073709551615 z false s"
+    );
 }
 
 #[test]
@@ -6502,17 +6546,38 @@ fn language_string_and_vec_methods() {
          Ok(\"hi\") invalid utf-8 sequence of 1 bytes from index 1|[3, 5, 7, 9] [[1, 2], [3, 4], [5]] [1, 2, 3] [4, 5] []"
     );
     for (body, message) in [
-        ("let mut s = String::from(\"é\"); s.insert(1, 'x')", "assertion failed: self.is_char_boundary(idx)"),
-        ("let mut s = String::from(\"ab\"); s.remove(2)", "cannot remove a char from the end of a string"),
-        ("let mut s = String::from(\"ab\"); s.remove(5)", "start byte index 5 is out of bounds for string of length 2"),
+        (
+            "let mut s = String::from(\"é\"); s.insert(1, 'x')",
+            "assertion failed: self.is_char_boundary(idx)",
+        ),
+        (
+            "let mut s = String::from(\"ab\"); s.remove(2)",
+            "cannot remove a char from the end of a string",
+        ),
+        (
+            "let mut s = String::from(\"ab\"); s.remove(5)",
+            "start byte index 5 is out of bounds for string of length 2",
+        ),
         (
             "let mut s = String::from(\"éa\"); s.remove(1)",
             "start byte index 1 is not a char boundary; it is inside 'é' (bytes 0..2 of string)",
         ),
-        ("let mut s = String::from(\"é\"); s.truncate(1)", "assertion failed: self.is_char_boundary(new_len)"),
-        ("let v = vec![1]; let n = v.windows(0).count()", "window size must be non-zero"),
-        ("let v = vec![1]; let n = v.chunks(0).count()", "chunk size must be non-zero"),
-        ("let mut v = vec![1]; let w = v.split_off(3)", "`at` split index (is 3) should be <= len (is 1)"),
+        (
+            "let mut s = String::from(\"é\"); s.truncate(1)",
+            "assertion failed: self.is_char_boundary(new_len)",
+        ),
+        (
+            "let v = vec![1]; let n = v.windows(0).count()",
+            "window size must be non-zero",
+        ),
+        (
+            "let v = vec![1]; let n = v.chunks(0).count()",
+            "chunk size must be non-zero",
+        ),
+        (
+            "let mut v = vec![1]; let w = v.split_off(3)",
+            "`at` split index (is 3) should be <= len (is 1)",
+        ),
     ] {
         let error = rejected(&format!("pub fn run() -> i64 {{ {body}; 0 }} run()"));
         assert!(error.contains(message), "{body}: {error}");
@@ -6574,9 +6639,13 @@ fn language_std_mem_swap_replace_take() {
         run()
     "#,
     );
-    assert_eq!(value, "0 1 2 [1] [] P { a: [9, 3], b: [1], name: \"\" } n 2 6 5");
+    assert_eq!(
+        value,
+        "0 1 2 [1] [] P { a: [9, 3], b: [1], name: \"\" } n 2 6 5"
+    );
     // A crate's own `swap` is called as written.
-    let own = run("fn swap(a: i64, b: i64) -> i64 { a - b } pub fn run() -> i64 { swap(5, 2) } run()");
+    let own =
+        run("fn swap(a: i64, b: i64) -> i64 { a - b } pub fn run() -> i64 { swap(5, 2) } run()");
     assert_eq!(own, 3);
     rejected("pub fn run() -> i64 { let mut a = 1; std::mem::swap(&mut a, &mut a); a } run()");
 }
@@ -6614,7 +6683,9 @@ fn language_let_else() {
     assert!(error.contains("`!`"), "{error}");
     let error = rejected("pub fn run() -> i64 { let Some(x) = Some(1) else { return 0; }; } run()");
     assert!(!error.is_empty());
-    rejected("pub fn run() -> i64 { let Some(x) = Some(1) else { let y = x; return 0; }; x } run()");
+    rejected(
+        "pub fn run() -> i64 { let Some(x) = Some(1) else { let y = x; return 0; }; x } run()",
+    );
 }
 
 #[test]
@@ -6648,7 +6719,10 @@ fn language_nested_fn_items() {
 #[test]
 fn language_untyped_integers_are_i32() {
     let error = rejected("pub fn run() -> i64 { let f = (1..=20).fold(1, |a, b| a * b); println!(\"{}\", f); 0 } run()");
-    assert!(error.contains("attempt to multiply with overflow"), "{error}");
+    assert!(
+        error.contains("attempt to multiply with overflow"),
+        "{error}"
+    );
     let error = rejected("pub fn run() -> i64 { let mut x = 2147483600; for _ in 0..100 { x += 1; } println!(\"{}\", x); 0 } run()");
     assert!(error.contains("attempt to add with overflow"), "{error}");
     // A literal an `i64` binds is an `i64`, before or after the arithmetic.
@@ -6739,16 +6813,46 @@ fn language_every_accepted_float_method_runs() {
             (format!("{name}()"), expected)
         })
         .collect();
-    calls.push(("powi(3)".into(), Box::new(|x: f64| format!("{:?}", x.powi(3)))));
-    calls.push(("atan2(1.5)".into(), Box::new(|x: f64| format!("{:?}", x.atan2(1.5)))));
-    calls.push(("hypot(1.5)".into(), Box::new(|x: f64| format!("{:?}", x.hypot(1.5)))));
-    calls.push(("log(2.0)".into(), Box::new(|x: f64| format!("{:?}", x.log(2.0)))));
-    calls.push(("powf(0.5)".into(), Box::new(|x: f64| format!("{:?}", x.powf(0.5)))));
-    calls.push(("min(1.0)".into(), Box::new(|x: f64| format!("{:?}", x.min(1.0)))));
-    calls.push(("max(1.0)".into(), Box::new(|x: f64| format!("{:?}", x.max(1.0)))));
-    calls.push(("clamp(-1.0, 1.0)".into(), Box::new(|x: f64| format!("{:?}", x.clamp(-1.0, 1.0)))));
-    calls.push(("partial_cmp(&1.0)".into(), Box::new(|x: f64| format!("{:?}", x.partial_cmp(&1.0)))));
-    calls.push(("to_string()".into(), Box::new(|x: f64| format!("{:?}", x.to_string()))));
+    calls.push((
+        "powi(3)".into(),
+        Box::new(|x: f64| format!("{:?}", x.powi(3))),
+    ));
+    calls.push((
+        "atan2(1.5)".into(),
+        Box::new(|x: f64| format!("{:?}", x.atan2(1.5))),
+    ));
+    calls.push((
+        "hypot(1.5)".into(),
+        Box::new(|x: f64| format!("{:?}", x.hypot(1.5))),
+    ));
+    calls.push((
+        "log(2.0)".into(),
+        Box::new(|x: f64| format!("{:?}", x.log(2.0))),
+    ));
+    calls.push((
+        "powf(0.5)".into(),
+        Box::new(|x: f64| format!("{:?}", x.powf(0.5))),
+    ));
+    calls.push((
+        "min(1.0)".into(),
+        Box::new(|x: f64| format!("{:?}", x.min(1.0))),
+    ));
+    calls.push((
+        "max(1.0)".into(),
+        Box::new(|x: f64| format!("{:?}", x.max(1.0))),
+    ));
+    calls.push((
+        "clamp(-1.0, 1.0)".into(),
+        Box::new(|x: f64| format!("{:?}", x.clamp(-1.0, 1.0))),
+    ));
+    calls.push((
+        "partial_cmp(&1.0)".into(),
+        Box::new(|x: f64| format!("{:?}", x.partial_cmp(&1.0))),
+    ));
+    calls.push((
+        "to_string()".into(),
+        Box::new(|x: f64| format!("{:?}", x.to_string())),
+    ));
     calls.push(("clone()".into(), Box::new(|x: f64| format!("{:?}", x))));
     for (call, expected) in &calls {
         for x in [2.25, -2.5, 0.5, -0.5, 3.0] {
@@ -6938,7 +7042,17 @@ fn language_format_strings_are_checked_as_rustc_does() {
         )
         .unwrap_or_else(|error| panic!("{error}"));
     let (width, y) = (6usize, 2.5);
-    assert_eq!(value, format!("{:0digits$}|{y:>width$}|{:>1$}|{:.*}", 1, 7, 3, y, digits = 5));
+    assert_eq!(
+        value,
+        format!(
+            "{:0digits$}|{y:>width$}|{:>1$}|{:.*}",
+            1,
+            7,
+            3,
+            y,
+            digits = 5
+        )
+    );
     for source in [
         r#"format!("{} {}", 1)"#,
         r#"format!("{}", 1, 2)"#,
@@ -6954,7 +7068,9 @@ fn language_format_strings_are_checked_as_rustc_does() {
         r#"format!("{")"#,
         r#"format!("}")"#,
     ] {
-        rejected(&format!("pub fn run() -> i64 {{ let s = {source}; 0 }} run()"));
+        rejected(&format!(
+            "pub fn run() -> i64 {{ let s = {source}; 0 }} run()"
+        ));
     }
 }
 
@@ -6977,7 +7093,10 @@ fn language_builtin_functions_as_values() {
         "#,
         )
         .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(value, r#"["a", "b"] [2.0, 3.0] [1, 0] [Named("a"), Named("b")] ['A', 'B']"#);
+    assert_eq!(
+        value,
+        r#"["a", "b"] [2.0, 3.0] [1, 0] [Named("a"), Named("b")] ['A', 'B']"#
+    );
 }
 
 #[test]
@@ -7298,7 +7417,10 @@ fn language_patterns_on_mut_places_write_their_bindings_back() {
         }
         run()
     "#);
-    assert_eq!(value, 8 * 1000000 + 1 * 10000 + 2 * 1000 + 12 * 10 + 3 + 4 * 100 + 2 * 100000);
+    assert_eq!(
+        value,
+        8 * 1000000 + 1 * 10000 + 2 * 1000 + 12 * 10 + 3 + 4 * 100 + 2 * 100000
+    );
 }
 
 #[test]
@@ -7493,7 +7615,10 @@ fn language_let_chains() {
         }
         run()
     "#);
-    assert_eq!(value, 2 * 1000000 + 10 * 10000 + 0 + 300 + 7 * 10 + 4 * 1000 + 7 * 100000);
+    assert_eq!(
+        value,
+        2 * 1000000 + 10 * 10000 + 0 + 300 + 7 * 10 + 4 * 1000 + 7 * 100000
+    );
     let error = rejected("pub fn run() -> i64 { let a = Some(1); if let Some(x) = a && x > 0 || true { 1 } else { 0 } } run()");
     assert!(error.contains("||"), "{error}");
 }
@@ -7531,13 +7656,17 @@ fn language_get_mut_and_iter_mut_find_lend_an_element() {
         }
         run()
     "#);
-    assert_eq!(value, 40 * 1000000 + 1 * 100000 + 1 * 10000 - 1 + 6 * 1000 + 21 * 10 + 31 - 31);
+    assert_eq!(
+        value,
+        40 * 1000000 + 1 * 100000 + 1 * 10000 - 1 + 6 * 1000 + 21 * 10 + 31 - 31
+    );
 }
 
 #[test]
 fn language_euclidean_division_of_floats_and_integers() {
     let value = Engine::new()
-        .eval::<f64>(r#"
+        .eval::<f64>(
+            r#"
             pub fn run() -> f64 {
                 let a: f32 = -7.5;
                 let b: f64 = 7.5;
@@ -7548,11 +7677,14 @@ fn language_euclidean_division_of_floats_and_integers() {
                     + f64::rem_euclid(b, 2.0) * 1000000.0
             }
             run()
-        "#)
+        "#,
+        )
         .unwrap_or_else(|error| panic!("{error}"));
     let (a, b, i) = (-7.5_f32, 7.5_f64, -7_i64);
-    let expected = f64::from(a.rem_euclid(2.0)) * 1000.0 + f64::from(a.div_euclid(2.0)) * 100.0
-        + b.rem_euclid(-2.0) * 10.0 + b.div_euclid(-2.0)
+    let expected = f64::from(a.rem_euclid(2.0)) * 1000.0
+        + f64::from(a.div_euclid(2.0)) * 100.0
+        + b.rem_euclid(-2.0) * 10.0
+        + b.div_euclid(-2.0)
         + (i.rem_euclid(3) * 10000 + i.div_euclid(3) * 100000) as f64
         + f64::rem_euclid(b, 2.0) * 1000000.0;
     assert_eq!(value, expected);
@@ -7561,7 +7693,10 @@ fn language_euclidean_division_of_floats_and_integers() {
 #[test]
 fn language_a_call_of_no_function_names_it() {
     let error = rejected("fn f() -> i64 { centre(1) } pub fn run() -> i64 { f() } run()");
-    assert!(error.contains("nknown function") && error.contains("centre"), "{error}");
+    assert!(
+        error.contains("nknown function") && error.contains("centre"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -7607,7 +7742,10 @@ fn language_fieldless_enum_casts() {
         }
         run()
     "#);
-    assert_eq!(value, 0 + 10 * 100 + 11 * 10000 + -3 * 1000000 + 254 * 100000000);
+    assert_eq!(
+        value,
+        0 + 10 * 100 + 11 * 10000 + -3 * 1000000 + 254 * 100000000
+    );
     rejected("enum E { A(i64) } pub fn run() -> i64 { E::A(1) as i64 } run()");
 }
 
@@ -8071,7 +8209,6 @@ fn language_phantom_data_is_a_field_of_no_value() {
     assert_eq!(value, 7);
 }
 
-
 #[test]
 fn language_a_map_entry_held_in_a_local_writes_the_map() {
     let value = run(r#"
@@ -8187,9 +8324,8 @@ fn language_one_variant_enum_let_is_irrefutable() {
         run()
     "#);
     assert_eq!(value, 11115);
-    let error = rejected(
-        "enum Two { A(i64), B } pub fn run() -> i64 { let Two::A(x) = Two::B; x } run()",
-    );
+    let error =
+        rejected("enum Two { A(i64), B } pub fn run() -> i64 { let Two::A(x) = Two::B; x } run()");
     assert!(error.contains("refutable pattern"), "{error}");
 }
 
@@ -8257,7 +8393,11 @@ fn rejected_at(source: &str) -> (String, Option<usize>, Option<usize>) {
         .compile(source)
         .expect_err("Rust rejects this program");
     let position = error.position();
-    (error.err_type().to_string(), position.line(), position.position())
+    (
+        error.err_type().to_string(),
+        position.line(),
+        position.position(),
+    )
 }
 
 #[test]
@@ -8280,7 +8420,10 @@ fn language_unknown_call_bound_to_a_local_is_an_error_at_its_name() {
 fn language_method_on_an_unknown_call_is_an_error_at_its_name() {
     let (error, line, column) =
         rejected_at("pub fn run() -> i64 { nonexistent_widget(1).scale(2.0); 0 }");
-    assert!(error.contains("Unknown function 'nonexistent_widget'"), "{error}");
+    assert!(
+        error.contains("Unknown function 'nonexistent_widget'"),
+        "{error}"
+    );
     assert!(!error.contains("non-nominal"), "{error}");
     assert_eq!((line, column), (Some(1), Some(23)), "{error}");
 }
@@ -8389,7 +8532,9 @@ fn run_guarded(source: &str) -> i64 {
         .bind("drops::guard", |_| Ok(crate::Dynamic::from(Guard::new())))
         .unwrap();
     runtime
-        .bind("drops::alive", |_| Ok(crate::Dynamic::from(GUARDS.with(std::cell::Cell::get))))
+        .bind("drops::alive", |_| {
+            Ok(crate::Dynamic::from(GUARDS.with(std::cell::Cell::get)))
+        })
         .unwrap();
     let mut registry = crate::host::runtime::Registry::new();
     registry.install(runtime.finish()).unwrap();
@@ -8729,22 +8874,29 @@ fn language_rc_and_arc_are_shared_pointers() {
 
 #[test]
 fn language_pointer_kinds_do_not_mix() {
-    let error = rejected(r#"
+    let error = rejected(
+        r#"
         use std::sync::Arc;
         pub fn run() -> i64 {
             let shared: Arc<i64> = Box::new(1);
             *shared
         }
         run()
-    "#);
-    assert!(error.contains("expected 'Arc<i64>', found 'Box<"), "{error}");
-    let error = rejected(r#"
+    "#,
+    );
+    assert!(
+        error.contains("expected 'Arc<i64>', found 'Box<"),
+        "{error}"
+    );
+    let error = rejected(
+        r#"
         pub fn run() -> i64 {
             let shared = Arc::new(1);
             *shared
         }
         run()
-    "#);
+    "#,
+    );
     assert!(error.contains("Arc"), "{error}");
 }
 
@@ -8781,7 +8933,8 @@ fn language_collect_into_a_type_that_implements_from_iterator() {
 
 #[test]
 fn language_collect_into_a_type_checks_the_item() {
-    let error = rejected(r#"
+    let error = rejected(
+        r#"
         struct Total(i64);
         impl FromIterator<i64> for Total {
             fn from_iter<T: IntoIterator<Item = i64>>(iter: T) -> Self {
@@ -8793,7 +8946,8 @@ fn language_collect_into_a_type_checks_the_item() {
             total.0
         }
         run()
-    "#);
+    "#,
+    );
     assert!(error.contains("mismatch"), "{error}");
 }
 

@@ -10,10 +10,12 @@ use iced::{mouse, Length, Rectangle, Size};
 use rawr::{host, Dynamic, EvalAltResult};
 
 use super::lend::Frame;
-use super::{record, ChildDraw, LengthSize, Operation, Overlay, Shell, State, Tag, Tree, TreeState};
+use super::{
+    record, ChildDraw, LengthSize, Operation, Overlay, Shell, State, Tag, Tree, TreeState,
+};
 use crate::renderer::Command;
-use crate::widget::builtin::{arity, number, pixels, runtime_error, take};
 use crate::widget as widgets;
+use crate::widget::builtin::{arity, number, pixels, runtime_error, take};
 
 pub(super) fn bind(builder: &mut host::runtime::Builder) {
     bind_tree(builder);
@@ -29,7 +31,9 @@ fn floats<const N: usize>(value: &Dynamic, path: &str) -> Result<[f32; N], Box<E
         .ok_or_else(|| runtime_error(format!("`{path}` expects an array of {N} numbers")))?;
     let mut floats = [0.0; N];
     if array.len() != N {
-        return Err(runtime_error(format!("`{path}` expects an array of {N} numbers")));
+        return Err(runtime_error(format!(
+            "`{path}` expects an array of {N} numbers"
+        )));
     }
     for (float, value) in floats.iter_mut().zip(array.iter()) {
         *float = number(value, path)? as f32;
@@ -57,12 +61,15 @@ fn bind_mesh(builder: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain color::pack");
     builder
-        .bind("iced::advanced::graphics::mesh::SolidVertex2D::default", |_| {
-            Ok(Dynamic::from(SolidVertex2D {
-                position: [0.0; 2],
-                color: color::pack(iced::Color::TRANSPARENT),
-            }))
-        })
+        .bind(
+            "iced::advanced::graphics::mesh::SolidVertex2D::default",
+            |_| {
+                Ok(Dynamic::from(SolidVertex2D {
+                    position: [0.0; 2],
+                    color: color::pack(iced::Color::TRANSPARENT),
+                }))
+            },
+        )
         .expect("the iced facade must retain SolidVertex2D::default");
     for name in ["position", "color"] {
         let path = format!("iced::advanced::graphics::mesh::SolidVertex2D::{name}");
@@ -111,7 +118,12 @@ fn bind_mesh(builder: &mut host::runtime::Builder) {
                 let [value] = operands else {
                     return Ok(match name {
                         "vertices" => Dynamic::from(
-                            indexed.vertices.iter().copied().map(Dynamic::from).collect::<rawr::Array>(),
+                            indexed
+                                .vertices
+                                .iter()
+                                .copied()
+                                .map(Dynamic::from)
+                                .collect::<rawr::Array>(),
                         ),
                         _ => Dynamic::from(
                             indexed
@@ -141,7 +153,9 @@ fn bind_mesh(builder: &mut host::runtime::Builder) {
                                     .as_int()
                                     .ok()
                                     .and_then(|index| u32::try_from(index).ok())
-                                    .ok_or_else(|| runtime_error(format!("`{path}` expects `u32` indices")))
+                                    .ok_or_else(|| {
+                                        runtime_error(format!("`{path}` expects `u32` indices"))
+                                    })
                             })
                             .collect::<Result<_, _>>()?;
                     }
@@ -151,16 +165,19 @@ fn bind_mesh(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain every Indexed field");
     }
     builder
-        .bind("iced::advanced::graphics::mesh::Mesh::Solid::default", |_| {
-            Ok(Dynamic::from(super::SolidMesh {
-                buffers: Indexed {
-                    vertices: Vec::new(),
-                    indices: Vec::new(),
-                },
-                transformation: iced::Transformation::IDENTITY,
-                clip_bounds: Rectangle::INFINITE,
-            }))
-        })
+        .bind(
+            "iced::advanced::graphics::mesh::Mesh::Solid::default",
+            |_| {
+                Ok(Dynamic::from(super::SolidMesh {
+                    buffers: Indexed {
+                        vertices: Vec::new(),
+                        indices: Vec::new(),
+                    },
+                    transformation: iced::Transformation::IDENTITY,
+                    clip_bounds: Rectangle::INFINITE,
+                }))
+            },
+        )
         .expect("the iced facade must retain Mesh::Solid");
     for name in ["buffers", "transformation", "clip_bounds"] {
         let path = format!("iced::advanced::graphics::mesh::Mesh::Solid::{name}");
@@ -187,31 +204,37 @@ fn bind_mesh(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain every Mesh::Solid field");
     }
     builder
-        .bind("iced::advanced::graphics::mesh::Mesh::Solid::into", |args| {
-            let [solid] = args else {
-                return Err(arity("Mesh::Solid", 1, args.len()));
-            };
-            let super::SolidMesh {
-                buffers,
-                transformation,
-                clip_bounds,
-            } = read(solid, "Mesh::Solid")?;
-            Ok(Dynamic::from(Mesh::Solid {
-                buffers,
-                transformation,
-                clip_bounds,
-            }))
-        })
+        .bind(
+            "iced::advanced::graphics::mesh::Mesh::Solid::into",
+            |args| {
+                let [solid] = args else {
+                    return Err(arity("Mesh::Solid", 1, args.len()));
+                };
+                let super::SolidMesh {
+                    buffers,
+                    transformation,
+                    clip_bounds,
+                } = read(solid, "Mesh::Solid")?;
+                Ok(Dynamic::from(Mesh::Solid {
+                    buffers,
+                    transformation,
+                    clip_bounds,
+                }))
+            },
+        )
         .expect("the iced facade must retain Mesh::Solid::into");
     builder
         .bind("iced::widget::Renderer::draw_mesh", |args| {
             let [_, mesh] = args else {
                 return Err(arity("Renderer::draw_mesh", 2, args.len()));
             };
-            let mesh = mesh.take().try_cast_result::<Mesh>().map_err(|_| {
-                runtime_error("`Renderer::draw_mesh` expects a `Mesh`".into())
+            let mesh = mesh
+                .take()
+                .try_cast_result::<Mesh>()
+                .map_err(|_| runtime_error("`Renderer::draw_mesh` expects a `Mesh`".into()))?;
+            record("Renderer::draw_mesh", |effects| {
+                effects.commands.push(Command::Mesh(mesh))
             })?;
-            record("Renderer::draw_mesh", |effects| effects.commands.push(Command::Mesh(mesh)))?;
             Ok(Dynamic::UNIT)
         })
         .expect("the iced facade must retain Renderer::draw_mesh");
@@ -219,13 +242,16 @@ fn bind_mesh(builder: &mut host::runtime::Builder) {
 
 /// A value of `T` read in place.
 fn read<T: Clone + 'static>(value: &Dynamic, path: &str) -> Result<T, Box<EvalAltResult>> {
-    value.read_lock::<T>().map(|value| value.clone()).ok_or_else(|| {
-        runtime_error(format!(
-            "`{path}` received `{}`, expected `{}`",
-            value.type_name(),
-            std::any::type_name::<T>()
-        ))
-    })
+    value
+        .read_lock::<T>()
+        .map(|value| value.clone())
+        .ok_or_else(|| {
+            runtime_error(format!(
+                "`{path}` received `{}`, expected `{}`",
+                value.type_name(),
+                std::any::type_name::<T>()
+            ))
+        })
 }
 
 fn lent<T>(result: Result<T, super::lend::Error>) -> Result<T, Box<EvalAltResult>> {
@@ -255,7 +281,9 @@ fn bind_tree(builder: &mut host::runtime::Builder) {
                             }
                             _ => {
                                 let translation = read::<iced::Vector>(value, &path)?;
-                                lent(frame.tree_mut(&handle.path, |tree| tree.translation = translation))?;
+                                lent(frame.tree_mut(&handle.path, |tree| {
+                                    tree.translation = translation
+                                }))?;
                             }
                         }
                         Ok(Dynamic::from(handle))
@@ -281,12 +309,16 @@ fn bind_tree(builder: &mut host::runtime::Builder) {
         .expect("the iced facade must retain Tag::of");
     builder
         .bind("iced::advanced::widget::tree::Tag::of", |_| {
-            Err(runtime_error("`Tag::of` names its State's type, as `Tag::of::<State>()`".into()))
+            Err(runtime_error(
+                "`Tag::of` names its State's type, as `Tag::of::<State>()`".into(),
+            ))
         })
         .expect("the iced facade must retain Tag::of");
     builder
         .bind("iced::advanced::widget::tree::State::None", |_| {
-            Ok(Dynamic::from(State::Native(Arc::new(Mutex::new(Some(tree::State::None))))))
+            Ok(Dynamic::from(State::Native(Arc::new(Mutex::new(Some(
+                tree::State::None,
+            ))))))
         })
         .expect("the iced facade must retain State::None");
     builder
@@ -315,20 +347,25 @@ fn bind_tree(builder: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain Tree::state");
     builder
-        .bind("iced::advanced::widget::tree::Lent::__rawr_downcast", |args| {
-            let [receiver] = args else {
-                return Err(arity("downcast_ref", 1, args.len()));
-            };
-            let handle = read::<TreeState>(receiver, "downcast_ref")?;
-            let frame = lent(Frame::find(handle.nonce, "Tree"))?;
-            lent(frame.tree(&handle.path, |tree| match &tree.state {
-                tree::State::Some(state) => state
-                    .downcast_ref::<super::ScriptState>()
-                    .map(|state| state.value.clone()),
-                tree::State::None => None,
-            }))?
-            .ok_or_else(|| runtime_error("the Tree's state is not a script State".into()))
-        })
+        .bind(
+            "iced::advanced::widget::tree::Lent::__rawr_downcast",
+            |args| {
+                let [receiver] = args else {
+                    return Err(arity("downcast_ref", 1, args.len()));
+                };
+                let handle = read::<TreeState>(receiver, "downcast_ref")?;
+                let frame = lent(Frame::find(handle.nonce, "Tree"))?;
+                lent(frame.tree(&handle.path, |tree| {
+                    match &tree.state {
+                        tree::State::Some(state) => state
+                            .downcast_ref::<super::ScriptState>()
+                            .map(|state| state.value.clone()),
+                        tree::State::None => None,
+                    }
+                }))?
+                .ok_or_else(|| runtime_error("the Tree's state is not a script State".into()))
+            },
+        )
         .expect("the iced facade must retain downcast_ref");
     builder
         .bind("iced::advanced::widget::tree::Lent::__rawr_store", |args| {
@@ -338,12 +375,14 @@ fn bind_tree(builder: &mut host::runtime::Builder) {
             let handle = read::<TreeState>(receiver, "downcast_mut")?;
             let value = value.take();
             let frame = lent(Frame::find(handle.nonce, "Tree"))?;
-            lent(frame.tree_mut(&handle.path, |tree| match &mut tree.state {
-                tree::State::Some(state) => state
-                    .downcast_mut::<super::ScriptState>()
-                    .map(|state| state.value = value)
-                    .is_some(),
-                tree::State::None => false,
+            lent(frame.tree_mut(&handle.path, |tree| {
+                match &mut tree.state {
+                    tree::State::Some(state) => state
+                        .downcast_mut::<super::ScriptState>()
+                        .map(|state| state.value = value)
+                        .is_some(),
+                    tree::State::None => false,
+                }
             }))?
             .then_some(Dynamic::from(handle))
             .ok_or_else(|| runtime_error("the Tree's state is not a script State".into()))
@@ -376,7 +415,9 @@ fn bind_values(builder: &mut host::runtime::Builder) {
             })
             .expect("the iced facade must retain every Layout method");
     }
-    for name in ["min", "max", "loose", "shrink", "width", "height", "resolve"] {
+    for name in [
+        "min", "max", "loose", "shrink", "width", "height", "resolve",
+    ] {
         let path = format!("iced::advanced::layout::Limits::{name}");
         builder
             .bind(path.clone(), move |args| {
@@ -390,8 +431,12 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                     ("max", []) => Dynamic::from(limits.max),
                     ("loose", []) => Dynamic::from(limits.loose()),
                     ("shrink", [size]) => Dynamic::from(limits.shrink(read::<Size>(size, &path)?)),
-                    ("width", [length]) => Dynamic::from(limits.width(read::<Length>(length, &path)?)),
-                    ("height", [length]) => Dynamic::from(limits.height(read::<Length>(length, &path)?)),
+                    ("width", [length]) => {
+                        Dynamic::from(limits.width(read::<Length>(length, &path)?))
+                    }
+                    ("height", [length]) => {
+                        Dynamic::from(limits.height(read::<Length>(length, &path)?))
+                    }
                     ("resolve", [width, height, intrinsic]) => Dynamic::from(limits.resolve(
                         read::<Length>(width, &path)?,
                         read::<Length>(height, &path)?,
@@ -461,7 +506,9 @@ fn bind_values(builder: &mut host::runtime::Builder) {
     }
 
     builder
-        .bind("iced::Size::default", |_| Ok(Dynamic::from(Size::<f32>::default())))
+        .bind("iced::Size::default", |_| {
+            Ok(Dynamic::from(Size::<f32>::default()))
+        })
         .expect("the iced facade must retain Size::default");
     for name in ["width", "height"] {
         let path = format!("iced::advanced::layout::LengthSize::{name}");
@@ -472,7 +519,11 @@ fn bind_values(builder: &mut host::runtime::Builder) {
                 };
                 let LengthSize(mut size) = read::<LengthSize>(receiver, &path)?;
                 let [value] = operands else {
-                    return Ok(Dynamic::from(if name == "width" { size.width } else { size.height }));
+                    return Ok(Dynamic::from(if name == "width" {
+                        size.width
+                    } else {
+                        size.height
+                    }));
                 };
                 let length = read::<Length>(value, &path)?;
                 if name == "width" {
@@ -485,7 +536,12 @@ fn bind_values(builder: &mut host::runtime::Builder) {
             .expect("the iced facade must retain every Size<Length> field");
     }
 
-    for name in ["request_redraw", "capture_event", "is_event_captured", "publish"] {
+    for name in [
+        "request_redraw",
+        "capture_event",
+        "is_event_captured",
+        "publish",
+    ] {
         let path = format!("iced::advanced::Shell::{name}");
         builder
             .bind(path.clone(), move |args| {
@@ -553,7 +609,9 @@ fn bind_values(builder: &mut host::runtime::Builder) {
         })
         .expect("the iced facade must retain Transformation::mul");
     builder
-        .bind("iced::Rectangle::INFINITE", |_| Ok(Dynamic::from(Rectangle::INFINITE)))
+        .bind("iced::Rectangle::INFINITE", |_| {
+            Ok(Dynamic::from(Rectangle::INFINITE))
+        })
         .expect("the iced facade must retain Rectangle::INFINITE");
     builder
         .bind("iced::Rectangle::expand", |args| {
@@ -601,7 +659,12 @@ fn bind_renderer(builder: &mut host::runtime::Builder) {
             Ok(Dynamic::UNIT)
         })
         .expect("the iced facade must retain Renderer::with_translation's start");
-    for name in ["start_layer", "end_layer", "start_transformation", "end_transformation"] {
+    for name in [
+        "start_layer",
+        "end_layer",
+        "start_transformation",
+        "end_transformation",
+    ] {
         let path = format!("iced::widget::Renderer::{name}");
         builder
             .bind(path.clone(), move |args| {
@@ -692,7 +755,9 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
                 .children()
                 .with(index, |child| child.state())
                 .map_err(child_error)?;
-            Ok(Dynamic::from(State::Native(Arc::new(Mutex::new(Some(state))))))
+            Ok(Dynamic::from(State::Native(Arc::new(Mutex::new(Some(
+                state,
+            ))))))
         })
         .expect("the iced facade must retain Element::state");
     builder
@@ -703,9 +768,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let handle = tree(handle, "Element::diff")?;
             let (frame, index) = child(element, "Element::diff")?;
             lent(frame.tree_mut(&handle.path, |subtree| {
-                frame
-                    .children()
-                    .with(index, |child| child.diff(subtree))
+                frame.children().with(index, |child| child.diff(subtree))
             }))?
             .map_err(child_error)?;
             Ok(Dynamic::UNIT)
@@ -746,7 +809,9 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
                 viewport: read(viewport, path)?,
             };
             record(path, |effects| {
-                effects.commands.push(Command::Child(effects.children.len()));
+                effects
+                    .commands
+                    .push(Command::Child(effects.children.len()));
                 effects.children.push(draw);
             })?;
             Ok(Dynamic::UNIT)
@@ -768,9 +833,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let shell = lent(frame.shell())?;
             lent(frame.tree_mut(&handle.path, |subtree| {
                 frame.children().with(index, |child| {
-                    child
-                        
-                        .update(subtree, &event, layout, cursor, renderer, shell, &viewport);
+                    child.update(subtree, &event, layout, cursor, renderer, shell, &viewport);
                 })
             }))?
             .map_err(child_error)?;
@@ -791,9 +854,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let renderer = lent(frame.renderer())?;
             let interaction = lent(frame.tree(&handle.path, |subtree| {
                 frame.children().with(index, |child| {
-                    child
-                        
-                        .mouse_interaction(subtree, layout, cursor, &viewport, renderer)
+                    child.mouse_interaction(subtree, layout, cursor, &viewport, renderer)
                 })
             }))?
             .map_err(child_error)?;
@@ -811,7 +872,9 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let viewport = read::<Rectangle>(viewport, path)?;
             let operation = read::<Operation>(operation, path)?;
             if operation.nonce != handle.nonce {
-                return Err(runtime_error(format!("`{path}` received an operation lent to another call")));
+                return Err(runtime_error(format!(
+                    "`{path}` received an operation lent to another call"
+                )));
             }
             let (frame, index) = child(element, path)?;
             let renderer = lent(frame.renderer())?;
@@ -839,7 +902,11 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
                 layout: read(layout, path)?,
                 translation: read(translation, path)?,
             };
-            Ok(Dynamic::from(vec![Dynamic::from(overlay)].into_iter().collect::<rawr::Array>()))
+            Ok(Dynamic::from(
+                vec![Dynamic::from(overlay)]
+                    .into_iter()
+                    .collect::<rawr::Array>(),
+            ))
         })
         .expect("the iced facade must retain Element::overlay");
     builder
@@ -849,9 +916,9 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             };
             let child = take::<widgets::Value>(element, "iced::Element")?;
             let color = read::<iced::Color>(color, "Element::explain")?;
-            let witness = child.witness().ok_or_else(|| {
-                runtime_error("`explain` received an unattested element".into())
-            })?;
+            let witness = child
+                .witness()
+                .ok_or_else(|| runtime_error("`explain` received an unattested element".into()))?;
             let explained = widgets::Value::from_transform(
                 Explain {
                     identity: widgets::Identity::unique(),
@@ -875,7 +942,10 @@ struct Explain {
 }
 
 impl widgets::Descriptor for Explain {
-    fn lower(&self, context: &widgets::Context<'_>) -> iced::Element<'static, crate::runtime::Message> {
+    fn lower(
+        &self,
+        context: &widgets::Context<'_>,
+    ) -> iced::Element<'static, crate::runtime::Message> {
         iced::widget::Widget::explain(self.child.lower(context), self.color).boxed()
     }
 

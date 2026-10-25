@@ -610,7 +610,11 @@ fn a_project_keeps_only_its_newest_unrooted_units_of_a_kind() {
     }
     assert_eq!(executions.load(Ordering::Relaxed), 6, "the newest four hit");
     evaluate(&recipes[0]);
-    assert_eq!(executions.load(Ordering::Relaxed), 7, "the oldest executes again");
+    assert_eq!(
+        executions.load(Ordering::Relaxed),
+        7,
+        "the oldest executes again"
+    );
     fs::remove_dir_all(root).expect("the excess fixture retires");
 }
 
@@ -2984,7 +2988,11 @@ fn publication_failure_preserves_its_reservation_for_recovery() {
         retry_executions.fetch_add(1, Ordering::Relaxed);
         Ok(Artifact(b"unpublished".to_vec().into_boxed_slice()))
     });
-    assert!(matches!(retried, Err(Error::Shape(_))), "{:?}", retried.err());
+    assert!(
+        matches!(retried, Err(Error::Shape(_))),
+        "{:?}",
+        retried.err()
+    );
     // The retry's plan checks its own allocation's placement, not the whole
     // store: it may execute once more, then refuses before publishing.
     assert!(
@@ -3125,13 +3133,8 @@ fn different_key_mutation_recovers_one_dead_foreign_installation_reservation() {
         &limits,
     )
     .expect("project A context seals");
-    let second = Context::capture(
-        &root.join("project-b"),
-        environment,
-        "test-target",
-        &limits,
-    )
-    .expect("project B context seals");
+    let second = Context::capture(&root.join("project-b"), environment, "test-target", &limits)
+        .expect("project B context seals");
     let first_store = first.open_store().expect("project A store opens");
     let abandoned = first
         .direct::<Artifact>(b"abandoned-foreign", 4_096)

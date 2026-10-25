@@ -19,10 +19,8 @@ struct Sandbox {
 impl Sandbox {
     fn new(label: &str) -> Self {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "rawr-base-{label}-{}-{id}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("rawr-base-{label}-{}-{id}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(path.join("bin")).unwrap();
         fs::create_dir_all(path.join("work")).unwrap();
@@ -107,7 +105,11 @@ fn assert_success(output: &Output) {
 }
 
 fn tree(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
-    fn visit(root: &Path, directory: &Path, files: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+    fn visit(
+        root: &Path,
+        directory: &Path,
+        files: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>,
+    ) {
         for entry in fs::read_dir(directory).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
@@ -125,7 +127,8 @@ fn tree(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
     files
 }
 
-const FAKE: &str = "format = 1\nname = \"rawr-fake\"\ncrates = [\"fakecrate\"]\ncommands = [\"fly\"]";
+const FAKE: &str =
+    "format = 1\nname = \"rawr-fake\"\ncrates = [\"fakecrate\"]\ncommands = [\"fly\"]";
 
 #[test]
 fn rawr_runs_the_cart_with_no_build_and_leaves_its_directory_as_it_was() {
@@ -231,7 +234,9 @@ fn a_program_using_iced_without_rawr_iced_says_how_to_install_it() {
         assert_eq!(output.status.code(), Some(1));
         let text = stderr(&output);
         assert!(
-            text.contains("this program uses `iced`, which rawr-iced serves, and it is not installed"),
+            text.contains(
+                "this program uses `iced`, which rawr-iced serves, and it is not installed"
+            ),
             "{text}"
         );
         assert!(
@@ -276,7 +281,11 @@ fn a_new_crate_runs_on_the_base() {
     // A new crate refuses to overwrite one.
     let again = sandbox.rawr(&["new", "hello"]);
     assert_eq!(again.status.code(), Some(1));
-    assert!(stderr(&again).contains("refusing non-empty project target"), "{}", stderr(&again));
+    assert!(
+        stderr(&again).contains("refusing non-empty project target"),
+        "{}",
+        stderr(&again)
+    );
 }
 
 /// A template comes from the installed binary whose manifest offers it,
@@ -305,7 +314,11 @@ fn a_template_is_written_by_the_binary_offering_it() {
     assert_eq!(unknown.status.code(), Some(2));
     assert!(stderr(&unknown).contains("no installed binary offers a template named `nothing`"));
     assert_success(&help);
-    assert!(stdout(&help).contains("shapes       from rawr-shapes"), "{}", stdout(&help));
+    assert!(
+        stdout(&help).contains("shapes       from rawr-shapes"),
+        "{}",
+        stdout(&help)
+    );
     assert!(!sandbox.work().join("app").exists());
 }
 
@@ -390,11 +403,20 @@ fn rawr_says_how_it_loaded_a_program_when_asked() {
     let second = sandbox.rawr_verbose(&["check", "app.rs"]);
 
     let first = stderr(&first);
-    assert!(first.contains("rawr: parsed 1 sources, read 0 from parse cells"), "{first}");
+    assert!(
+        first.contains("rawr: parsed 1 sources, read 0 from parse cells"),
+        "{first}"
+    );
     assert!(first.contains("rawr: wrote 1 parse cells"), "{first}");
-    assert!(first.contains("rawr-fake serves this program; handing it over"), "{first}");
+    assert!(
+        first.contains("rawr-fake serves this program; handing it over"),
+        "{first}"
+    );
     let second = stderr(&second);
-    assert!(second.contains("rawr: parsed 0 sources, read 1 from parse cells"), "{second}");
+    assert!(
+        second.contains("rawr: parsed 0 sources, read 1 from parse cells"),
+        "{second}"
+    );
 }
 
 #[test]
@@ -415,7 +437,10 @@ fn a_program_two_binaries_claim_is_a_diagnostic() {
 
     assert_eq!(output.status.code(), Some(1));
     let text = stderr(&output);
-    assert!(text.contains("this program uses `fakecrate` and `othercrate`"), "{text}");
+    assert!(
+        text.contains("this program uses `fakecrate` and `othercrate`"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -426,7 +451,9 @@ fn help_lists_what_installed_binaries_add() {
     let with = sandbox.rawr(&["--help"]);
 
     assert_success(&alone);
-    assert!(stdout(&alone).contains("rawr-iced is not installed. It serves programs that use `iced`. Install it with:"));
+    assert!(stdout(&alone).contains(
+        "rawr-iced is not installed. It serves programs that use `iced`. Install it with:"
+    ));
     assert!(stdout(&alone).contains("rawr new <path>"));
     assert!(
         stdout(&with).contains("From rawr-fake"),
@@ -463,7 +490,11 @@ fn inline_modules_and_cfg_test_items_build_as_rustc_does() {
     let sandbox = Sandbox::new("inline-modules");
     let project = sandbox.work().join("shapes");
     fs::create_dir_all(project.join("src")).unwrap();
-    fs::write(project.join("Cargo.toml"), "[package]\nname = \"shapes\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
+    fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"shapes\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
     fs::write(
         project.join("src/main.rs"),
         r#"// rawr
@@ -522,7 +553,11 @@ fn compile_time_macros_read_the_project_as_rustc_does() {
     let project = sandbox.work().join("macros");
     fs::create_dir_all(project.join("src")).unwrap();
     fs::write(project.join("src/greeting.txt"), "hello\n").unwrap();
-    fs::write(project.join("Cargo.toml"), "[package]\nname = \"macros\"\nversion = \"0.1.0\"\nedition = \"2024\"\n").unwrap();
+    fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"macros\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
     fs::write(
         project.join("src/main.rs"),
         r#"// rawr
@@ -570,12 +605,23 @@ fn a_rawr_file_or_rawr_toml_says_how_to_convert_it() {
 
     assert_eq!(file.status.code(), Some(1));
     let text = stderr(&file);
-    assert!(text.contains("is a `.rawr` file. Rawr reads `.rs` files now."), "{text}");
-    assert!(text.contains("Rename the file to `.rs` and put `// rawr` on its first line."), "{text}");
+    assert!(
+        text.contains("is a `.rawr` file. Rawr reads `.rs` files now."),
+        "{text}"
+    );
+    assert!(
+        text.contains("Rename the file to `.rs` and put `// rawr` on its first line."),
+        "{text}"
+    );
     assert_eq!(manifest.status.code(), Some(1));
     let text = stderr(&manifest);
     assert!(text.contains("rawr.toml` is no longer read."), "{text}");
-    assert!(text.contains("Put the project in a Cargo crate whose `src/main.rs` starts with `// rawr`."), "{text}");
+    assert!(
+        text.contains(
+            "Put the project in a Cargo crate whose `src/main.rs` starts with `// rawr`."
+        ),
+        "{text}"
+    );
     assert_eq!(directory.status.code(), Some(1));
     let text = stderr(&directory);
     assert!(text.contains("no Rawr project found"), "{text}");

@@ -751,7 +751,9 @@ fn copy_scalar(ty: &host::type_ref::Type, facade: &host::facade::Definition) -> 
     match ty.shape() {
         host::type_ref::Shape::Imported { identity, .. } => facade.types().any(|definition| {
             definition.identity().imported() == Some(identity)
-                && definition.capabilities().contains(crate::capability::Kind::Copy)
+                && definition
+                    .capabilities()
+                    .contains(crate::capability::Kind::Copy)
         }),
         host::type_ref::Shape::Unit => true,
         host::type_ref::Shape::Builtin(builtin) => matches!(
@@ -904,7 +906,12 @@ fn build(
         .map(|seed| {
             seed.aliases()
                 .iter()
-                .filter_map(|(alias, _)| alias.to_string().strip_prefix(&prefix).map(Box::<str>::from))
+                .filter_map(|(alias, _)| {
+                    alias
+                        .to_string()
+                        .strip_prefix(&prefix)
+                        .map(Box::<str>::from)
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -1230,7 +1237,9 @@ fn ty(
                 .map(|argument| ty(facade, argument, profile, installed))
                 .collect::<Result<Vec<_>, _>>()?
                 .into_boxed_slice();
-            if let Some(ty) = profile.semantic_type(facade, installed, identity, arguments.clone())? {
+            if let Some(ty) =
+                profile.semantic_type(facade, installed, identity, arguments.clone())?
+            {
                 return Ok(ty);
             }
             host::type_ref::Type::imported_boxed(
@@ -1248,9 +1257,10 @@ fn ty(
         facade::Type::Option(element) => {
             host::type_ref::Type::option(ty(facade, element, profile, installed)?)
         }
-        facade::Type::Result(ok, err) => {
-            host::type_ref::Type::result(ty(facade, ok, profile, installed)?, ty(facade, err, profile, installed)?)
-        }
+        facade::Type::Result(ok, err) => host::type_ref::Type::result(
+            ty(facade, ok, profile, installed)?,
+            ty(facade, err, profile, installed)?,
+        ),
         facade::Type::Array(element) => {
             host::type_ref::Type::slice(ty(facade, element, profile, installed)?)
         }

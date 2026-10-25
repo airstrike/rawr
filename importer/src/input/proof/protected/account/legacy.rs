@@ -168,14 +168,17 @@ fn replace_outputs(
     outputs: Vec<(&str, &str)>,
     token: impl Fn(&str) -> Option<String>,
 ) -> String {
-    let shared = outputs.iter().map(|(path, _)| *path).reduce(|shared, path| {
-        let length = shared
-            .bytes()
-            .zip(path.bytes())
-            .take_while(|(left, right)| left == right)
-            .count();
-        &shared[..shared.floor_char_boundary(length)]
-    });
+    let shared = outputs
+        .iter()
+        .map(|(path, _)| *path)
+        .reduce(|shared, path| {
+            let length = shared
+                .bytes()
+                .zip(path.bytes())
+                .take_while(|(left, right)| left == right)
+                .count();
+            &shared[..shared.floor_char_boundary(length)]
+        });
     if shared.is_none_or(|shared| !value.contains(shared)) {
         return value;
     }

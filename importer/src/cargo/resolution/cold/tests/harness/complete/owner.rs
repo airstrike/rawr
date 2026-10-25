@@ -1631,9 +1631,7 @@ fn api_adapter(limits: &Limits) -> crate::profile::trusted::Adapter<ApiProfile> 
 fn api_source(limits: &Limits) -> crate::surface::Snapshot {
     let mut source = crate::surface::Snapshot::builder(limits);
     source.entry("/fixture/Cargo.toml").unwrap();
-    source
-        .file("/fixture/main.rs", b"let value = 1;")
-        .unwrap();
+    source.file("/fixture/main.rs", b"let value = 1;").unwrap();
     source.seal().unwrap()
 }
 

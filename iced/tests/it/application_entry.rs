@@ -342,12 +342,18 @@ fn run_boots_from_a_hand_written_default() {
     );
     let application = engine.compile_application(written).unwrap();
     assert_eq!(application.entry().form(), Form::Run);
-    assert!(application.entry().boot().is_some(), "runs `Default::default`");
+    assert!(
+        application.entry().boot().is_some(),
+        "runs `Default::default`"
+    );
 
     let derived = format!(
         "#[derive(Default)]\n{}\npub fn main() -> iced::Result {{ iced::run(Counter::update, Counter::view) }}",
         declarations()
     );
     let application = engine.compile_application(derived).unwrap();
-    assert!(application.entry().boot().is_none(), "boots from the derived Default");
+    assert!(
+        application.entry().boot().is_none(),
+        "boots from the derived Default"
+    );
 }

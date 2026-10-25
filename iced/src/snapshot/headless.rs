@@ -179,7 +179,10 @@ impl Renderer {
     fn scale(&self, size: Size) -> f32 {
         self.canvas.map_or(SCALE, |canvas| {
             let largest = size.width.max(size.height);
-            canvas.scale.min(canvas.max_pixels as f32 / largest).max(1.0)
+            canvas
+                .scale
+                .min(canvas.max_pixels as f32 / largest)
+                .max(1.0)
         })
     }
 
@@ -204,7 +207,10 @@ impl Renderer {
     /// when the drawn interface asked to be redrawn, and the logical size.
     pub(super) fn frame(
         &mut self,
-        view: &mut dyn FnMut(Vec<runtime::Message>, bool) -> iced::Element<'static, runtime::Message>,
+        view: &mut dyn FnMut(
+            Vec<runtime::Message>,
+            bool,
+        ) -> iced::Element<'static, runtime::Message>,
         trees: &mut Trees,
         declared: Size,
         now: time::Instant,

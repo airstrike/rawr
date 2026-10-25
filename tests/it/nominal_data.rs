@@ -73,12 +73,7 @@ fn a_derived_default_runs_a_field_hand_written_default() {
         )
         .unwrap();
 
-    let values = engine
-        .eval_ast::<rawr::Array>(&ast)
-        .unwrap()
-        .into_iter()
-        .map(|value| value.as_int().unwrap())
-        .collect::<Vec<_>>();
+    let values = engine.eval_ast::<rawr::Array>(&ast).unwrap().into_iter().map(|value| value.as_int().unwrap()).collect::<Vec<_>>();
     assert_eq!(values, [5, 5, 5, 0, 5, 5]);
 }
 

@@ -121,7 +121,7 @@ fn read(path: &Path) -> Result<Option<String>, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CLAUDE_CONFIG, CODEX_CONFIG, Outcome, claude, codex};
+    use super::{claude, codex, Outcome, CLAUDE_CONFIG, CODEX_CONFIG};
     use std::fs;
     use std::path::PathBuf;
 
