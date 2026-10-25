@@ -551,10 +551,143 @@ pub trait Remote: crate::func::SendSync {
         let _ = value;
         None
     }
+
+    /// Whether `function`, a callable `from` made, runs here: the same
+    /// item by its stable key and signature, and for a lifted closure the
+    /// same closures in the function that writes it (D553.5).
+    fn rebinds(&self, function: &item::Value, from: &dyn Remote) -> bool {
+        let _ = (function, from);
+        false
+    }
+
+    /// The closures written by the function that writes `closure`, each by
+    /// its key and signature, which carries its captures' names and types.
+    /// `None` when this program can't say.
+    fn closures(&self, closure: &item::Key) -> Option<&[item::Value]> {
+        let _ = closure;
+        None
+    }
 }
 
 /// A program any thread may call into.
 pub type Program = Arc<dyn Remote>;
+
+thread_local! {
+    /// How many calls from native code into script code this thread is
+    /// inside (D553.1). A marked `main`'s own frame is not one.
+    static DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The latest generation offered to the thread that owns the program, as
+/// what admits it there. A newer offer replaces an older one.
+#[allow(clippy::type_complexity)]
+static OFFERED: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+/// Whether [`OFFERED`] holds an offer, read at each entry.
+static WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Whether native code has called into script code in this process.
+static ENTERED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether native code has called into script code in this process, so a
+/// generation [`offer`]ed can be admitted.
+#[must_use]
+pub fn called_from_native() -> bool {
+    ENTERED_ONCE.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Offer a committed generation to the thread that owns the program
+/// (D553.3): `admit` runs there at its next outermost entry from native
+/// code, so the whole call tree of each entry runs in one generation. The
+/// latest offer wins.
+pub fn offer(admit: impl FnOnce() + Send + 'static) {
+    let older = {
+        let mut offered = lock(&OFFERED);
+        WAITING.store(true, std::sync::atomic::Ordering::Release);
+        offered.replace(Box::new(admit))
+    };
+    drop(older);
+}
+
+/// Inside a call from native code into script code until it drops
+/// (D553.1). The outermost one on the thread that owns the program first
+/// admits the generation [`offer`]ed last.
+#[must_use]
+pub fn entry() -> Entry {
+    let depth = DEPTH.with(|depth| depth.replace(depth.get() + 1));
+    if depth == 0 && !ENTERED_ONCE.load(std::sync::atomic::Ordering::Relaxed) {
+        ENTERED_ONCE.store(true, std::sync::atomic::Ordering::Release);
+    }
+    if depth == 0 && WAITING.load(std::sync::atomic::Ordering::Acquire) && owns() {
+        let admit = {
+            let mut offered = lock(&OFFERED);
+            WAITING.store(false, std::sync::atomic::Ordering::Release);
+            offered.take()
+        };
+        // In a memoizing framework, such as Freya, nothing calls the new
+        // generation until something marks a scope dirty: an edit shows at
+        // the next event or state change, not at once. Showing it at once
+        // needs a framework API that marks every scope dirty and keeps its
+        // hooks, which Freya doesn't have (`Runner::reload` resets hooks).
+        // D553.7 logs this for a later revisit, such as an upstream
+        // proposal.
+        if let Some(admit) = admit {
+            admit();
+        }
+    }
+    Entry(())
+}
+
+/// The guard [`entry`] gives.
+pub struct Entry(());
+
+impl Drop for Entry {
+    fn drop(&mut self) {
+        DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+/// Whether this thread is outside every call from native code into script
+/// code: a marked `main`'s own frame runs here.
+#[must_use]
+pub fn outermost() -> bool {
+    DEPTH.with(Cell::get) == 0
+}
+
+/// A callable a marked `main`'s own frame gave native code. `main` never
+/// runs again to make another, so a generation it can't run in restarts
+/// the program (D553.5).
+pub struct Held {
+    function: item::Value,
+    program: Program,
+}
+
+/// Each callable a marked `main`'s own frame gave native code, while
+/// native code holds it.
+#[cfg(feature = "sync")]
+static HELD: Mutex<Vec<std::sync::Weak<Held>>> = Mutex::new(Vec::new());
+
+#[cfg(not(feature = "sync"))]
+thread_local! {
+    static HELD: RefCell<Vec<std::sync::Weak<Held>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn with_held<R>(work: impl FnOnce(&mut Vec<std::sync::Weak<Held>>) -> R) -> R {
+    #[cfg(feature = "sync")]
+    return work(&mut lock(&HELD));
+    #[cfg(not(feature = "sync"))]
+    return HELD.with_borrow_mut(work);
+}
+
+/// Each callable a marked `main`'s own frame gave native code that native
+/// code still holds, with the program that made it.
+pub fn held() -> Vec<(item::Value, Program)> {
+    with_held(|held| {
+        held.retain(|held| held.strong_count() > 0);
+        held.iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .map(|held| (held.function.clone(), held.program.clone()))
+            .collect()
+    })
+}
 
 /// The program the process runs, for script values native code holds
 /// (`rawr::Value`'s `Clone` and `Debug`) on any thread.
@@ -588,10 +721,16 @@ pub(crate) fn clone_value(value: &Dynamic) -> Option<RawrResultOf<Dynamic>> {
 /// captured, in an evaluation of its own on the calling thread (D490). The
 /// imported values a closure captured live on the owner thread, so a call
 /// on another thread can't reach them.
+///
+/// A call from native code is an entry (D553.1): the outermost one admits
+/// a newer generation, and the closure runs there when it rebinds by its
+/// stable identity. Otherwise it runs in the generation that made it.
 #[derive(Clone)]
 pub struct Callable {
     function: item::Value,
     program: Program,
+    /// Set when a marked `main`'s own frame made it.
+    _held: Option<Arc<Held>>,
 }
 
 impl std::fmt::Debug for Callable {
@@ -610,12 +749,39 @@ impl Callable {
         let program = with_host(|host| host.share())
             .flatten()
             .ok_or_else(|| failure("rawr: no program runs closures on this thread"))?;
-        Ok(Self { function, program })
+        let held = outermost().then(|| {
+            let held = Arc::new(Held {
+                function: function.bind(Vec::new()),
+                program: program.clone(),
+            });
+            with_held(|all| all.push(Arc::downgrade(&held)));
+            held
+        });
+        Ok(Self {
+            function,
+            program,
+            _held: held,
+        })
+    }
+
+    /// The program this call runs in: the generation current on this
+    /// thread when the closure rebinds there, and else the one that made it.
+    fn program(&self) -> Program {
+        match with_host(|host| host.share()).flatten() {
+            Some(current)
+                if !std::ptr::addr_eq(Arc::as_ptr(&current), Arc::as_ptr(&self.program))
+                    && current.rebinds(&self.function, self.program.as_ref()) =>
+            {
+                current
+            }
+            _ => self.program.clone(),
+        }
     }
 
     /// Call the closure with `arguments`.
     pub fn call(&self, arguments: &mut [Dynamic]) -> RawrResultOf<Dynamic> {
-        self.program.invoke(&self.function, arguments)
+        let _entry = entry();
+        self.program().invoke(&self.function, arguments)
     }
 
     /// Call the closure with `arguments`, each first checked against the
@@ -626,16 +792,18 @@ impl Callable {
         arguments: &mut [Dynamic],
         witnesses: &[Option<crate::host::runtime::Witness>],
     ) -> RawrResultOf<Dynamic> {
+        let _entry = entry();
+        let program = self.program();
         for (index, (argument, witness)) in arguments.iter().zip(witnesses).enumerate() {
             if let Some(witness) = witness {
-                self.program.validate(witness, argument).map_err(|reason| {
+                program.validate(witness, argument).map_err(|reason| {
                     failure(format!(
                         "rawr: native code gave a closure's argument {index} a value that is not its type: {reason}"
                     ))
                 })?;
             }
         }
-        self.call(arguments)
+        program.invoke(&self.function, arguments)
     }
 }
 

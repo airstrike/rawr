@@ -3,7 +3,7 @@
 //!
 //! The server names a file in [`EVENTS`]. The owners that know what
 //! happened append one JSON object per line to it: `building` (a stage and
-//! a percent), `running`, `swapped`, `restarting` (a reason), `failed`
+//! a percent), `running`, `queued`, `swapped`, `restarting` (a reason), `failed`
 //! (structured diagnostics) and `ended` (the exit status). The server reads
 //! the file as it grows and numbers each event. A file needs no descriptor
 //! passed across `exec` or kept from runners: Rust opens it close-on-exec,
@@ -77,6 +77,12 @@ pub fn running() {
 /// A save swapped into the running program, which kept its state.
 pub fn swapped() {
     emit(&json!({ "event": "swapped" }));
+}
+
+/// A save went to the running program, which takes it at its next call
+/// from native code into script code and then says `swapped` (D553.3).
+pub fn queued() {
+    emit(&json!({ "event": "queued" }));
 }
 
 /// A save restarts the program, for `reason`.

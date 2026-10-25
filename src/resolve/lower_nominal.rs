@@ -31212,15 +31212,37 @@ impl<'a> Parser<'a> {
             output: output.clone(),
         }
         .name(&self.models);
+        // Each capture's name and type, read where the closure is written,
+        // as its captures are.
+        let closure = &self.lifted[index];
+        let captured = closure.parameters[..closure.captures.len()]
+            .iter()
+            .map(|name| {
+                let local = if name.as_str() == SELF_CAPTURE {
+                    "this"
+                } else {
+                    name.as_str()
+                };
+                let ty = self
+                    .bindings
+                    .get(local)
+                    .map_or_else(String::new, |binding| {
+                        self.inference
+                            .resolve(&binding.ty)
+                            .name(&self.models)
+                            .to_string()
+                    });
+                (name.as_str(), ty)
+            })
+            .collect::<Vec<_>>();
         let item = crate::item::Value::new(
             (*key).clone(),
             crate::item::Kind::Function,
             None,
             None,
-            crate::signature::Fingerprint::closure(inputs.len(), &signature),
+            crate::signature::Fingerprint::closure(inputs.len(), &signature, &captured),
             capability::Fingerprint::default(),
         );
-        let closure = &self.lifted[index];
         // Its captures are read where the closure is written.
         if !closure.captures.is_empty()
             && !(value.span.start() <= closure.span.start()

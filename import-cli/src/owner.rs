@@ -202,6 +202,12 @@ fn session(
     let (mut lane, adapter, mut manifests, mut native_baseline) = initial?;
     rawr_cli::events::running();
 
+    // A marked `main` keeps running across a save: the runner compiles the
+    // new generation beside it and admits it at its next call from native
+    // code into script code (D553). An async `main` still restarts.
+    let marked = program.is_some() && !manifests.has_islands() && !manifests.restarts_on_save();
+    // Whether a save swapped into the running marked `main`.
+    let mut swapped_marked = false;
     let mut refresh_at = Instant::now();
     let mut refresh_required = false;
     // The preparation a restart was last announced for.
@@ -211,6 +217,18 @@ fn session(
         match lane.reap_if_exited() {
             Ok(true) => return Ok(Ended::Exit(0)),
             Ok(false) => {}
+            // A panic after a swap, such as a framework's own check that
+            // its hooks keep their order, restarts the program with the
+            // new code instead of ending the run (D553.6): the framework
+            // may be half-changed, so going back is not safe.
+            Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
+                101,
+            )))) if swapped_marked && lifecycle == rawr_import::process::Lifecycle::Run => {
+                let reason = "the program panicked after a save";
+                rawr_import::process::say(format_args!("rawr: {reason}; restarting the program"));
+                rawr_cli::events::restarting(reason);
+                return Ok(Ended::Restart);
+            }
             Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
                 code,
             )))) if lifecycle == rawr_import::process::Lifecycle::Run => {
@@ -241,10 +259,10 @@ fn session(
                     continue;
                 }
             };
-            // A marked `main` runs on the runner's own thread, which a new
+            // An async `main` runs on its runtime's thread, which a new
             // generation can't reach: each save that prepares restarts the
             // program (D500.1), and one that fails leaves it running.
-            if program.is_some() && !manifests.has_islands() {
+            if program.is_some() && !manifests.has_islands() && !marked {
                 let next = rawr::project::Target::discover(&target_path);
                 let changed = next.as_ref().ok().and_then(contents);
                 if changed.is_some() && changed == started_from {
@@ -343,7 +361,7 @@ fn session(
             // the native build stays the same: the new generation swaps in
             // at its next call through a trampoline. Any other program's
             // swap went by the resident route above.
-            let started = if next_manifests.has_islands() {
+            let started = if next_manifests.has_islands() || marked {
                 match lane.begin_compile() {
                     Ok(started) => started,
                     Err(error) => {
@@ -357,6 +375,17 @@ fn session(
             let preparation =
                 match lane.prepare_started_compile(started, request, snapshot, &observation) {
                     Ok(preparation) => preparation,
+                    // The runner refused a generation the running marked
+                    // `main` can't take, and said why (D553.6).
+                    Err(crate::native::Error::Process(
+                        rawr_import::process::RunnerError::ProfileRejected(reason),
+                    )) if marked => {
+                        rawr_import::process::say(format_args!(
+                            "rawr: {reason}; restarting the program"
+                        ));
+                        rawr_cli::events::restarting(&reason);
+                        return Ok(Ended::Restart);
+                    }
                     Err(error) => {
                         settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
                         continue;
@@ -407,6 +436,17 @@ fn session(
                             Err(framework(error, source.clone()))
                         }
                     }),
+                // A new native build restarts a marked `main` as a
+                // new session, which builds it.
+                rawr_import::process::hot::Preparation::Miss(_) if marked => {
+                    drop(staged);
+                    let reason = manifests.restart_line(&next_manifests);
+                    rawr_import::process::say(format_args!(
+                        "rawr: {reason}; restarting the program"
+                    ));
+                    rawr_cli::events::restarting(&reason);
+                    return Ok(Ended::Restart);
+                }
                 rawr_import::process::hot::Preparation::Miss(miss) => {
                     // D500.4: a new native build restarts the program, and
                     // says why in one line, once for each new build.
@@ -447,7 +487,13 @@ fn session(
             };
             match admitted {
                 Ok(crate::native::Watched::Installed) => {
-                    if swapped {
+                    // A marked `main`'s runner admits the generation at
+                    // its next call from native code, and says `swapped`
+                    // then (D553.3).
+                    if swapped && marked {
+                        swapped_marked = true;
+                        rawr_cli::events::queued();
+                    } else if swapped {
                         rawr_cli::events::swapped();
                     } else {
                         rawr_cli::events::running();
