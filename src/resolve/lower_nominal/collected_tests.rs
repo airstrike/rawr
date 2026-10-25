@@ -1044,3 +1044,23 @@ fn an_imported_type_s_to_string_is_a_function_value_through_its_display() {
         .unwrap_err();
     assert!(error.to_string().contains("to_strin"), "{error}");
 }
+
+/// A trait the program names becomes a module of the imported crate's
+/// facade, unless a re-export already names that path: iced's
+/// `widget::Component` stays the facade trait it re-exports.
+#[test]
+fn an_imported_trait_module_leaves_a_re_export_its_path() {
+    let mut allocation = host::TestImportAllocation::default();
+    let mut builder =
+        facade::Builder::new_imported("ui", facade::Abi::new(1).unwrap(), &mut allocation).unwrap();
+    builder
+        .alias("widget::Component", "widget::component::Component")
+        .unwrap();
+    let Err(error) = builder.imported_module("widget::Component", &mut allocation) else {
+        panic!("a re-export's path is taken");
+    };
+    assert!(error.to_string().contains("re-export"), "{error}");
+    builder
+        .imported_module("widget::Other", &mut allocation)
+        .unwrap();
+}
