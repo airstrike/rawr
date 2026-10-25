@@ -37,10 +37,12 @@ fn every_native_type_uses_exact_masked_encoding() {
 #[test]
 fn raw_signed_metadata_is_retained_without_optional_hint_rejection() {
     let mut native = stat::stat(c"/dev/null").unwrap();
-    native.st_dev = -1;
+    // dev_t is signed on macOS and unsigned on Linux, and the kernel's
+    // st_mtime_nsec is unsigned there too, so these take the bit patterns.
+    native.st_dev = (-1_i64) as _;
     native.st_size = -2;
     native.st_mtime = -3;
-    native.st_mtime_nsec = -4;
+    native.st_mtime_nsec = (-4_i64) as _;
     native.st_ctime = -5;
     native.st_ctime_nsec = 1_000_000_000;
     let Stat::Metadata(value) = metadata(Ok(native)) else {
