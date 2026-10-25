@@ -102,8 +102,8 @@ fn output_mapper_and_message_validation_remain_under_issuing_authority() {
         engine,
         r#"
 pub fn boolean(value: i64) -> bool { true }
-pub fn string(value: i64) -> String { "mapped" }
-pub fn failing(value: i64) -> bool { throw "mapper failed"; }
+pub fn string(value: i64) -> String { "mapped".to_string() }
+pub fn failing(value: i64) -> bool { panic!("mapper failed") }
 "#,
     );
     let starts = Arc::new(AtomicUsize::new(0));
