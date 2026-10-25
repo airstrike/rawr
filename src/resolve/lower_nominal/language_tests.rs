@@ -9344,3 +9344,33 @@ main();
         "{error}"
     );
 }
+
+/// `Send`, `Sync` and the other auto traits are bounds rustc reads on a
+/// generic parameter, in a `where` clause, on an `impl`, as a supertrait
+/// and in `impl Trait`, bare or by their `std::marker` path. rustc prints
+/// `5 s 2.5 7 5 5`.
+#[test]
+fn language_send_and_sync_are_bounds() {
+    assert_eq!(
+        printed(
+            r#"
+fn needs_send<T: Send>(value: T) -> T { value }
+fn needs_both<T>(value: T) -> T where T: Send + Sync { value }
+struct Wrapper<T: Send> { inner: T }
+impl<T: Send> Wrapper<T> { fn get(self) -> T { self.inner } }
+trait Job: Send + Sync { fn run(&self) -> i32; }
+struct J;
+impl Job for J { fn run(&self) -> i32 { 7 } }
+fn full<T: std::marker::Send + Clone + 'static>(value: T) -> T { value.clone() }
+fn shown(value: impl Send + std::fmt::Display) -> String { format!("{value}") }
+fn main() {
+    let job: Box<dyn Job> = Box::new(J);
+    println!("{} {} {} {} {} {}", needs_send(5), needs_both(String::from("s")),
+        Wrapper { inner: 2.5 }.get(), job.run(), full(5), shown(5));
+}
+main();
+"#
+        ),
+        "5 s 2.5 7 5 5\n"
+    );
+}

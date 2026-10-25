@@ -155,6 +155,7 @@ println!("{}", 7_i64.describe());</code></pre>
 </div>
 <h2 id="send-sync"><code>Send</code> and <code>Sync</code></h2>
 <p>Every value in interpreted code is already <code>Send</code> and <code>Sync</code>, so these impls change nothing. rawr checks them as rustc does. <code>impl Send</code> without <code>unsafe</code> is an error, and so is an <code>unsafe impl</code> of another trait.</p>
+<p>A bound such as <code>T: Send</code>, <code>where T: Send + Sync</code> or <code>trait Job: Send</code> is accepted, but rawr does not check it. <code>rawr check</code> runs <code>cargo check</code>, which does.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="unsafe-impl.rs" id="src-unsafe-impl">struct Handle(u64);
 unsafe impl Send for Handle {}

@@ -4147,6 +4147,13 @@ fn resolve_bounds_with_arguments(
     let mut traits = Vec::new();
     let mut trait_arguments = Vec::new();
     for bound in bounds_written {
+        // `Send`, `Sync` and the other auto traits, bare or by their std
+        // path. rawr does not prove a type's auto traits, so the bound is
+        // accepted and asks nothing (an over-admission: an `Rc` passes
+        // `T: Send`), as rustc reads it for every type that has them.
+        if crate::parser::item::is_auto_trait(bound) {
+            continue;
+        }
         // `Debug`, or `std::fmt::Debug` as Rust spells it in full.
         let kind = match &bound.segments[..] {
             [prefix @ .., segment]

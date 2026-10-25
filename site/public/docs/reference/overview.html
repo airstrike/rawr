@@ -162,6 +162,7 @@ Error: "\"forty\": invalid digit found in string"
   <li>Private struct fields can be read and set from another module. Private functions are rejected, as in rustc.</li>
   <li><code>HashMap</code> can be used without a <code>use</code> line.</li>
   <li>Out-of-range literals such as <code>let x: u8 = 300</code> are accepted.</li>
+  <li><code>Send</code> and <code>Sync</code> bounds are not checked. An <code>Rc</code> passes <code>T: Send</code>.</li>
   <li>Top-level statements are accepted.</li>
   <li>In iced code, a concrete widget is accepted where an <code>Element</code> is expected.</li>
   <li><code>.await</code> on an iced <code>Task</code> is accepted.</li>
