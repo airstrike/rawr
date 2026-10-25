@@ -1,8 +1,8 @@
 //! Where a program's parse cells live, and what a load through them did.
 //!
-//! The cells of a program are in `<target>/rawr/parse`, `<target>` being the
-//! Cargo target directory of the program's package, as for every other
-//! product Rawr keeps for a project. `cargo clean` removes them.
+//! The cells of a program are in `parse` in its package's Rawr directory
+//! (`<target>/rawr/parse`, `<target>` being the Cargo target directory), as
+//! for every other product Rawr keeps for a project. `cargo clean` removes them.
 
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,13 @@ use rawr::project;
 pub fn directory(target: &project::Target) -> PathBuf {
     let root = Graph::root_of(target);
     let root = std::fs::canonicalize(&root).unwrap_or(root);
+    rawr_location::rawr_directory_in(&target_directory(&root), &root).join("parse")
+}
+
+/// The Cargo target directory of the package at `root`, under this
+/// process's environment.
+#[must_use]
+pub fn target_directory(root: &Path) -> PathBuf {
     let variables: Vec<(&str, String)> = ["CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR"]
         .into_iter()
         .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
@@ -22,7 +29,7 @@ pub fn directory(target: &project::Target) -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".cargo")));
     rawr_location::target_directory(
-        &root,
+        root,
         |key| {
             variables
                 .iter()
@@ -31,8 +38,6 @@ pub fn directory(target: &project::Target) -> PathBuf {
         },
         cargo_home.as_deref(),
     )
-    .join("rawr")
-    .join("parse")
 }
 
 /// Whether `RAWR_VERBOSE` asks the command to say what it did.

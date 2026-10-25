@@ -32,7 +32,17 @@ pub fn cargo_config() -> String {
 /// Whether the project at `root` builds as Rawr builds it. `Err` names what
 /// it needs, as the files to add. Otherwise every crate would be compiled
 /// twice.
+///
+/// A member of a workspace rooted elsewhere is not asked: `cargo build`
+/// takes its toolchain and config from the workspace root's directory, and
+/// pinning the importer's nightly there would pin it for every crate in the
+/// workspace. Rawr builds the member with its own toolchain into the
+/// workspace's target directory, and `cargo build` compiles the member's
+/// dependencies separately.
 pub fn same_build(root: &Path) -> Result<(), String> {
+    if rawr_import::location::member_path(root).is_some() {
+        return Ok(());
+    }
     let environment = Environment::capture().map_err(|error| error.to_string())?;
     // rustup decides the toolchain from the directory: `RUSTUP_TOOLCHAIN`,
     // an override, a `rust-toolchain.toml` above it, or the default.

@@ -1,0 +1,27 @@
+---
+// The site bar, the same on every page: the docs mark Docs as current, the
+// playground marks Playground. The switch sets the theme (theme.ts).
+interface Props {
+  current?: "docs" | "play";
+}
+const { current } = Astro.props;
+---
+<header class="bar">
+  <a class="brand" href="/" aria-label="rawr home"><span class="mark" aria-hidden="true"></span><b>rawr</b><span class="cap">pre-alpha</span></a>
+  <nav class="links cap" aria-label="Site">
+    <a href="/docs" aria-current={current === "docs" ? "true" : undefined}>Docs</a>
+    <a class="wide" href="/docs/start">Get started</a>
+    <a href="/play" aria-current={current === "play" ? "page" : undefined}>Playground</a>
+    <a class="wide" href="https://github.com/airstrike/rawr">GitHub</a>
+    <button type="button" class="theme" aria-label="Switch theme" data-theme-switch>
+      <svg class="sun" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="3" fill="currentColor"/><path d="M8 0.5v2.2M8 13.3v2.2M0.5 8h2.2M13.3 8h2.2M2.7 2.7l1.6 1.6M11.7 11.7l1.6 1.6M2.7 13.3l1.6-1.6M11.7 4.3l1.6-1.6" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>
+      <svg class="moon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M13.6 10.2A6 6 0 0 1 5.8 2.4a6 6 0 1 0 7.8 7.8Z" fill="currentColor"/></svg>
+    </button>
+  </nav>
+</header>
+<script>
+  import { followSystem, setupSwitch } from "../lib/theme.ts";
+  const button = document.querySelector<HTMLButtonElement>("[data-theme-switch]");
+  if (button) setupSwitch(button);
+  followSystem();
+</script>

@@ -1,0 +1,26 @@
+<meta name="description" content="What each part of rawr needs: Rust 1.95 for the crate and the command, a Unix system and nightly-2026-07-11 for rawr-import and rawr-iced. Where it has been tested, and what is planned.">
+<article>
+<h1>Requirements</h1>
+<p class="lede">What each part of rawr needs, where it has been tested and what is planned.</p>
+<h2 id="status">Status</h2>
+<p>rawr is pre-alpha. Its API, commands and error codes may change.</p>
+<p>rawr supports part of Rust. The <a href="/docs/reference/overview">Overview</a> lists what works today. If rawr runs code with a different result than Rust, or rejects Rust it says it supports, report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
+
+<h2 id="toolchains">Toolchains and platforms</h2>
+<table class="wide">
+  <tr><th>Part</th><th>Needs</th><th>Tested on</th></tr>
+  <tr><td>The <code>rawr</code> crate</td><td>Rust 1.95 or newer.</td><td>macOS.</td></tr>
+  <tr><td>The <code>rawr</code> command</td><td>Rust 1.95 or newer.</td><td>macOS.</td></tr>
+  <tr><td>rawr-import</td><td>A Unix system, and <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components.</td><td>Apple Silicon Macs.</td></tr>
+  <tr><td>rawr-iced</td><td>The same as rawr-import, and iced master at revision <code>be88873d</code>. <code>rawr doctor</code> prints that revision.</td><td>Apple Silicon Macs.</td></tr>
+  <tr><td><code>rawr-macros</code></td><td>Rust 1.95 or newer. It installs from git and isn&rsquo;t on crates.io yet.</td><td>macOS.</td></tr>
+</table>
+<p>Everything installs from <a href="https://github.com/airstrike/rawr">the git repository</a>. <a href="/docs/start#install">Start</a>, <a href="/docs/imports#install">Imports</a> and <a href="/docs/iced#install">iced</a> give the commands.</p>
+<p>rawr-iced refuses a project on another iced revision with a message.</p>
+
+<h2 id="planned">Planned</h2>
+<ul>
+  <li>A native module other than the crate root that calls into marked modules.</li>
+  <li>Marked ratatui code that takes <code>&amp;mut Frame</code> and draws ratatui&rsquo;s widgets itself. A <a href="/docs/ratatui">ratatui</a> app runs today with its drawing native.</li>
+</ul>
+</article>

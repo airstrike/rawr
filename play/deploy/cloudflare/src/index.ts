@@ -2,9 +2,9 @@
 // rawr-play-bot, which holds Discord's gateway websocket (outbound only).
 // A cron trigger and GET /bot/health start it if it is not running.
 //
-// It serves all of rawr.airstrike.fyi: the landing page (site/public) and
-// the bot's files (public/), merged into dist/ by build.mjs, plus /play and
-// /bot. The old host, rawr-bot.airstrike.fyi, redirects every request here.
+// It serves all of rawr.airstrike.fyi: the site's static build (site/dist:
+// the landing page, the docs and the playground's page) and the bot's files
+// (public/), merged into dist/ by build.mjs, plus /play's routes and /bot. The old host, rawr-bot.airstrike.fyi, redirects every request here.
 //
 // The channels each server's mods chose with /play-channel live in this
 // Durable Object's storage. The bot loads and saves them at
@@ -18,7 +18,8 @@
 // settings passed to the container) it started
 // and `ensure` (cron, /bot/health) restarts a container started from another.
 //
-// /play is a web playground: the Worker serves the page, keeps shares in this
+// /play is a web playground: the Worker serves the site's static page with
+// each request's data written in (playpage.ts), keeps shares in this
 // Durable Object (content-addressed), limits each IP (by HMAC, never in
 // clear), checks Turnstile, and forwards renders to the bot's HTTP port,
 // which only this Durable Object can reach. A render is an iced snippet's
@@ -33,7 +34,7 @@
 // pages, with the `?play` options of its `data-play`, in canonical form.
 // build.mjs collects those hashes into src/runnable.gen.ts, so the
 // list is the deployed pages'. Results are cached per image version. A
-// snippet edited on the site is the visitor's own code: run.js sends it to
+// snippet edited on the site is the visitor's own code: run.ts sends it to
 // POST /play/render with the playground's Turnstile, pass and limits, and
 // learns the site key and whether it holds a pass from GET /play/gate.
 
@@ -75,7 +76,7 @@ import {
   type Og,
   type Snippet,
 } from "./play.ts";
-import { render as renderPlay } from "./playpage.ts";
+import { inject } from "./playpage.ts";
 import { RUNNABLE } from "./runnable.gen.ts";
 import {
   addWebRateLimited,
@@ -116,8 +117,8 @@ const MOVED: Record<string, string> = { "/": "/bot", "/invite": "/bot/invite", "
  * Docs pages that moved. The FAQ's answers went to /docs/how-it-works and
  * elsewhere. rawr-iced's and ?play's pages became directories. The reference
  * pages went under /docs/reference, and /docs/language became its overview
- * and one page per topic. A redirect keeps the URL's #anchor, and docs.js
- * sends an anchor that moved on to its new page.
+ * and one page per topic. A redirect keeps the URL's #anchor, and the page
+ * sends an anchor that moved on to its new page (the site's lib/moved.ts).
  */
 export const DOCS_MOVED: Record<string, string> = {
   "/docs/faq": "/docs/how-it-works",
@@ -774,7 +775,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
     return landingRun(request, env, ctx);
   }
   if (path === "/play/gate" && request.method === "GET") {
-    // What the site's run.js needs to send an edited snippet to
+    // What the site's run.ts needs to send an edited snippet to
     // /play/render: the Turnstile site key, and whether this browser holds a
     // pass (the cookie is HttpOnly, so the page can't read it).
     return Response.json(
@@ -837,7 +838,10 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
           ...(info && "width" in info ? info : {}),
         };
   }
-  const page = renderPlay({ snippet, examples: EXAMPLES, sitekey: env.TURNSTILE_SITEKEY ?? null, pass: await hasPass(request, env), shared, og });
+  // The site's static page (dist/play.html), with this request's preview and data.
+  const asset = await env.ASSETS.fetch(new Request(`${SITE}/play`));
+  if (!asset.ok) return plain("the playground page is missing", 500);
+  const page = inject(await asset.text(), { snippet, examples: EXAMPLES, sitekey: env.TURNSTILE_SITEKEY ?? null, pass: await hasPass(request, env), shared, og });
   return html(request.method === "HEAD" ? "" : page);
 }
 

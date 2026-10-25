@@ -1,0 +1,30 @@
+---
+// The landing page: src/content/index.html is its <main>.
+import Footer from "../components/Footer.astro";
+import RunBlocks from "../components/RunBlocks.astro";
+import Base from "../layouts/Base.astro";
+import { highlightBlocks } from "../lib/docs.ts";
+import main from "../content/index.html?raw";
+import "../styles/landing.css";
+
+const og = {
+  description: "Mark a file in your Cargo crate with // rawr. rawr run interprets it while you develop. Cargo compiles the same crate for release. Pre-alpha.",
+  twitter: true,
+};
+---
+<Base
+  title="rawr: a Rust interpreter for your dev builds"
+  description="rawr is a Rust interpreter for your dev builds. rawr run interprets the files in your Cargo crate whose first line is // rawr, and Cargo compiles the same crate for release. An app can also embed rawr to run Rust scripts."
+  path="/"
+  og={og}
+>
+<Fragment set:html={highlightBlocks(main)} />
+<Footer />
+<RunBlocks />
+<script>
+  import { setup as copy } from "../scripts/copy.ts";
+  import { setup as landing } from "../scripts/landing.ts";
+  landing();
+  copy();
+</script>
+</Base>

@@ -1,0 +1,13 @@
+---
+// The Run buttons' stylesheet and script, on a page with runnable snippets.
+// The inline script swaps each snippet's highlighted copy in before the first
+// paint; the HTML itself keeps the plain text /play/run's allow-list reads.
+import "../styles/run.css";
+---
+<script is:inline>
+for (const t of document.querySelectorAll("code[data-run] + template[data-hl]")) t.previousElementSibling.innerHTML = t.innerHTML;
+</script>
+<script>
+  import { setup } from "../scripts/run.ts";
+  setup({ document, window, fetch: fetch.bind(window) });
+</script>

@@ -107,8 +107,9 @@ cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/ra
 
 A crate with dependencies needs `rust-toolchain.toml` and
 `.cargo/config.toml`, so that `rawr run` and `cargo build` share one build.
-`rawr run` prints both files when they are missing. The
-[docs](https://rawr.airstrike.fyi/docs/imports) explain them.
+`rawr run` prints both files when they are missing. A member of a Cargo
+workspace needs neither, and `cargo build` then compiles its dependencies
+separately. The [docs](https://rawr.airstrike.fyi/docs/imports) explain them.
 
 ## How do I start an iced app?
 
@@ -214,6 +215,11 @@ the terminal at once, and rawr leaves the terminal as it found it. The
 [ratatui docs](https://rawr.airstrike.fyi/docs/ratatui) say how. Planned and
 not built yet: calls from native modules other than the root, and marked
 ratatui code that draws on the `Frame` itself.
+
+The examples are packages of this repository's Cargo workspace. From its
+root, `cargo run -p invaders` plays the game natively, and `rawr run -p
+invaders` plays it under rawr. [`examples/README.md`](examples/README.md)
+lists them all.
 
 If rawr gives a different result than Rust, or rejects Rust it says it
 supports, please [report it](https://github.com/airstrike/rawr/issues) with a

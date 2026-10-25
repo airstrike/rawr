@@ -1,0 +1,24 @@
+---
+// The playground at /play and /play/<id>. The page is static; for each
+// request the Worker writes the link preview, a share's pinned theme and
+// the data the island reads into it (playpage.ts's inject):
+//   <script type="application/json" id="play-data">null</script>
+// The island is the only React on the site.
+import Base from "../layouts/Base.astro";
+import { SITE } from "../lib/docs.ts";
+import Playground from "../play/Playground.tsx";
+import "../styles/play.css";
+
+const og = {
+  description: "Write Rust and run it. iced code shows its last frame. An app that moves shows a GIF. Other programs show their output.",
+  image: `${SITE}/og/invite.png`,
+  alt: "rawr: iced code and the frame it renders",
+  twitter: true,
+};
+---
+<Base title="rawr playground" description={og.description} path="/play" current="play" og={og} chrome="#ff2e93" icon="/play.svg" bodyClass="play">
+<script type="application/json" id="play-data">null</script>
+<div id="playground">
+<Playground client:load />
+</div>
+</Base>

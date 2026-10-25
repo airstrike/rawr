@@ -1,0 +1,31 @@
+<meta name="description" content="How rawr runs Rust without compiling it, how it checks borrows and generics, and why it does not interpret rustc&#x27;s MIR.">
+<article>
+<h1>How it works</h1>
+<p class="lede">How rawr runs Rust without compiling it, and why it is built this way.</p>
+<h2 id="interpreter">What kind of interpreter is rawr?</h2>
+<p>rawr is a tree-walking interpreter over a typed program. Its front end checks names, types, traits and generics before anything runs. Then an evaluator walks the checked program.</p>
+<p>Values at run time carry a tag for their type and are reference-counted. Standard library types such as <code>Vec</code> and <code>HashMap</code> are backed by native Rust code. So are the crates a program imports and iced&rsquo;s widgets.</p>
+
+<h2 id="speed">How fast is it?</h2>
+<p>Calls into native code run at native speed. In an iced app most of the time goes to native iced code, such as layout and drawing.</p>
+<p>The interpreter shows in a tight loop that runs many times. Keep a loop like that in a native module or a crate, and <a href="/docs/imports">Cargo compiles it</a>.</p>
+<p>In RawrGallery, an edit to a marked file was live in the running app in about 0.2&nbsp;s on an Apple Silicon Mac.</p>
+
+<h2 id="borrowing">How does rawr handle borrow checking?</h2>
+<p>rawr doesn&rsquo;t have a full borrow checker. It rejects a use after a move, as rustc&rsquo;s E0382 does. It also rejects two live <code>&amp;mut</code> borrows of one value. It accepts some programs that rustc rejects, and the <a href="/docs/reference/overview#lenient">Overview</a> lists them.</p>
+<p>Values are reference-counted, so a program can&rsquo;t corrupt memory. Borrow checking only rejects programs. It never changes what a valid program does.</p>
+<p>rawr aims to run every program that rustc accepts with Rust&rsquo;s meaning. Where it can&rsquo;t yet, it refuses the program. <a href="/docs/reference/overview#differences">A few known differences</a> remain, and each one is a defect to fix.</p>
+<p>Marked files are ordinary <code>.rs</code> files, so rust-analyzer checks them too.</p>
+
+<h2 id="generics">How are generics handled?</h2>
+<p>rawr checks each generic call against the bounds of the function it calls, as rustc does.</p>
+<p>At run time each generic function has one body. Values carry their types, so a trait method call dispatches on the value it is called on. A call like <code>T::default()</code> has no value to dispatch on. rawr passes the type to the function as a hidden argument for these calls.</p>
+<p>In an iced app, a function whose signature names a type parameter inside an iced type gets the same hidden argument. <code>fn card&lt;Message: Clone&gt;(label: &amp;str) -&gt; Element&lt;'static, Message&gt;</code> is one such function. Each iced call in its body uses the caller&rsquo;s message type at run time.</p>
+<p>Generic code in an imported crate is compiled natively for the concrete types your program uses.</p>
+<p>Code that relies on a separate copy of a function for each type is not supported. <code>std::mem::size_of::&lt;T&gt;()</code> is an example.</p>
+
+<h2 id="miri">Why not use Miri or interpret rustc&rsquo;s MIR?</h2>
+<p>Miri cannot call native code, so it cannot drive iced, wgpu or the window system. Miri is also slow on purpose, because it checks each operation for undefined behaviour.</p>
+<p>An interpreter for rustc&rsquo;s MIR would have two problems. Native iced code is compiled for concrete message types, and a type defined in interpreted code has no compiled copy of iced to call. rustc&rsquo;s front end would also run on each edit. That takes much longer than a reload does today.</p>
+<p>Using rustc&rsquo;s typed output as rawr&rsquo;s front end is a possible future direction.</p>
+</article>

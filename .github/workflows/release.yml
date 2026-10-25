@@ -184,6 +184,11 @@ jobs:
         working-directory: play/deploy/cloudflare
         run: npm install --no-audit --no-fund
 
+      # build.mjs builds the site (an Astro package with its own lock file).
+      - name: Install the site's dependencies
+        working-directory: site
+        run: npm ci --no-audit --no-fund
+
       # build.mjs merges public/, with web/ in it, into the Worker's assets.
       - uses: actions/download-artifact@v4
         with:

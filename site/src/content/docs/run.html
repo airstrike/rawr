@@ -1,0 +1,153 @@
+<meta name="description" content="Which files rawr interprets, how marked code and a native main share one program, and what ships in a release build.">
+<article>
+<h1>Run</h1>
+<p class="lede">How <code>rawr run</code> splits a crate between interpreted and native code, and how the two share one program.</p>
+<h2 id="programs">What rawr runs</h2>
+<p><code>rawr run</code> takes a Cargo crate or a single <code>.rs</code> file. Without a path, rawr looks in the current directory and its parents for a crate.</p>
+<p>In a Cargo workspace, <code>-p</code> names a package, as under <code>cargo run</code>:</p>
+<div class="block"><pre><code>rawr run -p invaders</code></pre></div>
+<p><code>rawr check -p</code> takes a package name too.</p>
+
+<h2 id="arguments">Arguments and stdin</h2>
+<p>Arguments after <code>--</code> go to the program, as under <code>cargo run</code>:</p>
+<div class="block"><pre><code>rawr run examples/grep -- -n pie menu.txt</code></pre></div>
+<p><code>std::env::args()</code> gives the program&rsquo;s name first. The name is the path <code>cargo run</code> would run, the binary&rsquo;s name under <code>target/debug/</code>. For a workspace member, that is the workspace&rsquo;s <code>target/</code>. For a single file, it is the file&rsquo;s path without <code>.rs</code>.</p>
+<p>The program reads the stdin of <code>rawr run</code>, a terminal or a pipe:</p>
+<div class="block"><pre><code>cat menu.txt | rawr run examples/grep -- pie</code></pre></div>
+<p>At a terminal the running program gets the keyboard, so Ctrl-C reaches it as it reaches a program <code>cargo run</code> started. Ctrl-C ends <code>rawr run</code> too.</p>
+<p>At a terminal the program also writes to the terminal itself, as under <code>cargo run</code>. rawr saves the terminal&rsquo;s settings before the program starts. After the program ends, rawr puts them back if the program changed them, even when a restart killed it. While the program holds the terminal raw, rawr&rsquo;s own lines wait until then. <a href="/docs/ratatui#terminal">ratatui</a> says more.</p>
+<p>The <code>examples/grep</code> crate in rawr&rsquo;s repository is a small grep with flags, files and stdin. <code>cargo build --release</code> builds the same crate, and its binary prints the same lines.</p>
+<p>rawr&rsquo;s examples are packages of its Cargo workspace, as iced&rsquo;s are. From the repository&rsquo;s root, <code>rawr run -p grep</code> runs one under rawr. <code>cargo run -p grep</code> runs it natively.</p>
+
+<h2 id="marker">The <code>// rawr</code> marker</h2>
+<p>A file whose first line is <code>// rawr</code> is interpreted. Every other file is native Rust.</p>
+<ul>
+  <li>The crate root may be marked or native. A crate with a native root runs when a module it declares is marked. If no file is marked, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-MISSING-SOURCE</code>.</li>
+  <li>Marked code may call native modules.</li>
+  <li>Native code may call marked modules when the crate root is native.</li>
+  <li>With a marked root, native code can&rsquo;t use code from marked files yet. rawr reports an error if it does.</li>
+  <li>A path dependency is compiled natively, even if its files start with <code>// rawr</code>. Only the crate you run is interpreted.</li>
+</ul>
+
+<h2 id="native-main">A native main</h2>
+<p>An app can keep its <code>main</code> native and mark only the module you are working on. Under <code>rawr run</code>, each function of that module that native code can call gets a generated stub with the same signature. The stub runs the function in the interpreter.</p>
+<p>The stubs live in rawr&rsquo;s own copy of the crate, under <code>target/rawr/crate</code>. For a workspace member, the copy is under <code>target/rawr/members/&lt;path&gt;/crate</code> in the workspace&rsquo;s <code>target/</code>. Your crate never depends on rawr.</p>
+<p>Native code sees the public items of a marked module: its functions, methods, structs, enums, constants and type aliases. Private items stay in the interpreter.</p>
+<p>Numbers, <code>bool</code>, <code>char</code>, <code>String</code> and <code>&amp;str</code> cross between native code and a marked module. <code>Vec</code> and <code>Option</code> of them cross too. So do the structs and enums of marked modules whose fields cross.</p>
+<p>A parameter may be one of those values or a reference to one. A <code>&amp;mut</code> argument comes back with the changes the function made.</p>
+<p>A function whose values can&rsquo;t cross yet panics when native code calls it, and the message names the function. A public function that returns <code>impl Trait</code> stops <code>rawr run</code> with an error that names it.</p>
+<p>A save of a marked file reaches the running program at its next call into that file. An edit to a function body or to a private item swaps in place, and the program keeps its state. An edit that changes what native code sees needs a new native build. That covers a signature, a struct&rsquo;s fields and a public constant. rawr then restarts the program and prints why:</p>
+<div class="block"><pre><code>rawr: `physics::Ball` changed its fields; restarting the program</code></pre></div>
+<p>An edit to a native file restarts the program too.</p>
+<p>The <code>examples/islands</code> crate in rawr&rsquo;s repository is such an app.</p>
+<p>The native <code>main</code> runs on the process&rsquo;s main thread, as under <code>cargo run</code>. The interpreter runs on a thread of its own. So an app whose event loop must own the main thread, such as one built on winit, runs under <code>rawr run</code>.</p>
+<p>The <code>examples/invaders</code> crate is a space-invaders game on winit and softbuffer. Its native <code>main.rs</code> owns the window, the keys and a pixel framebuffer. Four marked modules hold the game: its rules, the invaders&rsquo; march, the hits and what each frame draws. Each frame calls them once to move the game on and once more for the picture.</p>
+<div class="block"><pre><code>rawr run -p invaders</code></pre></div>
+<p><code>cargo run -p invaders</code> plays the same game natively.</p>
+<p>A save that changes a colour, a speed or a sprite&rsquo;s shape shows at the next frame. The game keeps its score and its invaders. A new field on the game&rsquo;s state restarts the game.</p>
+<p>The <code>examples/tui</code> crate is a to-do list on ratatui. Its native <code>main.rs</code> owns the terminal, and its marked <code>app.rs</code> says what the keys do and what the screen shows. A save repaints the screen at once, with no key pressed. <a href="/docs/ratatui">ratatui</a> covers terminal apps.</p>
+<p>Limits today:</p>
+<ul>
+  <li>A native module other than the root can&rsquo;t declare a marked module.</li>
+  <li>Marked code can&rsquo;t call items written in the native root itself.</li>
+  <li>A marked <code>main</code> doesn&rsquo;t run on the process&rsquo;s main thread. Keep <code>main</code> native when an event loop needs that thread.</li>
+</ul>
+
+<h2 id="async">An async main</h2>
+<p>A marked crate root may have an <code>async fn main</code> under its runtime&rsquo;s attribute, such as <code>#[tokio::main]</code>. The runtime is the one in your <code>Cargo.toml</code>, built by Cargo as <code>cargo run</code> builds it. rawr adds none and favors none.</p>
+<div class="block">
+  <div class="file"><b>Cargo.toml</b></div>
+  <pre><code data-lang="toml">[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }</code></pre>
+</div>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">// rawr
+use std::time::Duration;
+use tokio::sync::mpsc;
+
+#[derive(Debug, Clone)]
+struct Job {
+    id: u32,
+}
+
+#[tokio::main]
+async fn main() {
+    let (sender, mut receiver) = mpsc::channel::&lt;Job&gt;(1);
+    let producer = async move {
+        for id in 1..=3 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            sender.send(Job { id }).await.unwrap();
+        }
+    };
+    let consumer = async move {
+        while let Some(job) = receiver.recv().await {
+            println!("{job:?}");
+        }
+    };
+    tokio::join!(producer, consumer);
+    let sum = tokio::task::spawn_blocking(|| (1..=100).sum::&lt;u32&gt;()).await.unwrap();
+    println!("sum {sum}");
+}</code></pre>
+  <div class="run"><small>on your machine</small><b>rawr run</b><span>Job { id: 1 }
+Job { id: 2 }
+Job { id: 3 }
+sum 5050</span></div>
+</div>
+<p>Each job prints 100&nbsp;ms after the last one, on tokio&rsquo;s own clock.</p>
+<p>Under <code>rawr run</code>, rawr&rsquo;s copy of your crate in <code>target/rawr/crate</code> holds a native <code>main</code> with your attribute copied as written, arguments and all. That <code>main</code> awaits the future of your marked <code>main</code>. Your crate never depends on rawr, and <code>cargo build --release</code> builds it as it is.</p>
+<p>How it runs:</p>
+<ul>
+  <li>An <code>async</code> block or an <code>async fn</code> gives a Rust future that any runtime can poll.</li>
+  <li>Your code runs on one thread, the one that holds the program. That thread also runs your runtime&rsquo;s <code>main</code>, so <code>tokio::spawn</code>, <code>spawn_blocking</code> and <code>sleep</code> start when you call them, as in Rust. A future polled on another thread hands each step of your code to that thread, which runs it the next time <code>main</code> is polled. A runtime&rsquo;s own futures, such as tokio&rsquo;s <code>sleep</code>, run on whichever thread polls them.</li>
+  <li><code>tokio::spawn</code> takes a future of yours, and its handle&rsquo;s <code>.await</code> gives the future&rsquo;s value. A spawned future runs though nobody awaits it.</li>
+  <li>A generic item called at one of your types, such as <code>mpsc::channel::&lt;Job&gt;()</code>, carries your values as they are. A value that comes back is checked against the type you named. <a href="/docs/imports#generics">Imports</a> says more.</li>
+  <li>An async method that borrows its receiver, such as <code>Sender::send</code> or <code>Receiver::recv</code>, keeps it until its future ends. A <code>Clone</code> receiver is copied for <code>&amp;self</code>. A <code>&amp;mut self</code> receiver is lent, and using it before the future ends is a borrow error.</li>
+  <li>A native value drops with its last owner, so a channel closes when its last sender goes.</li>
+  <li><code>spawn_blocking</code> runs your closure on a worker thread, with an evaluation of its own.</li>
+</ul>
+<p>Limits today:</p>
+<ul>
+  <li><code>join!</code> works. <code>try_join!</code> and <code>select!</code> don&rsquo;t yet.</li>
+  <li>On tokio&rsquo;s multi-thread runtime, a step of a spawned future runs inside <code>main</code>&rsquo;s task. So your code there sees <code>main</code>&rsquo;s <code>tokio::task::id()</code> and task-locals, and a tracing span that instruments the spawned future isn&rsquo;t entered. On the <code>current_thread</code> runtime it sees the spawned task&rsquo;s.</li>
+  <li>An iced app has no runtime <code>main</code>. There, a runtime&rsquo;s future is made when it is first polled, so a <code>sleep</code> starts its timer at the await. A call that needs a runtime the app doesn&rsquo;t run fails with an error that says to give <code>async fn main</code> the runtime&rsquo;s attribute.</li>
+  <li>A closure that <code>spawn_blocking</code> runs can&rsquo;t use values of imported types.</li>
+  <li>A generic item whose bound picks behaviour by type alone, such as <code>Default</code> or <code>Deserialize</code>, can&rsquo;t take one of your types. rawr says which bound when it builds the runner.</li>
+  <li>A <code>main</code> that is <code>async</code> needs a runtime&rsquo;s attribute, as Rust does. Without one it is rustc&rsquo;s E0752.</li>
+</ul>
+
+<h2 id="check">Checking</h2>
+<p><code>rawr check</code> checks a program without running it. Then it runs <code>cargo check</code>, because rawr&rsquo;s check accepts some code that rustc rejects. The <a href="/docs/reference/overview#lenient">Overview</a> lists those cases.</p>
+<p><code>rawr run</code> runs <code>cargo check</code> beside the program. When <code>rawr run</code> ends with the program, cargo&rsquo;s errors are printed after it.</p>
+
+<h2 id="who">Who runs a program</h2>
+<p><code>rawr</code> runs a program itself or hands it to an installed extension.</p>
+<table class="wide">
+  <tr><th>Program</th><th>Runs in</th></tr>
+  <tr><td>No dependencies and no native modules</td><td><code>rawr</code> itself.</td></tr>
+  <tr><td>Dependencies in <code>Cargo.toml</code> or native modules</td><td><a href="/docs/imports">rawr-import</a>, which compiles the native code with Cargo.</td></tr>
+  <tr><td>Uses the <code>iced</code> crate</td><td><a href="/docs/iced">rawr-iced</a>, which reloads the app on save.</td></tr>
+</table>
+<p>If the extension a program needs isn&rsquo;t installed, <code>rawr</code> names it and prints the commands that install it. Set <code>RAWR_VERBOSE=1</code> to see which binary ran a program.</p>
+
+<h2 id="reload">Reload</h2>
+<p><code>rawr run</code> watches every program it runs.</p>
+<ul>
+  <li>rawr-iced reloads an iced app when you save a marked file. <a href="/docs/iced/reload">Reload</a> says what it keeps.</li>
+  <li>A <a href="#native-main">native main</a> picks up a body edit at its next call into the marked file, and keeps running.</li>
+  <li>Any other running program restarts when you save, with the same arguments. One line on stderr says so:</li>
+</ul>
+<div class="block"><pre><code>rawr: the source changed; restarting the program</code></pre></div>
+<p>A save that doesn&rsquo;t compile prints its error, and the program keeps running.</p>
+<p>A restarted program reads stdin on from where the old one stopped. Input the old program had already read doesn&rsquo;t come back.</p>
+<p>When the program ends and stdin is a terminal, <code>rawr run</code> waits. The next save runs the program again, with the same arguments. Ctrl-C ends the wait. When stdin isn&rsquo;t a terminal, <code>rawr run</code> ends with the program and gives its exit status.</p>
+<p>With rawr-import, a crate whose native code didn&rsquo;t change reuses its earlier build.</p>
+
+<h2 id="release">Release builds</h2>
+<p><code>cargo build --release</code> compiles the marked files natively too. No interpreter ships with the build.</p>
+<p>rawr-iced&rsquo;s <code>#[preview]</code> and <code>#[widget]</code> attributes come from the <code>rawr-macros</code> crate. Under Cargo they leave the item as written.</p>
+<p>An app that embeds the <code>rawr</code> crate to run scripts does ship the interpreter. <a href="/docs/embedding">Embedding</a> covers that case.</p>
+
+<h2 id="speed">Speed</h2>
+<p>Calls into native code run at native speed. Keep a hot loop in a native module or a crate, and Cargo compiles it.</p>
+</article>

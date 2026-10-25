@@ -8,6 +8,11 @@ members = [
     "codegen",
     "codegen/tests/custom_root",
     "directory",
+    "examples/grep",
+    "examples/invaders",
+    "examples/islands",
+    "examples/rules",
+    "examples/tui",
     "iced",
     "play",
     "importer",
@@ -19,6 +24,14 @@ members = [
     "web",
 ]
 resolver = "3"
+
+# The example apps' dependencies, as iced's examples take theirs.
+[workspace.dependencies]
+crossterm = "0.29"
+ratatui = "0.30"
+rawr = { path = "." }
+softbuffer = "0.4"
+winit = "0.30"
 
 [package]
 name = "rawr"

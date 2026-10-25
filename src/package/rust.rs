@@ -27,7 +27,7 @@ impl Graph {
         let Some(config) = entry.rust.as_ref() else {
             return Ok(None);
         };
-        let app = app_crate(self, limits)?;
+        let app = app_crate(self, &environment, limits)?;
         request(entry, config, environment, app, limits).map(Some)
     }
 
@@ -47,7 +47,7 @@ impl Graph {
         let Some(config) = entry.rust.as_ref() else {
             return Ok(None);
         };
-        let app = app_crate(self, limits)?;
+        let app = app_crate(self, &environment, limits)?;
         request_with_profile(
             entry,
             config,
@@ -81,7 +81,7 @@ impl Graph {
         let Some(config) = entry.rust.as_ref() else {
             return Ok(None);
         };
-        let app = app_crate(self, limits)?;
+        let app = app_crate(self, &environment, limits)?;
         request_with_profile(
             entry,
             config,
@@ -197,7 +197,8 @@ fn app_crate_path<'a>(
 }
 
 /// The app's own crate as a Cargo path dependency. Rawr writes a
-/// generated package under `target/rawr/crate/`: the app's `[package]` and
+/// generated package under `crate/` in the project's Rawr directory
+/// (`target/rawr/crate/` for a crate of its own): the app's `[package]` and
 /// `[dependencies]`, a copy of each `.rs` module under `target/rawr/crate/src/`
 /// with crate-wide visibility made public (`polyglot::widened`), and a
 /// library root that declares each `.rs` module a marked module declares, in
@@ -211,7 +212,11 @@ fn app_crate_path<'a>(
 /// with the island's runtime support at its end, and in place of each
 /// marked file its generated trampolines (`island::shadow`). A save that
 /// changes no trampoline rewrites nothing, so nothing is built again.
-fn app_crate(graph: &Graph, limits: &Limits) -> rawr_import::Result<Option<Dependency>> {
+fn app_crate(
+    graph: &Graph,
+    environment: &Environment,
+    limits: &Limits,
+) -> rawr_import::Result<Option<Dependency>> {
     let entry = graph.entry_package();
     let (Some(alias), Some(cargo)) = (entry.rust_crate(), entry.cargo()) else {
         if let Some(module) = entry.native_root().or_else(|| entry.rust_modules().first()) {
@@ -232,7 +237,7 @@ fn app_crate(graph: &Graph, limits: &Limits) -> rawr_import::Result<Option<Depen
         .parent()
         .unwrap_or(entry.root())
         .to_path_buf();
-    let directory = entry.root().join("target/rawr/crate");
+    let directory = rawr_import::location::rawr_directory(entry.root(), environment).join("crate");
     let copies = directory.join("src");
     let mut files = match entry.native_root() {
         Some(root) => {

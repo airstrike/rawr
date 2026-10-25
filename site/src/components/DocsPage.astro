@@ -1,0 +1,36 @@
+---
+// One docs page, from its file in src/content/docs and the navigation in
+// lib/docs.ts. pages/docs/[...slug].astro builds every page but the three
+// that are a directory's index.html, which have their own index.astro.
+import Base from "../layouts/Base.astro";
+import { anchors, fullTitle, highlightBlocks, pager, parse, sidebar, source, toc, type Page } from "../lib/docs.ts";
+import { movedScript } from "../lib/moved.ts";
+import "../styles/docs.css";
+import Footer from "./Footer.astro";
+import RunBlocks from "./RunBlocks.astro";
+
+const files = import.meta.glob<string>("../content/docs/**/*.html", { query: "?raw", import: "default", eager: true });
+
+const { page } = Astro.props as { page: Page };
+const file = `../content/docs/${source(page.path)}`;
+const text = files[file];
+if (text === undefined) throw new Error(`no ${file} for ${page.path}`);
+const { description, article } = parse(text, file);
+const body = toc(anchors(highlightBlocks(article)));
+const runs = /<code[^>]*\bdata-run\b/.test(article);
+const moved = movedScript(page.path);
+---
+<Base title={fullTitle(page)} description={description} path={page.path} current="docs">
+<div class="docs">
+<Fragment set:html={sidebar(page, article)} />
+<main>
+<article>
+<Fragment set:html={body} />
+<Fragment set:html={pager(page)} />
+</article>
+</main>
+</div>
+<Footer />
+{runs && <RunBlocks />}
+{moved && <script is:inline set:html={moved} />}
+</Base>

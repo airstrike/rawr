@@ -1,0 +1,98 @@
+<meta name="description" content="Connect Claude Code, Codex or another coding agent to rawr with rawr mcp. The agent makes a Rust crate, checks it, runs it and sees it reload when it saves.">
+<article>
+<h1>Agents</h1>
+<p class="lede">Connect a coding agent such as Claude Code or Codex to rawr. The agent makes a Rust crate, checks it, runs it and sees each save reload.</p>
+<p><code>rawr mcp</code> is a Model Context Protocol server on stdio. It comes with <code>rawr</code> itself. Installed extensions add tools to it. The agent edits files with its own tools, and rawr does the rest.</p>
+
+<h2 id="install">Install</h2>
+<p>Install rawr:</p>
+<div class="block"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre></div>
+<p>That is enough for programs with no dependencies. A program with Rust dependencies needs rawr-import. An iced app needs rawr-iced. <a href="/docs/imports#install">Imports</a> and <a href="/docs/iced">iced</a> say how to install them. The server names whatever is missing when it starts, with the commands that install it.</p>
+
+<h2 id="register">Register the server</h2>
+<p>Run <code>rawr init</code> in the project the agent works in:</p>
+<div class="block"><pre><code>rawr init</code></pre></div>
+<p>It looks for a <code>.claude</code> or <code>.codex</code> directory to tell which agent the project uses. Pass <code>--claude</code>, <code>--codex</code> or both to choose.</p>
+<ul>
+  <li>For Claude Code it writes <code>.mcp.json</code>.</li>
+  <li>For Codex it writes <code>.codex/config.toml</code>, with a 120 s tool timeout and a 30 s startup timeout.</li>
+</ul>
+<p>The entry runs <code>rawr</code> by its absolute path, with <code>args = ["mcp"]</code> and the project as its working directory. A <code>rawr</code> elsewhere on <code>PATH</code> is never started. Running <code>rawr init</code> again replaces the entry. The old file is kept beside it as <code>.mcp.json.bak</code> or <code>config.toml.bak</code>. Every other setting in the file stays.</p>
+<p>Restart the agent once to load the server. An extension installed later adds its tools without another <code>rawr init</code>.</p>
+
+<h2 id="loop">The loop</h2>
+<ol>
+  <li><code>new</code> makes a crate whose <code>src/main.rs</code> starts with <code>// rawr</code>.</li>
+  <li>The agent edits the files with its own tools.</li>
+  <li><code>check</code> returns each error with its file, line and column.</li>
+  <li><code>run</code> runs a command-line program to its end, with arguments and stdin.</li>
+  <li><code>start</code> runs a window or a long-running program and keeps it running.</li>
+  <li>After each save, <code>wait</code> says whether the program swapped, restarted or failed.</li>
+  <li><code>screenshot</code> shows its window, and <code>stop</code> ends it.</li>
+</ol>
+
+<h2 id="tools">The tools</h2>
+<p>Every tool takes a <code>path</code>: a crate directory or a <code>.rs</code> file. A relative path starts at the project the server runs in. Each result has data in <code>structuredContent</code> and a text form an agent can act on.</p>
+<table>
+  <tr><th>Tool</th><th>What it does</th></tr>
+  <tr><td><code>new</code></td><td>Makes a crate at <code>path</code>. <code>template</code> picks a template an installed extension offers, such as <code>iced</code>. A path inside a Cargo workspace that doesn&rsquo;t list it is refused, with the fix.</td></tr>
+  <tr><td><code>check</code></td><td>Runs rawr&rsquo;s check and <code>cargo check</code>. Each diagnostic has an absolute <code>file</code>, <code>line</code>, <code>column</code>, <code>end_line</code>, <code>end_column</code>, <code>code</code>, <code>severity</code>, <code>message</code> and <code>help</code>. One from rustc may carry a <code>suggestion</code>. The text form has one <code>file:line:col: error[CODE]: message</code> line per diagnostic.</td></tr>
+  <tr><td><code>run</code></td><td>Runs the program with <code>args</code> and <code>stdin</code> until it ends or <code>timeout_ms</code> passes. It returns the exit status, stdout and stderr.</td></tr>
+  <tr><td><code>start</code></td><td>Starts the program and keeps it running. It answers <code>running</code>, <code>failed</code> with diagnostics, or <code>building</code> while a first start builds. Starting the same project again replaces the program.</td></tr>
+  <tr><td><code>wait</code></td><td>Waits for the next events of the started program and returns them with the output since the last call.</td></tr>
+  <tr><td><code>status</code></td><td>Says what each started program is doing, without waiting.</td></tr>
+  <tr><td><code>stop</code></td><td>Stops the started program.</td></tr>
+  <tr><td><code>screenshot</code></td><td>Returns a PNG of the started program&rsquo;s window alone.</td></tr>
+</table>
+<p>The events <code>wait</code> returns are these:</p>
+<ul>
+  <li><code>running</code>: the program runs.</li>
+  <li><code>swapped</code>: a save changed the running program in place, and it kept its state.</li>
+  <li><code>restarting</code>: a save restarts the program, for the reason given.</li>
+  <li><code>failed</code>: a start or a save failed, with diagnostics. The last good program keeps running.</li>
+  <li><code>ended</code>: the program ended, with its status. The next save runs it again.</li>
+</ul>
+<p>Each event has a number. <code>wait</code> goes on from the last event it returned, so an event that came between two calls is still returned. Pass <code>cursor</code> to start from another one.</p>
+<p>rawr-iced adds tools for iced apps:</p>
+<table>
+  <tr><th>Tool</th><th>What it does</th></tr>
+  <tr><td><code>list_previews</code></td><td>Lists the project&rsquo;s <code>#[preview]</code>s without rendering them.</td></tr>
+  <tr><td><code>render_preview</code></td><td>Renders one preview and returns the PNG.</td></tr>
+  <tr><td><code>click</code>, <code>type_text</code>, <code>press_key</code></td><td>Send input to the running window. A click finds a widget by its text or id, or goes to a point.</td></tr>
+  <tr><td><code>do</code></td><td>Sends a list of clicks, text and keys in order.</td></tr>
+  <tr><td><code>reset</code></td><td>Boots the app afresh.</td></tr>
+</table>
+<p>Each input tool can return a screenshot. An iced window takes its own screenshot, so it needs no permission. <a href="/docs/iced/previews">Previews</a> has more on previews.</p>
+
+<h2 id="example">An example session</h2>
+<p>An agent making a command-line tool calls these, in order:</p>
+<div class="block"><pre><code>new    {"path": "hello"}
+check  {"path": "hello"}
+run    {"path": "hello", "args": ["-n", "pie"], "stdin": "apple\ncherry\n"}</code></pre></div>
+<p>An agent making an iced app calls these:</p>
+<div class="block"><pre><code>new         {"path": "counter", "template": "iced"}
+start       {"path": "counter"}
+wait        {"path": "counter"}
+do          {"path": "counter", "actions": [{"action": "click", "text": "Increment"}], "screenshot": true}
+wait        {"path": "counter"}
+stop        {"path": "counter"}</code></pre></div>
+<p>The first <code>start</code> of an app with dependencies builds them, which can take minutes. It answers <code>building</code> within the call&rsquo;s time limit, and <code>wait</code> follows the build until the app runs.</p>
+
+<h2 id="programs">The programs the server starts</h2>
+<p>The server owns the programs it starts. It runs one program per project, as <code>rawr run</code> would at a terminal. The program&rsquo;s stdin is what <code>stdin</code> gave, then the end of input. Its output is kept for <code>wait</code>.</p>
+<ul>
+  <li><code>stop</code> ends the program and everything it started.</li>
+  <li>A second <code>start</code> of the same project ends the first program.</li>
+  <li>When the agent closes the server, its programs end.</li>
+  <li>When the server is killed, its programs notice and end themselves.</li>
+</ul>
+<p>A window started outside the server, with <code>rawr run</code> in a terminal, still works with rawr-iced&rsquo;s window tools. <code>stop</code> leaves it alone.</p>
+
+<h2 id="limits">Limits</h2>
+<ul>
+  <li>No call takes longer than about 45 s. A longer build answers <code>building</code>, or <code>check</code> says it is still checking. Call it again to keep waiting.</li>
+  <li><code>start</code> refuses a program that draws a terminal UI, such as a <a href="/docs/ratatui">ratatui</a> app. Run it with <code>rawr run</code> in a terminal of your own.</li>
+  <li>A screenshot of a window that isn&rsquo;t iced&rsquo;s uses macOS&rsquo;s window capture. macOS asks for Screen Recording permission for the app the agent runs in. Other systems have no such capture yet.</li>
+  <li>One project has one started program at a time.</li>
+</ul>
+</article>

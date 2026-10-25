@@ -1,0 +1,168 @@
+/* rawr's tokens for both themes, Tailwind and shadcn's variables over them,
+   and what every page shares: the reset, the site bar, the footer and the
+   syntax colours. The theme is <html data-theme="dark|light">, which an
+   inline script in <head> sets before the first paint (theme.ts). */
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root,
+[data-theme="dark"] {
+  --bg: #141416;
+  --raised: #1b1b1e;
+  --inset: #101012;
+  /* A terminal strip under a file, and the landing page's rawr side. */
+  --term: #0c0c0e;
+  --pane-rawr: #121115;
+  --term-rawr: #0e0c10;
+  --text: #e4e4e8;
+  --body: #cdcdd3;
+  --code: #cfcfd6;
+  --dim: #9a9aa3;
+  --line: #2e2e33;
+  /* The brand pink fills; --ink is pink text, the same pink in the dark. */
+  --pink: #ff2e93;
+  --ink: #ff2e93;
+  --pink-hover: #ff8cc6;
+  --on-pink: #141416;
+  --rose: #ff8cc6;
+  --err: #ff8fc4;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: #f7f7f8;
+  --raised: #ffffff;
+  --inset: #f0f0f2;
+  --term: #e9e9ec;
+  --pane-rawr: #f4f0f5;
+  --term-rawr: #ebe6ee;
+  --text: #18181b;
+  --body: #34343b;
+  --code: #2a2a30;
+  --dim: #6b6b74;
+  --line: #dadadf;
+  --pink: #ff2e93;
+  /* Pink text needs more contrast on a light page: 4.9:1 on --bg. */
+  --ink: #d1006b;
+  --pink-hover: #ff5aa9;
+  --on-pink: #141416;
+  --rose: #a8417a;
+  --err: #c4005a;
+  color-scheme: light;
+}
+
+:root {
+  --mono: "Fira Mono", ui-monospace, Menlo, monospace;
+  --sans: "Fira Sans", system-ui, -apple-system, sans-serif;
+  /* shadcn's names for the same tokens. */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--raised);
+  --card-foreground: var(--text);
+  --popover: var(--raised);
+  --popover-foreground: var(--text);
+  --primary: var(--pink);
+  --primary-foreground: var(--on-pink);
+  --secondary: var(--raised);
+  --secondary-foreground: var(--text);
+  --muted: var(--inset);
+  --muted-foreground: var(--dim);
+  --accent: var(--inset);
+  --accent-foreground: var(--text);
+  --destructive: var(--err);
+  --border: var(--line);
+  --input: var(--line);
+  --ring: var(--pink);
+  --radius: 0px;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-raised: var(--raised);
+  --color-inset: var(--inset);
+  --color-dim: var(--dim);
+  --color-line: var(--line);
+  --color-pink: var(--pink);
+  --color-ink: var(--ink);
+  --color-rose: var(--rose);
+  --color-err: var(--err);
+  --color-code: var(--code);
+  --font-mono: var(--mono);
+  --font-sans: var(--sans);
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius);
+}
+
+@layer base {
+  * { margin: 0; padding: 0; box-sizing: border-box; border-color: var(--line); }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; background: var(--bg); }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-weight: 400; }
+  a { color: var(--ink); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  :focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+  code, pre, kbd { font-family: var(--mono); }
+  /* The site bar stays at the top, so an anchor lands below it. */
+  [id] { scroll-margin-top: 72px; }
+}
+
+@layer components {
+  /* Captions keep the case they are written in, so product names stay lowercase. */
+  .cap { font: 12px/1.4 var(--mono); letter-spacing: 0.04em; color: var(--dim); }
+  code.nw { white-space: nowrap; }
+
+  /* The site bar, the same on every page. */
+  .bar { position: sticky; top: 0; z-index: 10; height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 32px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .brand { display: flex; align-items: center; gap: 12px; color: var(--dim); }
+  .brand:hover { text-decoration: none; }
+  .mark { width: 10px; height: 10px; background: var(--pink); flex: none; }
+  .brand b { font: 400 14px var(--mono); color: var(--text); letter-spacing: 0.04em; }
+  .links { display: flex; align-items: center; gap: 20px; }
+  .links a { color: var(--dim); }
+  .links a:hover, .links a[aria-current] { color: var(--text); text-decoration: none; }
+  /* The theme switch: a sun in the dark theme, a moon in the light one. */
+  .theme { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); background: transparent; color: var(--dim); cursor: pointer; }
+  .theme:hover { color: var(--text); border-color: var(--dim); }
+  .theme svg { width: 14px; height: 14px; display: block; }
+  [data-theme="dark"] .theme .moon, [data-theme="light"] .theme .sun { display: none; }
+
+  footer.site { border-top: 1px solid var(--line); }
+  footer.site .wrap { max-width: 1180px; margin: 0 auto; padding: 18px 32px 28px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+  /* Syntax: pink for keywords, rose for literals, brighter for names. The
+     build and the playground's editor both write these classes (highlight.ts). */
+  :where(code, .cm-content) .k { color: var(--ink); }
+  :where(code, .cm-content) :is(.s, .n) { color: var(--rose); }
+  :where(code, .cm-content) :is(.t, .m) { color: var(--text); }
+  :where(code, .cm-content) :is(.c, .p, .a) { color: var(--dim); }
+  .diag .e { color: var(--ink); }
+  .diag .h { color: var(--text); }
+
+  @media (max-width: 640px) {
+    .bar { padding: 0 16px; }
+    .links { gap: 14px; }
+    .links .wide { display: none; }
+    footer.site .wrap { padding-left: 16px; padding-right: 16px; }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
