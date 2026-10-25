@@ -79,6 +79,7 @@ where
 {
     /// Workspace loader call-site order: SourceId::for_manifest_path precedes
     /// read_manifest. A source error must not read or publish the manifest.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn begin<'s>(
         &mut self,
         path: &'original Path,

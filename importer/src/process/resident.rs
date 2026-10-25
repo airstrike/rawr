@@ -1,6 +1,8 @@
 //! A resident compiler result bound to one live owner and original hot attempt.
 
 /// Only the prepared branch owns a candidate awaiting commit or abort.
+// Boxing `Prepared` would change this public, exhaustively matched contract.
+#[allow(clippy::large_enum_variant)]
 pub enum Outcome {
     Prepared(Prepared),
     NeedsPreparation,

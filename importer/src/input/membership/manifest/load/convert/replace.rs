@@ -63,6 +63,7 @@ pub(in super::super) fn key<A: rawr_toml::document::Admission>(
 
 /// The caller owns the parsed/defaulted spec across any pending native work.
 /// Replace/patch exclusion and key parsing precede this stage.
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn entry<'a, 'd: 'a, 'p, 's, 'image: 's>(
     spec: &'a Spec,
     declaration: &'a direct::Direct<'d>,

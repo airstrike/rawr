@@ -644,6 +644,7 @@ impl Stored {
         Err(node::Error::Codec("early control absent from inventory"))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn replay_content(
         &self,
         root: &Path,

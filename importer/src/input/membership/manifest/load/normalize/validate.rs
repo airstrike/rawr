@@ -196,6 +196,7 @@ fn checked_name<'a, A: document::Admission>(
     Ok(name)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn deprecated<A: document::Admission>(
     original: Option<&Target<'_>>,
     old: &'static str,

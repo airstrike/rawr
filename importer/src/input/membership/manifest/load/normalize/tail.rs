@@ -83,6 +83,8 @@ impl<'a, 'd> Complete<'a, 'd> {
         self.workspace
     }
 }
+// A continuation step that is matched at once; boxing would allocate per step.
+#[allow(clippy::large_enum_variant)]
 pub(in super::super) enum Progress<'a, 'd> {
     Complete(Complete<'a, 'd>),
     Workspace(Workspace<'a, 'd>),
@@ -416,6 +418,7 @@ fn platform_map<'a, 'd, A: rawr_toml::document::Admission>(
     )?;
     Ok(new.or(old))
 }
+#[allow(clippy::too_many_arguments)]
 fn alias<A: rawr_toml::document::Admission>(
     old: bool,
     new: bool,

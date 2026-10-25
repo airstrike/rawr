@@ -49,6 +49,8 @@ pub(crate) enum Owned<K> {
     Staged(Staged<K>),
 }
 
+// Returned by every lookup and matched at once; boxing the hit would allocate on the hot path.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Outcome<K> {
     Hit(Owned<K>),
     Miss(Miss),

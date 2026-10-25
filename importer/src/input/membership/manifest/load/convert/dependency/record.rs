@@ -71,6 +71,7 @@ impl<'p, 's> BeforeArtifact<'p, 's> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn retain<'p, 's, 'image: 's>(
     dependency: super::input::Input<'_, '_>,
     version: Option<&str>,

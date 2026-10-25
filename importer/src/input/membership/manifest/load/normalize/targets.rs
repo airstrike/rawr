@@ -38,6 +38,7 @@ impl<'a, 'd> Normalized<'a, 'd> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn group<'a, 'd>(
     original: Input<'a, 'd, '_>,
     kind: resolve::Kind,

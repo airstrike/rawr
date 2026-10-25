@@ -21,6 +21,8 @@ pub struct Built {
     read_set: Option<crate::node::read_set::Prepared>,
 }
 
+// One value per launched runner, held for its life; boxing would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Native {
     Legacy {
         artifact: artifact::BuiltArtifactProof,

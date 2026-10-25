@@ -6,6 +6,8 @@ use std::ffi::CStr;
 use super::super::{observed, Budget, Error, Result};
 use observed::stream::{Row, Transcript};
 
+// rawr_directory::Stream keeps its read buffer inline; boxing would allocate per directory.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Start<'borrow, 'account> {
     Failed(observed::Record),
     Opened(Capture<'borrow, 'account>),
@@ -57,6 +59,8 @@ pub(super) fn open<'borrow, 'account>(
 
 /// Shared native acquisition only. Complete and source-directed consumers keep
 /// separate ownership/completion contracts over the same directory foundation.
+// rawr_directory::Stream keeps its read buffer inline; boxing would allocate per directory.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Opened {
     Failed(Transcript),
     Stream(rawr_directory::Stream),

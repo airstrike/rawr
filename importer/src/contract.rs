@@ -63,6 +63,7 @@ pub struct Allocation {
 }
 
 impl Contract<Classified> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn seal(
         graph: api::Graph<api::Extracted>,
         definitions: Box<[crate::classify::DefinitionPlan]>,
@@ -318,6 +319,7 @@ impl Contract<Classified> {
 }
 
 impl Usage {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn classified(
         graph: &crate::api::Graph<impl crate::api::Phase>,
         definitions: &[crate::classify::DefinitionPlan],

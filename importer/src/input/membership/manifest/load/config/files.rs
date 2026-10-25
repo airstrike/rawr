@@ -77,6 +77,7 @@ impl<'a, 'image: 'a> Files<'a, 'image> {
     /// Compose one reached physical selection with complete file/include load.
     /// No canonicalization or ancestor/home traversal is performed here. The
     /// caller still scopes a fresh Files visited set where pinned Cargo does.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn load_discovered(
         &mut self,
         directory: &Path,

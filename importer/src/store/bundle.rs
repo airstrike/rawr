@@ -661,6 +661,7 @@ impl Drop for Pending {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_complete(
     store: &Path,
     reference: BundleRef,

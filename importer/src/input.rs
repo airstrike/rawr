@@ -530,6 +530,7 @@ impl Evidence {
         Ok(ArtifactJoin::Available(authority))
     }
     #[cfg(all(feature = "rustc-driver", test))]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn validate_extern_artifact(
         &self,
         graph: &cargo::unit::BuildGraph,
@@ -1005,6 +1006,7 @@ impl Build {
     }
 
     #[cfg(all(feature = "rustc-driver", test))]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn validate_extern_artifact(
         &self,
         graph: &cargo::unit::BuildGraph,

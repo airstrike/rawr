@@ -36,6 +36,8 @@ pub(in super::super::super) struct Prepared<'a, 's> {
 pub(in super::super::super) struct Hints {
     pub(in super::super::super) mostly_unused: Option<super::super::value::Owned>,
 }
+// A continuation step that is matched at once; boxing would allocate per step.
+#[allow(clippy::large_enum_variant)]
 pub(in super::super::super) enum Progress<'a, 'd, 's> {
     Complete(Complete<'a, 's>),
     Compile {
@@ -46,6 +48,7 @@ pub(in super::super::super) enum Progress<'a, 'd, 's> {
     Patch,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in super::super::super) fn convert<'a, 'd: 'a, 's: 'a, 'image: 's>(
     tail: &'a normalize::tail::Complete<'a, 'd>,
     original: &'a manifest::Original<'d>,

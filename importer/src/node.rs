@@ -441,6 +441,8 @@ pub struct Evaluator<'store> {
 
 /// The authenticated result of one lookup, not a presence probe. Missing work
 /// retains its recovery disposition for the bounded continuation.
+// Returned by every lookup and matched at once; boxing the hit would allocate on the hot path.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Lookup<K> {
     Hit(Validated<K>),
     Miss(Miss),

@@ -81,6 +81,7 @@ impl<'a, 'd> Owner<'a, 'd> {
             .workspace
     }
     /// Called after virtual normalization has passed its package-field checks.
+    #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn convert_virtual<'b, 's: 'b, 'image: 's>(
         &'b self,
         specs: &mut storage::slots::Writer<'b, super::super::super::spec::Spec>,
@@ -134,6 +135,7 @@ impl<'a, 'd> Owner<'a, 'd> {
         )
     }
     /// Dependency conversion after target and original-dependency validation.
+    #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn convert_dependencies<'b, 's: 'b, 'image: 's>(
         &'b self,
         tail: &'b tail::Complete<'b, 'd>,

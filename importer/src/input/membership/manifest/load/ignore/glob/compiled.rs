@@ -23,6 +23,8 @@ pub(in super::super) enum Failure {
     Regex(matching::Failure),
 }
 
+// Built once per matcher and matched per candidate; boxing would add a hop to each match.
+#[allow(clippy::large_enum_variant)]
 enum Strategy {
     Literal(literal::Strategy),
     Basename(literal::Strategy),

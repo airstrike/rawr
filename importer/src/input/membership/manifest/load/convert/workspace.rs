@@ -26,6 +26,7 @@ pub(in super::super) enum Progress<'a, 's> {
     Replacement,
     Patch,
 }
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn convert<'a, 'd: 'a, 's: 'a, 'image: 's>(
     original: &'a manifest::Original<'d>,
     patches: Option<&'a [normalize::Source<'a, 'd>]>,

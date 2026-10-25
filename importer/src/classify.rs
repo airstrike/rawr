@@ -174,6 +174,8 @@ struct StoredCanonical {
 }
 
 #[derive(Deserialize, Serialize)]
+// A decoded record that is converted at once; boxing would allocate per record.
+#[allow(clippy::large_enum_variant)]
 enum StoredSupportOutcome {
     Complete {
         definition: crate::surface::identity::Definition,

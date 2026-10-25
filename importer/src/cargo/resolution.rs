@@ -439,6 +439,7 @@ pub(crate) fn cached_locked(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn cached_locked_with_toolchain(
     context: &Context,
     parent: &node::Validated<Attestation>,

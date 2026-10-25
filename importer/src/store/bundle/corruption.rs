@@ -54,6 +54,7 @@ impl std::fmt::Display for Corruption {
 }
 
 impl Corruption {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn observed(
         root: &Path,
         store: &Path,

@@ -1918,6 +1918,7 @@ impl ArtifactProfile {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn encoded_size(
         document: &'static str,
         opt_level: &str,

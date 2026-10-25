@@ -21,6 +21,7 @@ where
     'body: 'document,
     'document: 'original,
 {
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::input::membership::manifest::load) fn begin_staged<'s>(
         &mut self,
         path: &'original Path,

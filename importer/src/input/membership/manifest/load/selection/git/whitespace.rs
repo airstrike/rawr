@@ -17,6 +17,8 @@ pub(super) struct Owner {
     state: State,
 }
 
+// Built once and matched per use; boxing the DFA would add a hop to each use.
+#[allow(clippy::large_enum_variant)]
 enum State {
     Uninitialized,
     Ready(dfa::Dfa<'static>),

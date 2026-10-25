@@ -11,6 +11,7 @@ use crate::cargo::{universe::MetadataProof, Limits};
 use crate::input::build::Evidence;
 use crate::input::proof::Entry;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn project<A: Account>(
     entries: &[&Entry],
     package: &str,

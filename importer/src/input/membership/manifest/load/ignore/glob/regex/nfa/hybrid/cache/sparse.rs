@@ -35,6 +35,7 @@ impl Sets {
         Ok(builder)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn next<A: Admission>(
         &mut self,
         nfa: &finalize::Nfa,

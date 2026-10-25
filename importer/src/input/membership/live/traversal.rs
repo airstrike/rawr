@@ -37,6 +37,8 @@ struct Active {
     native: Native,
 }
 
+// rawr_directory::Stream keeps its read buffer inline; boxing would allocate per directory.
+#[allow(clippy::large_enum_variant)]
 enum Native {
     Directory {
         stream: Option<rawr_directory::Stream>,

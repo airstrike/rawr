@@ -66,6 +66,8 @@ impl<'p, 's> Map<'p, 's> {
         Ok(())
     }
 }
+// A continuation step that is matched at once; boxing would allocate per step.
+#[allow(clippy::large_enum_variant)]
 pub(in super::super::super) enum Progress<'a, 'p, 's> {
     Complete(Map<'p, 's>),
     Canonical(Pending<'a, 'p, 's>),
@@ -80,6 +82,7 @@ impl Pending<'_, '_, '_> {
 }
 
 /// Called after replacement handling. This does not grant full manifest authority.
+#[allow(clippy::too_many_arguments)]
 pub(in super::super::super) fn convert<'a, 'd: 'a, 'p, 's, 'image: 's>(
     patches: Option<&'a [normalize::Source<'a, 'd>]>,
     manifest: &'a Path,

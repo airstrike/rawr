@@ -477,6 +477,8 @@ struct Placement {
     exclusive: bool,
 }
 
+// Persisted is the usual state; boxing it would allocate per placement to shrink a local.
+#[allow(clippy::large_enum_variant)]
 enum PlacementState {
     Fresh,
     Persisted {

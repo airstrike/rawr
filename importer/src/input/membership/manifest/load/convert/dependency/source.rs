@@ -14,6 +14,7 @@ use crate::input::membership::manifest::{
 use crate::{cargo, input::membership::host};
 use std::path::Path;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn select<'a, 'd: 'a, 'store, 'image: 'store>(
     name: &str,
     get: impl Fn(Field) -> Option<inherit::Value<'a, 'd>>,

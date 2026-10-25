@@ -210,6 +210,8 @@ pub struct Store {
     graph_budget: crate::node::GraphBudget,
 }
 
+// A reservation is matched at once; boxing Publish would allocate on every publication.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Reserved<K, T> {
     Reuse(T),
     Publish {
@@ -987,6 +989,7 @@ impl Store {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn with_node_reservation_locked<K: Value, T, U>(
         &self,
         ownership: &Ownership<'_>,
@@ -1663,6 +1666,7 @@ impl Store {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn validate_allocation(
         &self,
         directory: &Path,
@@ -1688,6 +1692,7 @@ impl Store {
         accounting::registered_with_budget(&self.root, &record, budget)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn validate_allocation_record(
         &self,
         directory: &Path,

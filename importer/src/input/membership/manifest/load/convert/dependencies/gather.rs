@@ -17,6 +17,8 @@ use crate::input::membership::{
 };
 use std::path::Path;
 
+// A continuation step that is matched at once; boxing would allocate per step.
+#[allow(clippy::large_enum_variant)]
 pub(in super::super::super) enum Progress<'a, 'd, 's> {
     Complete(Collected<'a, 's>),
     Canonical(Pending<'a, 'd, 's>),
@@ -73,6 +75,7 @@ struct Cursor<'a, 'd, 's> {
     completed: storage::Buffer<dependency::Converted<'a, 's>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in super::super::super) fn convert<'a, 'd: 'a, 's, 'image: 's>(
     tail: &'a tail::Complete<'a, 'd>,
     manifest: &Path,

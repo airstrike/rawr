@@ -77,6 +77,7 @@ impl Variant {
 }
 
 impl Plan {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) const fn new(
         parameters: Box<[super::signature::Parameter]>,
         variants: Box<[Variant]>,

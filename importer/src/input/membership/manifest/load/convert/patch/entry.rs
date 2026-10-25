@@ -41,6 +41,7 @@ impl Pending<'_, '_, '_> {
 }
 
 /// Registry selection and replace/patch exclusion precede this per-entry stage.
+#[allow(clippy::too_many_arguments)]
 pub(in super::super::super) fn convert<'a, 'd: 'a, 'p, 's, 'image: 's>(
     declaration: &'a normalize::Dependency<'a, 'd>,
     registry: &str,

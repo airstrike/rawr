@@ -225,6 +225,7 @@ fn project<'evidence, A: Account>(
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn protected_execution<'evidence, A: Account>(
         package_id: &'evidence str,
         raw: &'evidence str,

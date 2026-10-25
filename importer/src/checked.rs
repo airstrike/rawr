@@ -65,6 +65,7 @@ where
 
 /// Prepare the unchanged checked action identity from authenticated owned data.
 /// This does not grant current authority or execute a source consumer.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn authority(
     contract: crate::contract::fingerprint::Fingerprint,
     graph: crate::api::Fingerprint,

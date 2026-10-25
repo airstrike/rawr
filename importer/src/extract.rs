@@ -416,6 +416,8 @@ pub(crate) struct DirectPublication {
 }
 
 #[cfg(feature = "rustc-driver")]
+// Both variants are large; boxing one would allocate per publication and barely shrink it.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Publication {
     Direct(DirectPublication),
     Cached {
@@ -567,6 +569,7 @@ pub(crate) fn materialize_owner(
 
 /// Retain the API from the owner; a current API hit defers `materialize`.
 #[cfg(feature = "rustc-driver")]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn retain_from_owner_parts(
     context: &crate::context::Context,
     request: &[u8; 32],

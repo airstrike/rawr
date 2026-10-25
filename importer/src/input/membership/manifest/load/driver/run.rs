@@ -23,6 +23,7 @@ pub(in super::super) enum Outcome<'a, 'd, 'owner, 'tail, 's> {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn run<
     'body: 'd,
     'd: 'a,

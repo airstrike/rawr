@@ -24,6 +24,7 @@ use super::super::{
 
 /// Convert one normalized declaration, retaining its prefix across native work.
 /// This does not grant whole-manifest or current-input authority.
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn convert<'a, 'd: 'a, 'p, 'store, 'image: 'store>(
     dependency: impl Into<input::Input<'a, 'd>>,
     manifest: &std::path::Path,
@@ -62,6 +63,7 @@ pub(in super::super) fn convert<'a, 'd: 'a, 'p, 'store, 'image: 'store>(
 }
 
 /// Source-ordered retained prefix; artifact conversion still must complete.
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn before_artifact<'a, 'd: 'a, 'p, 'store, 'image: 'store>(
     dependency: impl Into<input::Input<'a, 'd>>,
     manifest: &std::path::Path,
@@ -123,6 +125,7 @@ pub(in super::super) fn check<A: document::Admission>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn select<'store, 'image: 'store>(
     dependency: &dependencies::Dependency<'_, '_>,
     manifest: &std::path::Path,

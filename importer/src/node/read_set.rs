@@ -717,6 +717,7 @@ impl Fragment {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn compose<K: Value>(
         parents: &[impl Edge],
         action: ActionKey,

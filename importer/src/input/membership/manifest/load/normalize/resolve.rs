@@ -64,6 +64,7 @@ impl Resolved {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn resolve(
     name: &str,
     explicit: Option<&Path>,

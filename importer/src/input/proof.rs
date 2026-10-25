@@ -1456,6 +1456,7 @@ mod tests {
         .expect("fixture artifact profile is valid")
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn artifact(
         package_id: &str,
         root: &Path,

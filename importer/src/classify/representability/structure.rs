@@ -72,6 +72,7 @@ impl Field {
 }
 
 impl Plan {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) const fn new(
         constructor: Option<crate::surface::identity::Selector>,
         parameters: Box<[super::signature::Parameter]>,

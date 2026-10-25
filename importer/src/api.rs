@@ -1029,6 +1029,7 @@ impl Graph<Captured> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn seal_canonical(
         invocations: Vec<Invocation>,
         definitions: Vec<model::Definition>,
@@ -1519,6 +1520,7 @@ impl Artifact {
 
 impl Context {
     #[cfg(feature = "rustc-driver")]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_resolution_parts(
         metadata: &unit::Metadata,
         build_unit: &unit::BuildGraph,

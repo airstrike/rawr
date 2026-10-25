@@ -671,6 +671,8 @@ enum Visibility {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+// Each item's shape is built once and serialized; boxing a variant would allocate per item.
+#[allow(clippy::large_enum_variant)]
 enum Shape {
     UnnameablePrivate,
     Module,

@@ -54,6 +54,8 @@ pub(in super::super) struct Report<'a, 'd, 'owner, 'tail, 's> {
     pub(in super::super) errors: validate::Errors,
     pub(in super::super) result: Result<Output<'tail, 'd, 's>, Failure>,
 }
+// A continuation step that is matched at once; boxing would allocate per step.
+#[allow(clippy::large_enum_variant)]
 pub(in super::super) enum Converted<'a, 'd, 's> {
     Real(Real<'a, 'd, 's>),
     Virtual(convert::workspace::Complete<'a, 's>),
@@ -145,6 +147,7 @@ impl Candidate<'_, '_, '_> {
 impl<'a: 'owner, 'd: 'a, 'owner> Progress<'a, 'd, 'owner> {
     /// Pending normalization must first be resumed with its selected workspace.
     /// Returned conversion may itself suspend on native dependency operations.
+    #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn convert<'tail, 's: 'tail, 'image: 's>(
         self,
         tails: &mut slots::Writer<'tail, tail::Complete<'owner, 'd>>,

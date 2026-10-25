@@ -168,6 +168,7 @@ impl Dfa {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn transition<A: Admission>(
         &mut self,
         nfa: &noncontiguous::Nfa,

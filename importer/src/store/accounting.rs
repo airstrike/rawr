@@ -490,6 +490,7 @@ impl Record {
     }
 
     /// `validate` over the payload's already-computed length and SHA-256.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn validate_digest(
         &self,
         class: Class,
@@ -1614,6 +1615,7 @@ pub(crate) fn cancel(
     save(publication, root, &ledger)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn plan(
     publication: &super::lease::Publication<'_>,
     root: &Path,
@@ -2240,6 +2242,7 @@ pub(super) fn physical_usage(root: &Path) -> Result<(Charge, Charge), Error> {
     Ok((ledger.total()?, control))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn recover_planned(
     publication: &super::lease::Publication<'_>,
     root: &Path,

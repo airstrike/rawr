@@ -8,6 +8,8 @@ pub(crate) type Materialize = Box<
 >;
 
 /// The captured graph, or the deferred rebuild of a current stored API hit.
+// Ready is the usual result and is matched at once; boxing it would allocate per hit.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Lazy {
     Ready(super::Graph<super::Captured>),
     Pending(Materialize),

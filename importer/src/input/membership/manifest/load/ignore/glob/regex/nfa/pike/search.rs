@@ -54,6 +54,7 @@ impl Pike {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn nexts<A: Admission>(
         &self,
         stack: &mut super::storage::Array<cache::Frame>,
@@ -91,6 +92,7 @@ impl Pike {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn next<A: Admission>(
         &self,
         stack: &mut super::storage::Array<cache::Frame>,

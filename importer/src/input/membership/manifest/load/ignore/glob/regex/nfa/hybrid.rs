@@ -12,6 +12,8 @@ mod machine;
 
 pub(super) struct Hybrid(Attempt);
 
+// Built once per regex and matched per search; boxing would add a hop to each search.
+#[allow(clippy::large_enum_variant)]
 enum Attempt {
     Skipped,
     Rejected(machine::Failure),

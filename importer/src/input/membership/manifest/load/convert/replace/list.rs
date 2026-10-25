@@ -30,6 +30,8 @@ pub(in super::super::super) struct Entry<'a, 'p, 's> {
     pub(in super::super::super) spec: &'a Spec,
     pub(in super::super::super) dependency: dependency::Converted<'p, 's>,
 }
+// A continuation step that is matched at once; boxing would allocate per step.
+#[allow(clippy::large_enum_variant)]
 pub(in super::super::super) enum Progress<'a, 'p, 's> {
     Complete(storage::Buffer<Entry<'a, 'p, 's>>),
     Canonical(Pending<'a, 'p, 's>),
@@ -52,6 +54,7 @@ impl Pending<'_, '_, '_> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in super::super::super) fn convert<'a, 'd: 'a, 'p, 's, 'image: 's>(
     original: &'a manifest::Original<'d>,
     specs: &mut slots::Writer<'a, Spec>,

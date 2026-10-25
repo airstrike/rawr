@@ -1,5 +1,7 @@
 //! Request-local profile authority, before the actual renderer consumes inputs.
 
+// Historical is boxed; boxing the usual Current proof too would allocate per request.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Profile {
     Current(crate::profile::Proof),
     /// Boxed: a cached replay is the cold path, and the pair is large.

@@ -1758,6 +1758,8 @@ fn resolved_warm_launch_equals_cold_without_the_api_graph() {
             .retain_api(&limits)
             .unwrap()
     };
+    // The closure passes on resolve_api_semantic's result, whose Err is the unresolved API itself.
+    #[allow(clippy::result_large_err)]
     let resolve = |api, source| {
         crate::composition::resolve_api_semantic(api, &adapter, &policy, source, &limits, |_| {
             Ok::<_, ()>(())

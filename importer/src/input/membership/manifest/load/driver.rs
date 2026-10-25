@@ -24,6 +24,8 @@ pub(super) use frames::{Action, Cause, Continuation, Stack};
 pub(super) use run::{run, Outcome};
 pub(super) use walk::{walk, Work};
 
+// A continuation step that is matched at once; boxing would allocate per step.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Progress<'a, 'd, 'owner> {
     Patches {
         pending: normalize::Workspace<'a, 'd>,

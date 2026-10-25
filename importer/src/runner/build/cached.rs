@@ -213,6 +213,7 @@ fn authority(
     Ok(bytes.into_boxed_slice())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile<B>(
     manifest: &super::super::Manifest<super::super::Generated, B>,
     inputs: &Inputs,

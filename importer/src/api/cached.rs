@@ -82,6 +82,7 @@ pub(crate) fn evaluate_owner(
     Ok((product, graph))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn retain_owner<O>(
     context: &Context,
     request: &[u8; 32],

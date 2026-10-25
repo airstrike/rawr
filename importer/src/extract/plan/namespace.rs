@@ -176,6 +176,7 @@ impl Retained {
     }
 
     #[cfg(all(test, feature = "rustc-driver"))]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn revalidate_inventory_scoped_from(
         &self,
         inventory: &retained::Stored,
@@ -192,6 +193,7 @@ impl Retained {
     }
 
     #[cfg(feature = "rustc-driver")]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn revalidate_inventory_completing(
         &self,
         inventory: &retained::Stored,

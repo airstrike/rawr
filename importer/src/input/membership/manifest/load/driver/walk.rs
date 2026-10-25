@@ -9,6 +9,7 @@ pub(in super::super) enum Work<'a, 'd, 'owner, 's> {
     Normalize(read::Normalizing<'a, 'd, 'owner, 's>),
     Search(frames::Frame<'a, 'd, 'owner, 's>),
 }
+#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn walk<'body: 'd, 'd: 'a, 'a: 'owner, 'owner, 's, 'image: 'body + 's>(
     mut work: Work<'a, 'd, 'owner, 's>,
     stack: &mut Stack<'a, 'd, 'owner, 's>,

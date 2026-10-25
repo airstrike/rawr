@@ -486,6 +486,7 @@ impl Definition {
         self.seed
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn validate_context(
         &self,
         target: &str,
@@ -840,6 +841,7 @@ impl FinalLock {
 }
 
 impl Receipt {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn transform(
         request: Digest,
         lock: &FinalLock,
@@ -2719,6 +2721,7 @@ fn normalize_unit_base(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn normalize_path_field(
     object: &mut JsonMap<String, JsonValue>,
     field: &'static str,
@@ -2753,6 +2756,7 @@ fn normalize_path_field(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn normalize_optional_path_field(
     object: &mut JsonMap<String, JsonValue>,
     field: &'static str,

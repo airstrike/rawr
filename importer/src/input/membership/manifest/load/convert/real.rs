@@ -31,6 +31,7 @@ pub(in super::super) struct Conversion<'a, 'd, 's> {
     pub(in super::super) dependencies: all::Progress<'a, 'd, 's>,
 }
 impl<'a, 'd> Owner<'a, 'd> {
+    #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn convert_real<'b, 's: 'b, 'image: 's>(
         &'b self,
         tail: &'b tail::Complete<'b, 'd>,

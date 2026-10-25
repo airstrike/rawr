@@ -253,6 +253,7 @@ fn normalize<'a, 'd>(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn deprecated<A: document::Admission>(
     original: Option<&Target<'_>>,
     old: &'static str,

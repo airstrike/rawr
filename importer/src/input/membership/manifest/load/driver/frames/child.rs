@@ -18,6 +18,7 @@ pub(in crate::input::membership::manifest::load) struct Awaiting<'a, 'd, 'owner,
     child: source::Id<'s>,
 }
 impl<'a, 'd: 'a, 'owner, 's> Waiting<'a, 'd, 'owner, 's> {
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::input::membership::manifest::load) fn begin<'body: 'd, 'image: 'body>(
         self,
         reader: &mut read::Reader<'body, 'd, 'a, 'image>,
