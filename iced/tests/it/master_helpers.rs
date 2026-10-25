@@ -2669,9 +2669,15 @@ impl State {
         let rotation = rotation(15);
         let factor = if rotation < 180.0 { 1.0 } else { -1.0 };
         let limit: f32 = 90.0;
+        // `factor` stays a `{float}` through `Degrees(..)`, so it can be
+        // the `f32` it multiplies next, as in clock.
+        let turned = Degrees(-90.0 * factor);
+        let x: f32 = limit * factor;
         text(format!(
-            "angles {} {} {} {} {} {} {} {}",
+            "angles {} {} {} {} {} {} {} {} {} {}",
             factor,
+            turned.0,
+            x,
             rotation >= limit,
             rotation > 90.0,
             rotation <= Degrees(90.0),
@@ -2853,5 +2859,8 @@ fn master_application_style_returns_a_theme_style() {
 #[test]
 fn master_angles_compare_with_numbers_and_each_other() {
     let adapter = boot(ANGLE_COMPARISONS);
-    find(&adapter, "angles 1 true false true true false true false");
+    find(
+        &adapter,
+        "angles 1 -90 90 true false true true false true false",
+    );
 }

@@ -13786,11 +13786,16 @@ impl<'a> Parser<'a> {
             }
         }
         // A value that took iced's `f32` for a facade `f64` is passed as its
-        // runtime `f64`.
+        // runtime `f64`. An open `{float}` is passed so too, and stays open
+        // for its later uses, as `-90.0 * factor` leaves `factor` to the
+        // `f32` it is multiplied with next.
         if item.path().starts_with("iced::") && !repeated {
             for (expected, argument) in signature.inputs.iter().zip(arguments.iter_mut()) {
                 if self.inference.resolve(expected) == Ty::Float(Float::F64)
-                    && self.inference.resolve(&argument.ty) == Ty::Float(Float::F32)
+                    && matches!(
+                        self.inference.resolve(&argument.ty),
+                        Ty::Float(Float::F32 | Float::Var(_))
+                    )
                 {
                     argument.ty = Ty::Float(Float::F64);
                 }
@@ -14040,6 +14045,17 @@ impl<'a> Parser<'a> {
                                 && self.inference.resolve(expected) == Ty::Float(Float::F64)
                             {
                                 return self.unify_type(&Ty::Float(Float::F32), &argument.ty);
+                            }
+                            // An open `{float}` stays open: iced's `f32` or a
+                            // generic number, its later uses settle it.
+                            if iced
+                                && matches!(
+                                    self.inference.resolve(&argument.ty),
+                                    Ty::Float(Float::Var(_))
+                                )
+                                && self.inference.resolve(expected) == Ty::Float(Float::F64)
+                            {
+                                return true;
                             }
                             self.unify_type(expected, &argument.ty)
                                 || facade

@@ -4,7 +4,12 @@ use iced::{Degrees, Radians, Rotation};
 use rawr::host;
 use rawr::{Dynamic, EvalAltResult};
 
-use super::builtin::{arity, pixels, runtime_error, take};
+use super::builtin::{arity, number, runtime_error, take};
+
+/// An angle's number or a factor, of either sign, as Rust's `f32`.
+fn scalar(value: &Dynamic, operation: &str) -> Result<f32, Box<EvalAltResult>> {
+    Ok(number(value, operation)? as f32)
+}
 
 pub(super) fn bind(builder: &mut host::runtime::Builder) {
     // `Degrees(x)` is `Degrees::from(x)`.
@@ -13,7 +18,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             let [value] = args else {
                 return Err(arity("Degrees::from", 1, args.len()));
             };
-            Ok(Dynamic::from(Degrees(pixels(value, "Degrees::from")?)))
+            Ok(Dynamic::from(Degrees(scalar(value, "Degrees::from")?)))
         })
         .expect("the iced facade must retain Degrees::from");
     builder
@@ -24,7 +29,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
             if value.is::<Degrees>() {
                 return Ok(Dynamic::from(radians(value)?));
             }
-            Ok(Dynamic::from(Radians(pixels(value, "Radians::from")?)))
+            Ok(Dynamic::from(Radians(scalar(value, "Radians::from")?)))
         })
         .expect("the iced facade must retain Radians::from");
     for (name, variant) in [
@@ -143,7 +148,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
                 return Err(arity("Degrees::mul", 2, args.len()));
             };
             let degrees = take::<Degrees>(degrees, "iced::Degrees")?;
-            Ok(Dynamic::from(degrees * pixels(factor, "Degrees::mul")?))
+            Ok(Dynamic::from(degrees * scalar(factor, "Degrees::mul")?))
         })
         .expect("the iced facade must retain Degrees::mul");
     for name in ["add", "sub", "mul", "div", "rem"] {
@@ -155,7 +160,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
                 };
                 let left = take::<Radians>(left, "iced::Radians")?;
                 let angle = right.is::<Radians>() || right.is::<Degrees>();
-                let number = (!angle).then(|| pixels(right, &path)).transpose()?;
+                let number = (!angle).then(|| scalar(right, &path)).transpose()?;
                 let right = if angle { radians(right)? } else { Radians(0.0) };
                 Ok(Dynamic::from(match (name, number) {
                     ("add", _) => left + right,
@@ -186,7 +191,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
                     } else if right.is::<Radians>() {
                         take::<Radians>(right, "iced::Radians")?.0
                     } else {
-                        pixels(right, &path)?
+                        scalar(right, &path)?
                     };
                     Ok(Dynamic::from(match name {
                         "lt" => left < right,
@@ -210,8 +215,8 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
                 Ok(Dynamic::from(match name {
                     "add" => left + take::<iced::Vector>(right, "iced::Vector")?,
                     "sub" => left - take::<iced::Vector>(right, "iced::Vector")?,
-                    "mul" => left * pixels(right, &path)?,
-                    _ => left / pixels(right, &path)?,
+                    "mul" => left * scalar(right, &path)?,
+                    _ => left / scalar(right, &path)?,
                 }))
             })
             .expect("the iced facade must retain every Vector operator");
