@@ -333,6 +333,34 @@ fn main() {
 ",
         "rect 100 true [Hello]; rect 100 true [Hello]\nrect 0 false [closure]\n",
     );
+    // Freya's `on_press(impl Into<EventHandler<Event<PressEventData>>>)`, a
+    // default method with `impl<H: FnMut(D) + 'static, D> From<H> for
+    // EventHandler<D>`: a closure that takes a native event, and one that
+    // changes a native count, fire when native code presses the element.
+    runs(
+        "
+use natives::*;
+
+fn app() -> impl IntoElement {
+    rect().child(\"Hi\").on_press(|_| println!(\"pressed\"))
+}
+
+fn main() {
+    println!(\"{}\", WindowConfig::new(app).click(2));
+    let count = Count::new();
+    let shown = count.clone();
+    let window = WindowConfig::new(move || {
+        let pressed = shown.clone();
+        rect()
+            .child(format!(\"count {}\", shown.get()))
+            .on_press(move |_| pressed.add(1))
+    });
+    println!(\"{}\", window.click(3));
+    println!(\"final {}\", count.get());
+}
+",
+        "pressed\npressed\nrect 0 false [Hi]; rect 0 false [Hi]\nrect 0 false [count 0]; rect 0 false [count 1]; rect 0 false [count 2]\nfinal 3\n",
+    );
     // The runner's runtime tests, which only a generated runner compiles:
     // a handle the protocol gave out stays alive (review 5), and a lent
     // value given back on a thread without the arena, or while a native

@@ -2063,11 +2063,15 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 Selector::Function { .. } => ItemKind::Function,
                 Selector::AssociatedFunction { .. } => ItemKind::AssociatedFunction,
                 // A generic method Rawr calls at the types it infers: every
-                // parameter a type, none a callable.
+                // parameter a type, or the one callable a script closure
+                // fills, as Freya's `on_press` takes (D551.6).
                 Selector::Method { .. }
-                    if plan.class().is_none()
+                    if (plan.class().is_none() || plan.call().is_some())
                         && plan.signature().parameters().iter().all(|parameter| {
                             parameter.kind() == representability::signature::Kind::Type
+                                || plan
+                                    .call()
+                                    .is_some_and(|call| call.parameter() == parameter.index())
                         }) =>
                 {
                     match plan.receiver() {

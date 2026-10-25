@@ -66,6 +66,10 @@ pub(crate) enum Operation {
         substitutions: Box<[convert::Type]>,
         constants: Box<[convert::Constant]>,
         container_parameters: usize,
+        /// The callable parameter a script closure fills, as Freya's
+        /// `on_press` takes (D551.6).
+        #[serde(default)]
+        call: Option<crate::classify::representability::callable::Call>,
     },
     Constant {
         ty: convert::Type,
@@ -639,6 +643,7 @@ fn clone_operation(
                 substitutions: Box::default(),
                 constants: Box::default(),
                 container_parameters: 0,
+                call: None,
             })
         }
         (
@@ -679,6 +684,7 @@ fn clone_operation(
             substitutions: clone_types(selected.types())?,
             constants: clone_constants(selected.constants())?,
             container_parameters: 0,
+            call: plan.call().cloned(),
         }),
         (
             representability::Representability::Invocation(plan),
@@ -691,6 +697,7 @@ fn clone_operation(
             substitutions: clone_types(selected.types())?,
             constants: clone_constants(selected.constants())?,
             container_parameters: plan.container_parameters(),
+            call: None,
         }),
         (
             representability::Representability::Constant(plan),

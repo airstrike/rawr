@@ -4709,6 +4709,7 @@ fn render_adapter(
                     mappers,
                     Some(profile),
                     call.as_ref(),
+                    0,
                     output,
                 )?;
             } else {
@@ -4719,6 +4720,7 @@ fn render_adapter(
                     mappers,
                     None,
                     call.as_ref(),
+                    0,
                     output,
                 )?;
             }
@@ -4813,9 +4815,23 @@ fn render_adapter(
             substitutions,
             constants,
             container_parameters,
+            call,
         } => {
             if matches!(receiver, Receiver::Owned) && replay.is_some() {
                 render_arguments_with_profile(signature, substitutions, 1, profile, output)?;
+            } else if let Some(call) = call {
+                // A script closure a method takes, as Freya's `on_press`
+                // does (D551.6).
+                render_function_arguments(
+                    signature,
+                    substitutions,
+                    &[],
+                    &[],
+                    None,
+                    Some(call),
+                    1,
+                    output,
+                )?;
             } else {
                 render_arguments_with(signature, substitutions, 1, output)?;
             }
@@ -5224,6 +5240,7 @@ fn render_builder(
                 substitutions,
                 constants,
                 container_parameters,
+                ..
             } if !step.is_construct() => {
                 if !replay {
                     render_builder_arguments(signature.inputs(), step.arguments(), output)?;
@@ -5635,6 +5652,7 @@ fn method_message<'a>(
         substitutions,
         constants,
         container_parameters,
+        ..
     } = plan.operation()
     else {
         return Ok(None);
@@ -6069,6 +6087,7 @@ fn dynamic_function_arity(
     Ok(dynamic)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_function_arguments(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
@@ -6076,9 +6095,10 @@ fn render_function_arguments(
     mappers: &[crate::surface::adapter::EventMapper],
     profile: Option<&crate::profile::Proof>,
     call: Option<&crate::classify::representability::callable::Call>,
+    offset: usize,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let mut runtime = 0;
+    let mut runtime = offset;
     let mut selected = functions.iter().peekable();
     let mut mapped = mappers.iter().peekable();
     for (position, ty) in signature.inputs().iter().enumerate() {

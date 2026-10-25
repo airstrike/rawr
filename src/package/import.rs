@@ -510,47 +510,55 @@ impl crate::Engine {
                 );
             }
             // A closure argument is a one-shot callable (D513.7 b), or a
-            // shared `'static` one native code may call again (D551.6).
-            let shared =
-                contract
-                    .outcome(identity)
-                    .and_then(|outcome| match outcome.representability() {
-                        Representability::FunctionItem(plan) => match plan.class() {
-                            Some(rawr_import::surface::callable::Class::Shared(proof)) => {
-                                Some(proof.scope())
-                            }
-                            _ => None,
-                        },
-                        _ => None,
-                    });
-            let instance = if let (true, Some(scope)) = (used.callable, shared) {
-                rawr_import::surface::instance::Arguments::shared(
-                    used.types,
-                    Box::default(),
-                    Box::default(),
-                    scope,
-                    limits,
-                )
-            } else if used.callable {
-                rawr_import::surface::instance::Arguments::once(
-                    used.types,
-                    Box::default(),
-                    Box::default(),
-                    limits,
-                )
-            } else {
-                rawr_import::surface::instance::Arguments::new(
-                    used.types,
-                    Box::default(),
-                    Box::default(),
-                    None,
-                    limits,
-                )
-            }
-            .and_then(|instance| instance.with_function_items(functions.into_boxed_slice(), limits))
-            .and_then(|instance| instance.with_event_mappers(mappers.into_boxed_slice(), limits))
-            .map_err(Error::from)
-            .map_err(super::Error::import)?;
+            // `'static` one native code may call again, shared or mutable
+            // (D551.6).
+            let class = contract
+                .outcome(identity)
+                .and_then(|outcome| match outcome.representability() {
+                    Representability::FunctionItem(plan) => plan.class(),
+                    _ => None,
+                })
+                .filter(|_| used.callable);
+            let instance =
+                if let Some(rawr_import::surface::callable::Class::Shared(proof)) = class {
+                    rawr_import::surface::instance::Arguments::shared(
+                        used.types,
+                        Box::default(),
+                        Box::default(),
+                        proof.scope(),
+                        limits,
+                    )
+                } else if let Some(rawr_import::surface::callable::Class::Mutable(_)) = class {
+                    rawr_import::surface::instance::Arguments::mutable(
+                        used.types,
+                        Box::default(),
+                        Box::default(),
+                        limits,
+                    )
+                } else if used.callable {
+                    rawr_import::surface::instance::Arguments::once(
+                        used.types,
+                        Box::default(),
+                        Box::default(),
+                        limits,
+                    )
+                } else {
+                    rawr_import::surface::instance::Arguments::new(
+                        used.types,
+                        Box::default(),
+                        Box::default(),
+                        None,
+                        limits,
+                    )
+                }
+                .and_then(|instance| {
+                    instance.with_function_items(functions.into_boxed_slice(), limits)
+                })
+                .and_then(|instance| {
+                    instance.with_event_mappers(mappers.into_boxed_slice(), limits)
+                })
+                .map_err(Error::from)
+                .map_err(super::Error::import)?;
             compiler
                 .require_instance(
                     identity,
@@ -1807,10 +1815,12 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
         }),
         // `F: FnOnce(..) -> R`, as `spawn_blocking` takes: a script closure
         // runs there (D513.7 b). `F: Fn(..) -> R + 'static`, as Freya's
-        // `AppComponent` holds, may call it again.
+        // `AppComponent` holds, may call it again, and so may
+        // `F: FnMut(..) -> R + 'static`, as Freya's `EventHandler` holds.
         Some(
             rawr_import::surface::callable::Class::Once(_)
-            | rawr_import::surface::callable::Class::Shared(_),
+            | rawr_import::surface::callable::Class::Shared(_)
+            | rawr_import::surface::callable::Class::Mutable(_),
         ) => plan.call().is_some(),
         Some(_) => false,
     }
