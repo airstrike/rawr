@@ -108,13 +108,15 @@ column![text("hi"), button("go")]
 ````
 
 Options: `size=WxH` (or a bare `WxH`, at most 2048 per side),
-`theme=dark|light` (or a bare `dark`/`light`), and repeated `msg=EXPR`.
+`theme=dark|light` (or a bare `dark`/`light`), repeated `msg=EXPR`, and a
+bare `mine`, which lets only the request's author click its reply.
 
 An app's reply has a button for each target of its last frame, up to 20
 (D516). A button's `custom_id` carries the click history (`src/click.rs`),
 so a click replays the request with its messages and those steps and edits
-the reply, with no store. Only the request's author may click. A click is a
-run under the per-user and per-channel limits, one click renders per reply
+the reply, with no store. Anyone may click unless the request says `mine`,
+which the click reads from the request as it is now. A click is a run under
+the clicker's per-user and per-channel limits, one click renders per reply
 at a time, and a history stops at 24 clicks.
 
 ### Where it answers

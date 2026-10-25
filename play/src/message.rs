@@ -3,7 +3,8 @@
 //! A message plays when its first line starts with `?play` or a code fence's
 //! info string contains `?play`. Options are whitespace-separated tokens on
 //! that line: `size=WxH` (or a bare `WxH`), `theme=dark|light` (or a bare
-//! `dark`/`light`), and repeated `msg=Message::Increment` for a full app.
+//! `dark`/`light`), repeated `msg=Message::Increment` for a full app, and
+//! a bare `mine`, which lets only the request's author click its reply.
 //!
 //! ````text
 //! ?play 320x200 light msg=Message::Increment
@@ -33,6 +34,9 @@ pub struct Request {
     pub code: String,
     /// Options from the marker line, over `defaults`.
     pub options: Options,
+    /// Only the request's author may click its reply's buttons (`mine`).
+    /// Anyone may click otherwise.
+    pub mine: bool,
 }
 
 /// Parse a message. `None` means it is not a `?play` message at all.
@@ -52,6 +56,7 @@ pub fn parse(content: &str, defaults: &Options) -> Option<Result<Request, String
 
 fn request(content: &str, options_line: &str, defaults: &Options) -> Result<Request, String> {
     let mut options = defaults.clone();
+    let mut mine = false;
     let options_line = options_line.split("```").next().unwrap_or_default();
     for token in options_line.split_whitespace() {
         match token.split_once('=') {
@@ -60,7 +65,7 @@ fn request(content: &str, options_line: &str, defaults: &Options) -> Result<Requ
             Some(("msg" | "message", value)) => options.messages.push(value.to_owned()),
             Some((key, _)) => {
                 return Err(format!(
-                    "unknown option `{key}`; expected size=WxH, theme=dark|light, msg=EXPR"
+                    "unknown option `{key}`; expected size=WxH, theme=dark|light, msg=EXPR, mine"
                 ));
             }
             None if token.contains(['x', 'X'])
@@ -68,13 +73,18 @@ fn request(content: &str, options_line: &str, defaults: &Options) -> Result<Requ
             {
                 options.size = Some(crate::parse_size(token)?);
             }
+            None if token.eq_ignore_ascii_case("mine") => mine = true,
             None => options.theme = token.parse()?,
         }
     }
     let code = code_block(content).ok_or_else(|| {
         "put the snippet in a code block:\n?play\n```rust\ncolumn![text(\"hi\")]\n```".to_owned()
     })?;
-    Ok(Request { code, options })
+    Ok(Request {
+        code,
+        options,
+        mine,
+    })
 }
 
 impl Request {
@@ -442,6 +452,9 @@ mod tests {
         assert_eq!(request.options.size, Some((320, 200)));
         assert_eq!(request.options.theme, Theme::Light);
         assert_eq!(request.options.messages, ["Message::Increment"; 2]);
+        assert!(!request.mine, "anyone may click by default");
+        assert!(parsed("?play mine light\n```\nx\n```").mine);
+        assert!(parsed("```rust ?play Mine\nx\n```").mine);
     }
 
     #[test]
@@ -461,7 +474,9 @@ mod tests {
         let bad = parse("?play size=big\n```\nx\n```", &Options::default()).unwrap();
         assert!(bad.unwrap_err().contains("400x300"));
         let bad = parse("?play colour=red\n```\nx\n```", &Options::default()).unwrap();
-        assert!(bad.unwrap_err().contains("unknown option"));
+        let error = bad.unwrap_err();
+        assert!(error.contains("unknown option"), "{error}");
+        assert!(error.ends_with("msg=EXPR, mine"), "{error}");
     }
 
     #[test]

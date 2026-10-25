@@ -724,8 +724,11 @@ impl Handler {
         let mut claimed = None;
         let decision = click::decide(
             &component.data.custom_id,
-            hash.as_deref()
-                .zip(request.as_ref().map(|(_, author, _)| *author)),
+            hash.as_deref().zip(
+                request
+                    .as_ref()
+                    .map(|(parsed, author, _)| parsed.mine.then_some(*author)),
+            ),
             user,
             || self.throttle(user, channel),
             || {

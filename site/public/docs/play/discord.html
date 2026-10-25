@@ -76,13 +76,14 @@ column![text("hi"), button("go")]
   <tr><td><code>WxH</code> or <code>size=WxH</code></td><td>The canvas size in logical pixels. Each side can be from 1 to 2048. Without a size the canvas <a href="/docs/reference/play#size">fits the content</a>.</td></tr>
   <tr><td><code>dark</code>, <code>light</code> or <code>theme=..</code></td><td>The theme to render with. The default is dark. An app that passes its own function to <code>.theme(..)</code> uses its own theme.</td></tr>
   <tr><td><code>msg=EXPR</code> or <code>message=EXPR</code></td><td>A message to apply to an app. Repeat it to apply several in order.</td></tr>
+  <tr><td><code>mine</code></td><td>Only you can click the reply&rsquo;s buttons. Without it anyone can click them.</td></tr>
 </table>
 
 <h3 id="buttons">Buttons</h3>
 <p>A reply to an app has a button for each widget you can click in its image. A button&rsquo;s label is the widget&rsquo;s text. A label that appears twice gets a number, as in <code>+ (2)</code>. A reply shows at most 20 buttons.</p>
 <p>A button clicks its widget in the app, the way a mouse would. The bot runs the app again from the start, with its messages and every click so far, and edits its reply with the new image and new buttons. A line under the image lists the clicks. If a click starts an animation, the reply shows it as a GIF.</p>
-<p>Only the person who posted the <code>?play</code> message can click its reply. Anyone else gets a note that only they can see. To try the app yourself, post your own <code>?play</code>.</p>
-<p>Each click counts as a run against the rate limits, which are 4 runs a minute per user and 12 a minute per channel. A click over a limit gets a private note that says when to try again. A click while the reply is still rendering is ignored. The app and all of its clicks share the still budget of 5 seconds.</p>
+<p>Anyone in the channel can click a reply&rsquo;s buttons. To keep the clicks to yourself, add <code>mine</code> to the <code>?play</code> line, as in <code>?play mine</code>. Then anyone else who clicks gets a note that only they can see. The bot reads <code>mine</code> from the message as it is now, so an edit that adds or removes it takes effect on the next click.</p>
+<p>Each click counts as a run against the clicker&rsquo;s rate limits, which are 4 runs a minute per user and 12 a minute per channel. A click over a limit gets a private note that says when to try again. A click while the reply is still rendering is ignored. The app and all of its clicks share the still budget of 5 seconds.</p>
 <p>A reply takes up to 24 clicks, and then its buttons go away. Edit the message to start over. An edit always starts the clicks over. A button on a reply whose message was edited since gets a private note to run it again.</p>
 <p>Text inputs, sliders, togglers and radio buttons don&rsquo;t get buttons yet.</p>
 

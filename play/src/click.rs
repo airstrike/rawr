@@ -41,8 +41,10 @@ const DIGITS: &[u8; 62] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP
 /// What a stale button's click is told, privately.
 pub const STALE: &str = "This render is out of date. Run it again.";
 
-/// What a click from someone other than the request's author is told.
-pub const NOT_YOURS: &str = "Only the author can click this render. Post your own ?play to try it.";
+/// What a click from someone other than the author of a `mine` request is
+/// told.
+pub const NOT_YOURS: &str =
+    "This render says mine, so only its author can click it. Post your own ?play to try it.";
 
 /// The line that replaces the buttons once the history is full.
 pub const FULL: &str = "Edit the message to start over.";
@@ -57,6 +59,8 @@ pub fn wait_text(wait: Duration) -> String {
 /// A short hash of what `request` renders: its code, size, theme and
 /// messages. A button made for another request (its message was edited
 /// since) has another hash. FNV-1a, so it is the same in every build.
+/// `mine` changes who may click, not the image, so [`decide`] reads it
+/// from the request as it is now instead.
 #[must_use]
 pub fn hash(request: &Request) -> String {
     let options = &request.options;
@@ -125,7 +129,8 @@ pub enum Decision {
     /// The button is not for the request as it is now: tell the clicker
     /// [`STALE`], privately.
     Stale,
-    /// Someone other than the author clicked: tell them [`NOT_YOURS`].
+    /// Someone other than the author clicked a `mine` request's button:
+    /// tell them [`NOT_YOURS`].
     NotYours,
     /// Over the per-user or per-channel limit: tell them [`wait_text`].
     Wait(Duration),
@@ -136,14 +141,16 @@ pub enum Decision {
 }
 
 /// Decide a click on button `id` by `clicker`, in order: the hash check
-/// against `request` (its [`hash`] and author; `None` when it is gone or
-/// no longer a `?play`), the author check, then `allow` (the rate limits:
-/// `Some(wait)` when over) and `claim` (`false` while a click on this reply
-/// renders). `allow` runs only for the author's current buttons, and
-/// `claim` only once `allow` passed, so a refused click costs nothing.
+/// against `request` (its [`hash`], and its author when it says `mine`;
+/// `None` when it is gone or no longer a `?play`), the author check, then
+/// `allow` (the clicker's rate limits: `Some(wait)` when over) and `claim`
+/// (`false` while a click on this reply renders). Anyone may click a
+/// request without `mine`. `allow` runs only for current buttons the
+/// clicker may press, and `claim` only once `allow` passed, so a refused
+/// click costs nothing.
 pub fn decide(
     id: &str,
-    request: Option<(&str, u64)>,
+    request: Option<(&str, Option<u64>)>,
     clicker: u64,
     allow: impl FnOnce() -> Option<Duration>,
     claim: impl FnOnce() -> bool,
@@ -154,7 +161,7 @@ pub fn decide(
     let Some(click) = decode(id).filter(|click| click.hash == hash) else {
         return Decision::Stale;
     };
-    if clicker != author {
+    if author.is_some_and(|author| author != clicker) {
         return Decision::NotYours;
     }
     if let Some(wait) = allow() {
@@ -296,13 +303,19 @@ mod tests {
         ] {
             assert_ne!(base, hash(&request(other)), "{other}");
         }
+        assert_eq!(
+            base,
+            hash(&request("?play mine\n```rust\ncolumn![text(\"hi\")]\n```")),
+            "mine changes who may click, not the image"
+        );
     }
 
     #[test]
     fn a_click_is_checked_in_order() {
         const AUTHOR: u64 = 7;
+        const OTHER: u64 = 8;
         let id = encode("Xb3K", &[0, 1]);
-        let current = Some(("Xb3K", AUTHOR));
+        let current = Some(("Xb3K", Some(AUTHOR)));
         let never = || -> Option<Duration> { panic!("not reached") };
         let unclaimed = || -> bool { panic!("not reached") };
         assert_eq!(
@@ -311,7 +324,7 @@ mod tests {
             "the request is gone"
         );
         assert_eq!(
-            decide(&id, Some(("Zzzz", AUTHOR)), AUTHOR, never, unclaimed),
+            decide(&id, Some(("Zzzz", None)), OTHER, never, unclaimed),
             Decision::Stale,
             "the request was edited"
         );
@@ -321,8 +334,9 @@ mod tests {
             "an older format"
         );
         assert_eq!(
-            decide(&id, current, 8, never, unclaimed),
-            Decision::NotYours
+            decide(&id, current, OTHER, never, unclaimed),
+            Decision::NotYours,
+            "a mine request"
         );
         let wait = Duration::from_millis(41_200);
         assert_eq!(
@@ -335,6 +349,21 @@ mod tests {
         );
         assert_eq!(
             decide(&id, current, AUTHOR, || None, || true),
+            Decision::Render(vec![0, 1])
+        );
+        let anyone = Some(("Xb3K", None));
+        assert_eq!(
+            decide(&id, anyone, OTHER, || Some(wait), unclaimed),
+            Decision::Wait(wait),
+            "anyone may click, within their own limits"
+        );
+        assert_eq!(
+            decide(&id, anyone, OTHER, || None, || false),
+            Decision::Busy,
+            "one click at a time"
+        );
+        assert_eq!(
+            decide(&id, anyone, OTHER, || None, || true),
             Decision::Render(vec![0, 1])
         );
         assert_eq!(wait_text(wait), "Too many renders. Try again in 42 s.");
