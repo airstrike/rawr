@@ -284,10 +284,11 @@ pub struct Recording {
 
 /// A place in a drawn interface where a click does something: a widget
 /// that shows a pointer, a text cursor or a grab under the cursor, found
-/// by its text or container.
+/// by its text, its container, or the control's own report (a toggler, a
+/// radio, a checkbox without a label).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Target {
-    /// Its text, or the texts inside it; `#n` when it has none. A label
+    /// Its text or a control's label; `#n` when it has none. A label
     /// that repeats has its ordinal: `+ (2)`.
     pub label: String,
     /// Its logical bounds; a click lands at their centre.

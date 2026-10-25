@@ -114,11 +114,18 @@ bare `mine`, which lets only the request's author click its reply.
 An app's reply has a button for each target of its last frame, up to 20
 (D516). Past 20, a select menu in the fifth row holds up to 25 more. A
 button's `custom_id` carries the click history (`src/click.rs`), and so
-does each menu option's value, so a click or a pick replays the request with its messages and those steps and edits
-the reply, with no store. Anyone may click unless the request says `mine`,
-which the click reads from the request as it is now. A click is a run under
-the clicker's per-user and per-channel limits, one click renders per reply
-at a time, and a history stops at 24 clicks.
+does each menu option's value, so a click or a pick replays the request
+with its messages and those steps and edits the reply, with no store.
+Anyone may click unless the request says `mine`, which the click reads
+from the request as it is now. A click is a run under the clicker's
+per-user and per-channel limits, one click renders per reply at a time,
+and a history stops at 24 clicks.
+
+A target is a text or an icon's container that shows a pointer, or a
+control that reports itself. iced's toggler, radio and label-less
+checkbox report nothing to an `Operation`, so rawr-iced wraps each in
+`widget::reported`, which reports its bounds and its own label. Their
+buttons carry those labels, and one without a label is numbered (`#5`).
 
 ### Where it answers
 

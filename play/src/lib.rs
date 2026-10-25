@@ -1718,6 +1718,76 @@ impl State {
     }
 
     #[test]
+    fn togglers_radios_and_checkboxes_are_targets_by_their_labels() {
+        let source = r#"
+use iced::widget::{Widget, checkbox, column, radio, row, toggler};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Size { Small, Large }
+
+#[derive(Default)]
+struct State { dark: bool, size: Option<Size>, done: bool, bare: bool }
+
+#[derive(Debug, Clone, Copy)]
+enum Message { Dark(bool), Size(Size), Done(bool), Bare(bool) }
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Dark(on) => self.dark = on,
+            Message::Size(size) => self.size = Some(size),
+            Message::Done(on) => self.done = on,
+            Message::Bare(on) => self.bare = on,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            toggler(self.dark).label("Dark mode").on_toggle(Message::Dark),
+            toggler(self.dark).label("Locked"),
+            row![
+                radio("Small", Size::Small, self.size, Message::Size),
+                radio("Large", Size::Large, self.size, Message::Size),
+            ]
+            .spacing(20),
+            checkbox(self.done).label("Done").on_toggle(Message::Done),
+            checkbox(self.bare).on_toggle(Message::Bare),
+        ]
+        .spacing(12)
+    }
+}
+"#;
+        let image = clicked(source, &Options::default());
+        assert_eq!(
+            image.actions,
+            ["Dark mode", "Small", "Large", "Done", "#5"],
+            "a disabled toggler is no target, a bare checkbox is numbered"
+        );
+        let steps = |steps: Vec<usize>| Options {
+            steps,
+            still: true,
+            ..Options::default()
+        };
+        let messages = |messages: &[&str]| Options {
+            messages: messages.iter().map(|m| (*m).to_owned()).collect(),
+            still: true,
+            ..Options::default()
+        };
+        let png = |options: &Options| render(source, options).unwrap().bytes;
+        assert!(
+            png(&steps(vec![0, 2, 4]))
+                == png(&messages(&[
+                    "Message::Dark(true)",
+                    "Message::Size(Size::Large)",
+                    "Message::Bare(true)",
+                ])),
+            "a click toggles a toggler, picks a radio and checks a checkbox"
+        );
+        let image = clicked(source, &steps(vec![0, 0, 1]));
+        assert_eq!(image.clicked, ["Dark mode", "Dark mode", "Small"]);
+    }
+
+    #[test]
     fn render_iced_counter_example_verbatim() {
         let source = include_str!("../tests/fixtures/counter.rs");
         assert_eq!(shape(&super::without_tests(source)), Shape::App);

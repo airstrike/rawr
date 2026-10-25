@@ -85,7 +85,8 @@ column![text("hi"), button("go")]
 <p>Anyone in the channel can click a reply&rsquo;s buttons. To keep the clicks to yourself, add <code>mine</code> to the <code>?play</code> line, as in <code>?play mine</code>. Then anyone else who clicks gets a note that only they can see. The bot reads <code>mine</code> from the message as it is now, so an edit that adds or removes it takes effect on the next click.</p>
 <p>Each click counts as a run against the clicker&rsquo;s rate limits, which are 4 runs a minute per user and 12 a minute per channel. A click over a limit gets a private note that says when to try again. A click while the reply is still rendering is ignored. The app and all of its clicks share the still budget of 5 seconds.</p>
 <p>A reply takes up to 24 clicks, and then its buttons go away. Edit the message to start over. An edit always starts the clicks over. A button on a reply whose message was edited since gets a private note to run it again.</p>
-<p>Text inputs, sliders, togglers and radio buttons don&rsquo;t get buttons yet.</p>
+<p>Togglers, radio buttons and checkboxes get buttons too. Each is labelled by its own label. One without a label gets its number, as in <code>#5</code>. A click on its button toggles it or picks it.</p>
+<p>Text inputs and sliders don&rsquo;t get buttons yet.</p>
 
 
 <h2 id="add-bot">Adding the bot to a server</h2>

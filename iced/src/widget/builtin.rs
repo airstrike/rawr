@@ -154,7 +154,14 @@ impl widget::Descriptor for marker::Checkbox {
             Ok(None) => {}
             Err(diagnostic) => return diagnostic,
         }
-        checkbox.boxed()
+        // A labelled checkbox reports its label as a text. One without a
+        // label reports nothing, so it reports itself.
+        match self.label {
+            Some(_) => checkbox.boxed(),
+            None => {
+                widget::reported::reported(checkbox.boxed(), None, widget::reported::Kind::Toggle)
+            }
+        }
     }
 
     fn identity(&self) -> widget::Identity {
@@ -186,7 +193,13 @@ impl widget::Descriptor for marker::Toggler {
             Ok(None) => {}
             Err(diagnostic) => return diagnostic,
         }
-        toggler.boxed()
+        // iced's toggler reports nothing to an `Operation`, so it reports
+        // itself to the headless renderer's targets.
+        widget::reported::reported(
+            toggler.boxed(),
+            self.label.as_deref(),
+            widget::reported::Kind::Toggle,
+        )
     }
 
     fn identity(&self) -> widget::Identity {
@@ -660,7 +673,13 @@ impl widget::Descriptor for marker::Radio {
             Ok(None) => {}
             Err(diagnostic) => return diagnostic,
         }
-        radio.boxed()
+        // iced's radio reports nothing to an `Operation`, so it reports
+        // itself to the headless renderer's targets.
+        widget::reported::reported(
+            radio.boxed(),
+            Some(&self.label),
+            widget::reported::Kind::Toggle,
+        )
     }
 
     fn identity(&self) -> widget::Identity {

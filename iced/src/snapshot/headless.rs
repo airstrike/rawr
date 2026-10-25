@@ -263,7 +263,9 @@ impl Renderer {
 
     /// The places a click lands in the interface the last frame settled,
     /// in reading order (see [`arrange`]). Each text and container the
-    /// interface reports, overlays included, is a candidate; one is kept
+    /// interface reports, and each control that reports itself (a toggler,
+    /// a radio, a checkbox without a label; see `widget::reported`),
+    /// overlays included, is a candidate; one is kept
     /// when the interface, asked with the cursor at its centre and no
     /// event, shows a pointer, a text cursor or a grab. Asking runs no
     /// widget's `update`, so nothing is published and no State changes.
@@ -503,12 +505,13 @@ pub(super) struct Trees {
 /// The most candidates [`Renderer::targets`] asks about.
 const PROBED: usize = 512;
 
-/// Something an interface reports that a click might land on: a text or a
-/// container, at its bounds on screen.
+/// Something an interface reports that a click might land on: a text, a
+/// container or a control that reports itself, at its bounds on screen.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Candidate {
     bounds: Rectangle,
-    /// A text's content; `None` for a container.
+    /// A text's content or a control's label (empty for none); `None` for
+    /// a container.
     text: Option<String>,
     /// Whether an overlay reported it, over the interface's root.
     overlay: bool,
@@ -519,7 +522,7 @@ pub(super) struct Candidate {
     pointer: bool,
 }
 
-/// The texts and containers an interface reports, in the order it reports
+/// The texts, containers and controls an interface reports, in the order it reports
 /// them, at their place on screen: a scrollable's content moves by its
 /// offset. What is reported outside the first traversal of the root is an
 /// overlay's.
@@ -579,13 +582,21 @@ impl Operation for Candidates {
     }
 
     fn text(&mut self, _id: Option<&Id>, bounds: Rectangle, state: &mut dyn Text) {
-        let text = state
-            .text()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        self.push(bounds, Some(text));
+        self.push(bounds, Some(collapsed(&state.text())));
     }
+
+    // A toggler, a radio or a label-less checkbox reports itself through
+    // `widget::reported`, labelled by its own label (empty for none).
+    fn custom(&mut self, _id: Option<&Id>, bounds: Rectangle, state: &mut dyn std::any::Any) {
+        if let Some(report) = state.downcast_ref::<crate::widget::reported::Report>() {
+            self.push(bounds, Some(collapsed(&report.label)));
+        }
+    }
+}
+
+/// `text` with each run of whitespace one space, and none at its ends.
+fn collapsed(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The targets among `candidates` (as [`Candidates`] reports them, each
@@ -599,7 +610,8 @@ impl Operation for Candidates {
 /// - A container is a target only when it holds no text and shows a
 ///   pointer: an icon's button. A layout holding texts whose centre lands
 ///   on a slider or a text input is not one.
-/// - A text is labelled by its content, and a container by its number.
+/// - A text is labelled by its content and a control by its label. A
+///   container, or a control without a label, is labelled by its number.
 /// - Reading order is by lines, top to bottom, each left to right. A
 ///   target whose centre is above the bottom of a line's first target is
 ///   on that line.
@@ -781,6 +793,43 @@ mod target_tests {
             option,
         ];
         assert_eq!(labels(candidates), ["Pick", "Apple"]);
+    }
+}
+
+#[cfg(test)]
+mod report_tests {
+    use iced::widget::Widget as _;
+    use iced_runtime::core::Size;
+    use iced_runtime::user_interface::{self, UserInterface};
+
+    use crate::widget::reported::{reported, Kind};
+
+    #[test]
+    fn a_control_that_reports_itself_is_a_candidate_by_its_label() {
+        let mut renderer = super::Renderer::new().unwrap();
+        let toggler = iced::widget::toggler(false).label("Dark  mode").boxed();
+        let element = iced::widget::column![
+            iced::widget::text("Title"),
+            reported(toggler, Some("Dark  mode"), Kind::Toggle),
+        ]
+        .boxed();
+        let mut interface = UserInterface::build(
+            element,
+            Size::new(200.0, 100.0),
+            user_interface::Cache::default(),
+            &mut renderer.raw,
+        );
+        let mut found = super::Candidates::default();
+        interface.operate(&renderer.raw, &mut found);
+        let texts: Vec<&str> = found
+            .found
+            .iter()
+            .filter_map(|candidate| candidate.text.as_deref())
+            .collect();
+        assert_eq!(texts, ["Title", "Dark mode"]);
+        let control = &found.found[found.found.len() - 1];
+        assert!(control.bounds.y > 0.0, "below the title");
+        assert!(control.bounds.width > 0.0 && control.bounds.height > 0.0);
     }
 }
 
