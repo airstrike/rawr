@@ -110,10 +110,7 @@ where
                 match style {
                     Ok(style) => table.push((status, style)),
                     Err(error) => {
-                        return Err(
-                            widget::diagnostic(format!("{widget} style failed: {error}"))
-                                .lower(context),
-                        )
+                        return Err(widget::failure(format!("{widget} style failed: {error}")))
                     }
                 }
             }
@@ -155,9 +152,9 @@ pub(crate) fn progress_bar_style(
     });
     match style {
         Some(Ok(style)) => Ok(Some(Box::new(move |_: &iced::Theme| *style))),
-        Some(Err(error)) => {
-            Err(widget::diagnostic(format!("progress_bar style failed: {error}")).lower(context))
-        }
+        Some(Err(error)) => Err(widget::failure(format!(
+            "progress_bar style failed: {error}"
+        ))),
         None => Ok(None),
     }
 }
@@ -645,9 +642,7 @@ pub(crate) fn theme_style<T: Clone + Send + Sync + 'static>(
     });
     match style {
         Some(Ok(style)) => Ok(Some(style)),
-        Some(Err(error)) => {
-            Err(widget::diagnostic(format!("{widget} style failed: {error}")).lower(context))
-        }
+        Some(Err(error)) => Err(widget::failure(format!("{widget} style failed: {error}"))),
         None => Ok(None),
     }
 }

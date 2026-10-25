@@ -49,41 +49,35 @@ impl Renderer {
         })
     }
 
-    /// A function framing content as the canvas does: with its margin, in
+    /// How content is framed as the canvas frames it: with its margin, in
     /// the container a fitted size measures.
-    pub(super) fn framing(
-        &self,
-    ) -> impl Fn(iced::Element<'static, runtime::Message>) -> iced::Element<'static, runtime::Message>
-           + use<> {
-        let margin = self.canvas.map(|canvas| canvas.margin as f32);
-        move |content| match margin {
-            Some(margin) => iced::widget::container(content).padding(margin).boxed(),
-            None => content,
+    pub(super) fn framing(&self) -> Framing {
+        Framing {
+            margin: self.canvas.map(|canvas| canvas.margin as f32),
         }
     }
 
-    /// The logical size to render framed `view` at: the declared size, or
+    /// The logical size to render `surface` at: the declared size, or
     /// with a fitting canvas its settled content's own size, falling back
     /// per axis when the content fills it (a `Fill` width has no own size).
-    pub(super) fn size(&mut self, view: &mut View<'_>, declared: Size) -> Size {
+    pub(super) fn size(&mut self, surface: &mut dyn Surface, declared: Size) -> Size {
         let Some(canvas) = self.canvas.filter(|canvas| canvas.fit) else {
             return declared;
         };
-        let interface = self.settle(view, declared);
-        self.fit(interface, declared, canvas).1
+        self.settle(surface, true, declared, |renderer, interface| {
+            let (interface, size) = renderer.fit(interface, declared, canvas);
+            (size, interface.into_cache())
+        })
     }
 
     /// The size `canvas` fits a settled `interface` to within `declared`,
     /// and the interface laid out at the width it measured with.
-    fn fit(
+    fn fit<'a>(
         &mut self,
-        mut interface: UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
+        mut interface: Interface<'a>,
         declared: Size,
         canvas: super::Canvas,
-    ) -> (
-        UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
-        Size,
-    ) {
+    ) -> (Interface<'a>, Size) {
         let fallback = Size::new(canvas.fallback.0 as f32, canvas.fallback.1 as f32);
         let mut size = self.measure(&mut interface);
         if size.width >= declared.width {
@@ -100,10 +94,7 @@ impl Renderer {
     }
 
     /// The size of the root container `framing` adds.
-    fn measure(
-        &mut self,
-        interface: &mut UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
-    ) -> Size {
+    fn measure(&mut self, interface: &mut Interface<'_>) -> Size {
         struct Root(Option<Rectangle>);
         impl Operation for Root {
             // Into the interface's root, and no deeper.
@@ -122,26 +113,35 @@ impl Renderer {
         root.0.map_or(Size::ZERO, |bounds| bounds.size())
     }
 
-    /// `view` once it settles, as iced's runtime would show it. Each frame
-    /// delivers one `RedrawRequested` at a virtual clock, which starts at one
-    /// instant and moves only to a time the interface asked to be redrawn at
-    /// (a sensor's `delay`), so every time is relative to the start. A frame
-    /// that publishes a message or changes the interface (a component that
-    /// took its own Event, a sensor that fired) is rebuilt from `view`,
-    /// given that frame's messages, over the same widget tree; one that
-    /// changes nothing settles, unless it asked for a redraw at a time, to
-    /// which the clock jumps. A redraw on the next frame (an animation)
-    /// settles. At most [`FRAMES`] frames run.
-    fn settle(
+    /// `surface`'s view once it settles, as iced's runtime would show it,
+    /// handed to `settled`. Each frame delivers one `RedrawRequested` at a
+    /// virtual clock, which starts at one instant and moves only to a time
+    /// the interface asked to be redrawn at (a sensor's `delay`), so every
+    /// time is relative to the start. A frame that publishes a message or
+    /// changes the interface (a component that took its own Event, a sensor
+    /// that fired) gives way to the next: its interface goes into iced's
+    /// cache, its messages are applied, and the view is built again over the
+    /// same widget trees. One that changes nothing settles, unless it asked
+    /// for a redraw at a time, to which the clock jumps. A redraw on the
+    /// next frame (an animation) settles. At most [`FRAMES`] frames run.
+    ///
+    /// The view borrows `surface` (an element may borrow the application's
+    /// native home), so no interface is kept while messages apply:
+    /// `settled` gives what it measured and the interface's cache.
+    fn settle<R>(
         &mut self,
-        view: &mut View<'_>,
+        surface: &mut dyn Surface,
+        content: bool,
         size: Size,
-    ) -> UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer> {
+        settled: impl for<'s> FnOnce(&mut Self, Interface<'s>) -> (R, user_interface::Cache),
+    ) -> R {
+        let framing = self.framing();
         let mut now = time::Instant::now();
         let mut cache = user_interface::Cache::default();
         let mut published = Vec::new();
         for frame in 1.. {
-            let element = view(std::mem::take(&mut published));
+            surface.apply(std::mem::take(&mut published));
+            let element = surface.view(content, &framing);
             let mut interface = UserInterface::build(element, size, cache, &mut self.raw);
             let mut messages = shell::Bus::new();
             let (state, _) = interface.update(
@@ -159,12 +159,12 @@ impl Renderer {
                     ..
                 } if messages.is_empty() => match redraw_request {
                     window::RedrawRequest::At(at) if at > now => Some(at),
-                    _ => return interface,
+                    _ => return settled(self, interface).0,
                 },
                 _ => None,
             };
             if frame == FRAMES {
-                return interface;
+                return settled(self, interface).0;
             }
             if let Some(at) = later {
                 now = at;
@@ -187,42 +187,47 @@ impl Renderer {
         })
     }
 
-    /// Draw `view` at `size` once it settles.
+    /// Draw `surface` at `size` once it settles.
     pub(super) fn render(
         &mut self,
-        view: &mut View<'_>,
+        surface: &mut dyn Surface,
         theme: &iced::Theme,
         size: Size,
     ) -> Result<image::Image, Error> {
         let scale = self.scale(size);
-        let mut interface = self.settle(view, size);
-        self.draw(&mut interface, theme, size, scale)
+        self.settle(surface, false, size, |renderer, mut interface| {
+            let image = renderer.draw(&mut interface, theme, size, scale);
+            (image, interface.into_cache())
+        })
     }
 
     /// One frame of a recording at the clock's `now`, over the widget trees
-    /// of the frame before. `view(published, true)` gives the content to
-    /// measure and `view(published, false)` the view to draw, each settled
-    /// within the frame (each message its widgets publish applied while the
-    /// clock stands still). The image is sized as the canvas sizes the
-    /// content and drawn at `scale` (the first frame's, once set). Gives
-    /// when the drawn interface asked to be redrawn, and the logical size.
+    /// of the frame before. `surface`'s content is measured and its view
+    /// drawn, each settled within the frame (each message its widgets
+    /// publish applied while the clock stands still). The image is sized as
+    /// the canvas sizes the content and drawn at `scale` (the first frame's,
+    /// once set). Gives when the drawn interface asked to be redrawn, and
+    /// the logical size.
     pub(super) fn frame(
         &mut self,
-        view: &mut dyn FnMut(
-            Vec<runtime::Message>,
-            bool,
-        ) -> iced::Element<'static, runtime::Message>,
+        surface: &mut dyn Surface,
         trees: &mut Trees,
         declared: Size,
         now: time::Instant,
         theme: &iced::Theme,
         scale: &mut Option<f32>,
     ) -> Result<(image::Image, window::RedrawRequest, Size), Error> {
-        let (request, size) = self.settle_frame(view, trees, declared, now);
-        let scale = *scale.get_or_insert_with(|| self.scale(size));
-        let interface = trees.drawn.as_mut().expect("the frame settled");
-        let image = self.draw(interface, theme, size, scale)?;
-        Ok((image, request, size))
+        let (image, request, size) = self.settle_frame_with(
+            surface,
+            trees,
+            declared,
+            now,
+            |renderer, interface, size| {
+                let scale = *scale.get_or_insert_with(|| renderer.scale(size));
+                renderer.draw(interface, theme, size, scale)
+            },
+        );
+        Ok((image?, request, size))
     }
 
     /// One frame as [`Self::frame`] runs it, settled but not drawn: the
@@ -231,34 +236,83 @@ impl Renderer {
     /// size.
     pub(super) fn settle_frame(
         &mut self,
-        view: &mut dyn FnMut(
-            Vec<runtime::Message>,
-            bool,
-        ) -> iced::Element<'static, runtime::Message>,
+        surface: &mut dyn Surface,
         trees: &mut Trees,
         declared: Size,
         now: time::Instant,
     ) -> (window::RedrawRequest, Size) {
+        let ((), request, size) =
+            self.settle_frame_with(surface, trees, declared, now, |_, _, _| ());
+        (request, size)
+    }
+
+    /// A frame settled at `now`, its drawn interface handed to `settled`
+    /// before it goes into `trees` as iced's cache.
+    fn settle_frame_with<R>(
+        &mut self,
+        surface: &mut dyn Surface,
+        trees: &mut Trees,
+        declared: Size,
+        now: time::Instant,
+        settled: impl FnOnce(&mut Self, &mut Interface<'_>, Size) -> R,
+    ) -> (R, window::RedrawRequest, Size) {
         let size = match self.canvas.filter(|canvas| canvas.fit) {
             Some(canvas) => {
-                let mut content = |published| view(published, true);
                 let cache = std::mem::take(&mut trees.content);
-                let (interface, _) = self.settle_at(&mut content, declared, cache, now);
-                let (interface, size) = self.fit(interface, declared, canvas);
-                trees.content = interface.into_cache();
+                let (size, cache) = self.settle_at(
+                    surface,
+                    true,
+                    declared,
+                    cache,
+                    now,
+                    |renderer, interface, _| {
+                        let (interface, size) = renderer.fit(interface, declared, canvas);
+                        (size, interface.into_cache())
+                    },
+                );
+                trees.content = cache;
                 size
             }
             None => declared,
         };
-        let mut drawn = |published| view(published, false);
-        let cache = trees
-            .drawn
-            .take()
-            .map_or_else(user_interface::Cache::default, UserInterface::into_cache);
-        let (interface, request) = self.settle_at(&mut drawn, size, cache, now);
-        trees.drawn = Some(interface);
+        let cache = trees.drawn.take().unwrap_or_default();
+        let ((result, request), cache) = self.settle_at(
+            surface,
+            false,
+            size,
+            cache,
+            now,
+            |renderer, mut interface, request| {
+                let result = settled(renderer, &mut interface, size);
+                ((result, request), interface.into_cache())
+            },
+        );
+        trees.drawn = Some(cache);
         trees.size = size;
-        (request, size)
+        trees.now = Some(now);
+        (result, request, size)
+    }
+
+    /// The interface the last frame settled, built again from iced's cache
+    /// over `surface`'s view, which has not changed since, and given that
+    /// frame's `RedrawRequested` again so its widgets take the status they
+    /// had then. [`Trees::keep`] puts it back.
+    fn revive<'s>(&mut self, surface: &'s dyn Surface, trees: &mut Trees) -> Option<Interface<'s>> {
+        let cache = trees.drawn.take()?;
+        let element = surface.view(false, &self.framing());
+        let mut interface = UserInterface::build(element, trees.size, cache, &mut self.raw);
+        if let Some(now) = trees.now {
+            let mut messages = shell::Bus::new();
+            let _ = interface.update(
+                &window::Headless,
+                &shell::Waker::noop(),
+                &[Event::Window(window::Event::RedrawRequested(now))],
+                mouse::Cursor::Unavailable,
+                &mut self.raw,
+                &mut messages,
+            );
+        }
+        Some(interface)
     }
 
     /// The places a click lands in the interface the last frame settled,
@@ -272,16 +326,31 @@ impl Renderer {
     /// At most [`PROBED`] candidates are asked, and none once `stop` says so.
     pub(super) fn targets(
         &mut self,
+        surface: &dyn Surface,
         trees: &mut Trees,
         stop: &dyn Fn() -> bool,
     ) -> Vec<super::Target> {
-        let Some(interface) = trees.drawn.as_mut() else {
+        let size = trees.size;
+        let Some(mut interface) = self.revive(surface, trees) else {
             return Vec::new();
         };
+        let targets = self.probe(&mut interface, size, stop);
+        trees.keep(interface);
+        targets
+    }
+
+    /// The targets of `interface`, laid out at `size`, as
+    /// [`Self::targets`] finds them.
+    fn probe(
+        &mut self,
+        interface: &mut Interface<'_>,
+        size: Size,
+        stop: &dyn Fn() -> bool,
+    ) -> Vec<super::Target> {
         let mut found = Candidates::default();
         interface.operate(&self.raw, &mut found);
         let mut candidates = found.found;
-        let window = Rectangle::with_size(trees.size);
+        let window = Rectangle::with_size(size);
         for (at, candidate) in candidates.iter_mut().enumerate() {
             if at >= PROBED || stop() {
                 break;
@@ -324,11 +393,14 @@ impl Renderer {
     /// is tapped. Gives the messages its widgets published.
     pub(super) fn act(
         &mut self,
+        surface: &dyn Surface,
         trees: &mut Trees,
         target: &super::Target,
         text: Option<&str>,
     ) -> Vec<runtime::Message> {
-        let interface = trees.drawn.as_mut().expect("a frame settled before a step");
+        let mut interface = self
+            .revive(surface, trees)
+            .expect("a frame settled before a step");
         let at = target.bounds.center();
         let mut events = vec![Event::Mouse(mouse::Event::CursorMoved { position: at })];
         match target.action {
@@ -376,42 +448,54 @@ impl Renderer {
             &mut self.raw,
             &mut messages,
         );
+        trees.keep(interface);
         messages.drain().map(|(message, _)| message).collect()
     }
 
     /// The interface the last [`Self::frame`] drew, drawn again at
-    /// `scale`. It is the same interface, updated as that frame updated
-    /// it, so its widgets keep their status (a button not yet updated
-    /// draws as disabled), and the app's State and the clock are untouched.
+    /// `scale`. It is that interface revived from iced's cache over the same
+    /// view, updated as that frame updated it, so its widgets keep their
+    /// status (a button not yet updated draws as disabled), and the app's
+    /// State and the clock are untouched.
     pub(super) fn redraw(
         &mut self,
+        surface: &dyn Surface,
         trees: &mut Trees,
         size: Size,
         theme: &iced::Theme,
         scale: f32,
     ) -> Result<image::Image, Error> {
-        let interface = trees.drawn.as_mut().expect("a frame was drawn before");
-        self.draw(interface, theme, size, scale)
+        let mut interface = self
+            .revive(surface, trees)
+            .expect("a frame was drawn before");
+        let image = self.draw(&mut interface, theme, size, scale);
+        trees.keep(interface);
+        image
     }
 
-    /// `view` settled at `now` over `cache`, as [`Self::settle`] settles it
-    /// but with the clock held: a frame that publishes a message or changes
-    /// the interface is rebuilt, and the first that does neither ends it.
-    /// Gives when the interface asked to be redrawn; one still changing
-    /// after [`FRAMES`] asks for the next frame.
-    fn settle_at(
+    /// `surface` settled at `now` over `cache`, as [`Self::settle`] settles
+    /// it but with the clock held: a frame that publishes a message or
+    /// changes the interface is rebuilt, and the first that does neither
+    /// ends it. `settled` gets the interface and when it asked to be
+    /// redrawn; one still changing after [`FRAMES`] asks for the next frame.
+    fn settle_at<R>(
         &mut self,
-        view: &mut View<'_>,
+        surface: &mut dyn Surface,
+        content: bool,
         size: Size,
         mut cache: user_interface::Cache,
         now: time::Instant,
-    ) -> (
-        UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
-        window::RedrawRequest,
-    ) {
+        settled: impl for<'s> FnOnce(
+            &mut Self,
+            Interface<'s>,
+            window::RedrawRequest,
+        ) -> (R, user_interface::Cache),
+    ) -> (R, user_interface::Cache) {
+        let framing = self.framing();
         let mut published = Vec::new();
         for frame in 1.. {
-            let element = view(std::mem::take(&mut published));
+            surface.apply(std::mem::take(&mut published));
+            let element = surface.view(content, &framing);
             let mut interface = UserInterface::build(element, size, cache, &mut self.raw);
             let mut messages = shell::Bus::new();
             let (state, _) = interface.update(
@@ -429,10 +513,10 @@ impl Renderer {
             } = state
                 && messages.is_empty()
             {
-                return (interface, redraw_request);
+                return settled(self, interface, redraw_request);
             }
             if frame == FRAMES {
-                return (interface, window::RedrawRequest::NextFrame);
+                return settled(self, interface, window::RedrawRequest::NextFrame);
             }
             published = messages.drain().map(|(message, _)| message).collect();
             cache = interface.into_cache();
@@ -443,7 +527,7 @@ impl Renderer {
     /// Draw a settled `interface` at `size` and `scale`.
     fn draw(
         &mut self,
-        interface: &mut UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>,
+        interface: &mut Interface<'_>,
         theme: &iced::Theme,
         size: Size,
         scale: f32,
@@ -559,13 +643,24 @@ mod margin_tests {
 }
 
 /// What a recording builds each frame over: the widget trees of the
-/// content it measures, and the interface of the view it last drew.
+/// content it measures, and those of the view it last drew, as iced's
+/// caches. An interface borrows the application, which applies messages
+/// between frames, so none is kept.
 #[derive(Default)]
 pub(super) struct Trees {
     content: user_interface::Cache,
-    drawn: Option<UserInterface<'static, runtime::Message, iced::Theme, iced::Renderer>>,
+    drawn: Option<user_interface::Cache>,
     /// The logical size `drawn` is laid out at.
     size: Size,
+    /// The clock of the frame that settled `drawn`.
+    now: Option<time::Instant>,
+}
+
+impl Trees {
+    /// Keep `interface`, revived from `drawn`, as the cache it came from.
+    fn keep(&mut self, interface: Interface<'_>) {
+        self.drawn = Some(interface.into_cache());
+    }
 }
 
 /// The most candidates [`Renderer::targets`] asks about.
@@ -1001,10 +1096,39 @@ mod report_tests {
     }
 }
 
-/// A view to render: given the messages the last frame published, the
-/// element of the next.
-pub(super) type View<'a> =
-    dyn FnMut(Vec<runtime::Message>) -> iced::Element<'static, runtime::Message> + 'a;
+/// What a render draws: an application, or a preview, whose view may
+/// borrow it (a widget borrows a native value of its State, D546).
+pub(super) trait Surface {
+    /// Apply the messages the last frame's widgets published: the update
+    /// step, which needs the surface mutably.
+    fn apply(&mut self, published: Vec<runtime::Message>);
+
+    /// The element to draw, framed by `framing`: with `content`, without
+    /// the diagnostic overlays that fill the window. The view step, which
+    /// borrows the surface for as long as the element lives.
+    fn view(&self, content: bool, framing: &Framing) -> iced::Element<'_, runtime::Message>;
+}
+
+/// How a canvas frames content: with its margin.
+pub(super) struct Framing {
+    margin: Option<f32>,
+}
+
+impl Framing {
+    /// `content` framed: in the container a fitted size measures.
+    pub(super) fn frame<'a>(
+        &self,
+        content: iced::Element<'a, runtime::Message>,
+    ) -> iced::Element<'a, runtime::Message> {
+        match self.margin {
+            Some(margin) => iced::widget::container(content).padding(margin).boxed(),
+            None => content,
+        }
+    }
+}
+
+/// An interface the renderer builds over a surface's view.
+type Interface<'a> = UserInterface<'a, runtime::Message, iced::Theme, iced::Renderer>;
 
 /// The most frames a render runs before it draws the last.
 pub(super) const FRAMES: usize = 8;

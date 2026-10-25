@@ -106,7 +106,7 @@ impl Value {
 
     /// Lower a fresh transient iced element for the current authority context.
     #[must_use]
-    pub fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    pub fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         self.descriptor.lower(context)
     }
 
@@ -196,10 +196,7 @@ mod tests {
     }
 
     impl widget::Descriptor for Stub {
-        fn lower(
-            &self,
-            _context: &widget::Context<'_>,
-        ) -> iced::Element<'static, runtime::Message> {
+        fn lower<'a>(&self, _context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
             iced::widget::Widget::boxed(iced::widget::text("key carrier"))
         }
 

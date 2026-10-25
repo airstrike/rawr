@@ -135,7 +135,7 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
 }
 
 impl widget::Descriptor for marker::Table {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut columns = Vec::with_capacity(self.columns.len());
         for column in &self.columns {
             let mut cells = Vec::with_capacity(self.rows.len());
@@ -201,6 +201,6 @@ impl Witnessed for marker::Table {
     }
 }
 
-fn failed(error: &str, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+fn failed<'a>(error: &str, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
     widget::diagnostic(format!("table cell failed: {error}")).lower(context)
 }

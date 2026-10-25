@@ -56,8 +56,8 @@ struct State {
     waker: Option<iced_runtime::core::shell::Waker>,
 }
 
-struct Layer {
-    children: [iced::Element<'static, runtime::Message>; 2],
+struct Layer<'a> {
+    children: [iced::Element<'a, runtime::Message>; 2],
     sink: Arc<Sink>,
 }
 
@@ -271,10 +271,10 @@ impl Sink {
 }
 
 /// Keep lifecycle reports live above an otherwise ordinary iced element.
-pub(crate) fn overlay(
-    content: iced::Element<'static, runtime::Message>,
+pub(crate) fn overlay<'a>(
+    content: iced::Element<'a, runtime::Message>,
     sink: Arc<Sink>,
-) -> iced::Element<'static, runtime::Message> {
+) -> iced::Element<'a, runtime::Message> {
     let content = iced::widget::container(content)
         .width(iced::Length::Fill)
         .height(iced::Length::Fill)
@@ -282,8 +282,8 @@ pub(crate) fn overlay(
     Layer::bind(content, sink).boxed()
 }
 
-impl Layer {
-    fn bind(content: iced::Element<'static, runtime::Message>, sink: Arc<Sink>) -> Self {
+impl<'a> Layer<'a> {
+    fn bind(content: iced::Element<'a, runtime::Message>, sink: Arc<Sink>) -> Self {
         Self {
             children: [
                 content,
@@ -308,11 +308,11 @@ impl Layer {
     }
 }
 
-impl Meta for Layer {}
+impl Meta for Layer<'_> {}
 
-impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Layer {
+impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Layer<'_> {
     fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<Self>()
+        tree::Tag::of::<Layer<'static>>()
     }
 
     fn state(&self) -> tree::State {
@@ -651,7 +651,7 @@ mod tests {
         }
     }
 
-    fn layer(sink: Arc<Sink>, states: Arc<AtomicUsize>, diffs: Arc<AtomicUsize>) -> Layer {
+    fn layer(sink: Arc<Sink>, states: Arc<AtomicUsize>, diffs: Arc<AtomicUsize>) -> Layer<'static> {
         Layer::bind(Probe { states, diffs }.boxed(), sink)
     }
 

@@ -7,7 +7,6 @@ use iced::widget::Widget as _;
 use rawr::{host, Dynamic, EvalAltResult};
 
 use super::builtin::{arity, take, witness_error};
-use super::script::Services;
 use crate::{marker, runtime};
 
 pub(super) fn bind(builder: &mut host::runtime::Builder) {
@@ -48,12 +47,10 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
 }
 
 impl super::Descriptor for marker::Component {
-    fn lower(&self, context: &super::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &super::Context<'a>) -> iced::Element<'a, runtime::Message> {
         iced::widget::component(Instance {
             component: self.clone(),
-            services: Services::new(context),
-            instance: context.instance(),
-            generation: context.generation(),
+            context: context.clone(),
         })
         .boxed()
     }
@@ -63,11 +60,9 @@ impl super::Descriptor for marker::Component {
     }
 }
 
-struct Instance {
+struct Instance<'a> {
     component: marker::Component,
-    services: Services,
-    instance: rawr::application::Instance,
-    generation: rawr::program::GenerationId,
+    context: super::Context<'a>,
 }
 
 /// The tree-held State: the script State once the component has one, and
@@ -78,9 +73,9 @@ pub(crate) struct State {
     failure: Option<String>,
 }
 
-impl Instance {
-    fn context(&self) -> super::Context<'_> {
-        self.services.context(self.instance, self.generation)
+impl<'a> Instance<'a> {
+    fn context(&self) -> super::Context<'a> {
+        self.context.clone()
     }
 
     fn state(&self, state: &State) -> Dynamic {
@@ -91,7 +86,7 @@ impl Instance {
     }
 }
 
-impl iced::widget::component::Component<'static, runtime::Message> for Instance {
+impl<'a> iced::widget::component::Component<'a, runtime::Message> for Instance<'a> {
     type State = State;
     type Event = runtime::Message;
 
@@ -134,7 +129,7 @@ impl iced::widget::component::Component<'static, runtime::Message> for Instance 
         }
     }
 
-    fn view(&self, state: &State) -> impl iced::widget::Widget<runtime::Message> + 'static {
+    fn view(&self, state: &State) -> impl iced::widget::Widget<runtime::Message> + 'a {
         let context = self.context();
         if let Some(failure) = &state.failure {
             return super::diagnostic(failure.clone()).lower(&context);
@@ -153,9 +148,9 @@ impl iced::widget::component::Component<'static, runtime::Message> for Instance 
     }
 }
 
-fn component_failure(
-    context: &super::Context<'_>,
+fn component_failure<'a>(
+    context: &super::Context<'a>,
     error: &EvalAltResult,
-) -> iced::Element<'static, runtime::Message> {
+) -> iced::Element<'a, runtime::Message> {
     super::diagnostic(format!("component view failed: {error}")).lower(context)
 }

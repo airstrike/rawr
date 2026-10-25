@@ -333,16 +333,59 @@ pub(crate) struct PickList {
 }
 
 /// iced's `combo_box::State<T>`: the script's options and the `to_string`
-/// that labels them. The iced state it stands for (the typed text and the
-/// options it filters) is made where it is first drawn and kept under `id`
-/// (`widget::builtin::combo_box_state`), so it outlives each view as the
-/// app-owned state does in iced.
+/// that labels them. The iced state it stands for lives in the
+/// application's native home (D546): `native` holds it by handle, so every
+/// copy of this value names one iced state, which outlives each view as the
+/// app-owned state does in iced and is freed with the last copy. It is made
+/// from the labels where it is first drawn
+/// (`widget::builtin::combo_box_state`), and keeps its version, so iced's
+/// tree keeps the typed text across views.
 #[derive(Clone)]
 pub(crate) struct ComboBoxState {
     pub(crate) witness: rawr::host::runtime::Witness,
-    pub(crate) id: u64,
+    pub(crate) native: crate::home::Handle,
     pub(crate) options: Vec<Dynamic>,
     pub(crate) to_string: item::Value,
+}
+
+/// iced's `text_editor::Content`: the editor's text, cursor, selection and
+/// undo history. It lives in the application's native home (D546) and this
+/// value holds it by handle, so `text_editor(&self.content)` borrows it for
+/// the view and `self.content.perform(action)` changes it in place. Copies
+/// of a State share it, as the update's rollback copy does.
+#[derive(Clone)]
+pub(crate) struct EditorContent {
+    pub(crate) native: crate::home::Handle,
+}
+
+impl Default for EditorContent {
+    /// An empty `Content` in the home of the transition running now (a
+    /// derived `Default` at boot). Outside one it names nothing, and a use
+    /// says so.
+    fn default() -> Self {
+        Self {
+            native:
+                crate::home::insert(iced::widget::text_editor::Content::<iced::Renderer>::new())
+                    .unwrap_or_else(|_| crate::home::Handle::orphan()),
+        }
+    }
+}
+
+/// iced's `text_editor(&content)` and its builders.
+#[derive(Clone)]
+pub(crate) struct TextEditor {
+    pub(crate) witness: rawr::host::runtime::Witness,
+    pub(crate) identity: widget::Identity,
+    pub(crate) content: crate::home::Handle,
+    pub(crate) on_action: Option<item::Value>,
+    pub(crate) placeholder: Option<String>,
+    pub(crate) width: Option<f32>,
+    pub(crate) height: Option<iced::Length>,
+    pub(crate) padding: Option<iced::Padding>,
+    pub(crate) size: Option<f32>,
+    pub(crate) font: Option<iced::Font>,
+    pub(crate) wrapping: Option<iced::widget::text::Wrapping>,
+    pub(crate) id: Option<iced::widget::Id>,
 }
 
 /// iced's `combo_box(state, placeholder, selection, on_selected)`.
@@ -594,8 +637,9 @@ pub(crate) struct Native {
 }
 
 /// A [`Native`] widget's lowering to an iced element.
-pub(crate) type Lower =
-    dyn Fn(&widget::Context<'_>) -> iced::Element<'static, crate::runtime::Message> + Send + Sync;
+pub(crate) type Lower = dyn for<'a> Fn(&widget::Context<'a>) -> iced::Element<'a, crate::runtime::Message>
+    + Send
+    + Sync;
 
 /// iced's `pin(content)`: content at a fixed position.
 #[derive(Clone)]

@@ -161,14 +161,16 @@ impl Host {
         };
         match admission {
             rawr::reload::scheduler::Admission::Current(Ok((evidence, retired, inputs))) => {
+                let mut retired = retired.release();
+                self.keep_homes(&evidence, &mut retired);
                 let task = self.activate_application();
                 match timing {
                     Some(timing) => {
                         timing.observe_unwind(rawr::timing::Phase::EffectRetirement, || {
-                            drop(retired.release())
+                            drop(retired)
                         });
                     }
-                    None => drop(retired.release()),
+                    None => drop(retired),
                 }
                 Ok(rawr::reload::scheduler::Admission::Current(Outcome {
                     evidence,
@@ -184,6 +186,33 @@ impl Host {
                 drop(prepared);
                 Ok(rawr::reload::scheduler::Admission::Obsolete(()))
             }
+        }
+    }
+
+    /// Move the native values of each owner the edit kept from the
+    /// retired State into the admitted one (D546): a kept State still holds
+    /// them by handle. A reset owner's fresh State does not.
+    fn keep_homes(&mut self, evidence: &[compatibility::Evidence], retired: &mut State) {
+        let kept = |owner: &Owner| {
+            evidence
+                .iter()
+                .any(|evidence| evidence.owner() == owner && evidence.action() == Action::Retain)
+        };
+        let Storage::Reload(slot) = &mut self.storage else {
+            return;
+        };
+        let mut mutation = slot.mutation();
+        let (current, _) = mutation.parts();
+        if kept(&Owner::Application)
+            && let (Some(current), Some(retired)) =
+                (&mut current.application, &mut retired.application)
+        {
+            current.keep_home(retired);
+        }
+        if let (Some(current), Some(retired)) = (&mut current.preview, &mut retired.preview)
+            && kept(&Owner::Preview(current.key.clone()))
+        {
+            current.home.absorb(std::mem::take(&mut retired.home));
         }
     }
 
@@ -218,8 +247,9 @@ impl Host {
                 return Err(Error::Stale);
             }
         };
+        let mut old = retired.release();
+        self.keep_homes(&evidence, &mut old);
         let task = self.activate_application();
-        let old = retired.release();
         drop(old);
         Ok(Outcome {
             evidence,
@@ -591,29 +621,33 @@ fn retain_preview(
     timing: Option<&rawr::timing::Session>,
 ) -> Result<Preview, Error> {
     let state = preview.state.clone();
+    // As the application's retain: the running preview's native values are
+    // read shared, and the candidate's own go in a home of its own.
+    let mut home = crate::home::Home::default();
+    let _lent = crate::widget::custom::lend::Loan::home(&preview.home);
     let theme = match preview.selected_theme {
-        Some(index) => catalog
-            .theme(&preview.key, index, state.as_ref())
-            .map_err(|error| {
-                super::preview_report(catalog, &preview.key, super::Stage::Theme(index), error)
+        Some(index) => crate::home::enter(&mut home, || {
+            catalog.theme(&preview.key, index, state.as_ref())
+        })
+        .map_err(|error| {
+            super::preview_report(catalog, &preview.key, super::Stage::Theme(index), error)
+        })
+        .and_then(|value| {
+            crate::theme::Value::from_dynamic(value).map_err(|error| {
+                super::positioned_report(
+                    catalog,
+                    &preview.key,
+                    super::Stage::Theme(index),
+                    rawr::diagnostic::code::FRAMEWORK_THEME_OUTPUT,
+                    error.to_string(),
+                )
             })
-            .and_then(|value| {
-                crate::theme::Value::from_dynamic(value).map_err(|error| {
-                    super::positioned_report(
-                        catalog,
-                        &preview.key,
-                        super::Stage::Theme(index),
-                        rawr::diagnostic::code::FRAMEWORK_THEME_OUTPUT,
-                        error.to_string(),
-                    )
-                })
-            })
-            .map_err(Error::Candidate)?,
+        })
+        .map_err(Error::Candidate)?,
         None => inherited.clone(),
     };
-    let evaluate = || {
-        catalog
-            .subject(&preview.key, state.as_ref())
+    let mut evaluate = || {
+        crate::home::enter(&mut home, || catalog.subject(&preview.key, state.as_ref()))
             .map_err(|error| {
                 super::preview_report(catalog, &preview.key, super::Stage::Subject, error)
             })
@@ -648,5 +682,6 @@ fn retain_preview(
         selected_theme: preview.selected_theme,
         diagnostics: Vec::new(),
         tasks: effect::Tasks::default(),
+        home,
     })
 }

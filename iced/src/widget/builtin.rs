@@ -50,7 +50,7 @@ impl marker::container::Style {
 }
 
 impl widget::Descriptor for marker::Text {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut text = iced::widget::text(self.content.clone())
             .width(self.width)
             .align_x(self.align_x);
@@ -86,7 +86,7 @@ impl widget::Descriptor for marker::Text {
 }
 
 impl widget::Descriptor for marker::TextInput {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut input = iced::widget::text_input(self.placeholder.clone(), self.value.clone())
             .padding(self.padding)
             .secure(self.secure);
@@ -128,7 +128,7 @@ impl widget::Descriptor for marker::TextInput {
 }
 
 impl widget::Descriptor for marker::Checkbox {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut checkbox = iced::widget::checkbox(self.checked);
         if let Some(label) = &self.label {
             checkbox = checkbox.label(label.clone());
@@ -178,7 +178,7 @@ impl widget::Descriptor for marker::Checkbox {
 }
 
 impl widget::Descriptor for marker::Toggler {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut toggler = iced::widget::toggler(self.toggled);
         if let Some(label) = &self.label {
             toggler = toggler.label(label.clone());
@@ -216,7 +216,7 @@ impl widget::Descriptor for marker::Toggler {
 }
 
 impl widget::Descriptor for marker::Slider {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let style = match style::lower(&self.style, context, &style::SLIDER, "slider") {
             Ok(style) => style,
             Err(diagnostic) => return diagnostic,
@@ -273,7 +273,7 @@ impl widget::Descriptor for marker::Slider {
 }
 
 impl widget::Descriptor for marker::ProgressBar {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut bar =
             iced::widget::progress_bar(self.range.clone(), self.value).vertical(self.vertical);
         if let Some(length) = self.length {
@@ -296,7 +296,7 @@ impl widget::Descriptor for marker::ProgressBar {
 }
 
 impl widget::Descriptor for marker::Transition {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut arguments = [
             Dynamic::from(marker::Animation::Float(iced::Animation::new(
                 self.value as f32,
@@ -323,7 +323,7 @@ impl widget::Descriptor for marker::Transition {
 }
 
 impl widget::Descriptor for marker::Button {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let content = match &self.content {
             marker::Content::Label(label) => iced::widget::text(label.clone()).boxed(),
             marker::Content::Element(element) => element.lower(context),
@@ -352,7 +352,7 @@ impl widget::Descriptor for marker::Button {
 }
 
 impl widget::Descriptor for marker::Column {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let children = self
             .children
             .iter()
@@ -385,7 +385,7 @@ impl widget::Descriptor for marker::Column {
 }
 
 impl widget::Descriptor for marker::Row {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         iced::widget::row(
             self.children
                 .iter()
@@ -406,7 +406,7 @@ impl widget::Descriptor for marker::Row {
 }
 
 impl widget::Descriptor for marker::Wrapping {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let row = &self.row;
         let mut wrapping = iced::widget::row(
             row.children
@@ -433,7 +433,7 @@ impl widget::Descriptor for marker::Wrapping {
 }
 
 impl widget::Descriptor for marker::Container {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut container = iced::widget::container(self.child.lower(context))
             .padding(self.padding)
             .width(self.width)
@@ -482,9 +482,7 @@ fn container_style(
     });
     match style {
         Some(Ok(style)) => Ok(Some(Box::new(move |_: &iced::Theme| *style))),
-        Some(Err(error)) => {
-            Err(widget::diagnostic(format!("{widget} style failed: {error}")).lower(context))
-        }
+        Some(Err(error)) => Err(widget::failure(format!("{widget} style failed: {error}"))),
         None => Ok(None),
     }
 }
@@ -512,15 +510,13 @@ fn text_style(
     });
     match style {
         Some(Ok(style)) => Ok(Some(Box::new(move |_: &iced::Theme| *style))),
-        Some(Err(error)) => {
-            Err(widget::diagnostic(format!("text style failed: {error}")).lower(context))
-        }
+        Some(Err(error)) => Err(widget::failure(format!("text style failed: {error}"))),
         None => Ok(None),
     }
 }
 
 impl widget::Descriptor for marker::Tooltip {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let tip = match &self.tooltip {
             marker::Content::Label(label) => iced::widget::text(label.clone()).boxed(),
             marker::Content::Element(element) => element.lower(context),
@@ -542,7 +538,7 @@ impl widget::Descriptor for marker::Tooltip {
 }
 
 impl widget::Descriptor for marker::Scrollable {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut scrollable = iced::widget::scrollable(self.child.lower(context));
         if let Some(id) = &self.id {
             scrollable = scrollable.id(id.clone());
@@ -585,7 +581,7 @@ impl widget::Descriptor for marker::Scrollable {
 }
 
 impl widget::Descriptor for marker::Logo {
-    fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, _context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         iced::widget::iced(self.size).boxed()
     }
 
@@ -595,7 +591,7 @@ impl widget::Descriptor for marker::Logo {
 }
 
 impl widget::Descriptor for marker::Void {
-    fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, _context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         iced::widget::void().boxed()
     }
 
@@ -605,7 +601,7 @@ impl widget::Descriptor for marker::Void {
 }
 
 impl widget::Descriptor for marker::Sensor {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let mut sensor = iced::widget::sensor(self.child.lower(context));
         if let Some(mapper) = &self.on_show {
             let mapper = context.message_mapper(mapper.clone());
@@ -627,7 +623,7 @@ impl widget::Descriptor for marker::Sensor {
 }
 
 impl widget::Descriptor for marker::Space {
-    fn lower(&self, _context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, _context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         iced::widget::space()
             .width(self.width)
             .height(self.height)
@@ -656,7 +652,7 @@ fn bind_attestations(builder: &mut host::runtime::Builder) {
 }
 
 impl widget::Descriptor for marker::Radio {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         // iced compares the value with the selection; the facade compared
         // them already, so iced's value is just whether it is selected.
         let mapper = context.message_mapper(self.on_click.clone());
@@ -727,7 +723,7 @@ fn selected_option(equal: Option<usize>, label: Option<&str>, labels: &[String])
 }
 
 impl widget::Descriptor for marker::PickList {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         // iced picks among indexes into the options, labelled by the
         // script's `to_string`; the selection is the option equal to it, as
         // iced's `PartialEq` finds it, or else the option of its label.
@@ -804,22 +800,23 @@ impl std::fmt::Display for Choice {
     }
 }
 
-thread_local! {
-    /// The iced state of each `combo_box::State` drawn on this thread, by
-    /// id. iced's `ComboBox` borrows it for the element's whole life, so
-    /// each is allocated once and kept (a few labels per `State::new`).
-    static COMBO_BOX_STATES: std::cell::RefCell<
-        std::collections::HashMap<u64, &'static iced::widget::combo_box::State<Choice>>,
-    > = std::cell::RefCell::default();
-}
+/// The slot of a `combo_box::State` in the native home: iced's state, made
+/// from the script's labels the first time it is drawn.
+type ComboBoxSlot = std::cell::OnceCell<iced::widget::combo_box::State<Choice>>;
 
-/// The iced state of `state`, made from the script's labels the first
-/// time it is drawn.
-fn combo_box_state(
+/// The iced state of `state`, borrowed from the native home for the view's
+/// lifetime, and made from the script's labels the first time it is drawn.
+fn combo_box_state<'a>(
     state: &marker::ComboBoxState,
-    context: &widget::Context<'_>,
-) -> Result<&'static iced::widget::combo_box::State<Choice>, String> {
-    if let Some(existing) = COMBO_BOX_STATES.with_borrow(|states| states.get(&state.id).copied()) {
+    context: &widget::Context<'a>,
+) -> Result<&'a iced::widget::combo_box::State<Choice>, String> {
+    let home = context
+        .home()
+        .ok_or_else(|| widget::refuse_borrow("combo_box", "combo_box::State"))?;
+    let slot = home
+        .get::<ComboBoxSlot>(&state.native)
+        .map_err(|error| error.to_string())?;
+    if let Some(existing) = slot.get() {
         return Ok(existing);
     }
     let choices = state
@@ -838,19 +835,17 @@ fn combo_box_state(
                 label: label.into(),
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
-    let created: &'static _ = Box::leak(Box::new(iced::widget::combo_box::State::new(choices)));
-    COMBO_BOX_STATES.with_borrow_mut(|states| states.insert(state.id, created));
-    Ok(created)
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|error| format!("combo_box to_string failed: {error}"))?;
+    Ok(slot.get_or_init(|| iced::widget::combo_box::State::new(choices)))
 }
 
 impl widget::Descriptor for marker::ComboBox {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let state = match combo_box_state(&self.state, context) {
             Ok(state) => state,
             Err(error) => {
-                return widget::diagnostic(format!("combo_box to_string failed: {error}"))
-                    .lower(context)
+                return widget::failure(error);
             }
         };
         let selection = self.selection.as_ref().and_then(|selection| {
@@ -3114,15 +3109,22 @@ impl Witnessed for marker::ComboBox {
 
 /// `combo_box::State::new`, `combo_box` and the `ComboBox` builders.
 fn bind_combo_box(builder: &mut host::runtime::Builder) {
-    static NEXT_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     builder
         .bind_with_context("iced::widget::combo_box::State::new", |call, args| {
             if args.len() != 2 {
                 return Err(arity("combo_box::State::new", 2, args.len()));
             }
+            // iced's state goes in the application's native home; the
+            // script value holds it by handle.
+            let native = crate::home::insert(ComboBoxSlot::new()).map_err(|error| {
+                Box::new(EvalAltResult::ErrorRuntime(
+                    error.to_string().into(),
+                    Position::NONE,
+                ))
+            })?;
             Ok(Dynamic::from(marker::ComboBoxState {
                 witness: call.output_witness().map_err(witness_error)?,
-                id: NEXT_STATE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                native,
                 options: take::<rawr::Array>(args[0], "Vec<T>")?
                     .into_iter()
                     .collect(),
@@ -3443,7 +3445,7 @@ pub(super) fn length(value: &mut Dynamic) -> Result<iced::Length, Box<EvalAltRes
 /// iced's `impl Into<Padding>`: a `Padding`, or uniform pixels.
 /// `impl Into<Padding>`: uniform pixels, `[vertical, horizontal]`, or a
 /// `Padding`, as iced's `From` impls.
-fn padding(value: &mut Dynamic) -> Result<iced::Padding, Box<EvalAltResult>> {
+pub(super) fn padding(value: &mut Dynamic) -> Result<iced::Padding, Box<EvalAltResult>> {
     if value.is_int() || value.is_float() {
         return pixels(value, "Padding").map(iced::Padding::new);
     }

@@ -738,7 +738,7 @@ fn bind_containers(builder: &mut host::runtime::Builder) {
 }
 
 impl widget::Descriptor for marker::Native {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         (self.lower)(context)
     }
 
@@ -750,7 +750,7 @@ impl widget::Descriptor for marker::Native {
 /// An Element lowered by `lower`, as a facade function's output.
 pub(super) fn native(
     call: &host::runtime::Call<'_>,
-    lower: impl Fn(&widget::Context<'_>) -> iced::Element<'static, runtime::Message>
+    lower: impl for<'a> Fn(&widget::Context<'a>) -> iced::Element<'a, runtime::Message>
         + Send
         + Sync
         + 'static,
@@ -786,7 +786,7 @@ fn bind_rule(builder: &mut host::runtime::Builder) {
 }
 
 impl widget::Descriptor for marker::Stack {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         // Unset, iced's stack takes the size of its first child.
         let mut stack = iced::widget::Stack::with_children(
             self.children.iter().map(|child| child.lower(context)),
@@ -1578,12 +1578,12 @@ fn font_and<T: Clone + 'static>(
 
 /// The Element `function` returns for `arguments`, lowered; a diagnostic
 /// when it fails.
-fn invoke_view(
-    context: &widget::Context<'_>,
+fn invoke_view<'a>(
+    context: &widget::Context<'a>,
     function: &rawr::item::Value,
     arguments: &mut [Dynamic],
     widget: &str,
-) -> iced::Element<'static, runtime::Message> {
+) -> iced::Element<'a, runtime::Message> {
     match context.invoke(function, arguments) {
         None => iced::widget::space().boxed(),
         Some(Ok(view)) => match into_element(view) {
@@ -1664,7 +1664,7 @@ fn take_function(
 }
 
 impl widget::Descriptor for marker::Pin {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         iced::widget::pin(self.child.lower(context))
             .position(self.position)
             .width(self.width)
@@ -1684,16 +1684,11 @@ impl Witnessed for marker::Pin {
 }
 
 impl widget::Descriptor for marker::Responsive {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
-        let owned = context.owned();
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
+        let context = context.clone();
         let view = self.view.clone();
         iced::widget::responsive(move |size| {
-            invoke_view(
-                &owned.context(),
-                &view,
-                &mut [Dynamic::from(size)],
-                "responsive",
-            )
+            invoke_view(&context, &view, &mut [Dynamic::from(size)], "responsive")
         })
         .width(self.width)
         .height(self.height)
@@ -1712,14 +1707,13 @@ impl Witnessed for marker::Responsive {
 }
 
 impl widget::Descriptor for marker::Float {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
-        let mut float: iced::widget::Float<'static, _, iced::Theme> =
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
+        let mut float: iced::widget::Float<'a, _, iced::Theme> =
             iced::widget::float(self.child.lower(context)).scale(self.scale);
         if let Some(translate) = &self.translate {
-            let owned = context.owned();
+            let context = context.clone();
             let translate = translate.clone();
             float = float.translate(move |bounds, viewport| {
-                let context = owned.context();
                 let arguments = &mut [Dynamic::from(bounds), Dynamic::from(viewport)];
                 match context.invoke(&translate, arguments) {
                     Some(Ok(vector)) => vector
@@ -1755,12 +1749,12 @@ impl Witnessed for marker::Float {
 }
 
 impl widget::Descriptor for marker::MouseArea {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
-        type Set = fn(
-            iced::widget::MouseArea<'static, runtime::Message>,
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
+        type Set<'a> = fn(
+            iced::widget::MouseArea<'a, runtime::Message>,
             runtime::Message,
-        ) -> iced::widget::MouseArea<'static, runtime::Message>;
-        let setters: [Set; 9] = [
+        ) -> iced::widget::MouseArea<'a, runtime::Message>;
+        let setters: [Set<'a>; 9] = [
             |area, message| area.on_press(message),
             |area, message| area.on_release(message),
             |area, message| area.on_double_click(message),

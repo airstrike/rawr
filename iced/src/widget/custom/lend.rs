@@ -11,6 +11,10 @@
 //! The evaluator runs on the thread that called it, so a script hook that
 //! forwards to a child which is itself a script widget pushes a second
 //! frame above the first and pops it before the outer call resumes.
+//!
+//! A frame also lends the application's native home (`crate::home`), shared,
+//! to the script code a view runs: a widget's hooks, and the style
+//! functions, component views and labels lowering calls.
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -22,15 +26,16 @@ use iced::advanced::Shell;
 use crate::runtime;
 use crate::widget;
 
-/// A lowered child widget, as iced keeps it.
-pub(crate) type Element = iced::Element<'static, runtime::Message>;
+/// A lowered child widget, as iced keeps it: it may borrow the native
+/// home for the view's lifetime `'a`.
+pub(crate) type Element<'a> = iced::Element<'a, runtime::Message>;
 
 /// The wrapped child widgets of one script widget: each `Element` value its
 /// hooks forward to, lowered the first time a hook reaches it and kept for
 /// the rest of this view, by the value's identity.
-pub(crate) struct Children {
-    context: Option<widget::OwnedContext>,
-    lowered: RefCell<Vec<(widget::Identity, Element)>>,
+pub(crate) struct Children<'a> {
+    context: Option<widget::Context<'a>>,
+    lowered: RefCell<Vec<(widget::Identity, Element<'a>)>>,
 }
 
 /// The tree a call receives: `&Tree` for `draw`, `&mut Tree` for `layout`,
@@ -55,7 +60,14 @@ pub(crate) struct Frame {
     renderer: *const iced::Renderer,
     shell: *mut Shell<'static, runtime::Message>,
     operation: Option<*mut (dyn Operation + 'static)>,
-    children: *const Children,
+    /// The lowered children, whose view lifetime the frame does not
+    /// name: they live while the frame does, as the Shell's does.
+    children: *const Children<'static>,
+    /// The native home the view borrows, shared.
+    home: *const crate::home::Home,
+    /// Whether a widget's call lends this frame; one that lends only the
+    /// home ([`Loan::home`]) is not a call's, and handles never name it.
+    call: bool,
 }
 
 /// One call's borrows, lent while it lives. It holds them for `'a`, so the
@@ -86,8 +98,8 @@ thread_local! {
     static FRAMES: RefCell<Vec<Frame>> = const { RefCell::new(Vec::new()) };
 }
 
-impl Children {
-    pub(crate) fn new(context: widget::OwnedContext) -> Self {
+impl<'a> Children<'a> {
+    pub(crate) fn new(context: widget::Context<'a>) -> Self {
         Self {
             context: Some(context),
             lowered: RefCell::new(Vec::new()),
@@ -111,14 +123,14 @@ impl Children {
             return Ok(index);
         }
         let context = self.context.as_ref().ok_or(Error::Missing("Element"))?;
-        let element = value.lower(&context.context());
+        let element = value.lower(context);
         lowered.push((identity, element));
         Ok(lowered.len() - 1)
     }
 
     /// The lowered children, for `overlay`, which borrows one for as long
     /// as its overlay lives.
-    pub(crate) fn lowered_mut(&mut self) -> &mut Vec<(widget::Identity, Element)> {
+    pub(crate) fn lowered_mut(&mut self) -> &mut Vec<(widget::Identity, Element<'a>)> {
         self.lowered.get_mut()
     }
 
@@ -128,7 +140,7 @@ impl Children {
     pub(crate) fn with<R>(
         &self,
         index: usize,
-        f: impl FnOnce(&mut Element) -> R,
+        f: impl FnOnce(&mut Element<'a>) -> R,
     ) -> Result<R, Error> {
         let mut lowered = self.lowered.try_borrow_mut().map_err(|_| Error::Busy)?;
         let (_, element) = lowered.get_mut(index).ok_or(Error::Busy)?;
@@ -151,9 +163,16 @@ impl<'a> Loan<'a> {
         tree: Lent<'a>,
         renderer: Option<&'a iced::Renderer>,
         shell: Option<&'a mut Shell<'_, runtime::Message>>,
-        children: &'a Children,
+        children: &'a Children<'_>,
+        home: Option<&'a crate::home::Home>,
     ) -> Self {
-        Self::lend(tree, renderer, shell, None, children)
+        Self::lend(tree, renderer, shell, None, Some(children), home)
+    }
+
+    /// Lend only the native home, to script code a view runs while it
+    /// lowers (a style function, a component's view).
+    pub(crate) fn home(home: &'a crate::home::Home) -> Self {
+        Self::lend(Lent::None, None, None, None, None, Some(home))
     }
 
     /// Lend `operate`'s tree, renderer and operation.
@@ -161,14 +180,16 @@ impl<'a> Loan<'a> {
         tree: &'a mut Tree,
         renderer: &'a iced::Renderer,
         operation: &'a mut dyn Operation,
-        children: &'a Children,
+        children: &'a Children<'_>,
+        home: Option<&'a crate::home::Home>,
     ) -> Self {
         Self::lend(
             Lent::Mutable(tree),
             Some(renderer),
             None,
             Some(operation),
-            children,
+            Some(children),
+            home,
         )
     }
 
@@ -177,7 +198,8 @@ impl<'a> Loan<'a> {
         renderer: Option<&'a iced::Renderer>,
         shell: Option<&'a mut Shell<'_, runtime::Message>>,
         operation: Option<&'a mut dyn Operation>,
-        children: &'a Children,
+        children: Option<&'a Children<'_>>,
+        home: Option<&'a crate::home::Home>,
     ) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
 
@@ -202,7 +224,11 @@ impl<'a> Loan<'a> {
                     std::ptr::from_mut(operation),
                 )
             }),
-            children: std::ptr::from_ref(children),
+            children: children.map_or(std::ptr::null(), |children| {
+                std::ptr::from_ref(children).cast::<Children<'static>>()
+            }),
+            home: home.map_or(std::ptr::null(), std::ptr::from_ref),
+            call: children.is_some(),
         };
         FRAMES.with(|frames| frames.borrow_mut().push(frame));
         Self {
@@ -227,6 +253,23 @@ impl Drop for Loan<'_> {
     }
 }
 
+/// Run `f` with the native home the newest frame that lends one borrows,
+/// or `None` when no call running now lends one.
+pub(crate) fn with_home<R>(f: impl FnOnce(Option<&crate::home::Home>) -> R) -> R {
+    let home = FRAMES.with(|frames| {
+        frames
+            .borrow()
+            .iter()
+            .rev()
+            .map(|frame| frame.home)
+            .find(|home| !home.is_null())
+    });
+    // SAFETY: as in `Frame::tree`: the frame is on the stack, so its call
+    // still holds the shared borrow this pointer came from, and the
+    // reference lives only for `f`.
+    f(home.and_then(|home| unsafe { home.as_ref() }))
+}
+
 impl Frame {
     /// The frame `nonce` names, while its call runs.
     pub(crate) fn find(nonce: Nonce, what: &'static str) -> Result<Self, Error> {
@@ -243,7 +286,15 @@ impl Frame {
 
     /// The frame of the call running now: the newest.
     pub(crate) fn current(what: &'static str) -> Result<Self, Error> {
-        FRAMES.with(|frames| frames.borrow().last().copied().ok_or(Error::Expired(what)))
+        FRAMES.with(|frames| {
+            frames
+                .borrow()
+                .iter()
+                .rev()
+                .find(|frame| frame.call)
+                .copied()
+                .ok_or(Error::Expired(what))
+        })
     }
 
     pub(crate) const fn nonce(&self) -> Nonce {
@@ -311,14 +362,23 @@ impl Frame {
         Ok(f(unsafe { &mut *operation }))
     }
 
-    pub(crate) fn children(&self) -> &Children {
+    fn children(&self) -> Result<&Children<'static>, Error> {
         // SAFETY: as in `tree`.
-        unsafe { &*self.children }
+        unsafe { self.children.as_ref() }.ok_or(Error::Missing("Element"))
     }
 
     /// The index of `value` among the frame's children, lowered on first use.
     pub(crate) fn child(&self, value: &widget::Value) -> Result<usize, Error> {
-        self.children().index(value)
+        self.children()?.index(value)
+    }
+
+    /// Run `f` on the child `index` lowered earlier in this view.
+    pub(crate) fn with_child<R>(
+        &self,
+        index: usize,
+        f: impl FnOnce(&mut Element<'static>) -> R,
+    ) -> Result<R, Error> {
+        self.children()?.with(index, f)
     }
 }
 
@@ -334,7 +394,7 @@ mod tests {
         let mut tree = Tree::empty();
         tree.children.push(Tree::empty());
         let nonce = {
-            let loan = Loan::new(Lent::Mutable(&mut tree), None, None, &children);
+            let loan = Loan::new(Lent::Mutable(&mut tree), None, None, &children, None);
             let frame = Frame::find(loan.nonce(), "Tree").unwrap();
             frame
                 .tree_mut(&[0], |child| child.size = iced::Size::new(3.0, 4.0))
@@ -358,13 +418,13 @@ mod tests {
     fn a_read_only_loan_refuses_changes_and_nested_loans_pop_in_order() {
         let children = Children::none();
         let tree = Tree::empty();
-        let outer = Loan::new(Lent::Shared(&tree), None, None, &children);
+        let outer = Loan::new(Lent::Shared(&tree), None, None, &children, None);
         assert_eq!(
             Frame::current("Tree").unwrap().tree_mut(&[], |_| ()),
             Err(Error::ReadOnly)
         );
         let inner_nonce = {
-            let inner = Loan::new(Lent::Shared(&tree), None, None, &children);
+            let inner = Loan::new(Lent::Shared(&tree), None, None, &children, None);
             assert_eq!(Frame::current("Tree").unwrap().nonce(), inner.nonce());
             assert!(Frame::find(outer.nonce(), "Tree").is_ok());
             inner.nonce()

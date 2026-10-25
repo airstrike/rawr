@@ -30,6 +30,7 @@ pub(crate) mod script;
 mod scroll;
 pub(crate) mod style;
 mod table;
+mod text_editor;
 mod value;
 
 pub use value::{Error, Value};
@@ -57,6 +58,7 @@ pub(crate) fn bind(
     custom::bind(iced);
     protocol::bind(iced, rawr);
     script::bind(iced);
+    text_editor::bind(iced);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -74,6 +76,7 @@ pub(crate) fn bind_profile(
     custom::bind(iced);
     protocol::bind_profile(iced, rawr);
     script::bind(iced);
+    text_editor::bind(iced);
 }
 
 /// One opaque logical identity owned by a widget descriptor.
@@ -92,13 +95,19 @@ enum Kind {
 }
 
 /// The authority-limited services available while lowering one descriptor.
+///
+/// `'a` is iced's view lifetime: the application's native home is lent for
+/// it (see [`Context::home`]), so an element may borrow a native value the
+/// State holds by handle. A context without a home is a `Context<'static>`.
+#[derive(Clone)]
 pub struct Context<'a> {
     instance: application::Instance,
     generation: program::GenerationId,
     authority: MappingAuthority,
     diagnostics: Arc<diagnostic::Sink>,
-    theme: &'a theme::Value,
+    theme: theme::Value,
     timing: Option<timing::Session>,
+    home: Option<&'a crate::home::Home>,
 }
 
 /// Owned provenance stamp for messages produced by one freshly lowered native widget.
@@ -206,19 +215,28 @@ impl ApplicationAuthority for Arc<application::BoundLaunch> {
 
 /// A durable open widget description that can build a fresh iced element.
 ///
-/// Implementations own all data borrowed by the returned element and must not
-/// cache an [`iced::Element`]. Native and built-in descriptors remain inert;
-/// the private scripted descriptor binds its compiler-proven lifecycle through
-/// the current lowering context and stores persistent values only in iced
+/// The element lives for iced's view lifetime `'a` (D546). It borrows at most
+/// what the lowering context lends for `'a`: the application's native home,
+/// whose values a State holds by handle, so `text_editor(&self.content)`
+/// lowers to an editor borrowing the State's `Content`. It never borrows the
+/// descriptor itself, so a descriptor made while lowering (a component's
+/// view, a `responsive` closure's) lowers like a retained one, and whatever
+/// else the element shows the descriptor clones or shares into it.
+/// Implementations must not cache an [`iced::Element`], and an element that
+/// outlives the view lowers from a context without a home. Native and
+/// built-in descriptors remain inert; the private scripted descriptor binds
+/// its compiler-proven lifecycle through the current lowering context and
+/// stores persistent values only in iced
 /// [`Tree`](iced::advanced::widget::Tree) state.
 ///
 /// Native extensions implement this trait in their own crate, seal an instance
 /// with [`Value::new`], and stamp every Rawr payload through
 /// [`Context::message`]. No built-in widget registration or dispatch change is
-/// required.
+/// required. An implementation that returns `iced::Element<'static, _>`
+/// satisfies the trait as well.
 pub trait Descriptor: Send + Sync + 'static {
-    /// Lower this durable description into a fresh transient iced element.
-    fn lower(&self, context: &Context<'_>) -> iced::Element<'static, runtime::Message>;
+    /// Lower this durable description into a fresh element for one view.
+    fn lower<'a>(&self, context: &Context<'a>) -> iced::Element<'a, runtime::Message>;
 
     /// Return this descriptor's stable logical identity.
     fn identity(&self) -> Identity;
@@ -250,15 +268,16 @@ impl<'a> Context<'a> {
         instance: application::Instance,
         generation: program::GenerationId,
         diagnostics: &Arc<diagnostic::Sink>,
-        theme: &'a theme::Value,
+        theme: &theme::Value,
     ) -> Self {
         Self {
             instance,
             generation,
             authority: MappingAuthority::Unavailable,
             diagnostics: diagnostics.clone(),
-            theme,
+            theme: theme.clone(),
             timing: None,
+            home: None,
         }
     }
 
@@ -266,7 +285,7 @@ impl<'a> Context<'a> {
         authority: &impl ApplicationAuthority,
         instance: application::Instance,
         diagnostics: &Arc<diagnostic::Sink>,
-        theme: &'a theme::Value,
+        theme: &theme::Value,
     ) -> Self {
         debug_assert!(diagnostics.owns(instance, authority.generation()));
         Self {
@@ -277,17 +296,18 @@ impl<'a> Context<'a> {
                 boundary: mapping::Boundary::Final,
             },
             diagnostics: diagnostics.clone(),
-            theme,
+            theme: theme.clone(),
             timing: None,
+            home: None,
         }
     }
 
     pub(crate) fn preview(
-        catalog: &'a crate::preview::catalog::Authority,
-        key: &'a preview::Key,
+        catalog: &crate::preview::catalog::Authority,
+        key: &preview::Key,
         instance: application::Instance,
         diagnostics: &Arc<diagnostic::Sink>,
-        theme: &'a theme::Value,
+        theme: &theme::Value,
     ) -> Self {
         debug_assert!(diagnostics.owns(instance, catalog.generation()));
         Self {
@@ -299,14 +319,49 @@ impl<'a> Context<'a> {
                 boundary: mapping::Boundary::Final,
             },
             diagnostics: diagnostics.clone(),
-            theme,
+            theme: theme.clone(),
             timing: None,
+            home: None,
         }
     }
 
     pub(crate) fn observed(mut self, session: &timing::Session) -> Self {
         self.timing = Some(session.clone());
         self
+    }
+
+    /// This context with `home` lent for the view lifetime `'h`.
+    pub(crate) fn with_home<'h>(self, home: &'h crate::home::Home) -> Context<'h> {
+        Context {
+            instance: self.instance,
+            generation: self.generation,
+            authority: self.authority,
+            diagnostics: self.diagnostics,
+            theme: self.theme,
+            timing: self.timing,
+            home: Some(home),
+        }
+    }
+
+    /// This context without its home, for an element kept past the view
+    /// (a scripted widget's overlay keeps its content in iced's tree).
+    pub(crate) fn detached(&self) -> Context<'static> {
+        Context {
+            instance: self.instance,
+            generation: self.generation,
+            authority: self.authority.clone(),
+            diagnostics: self.diagnostics.clone(),
+            theme: self.theme.clone(),
+            timing: self.timing.clone(),
+            home: None,
+        }
+    }
+
+    /// The application's native home, lent for the view: a widget that
+    /// borrows app state (`text_editor(&self.content)`) borrows its value
+    /// from here. `None` where the element outlives the view.
+    pub(crate) const fn home(&self) -> Option<&'a crate::home::Home> {
+        self.home
     }
 
     /// Return the application instance receiving lowered messages.
@@ -355,7 +410,7 @@ impl<'a> Context<'a> {
     /// Return the fully materialized inert application theme.
     #[must_use]
     pub const fn theme(&self) -> &theme::Value {
-        self.theme
+        &self.theme
     }
 
     /// Invoke one compiler-proven function, such as a style function, while
@@ -365,6 +420,8 @@ impl<'a> Context<'a> {
         function: &item::Value,
         arguments: &mut [Dynamic],
     ) -> Option<Result<Dynamic, String>> {
+        // The script code a view runs reads the home the view borrows.
+        let _loan = self.home.map(custom::lend::Loan::home);
         Some(match &self.authority {
             MappingAuthority::Unavailable => return None,
             MappingAuthority::Application { authority, .. } => authority
@@ -395,30 +452,14 @@ impl<'a> Context<'a> {
             generation: self.generation,
             authority: self.authority.intermediate(),
             diagnostics: self.diagnostics.clone(),
-            theme: self.theme,
-            timing: self.timing.clone(),
-        }
-    }
-
-    /// This context with its theme owned, for a widget that lowers its
-    /// content later, as `responsive` does at layout.
-    pub(crate) fn owned(&self) -> OwnedContext {
-        OwnedContext {
-            instance: self.instance,
-            generation: self.generation,
-            authority: self.authority.clone(),
-            diagnostics: self.diagnostics.clone(),
             theme: self.theme.clone(),
             timing: self.timing.clone(),
+            home: self.home,
         }
     }
 
     pub(crate) fn diagnostics(&self) -> Arc<diagnostic::Sink> {
         self.diagnostics.clone()
-    }
-
-    pub(crate) fn timing(&self) -> Option<&timing::Session> {
-        self.timing.as_ref()
     }
 
     #[allow(dead_code)]
@@ -441,30 +482,6 @@ impl<'a> Context<'a> {
                 Some(session) => binding.observed(session),
                 None => binding,
             })
-    }
-}
-
-/// A [`Context`] that owns its theme; [`OwnedContext::context`] lends one.
-#[derive(Clone)]
-pub(crate) struct OwnedContext {
-    instance: application::Instance,
-    generation: program::GenerationId,
-    authority: MappingAuthority,
-    diagnostics: Arc<diagnostic::Sink>,
-    theme: theme::Value,
-    timing: Option<timing::Session>,
-}
-
-impl OwnedContext {
-    pub(crate) fn context(&self) -> Context<'_> {
-        Context {
-            instance: self.instance,
-            generation: self.generation,
-            authority: self.authority.clone(),
-            diagnostics: self.diagnostics.clone(),
-            theme: &self.theme,
-            timing: self.timing.clone(),
-        }
     }
 }
 
@@ -571,7 +588,7 @@ struct Unavailable {
 }
 
 impl Descriptor for Unavailable {
-    fn lower(&self, _context: &Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, _context: &Context<'a>) -> iced::Element<'a, runtime::Message> {
         iced::widget::column![
             iced::widget::text("Rawr view unavailable"),
             iced::widget::text(self.reason.clone()).size(14),
@@ -583,6 +600,35 @@ impl Descriptor for Unavailable {
     fn identity(&self) -> Identity {
         self.identity.clone()
     }
+}
+
+thread_local! {
+    /// The widget whose borrow of app state the last lowering refused: one
+    /// lowered where its element outlives the view.
+    static REFUSED: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Why `widget` can't borrow `state` here: its element outlives the view
+/// (a scripted widget's overlay keeps its content in iced's tree), and a
+/// borrow of app state lasts only for the view, as in Rust. The lowering
+/// that kept the element reports it at its source with
+/// [`take_refused_borrow`].
+pub(crate) fn refuse_borrow(widget: &'static str, state: &'static str) -> String {
+    REFUSED.with(|refused| refused.set(Some(widget)));
+    format!(
+        "error[E0597]: `{widget}` borrows a `{state}` of the application's State, which lives only for the view, but this element is kept past it"
+    )
+}
+
+/// The widget whose borrow the lowering since the last call refused.
+pub(crate) fn take_refused_borrow() -> Option<&'static str> {
+    REFUSED.with(std::cell::Cell::take)
+}
+
+/// A diagnostic's element, which owns its text: what a [`diagnostic`]
+/// value lowers to.
+pub(crate) fn failure(message: impl Into<String>) -> iced::Element<'static, runtime::Message> {
+    iced::widget::text(message.into()).boxed()
 }
 
 pub(crate) fn diagnostic(message: impl Into<String>) -> Value {
@@ -614,8 +660,8 @@ struct Diagnostic {
 }
 
 impl Descriptor for Diagnostic {
-    fn lower(&self, _context: &Context<'_>) -> iced::Element<'static, runtime::Message> {
-        iced::widget::text(self.message.clone()).boxed()
+    fn lower<'a>(&self, _context: &Context<'a>) -> iced::Element<'a, runtime::Message> {
+        failure(self.message.clone())
     }
 
     fn identity(&self) -> Identity {

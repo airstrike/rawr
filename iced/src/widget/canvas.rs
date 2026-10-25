@@ -987,10 +987,10 @@ impl Witnessed for marker::Canvas {
 }
 
 impl super::Descriptor for marker::Canvas {
-    fn lower(&self, context: &super::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &super::Context<'a>) -> iced::Element<'a, runtime::Message> {
         iced::widget::canvas(Program {
             program: self.program.clone(),
-            context: context.owned(),
+            context: context.clone(),
         })
         .width(self.width)
         .height(self.height)
@@ -1003,9 +1003,9 @@ impl super::Descriptor for marker::Canvas {
 }
 
 /// A script program as iced's `canvas::Program`.
-struct Program {
+struct Program<'a> {
     program: marker::CanvasProgram,
-    context: super::OwnedContext,
+    context: super::Context<'a>,
 }
 
 /// The tree-held State: the script State once `update` has changed it,
@@ -1020,7 +1020,7 @@ pub(crate) struct State {
     geometries: std::cell::RefCell<Vec<(Arc<[marker::Draw]>, canvas::Cache)>>,
 }
 
-impl Program {
+impl Program<'_> {
     fn state(&self, state: &State) -> Dynamic {
         state
             .value
@@ -1029,11 +1029,11 @@ impl Program {
     }
 
     fn theme(&self) -> theme::Value {
-        self.context.context().theme().clone()
+        self.context.theme().clone()
     }
 }
 
-impl canvas::Program<runtime::Message> for Program {
+impl canvas::Program<runtime::Message> for Program<'_> {
     type State = State;
 
     fn update(
@@ -1043,7 +1043,7 @@ impl canvas::Program<runtime::Message> for Program {
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> Option<canvas::Action<runtime::Message>> {
-        let context = self.context.context();
+        let context = &self.context;
         let mut arguments = [
             self.program.value.clone(),
             self.state(state),
@@ -1114,7 +1114,7 @@ impl canvas::Program<runtime::Message> for Program {
         if let Some(message) = &state.failure {
             return failure(message.clone());
         }
-        let context = self.context.context();
+        let context = &self.context;
         let mut arguments = [
             self.program.value.clone(),
             self.state(state),
@@ -1161,7 +1161,7 @@ impl canvas::Program<runtime::Message> for Program {
         bounds: iced::Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
-        let context = self.context.context();
+        let context = &self.context;
         let mut arguments = [
             self.program.value.clone(),
             self.state(state),

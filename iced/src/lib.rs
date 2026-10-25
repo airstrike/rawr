@@ -17,6 +17,7 @@ pub mod diagnostic;
 mod dispatch;
 mod effect;
 pub mod features;
+pub mod home;
 mod local;
 
 use features::Feature;
@@ -177,6 +178,11 @@ fn register_debug() {
         register::<iced::widget::canvas::Text>();
     }
     register::<iced::widget::text::Alignment>();
+    register::<iced::widget::text::Wrapping>();
+    register::<iced::widget::text_editor::Action>();
+    register::<iced::widget::text_editor::Cursor>();
+    register::<iced::widget::text_editor::LineEnding>();
+    register::<iced::advanced::text::Position>();
     #[cfg(feature = "canvas")]
     register::<marker::Cache>();
     #[cfg(feature = "canvas")]
@@ -236,6 +242,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
     builder.module("widget::slider")?;
     builder.module("widget::table")?;
     builder.module("widget::text")?;
+    builder.module("widget::text_editor")?;
     builder.module("widget::text_input")?;
     builder.module("widget::toggler")?;
     builder.module("widget::tooltip")?;
@@ -1303,6 +1310,7 @@ pub fn facade() -> Result<facade::Definition, host::Error> {
         declare_canvas(&mut builder)?;
     }
     widget::custom::declare::declare(&mut builder)?;
+    declare_text_editor(&mut builder)?;
     declare_events(&mut builder)?;
     declare_event_variants(&mut builder)?;
     declare_font(&mut builder)?;
@@ -5412,6 +5420,200 @@ fn pick_list_builders(builder: &mut facade::Builder) -> Result<(), host::Error> 
     }
     Ok(())
 }
+
+/// iced's `text_editor(&content)` over a `text_editor::Content` the app
+/// owns, its builders, and the `Content` methods an app calls: `new`,
+/// `with_text`, `perform` and the readers. The `Content` lives in the
+/// application's native home (D546), so the editor borrows it for the view
+/// and `perform` changes it in place. `text::Wrapping` and the editor's
+/// `Action`, `Cursor`, `LineEnding` and `advanced::text::Position` are
+/// values.
+fn declare_text_editor(builder: &mut facade::Builder) -> Result<(), host::Error> {
+    builder.module("advanced::text")?;
+    builder.default_type::<marker::EditorContent>(
+        "widget::text_editor::Content",
+        &[],
+        &[capability::Kind::Default],
+    )?;
+    builder.value_type::<iced::widget::text_editor::Action>(
+        "widget::text_editor::Action",
+        &[],
+        DEBUG_VALUE_CAPABILITIES,
+    )?;
+    builder.value_type::<iced::widget::text_editor::Cursor>(
+        "widget::text_editor::Cursor",
+        &[],
+        OWNED_VALUE_CAPABILITIES,
+    )?;
+    builder.value_type::<iced::advanced::text::Position>(
+        "advanced::text::Position",
+        &[],
+        OWNED_EQ_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::widget::text_editor::LineEnding>(
+        "widget::text_editor::LineEnding",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.default_value_type::<iced::widget::text::Wrapping>(
+        "widget::text::Wrapping",
+        &[],
+        OWNED_EQ_DEFAULT_VALUE_CAPABILITIES,
+    )?;
+    builder.type_::<marker::TextEditor>("widget::TextEditor", &["Message"], &[])?;
+    builder.project("widget::TextEditor", "Element", &["Message"])?;
+
+    let content = || type_ref::Type::registered("widget::text_editor::Content");
+    let action = || type_ref::Type::registered("widget::text_editor::Action");
+    let cursor = || type_ref::Type::registered("widget::text_editor::Cursor");
+    let position = || type_ref::Type::registered("advanced::text::Position");
+    let string = || type_ref::Type::builtin(type_ref::Builtin::String);
+    let usize = || type_ref::Type::builtin(type_ref::Builtin::Usize);
+    let bool_ = || type_ref::Type::builtin(type_ref::Builtin::Bool);
+    for name in ["new", "default"] {
+        builder.item(item::Definition::associated_function(
+            format!("widget::text_editor::Content::{name}"),
+            output_signature("widget::text_editor::Content")?,
+        )?)?;
+    }
+    let mut with_text = signature::Builder::new();
+    with_text.parameter(string());
+    with_text.output(content()?);
+    builder.item(item::Definition::associated_function(
+        "widget::text_editor::Content::with_text",
+        with_text.finish(),
+    )?)?;
+    for (name, input) in [("perform", action()?), ("move_to", cursor()?)] {
+        let mut signature = signature::Builder::new();
+        signature.parameter(input);
+        signature.output(type_ref::Type::unit());
+        builder.item(item::Definition::method(
+            format!("widget::text_editor::Content::{name}"),
+            receiver::Mode::Mutable,
+            signature.finish(),
+        )?)?;
+    }
+    for (name, output) in [
+        ("text", string()),
+        ("line_count", usize()),
+        ("cursor", cursor()?),
+        ("selection", type_ref::Type::option(string())),
+        ("is_empty", bool_()),
+        (
+            "line_ending",
+            type_ref::Type::option(type_ref::Type::registered(
+                "widget::text_editor::LineEnding",
+            )?),
+        ),
+    ] {
+        let mut signature = signature::Builder::new();
+        signature.output(output);
+        builder.item(item::Definition::method(
+            format!("widget::text_editor::Content::{name}"),
+            receiver::Mode::Shared,
+            signature.finish(),
+        )?)?;
+    }
+    let mut is_edit = signature::Builder::new();
+    is_edit.output(bool_());
+    builder.item(item::Definition::method(
+        "widget::text_editor::Action::is_edit",
+        receiver::Mode::Shared,
+        is_edit.finish(),
+    )?)?;
+    for (name, output) in [
+        ("position", position()?),
+        ("selection", type_ref::Type::option(position()?)),
+    ] {
+        let mut signature = signature::Builder::new();
+        signature.output(output);
+        builder.item(item::Definition::method(
+            format!("widget::text_editor::Cursor::{name}"),
+            receiver::Mode::Shared,
+            signature.finish(),
+        )?)?;
+    }
+    for name in ["line", "index"] {
+        let mut signature = signature::Builder::new();
+        signature.output(usize());
+        builder.item(item::Definition::method(
+            format!("advanced::text::Position::{name}"),
+            receiver::Mode::Shared,
+            signature.finish(),
+        )?)?;
+    }
+    let mut as_str = signature::Builder::new();
+    as_str.output(string());
+    builder.item(item::Definition::method(
+        "widget::text_editor::LineEnding::as_str",
+        receiver::Mode::Owned,
+        as_str.finish(),
+    )?)?;
+    for name in TEXT_WRAPPINGS {
+        builder.item(item::Definition::associated_value(
+            format!("widget::text::Wrapping::{name}"),
+            type_ref::Type::registered("widget::text::Wrapping")?,
+        )?)?;
+    }
+
+    let mut editor = signature::Builder::new();
+    editor.type_parameter("Message", &[])?;
+    editor.parameter(content()?);
+    editor.output(type_ref::Type::applied(
+        "widget::TextEditor",
+        [type_ref::Type::parameter("Message")?],
+    )?);
+    builder.item(item::Definition::function(
+        "widget::text_editor",
+        editor.finish(),
+    )?)?;
+    let owner = "widget::TextEditor";
+    let mut on_action = signature::Builder::new();
+    on_action.type_parameter("Message", &[])?;
+    on_action.parameter(type_ref::Type::callable(
+        action()?,
+        type_ref::Type::parameter("Message")?,
+    ));
+    on_action.output(type_ref::Type::applied(
+        owner,
+        [type_ref::Type::parameter("Message")?],
+    )?);
+    builder.item(item::Definition::method(
+        "widget::TextEditor::on_action",
+        receiver::Mode::Owned,
+        on_action.finish(),
+    )?)?;
+    length_builders(builder, owner, &["height"])?;
+    pixels_builders(builder, owner, "width")?;
+    pixels_builders(builder, owner, "size")?;
+    padding_builders(builder, owner)?;
+    builders(builder, owner, "placeholder", [string()])?;
+    builders(
+        builder,
+        owner,
+        "font",
+        [type_ref::Type::registered("Font")?],
+    )?;
+    builders(
+        builder,
+        owner,
+        "wrapping",
+        [type_ref::Type::registered("widget::text::Wrapping")?],
+    )?;
+    builders(
+        builder,
+        owner,
+        "id",
+        [
+            type_ref::Type::registered("widget::Id")?,
+            type_ref::Type::builtin(type_ref::Builtin::String),
+        ],
+    )?;
+    Ok(())
+}
+
+/// iced's `text::Wrapping` variants.
+pub(crate) const TEXT_WRAPPINGS: [&str; 4] = ["None", "Word", "Glyph", "WordOrGlyph"];
 
 /// iced's `combo_box(state: &combo_box::State<T>, placeholder: &str,
 /// selection: Option<&T>, on_selected: impl Fn(T) -> Message)`, its

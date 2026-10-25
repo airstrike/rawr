@@ -48,37 +48,43 @@ impl Artifact {
                     source,
                 }
             })?;
-        let state = catalog
-            .seed(definition.key())
-            .map_err(|source| Error::Runtime {
-                identity: identity.clone(),
-                stage: "seed",
-                source,
+        // The preview's native values (a `text_editor::Content` in its
+        // State) live in its own home while it renders.
+        let mut home = crate::home::Home::default();
+        let state =
+            crate::home::enter(&mut home, || catalog.seed(definition.key())).map_err(|source| {
+                Error::Runtime {
+                    identity: identity.clone(),
+                    stage: "seed",
+                    source,
+                }
             })?;
         let materialized = match &theme {
             Theme::Native => crate::theme::Value::default(),
-            Theme::Explicit { index, name } => catalog
-                .theme(definition.key(), *index, state.as_ref())
-                .map_err(|source| Error::Runtime {
-                    identity: identity.clone(),
-                    stage: "theme",
-                    source,
-                })
-                .and_then(|value| {
-                    crate::theme::Value::from_dynamic(value).map_err(|source| Error::Theme {
-                        identity: identity.clone(),
-                        theme: name.clone(),
-                        source,
-                    })
-                })?,
-        };
-        let value = catalog
-            .subject(definition.key(), state.as_ref())
+            Theme::Explicit { index, name } => crate::home::enter(&mut home, || {
+                catalog.theme(definition.key(), *index, state.as_ref())
+            })
             .map_err(|source| Error::Runtime {
                 identity: identity.clone(),
-                stage: "subject",
+                stage: "theme",
                 source,
-            })?;
+            })
+            .and_then(|value| {
+                crate::theme::Value::from_dynamic(value).map_err(|source| Error::Theme {
+                    identity: identity.clone(),
+                    theme: name.clone(),
+                    source,
+                })
+            })?,
+        };
+        let value = crate::home::enter(&mut home, || {
+            catalog.subject(definition.key(), state.as_ref())
+        })
+        .map_err(|source| Error::Runtime {
+            identity: identity.clone(),
+            stage: "subject",
+            source,
+        })?;
         let display = widget::Value::from_dynamic(value).map_err(|source| Error::Widget {
             identity: identity.clone(),
             source,
@@ -95,48 +101,19 @@ impl Artifact {
             &lifecycle,
             &materialized,
         );
-        let frame = renderer.framing();
         let logical = definition.size();
         let declared = iced::Size::new(logical.width() as f32, logical.height() as f32);
-        // What its widgets publish goes through the preview's update, when
-        // it has a State.
-        let mut state = state;
-        let mut display = display;
-        let mut apply = |published: Vec<crate::runtime::Message>| {
-            let Some(current) = state.as_ref().filter(|_| !published.is_empty()) else {
-                return display.clone();
-            };
-            let mut current = current.clone();
-            for message in published {
-                if let Ok(update) =
-                    catalog.update(definition.key(), &current, message.into_payload())
-                    && let Ok((next, _)) = update.try_into_parts(Ok::<_, ()>)
-                {
-                    current = next;
-                }
-            }
-            if let Ok(value) = catalog.subject(definition.key(), Some(&current))
-                && let Ok(value) = widget::Value::from_dynamic(value)
-            {
-                display = value;
-            }
-            state = Some(current);
-            display.clone()
+        let mut surface = Preview {
+            catalog,
+            definition,
+            state,
+            display,
+            context,
+            lifecycle,
+            home,
         };
-        let size = renderer.size(
-            &mut |published| frame(apply(published).lower(&context)),
-            declared,
-        );
-        let image = renderer.render(
-            &mut |published| {
-                widget::diagnostic::overlay(
-                    frame(apply(published).lower(&context)),
-                    lifecycle.clone(),
-                )
-            },
-            materialized.native(),
-            size,
-        )?;
+        let size = renderer.size(&mut surface, declared);
+        let image = renderer.render(&mut surface, materialized.native(), size)?;
         Ok(Self {
             identity,
             fingerprint,
@@ -150,7 +127,63 @@ impl Artifact {
     pub(super) fn identity(&self) -> &str {
         &self.identity
     }
+}
 
+/// One preview as a render draws it: what its widgets publish goes through
+/// the preview's update, when it has a State, and its view borrows its
+/// native home while the frame lives.
+struct Preview<'c> {
+    catalog: &'c crate::preview::catalog::Authority,
+    definition: &'c preview::Definition,
+    state: Option<rawr::Dynamic>,
+    display: widget::Value,
+    context: widget::Context<'static>,
+    lifecycle: Arc<widget::diagnostic::Sink>,
+    home: crate::home::Home,
+}
+
+impl headless::Surface for Preview<'_> {
+    fn apply(&mut self, published: Vec<crate::runtime::Message>) {
+        let Some(current) = self.state.as_ref().filter(|_| !published.is_empty()) else {
+            return;
+        };
+        let mut current = current.clone();
+        let (catalog, key) = (self.catalog, self.definition.key());
+        let display = crate::home::enter(&mut self.home, || {
+            for message in published {
+                if let Ok(update) = catalog.update(key, &current, message.into_payload())
+                    && let Ok((next, _)) = update.try_into_parts(Ok::<_, ()>)
+                {
+                    current = next;
+                }
+            }
+            catalog
+                .subject(key, Some(&current))
+                .ok()
+                .and_then(|value| widget::Value::from_dynamic(value).ok())
+        });
+        if let Some(display) = display {
+            self.display = display;
+        }
+        self.state = Some(current);
+    }
+
+    fn view(
+        &self,
+        content: bool,
+        framing: &headless::Framing,
+    ) -> iced::Element<'_, crate::runtime::Message> {
+        let context = self.context.clone().with_home(&self.home);
+        let framed = framing.frame(self.display.lower(&context));
+        if content {
+            framed
+        } else {
+            widget::diagnostic::overlay(framed, self.lifecycle.clone())
+        }
+    }
+}
+
+impl Artifact {
     pub(super) fn fingerprint(&self) -> &str {
         &self.fingerprint
     }

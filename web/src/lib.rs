@@ -216,7 +216,7 @@ impl Web {
         // keeps running. Its subscription is the new program's, from it.
         let carried = self
             .adapter
-            .as_ref()
+            .as_mut()
             .is_some_and(|previous| adapter.carry_state(previous));
         // Another app's State (another example) boots without a note.
         self.note = (!carried && self.adapter.is_some() && state.is_some() && state == self.state)

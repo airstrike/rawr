@@ -1,11 +1,9 @@
 //! Symbolic scripted widgets and their explicit launch binding.
 
-use std::sync::Arc;
-
 use iced::widget::Widget as _;
-use rawr::{host, program, timing, widget, Dynamic};
+use rawr::{host, program, widget, Dynamic};
 
-use crate::{runtime, theme};
+use crate::runtime;
 
 /// One durable scripted widget awaiting the current lowering authority.
 #[derive(Clone, Debug)]
@@ -15,15 +13,15 @@ pub(crate) struct Descriptor {
 }
 
 /// One scripted widget bound to the exact authority that may execute it.
-pub(crate) struct Bound {
+pub(crate) struct Bound<'a> {
     pub(super) binding: widget::Binding,
     pub(super) instance: rawr::application::Instance,
-    pub(super) services: Services,
-    pub(super) children: Vec<iced::Element<'static, runtime::Message>>,
+    pub(super) context: super::Context<'a>,
+    pub(super) children: Vec<iced::Element<'a, runtime::Message>>,
     pub(super) children_ready: bool,
 }
 
-impl std::fmt::Debug for Bound {
+impl std::fmt::Debug for Bound<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("Bound")
@@ -33,14 +31,6 @@ impl std::fmt::Debug for Bound {
             .field("children_ready", &self.children_ready)
             .finish_non_exhaustive()
     }
-}
-
-#[derive(Clone)]
-pub(super) struct Services {
-    authority: super::MappingAuthority,
-    diagnostics: Arc<super::diagnostic::Sink>,
-    theme: theme::Value,
-    timing: Option<timing::Session>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,11 +67,14 @@ impl Descriptor {
         Self { symbolic, identity }
     }
 
-    pub(crate) fn bind(&self, context: &super::Context<'_>) -> Result<Bound, widget::Error> {
+    pub(crate) fn bind<'a>(
+        &self,
+        context: &super::Context<'a>,
+    ) -> Result<Bound<'a>, widget::Error> {
         context.bind_script(&self.symbolic).map(|binding| Bound {
             binding,
             instance: context.instance(),
-            services: Services::new(context),
+            context: context.clone(),
             children: Vec::new(),
             children_ready: false,
         })
@@ -94,7 +87,7 @@ impl Descriptor {
 }
 
 impl super::Descriptor for Descriptor {
-    fn lower(&self, context: &super::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &super::Context<'a>) -> iced::Element<'a, runtime::Message> {
         match self.bind(context) {
             Ok(bound) => {
                 context.diagnostics().clear(&self.binding_key());
@@ -128,37 +121,7 @@ impl Descriptor {
     }
 }
 
-impl Services {
-    pub(super) fn new(context: &super::Context<'_>) -> Self {
-        Self {
-            authority: context.mapping_authority(),
-            diagnostics: context.diagnostics(),
-            theme: context.theme().clone(),
-            timing: context.timing().cloned(),
-        }
-    }
-
-    pub(super) fn context(
-        &self,
-        instance: rawr::application::Instance,
-        generation: program::GenerationId,
-    ) -> super::Context<'_> {
-        super::Context {
-            instance,
-            generation,
-            authority: self.authority.clone(),
-            diagnostics: self.diagnostics.clone(),
-            theme: &self.theme,
-            timing: self.timing.clone(),
-        }
-    }
-
-    pub(super) fn diagnostics(&self) -> &Arc<super::diagnostic::Sink> {
-        &self.diagnostics
-    }
-}
-
-impl Bound {
+impl Bound<'_> {
     #[cfg(test)]
     pub(crate) fn generation(&self) -> program::GenerationId {
         self.binding.generation()

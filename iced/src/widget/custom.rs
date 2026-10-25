@@ -216,12 +216,12 @@ impl Witnessed for Instance {
 }
 
 impl super::Descriptor for Instance {
-    fn lower(&self, context: &super::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &super::Context<'a>) -> iced::Element<'a, runtime::Message> {
         iced::widget::Widget::boxed(Custom {
             value: self.value.clone(),
             instance: self.clone(),
-            children: Children::new(context.owned()),
-            context: context.owned(),
+            children: Children::new(context.clone()),
+            context: context.clone(),
             failure: RefCell::new(None),
             logical: RefCell::new(None),
         })
@@ -233,19 +233,19 @@ impl super::Descriptor for Instance {
 }
 
 /// A script `advanced::Widget` as an iced widget.
-struct Custom {
+struct Custom<'a> {
     instance: Instance,
     /// The script value, as the `&mut self` methods leave it.
     value: Dynamic,
-    context: super::OwnedContext,
-    children: Children,
+    context: super::Context<'a>,
+    children: Children<'a>,
     /// The failure of the last call, which `draw` shows.
     failure: RefCell<Option<String>>,
     /// The logical tag `tag` last returned for a script State.
     logical: RefCell<Option<Arc<str>>>,
 }
 
-impl Custom {
+impl Custom<'_> {
     fn written(&self, hook: usize) -> bool {
         self.instance.written & (1 << hook) != 0
     }
@@ -255,11 +255,7 @@ impl Custom {
     /// returned beside its result.
     fn call(&self, hook: usize, arguments: &mut [Dynamic]) -> (Result<Dynamic, String>, Effects) {
         EFFECTS.with(|effects| effects.borrow_mut().push(Effects::default()));
-        let result = match self
-            .context
-            .context()
-            .invoke(&self.instance.hooks[hook], arguments)
-        {
+        let result = match self.context.invoke(&self.instance.hooks[hook], arguments) {
             Some(result) => result,
             None => Err("this widget's code is not available".into()),
         };
@@ -274,7 +270,7 @@ impl Custom {
     }
 
     fn theme(&self) -> Dynamic {
-        Dynamic::from(self.context.context().theme().clone())
+        Dynamic::from(self.context.theme().clone())
     }
 
     /// The first value a call returned: a method with `&mut` parameters
@@ -288,13 +284,13 @@ impl Custom {
     }
 }
 
-impl iced::advanced::widget::Meta for Custom {}
+impl iced::advanced::widget::Meta for Custom<'_> {}
 
-impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
+impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom<'_> {
     fn size(&self) -> Size<Length> {
         let shrink = Size::new(Length::Shrink, Length::Shrink);
         let (result, _) = {
-            let _loan = Loan::new(Lent::None, None, None, &self.children);
+            let _loan = Loan::new(Lent::None, None, None, &self.children, self.context.home());
             self.call(SIZE, &mut [self.value.clone()])
         };
         match result {
@@ -311,7 +307,7 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
             return tree::Tag::stateless();
         }
         let (result, _) = {
-            let _loan = Loan::new(Lent::None, None, None, &self.children);
+            let _loan = Loan::new(Lent::None, None, None, &self.children, self.context.home());
             self.call(TAG, &mut [self.value.clone()])
         };
         match result.map(|tag| tag.try_cast::<Tag>()) {
@@ -333,7 +329,7 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
             return tree::State::None;
         }
         let (result, _) = {
-            let _loan = Loan::new(Lent::None, None, None, &self.children);
+            let _loan = Loan::new(Lent::None, None, None, &self.children, self.context.home());
             self.call(STATE, &mut [self.value.clone()])
         };
         match result.map(|state| state.try_cast::<State>()) {
@@ -385,7 +381,13 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
         }
         let mut arguments = [self.value.clone(), Dynamic::UNIT];
         let (result, _) = {
-            let loan = Loan::new(Lent::Mutable(tree), None, None, &self.children);
+            let loan = Loan::new(
+                Lent::Mutable(tree),
+                None,
+                None,
+                &self.children,
+                self.context.home(),
+            );
             arguments[1] = Dynamic::from(Tree::root(loan.nonce()));
             self.call(DIFF, &mut arguments)
         };
@@ -403,7 +405,13 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
             Dynamic::from(*limits),
         ];
         let (result, _) = {
-            let loan = Loan::new(Lent::Mutable(tree), Some(renderer), None, &self.children);
+            let loan = Loan::new(
+                Lent::Mutable(tree),
+                Some(renderer),
+                None,
+                &self.children,
+                self.context.home(),
+            );
             arguments[1] = Dynamic::from(Tree::root(loan.nonce()));
             self.call(LAYOUT, &mut arguments)
         };
@@ -438,7 +446,13 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
             Dynamic::from(*viewport),
         ];
         let (result, effects) = {
-            let loan = Loan::new(Lent::Shared(tree), None, None, &self.children);
+            let loan = Loan::new(
+                Lent::Shared(tree),
+                None,
+                None,
+                &self.children,
+                self.context.home(),
+            );
             arguments[1] = Dynamic::from(Tree::root(loan.nonce()));
             self.call(DRAW, &mut arguments)
         };
@@ -505,6 +519,7 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
                 Some(renderer),
                 Some(&mut *shell),
                 &self.children,
+                self.context.home(),
             );
             arguments[1] = Dynamic::from(Tree::root(loan.nonce()));
             arguments[6] = Dynamic::from(Shell {
@@ -515,7 +530,7 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
         match result {
             Ok(_) => {
                 self.value = std::mem::take(&mut arguments[0]);
-                let context = self.context.context();
+                let context = &self.context;
                 for message in effects.messages {
                     shell.publish(context.message(message));
                 }
@@ -553,7 +568,13 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
             Dynamic::from(crate::marker::Renderer),
         ];
         let (result, _) = {
-            let loan = Loan::new(Lent::Shared(tree), Some(renderer), None, &self.children);
+            let loan = Loan::new(
+                Lent::Shared(tree),
+                Some(renderer),
+                None,
+                &self.children,
+                self.context.home(),
+            );
             arguments[1] = Dynamic::from(Tree::root(loan.nonce()));
             self.call(INTERACTION, &mut arguments)
         };
@@ -588,7 +609,13 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
             Dynamic::UNIT,
         ];
         let (result, _) = {
-            let loan = Loan::operating(tree, renderer, operation, &self.children);
+            let loan = Loan::operating(
+                tree,
+                renderer,
+                operation,
+                &self.children,
+                self.context.home(),
+            );
             arguments[1] = Dynamic::from(Tree::root(loan.nonce()));
             arguments[5] = Dynamic::from(Operation {
                 nonce: loan.nonce(),
@@ -629,6 +656,7 @@ impl Widget<runtime::Message, iced::Theme, iced::Renderer> for Custom {
                 Some(renderer),
                 None,
                 &self.children,
+                self.context.home(),
             );
             arguments[1] = Dynamic::from(Tree::root(loan.nonce()));
             self.call(OVERLAY, &mut arguments)

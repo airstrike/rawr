@@ -22,7 +22,7 @@ impl Mapped {
 }
 
 impl widget::Descriptor for Mapped {
-    fn lower(&self, context: &widget::Context<'_>) -> iced::Element<'static, runtime::Message> {
+    fn lower<'a>(&self, context: &widget::Context<'a>) -> iced::Element<'a, runtime::Message> {
         let authority = context.mapping_authority();
         let child = context.child_mapping();
         let mapper = self.mapper.clone();

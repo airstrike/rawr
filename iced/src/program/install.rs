@@ -158,16 +158,24 @@ impl Host {
         };
         match admission {
             rawr::reload::scheduler::Admission::Current(Ok((evidence, retired, inputs))) => {
+                let mut retired = retired.release();
                 let task = {
                     let mut mutation = self.slot.mutation();
                     let (adapter, context) = mutation.parts();
+                    // A kept State keeps the native values it holds by
+                    // handle (D546); a reset's fresh State does not.
+                    if evidence
+                        .iter()
+                        .any(|evidence| evidence.action() == Action::Retain)
+                    {
+                        adapter.home.absorb(std::mem::take(&mut retired.home));
+                    }
                     adapter
                         .authority(&context)
                         .map_or_else(iced::Task::none, |authority| {
                             adapter.activate_prepared(&context, &authority)
                         })
                 };
-                let retired = retired.release();
                 let cancelled = retired.has_running_tasks();
                 match timing {
                     Some(timing) => {
@@ -379,25 +387,34 @@ pub(crate) fn retain(
         .map_err(super::Error::Boot)
         .map_err(Error::Adapter)?;
     let state = adapter.state.clone();
+    // The candidate reads the running application's native values shared:
+    // that application keeps them until the candidate is admitted
+    // (`install_with_timing` moves them over), and keeps them if it fails.
+    // A value the candidate makes goes in a home of its own.
+    let mut home = crate::home::Home::default();
+    let _lent = crate::widget::custom::lend::Loan::home(&adapter.home);
     let display = match timing {
         Some(timing) => timing
             .observe_result(rawr::timing::Phase::ViewEvaluation, || {
-                super::evaluate_view(launch, &state)
+                crate::home::enter(&mut home, || super::evaluate_view(launch, &state))
             })
             .map_err(Error::Adapter)?,
-        None => super::evaluate_view(launch, &state).map_err(Error::Adapter)?,
+        None => crate::home::enter(&mut home, || super::evaluate_view(launch, &state))
+            .map_err(Error::Adapter)?,
     };
-    let title = super::evaluate_title(launch, &state)
+    let title = crate::home::enter(&mut home, || super::evaluate_title(launch, &state))
         .map_err(|error| match launch.title() {
             Some(title) => error.with_callback(launch, title.callback()),
             None => error,
         })
         .map_err(Error::Adapter)?
         .unwrap_or_else(|| "Rawr application".to_owned());
-    let theme = super::evaluate_theme(launch, &state)
+    let theme = crate::home::enter(&mut home, || super::evaluate_theme(launch, &state))
         .map_err(Error::Adapter)?
         .unwrap_or_default();
-    let subscription = super::evaluate_subscription(launch, &state).map_err(Error::Adapter)?;
+    let subscription =
+        crate::home::enter(&mut home, || super::evaluate_subscription(launch, &state))
+            .map_err(Error::Adapter)?;
     let lifecycle = Arc::new(widget::diagnostic::Sink::new(
         adapter.instance,
         launch.generation(),
@@ -419,5 +436,6 @@ pub(crate) fn retain(
         centered: launch.centered(),
         source,
         timing: None,
+        home,
     })
 }

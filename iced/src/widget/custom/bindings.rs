@@ -726,8 +726,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             };
             let (frame, index) = child(element, "Element::size")?;
             let size = frame
-                .children()
-                .with(index, |child| child.size())
+                .with_child(index, |child| child.size())
                 .map_err(child_error)?;
             Ok(Dynamic::from(LengthSize(size)))
         })
@@ -739,8 +738,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             };
             let (frame, index) = child(element, "Element::tag")?;
             let tag = frame
-                .children()
-                .with(index, |child| child.tag())
+                .with_child(index, |child| child.tag())
                 .map_err(child_error)?;
             Ok(Dynamic::from(Tag::Native(tag)))
         })
@@ -752,8 +750,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             };
             let (frame, index) = child(element, "Element::state")?;
             let state = frame
-                .children()
-                .with(index, |child| child.state())
+                .with_child(index, |child| child.state())
                 .map_err(child_error)?;
             Ok(Dynamic::from(State::Native(std::rc::Rc::new(
                 std::cell::RefCell::new(Some(state)),
@@ -768,7 +765,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let handle = tree(handle, "Element::diff")?;
             let (frame, index) = child(element, "Element::diff")?;
             lent(frame.tree_mut(&handle.path, |subtree| {
-                frame.children().with(index, |child| child.diff(subtree))
+                frame.with_child(index, |child| child.diff(subtree))
             }))?
             .map_err(child_error)?;
             Ok(Dynamic::UNIT)
@@ -784,7 +781,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let (frame, index) = child(element, "Element::layout")?;
             let renderer = lent(frame.renderer())?;
             lent(frame.tree_mut(&handle.path, |subtree| {
-                frame.children().with(index, |child| {
+                frame.with_child(index, |child| {
                     child.layout(subtree, renderer, &limits);
                 })
             }))?
@@ -834,7 +831,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
                 frame
                     .with_shell(|shell| {
                         frame.tree_mut(&handle.path, |subtree| {
-                            frame.children().with(index, |child| {
+                            frame.with_child(index, |child| {
                                 child.update(
                                     subtree, &event, layout, cursor, renderer, shell, &viewport,
                                 );
@@ -860,7 +857,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
             let (frame, index) = child(element, path)?;
             let renderer = lent(frame.renderer())?;
             let interaction = lent(frame.tree(&handle.path, |subtree| {
-                frame.children().with(index, |child| {
+                frame.with_child(index, |child| {
                     child.mouse_interaction(subtree, layout, cursor, &viewport, renderer)
                 })
             }))?
@@ -889,7 +886,7 @@ fn bind_forwarding(builder: &mut host::runtime::Builder) {
                 frame
                     .with_operation(|operation| {
                         frame.tree_mut(&handle.path, |subtree| {
-                            frame.children().with(index, |child| {
+                            frame.with_child(index, |child| {
                                 child.operate(subtree, layout, &viewport, renderer, operation);
                             })
                         })
@@ -954,10 +951,10 @@ struct Explain {
 }
 
 impl widgets::Descriptor for Explain {
-    fn lower(
+    fn lower<'a>(
         &self,
-        context: &widgets::Context<'_>,
-    ) -> iced::Element<'static, crate::runtime::Message> {
+        context: &widgets::Context<'a>,
+    ) -> iced::Element<'a, crate::runtime::Message> {
         iced::widget::Widget::explain(self.child.lower(context), self.color).boxed()
     }
 
