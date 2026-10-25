@@ -4,7 +4,7 @@
 <p class="lede">Use the crates in your <code>Cargo.toml</code> and your native modules from marked code. rawr-import compiles them with Cargo.</p>
 <h2 id="install">Install rawr-import</h2>
 <p>Once rawr-import is installed, <code>rawr</code> hands it every program with dependencies or native modules.</p>
-<div class="note"><p>rawr-import needs a Unix system and the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. It has been tested on Apple Silicon Macs.</p></div>
+<div class="note"><p>rawr-import needs 64-bit macOS or 64-bit Linux and the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. It has been tested on Apple Silicon Macs. CI runs it on x86_64 Linux. <a href="/docs/reference/requirements#platforms">Requirements</a> lists the platforms.</p></div>
 <div class="block"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import-cli
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre></div>
