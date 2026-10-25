@@ -135,7 +135,8 @@ sum 5050</span></div>
 <p>How it runs:</p>
 <ul>
   <li>An <code>async</code> block or an <code>async fn</code> gives a Rust future that any runtime can poll.</li>
-  <li>Your code runs on one thread, the one that holds the program. A future polled on another thread hands each step of your code to that thread. A runtime&rsquo;s own futures, such as tokio&rsquo;s <code>sleep</code>, run on whichever thread polls them.</li>
+  <li>Your code runs on one thread, the one that holds the program. That thread also runs your runtime&rsquo;s <code>main</code>, so <code>tokio::spawn</code>, <code>spawn_blocking</code> and <code>sleep</code> start when you call them, as in Rust. A future polled on another thread hands each step of your code to that thread, which runs it the next time <code>main</code> is polled. A runtime&rsquo;s own futures, such as tokio&rsquo;s <code>sleep</code>, run on whichever thread polls them.</li>
+  <li><code>tokio::spawn</code> takes a future of yours, and its handle&rsquo;s <code>.await</code> gives the future&rsquo;s value. A spawned future runs though nobody awaits it.</li>
   <li>A generic item called at one of your types, such as <code>mpsc::channel::&lt;Job&gt;()</code>, carries your values as they are. A value that comes back is checked against the type you named. <a href="/docs/imports#generics">Imports</a> says more.</li>
   <li>An async method that borrows its receiver, such as <code>Sender::send</code> or <code>Receiver::recv</code>, keeps it until its future ends. A <code>Clone</code> receiver is copied for <code>&amp;self</code>. A <code>&amp;mut self</code> receiver is lent, and using it before the future ends is a borrow error.</li>
   <li>A native value drops with its last owner, so a channel closes when its last sender goes.</li>
@@ -144,8 +145,8 @@ sum 5050</span></div>
 <p>Limits today:</p>
 <ul>
   <li><code>join!</code> works. <code>try_join!</code> and <code>select!</code> don&rsquo;t yet.</li>
-  <li><code>tokio::spawn</code> of your own future doesn&rsquo;t work yet.</li>
-  <li>A runtime&rsquo;s future is made when it is first polled, not when the function that returns it is called. A <code>sleep</code> that you create and await later starts its timer at the await.</li>
+  <li>On tokio&rsquo;s multi-thread runtime, a step of a spawned future runs inside <code>main</code>&rsquo;s task. So your code there sees <code>main</code>&rsquo;s <code>tokio::task::id()</code> and task-locals, and a tracing span that instruments the spawned future isn&rsquo;t entered. On the <code>current_thread</code> runtime it sees the spawned task&rsquo;s.</li>
+  <li>An iced app has no runtime <code>main</code>. There, a runtime&rsquo;s future is made when it is first polled, so a <code>sleep</code> starts its timer at the await. A call that needs a runtime the app doesn&rsquo;t run fails with an error that says to give <code>async fn main</code> the runtime&rsquo;s attribute.</li>
   <li>A closure that <code>spawn_blocking</code> runs can&rsquo;t use values of imported types.</li>
   <li>A generic item whose bound picks behaviour by type alone, such as <code>Default</code> or <code>Deserialize</code>, can&rsquo;t take one of your types. rawr says which bound when it builds the runner.</li>
   <li>A <code>main</code> that is <code>async</code> needs a runtime&rsquo;s attribute, as Rust does. Without one it is rustc&rsquo;s E0752.</li>
