@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Embedding | rawr docs</title>
-<meta name="description" content="Run Rust scripts inside your own Rust app with the rawr crate. Export your types and functions with #[rawr::export], compile a script with Engine::compile_file and call its functions with call_fn.">
+<meta name="description" content="Let the people who use your Rust app change its behaviour in Rust, without rebuilding it. Export your types with #[rawr::export], load the user&#39;s script with Engine::load and call its functions through typed handles.">
 <meta property="og:title" content="Embedding | rawr docs">
-<meta property="og:description" content="Run Rust scripts inside your own Rust app with the rawr crate. Export your types and functions with #[rawr::export], compile a script with Engine::compile_file and call its functions with call_fn.">
+<meta property="og:description" content="Let the people who use your Rust app change its behaviour in Rust, without rebuilding it. Export your types with #[rawr::export], load the user&#39;s script with Engine::load and call its functions through typed handles.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://rawr.airstrike.fyi/docs/embedding">
 <meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">
@@ -38,7 +38,7 @@
     <li><a href="/docs/start">Start</a></li>
     <li><a href="/docs/run">Run</a></li>
     <li><a href="/docs/imports">Imports</a></li>
-    <li><a href="/docs/embedding" aria-current="page">Embedding</a><ol class="secs"><li><a href="#add">Add the crate</a></li><li><a href="#export">Export your types</a></li><li><a href="#example">A script without exports</a></li><li><a href="#statements">Statements and expressions</a></li><li><a href="#call-fn">Calling functions</a></li><li><a href="#boundary">What crosses the boundary</a></li><li><a href="#output">Capturing output</a></li><li><a href="#lifecycle">Loading and reloading scripts</a></li><li><a href="#release">In a release build</a></li><li><a href="#errors">Errors</a></li><li><a href="#limits">Limits</a></li></ol></li>
+    <li><a href="/docs/embedding" aria-current="page">Embedding</a><ol class="secs"><li><a href="#add">Add the crate</a></li><li><a href="#example">An example</a></li><li><a href="#reload">Reloading</a></li><li><a href="#export">Export your types</a></li><li><a href="#boundary">What crosses the boundary</a></li><li><a href="#statements">Statements and expressions</a></li><li><a href="#output">Capturing output</a></li><li><a href="#release">In a release build</a></li><li><a href="#errors">Errors</a></li><li><a href="#limits">Limits</a></li></ol></li>
     <li><a href="/docs/iced">iced</a><ol class="kids"><li><a href="/docs/iced/reload">Reload</a></li><li><a href="/docs/iced/previews">Previews</a></li></ol></li>
     <li><a href="/docs/play">Play</a><ol class="kids"><li><a href="/docs/play/discord">Discord</a></li></ol></li>
     <li><a href="/docs/troubleshooting">Troubleshooting</a></li>
@@ -55,114 +55,206 @@
 </nav>
 <main>
 <article>
-<!-- TODO: a later batch replaces the call API shown on this page (engine.call_fn::<T>(&mut scope, &ast, "name", (args,))). Leave the API text as it is until then. -->
 <h1>Embedding</h1>
-<p class="lede">Your app can run Rust scripts with rawr. It exports its own types and functions with <code>#[rawr::export]</code>, compiles a script with an <code>Engine</code> and calls the functions the script defines.</p>
+<p class="lede">Let the people who use your Rust app change its behaviour in Rust, without rebuilding it.</p>
+<p>Your app links the rawr crate and loads rules, hooks or mods that its users write. With plain Rust, a user would need your source and a toolchain to change anything. With Lua or Rhai, they would learn another language, and you would write bindings for it. With rawr, the rules are Rust and use your app&rsquo;s own types. A mistake fails when the rules load, with the error rustc would give.</p>
+
 <h2 id="add">Add the crate</h2>
 <p>The crate needs Rust 1.95 or newer.</p>
 <div class="block"><pre><code>cargo add --git https://github.com/airstrike/rawr rawr</code></pre></div>
 
-<h2 id="export">Export your types</h2>
-<p>Put <code>#[rawr::export]</code> on a struct, on its impl block and on a free function. This is <code>examples/app</code> in the repository, an app with its own Cargo workspace.</p>
+<h2 id="example">An example</h2>
+<p>This is <code>examples/rules</code> in the repository, an app with its own Cargo workspace. It totals a bank statement by category. Its users decide the categories in <code>rules.rs</code>.</p>
 <div class="block">
-  <div class="file"><b>examples/app/src/main.rs</b></div>
-  <pre><code data-lang="rust">use rawr::{Engine, Exports, Scope};
+  <div class="file"><b>examples/rules/src/main.rs</b></div>
+  <pre><code data-lang="rust">//! A bank-statement tool whose users write their own rules in Rust. It
+//! exports `Transaction`, reads a CSV, loads the user's `rules.rs` and
+//! prints the total for each category. `scripts/embed-check.sh` runs it.
+//!
+//! - `cargo run` uses `rules.rs`.
+//! - `cargo run -- scripts/typo.rs` fails as the rules load.
+//! - `cargo run -- scripts/wrong.rs` fails as the app looks up `category`.
+//! - `cargo run -- rules.rs scripts/edited.rs` saves an edit and reloads.
+//! - `cargo run -- rules.rs scripts/wrong.rs` keeps the old rules.
+
+use rawr::{Engine, Exports, Func};
+use std::collections::BTreeMap;
 
 #[derive(Clone)]
 #[rawr::export]
-pub struct Order {
-    pub customer: String,
-    pub items: i64,
+pub struct Transaction {
+    pub date: String,
+    pub payee: String,
+    pub amount: f64,
 }
 
 #[rawr::export]
-impl Order {
-    pub fn total(&amp;self, price: f64) -&gt; f64 {
-        price * self.items as f64
+impl Transaction {
+    pub fn is_income(&amp;self) -&gt; bool {
+        self.amount &gt; 0.0
     }
-
-    pub fn add(&amp;mut self, n: i64) {
-        self.items += n;
-    }
-}
-
-#[rawr::export]
-fn tax_rate(state: &amp;str) -&gt; f64 {
-    if state == "NY" { 0.08875 } else { 0.0 }
 }
 
 fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
-    // Scripts are named relative to the app, as rustc names source files.
+    // Paths are relative to the app, as rustc names source files.
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("the app's directory");
-    let script = std::env::args().nth(1).unwrap_or("scripts/pricing.rs".into());
+    let mut args = std::env::args().skip(1);
+    let rules = args.next().unwrap_or("rules.rs".into());
+    let edit = args.next();
+    let transactions = read("transactions.csv");
 
-    let mut shop = Exports::new("shop");
-    shop.add::&lt;Order&gt;().add::&lt;tax_rate&gt;();
+    let mut bank = Exports::new("bank");
+    bank.add::&lt;Transaction&gt;();
     let mut engine = Engine::new();
-    engine.export(shop)?;
+    engine.export(bank)?;
 
-    let ast = engine.compile_file(script.into())?;
-    let mut scope = Scope::new();
+    // To show a reload, work on a copy the app can save an edit over.
+    let path = match &amp;edit {
+        Some(_) =&gt; {
+            let copy = std::env::current_exe().unwrap().with_file_name("rules.rs");
+            std::fs::copy(&amp;rules, &amp;copy).expect("a copy of the rules");
+            copy.to_string_lossy().into_owned()
+        }
+        None =&gt; rules,
+    };
 
-    let total = engine.call_fn::&lt;f64&gt;(&amp;mut scope, &amp;ast, "price", (100.0_f64, 2_i64))?;
-    println!("{total:.2}");
-    let receipt = engine.call_fn::&lt;String&gt;(&amp;mut scope, &amp;ast, "receipt", (100.0_f64, 5_i64))?;
-    println!("{receipt}");
+    let script = engine.load(&amp;path)?;
+    let category = script.func::&lt;(Transaction,), Option&lt;String&gt;&gt;("category")?;
+    report(&amp;category, &amp;transactions)?;
 
-    let order = Order { customer: "Ada".into(), items: 2 };
-    let label = engine.call_fn::&lt;String&gt;(&amp;mut scope, &amp;ast, "label", (order.clone(),))?;
-    println!("{label}");
-    let bigger = engine.call_fn::&lt;f64&gt;(&amp;mut scope, &amp;ast, "bigger", (order,))?;
-    println!("{bigger:.2}");
+    if let Some(edit) = edit {
+        // The user saves new rules. The app reloads them between reports,
+        // and `category` runs the new code at its next call. Rules that
+        // fail to compile, or no longer fit `category`, leave the old rules
+        // running.
+        std::fs::copy(&amp;edit, &amp;path).expect("the edited rules");
+        match script.reload() {
+            Ok(true) =&gt; println!("reloaded"),
+            Ok(false) =&gt; println!("unchanged"),
+            Err(error) =&gt; eprintln!("{error}"),
+        }
+        report(&amp;category, &amp;transactions)?;
+    }
+    Ok(())
+}
+
+/// The total for each category, in name order. A transaction the rules
+/// leave out is `other`.
+fn report(
+    category: &amp;Func&lt;(Transaction,), Option&lt;String&gt;&gt;,
+    transactions: &amp;[Transaction],
+) -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
+    let mut totals = BTreeMap::new();
+    for tx in transactions {
+        let name = category.call(tx.clone())?.unwrap_or("other".into());
+        *totals.entry(name).or_insert(0.0) += tx.amount;
+    }
+    for (name, total) in totals {
+        println!("{name:&lt;10} {total:&gt;8.2}");
+    }
+    Ok(())
+}
+
+fn read(path: &amp;str) -&gt; Vec&lt;Transaction&gt; {
+    let text = std::fs::read_to_string(path).expect("the transactions");
+    text.lines()
+        .skip(1)
+        .map(|line| {
+            let fields: Vec&lt;&amp;str&gt; = line.split(',').collect();
+            Transaction {
+                date: fields[0].into(),
+                payee: fields[1].into(),
+                amount: fields[2].parse().expect("an amount"),
+            }
+        })
+        .collect()
+}</code></pre>
+</div>
+<p>The rules import <code>Transaction</code> from the root the app named, as Rust code imports from a crate. They read its fields and call its methods as Rust would.</p>
+<div class="block">
+  <div class="file"><b>examples/rules/rules.rs</b></div>
+  <pre><code data-lang="rust">use bank::Transaction;
+
+fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
+    let payee = tx.payee.to_lowercase();
+    if payee.contains("coffee") {
+        Some("coffee".into())
+    } else if payee.contains("whole foods") || payee.contains("trader joe") {
+        Some("groceries".into())
+    } else if tx.is_income() {
+        Some("income".into())
+    } else {
+        None
+    }
+}</code></pre>
+  <div class="run"><b>cargo run</b><span>coffee       -14.50
+groceries    -85.58
+income      2500.00
+other        -56.49</span></div>
+</div>
+<ul>
+  <li><code>engine.load(path)</code> reads the rules and checks them against the app&rsquo;s exports. It returns a <code>Script</code>. <code>engine.script(text)</code> does the same with text.</li>
+  <li><code>script.func::&lt;(Transaction,), Option&lt;String&gt;&gt;("category")</code> looks up <code>category</code> once and checks its signature. The first type is a tuple of the parameter types, and the second is the return type. The result is a <code>Func</code>, a typed handle.</li>
+  <li><code>category.call(tx)</code> runs the function. The arguments take their types from the handle. A call skips the script&rsquo;s top-level statements.</li>
+</ul>
+<p>Since the handle fixes the types, literals need no suffixes. A <code>&amp;str</code> parameter takes a <code>String</code>.</p>
+<div class="block">
+  <div class="file"><b>src/main.rs</b></div>
+  <pre><code data-lang="rust">use rawr::Engine;
+
+const SCRIPT: &amp;str = "
+fn price(subtotal: f64, items: i64) -&gt; f64 {
+    subtotal + 4.99 * items as f64
+}
+
+fn greet(name: &amp;str) -&gt; String {
+    format!(\"hello, {name}\")
+}
+";
+
+fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
+    let script = Engine::new().script(SCRIPT)?;
+    let price = script.func::&lt;(f64, i64), f64&gt;("price")?;
+    let greet = script.func::&lt;(String,), String&gt;("greet")?;
+    println!("{:.2} {}", price.call(100.0, 2)?, greet.call("Rust".into())?);
     Ok(())
 }</code></pre>
+  <div class="run"><b>cargo run</b><span>109.98 hello, Rust</span></div>
 </div>
-<p>The script imports the exports from the root the app named, as Rust code imports from a crate. It reads the pub fields and calls the methods as Rust would.</p>
+<p>A handle takes up to eight parameters. Clone it to share it. <code>load</code> and <code>script</code> take the engine, so a second script needs its own <code>Engine</code> with the exports installed again.</p>
+
+<h2 id="reload">Reloading</h2>
+<p><code>script.reload()</code> rereads the script&rsquo;s file. If the text is unchanged, it does nothing and returns <code>false</code>. Otherwise it compiles the new text and checks every live handle against it. Then it publishes the new program, and every handle runs the new code at its next call. Your app decides when to reload, such as between two reports or when its file watcher fires.</p>
+<p>A reload publishes all of the new program or none of it. If the new text doesn&rsquo;t compile, or a handle no longer matches its function, <code>reload</code> returns the error and the old program keeps running. A dropped handle isn&rsquo;t checked.</p>
+<p>Run the example with an edit. It loads a copy of <code>rules.rs</code>, saves <code>scripts/edited.rs</code> over the copy and reloads it.</p>
 <div class="block">
-  <div class="file"><b>examples/app/scripts/pricing.rs</b></div>
-  <pre><code data-lang="rust">use shop::{tax_rate, Order};
-
-fn price(subtotal: f64, items: i64) -&gt; f64 {
-    let rate = tax_rate("NY");
-    let shipping = if items &gt; 3 { 0.0 } else { 4.99 };
-    subtotal * (1.0 + rate) + shipping
-}
-
-fn receipt(subtotal: f64, items: i64) -&gt; String {
-    format!("{items} items, {:.2} total", price(subtotal, items))
-}
-
-fn label(order: Order) -&gt; String {
-    format!("{} x{}", order.customer, order.items)
-}
-
-fn bigger(mut order: Order) -&gt; f64 {
-    order.add(3);
-    price(order.total(10.0), order.items)
-}</code></pre>
-  <div class="run"><b>cargo run</b><span>113.87
-5 items, 108.88 total
-Ada x2
-54.44</span></div>
+  <div class="run"><b>cargo run -- rules.rs scripts/edited.rs</b><span>coffee       -14.50
+groceries    -85.58
+income      2500.00
+other        -56.49
+reloaded
+coffee       -14.50
+fuel         -41.00
+groceries    -85.58
+income      2500.00
+streaming    -15.49</span></div>
 </div>
-<p>On a struct, <code>#[rawr::export]</code> exports the type and its pub fields. A script reads a field and assigns it. On the impl block, it exports the pub methods and associated functions. A method keeps its receiver, so a script calls <code>add</code>, which takes <code>&amp;mut self</code>, only on a <code>mut</code> binding. On a free function, it exports the function. Private fields and methods stay private. As in Rust, a field and a method may share a name. <code>order.items</code> reads the field, and calling a field or reading a method without parentheses is rustc&rsquo;s error.</p>
-<p><code>Exports::new</code> names the root that scripts <code>use</code>. <code>add</code> takes each exported struct and function by name. <code>Engine::export</code> installs them. Export everything before you compile a script that uses the exports. After that compile, the exports can&rsquo;t change, and <code>Engine::export</code> returns an error. Scripts on one engine share its exports. Use another <code>Engine</code> for another set.</p>
+<p>With <code>scripts/wrong.rs</code> as the edit, the reload fails with E0308 and the second report uses the old rules.</p>
+
+<h2 id="export">Export your types</h2>
+<p>Put <code>#[rawr::export]</code> on a struct, on its impl block and on a free function.</p>
+<ul>
+  <li>On a struct, it exports the type and its pub fields. A script reads a field and assigns it.</li>
+  <li>On the impl block, it exports the pub methods and associated functions. A method keeps its receiver, so a script calls a <code>&amp;mut self</code> method only on a <code>mut</code> binding.</li>
+  <li>On a free function, it exports the function.</li>
+</ul>
+<p>Private fields and methods stay private. As in Rust, a field and a method may share a name. Calling a field or reading a method without parentheses is rustc&rsquo;s error.</p>
+<p><code>Exports::new</code> names the root that scripts <code>use</code>. <code>add</code> takes each exported struct and function by name. <code>Engine::export</code> installs them. Export everything before you load a script that uses the exports. After that, the exports can&rsquo;t change, and <code>Engine::export</code> returns an error.</p>
 <p>The first release exports one impl block per struct. It doesn&rsquo;t export generic items, <code>&amp;mut</code> parameters or functions that return a reference.</p>
 
-<h2 id="example">A script without exports</h2>
-<p>This is <code>examples/cart.rs</code> in the repository. It compiles <code>examples/scripts/cart.rs</code> and calls its <code>main</code>. That script is the cart program from <a href="/docs/start#first-program">Get started</a> without its <code>// rawr</code> line. A script is typed Rust, like every program rawr runs. An embedded script doesn&rsquo;t need the marker. <code>Engine::compile</code> takes text, so the file&rsquo;s name is the app&rsquo;s choice. The examples use <code>.rs</code>.</p>
-<div class="block">
-  <div class="file"><b>examples/cart.rs</b></div>
-  <pre><code data-lang="rust">use rawr::{Engine, Scope};
-
-fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
-    let engine = Engine::new();
-    let ast = engine.compile(include_str!("scripts/cart.rs"))?;
-    engine.call_fn::&lt;()&gt;(&amp;mut Scope::new(), &amp;ast, "main", ())
-}</code></pre>
-  <div class="run"><b>cargo run --example cart</b><span>total: 27</span></div>
-</div>
-<p><code>Engine::compile</code> parses and checks the source. It returns an <code>AST</code>. If the source doesn&rsquo;t pass the check, it returns an error. <code>call_fn</code> runs a function from that <code>AST</code> and converts its result to the type you name. A <code>Scope</code> holds variables that live across calls.</p>
+<h2 id="boundary">What crosses the boundary</h2>
+<p>A handle&rsquo;s parameters and return type, and the exported items&rsquo; own, are <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>String</code>, <code>()</code>, <code>Option</code> of these and exported structs. An exported struct crosses as itself. A script gets the Rust value, and Rust gets back the value the script returns. A script parameter may borrow, as <code>&amp;str</code> or <code>&amp;Transaction</code> does, and takes the handle&rsquo;s owned value. Integers are <code>i64</code> and floats are <code>f64</code>, so a script function that takes an <code>i32</code> doesn&rsquo;t match an <code>i64</code> handle.</p>
+<p>The check knows the items exported to the engine that loads the script. A call to any other name is rustc&rsquo;s error at the name.</p>
 
 <h2 id="statements">Statements and expressions</h2>
 <p>A script can be items, as above, or plain statements. Statements run as if they were the body of <code>fn main() { .. }</code>, the way rustdoc runs a doctest. The value of the last expression is what <code>Engine::eval</code> returns. Functions in the script can&rsquo;t read its <code>let</code> variables, as in Rust.</p>
@@ -185,67 +277,14 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
 42
 42</span></div>
 </div>
-<p>A value pushed into a <code>Scope</code> becomes a typed variable in the script&rsquo;s scope. Its type comes from its value. An <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code> or string has that type. A constant from <code>push_constant</code> can&rsquo;t be assigned. <code>Engine::eval_expression</code> takes one expression and refuses statements.</p>
-
-<h2 id="call-fn">Calling functions</h2>
-<p>Arguments go in a tuple. A function with one argument takes a one-element tuple such as <code>(x,)</code>. A function with none takes <code>()</code>. The type parameter of <code>call_fn</code> is the return type.</p>
-<div class="block">
-  <div class="file"><b>src/main.rs</b></div>
-  <pre><code data-lang="rust">use rawr::{Engine, Scope};
-
-const SCRIPT: &amp;str = r#"
-fn add(a: i64, b: i64) -&gt; i64 {
-    a + b
-}
-
-fn greet(name: String) -&gt; String {
-    format!("hello, {name}")
-}
-
-fn mean(xs: Vec&lt;f64&gt;) -&gt; f64 {
-    let mut sum = 0.0;
-    for x in &amp;xs {
-        sum += *x;
-    }
-    sum / (xs.len() as f64)
-}
-"#;
-
-fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
-    let engine = Engine::new();
-    let ast = engine.compile(SCRIPT)?;
-    let mut scope = Scope::new();
-
-    let n = engine.call_fn::&lt;i64&gt;(&amp;mut scope, &amp;ast, "add", (2_i64, 40_i64))?;
-    let s = engine.call_fn::&lt;String&gt;(&amp;mut scope, &amp;ast, "greet", ("Rust".to_string(),))?;
-    let xs: rawr::Array = vec![1.0_f64.into(), 2.0_f64.into(), 4.5_f64.into()];
-    let m = engine.call_fn::&lt;f64&gt;(&amp;mut scope, &amp;ast, "mean", (xs,))?;
-
-    println!("{n} {s} {m}");
-    Ok(())
-}</code></pre>
-  <div class="run"><b>cargo run</b><span>42 hello, Rust 2.5</span></div>
-</div>
-<p>Calling a function that doesn&rsquo;t exist returns an error (<code>Function not found: nope</code>). So does asking for the wrong return type (<code>Output type incorrect: string (expecting i64)</code>).</p>
-
-<h2 id="boundary">What crosses the boundary</h2>
-<table class="wide">
-  <tr><th>Your app</th><th>The script</th></tr>
-  <tr><td><code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code></td><td>The same types. Pass integers as <code>i64</code> and floats as <code>f64</code>.</td></tr>
-  <tr><td><code>String</code>, <code>&amp;str</code></td><td>Either one can be passed for a <code>String</code> or <code>&amp;str</code> parameter. A returned string comes back as <code>String</code>.</td></tr>
-  <tr><td><code>rawr::Array</code></td><td>A <code>Vec</code>. Build one from values converted with <code>.into()</code>.</td></tr>
-  <tr><td><code>()</code></td><td>The unit return of a function such as <code>main</code>.</td></tr>
-  <tr><td><code>rawr::Dynamic</code></td><td>Any value. A struct or enum that the script defines comes back as a <code>Dynamic</code>. Rust code can hold it and pass it back. It can&rsquo;t read the fields.</td></tr>
-</table>
-<p>An exported struct crosses as itself. A script gets the Rust value, and Rust gets back the value the script returns. The exported items take and return <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code>, <code>String</code>, <code>()</code>, <code>Option</code> of these and exported structs. A parameter may borrow, as <code>&amp;str</code> or <code>&amp;Order</code> does.</p>
-<p>The check knows the items exported to the engine that compiles the script. A call to any other name is an <code>unknown function</code> error at the name, as in rustc.</p>
+<p>A <code>Scope</code> holds variables across runs. A value pushed into it becomes a typed variable in the script. Its type comes from its value. An <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>char</code> or string has that type. A constant from <code>push_constant</code> can&rsquo;t be assigned. <code>Engine::eval_expression</code> takes one expression and refuses statements.</p>
 
 <h2 id="output">Capturing output</h2>
 <p>By default <code>println!</code> and <code>print!</code> write to the process&rsquo;s stdout. <code>eprintln!</code> and <code>eprint!</code> write to stderr. <code>Engine::on_output</code> sends that text to a callback instead. The callback gets the stream and the exact text. <code>println!</code> text includes its newline.</p>
 <div class="block">
   <div class="file"><b>src/main.rs</b></div>
-  <pre><code data-lang="rust">use std::sync::{Arc, Mutex};
-use rawr::{Engine, Output, Scope};
+  <pre><code data-lang="rust">use rawr::{Engine, Output};
+use std::sync::{Arc, Mutex};
 
 fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
     let mut engine = Engine::new();
@@ -255,46 +294,52 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
         sink.lock().unwrap().push((output == Output::Stderr, text.to_string()));
     });
 
-    let ast = engine.compile(r#"
+    let script = engine.script(
+        r#"
         fn main() {
             println!("to stdout");
             eprintln!("to stderr");
         }
-    "#)?;
-    engine.call_fn::&lt;()&gt;(&amp;mut Scope::new(), &amp;ast, "main", ())?;
+        "#,
+    )?;
+    script.func::&lt;(), ()&gt;("main")?.call()?;
     println!("{:?}", lines.lock().unwrap());
     Ok(())
 }</code></pre>
   <div class="run"><b>cargo run</b><span>[(false, "to stdout\n"), (true, "to stderr\n")]</span></div>
 </div>
 
-
-<h2 id="lifecycle">Loading and reloading scripts</h2>
-<p>The <code>Engine</code> doesn&rsquo;t read or watch files on its own. Your app decides when to load a script.</p>
-<ul>
-  <li><code>compile_file</code> reads a script and checks it against the exports. <code>compile</code> does the same with text.</li>
-  <li>The <code>AST</code> it returns stays valid. Call <code>call_fn</code> on it as often as you like.</li>
-  <li>To pick up an edited script, call <code>compile_file</code> again and call functions on the new <code>AST</code>. The old one keeps working until you drop it.</li>
-  <li>A <code>Scope</code> holds variables across calls. Your app chooses whether a new <code>AST</code> gets the old <code>Scope</code> or a new one.</li>
-</ul>
-
 <h2 id="release">In a release build</h2>
 <p>An app that runs scripts ships the <code>rawr</code> crate, because the interpreter runs the scripts at run time. This differs from <a href="/docs/run#release">the dev loop</a>, where Cargo compiles the marked files and no interpreter ships.</p>
 
 <h2 id="errors">Errors</h2>
-<p>A compile error prints as rustc prints one, with its code, the message and the source line. <code>Display</code> prints it. So does the <code>Debug</code> output that <code>fn main() -&gt; Result</code> shows when <code>?</code> returns the error. <code>compile_file</code> names the file. <code>compile</code> names the source <code>&lt;script&gt;</code>. Run <code>examples/app</code> with a typo in its script:</p>
+<p>Errors print as rustc prints them, with the code, the message and the source line. <code>Display</code> prints them. So does the <code>Debug</code> output that <code>fn main() -&gt; Result</code> shows when <code>?</code> returns one. <code>load</code> names the file, and <code>script</code> names the source <code>&lt;script&gt;</code>.</p>
+<p>A mistake in the rules fails when they load:</p>
 <div class="block diag">
   <div class="file"><b>cargo run -- scripts/typo.rs</b><span>exit 1</span></div>
-  <pre><code>Error: <span class="e">error[E0609]</span><span class="h">: no field `itmes` on type `Order`</span>
- <span class="c">--&gt;</span> scripts/typo.rs:4:45-4:50
- <span class="c">4 |</span>     format!("{} x{}", order.customer, order.itmes)
-   <span class="c">|</span>                                             <span class="e">^^^^^</span></code></pre>
+  <pre><code>Error: <span class="e">error[E0609]</span><span class="h">: no field `payye` on type `Transaction`</span>
+ <span class="c">--&gt;</span> scripts/typo.rs:4:11-4:16
+ <span class="c">4 |</span>     if tx.payye.contains("Coffee") {
+   <span class="c">|</span>           <span class="e">^^^^^</span></code></pre>
 </div>
-<p><code>compile</code> returns <code>Result&lt;AST, ParseError&gt;</code>. <code>compile_file</code>, <code>eval</code>, <code>run_with_scope</code> and <code>call_fn</code> return <code>Result&lt;_, Box&lt;EvalAltResult&gt;&gt;</code>. In a function that returns <code>Box&lt;EvalAltResult&gt;</code>, <code>?</code> converts a <code>ParseError</code>, as the examples on this page do.</p>
-<p>To match on a compile error, call <code>err_type()</code> on the <code>ParseError</code>. A runtime error from <code>call_fn</code> names the problem and its position in the script.</p>
+<p>A function whose signature differs from the handle&rsquo;s fails when the app looks it up. The error points at the script&rsquo;s signature:</p>
+<div class="block diag">
+  <div class="file"><b>cargo run -- scripts/wrong.rs</b><span>exit 1</span></div>
+  <pre><code>Error: <span class="e">error[E0308]</span><span class="h">: mismatched types</span>
+ <span class="c">--&gt;</span> scripts/wrong.rs:3:1-3:39
+ <span class="c">3 |</span> fn category(tx: Transaction) -&gt; String {
+   <span class="c">|</span> <span class="e">^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span> expected `fn(Transaction) -&gt; Option&lt;String&gt;`, found `fn(Transaction) -&gt; String`</code></pre>
+</div>
+<p>A function the script doesn&rsquo;t have is E0425. Here the app asks the price script above for <code>cost</code>:</p>
+<div class="block diag">
+  <pre><code><span class="e">error[E0425]</span><span class="h">: cannot find function `cost` in this script</span>
+ <span class="c">--&gt;</span> &lt;script&gt;
+  <span class="c">=</span> help: the app calls `cost` as `fn(f64) -&gt; f64`</code></pre>
+</div>
+<p>Every call returns <code>Result&lt;_, Box&lt;EvalAltResult&gt;&gt;</code>. A runtime error, such as a panic or a limit the script reached, names the problem and its position in the script.</p>
 
 <h2 id="limits">Limits</h2>
-<p>An <code>Engine</code> can bound what a script may do. Set the limits on the engine before running a script.</p>
+<p>An <code>Engine</code> can bound what a script may do. Set the limits on the engine before loading a script.</p>
 <ul>
   <li><code>set_max_operations</code> stops a script after a number of steps. An endless loop then fails with <code>Too many operations</code>.</li>
   <li><code>set_max_call_levels</code> bounds recursion depth.</li>
