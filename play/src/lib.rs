@@ -1788,6 +1788,71 @@ impl State {
     }
 
     #[test]
+    fn a_slider_steps_down_and_up_by_its_keys() {
+        let source = r#"
+use iced::widget::{Widget, column, slider, text};
+
+struct State { value: i64 }
+
+impl Default for State {
+    fn default() -> Self { State { value: 5 } }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message { Changed(i64) }
+
+impl State {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Changed(value) => self.value = value,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![text(self.value), slider(0..=10, self.value, Message::Changed)]
+            .spacing(12)
+            .width(200)
+    }
+}
+"#;
+        let image = clicked(source, &Options::default());
+        assert_eq!(image.actions, ["Slider −", "Slider +"]);
+        let still = |options: Options| Options {
+            still: true,
+            ..options
+        };
+        let png = |options: &Options| render(source, options).unwrap().bytes;
+        assert!(
+            png(&still(Options {
+                steps: vec![1, 1, 0],
+                ..Options::default()
+            })) == png(&still(Options {
+                messages: vec!["Message::Changed(6)".into()],
+                ..Options::default()
+            })),
+            "up, up and down from 5 is 6"
+        );
+        let image = clicked(
+            source,
+            &Options {
+                steps: vec![0; 6],
+                ..Options::default()
+            },
+        );
+        assert_eq!(image.clicked.len(), 6);
+        assert!(
+            png(&still(Options {
+                steps: vec![0; 6],
+                ..Options::default()
+            })) == png(&still(Options {
+                messages: vec!["Message::Changed(0)".into()],
+                ..Options::default()
+            })),
+            "a slider stops at its start"
+        );
+    }
+
+    #[test]
     fn render_iced_counter_example_verbatim() {
         let source = include_str!("../tests/fixtures/counter.rs");
         assert_eq!(shape(&super::without_tests(source)), Shape::App);

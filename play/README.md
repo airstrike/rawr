@@ -122,10 +122,13 @@ per-user and per-channel limits, one click renders per reply at a time,
 and a history stops at 24 clicks.
 
 A target is a text or an icon's container that shows a pointer, or a
-control that reports itself. iced's toggler, radio and label-less
+control that reports itself. iced's toggler, radio, slider and label-less
 checkbox report nothing to an `Operation`, so rawr-iced wraps each in
 `widget::reported`, which reports its bounds and its own label. Their
 buttons carry those labels, and one without a label is numbered (`#5`).
+A slider is two targets, `Slider −` and `Slider +`: a step on one moves
+the cursor over the slider and taps ↓ or ↑, which iced's slider reads as
+one step down or up.
 
 ### Where it answers
 

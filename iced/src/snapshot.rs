@@ -285,7 +285,7 @@ pub struct Recording {
 /// A place in a drawn interface where a click does something: a widget
 /// that shows a pointer, a text cursor or a grab under the cursor, found
 /// by its text, its container, or the control's own report (a toggler, a
-/// radio, a checkbox without a label).
+/// radio, a slider, a checkbox without a label).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Target {
     /// Its text or a control's label; `#n` when it has none. A label
@@ -293,6 +293,19 @@ pub struct Target {
     pub label: String,
     /// Its logical bounds; a click lands at their centre.
     pub bounds: iced::Rectangle,
+    /// What a step on it does.
+    pub action: Action,
+}
+
+/// What a step on a [`Target`] does, with the cursor at its centre.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Action {
+    /// The left button is pressed and released there.
+    Click,
+    /// ↓ is tapped over a slider: one step down, as iced's slider reads it.
+    Decrease,
+    /// ↑ is tapped over a slider: one step up.
+    Increase,
 }
 
 /// Record a booted application on a simulated clock: a frame every
@@ -304,6 +317,7 @@ pub struct Target {
 /// interface as it then is: `steps[i]` indexes the targets in reading
 /// order (see [`Recording::targets`]), and the cursor moves to its centre,
 /// presses and releases there, as `iced_test`'s `Simulator::click` does.
+/// A slider's step taps ↓ or ↑ there instead (see [`Action`]).
 /// What its widgets publish is applied as any frame's messages are. With
 /// steps, the boot, the messages and every step but the last run their
 /// frames without drawing them, and the frames recorded are the last
@@ -375,7 +389,7 @@ pub fn record_application(
                     count: targets.len(),
                 })?;
                 clicked.push(target.label.clone());
-                let published = renderer.click(&mut trees, target.bounds.center());
+                let published = renderer.act(&mut trees, target);
                 adapter.deliver(published);
             }
             // With steps, only the last one's frames are drawn.

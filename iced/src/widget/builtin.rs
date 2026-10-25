@@ -248,12 +248,15 @@ impl widget::Descriptor for marker::Slider {
                 slider.boxed()
             }};
         }
-        match (self.vertical, number != marker::SliderNumber::Integer) {
+        let slider = match (self.vertical, number != marker::SliderNumber::Integer) {
             (false, false) => native!(iced::widget::slider, rawr::INT, width, height),
             (false, true) => native!(iced::widget::slider, f64, width, height),
             (true, false) => native!(iced::widget::vertical_slider, rawr::INT, height, width),
             (true, true) => native!(iced::widget::vertical_slider, f64, height, width),
-        }
+        };
+        // iced's slider reports nothing to an `Operation`, so it reports
+        // itself to the headless renderer's targets.
+        widget::reported::reported(slider, None, widget::reported::Kind::Slider)
     }
 
     fn identity(&self) -> widget::Identity {

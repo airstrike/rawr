@@ -24,6 +24,9 @@ pub(crate) enum Kind {
     /// A click anywhere on it toggles or selects it: a toggler, a radio,
     /// a checkbox.
     Toggle,
+    /// A slider: with the cursor over it, ↓ moves it one step down and ↑
+    /// one step up, as iced's slider reads its keys.
+    Slider,
 }
 
 /// What a [`Reported`] control tells an `Operation` about itself.

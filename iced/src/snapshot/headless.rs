@@ -6,7 +6,7 @@ use iced_runtime::core::renderer::Style;
 use iced_runtime::core::theme::Base;
 use iced_runtime::core::widget::operation::Text;
 use iced_runtime::core::widget::{Id, Operation};
-use iced_runtime::core::{mouse, shell, time, window, Event, Point, Rectangle, Size, Vector};
+use iced_runtime::core::{keyboard, mouse, shell, time, window, Event, Rectangle, Size, Vector};
 use iced_runtime::user_interface::{self, UserInterface};
 
 use crate::runtime;
@@ -264,7 +264,7 @@ impl Renderer {
     /// The places a click lands in the interface the last frame settled,
     /// in reading order (see [`arrange`]). Each text and container the
     /// interface reports, and each control that reports itself (a toggler,
-    /// a radio, a checkbox without a label; see `widget::reported`),
+    /// a radio, a slider, a checkbox without a label; see `widget::reported`),
     /// overlays included, is a candidate; one is kept
     /// when the interface, asked with the cursor at its centre and no
     /// event, shows a pointer, a text cursor or a grab. Asking runs no
@@ -315,20 +315,27 @@ impl Renderer {
         arrange(candidates)
     }
 
-    /// Click the interface the last frame settled at `at`, as a person
-    /// would and as `iced_test`'s `Simulator::click` does: the cursor moves
-    /// there, then the left button is pressed and released. Gives the
-    /// messages its widgets published.
-    pub(super) fn click(&mut self, trees: &mut Trees, at: Point) -> Vec<runtime::Message> {
-        let interface = trees
-            .drawn
-            .as_mut()
-            .expect("a frame settled before a click");
-        let events = [
-            Event::Mouse(mouse::Event::CursorMoved { position: at }),
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
-        ];
+    /// Act on `target` in the interface the last frame settled, as a
+    /// person would and as `iced_test`'s `Simulator` does: the cursor
+    /// moves to its centre, then for a click the left button is pressed
+    /// and released there, and for a slider's step ↓ or ↑ is tapped. Gives
+    /// the messages its widgets published.
+    pub(super) fn act(
+        &mut self,
+        trees: &mut Trees,
+        target: &super::Target,
+    ) -> Vec<runtime::Message> {
+        let interface = trees.drawn.as_mut().expect("a frame settled before a step");
+        let at = target.bounds.center();
+        let mut events = vec![Event::Mouse(mouse::Event::CursorMoved { position: at })];
+        match target.action {
+            super::Action::Click => events.extend([
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            ]),
+            super::Action::Decrease => events.extend(tap(keyboard::key::Named::ArrowDown)),
+            super::Action::Increase => events.extend(tap(keyboard::key::Named::ArrowUp)),
+        }
         let mut messages = shell::Bus::new();
         let _ = interface.update(
             &window::Headless,
@@ -432,6 +439,31 @@ impl Renderer {
     }
 }
 
+/// The events of tapping `key`, pressed and released with no modifiers,
+/// as `iced_test`'s `tap_key` sends them.
+fn tap(key: keyboard::key::Named) -> [Event; 2] {
+    let key = keyboard::Key::Named(key);
+    let physical = keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified);
+    [
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key.clone(),
+            physical_key: physical,
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::default(),
+            text: None,
+            repeat: false,
+        }),
+        Event::Keyboard(keyboard::Event::KeyReleased {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: physical,
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::default(),
+        }),
+    ]
+}
+
 /// Paint the canvas's margin, `margin` pixels on each side of an image
 /// `width` by `height`, with the content's own background: the color its
 /// edge is all in, as a canvas filling the view draws. A content edge of
@@ -520,6 +552,8 @@ pub(super) struct Candidate {
     clickable: bool,
     /// Whether that is a pointer.
     pointer: bool,
+    /// Whether it is a slider, which keys step: two targets, ↓ and ↑.
+    slider: bool,
 }
 
 /// The texts, containers and controls an interface reports, in the order it reports
@@ -538,9 +572,9 @@ struct Candidates {
 }
 
 impl Candidates {
-    fn push(&mut self, bounds: Rectangle, text: Option<String>) {
+    fn push(&mut self, bounds: Rectangle, text: Option<String>) -> Option<&mut Candidate> {
         if bounds.width <= 0.0 || bounds.height <= 0.0 {
-            return;
+            return None;
         }
         let shift = self.translation + self.scrolled;
         self.found.push(Candidate {
@@ -549,7 +583,9 @@ impl Candidates {
             overlay: self.rooted || self.depth == 0,
             clickable: false,
             pointer: false,
+            slider: false,
         });
+        self.found.last_mut()
     }
 }
 
@@ -567,7 +603,7 @@ impl Operation for Candidates {
     }
 
     fn container(&mut self, _id: Option<&Id>, bounds: Rectangle, _viewport: &Rectangle) {
-        self.push(bounds, None);
+        let _ = self.push(bounds, None);
     }
 
     fn scrollable(
@@ -582,14 +618,18 @@ impl Operation for Candidates {
     }
 
     fn text(&mut self, _id: Option<&Id>, bounds: Rectangle, state: &mut dyn Text) {
-        self.push(bounds, Some(collapsed(&state.text())));
+        let _ = self.push(bounds, Some(collapsed(&state.text())));
     }
 
-    // A toggler, a radio or a label-less checkbox reports itself through
-    // `widget::reported`, labelled by its own label (empty for none).
+    // A toggler, a radio, a label-less checkbox or a slider reports itself
+    // through `widget::reported`, labelled by its own label (empty for
+    // none).
     fn custom(&mut self, _id: Option<&Id>, bounds: Rectangle, state: &mut dyn std::any::Any) {
-        if let Some(report) = state.downcast_ref::<crate::widget::reported::Report>() {
-            self.push(bounds, Some(collapsed(&report.label)));
+        use crate::widget::reported::{Kind, Report};
+        if let Some(report) = state.downcast_ref::<Report>()
+            && let Some(candidate) = self.push(bounds, Some(collapsed(&report.label)))
+        {
+            candidate.slider = report.kind == Kind::Slider;
         }
     }
 }
@@ -612,6 +652,8 @@ fn collapsed(text: &str) -> String {
 ///   on a slider or a text input is not one.
 /// - A text is labelled by its content and a control by its label. A
 ///   container, or a control without a label, is labelled by its number.
+/// - A slider is two targets, one step down and one up, labelled `−` and
+///   `+` after its label, or after `Slider` when it has none.
 /// - Reading order is by lines, top to bottom, each left to right. A
 ///   target whose centre is above the bottom of a line's first target is
 ///   on that line.
@@ -651,9 +693,22 @@ pub(super) fn arrange(candidates: Vec<Candidate>) -> Vec<super::Target> {
                 && (candidate.text.is_some()
                     || candidate.pointer && !inside(at, |other| other.text.is_some()))
         })
-        .map(|(_, candidate)| super::Target {
-            label: candidate.text.clone().unwrap_or_default(),
-            bounds: candidate.bounds,
+        .flat_map(|(_, candidate)| {
+            let label = candidate.text.clone().unwrap_or_default();
+            let target = |label, action| super::Target {
+                label,
+                bounds: candidate.bounds,
+                action,
+            };
+            if candidate.slider {
+                let name = if label.is_empty() { "Slider" } else { &label };
+                vec![
+                    target(format!("{name} −"), super::Action::Decrease),
+                    target(format!("{name} +"), super::Action::Increase),
+                ]
+            } else {
+                vec![target(label, super::Action::Click)]
+            }
         })
         .collect();
     kept.sort_by(|a, b| a.bounds.y.total_cmp(&b.bounds.y));
@@ -709,6 +764,7 @@ mod target_tests {
             overlay: false,
             clickable,
             pointer: clickable,
+            slider: false,
         }
     }
 
@@ -777,6 +833,50 @@ mod target_tests {
         let mut alone = at(0.0, 0.0, 100.0, 20.0, None, true);
         alone.pointer = false;
         assert!(labels(vec![alone]).is_empty());
+    }
+
+    #[test]
+    fn a_slider_is_a_step_down_and_a_step_up() {
+        use crate::snapshot::Action;
+        // A column whose centre lands on a slider, the slider reporting
+        // itself inside it, and a button beside it.
+        let mut column = at(0.0, 0.0, 100.0, 60.0, None, true);
+        column.pointer = false;
+        let mut slider = at(0.0, 20.0, 100.0, 20.0, Some(""), true);
+        slider.pointer = false;
+        slider.slider = true;
+        let candidates = vec![
+            column,
+            at(0.0, 0.0, 100.0, 20.0, Some("Width:"), false),
+            slider.clone(),
+            at(120.0, 20.0, 40.0, 20.0, Some("Reset"), true),
+        ];
+        let targets = arrange(candidates);
+        let found: Vec<(&str, Action)> = targets
+            .iter()
+            .map(|target| (target.label.as_str(), target.action))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("Slider −", Action::Decrease),
+                ("Slider +", Action::Increase),
+                ("Reset", Action::Click),
+            ]
+        );
+        assert_eq!(targets[0].bounds, targets[1].bounds);
+        // Two sliders: each pair gets its ordinal.
+        let mut lower = slider.clone();
+        lower.bounds.y = 60.0;
+        assert_eq!(
+            labels(vec![slider, lower]),
+            [
+                "Slider − (1)",
+                "Slider + (1)",
+                "Slider − (2)",
+                "Slider + (2)"
+            ]
+        );
     }
 
     #[test]
