@@ -163,7 +163,11 @@ pub enum Status {
 /// added and leaves every other locked version as it is. Best effort:
 /// `cargo check` reports any problem.
 fn settle_lock(program: &OsString, manifest: &Path) {
-    let lock = manifest.with_file_name("Cargo.lock");
+    // A workspace member's lock is the workspace root's.
+    let lock = manifest.parent().map_or_else(
+        || manifest.with_file_name("Cargo.lock"),
+        |directory| rawr_location::workspace_root(directory).join("Cargo.lock"),
+    );
     let modified = |path: &Path| {
         fs::metadata(path)
             .and_then(|metadata| metadata.modified())

@@ -78,7 +78,7 @@ fn lock() -> std::sync::MutexGuard<'static, State> {
 /// Start showing progress for one launch of the project at `project` until
 /// [`finish`].
 pub fn begin(project: &Path) {
-    let file = project.join("target/rawr/cache/progress");
+    let file = crate::location::rawr_directory_here(project).join("cache/progress");
     let previous = std::fs::read_to_string(&file)
         .ok()
         .and_then(|text| parse(&text));

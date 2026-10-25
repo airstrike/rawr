@@ -2,7 +2,8 @@
 //!
 //! Cargo keeps a project's build output in the project's target directory, and
 //! so does Rawr: `<target>/rawr` holds what Rawr builds and keeps for a
-//! project. `cargo clean` removes it.
+//! project, and `<target>/rawr/members/<path>` for a workspace member
+//! ([`rawr_directory`]). `cargo clean` removes it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -156,10 +157,96 @@ fn configured(path: &Path, key: &str) -> Option<String> {
     document.get("build")?.get(key)?.as_str().map(str::to_owned)
 }
 
+/// Where Rawr keeps what it builds and remembers for `project`:
+/// `<target>/rawr` for a crate of its own or a workspace's root package, and
+/// `<target>/rawr/members/<path>` for a member elsewhere in a workspace,
+/// `<path>` being the member's directory under the workspace root. Members
+/// share the workspace's target directory, as under Cargo, and each keeps
+/// its own runner, crate and store.
+pub fn rawr_directory<'a>(
+    project: &Path,
+    environment: impl Fn(&str) -> Option<&'a str>,
+    cargo_home: Option<&Path>,
+) -> PathBuf {
+    rawr_directory_in(&target_directory(project, environment, cargo_home), project)
+}
+
+/// [`rawr_directory`] for `project` when its target directory is `target`.
+#[must_use]
+pub fn rawr_directory_in(target: &Path, project: &Path) -> PathBuf {
+    let rawr = target.join("rawr");
+    match member_path(project) {
+        Some(member) => rawr.join("members").join(member),
+        None => rawr,
+    }
+}
+
+/// `project`'s directory under its workspace root, when it is a member of
+/// a workspace rooted elsewhere. Cargo builds such a member with the
+/// toolchain and the config files the workspace root's directory selects.
+#[must_use]
+pub fn member_path(project: &Path) -> Option<PathBuf> {
+    if !project.join("Cargo.toml").is_file() {
+        return None;
+    }
+    let root = workspace_root(project);
+    let root = fs::canonicalize(&root).unwrap_or(root);
+    let project = fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
+    project
+        .strip_prefix(&root)
+        .ok()
+        .filter(|member| !member.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+}
+
+/// The directory of the package named `name` in the workspace that holds
+/// `start`, as `cargo run -p <name>` finds it: the workspace's root package
+/// or one of its `members`. A member pattern may end in `*`, as in
+/// `"examples/*"`.
+#[must_use]
+pub fn package(start: &Path, name: &str) -> Option<PathBuf> {
+    let manifest = |directory: &Path| {
+        fs::read_to_string(directory.join("Cargo.toml"))
+            .ok()
+            .and_then(|text| text.parse::<DocumentMut>().ok())
+    };
+    let named = |directory: &Path| {
+        manifest(directory).is_some_and(|document| {
+            document
+                .get("package")
+                .and_then(|package| package.get("name"))
+                .and_then(|name| name.as_str())
+                == Some(name)
+        })
+    };
+    let root = start
+        .ancestors()
+        .find(|directory| directory.join("Cargo.toml").is_file())
+        .map(workspace_root)?;
+    if named(&root) {
+        return Some(root);
+    }
+    let document = manifest(&root)?;
+    let members = document.get("workspace")?.get("members")?.as_array()?;
+    members
+        .iter()
+        .filter_map(|member| member.as_str())
+        .flat_map(|member| match member.strip_suffix('*') {
+            Some(prefix) => fs::read_dir(root.join(prefix))
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .collect(),
+            None => vec![root.join(member)],
+        })
+        .find(|directory| named(directory))
+}
+
 /// The project itself when its manifest declares `[workspace]` or none
 /// encloses it, its `package.workspace` when set, else the nearest enclosing
 /// manifest with `[workspace]`.
-fn workspace_root(project: &Path) -> PathBuf {
+#[must_use]
+pub fn workspace_root(project: &Path) -> PathBuf {
     let manifest = |directory: &Path| {
         fs::read_to_string(directory.join("Cargo.toml"))
             .ok()
@@ -189,7 +276,7 @@ fn workspace_root(project: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_directory, target_directory};
+    use super::{build_directory, member_path, package, rawr_directory, target_directory};
     use std::fs;
     use std::path::Path;
 
@@ -251,6 +338,43 @@ mod tests {
             target_directory(&project, environment, None),
             Path::new("/elsewhere")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_workspace_member_keeps_its_products_under_the_workspace_target() {
+        let root = fixture("member");
+        write(
+            &root.join("Cargo.toml"),
+            "[package]\nname = \"top\"\n[workspace]\nmembers = [\"examples/*\", \"tools/one\"]\n",
+        );
+        write(
+            &root.join("examples/game/Cargo.toml"),
+            "[package]\nname = \"game\"\n",
+        );
+        write(
+            &root.join("tools/one/Cargo.toml"),
+            "[package]\nname = \"one\"\n",
+        );
+        let none = |_: &str| None;
+        assert_eq!(rawr_directory(&root, none, None), root.join("target/rawr"));
+        assert_eq!(
+            rawr_directory(&root.join("examples/game"), none, None),
+            root.join("target/rawr/members/examples/game")
+        );
+        assert_eq!(member_path(&root), None);
+        assert_eq!(
+            member_path(&root.join("tools/one")),
+            Some(Path::new("tools/one").to_path_buf())
+        );
+        // `-p <name>` from anywhere in the workspace.
+        assert_eq!(package(&root, "game"), Some(root.join("examples/game")));
+        assert_eq!(package(&root.join("tools/one"), "top"), Some(root.clone()));
+        assert_eq!(
+            package(&root.join("examples/game/src"), "one"),
+            Some(root.join("tools/one"))
+        );
+        assert_eq!(package(&root, "missing"), None);
         fs::remove_dir_all(root).unwrap();
     }
 

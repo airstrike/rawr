@@ -29,6 +29,13 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     if let Some(code) = supervise::child() {
         return code;
     }
+    let arguments = match package_arguments(arguments) {
+        Ok(arguments) => arguments,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return ExitCode::from(2);
+        }
+    };
     match parse(&arguments) {
         Ok(Request::Help) => {
             println!("{}", help(&layer::installed()));
@@ -57,6 +64,38 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// `rawr run -p <name>` and `rawr check -p <name>` (or `--package`), as
+/// under `cargo run -p`: the arguments with the directory of the
+/// workspace's package `name` in place of the option, so every binary that
+/// is handed the program reads a path.
+fn package_arguments(mut arguments: Vec<OsString>) -> Result<Vec<OsString>, String> {
+    if !arguments
+        .first()
+        .is_some_and(|command| command == "run" || command == "check")
+    {
+        return Ok(arguments);
+    }
+    let end = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    let Some(option) = arguments[..end]
+        .iter()
+        .position(|argument| argument == "-p" || argument == "--package")
+    else {
+        return Ok(arguments);
+    };
+    let name = arguments[..end]
+        .get(option + 1)
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or("`-p` needs a package name")?;
+    let current = std::env::current_dir().map_err(|error| error.to_string())?;
+    let directory = rawr_location::package(&current, &name)
+        .ok_or_else(|| format!("no package `{name}` in the workspace here"))?;
+    arguments.splice(option..option + 2, [directory.into_os_string()]);
+    Ok(arguments)
 }
 
 /// What the arguments ask of `rawr` itself.
@@ -222,6 +261,7 @@ fn help(installed: &[layer::Installed]) -> String {
          program to the extension that serves it.\n\n\
          Usage:\n  rawr [run] [path] [-- args]   Run a program, with its arguments after `--`\n  \
          rawr check [path]             Check a program without running it\n  \
+         rawr run -p <package>         Run a package of this workspace, as `cargo run -p`\n  \
          rawr new <path>               Create a crate with a marked `src/main.rs`\n  \
          rawr doctor [path]            Report on the environment and the project\n",
     );

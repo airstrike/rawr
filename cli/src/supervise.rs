@@ -34,7 +34,8 @@ pub fn child() -> Option<ExitCode> {
 }
 
 /// The name a program sees as its first argument: the path of the binary
-/// `cargo run` builds, `target/debug/<name>` under the crate, or the
+/// `cargo run` builds, `<target>/debug/<name>` in the crate's Cargo target
+/// directory (the workspace's, for a member), or the
 /// file's path without `.rs` for a single file.
 #[must_use]
 pub fn program_name(target: &rawr::project::Target) -> OsString {
@@ -48,7 +49,7 @@ pub fn program_name(target: &rawr::project::Target) -> OsString {
             |name| name.to_string_lossy().into_owned(),
         )
     });
-    root.join("target")
+    crate::cells::target_directory(root)
         .join("debug")
         .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
         .into_os_string()
