@@ -202,7 +202,7 @@ debug = false
 lto = "fat"
 codegen-units = 1
 #opt-level = "z"     # optimize for size
-#panic = 'abort'     # remove stack backtrace for no-std
+#panic = 'abort'     # remove stack backtrace
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 web-time = { version = "1.1.0" } # WASM implementation of std::time::Instant
