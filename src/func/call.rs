@@ -384,20 +384,24 @@ impl Engine {
                 .has_context()
                 .then(|| (self, name, source.as_deref(), &*global, pos).into());
 
-            let mut _result = match func {
-                f if !f.is_pure() && args.first().is_some_and(|v| v.is_read_only()) => {
-                    Err(ERR::ErrorNonPureMethodCallOnConstant(name.to_string(), pos).into())
+            // The first argument comes back when the call ends, and also
+            // when native code panics, so the panic unwinds and is reported
+            // instead of aborting the process in `ArgBackup`'s drop.
+            let mut _result = {
+                defer! { args = (args) if swap => move |a| backup.restore_first_arg(a) }
+                match func {
+                    f if !f.is_pure() && args.first().is_some_and(|v| v.is_read_only()) => {
+                        Err(ERR::ErrorNonPureMethodCallOnConstant(name.to_string(), pos).into())
+                    }
+                    RawrFunc::Plugin { func } => func.call(context, args),
+                    RawrFunc::Pure { func, .. } | RawrFunc::Method { func, .. } => {
+                        func(context, args)
+                    }
+                    _ => unreachable!("non-native function"),
                 }
-                RawrFunc::Plugin { func } => func.call(context, args),
-                RawrFunc::Pure { func, .. } | RawrFunc::Method { func, .. } => func(context, args),
-                _ => unreachable!("non-native function"),
             }
             .and_then(|r| self.check_data_size(r, pos))
             .map_err(|err| err.fill_position(pos));
-
-            if swap {
-                backup.restore_first_arg(args);
-            }
 
             #[cfg(feature = "debugging")]
             if self.is_debugger_registered() {
