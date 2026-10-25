@@ -122,7 +122,6 @@ Error: "\"forty\": invalid digit found in string"
   <li>Returning <code>&amp;mut</code> from a function or method.</li>
   <li>Two mutable borrows of fields of one struct at once, as in <code>swap(&amp;mut p.x, &amp;mut p.y)</code>.</li>
   <li><code>&amp;dyn Trait</code> arguments such as <code>&amp;dyn Debug</code>. <code>Box&lt;dyn Trait&gt;</code> works.</li>
-  <li>Dereferencing twice (<code>**x</code>) inside a closure such as the one passed to <code>min_by_key</code>.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
   <li><code>impl Drop</code>.</li>
 </ul>

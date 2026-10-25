@@ -9232,20 +9232,48 @@ main();
 }
 
 /// Deref coercion at an argument: `&&u8` where `&u8` is expected, and
-/// `&String` where `&str` is. rustc prints `1 2`.
+/// `&&String` or `&&&str` where `&str` is. rustc prints `1 2 3 2`.
 #[test]
 fn language_arguments_deref_through_nested_references() {
     assert_eq!(
         printed(
             r#"
 fn takes(x: &str) -> usize { x.len() }
+fn byte(x: &u8) -> u8 { *x }
 let word = b"rhythm";
 let n = word.iter().filter(|b| b"aeiouy".contains(b)).count();
 let s = String::from("hi");
 let r = &s;
-println!("{} {}", n, takes(r));
+let k: &&u8 = &&3u8;
+println!("{} {} {} {}", n, takes(r), byte(k), takes(&&s));
 "#
         ),
-        "1 2\n"
+        "1 2 3 2\n"
+    );
+    // A `&&u8` where a `u8` is expected stays rustc's E0308.
+    let error = rejected("fn byte(x: u8) -> i64 { x as i64 } let k: &&u8 = &&3u8; byte(k)");
+    assert!(error.contains("mismatch"), "{error}");
+}
+
+/// A closure parameter annotated with a nested reference, and the `&&T`
+/// that `min_by_key` and kin pass over `v.iter()`. rustc prints
+/// `[2, 4] -7 -7 2 ["bb"]`.
+#[test]
+fn language_closure_parameters_take_nested_references() {
+    assert_eq!(
+        printed(
+            r#"
+let v: Vec<u32> = vec![1, 2, 3, 4];
+let evens: Vec<&u32> = v.iter().filter(|x: &&u32| **x % 2 == 0).collect();
+let w: Vec<i64> = vec![4, -7, 2];
+let m = w.iter().min_by_key(|x| **x).unwrap();
+let a = w.iter().max_by_key(|x: &&i64| x.abs()).unwrap();
+let c = w.iter().filter(|&&x| x > 0).count();
+let s: Vec<&str> = vec!["a", "bb"];
+let long: Vec<&&str> = s.iter().filter(|w: &&&str| w.len() > 1).collect();
+println!("{:?} {} {} {} {:?}", evens, m, a, c, long);
+"#
+        ),
+        "[2, 4] -7 -7 2 [\"bb\"]\n"
     );
 }

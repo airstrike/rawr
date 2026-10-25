@@ -730,14 +730,10 @@ impl Parser<'_> {
                 vec![hint(vec![reference(&item)])]
             }
             "fold" => vec![None, hint(vec![accumulator.clone(), item.clone()])],
-            // As `extremum` takes them: a reference to the item's target.
+            // `&Self::Item`, as Rust passes them: `&&T` over `v.iter()`.
             "min_by_key" | "max_by_key" | "min_by" | "max_by" => {
-                let borrowed = match self.inference.resolve(&item) {
-                    item @ Ty::Reference { .. } => item,
-                    item => reference(&item),
-                };
                 let count = if member.ends_with("_key") { 1 } else { 2 };
-                vec![hint(vec![borrowed; count])]
+                vec![hint(vec![reference(&item); count])]
             }
             _ => Vec::new(),
         };
@@ -1621,6 +1617,8 @@ impl Parser<'_> {
                     Ty::Reference { target, .. } => (*target, true),
                     item => (item, false),
                 };
+                let input = reference(&self.inference.resolve(&item));
+                let by = by.map(|by| (by, input));
                 let (source, best) = self.extremum(items, &element, &member, by, member_span)?;
                 let best = if borrowed { best } else { element };
                 (source, Ty::Option(Box::new(best)))

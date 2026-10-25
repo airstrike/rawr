@@ -26859,6 +26859,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_operand(&mut self) -> Result<ParsedExpr, Error> {
+        // `&&x`, which the lexer reads as one `&&`: `& &x`.
+        if matches!(self.peek(), Token::And) {
+            let at = self.next().1;
+            let mut second = at;
+            second.advance();
+            self.splice_tokens(vec![(Token::Ampersand, at), (Token::Ampersand, second)]);
+        }
         if matches!(self.peek(), Token::Ampersand) {
             let start = self.next().1;
             if matches!(self.peek(), Token::Mut) {
@@ -26962,7 +26969,14 @@ impl<'a> Parser<'a> {
             value.span = span(start, operand.span.end());
             return Ok(value);
         }
-        let ty = self.inference.resolve(&operand.ty);
+        let mut ty = self.inference.resolve(&operand.ty);
+        // `-x` and `!x` of a `&i64` or `&bool`: std's `impl Neg for &i64`
+        // and kin give the value.
+        if let Ty::Reference { target, .. } = &ty
+            && let target @ (Ty::Int(_) | Ty::Float(_) | Ty::Bool) = self.inference.resolve(target)
+        {
+            ty = target;
+        }
         // `!x` of an integer flips its bits.
         if operator == "!"
             && let Ty::Int(_) = ty
@@ -27302,7 +27316,15 @@ impl<'a> Parser<'a> {
                 );
                 continue;
             }
-            let builtin = self.inference.resolve(&value.ty);
+            // A method call auto-derefs through every reference: `x.abs()`
+            // of a `&&i64` is `i64::abs`. One reference is left, which
+            // the builtin methods below look through.
+            let mut builtin = self.inference.resolve(&value.ty);
+            while let Ty::Reference { target, .. } = &builtin
+                && let inner @ Ty::Reference { .. } = self.inference.resolve(target)
+            {
+                builtin = inner;
+            }
             // `a.min(b)`, `a.max(b)`, `a.clamp(lo, hi)` through `Ord`, unless
             // the type has its own method of that name.
             if matches!(member.as_str(), "min" | "max" | "clamp")
@@ -32604,13 +32626,21 @@ impl<'a> Parser<'a> {
             target: Box::new(element.clone()),
         };
         let hint = |inputs: Vec<Ty>| Some(inputs.into_boxed_slice());
+        // `v.iter().min_by_key(..)` passes `&&T`: a reference to the
+        // iterator's `&T`.
+        let borrowed = Ty::Reference {
+            mutable: false,
+            target: Box::new(reference.clone()),
+        };
         self.closure_hints = match member.as_str() {
-            "sort_by" | "sort_unstable_by" | "min_by" | "max_by" => {
+            "sort_by" | "sort_unstable_by" => {
                 vec![hint(vec![reference.clone(), reference.clone()])]
             }
-            "sort_by_key" | "sort_unstable_by_key" | "min_by_key" | "max_by_key" | "retain" => {
+            "min_by" | "max_by" => vec![hint(vec![borrowed.clone(), borrowed])],
+            "sort_by_key" | "sort_unstable_by_key" | "retain" => {
                 vec![hint(vec![reference.clone()])]
             }
+            "min_by_key" | "max_by_key" => vec![hint(vec![borrowed])],
             _ => Vec::new(),
         };
         let arguments = if member.as_str() == "append" {
@@ -32948,11 +32978,15 @@ impl<'a> Parser<'a> {
             ("min" | "max", []) | ("min_by_key" | "max_by_key" | "min_by" | "max_by", [_])
                 if matches!(self.inference.resolve(&value.ty), Ty::Reference { .. }) =>
             {
+                let input = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(reference.clone()),
+                };
                 let (source, item) = self.extremum(
                     receiver,
                     &element,
                     &member,
-                    arguments.first_mut(),
+                    arguments.first_mut().map(|by| (by, input)),
                     member_span,
                 )?;
                 (source, Ty::Option(Box::new(item)))
@@ -33119,7 +33153,7 @@ impl<'a> Parser<'a> {
         values: origin::Fragment,
         element: &Ty,
         member: &str,
-        by: Option<&mut ParsedExpr>,
+        by: Option<(&mut ParsedExpr, Ty)>,
         member_span: Span,
     ) -> Result<(origin::Fragment, Ty), Error> {
         let item = Ty::Reference {
@@ -33142,16 +33176,18 @@ impl<'a> Parser<'a> {
             "; let {best} = (); let {best_key} = (); let {first} = true; "
         ));
         let keyed = member.ends_with("_key");
-        let compare = if let Some(by) = by {
+        // `by`'s closure takes a reference to the iterator's item, `input`:
+        // `&&T` over `v.iter()`.
+        let compare = if let Some((by, input)) = by {
             let output = if keyed {
                 self.inference.fresh()
             } else {
                 Ty::Ordering
             };
             let inputs: Box<[Ty]> = if keyed {
-                Box::new([item.clone()])
+                Box::new([input])
             } else {
-                Box::new([item.clone(), item.clone()])
+                Box::new([input.clone(), input])
             };
             let expected = Ty::Fn {
                 inputs,
@@ -36651,6 +36687,16 @@ impl<'a> Parser<'a> {
                 }
                 let target = Box::new(self.parse_local_type()?);
                 return Ok(Ty::Reference { mutable, target });
+            }
+            // `&&T`, which the lexer reads as one `&&`: `& &T`.
+            Token::And => {
+                let at = self.next().1;
+                self.splice_tokens(vec![(Token::Ampersand, at)]);
+                let target = Box::new(self.parse_local_type()?);
+                return Ok(Ty::Reference {
+                    mutable: false,
+                    target,
+                });
             }
             _ => {}
         }
