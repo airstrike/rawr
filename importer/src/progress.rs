@@ -328,8 +328,18 @@ fn draw(state: &mut State) {
 }
 
 fn clear(state: &mut State) {
-    if std::mem::take(&mut state.drawn) && !crate::process::terminal::raw() {
+    // While a program has the screen, the line stays until it is restored.
+    if state.drawn && !crate::process::terminal::raw() {
+        state.drawn = false;
         let _ = write!(std::io::stderr(), "\r\x1b[2K");
+    }
+}
+
+/// Clear a finished launch's line that a program's screen kept.
+pub(crate) fn clear_left() {
+    let mut state = lock();
+    if state.launch.is_none() {
+        clear(&mut state);
     }
 }
 

@@ -127,6 +127,7 @@ mod imp {
             let _ = tcsetattr(&stdin, OptionalActions::Now, &saved);
             write_reset();
         }
+        crate::progress::clear_left();
         let held = HELD
             .lock()
             .map(|mut held| std::mem::take(&mut *held))

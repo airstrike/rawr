@@ -94,6 +94,8 @@ struct Screen {
     row: usize,
     column: usize,
     main: String,
+    /// The end of the last read: a character or an escape it cut.
+    pending: Vec<u8>,
 }
 
 impl Screen {
@@ -101,7 +103,28 @@ impl Screen {
     const COLUMNS: usize = 80;
 
     fn feed(&mut self, bytes: &[u8]) {
-        let text = String::from_utf8_lossy(bytes);
+        self.pending.extend_from_slice(bytes);
+        let mut whole = match std::str::from_utf8(&self.pending) {
+            Ok(_) => self.pending.len(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(_) => self.pending.len(),
+        };
+        // An escape sequence the read cut waits for the rest.
+        if let Some(escape) = self.pending[..whole].iter().rposition(|&byte| byte == 0x1b) {
+            let rest = &self.pending[escape + 1..whole];
+            let complete = match rest.first() {
+                Some(b'[') => rest[1..]
+                    .iter()
+                    .any(|byte| byte.is_ascii_alphabetic() || *byte == b'~'),
+                Some(_) => true,
+                None => false,
+            };
+            if !complete {
+                whole = escape;
+            }
+        }
+        let bytes: Vec<u8> = self.pending.drain(..whole).collect();
+        let text = String::from_utf8_lossy(&bytes);
         let mut chars = text.chars().peekable();
         while let Some(char) = chars.next() {
             match char {
@@ -147,6 +170,13 @@ impl Screen {
             ("2", Some('K')) if !self.alternate => {
                 let line = self.main.rfind('\n').map_or(0, |at| at + 1);
                 self.main.truncate(line);
+            }
+            ("" | "0", Some('K')) if self.alternate => {
+                if let Some(row) = self.cells.get_mut(self.row) {
+                    for cell in row.iter_mut().skip(self.column) {
+                        *cell = ' ';
+                    }
+                }
             }
             ("2", Some('J')) if self.alternate => {
                 self.cells = vec![vec![' '; Self::COLUMNS]; Self::ROWS];
