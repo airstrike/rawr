@@ -10118,10 +10118,14 @@ impl<'a> Parser<'a> {
         {
             return true;
         }
+        // A facade trait (iced's `canvas::Program`) is declared at the root
+        // for the whole crate; only its import puts it in scope.
         self.models
             .traits
             .get(trait_name.as_str())
-            .is_some_and(|(source, _)| *source == self.models.context)
+            .is_some_and(|(source, declared)| {
+                declared.declaration.is_none() && *source == self.models.context
+            })
     }
 
     /// The instances of the supertrait `parent` that `dyn sub<..>` has:
