@@ -79,29 +79,6 @@ fn bind_images(builder: &mut host::runtime::Builder) {
     }
 }
 
-/// `segments` as the `'static` slice a `LineDash` holds: one per distinct
-/// pattern, kept for the process, so a pattern drawn on every frame is
-/// allocated once.
-fn segments(values: Vec<f32>) -> Result<&'static [f32], Box<EvalAltResult>> {
-    static PATTERNS: Mutex<Vec<&'static [f32]>> = Mutex::new(Vec::new());
-    let mut patterns = PATTERNS
-        .lock()
-        .map_err(|_| runtime_error("`LineDash::segments` found its patterns poisoned".into()))?;
-    let bits = |pattern: &[f32]| {
-        pattern
-            .iter()
-            .map(|value| value.to_bits())
-            .collect::<Vec<_>>()
-    };
-    let wanted = bits(&values);
-    if let Some(pattern) = patterns.iter().find(|pattern| bits(pattern) == wanted) {
-        return Ok(pattern);
-    }
-    let pattern: &'static [f32] = Box::leak(values.into_boxed_slice());
-    patterns.push(pattern);
-    Ok(pattern)
-}
-
 fn bind_program(builder: &mut host::runtime::Builder) {
     builder
         .bind_with_context("iced::widget::canvas::Instance::new", |call, args| {
@@ -465,12 +442,12 @@ fn bind_frames(builder: &mut host::runtime::Builder) {
                     ),
                     "stroke" => marker::Draw::Stroke(
                         read::<canvas::Path>(operand(0)?, &path)?,
-                        read::<canvas::Stroke<'static>>(operand(1)?, &path)?,
+                        read::<marker::Stroke>(operand(1)?, &path)?,
                     ),
                     "stroke_rectangle" => marker::Draw::StrokeRectangle(
                         point(operand(0)?, &path)?,
                         size(operand(1)?, &path)?,
-                        read::<canvas::Stroke<'static>>(operand(2)?, &path)?,
+                        read::<marker::Stroke>(operand(2)?, &path)?,
                     ),
                     "fill_text" => {
                         let text = operand(0)?;
@@ -610,7 +587,7 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
     value(
         builder,
         "iced::widget::canvas::Stroke::default",
-        canvas::Stroke::<'static>::default(),
+        marker::Stroke::default(),
     );
     value(
         builder,
@@ -620,7 +597,7 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
     value(
         builder,
         "iced::widget::canvas::LineDash::default",
-        canvas::LineDash::<'static>::default(),
+        marker::LineDash::default(),
     );
     // A dash pattern's fields, read or set
     // (`LineDash { segments: &[3.0, 6.0], offset: 0 }`).
@@ -631,7 +608,7 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
                 let Some((receiver, operands)) = args.split_first_mut() else {
                     return Err(arity(&path, 1, 0));
                 };
-                let mut dash = read::<canvas::LineDash<'static>>(receiver, &path)?;
+                let mut dash = read::<marker::LineDash>(receiver, &path)?;
                 let [operand] = operands else {
                     return Ok(match name {
                         "segments" => Dynamic::from(
@@ -653,7 +630,7 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
                             .iter()
                             .map(|segment| pixels(segment, &path))
                             .collect::<Result<Vec<_>, _>>()?;
-                        dash.segments = segments(values)?;
+                        dash.segments = values.into();
                     }
                     _ => {
                         dash.offset =
@@ -768,13 +745,13 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
                 let Some((receiver, operands)) = args.split_first_mut() else {
                     return Err(arity(&path, 1, 0));
                 };
-                let mut stroke = read::<canvas::Stroke<'static>>(receiver, &path)?;
+                let mut stroke = read::<marker::Stroke>(receiver, &path)?;
                 let [operand] = operands else {
                     return Ok(match name {
                         "width" => Dynamic::from(f64::from(stroke.width)),
                         "style" => Dynamic::from(stroke.style),
                         "line_cap" => Dynamic::from(stroke.line_cap),
-                        "line_dash" => Dynamic::from(stroke.line_dash),
+                        "line_dash" => Dynamic::from(stroke.line_dash.clone()),
                         _ => Dynamic::from(stroke.line_join),
                     });
                 };
@@ -801,13 +778,17 @@ fn bind_styles(builder: &mut host::runtime::Builder) {
                 let [receiver, operand] = args else {
                     return Err(arity(&path, 2, args.len()));
                 };
-                let stroke = read::<canvas::Stroke<'static>>(receiver, &path)?;
-                Ok(Dynamic::from(match name {
-                    "with_width" => stroke.with_width(pixels(operand, &path)?),
-                    "with_color" => stroke.with_color(read(operand, &path)?),
-                    "with_line_cap" => stroke.with_line_cap(read(operand, &path)?),
-                    _ => stroke.with_line_join(read(operand, &path)?),
-                }))
+                let mut stroke = read::<marker::Stroke>(receiver, &path)?;
+                // iced's `with_*` builders, on the owned stroke.
+                match name {
+                    "with_width" => stroke.width = pixels(operand, &path)?,
+                    "with_color" => {
+                        stroke.style = canvas::Style::Solid(read(operand, &path)?);
+                    }
+                    "with_line_cap" => stroke.line_cap = read(operand, &path)?,
+                    _ => stroke.line_join = read(operand, &path)?,
+                }
+                Ok(Dynamic::from(stroke))
             })
             .expect("the iced facade must retain every Stroke builder");
     }
@@ -1183,9 +1164,9 @@ fn replay(frame: &mut canvas::Frame, draw: &marker::Draw) {
         marker::Draw::FillRectangle(top_left, size, fill) => {
             frame.fill_rectangle(*top_left, *size, *fill);
         }
-        marker::Draw::Stroke(path, stroke) => frame.stroke(path, *stroke),
+        marker::Draw::Stroke(path, stroke) => frame.stroke(path, stroke.native()),
         marker::Draw::StrokeRectangle(top_left, size, stroke) => {
-            frame.stroke_rectangle(*top_left, *size, *stroke);
+            frame.stroke_rectangle(*top_left, *size, stroke.native());
         }
         marker::Draw::FillText(text) => frame.fill_text(text.clone()),
         marker::Draw::PushTransform => frame.push_transform(),

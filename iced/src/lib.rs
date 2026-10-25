@@ -169,7 +169,8 @@ fn register_debug() {
     #[cfg(feature = "canvas")]
     {
         register::<iced::widget::canvas::Path>();
-        register::<iced::widget::canvas::Stroke<'static>>();
+        register::<marker::Stroke>();
+        register::<marker::LineDash>();
         register::<iced::widget::canvas::Fill>();
         register::<iced::widget::canvas::Style>();
         register::<iced::widget::canvas::fill::Rule>();
@@ -3324,21 +3325,13 @@ fn declare_canvas(builder: &mut facade::Builder) -> Result<(), host::Error> {
             capability::Kind::Static,
         ],
     )?;
-    builder.default_type::<iced::widget::canvas::Stroke<'static>>(
-        "widget::canvas::Stroke",
-        &[],
-        copied_default,
-    )?;
+    builder.default_type::<marker::Stroke>("widget::canvas::Stroke", &[], copied_default)?;
     builder.default_type::<iced::widget::canvas::Fill>(
         "widget::canvas::Fill",
         &[],
         copied_default,
     )?;
-    builder.default_type::<iced::widget::canvas::LineDash<'static>>(
-        "widget::canvas::LineDash",
-        &[],
-        copied_default,
-    )?;
+    builder.default_type::<marker::LineDash>("widget::canvas::LineDash", &[], copied_default)?;
     builder.value_type::<iced::widget::canvas::Style>(
         "widget::canvas::Style",
         &[],

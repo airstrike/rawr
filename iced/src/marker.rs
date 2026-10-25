@@ -791,6 +791,84 @@ pub(crate) struct Canvas {
     pub(crate) height: iced::Length,
 }
 
+/// iced's `canvas::LineDash`, which owns its segments: iced's borrows a
+/// slice, so a script's pattern is lent to iced's when its stroke is drawn
+/// (`Stroke::native`), and freed with the last stroke that holds it.
+#[cfg(feature = "canvas")]
+#[derive(Clone, Default)]
+pub(crate) struct LineDash {
+    pub(crate) segments: std::sync::Arc<[f32]>,
+    pub(crate) offset: usize,
+}
+
+/// iced's `canvas::Stroke`, with an owned [`LineDash`].
+#[cfg(feature = "canvas")]
+#[derive(Clone)]
+pub(crate) struct Stroke {
+    pub(crate) style: iced::widget::canvas::Style,
+    pub(crate) width: f32,
+    pub(crate) line_cap: iced::widget::canvas::LineCap,
+    pub(crate) line_join: iced::widget::canvas::LineJoin,
+    pub(crate) line_dash: LineDash,
+}
+
+#[cfg(feature = "canvas")]
+impl Stroke {
+    /// iced's stroke, borrowing this one's dash pattern.
+    pub(crate) fn native(&self) -> iced::widget::canvas::Stroke<'_> {
+        iced::widget::canvas::Stroke {
+            style: self.style,
+            width: self.width,
+            line_cap: self.line_cap,
+            line_join: self.line_join,
+            line_dash: self.line_dash.native(),
+        }
+    }
+}
+
+#[cfg(feature = "canvas")]
+impl Default for Stroke {
+    fn default() -> Self {
+        let native = iced::widget::canvas::Stroke::default();
+        Self {
+            style: native.style,
+            width: native.width,
+            line_cap: native.line_cap,
+            line_join: native.line_join,
+            line_dash: LineDash {
+                segments: native.line_dash.segments.into(),
+                offset: native.line_dash.offset,
+            },
+        }
+    }
+}
+
+#[cfg(feature = "canvas")]
+impl LineDash {
+    /// iced's dash pattern, borrowing these segments.
+    pub(crate) fn native(&self) -> iced::widget::canvas::LineDash<'_> {
+        iced::widget::canvas::LineDash {
+            segments: &self.segments,
+            offset: self.offset,
+        }
+    }
+}
+
+/// `{:?}` prints iced's own `Debug` text.
+#[cfg(feature = "canvas")]
+impl std::fmt::Debug for Stroke {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.native(), formatter)
+    }
+}
+
+#[cfg(feature = "canvas")]
+impl std::fmt::Debug for LineDash {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.native(), formatter)
+    }
+}
+
 #[cfg(feature = "canvas")]
 /// One drawing operation a script `Frame` records, replayed on iced's own
 /// frame when the canvas draws.
@@ -798,15 +876,8 @@ pub(crate) struct Canvas {
 pub(crate) enum Draw {
     Fill(iced::widget::canvas::Path, iced::widget::canvas::Fill),
     FillRectangle(iced::Point, iced::Size, iced::widget::canvas::Fill),
-    Stroke(
-        iced::widget::canvas::Path,
-        iced::widget::canvas::Stroke<'static>,
-    ),
-    StrokeRectangle(
-        iced::Point,
-        iced::Size,
-        iced::widget::canvas::Stroke<'static>,
-    ),
+    Stroke(iced::widget::canvas::Path, Stroke),
+    StrokeRectangle(iced::Point, iced::Size, Stroke),
     FillText(iced::widget::canvas::Text),
     PushTransform,
     PopTransform,
