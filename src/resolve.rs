@@ -1231,12 +1231,37 @@ pub fn cell_lock(value: &crate::Dynamic) -> Option<crate::Dynamic> {
 /// `select` in a program without tokio, whose tokio is rawr-iced's
 /// (`std_reexport`). Rawr expands them itself.
 pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static str> {
-    let name = path.strip_prefix("tokio::")?;
+    if let Some(name) = path.strip_prefix("tokio::")
+        && let Some(name) = ["join", "try_join", "select"]
+            .into_iter()
+            .find(|macro_name| *macro_name == name)
+        && host.facade_fingerprint("tokio").is_none()
+        && host.entry("rawr_iced::tokio").is_some()
+    {
+        return Some(name);
+    }
+    // A program whose futures are the core's (D513.5): the runtime's own
+    // `join!` expands with private items, so Rawr writes it over
+    // `rawr::future`'s combinators, for tokio's and the futures crate's.
+    let name = path
+        .strip_prefix("tokio::")
+        .or_else(|| path.strip_prefix("futures::"))
+        .or_else(|| path.strip_prefix("futures::future::"))?;
     let name = ["join", "try_join", "select"]
         .into_iter()
         .find(|macro_name| *macro_name == name)?;
-    (host.facade_fingerprint("tokio").is_none() && host.entry("rawr_iced::tokio").is_some())
-        .then_some(name)
+    core_futures(host).then_some(name)
+}
+
+/// Whether async code in this program gives the core's
+/// `rawr::future::Future`: its facade is installed and no host's own type,
+/// such as iced's `Task`, runs futures.
+pub(crate) fn core_futures(host: &host::Registry) -> bool {
+    #[cfg(all(feature = "std", not(feature = "no_function")))]
+    return host.type_(crate::future::facade::FUTURE).is_some()
+        && host.type_("iced::Task").is_none();
+    #[cfg(not(all(feature = "std", not(feature = "no_function"))))]
+    return false;
 }
 
 /// `std::fmt` (or `core::fmt`) and its `Debug`, `Display` and `Formatter`,

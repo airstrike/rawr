@@ -133,11 +133,10 @@ pub mod diagnostic;
 mod engine;
 mod eval;
 mod func;
-/// Async bodies: what their functions return, and how they resume.
+/// Async code: what async bodies return, how they resume, and how a
+/// runtime polls them.
 #[cfg(not(feature = "no_function"))]
-pub mod future {
-    pub use crate::eval::machine::{Frame, Poll};
-}
+pub mod future;
 #[cfg(feature = "grain")]
 pub mod grain;
 /// Host type metadata visible during Rawr resolution.
@@ -192,6 +191,7 @@ mod tokenizer;
 /// Generation-local nominal type definitions.
 pub mod type_def;
 mod types;
+mod value;
 /// Compiler-proven scripted-widget lifecycle protocols.
 pub mod widget;
 
@@ -311,6 +311,7 @@ pub use types::{
     Dynamic, EvalAltResult, FnPtr, ImmutableString, LexError, ParseError, ParseErrorType, Position,
     Scope, Span, VarDefInfo,
 };
+pub use value::Value;
 
 /// _(debugging)_ Module containing types for debugging.
 /// Exported under the `debugging` feature only.

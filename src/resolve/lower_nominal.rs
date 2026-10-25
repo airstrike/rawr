@@ -56,6 +56,9 @@ const CLOSURE_SENTINEL: &str = "__rawr_nominal_closure_";
 const ASYNC_RESUME: &str = "__rawr_resume";
 /// The facade function that makes an async body's step function a `Task`.
 const ASYNC_TASK: &str = "rawr_iced::task::script";
+/// The core's function an async body's step function is passed to, where
+/// no host's `Task` runs futures.
+const CORE_ASYNC: &str = "rawr::future::script";
 /// The std and prelude traits whose functions a path call names
 /// (`Default::default()`, `From::from(x)`), with those functions, and
 /// `std::cmp`'s free `min` and `max`.
@@ -11654,9 +11657,26 @@ impl<'a> Parser<'a> {
             spliced.push((Token::RightParen, at));
         } else {
             let function = if filtered { "select_some" } else { name };
+            if crate::resolve::core_futures(&self.models.host) {
+                // The core has `join!` only, so far (D513.7).
+                if name != "join" {
+                    return Err(unsupported(
+                        format!(
+                            "`{name}!` in a program without iced; Rawr runs `join!` here so far"
+                        ),
+                        end,
+                    ));
+                }
+                spliced.extend([
+                    ident("rawr"),
+                    (Token::DoubleColon, at),
+                    ident("future"),
+                    (Token::DoubleColon, at),
+                ]);
+            } else {
+                spliced.extend([ident("tokio"), (Token::DoubleColon, at)]);
+            }
             spliced.extend([
-                ident("tokio"),
-                (Token::DoubleColon, at),
                 ident(&format!("__{function}{count}")),
                 (Token::LeftParen, at),
             ]);
@@ -33242,15 +33262,22 @@ impl<'a> Parser<'a> {
         moved: bool,
         output: Option<Ty>,
     ) -> Result<ParsedExpr, Error> {
+        // iced's `Task` runs an iced program's async bodies, and the core's
+        // future any other program's (D511.3).
+        let runner = if self.models.host_items(ASYNC_TASK).is_some() {
+            ASYNC_TASK
+        } else {
+            CORE_ASYNC
+        };
         let items = self
             .models
-            .host_items(ASYNC_TASK)
+            .host_items(runner)
             .map(<[_]>::to_vec)
             .ok_or_else(|| Error::UnsupportedNominalSyntax {
                 construct: "`async` in a program without iced, whose `Task` runs it".into(),
                 source: start,
             })?;
-        let owner = self.models.item_owner(ASYNC_TASK).cloned();
+        let owner = self.models.item_owner(runner).cloned();
         self.async_step = Some(output);
         let step = self.parse_closure(Token::Or, start, moved)?;
         let call = span(start.start(), step.span.end());
@@ -33297,7 +33324,10 @@ impl<'a> Parser<'a> {
     fn task_output(&self, ty: &Ty) -> Option<Ty> {
         match self.inference.resolve(ty) {
             Ty::Host { proof, arguments }
-                if proof.definition.path() == "iced::Task" && arguments.len() == 1 =>
+                if matches!(
+                    proof.definition.path().as_str(),
+                    "iced::Task" | "rawr::future::Future"
+                ) && arguments.len() == 1 =>
             {
                 Some(arguments[0].clone())
             }
