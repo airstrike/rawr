@@ -1,0 +1,14 @@
+#!/bin/sh
+# D507: cargo audit; with Rust changes staged, rustfmt and Clippy; no new
+# mod.rs; root Markdown only from the allow list. checks.sh has the checks.
+. "$(git rev-parse --show-toplevel)/.githooks/checks.sh"
+
+CHECK_FILES=$(git diff --cached --name-only --diff-filter=ACR)
+check_layout || exit 1
+check_audit || exit 1
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.rs$|(^|/)Cargo\.toml$')
+if [ -n "$staged" ]; then
+    check_rust --workspace || exit 1
+fi
+exit 0

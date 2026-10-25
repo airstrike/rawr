@@ -1,0 +1,16 @@
+#!/bin/sh
+# D507: a merge brings in no commit whose message mentions Claude, and passes
+# cargo audit.
+merge_head=$(git rev-parse -q --verify MERGE_HEAD) || exit 0
+
+offending=$(git log --format='%h %s%n%b' HEAD.."$merge_head" | grep -i "Claude")
+if [ -n "$offending" ]; then
+    echo "ERROR: incoming commits mention 'Claude':"
+    git log --format='  %h %s' HEAD.."$merge_head" --grep='Claude' -i
+    echo "Reword them on their branch before merging."
+    exit 1
+fi
+
+. "$(git rev-parse --show-toplevel)/.githooks/checks.sh"
+check_audit || exit 1
+exit 0

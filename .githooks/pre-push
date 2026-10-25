@@ -1,0 +1,25 @@
+#!/bin/sh
+# D507: the pre-commit checks over everything being pushed (Clippy over the
+# whole workspace), and no pushed commit message mentions Claude.
+zero=0000000000000000000000000000000000000000
+CHECK_FILES=""
+pushing=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue
+    # Commits not on any remote yet.
+    if git log --format='%s%n%b' "$local_sha" --not --remotes | grep -qi "Claude"; then
+        echo "ERROR: a commit message being pushed mentions 'Claude':"
+        git log --format='  %h %s' "$local_sha" --not --remotes --grep='Claude' -i
+        exit 1
+    fi
+    added=$(git log --format= --name-only --diff-filter=ACR "$local_sha" --not --remotes)
+    CHECK_FILES=$(printf '%s\n%s' "$CHECK_FILES" "$added")
+    pushing=1
+done
+[ -n "$pushing" ] || exit 0
+
+. "$(git rev-parse --show-toplevel)/.githooks/checks.sh"
+check_layout || exit 1
+check_audit || exit 1
+check_rust --workspace || exit 1
+exit 0

@@ -208,6 +208,23 @@ If rawr gives a different result than Rust, or rejects Rust it says it
 supports, please [report it](https://github.com/airstrike/rawr/issues) with a
 small reproduction.
 
+## How do I work on rawr itself?
+
+The repository checks its commits with git hooks in `.githooks/`. Turn them
+on once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+Before a commit, `pre-commit` runs `cargo audit` and refuses a new `mod.rs`
+or a new Markdown file at the root. When Rust files are staged, it also runs
+`cargo +stable fmt --all --check` and
+`cargo +nightly-2026-07-11 clippy --workspace --all-targets -- -D warnings`.
+`pre-push` runs the same checks on everything being pushed. `commit-msg`
+and `pre-merge-commit` refuse messages that mention Claude. Run
+`cargo +stable fmt --all` before committing.
+
 ## What's the license?
 
 MIT or Apache-2.0, at your option. See [`LICENSE-MIT.txt`](LICENSE-MIT.txt) and

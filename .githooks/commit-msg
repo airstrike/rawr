@@ -1,0 +1,7 @@
+#!/bin/sh
+# D507: no commit message mentions Claude.
+if grep -qi "Claude" "$1"; then
+    echo "ERROR: the commit message mentions 'Claude'. Remove it:"
+    grep -in "Claude" "$1" | sed 's/^/  /'
+    exit 1
+fi
