@@ -22342,6 +22342,22 @@ impl<'a> Parser<'a> {
             let Some(place) = arguments.get(index) else {
                 continue;
             };
+            // `self` in a `&mut self` method, passed on to a `&mut`
+            // parameter, is the receiver's place.
+            let receiver = place.lvalue.is_none()
+                && self.closures.is_empty()
+                && place.source.as_str() == "this"
+                && self.bindings.get("this").is_some_and(|binding| {
+                    binding.mutable && matches!(binding.kind, BindingKind::Receiver { .. })
+                });
+            let mut place = place.clone();
+            if receiver {
+                place.lvalue = Some(Lvalue::Binding {
+                    binding: "this".into(),
+                    ty: place.ty.clone(),
+                });
+            }
+            let place = &place;
             if !matches!(
                 self.inference.resolve(&place.ty),
                 Ty::Reference { mutable: true, .. }
@@ -33190,7 +33206,10 @@ impl<'a> Parser<'a> {
                 let source = self.mutation_call(&value, &helper, operands)?;
                 (source, Ty::Unit)
             }
-            ("insert", [_, _]) | ("remove", [_]) | ("swap", [_, _]) | ("dedup" | "pop", []) => {
+            ("insert", [_, _])
+            | ("remove" | "swap_remove", [_])
+            | ("swap", [_, _])
+            | ("dedup" | "pop", []) => {
                 let code = VEC_METHODS
                     .iter()
                     .position(|name| *name == member.as_str())
@@ -33209,7 +33228,7 @@ impl<'a> Parser<'a> {
                 let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
                 let source = self.mutation_call(&value, &helper, operands)?;
                 let ty = match member.as_str() {
-                    "remove" => element,
+                    "remove" | "swap_remove" => element,
                     "pop" => Ty::Option(Box::new(element)),
                     _ => Ty::Unit,
                 };
@@ -34258,7 +34277,10 @@ impl<'a> Parser<'a> {
             if let Some(index) = receiver
                 && index < arguments.len()
             {
-                let place = arguments.remove(index);
+                // The place as `mutable_arguments` found it: `self` in a
+                // `&mut self` method is the receiver's.
+                arguments.remove(index);
+                let place = places[0].clone();
                 let operands = arguments
                     .iter()
                     .map(ParsedExpr::rendered_source)
@@ -37974,6 +37996,25 @@ impl<'a> Parser<'a> {
                 source = inner;
                 value.ty = source.clone();
             }
+        }
+        // A reborrow: `&mut T` where `&T` is expected, as a `&mut Game`
+        // parameter passed on to a function that only reads it. The
+        // reference is the same value at runtime, so only the type changes.
+        if let Ty::Reference {
+            mutable: false,
+            target: to,
+        } = &target
+            && !matches!(self.inference.resolve(to), Ty::Infer(_))
+            && let Ty::Reference {
+                mutable: true,
+                target: from,
+            } = &source
+        {
+            source = Ty::Reference {
+                mutable: false,
+                target: from.clone(),
+            };
+            value.ty = source.clone();
         }
         // Unsized coercion: `&T` to `&dyn Trait` and `Box<T>` to
         // `Box<dyn Trait>` for a `T: Trait`; the value is unchanged.
@@ -41789,6 +41830,7 @@ const VEC_METHODS: &[&str] = &[
     "fill",
     "copy_from_slice",
     "split_off",
+    "swap_remove",
 ];
 
 /// A `VEC_METHODS` code by name.
@@ -42006,7 +42048,7 @@ fn time_method(args: &mut FnCallArgs) -> RawrResult {
     })
 }
 
-/// `insert(i, x)`, `remove(i)`, `swap(a, b)`, `dedup()` and
+/// `insert(i, x)`, `remove(i)`, `swap_remove(i)`, `swap(a, b)`, `dedup()` and
 /// `drain(low, high, inclusive)` (`high` `-1` for an open end) on the array
 /// taken by reference, with Rust's panics.
 fn vec_method(args: &mut FnCallArgs) -> RawrResult {
@@ -42037,6 +42079,10 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
             fail(format!("removal index (is {a}) should be < len (is {len})"))
         }
         Some("remove") => Ok(array.remove(a)),
+        Some("swap_remove") if a >= len => fail(format!(
+            "swap_remove index (is {a}) should be < len (is {len})"
+        )),
+        Some("swap_remove") => Ok(array.swap_remove(a)),
         Some("swap") => match [a, b].into_iter().find(|index| *index >= len) {
             Some(index) => fail(format!(
                 "index out of bounds: the len is {len} but the index is {index}"

@@ -18,6 +18,17 @@
 | [`strings`](strings.rs)                                   | shows different ways to register Rust functions taking string arguments                                                                             |
 | [`threading`](threading.rs)                               | shows how to communicate in duplex with an `Engine` running in a separate thread via a pair of MPSC channels                                        |
 
+## Apps for `rawr run`
+
+Each is a Cargo crate with its own workspace. `rawr run examples/<name>`
+interprets its marked files, and `cargo build --release` builds it natively.
+
+| App                     | Description                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------ |
+| [`islands`](islands)    | a native `main` that calls one marked module each tick                                                       |
+| [`grep`](grep)          | a marked command-line tool with flags, files and stdin                                                       |
+| [`invaders`](invaders)  | a space-invaders game on winit and softbuffer, whose rules and drawing are marked and reload while you play |
+
 ## An App That Embeds rawr
 
 [`rules`](rules) is an app with its own Cargo workspace. It totals bank

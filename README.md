@@ -197,8 +197,11 @@ works, what is missing, what rawr refuses and the few known cases that still
 differ from Rust.
 
 A native crate root may call marked modules, and a save reaches the running
-program at its next call. Planned and not built yet: the same from native
-modules other than the root, and a second UI host for ratatui.
+program at its next call. The native `main` runs on the process's main
+thread, so a winit app works. `examples/invaders` is a space-invaders game
+whose rules and drawing reload while you play. Planned and not built yet:
+calls from native modules other than the root, and a second UI host for
+ratatui.
 
 If rawr gives a different result than Rust, or rejects Rust it says it
 supports, please [report it](https://github.com/airstrike/rawr/issues) with a

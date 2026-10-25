@@ -11,10 +11,13 @@
 //!
 //! The interpreter lives on the runner's protocol thread. The runner
 //! [`publish`]es each generation there, calls the program's Rawr `main`
-//! (which registers the native one) and [`start`]s the native `main` on a
-//! thread of its own. A call from that thread is handed to the protocol
-//! thread as a [`Call`], which answers it between the runner's own messages:
-//! a generation swapped in by a save is the one the next call runs in.
+//! (which registers the native one) and [`start`]s the native `main`. It
+//! runs on the process's main thread when the runner kept that thread for
+//! it ([`keep_main_thread`]), as winit and other windowing crates need, and
+//! on a thread of its own otherwise. A call from that thread is handed to
+//! the protocol thread as a [`Call`], which answers it between the runner's
+//! own messages: a generation swapped in by a save is the one the next call
+//! runs in.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -30,6 +33,9 @@ use crate::{item, program, type_def, Dynamic, ImmutableString};
 static START: Mutex<Option<fn() -> i32>> = Mutex::new(None);
 /// Whether the native `main` runs.
 static RUNNING: AtomicBool = AtomicBool::new(false);
+/// Hands the native `main` to the process's main thread, when the runner
+/// kept that thread for it.
+static MAIN_THREAD: OnceLock<mpsc::SyncSender<fn() -> i32>> = OnceLock::new();
 /// Hands a call from a native thread to the thread that serves it.
 #[allow(clippy::type_complexity)]
 static SERVER: OnceLock<Box<dyn Fn(Call) + Send + Sync>> = OnceLock::new();
@@ -200,11 +206,52 @@ pub fn take_entry() -> Option<fn() -> i32> {
     START.lock().ok().and_then(|mut start| start.take())
 }
 
+/// The process's main thread, kept for the program's native `main`.
+///
+/// A runner calls [`keep_main_thread`] on the main thread first, runs its
+/// protocol on another thread, and then [`MainThread::serve`]s here.
+pub struct MainThread(mpsc::Receiver<fn() -> i32>);
+
+/// Keep the calling thread, which must be the process's main thread, for
+/// the program's native `main`: [`start`] then hands it here instead of
+/// spawning a thread. winit's event loop, and other windowing crates', must
+/// run on the main thread.
+#[must_use]
+pub fn keep_main_thread() -> MainThread {
+    let (send, receive) = mpsc::sync_channel(1);
+    let _ = MAIN_THREAD.set(send);
+    MainThread(receive)
+}
+
+impl MainThread {
+    /// Wait for the native `main` and run it here. The process exits with
+    /// its status when it returns. Another thread ends the process when no
+    /// native `main` comes.
+    pub fn serve(self) -> ! {
+        match self.0.recv() {
+            Ok(entry) => run(entry),
+            Err(_) => loop {
+                std::thread::park();
+            },
+        }
+    }
+}
+
+/// Run the native `main` and exit with its status (101 when it panics).
+fn run(entry: fn() -> i32) -> ! {
+    let status = std::panic::catch_unwind(entry).unwrap_or(101);
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(status)
+}
+
 /// Start the native `main` the program registered, if it did: `false`
-/// when it registered none. It runs on a thread of its own and the process
-/// exits with its status when it returns (101 when it panics). Each call
-/// it makes into marked code goes to `forward`, which hands it to this
-/// thread to [`Call::answer`].
+/// when it registered none. It runs on the process's main thread when the
+/// runner kept it ([`keep_main_thread`]), and on a thread of its own
+/// otherwise. The process exits with its status when it returns (101 when
+/// it panics). Each call it makes into marked code goes to `forward`,
+/// which hands it to this thread to [`Call::answer`].
 pub fn start(forward: impl Fn(Call) + Send + Sync + 'static) -> bool {
     let Some(entry) = START.lock().ok().and_then(|mut start| start.take()) else {
         return false;
@@ -216,17 +263,16 @@ pub fn start(forward: impl Fn(Call) + Send + Sync + 'static) -> bool {
         return false;
     }
     RUNNING.store(true, Ordering::Release);
+    if let Some(main_thread) = MAIN_THREAD.get()
+        && main_thread.send(entry).is_ok()
+    {
+        return true;
+    }
     let spawned = std::thread::Builder::new()
         .name("main".into())
         // The stack a process's own main thread usually has.
         .stack_size(8 << 20)
-        .spawn(move || {
-            let status = std::panic::catch_unwind(entry).unwrap_or(101);
-            use std::io::Write as _;
-            let _ = std::io::stdout().flush();
-            let _ = std::io::stderr().flush();
-            std::process::exit(status);
-        });
+        .spawn(move || run(entry));
     if let Err(error) = spawned {
         eprintln!("rawr: cannot start the program's main thread: {error}");
         std::process::exit(101);
