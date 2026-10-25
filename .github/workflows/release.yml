@@ -56,8 +56,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Add the wasm32 target
-        run: rustup target add wasm32-unknown-unknown
+      # The runner's Rust can trail the workspace's rust-version.
+      - name: Install stable Rust for wasm32
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown --no-self-update
+          rustup default stable
 
       - name: Restore the wasm build
         uses: actions/cache@v4
