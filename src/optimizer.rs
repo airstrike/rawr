@@ -836,8 +836,17 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
         // for id in expr { block }
         Stmt::For(x, ..) => {
             optimize_expr(&mut x.2.expr, state, false);
+            // The loop's variable and counter shadow outer variables in the
+            // body, as they do while parsing and at runtime: an outer
+            // constant of the same name is not propagated into it.
+            let original_variables_len = state.variables.len();
+            if let Some(counter) = &x.1 {
+                state.push_var(counter.name.clone(), None);
+            }
+            state.push_var(x.0.name.clone(), None);
             *x.2.body.statements_mut() =
                 optimize_stmt_block(x.2.body.take_statements(), state, false, true, false);
+            state.rewind_var(original_variables_len);
         }
         // let id = expr;
         Stmt::Var(x, options, ..) if !options.intersects(ASTFlags::CONSTANT) => {
