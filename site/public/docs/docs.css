@@ -79,6 +79,8 @@ article li::marker { color: var(--dim); }
 .run b::before { content: "$ "; color: var(--dim); }
 .run span { color: var(--rose); }
 .run .err { color: #ff8fc4; }
+/* A strip without a Run button shows a run on the reader's machine, and says so where the button would be. */
+.run small { float: right; margin-left: 16px; font: inherit; color: var(--dim); }
 
 table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); background: var(--raised); font-size: 15px; margin: 18px 0; }
 th, td { padding: 10px 14px; border-top: 1px solid var(--line); vertical-align: top; text-align: left; }

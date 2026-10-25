@@ -301,10 +301,10 @@ test("the allow-list covers every page's run blocks, the docs included", async (
     "match.rs", "destructure.rs", "let-else.rs", "irrefutable.rs", "labels.rs", "block-value.rs", "iter-mut.rs",
   ]);
   assert.deepEqual(at("docs/reference/closures.html"), ["closures.rs", "capture.rs", "boxed-fn.rs", "copy-closure.rs", "struct-update.rs"]);
-  assert.deepEqual(at("docs/reference/moves.html"), ["partial-move.rs", "clone-out.rs", "rc-refcell.rs"]);
+  assert.deepEqual(at("docs/reference/moves.html"), ["use-after-move.rs", "partial-move.rs", "clone-out.rs", "rc-refcell.rs"]);
   assert.deepEqual(at("docs/reference/macros.html"), ["macros.rs", "format.rs"]);
   assert.deepEqual(at("docs/reference/std.html"), [
-    "strings.rs", "find-retain.rs", "iterators.rs", "array-map.rs", "floats.rs", "time.rs",
+    "strings.rs", "find-retain.rs", "iterators.rs", "array-map.rs", "floats.rs", "time.rs", "futures.rs",
     "hashmap.rs", "refcell.rs", "mem.rs", "ordering.rs", "conversions.rs", "path.rs",
   ]);
   assert.deepEqual(at("docs/reference/iced.html"), ["sun.rs", "widget.rs"]);
