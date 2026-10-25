@@ -6,7 +6,7 @@ use crate::ast::{ASTNode, Expr, Stmt};
 use crate::{
     Dynamic, Engine, EvalAltResult, ImmutableString, Position, RawrResultOf, Scope, ThinVec,
 };
-use std::{fmt, iter::repeat, mem};
+use std::{fmt, mem};
 
 /// Callback function to initialize the debugger.
 #[cfg(not(feature = "sync"))]
@@ -156,7 +156,9 @@ impl fmt::Display for BreakPoint {
                 write!(
                     f,
                     "{name} ({})",
-                    repeat("_").take(*args).collect::<Vec<_>>().join(", ")
+                    std::iter::repeat_n("_", *args)
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )?;
                 if !*enabled {
                     f.write_str(" (disabled)")?;
@@ -388,10 +390,10 @@ impl Engine {
         this_ptr: Option<&mut Dynamic>,
         node: impl Into<ASTNode<'a>>,
     ) -> RawrResultOf<()> {
-        if self.is_debugger_registered() {
-            if let Some(cmd) = self.dbg_reset_raw(global, caches, scope, this_ptr, node)? {
-                global.debugger_mut().status = cmd;
-            }
+        if self.is_debugger_registered()
+            && let Some(cmd) = self.dbg_reset_raw(global, caches, scope, this_ptr, node)?
+        {
+            global.debugger_mut().status = cmd;
         }
 
         Ok(())

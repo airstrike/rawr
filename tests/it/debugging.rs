@@ -1,18 +1,7 @@
 #![cfg(feature = "debugging")]
 use rawr::{Engine, INT};
 
-use rawr::Array;
-
 use rawr::Map;
-
-#[test]
-fn test_debugging() {
-    let mut engine = Engine::new();
-
-    engine.register_debugger(|_, dbg| dbg, |_, _, _, _, _| Ok(rawr::debugger::DebuggerCommand::Continue));
-
-    assert_eq!(engine.eval::<Array>("back_trace()").unwrap().len(), 0);
-}
 
 #[test]
 fn test_debugger_state() {

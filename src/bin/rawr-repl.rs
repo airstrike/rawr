@@ -516,16 +516,15 @@ fn main() {
             }
             _ if cmd.starts_with('!') => {
                 if let Ok(num) = cmd[1..].parse::<usize>() {
-                    if num >= history_offset {
-                        if let Some(line) = rl
+                    if num >= history_offset
+                        && let Some(line) = rl
                             .history()
                             .get(num - history_offset, SearchDirection::Forward)
                             .expect("Failed to get history entry")
-                        {
-                            replacement = Some(line.entry.into());
-                            replacement_index = num;
-                            continue;
-                        }
+                    {
+                        replacement = Some(line.entry.into());
+                        replacement_index = num;
+                        continue;
                     }
                 } else {
                     let prefix = cmd[1..].trim();

@@ -468,8 +468,7 @@ mod decimal_functions {
     /// Convert the decimal number into an integer.
     #[rawr_fn(return_raw)]
     pub fn to_int(x: Decimal) -> RawrResultOf<INT> {
-        #[allow(clippy::bind_instead_of_map)]
-        x.to_i64().and_then(|n| Some(n)).map_or_else(
+        x.to_i64().map_or_else(
             || {
                 Err(
                     ERR::ErrorArithmetic(format!("Integer overflow: to_int({x})"), Position::NONE)

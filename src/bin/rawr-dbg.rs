@@ -42,11 +42,11 @@ fn print_source(lines: &[String], pos: Position, offset: usize, window: (usize, 
                 if n == line { "\x1b[39m" } else { "" },
             );
 
-            if n == line {
-                if let Some(pos) = pos.position() {
-                    let shift = offset + line_no_len + marker.len() + 2;
-                    println!("{0:>1$}{2:>3$}", "│ ", shift, "\x1b[36m^\x1b[39m", pos + 10);
-                }
+            if n == line
+                && let Some(pos) = pos.position()
+            {
+                let shift = offset + line_no_len + marker.len() + 2;
+                println!("{0:>1$}{2:>3$}", "│ ", shift, "\x1b[36m^\x1b[39m", pos + 10);
             }
         }
     }

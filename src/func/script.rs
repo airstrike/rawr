@@ -23,7 +23,7 @@ impl Engine {
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
         scope: &mut Scope,
-        this_ptr: Option<&mut Dynamic>,
+        mut this_ptr: Option<&mut Dynamic>,
         _env: Option<&EncapsulatedEnviron>,
         fn_def: &ScriptFuncDef,
         args: &mut FnCallArgs,
@@ -110,16 +110,23 @@ impl Engine {
             self.dbg(global, caches, scope, this_ptr.as_deref_mut(), &node)?;
         }
 
-        // Evaluate the function
+        // Evaluate the function. `this_ptr` is reborrowed because the
+        // debugger reads it after the call.
+        #[cfg_attr(not(feature = "debugging"), allow(clippy::needless_option_as_deref))]
         let evaluated = match &fn_def.machine {
-            Some(machine) => {
-                self.run_machine(global, caches, scope, this_ptr, machine, orig_scope_len)
-            }
+            Some(machine) => self.run_machine(
+                global,
+                caches,
+                scope,
+                this_ptr.as_deref_mut(),
+                machine,
+                orig_scope_len,
+            ),
             None => self.eval_stmt_block(
                 global,
                 caches,
                 scope,
-                this_ptr,
+                this_ptr.as_deref_mut(),
                 fn_def.body.statements(),
                 rewind_scope,
             ),

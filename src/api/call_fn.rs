@@ -303,7 +303,9 @@ impl Engine {
             } else if !in_all_namespaces {
                 Err(ERR::ErrorFunctionNotFound(name.into(), Position::NONE).into())
             } else {
-                let has_this = this_ptr.is_some_and(|this_ptr| {
+                // Reborrowed: the debugger reads `this_ptr` after the call.
+                #[cfg_attr(not(feature = "debugging"), allow(clippy::needless_option_as_deref))]
+                let has_this = this_ptr.as_deref_mut().is_some_and(|this_ptr| {
                     args.insert(0, this_ptr);
                     true
                 });
