@@ -4,6 +4,10 @@
 //! read the triple the same way.
 
 /// The triple on the `host:` line of `rustc -vV` output.
+// The build script calls it; the library only tests that it reads the same
+// triple. The module stays declared without `cfg(test)`, so the embedded host
+// source keeps this file for the build script.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse(version: &str) -> Option<&str> {
     version
         .lines()
