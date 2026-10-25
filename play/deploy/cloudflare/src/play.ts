@@ -17,18 +17,56 @@ export interface Snippet {
   messages: string[];
 }
 
-/** The snippet in a request body, normalized, or an error. */
+/** The options a `?play` line sets. Each is absent when the line doesn't name it. */
+export interface PlayLine {
+  theme?: "dark" | "light";
+  size?: string;
+  messages: string[];
+}
+
+/**
+ * The options after `?play` on a line, read as the bot reads them. A token is
+ * `size=WxH` or a bare `WxH`, `theme=dark|light` or a bare `dark` or `light`,
+ * or `msg=EXPR`, which may repeat. An error names the token.
+ */
+export function playLine(line: string): PlayLine | string {
+  const options: PlayLine = { messages: [] };
+  for (const token of line.split(/\s+/).filter((t) => t !== "")) {
+    const at = token.indexOf("=");
+    const key = at < 0 ? "" : token.slice(0, at);
+    const value = at < 0 ? token : token.slice(at + 1);
+    if (key === "msg" || key === "message") options.messages.push(value);
+    else if (key === "size" || (key === "" && /^\d/.test(value) && /x/i.test(value))) options.size = value;
+    else if ((key === "theme" || key === "") && (value === "dark" || value === "light")) options.theme = value;
+    else return `unknown ?play option \`${token}\`; expected size=WxH, theme=dark|light or msg=EXPR`;
+  }
+  return options;
+}
+
+/**
+ * The snippet in a request body, normalized, or an error. The body names its
+ * options as `theme`, `size` and `messages`, or as `play`, the text of a
+ * `?play` line after the marker. The line's options apply after the fields.
+ */
 export function parseSnippet(body: unknown): Snippet | string {
   if (typeof body !== "object" || body === null) return "bad request";
   const b = body as Record<string, unknown>;
   if (typeof b.code !== "string" || b.code.trim() === "") return "write some code first";
   if (new TextEncoder().encode(b.code).length > MAX_CODE) return `the code is over ${MAX_CODE / 1024} KiB`;
-  const theme = b.theme === "light" ? "light" : "dark";
-  const size = typeof b.size === "string" ? b.size.trim() : "";
-  if (size !== "" && !/^\d{1,4}x\d{1,4}$/i.test(size)) return "size is WxH, like 400x300";
+  let theme: Snippet["theme"] = b.theme === "light" ? "light" : "dark";
+  let size = typeof b.size === "string" ? b.size.trim() : "";
   const raw = b.messages ?? [];
   if (!Array.isArray(raw) || !raw.every((m) => typeof m === "string")) return "messages are text";
-  const messages = (raw as string[]).map((m) => m.trim()).filter((m) => m !== "");
+  let messages = (raw as string[]).map((m) => m.trim()).filter((m) => m !== "");
+  if (b.play !== undefined) {
+    if (typeof b.play !== "string") return "play options are text";
+    const line = playLine(b.play);
+    if (typeof line === "string") return line;
+    theme = line.theme ?? theme;
+    size = line.size ?? size;
+    messages = [...messages, ...line.messages];
+  }
+  if (size !== "" && !/^\d{1,4}x\d{1,4}$/i.test(size)) return "size is WxH, like 400x300";
   if (messages.length > MAX_MESSAGES) return `at most ${MAX_MESSAGES} messages`;
   if (messages.some((m) => m.length > 256)) return "a message is over 256 characters";
   return { code: b.code, theme, size: size.toLowerCase(), messages };
@@ -305,19 +343,40 @@ export interface RunBlock {
   code: string;
   /** The element's inner HTML, to catch markup inside it. */
   html: string;
+  /** Its `data-play` attribute, the `?play` options its Run button sends, or null. */
+  play: string | null;
+  /**
+   * The options of the `?play` file header right above its `<pre>`, as the
+   * page shows them, or null when no such header is there.
+   */
+  header: string | null;
 }
 
 /**
  * The `<code data-run>` elements in a page's HTML. Their text is what the
- * page's Run buttons send (`textContent`), so these are the only sources
- * /play/run accepts without Turnstile.
+ * page's Run buttons send (`textContent`), with the `data-play` options, so
+ * these are the only snippets /play/run accepts without Turnstile.
  */
 export function runBlocks(html: string): RunBlock[] {
   const blocks: RunBlock[] = [];
   for (const match of html.matchAll(/<code\b([^>]*)\bdata-run\b(?:="([^"]*)")?([^>]*)>([\s\S]*?)<\/code>/g)) {
-    blocks.push({ name: match[2] ?? "", code: decodeHtml(match[4]), html: match[4] });
+    const play = /\bdata-play="([^"]*)"/.exec(match[1] + match[3]);
+    const above = /<div class="file"><b>([^<]*)<\/b>(?:<span>[^<]*<\/span>)?<\/div>\s*<pre>\s*$/.exec(html.slice(0, match.index));
+    const title = above ? decodeHtml(above[1]).trim() : "";
+    blocks.push({
+      name: match[2] ?? "",
+      code: decodeHtml(match[4]),
+      html: match[4],
+      play: play ? decodeHtml(play[1]) : null,
+      header: title === "?play" || title.startsWith("?play ") ? title.slice("?play".length).trim() : null,
+    });
   }
   return blocks;
+}
+
+/** The snippet a run block's Run button sends to /play/run, or an error. */
+export function runSnippet(block: { code: string; play: string | null }): Snippet | string {
+  return parseSnippet(block.play === null ? { code: block.code } : { code: block.code, play: block.play });
 }
 
 /** The sources a page runs: the text of each `<code data-run>` element. */

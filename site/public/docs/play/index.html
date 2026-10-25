@@ -98,7 +98,7 @@
 <p>Each <code>msg=</code> is applied in order. <a href="/docs/reference/play#output">Output</a> says when the reply is a PNG or a GIF. An app gets no imports for free, so write its <code>use</code> lines as in a file.</p>
 <div class="block">
   <div class="file"><b>?play light msg=Message::Increment msg=Message::Increment</b></div>
-  <pre><code data-lang="rust" data-run="increment.rs" id="src-increment">use iced::widget::{Widget, button, column, text};
+  <pre><code data-lang="rust" data-run="increment.rs" data-play="light msg=Message::Increment msg=Message::Increment" id="src-increment">use iced::widget::{Widget, button, column, text};
 
 #[derive(Default)]
 struct Counter {
@@ -125,7 +125,7 @@ impl Counter {
         .padding(20)
     }
 }</code></pre>
-  <div class="run"><button type="button" class="runbtn" data-source="src-increment" data-out="out-increment" data-alt="The counter at 0 above an Increment button, rendered on rawr's server" aria-label="Render this snippet on rawr's server" hidden></button><span class="quiet" id="out-increment" aria-live="polite">(renders a frame)</span></div>
+  <div class="run"><button type="button" class="runbtn" data-source="src-increment" data-out="out-increment" data-alt="The counter at 2 above an Increment button in the light theme, rendered on rawr's server" aria-label="Render this snippet on rawr's server" hidden></button><span class="quiet" id="out-increment" aria-live="polite">(renders a frame)</span></div>
 </div>
 <figure class="shot">
   <img src="/img/docs-play-counter.png" width="159" height="151" alt="The counter rendered in the light theme after two Increment messages: the number 2 above an Increment button">

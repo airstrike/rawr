@@ -140,7 +140,7 @@ async fn main() {
     let sum = tokio::task::spawn_blocking(|| (1..=100).sum::&lt;u32&gt;()).await.unwrap();
     println!("sum {sum}");
 }</code></pre>
-  <div class="run"><b>rawr run</b><span>Job { id: 1 }
+  <div class="run"><small>on your machine</small><b>rawr run</b><span>Job { id: 1 }
 Job { id: 2 }
 Job { id: 3 }
 sum 5050</span></div>

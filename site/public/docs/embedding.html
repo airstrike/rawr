@@ -188,7 +188,7 @@ fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
         None
     }
 }</code></pre>
-  <div class="run"><b>cargo run</b><span>coffee       -14.50
+  <div class="run"><small>on your machine</small><b>cargo run</b><span>coffee       -14.50
 groceries    -85.58
 income      2500.00
 other        -56.49</span></div>
@@ -220,7 +220,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
     println!("{:.2} {}", price.call(100.0, 2)?, greet.call("Rust".into())?);
     Ok(())
 }</code></pre>
-  <div class="run"><b>cargo run</b><span>109.98 hello, Rust</span></div>
+  <div class="run"><small>on your machine</small><b>cargo run</b><span>109.98 hello, Rust</span></div>
 </div>
 <p>A handle takes up to eight parameters. Clone it to share it. <code>load</code> and <code>script</code> take the engine, so a second script needs its own <code>Engine</code> with the exports installed again.</p>
 
@@ -230,7 +230,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
 <p>Reloads on two threads take turns: each one reads, compiles and publishes before the next one reads the file, so an older text never replaces a newer one.</p>
 <p>Run the example with an edit. It loads a copy of <code>rules.rs</code>, saves <code>scripts/edited.rs</code> over the copy and reloads it.</p>
 <div class="block">
-  <div class="run"><b>cargo run -- rules.rs scripts/edited.rs</b><span>coffee       -14.50
+  <div class="run"><small>on your machine</small><b>cargo run -- rules.rs scripts/edited.rs</b><span>coffee       -14.50
 groceries    -85.58
 income      2500.00
 other        -56.49
@@ -275,7 +275,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
     println!("{}", scope.get_value::&lt;i64&gt;("count").unwrap());
     Ok(())
 }</code></pre>
-  <div class="run"><b>cargo run</b><span>42
+  <div class="run"><small>on your machine</small><b>cargo run</b><span>42
 42
 42</span></div>
 </div>
@@ -308,7 +308,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
     println!("{:?}", lines.lock().unwrap());
     Ok(())
 }</code></pre>
-  <div class="run"><b>cargo run</b><span>[(false, "to stdout\n"), (true, "to stderr\n")]</span></div>
+  <div class="run"><small>on your machine</small><b>cargo run</b><span>[(false, "to stdout\n"), (true, "to stderr\n")]</span></div>
 </div>
 
 <h2 id="release">In a release build</h2>

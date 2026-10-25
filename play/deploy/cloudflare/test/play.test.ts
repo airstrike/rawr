@@ -301,10 +301,10 @@ test("the allow-list covers every page's run blocks, the docs included", async (
     "match.rs", "destructure.rs", "let-else.rs", "irrefutable.rs", "labels.rs", "block-value.rs", "iter-mut.rs",
   ]);
   assert.deepEqual(at("docs/reference/closures.html"), ["closures.rs", "capture.rs", "boxed-fn.rs", "copy-closure.rs", "struct-update.rs"]);
-  assert.deepEqual(at("docs/reference/moves.html"), ["partial-move.rs", "clone-out.rs", "rc-refcell.rs"]);
+  assert.deepEqual(at("docs/reference/moves.html"), ["use-after-move.rs", "partial-move.rs", "clone-out.rs", "rc-refcell.rs"]);
   assert.deepEqual(at("docs/reference/macros.html"), ["macros.rs", "format.rs"]);
   assert.deepEqual(at("docs/reference/std.html"), [
-    "strings.rs", "find-retain.rs", "iterators.rs", "array-map.rs", "floats.rs", "time.rs",
+    "strings.rs", "find-retain.rs", "iterators.rs", "array-map.rs", "floats.rs", "time.rs", "futures.rs",
     "hashmap.rs", "refcell.rs", "mem.rs", "ordering.rs", "conversions.rs", "path.rs",
   ]);
   assert.deepEqual(at("docs/reference/iced.html"), ["sun.rs", "widget.rs"]);
@@ -321,8 +321,8 @@ test("the allow-list covers every page's run blocks, the docs included", async (
   // cart.rs and main.rs, so each pair is one entry.
   assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
   assert.equal(hashes.length, blocks.length - 2);
-  assert.ok(hashes.includes(await sha256("let xs = vec![3, 1, 2];\nxs.iter().sum::<i64>()")));
-  assert.ok(!hashes.includes(await sha256("println!(\"hi\");")));
+  assert.ok(hashes.includes(await sha256(canonical(snippet({ code: "let xs = vec![3, 1, 2];\nxs.iter().sum::<i64>()" })))));
+  assert.ok(!hashes.includes(await sha256(canonical(snippet({ code: "println!(\"hi\");" })))));
 });
 
 test("every link between the site's pages lands on a page and an anchor", async () => {
@@ -420,6 +420,136 @@ test("the allow-list build fails on empty, marked-up or disagreeing blocks", asy
   const ok = await allowList(new Map([["a.html", '<code data-run="x.rs">1 &lt; 2</code>'], ["b.html", '<code data-run="x.rs">1 &lt; 2</code>']]));
   assert.equal(ok.hashes.length, 1);
   assert.equal(ok.blocks[0].code, "1 < 2");
+  // A block's data-play and the ?play header the page shows above it agree.
+  const app = (header: string, play: string | null) =>
+    `<div class="file"><b>${header}</b></div>\n  <pre><code data-run="app.rs"${play === null ? "" : ` data-play="${play}"`}>x</code></pre>`;
+  await fails({ "a.html": app("?play light", null) }, /shows \?play light but has no data-play/);
+  await fails({ "a.html": app("app.rs", "light") }, /has data-play but no \?play header above it/);
+  await fails({ "a.html": app("?play light msg=A", "light msg=B") }, /has data-play="light msg=B" but its header shows \?play light msg=A/);
+  await fails({ "a.html": app("?play pink", "pink") }, /unknown \?play option `pink`/);
+  await fails({ "a.html": app("?play", "") + app("?play light", "light") }, /differs from the block of the same name/);
+  const agreed = await allowList(new Map([["a.html", app("?play light msg=A", "light  msg=A")]]));
+  assert.deepEqual(agreed.blocks[0].snippet, { code: "x", theme: "light", size: "", messages: ["A"] });
+});
+
+test("a ?play line's options read as the bot reads them", async () => {
+  const { playLine } = await import("../src/play.ts");
+  assert.deepEqual(playLine("320x200 light msg=Message::Increment msg=Message::Increment"), {
+    size: "320x200",
+    theme: "light",
+    messages: ["Message::Increment", "Message::Increment"],
+  });
+  assert.deepEqual(playLine("size=40X30 theme=dark message=Go"), { size: "40X30", theme: "dark", messages: ["Go"] });
+  assert.deepEqual(playLine(""), { messages: [] });
+  assert.equal(typeof playLine("mine"), "string");
+  assert.equal(typeof playLine("theme=pink"), "string");
+  assert.deepEqual(parseSnippet({ code: "x", play: "light 40X30 msg=A", messages: ["B"] }), {
+    code: "x",
+    theme: "light",
+    size: "40x30",
+    messages: ["B", "A"],
+  });
+  assert.equal(typeof parseSnippet({ code: "x", play: "size=big" }), "string");
+  assert.equal(typeof parseSnippet({ code: "x", play: 3 }), "string");
+});
+
+/**
+ * Load the site's run.js over a stand-in DOM that holds one run block, click
+ * its Run button, and return the request it sends. With `edit`, the code is
+ * edited first, so the request goes to /play/render.
+ */
+async function runJs(block: { name: string; code: string; play: string | null }, edit = ""): Promise<{ url: string; body: any }> {
+  const { readFileSync } = await import("node:fs");
+  const script = readFileSync(new URL("../../../../site/public/run.js", import.meta.url), "utf8");
+  const element = (props: Record<string, unknown> = {}): any => {
+    const listeners: Record<string, ((event: unknown) => void)[]> = {};
+    const attributes: Record<string, string> = {};
+    return {
+      dataset: {},
+      classList: { add() {}, remove() {} },
+      childNodes: [],
+      lastChild: null,
+      setAttribute: (key: string, value: string) => (attributes[key] = value),
+      getAttribute: (key: string) => attributes[key] ?? null,
+      removeAttribute: (key: string) => delete attributes[key],
+      addEventListener: (type: string, listener: (event: unknown) => void) => (listeners[type] ??= []).push(listener),
+      fire: (type: string) => (listeners[type] ?? []).forEach((listener) => listener({ preventDefault() {} })),
+      append() {},
+      before() {},
+      after() {},
+      remove() {},
+      replaceChildren() {},
+      focus() {},
+      cloneNode: () => element(),
+      closest: () => null,
+      querySelector: () => null,
+      ...props,
+    };
+  };
+  const strip = element();
+  const out = element({ closest: () => strip });
+  const source = element({ textContent: block.code, innerHTML: block.code, innerText: block.code });
+  source.dataset = { run: block.name, ...(block.play === null ? {} : { play: block.play }) };
+  const button = element();
+  button.dataset = { source: "src", out: "out" };
+  const document = {
+    head: element(),
+    createElement: () => element(),
+    createElementNS: () => element(),
+    createDocumentFragment: () => element(),
+    querySelectorAll: (selector: string) => (selector === ".runbtn" ? [button] : []),
+    getElementById: (id: string) => ({ src: source, out })[id] ?? null,
+    execCommand() {},
+  };
+  let sent!: (request: { url: string; body: any }) => void;
+  const request = new Promise<{ url: string; body: any }>((resolve) => (sent = resolve));
+  const fetch = async (url: string, init?: { body?: string }) => {
+    if (url === "/play/gate") return Response.json({ sitekey: null, pass: false });
+    sent({ url, body: JSON.parse(init?.body ?? "null") });
+    return Response.json({ kind: "text", status: 0, output: [] });
+  };
+  new Function("document", "window", "fetch", script)(document, {}, fetch);
+  if (edit) {
+    source.innerText = block.code + edit;
+    source.fire("input");
+  }
+  button.fire("click");
+  return request;
+}
+
+test("run.js sends a block's ?play options, and /play/run allows that exact snippet", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { allowList, sitePages } = await import("../allowlist.mjs");
+  const { runBlocks, sha256 } = await import("../src/play.ts");
+  const root = new URL("../../../../site/public/", import.meta.url);
+  const html = readFileSync(new URL("docs/play/index.html", root), "utf8");
+  const app = runBlocks(html).find((block) => block.name === "increment.rs")!;
+  // The page shows the bot's ?play line, and the block sends the same options.
+  assert.equal(app.header, "light msg=Message::Increment msg=Message::Increment");
+  assert.equal(app.play, app.header);
+
+  // Run as shown: /play/run gets the code and the options, which make two
+  // messages in the light theme, and that pair is on the allow-list.
+  const run = await runJs(app);
+  assert.equal(run.url, "/play/run");
+  assert.deepEqual(run.body, { code: app.code, play: app.play });
+  const sent = parseSnippet(run.body) as Snippet;
+  assert.deepEqual(sent.messages, ["Message::Increment", "Message::Increment"]);
+  assert.equal(sent.theme, "light");
+  const { hashes } = await allowList(sitePages(root.pathname));
+  assert.ok(hashes.includes(await sha256(canonical(sent))));
+  // The code without its options, which drew the counter at 0, isn't allowed.
+  assert.ok(!hashes.includes(await sha256(canonical(parseSnippet({ code: app.code }) as Snippet))));
+
+  // An edit goes to /play/render with the same options.
+  const edited = await runJs(app, "\n// edited");
+  assert.equal(edited.url, "/play/render");
+  assert.equal(edited.body.play, app.play);
+  assert.deepEqual((parseSnippet(edited.body) as Snippet).messages, ["Message::Increment", "Message::Increment"]);
+
+  // A block with no options sends its code alone, as before.
+  const sum = runBlocks(html).find((block) => block.name === "")!;
+  assert.deepEqual((await runJs(sum)).body, { code: sum.code });
 });
 
 test("text results are read back, and give a preview line", async () => {

@@ -94,6 +94,7 @@ code.nw { white-space: nowrap; }
 .run b::before { content: "$ "; color: var(--dim); }
 .run span { color: var(--rose); }
 .run span.quiet { color: var(--dim); }
+.run small { float: right; margin-left: 16px; font: inherit; color: var(--dim); }
 .rawr .run { background: #0e0c10; }
 /* The right-hand file mirrors its name to the right edge, so it shows at any split. */
 .pane.rawr .file { flex-direction: row-reverse; }
@@ -318,7 +319,7 @@ fn main() {
       </div>
       <div class="block">
         <div class="file"><b>hello/src/main.rs</b><span>written by rawr new</span></div>
-        <div class="run"><b>rawr run</b><span>1. Hello, rawr!
+        <div class="run"><small>on your machine</small><b>rawr run</b><span>1. Hello, rawr!
 2. Hello, rawr!
 3. Hello, rawr!</span></div>
       </div>
@@ -496,7 +497,7 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
 fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
     if tx.payee.contains("Coffee") { Some("coffee".into()) } else { None }
 }</code></pre>
-        <div class="run"><b>cargo run</b><span>Some("coffee")</span></div>
+        <div class="run"><small>on your machine</small><b>cargo run</b><span>Some("coffee")</span></div>
       </div>
     </div>
   </div>
