@@ -123,6 +123,8 @@ pub(crate) struct Trait {
     /// Convert<T>`, `Self` of `trait Ord2: PartialOrd2<Self>`; made
     /// transitive and substituted by elaboration.
     pub supertrait_arguments: Box<[TraitArgument]>,
+    /// `trait Space: Sized`: `dyn Space` is not a type (E0038).
+    pub sized: bool,
     /// The trait's own type parameters: `T` of `trait Convert<T>`.
     pub generics: Box<[Generic]>,
     /// The declaration of a facade trait (iced's `canvas::Program`), whose

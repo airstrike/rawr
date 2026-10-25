@@ -8,7 +8,8 @@
 # rawr-iced uses, with the example's own features. Other workspace
 # dependencies are resolved from iced's workspace table. Each Cargo.toml gets
 # an empty `[workspace]` table. All crates share one target directory,
-# target/scratch/iced-examples/_target, through CARGO_TARGET_DIR.
+# target/scratch/iced-examples/_target, through CARGO_TARGET_DIR. A
+# `.cargo/config.toml` beside them names the host as the build target.
 #
 # Check one crate:
 #   cd target/scratch/iced-examples/todos
@@ -28,7 +29,10 @@ if [ ! -d "$iced_src/examples" ]; then
     exit 1
 fi
 
-mkdir -p "$out"
+mkdir -p "$out/.cargo"
+# Every crate builds for the host named as a target, as Rawr builds a
+# project that imports Rust, so `cargo check` and Rawr share their units.
+printf '[build]\ntarget = "host-tuple"\n' > "$out/.cargo/config.toml"
 if [ "$(cd "$(dirname "$0")" && pwd)" != "$out" ]; then
     cp "$0" "$out/setup.sh"
 fi

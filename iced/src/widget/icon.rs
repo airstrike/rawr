@@ -1,7 +1,7 @@
 //! iced's `text::Shaping`, `text::LineHeight` and `checkbox::Icon`.
 
 use iced::widget::checkbox::Icon;
-use iced::widget::text::{LineHeight, Shaping};
+use iced::widget::text::{Ellipsis, LineHeight, Shaping};
 use rawr::host;
 use rawr::{Dynamic, EvalAltResult};
 
@@ -18,6 +18,18 @@ pub(super) fn bind(builder: &mut host::runtime::Builder) {
                 Ok(Dynamic::from(shaping))
             })
             .expect("the iced facade must retain every text::Shaping");
+    }
+    for (name, ellipsis) in crate::TEXT_ELLIPSES.into_iter().zip([
+        Ellipsis::None,
+        Ellipsis::Start,
+        Ellipsis::Middle,
+        Ellipsis::End,
+    ]) {
+        builder
+            .bind(format!("iced::widget::text::Ellipsis::{name}"), move |_| {
+                Ok(Dynamic::from(ellipsis))
+            })
+            .expect("the iced facade must retain every text::Ellipsis");
     }
     for (name, make) in [
         (

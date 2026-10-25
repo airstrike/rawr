@@ -24,7 +24,7 @@ prelude = [
     "iced::widget::ComboBox", "iced::widget::Container", "iced::widget::Float", "iced::widget::Id",
     "iced::widget::Image", "iced::widget::Logo", "iced::widget::MouseArea",
     "iced::widget::PickList", "iced::widget::Pin", "iced::widget::ProgressBar",
-    "iced::widget::QRCode", "iced::widget::Radio", "iced::widget::Row",
+    "iced::widget::QRCode", "iced::widget::Radio", "iced::widget::Responsive", "iced::widget::Row",
     "iced::widget::Scrollable", "iced::widget::Sensor", "iced::widget::Slider",
     "iced::widget::Space", "iced::widget::Stack", "iced::widget::Svg",
     "iced::widget::Table", "iced::widget::Text", "iced::widget::TextInput", "iced::widget::Toggler",
